@@ -8,6 +8,9 @@
 //! service.close / stop ─▶ LiveLease::close ─▶ Ending ─▶ Agent::close ─▶ Ended | Interrupted
 //! ```
 //! `fetch_clock` owns test-only logical time for fetch orderings across real I/O.
+#[cfg(unix)]
+#[path = "leases/draining.rs"]
+mod draining;
 #[path = "leases/fetch_clock.rs"]
 mod fetch_clock;
 use super::{

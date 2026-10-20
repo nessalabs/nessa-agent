@@ -1672,7 +1672,9 @@ impl ConversationService {
                     // transfer through publication/start there is no fallible
                     // I/O and no unowned slot can supply this preparation.
                     let owned_preparation = if new_only {
-                        service.claim_owned_preparation(&id, &actor).await?
+                        service
+                            .claim_owned_preparation(&id, &actor, slot.clone())
+                            .await?
                     } else {
                         None
                     };
@@ -1958,7 +1960,7 @@ impl ConversationService {
                                     });
                                 }
                             };
-                            let manager = opened.map_err(|error| {
+                            let mut manager = opened.map_err(|error| {
                                 tracing::error!(conversation_id = %id, %error, "conversation storage opening failed");
                                 OpeningFailure {
                                     cause: ConversationError::Storage(error),
@@ -1986,10 +1988,10 @@ impl ConversationService {
                                     .map_err(|cause| OpeningFailure { cause, holds: false })?,
                             };
                             let mut avoid = Vec::new();
-                            // Each refusal left for another worker, recorded
-                            // before the lease this opening ends with.
-                            let mut left = Vec::new();
-                            let (environment, opening) = loop {
+                            // The last acknowledged refusal is the fallback if
+                            // placement cannot find another worker.
+                            let mut last_refusal = None;
+                            let selection = loop {
                                 let place = match service
                                     .inner
                                     .environment
@@ -2000,11 +2002,14 @@ impl ConversationService {
                                     // Another worker could not be placed: the
                                     // refusal already given stands, and is
                                     // recorded as any refusal is.
-                                    Err(_) if !left.is_empty() => {
-                                        break left.pop().expect("one refusal left");
+                                    Err(_) if last_refusal.is_some() => {
+                                        break Err(OpeningFailure {
+                                            cause: ConversationError::LeaseRefused(last_refusal.expect("one refusal left")),
+                                            holds: false,
+                                        });
                                     }
                                     Err(cause) => {
-                                        return Err(OpeningFailure {
+                                        break Err(OpeningFailure {
                                             cause,
                                             holds: false,
                                         })
@@ -2014,15 +2019,18 @@ impl ConversationService {
                                     place.context.as_ref().map(|context| context.worker());
                                 // No other worker to ask: the refusal it gave stands.
                                 if worker.as_ref().is_some_and(|worker| avoid.contains(worker)) {
-                                    if let Some(refused) = left.pop() {
-                                        break refused;
+                                    if let Some(refusal) = last_refusal {
+                                        break Err(OpeningFailure {
+                                            cause: ConversationError::LeaseRefused(refusal),
+                                            holds: false,
+                                        });
                                     }
                                 }
                                 // Placement may wait or select another worker.
                                 // Check the same lifetime after that wait and
                                 // before each environment lease is acquired.
                                 if ownership.as_ref().is_some_and(|gate| gate.is_sealed()) {
-                                    return Err(OpeningFailure { cause: ConversationError::Unavailable, holds: false });
+                                    break Err(OpeningFailure { cause: ConversationError::Unavailable, holds: false });
                                 }
                                 let opening = open_lease_on(
                                     place.environment.as_ref(),
@@ -2051,12 +2059,30 @@ impl ConversationService {
                                             refusal = ?opening.refusal,
                                             "a worker that left the pool refused the lease; asking another"
                                         );
+                                        // The refusal is consequential evidence,
+                                        // including when the next placement waits
+                                        // until this lifetime has sealed.
+                                        manager.prepare_for_lease_record(opening.fence.as_ref()).await.map_err(|cause| OpeningFailure {
+                                            cause: ConversationError::Agent(cause), holds: false,
+                                        })?;
+                                        let recorded = issue(&manager, place.environment.as_ref(), &opening, &actor).await;
+                                        let recorded = match recorded {
+                                            Err(LeaseIssueError::Record(LeaseRecordError::Storage(_))) => manager
+                                                .save_retained_lease_records().await
+                                                .map_err(|error| LeaseIssueError::Record(LeaseRecordError::Storage(error))),
+                                            result => result,
+                                        };
+                                        if let Err(error) = recorded {
+                                            tracing::error!(conversation_id = %id, %error, "a draining worker refusal could not be recorded");
+                                            break Err(OpeningFailure { cause: error.into(), holds: false });
+                                        }
                                         avoid.push(worker);
-                                        left.push((place.environment, opening));
+                                        last_refusal = opening.refusal;
                                     }
-                                    _ => break (place.environment, opening),
+                                    _ => break Ok((place.environment, opening)),
                                 }
                             };
+                            let (environment, opening) = selection?;
                             let tool_source = checked_source(agent);
                             let agent = Agent::prepare(
                                 opening.fence.clone(),
@@ -2093,23 +2119,6 @@ impl ConversationService {
                                     child: id.clone(),
                                 },
                             ));
-                            // A refusal left for another worker is recorded
-                            // as the refused lease it was, so the history says
-                            // which worker was asked and why it moved on. One
-                            // that cannot be recorded is logged; the opening
-                            // goes on to record its own lease.
-                            for (refused_on, refused) in &left {
-                                if let Err(error) = issue(
-                                    agent.session_manager(),
-                                    refused_on.as_ref(),
-                                    refused,
-                                    &actor,
-                                )
-                                .await
-                                {
-                                    tracing::error!(conversation_id = %id, %error, "a refusal left for another worker could not be recorded");
-                                }
-                            }
                             let issued = issue(
                                 agent.session_manager(),
                                 environment.as_ref(),
@@ -2167,25 +2176,7 @@ impl ConversationService {
                                 }
                                 (Err(error), _) => {
                                     tracing::error!(conversation_id = %id, %error, "a lease could not be recorded");
-                                    Some(match error {
-                                        LeaseIssueError::OverUnreadable => {
-                                            ConversationError::LeaseUnreadable
-                                        }
-                                        LeaseIssueError::Record(
-                                            LeaseRecordError::Refused(error)
-                                            | LeaseRecordError::Storage(error),
-                                        ) => {
-                                            ConversationError::Storage(error)
-                                        }
-                                        // Neither is what the history holds: the
-                                        // Agent prepared has loaded it, and only
-                                        // known records are written. Nothing ran,
-                                        // so the opening is only unavailable.
-                                        LeaseIssueError::Record(
-                                            LeaseRecordError::NotLoaded
-                                            | LeaseRecordError::Unreadable,
-                                        ) => ConversationError::Unavailable,
-                                    })
+                                    Some(error.into())
                                 }
                             };
                             if let Some(cause) = refused {

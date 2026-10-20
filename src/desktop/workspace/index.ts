@@ -7,7 +7,9 @@
  *        │  implemented by adapters/gateway/ (the gateway's conversations)
  *        │  and adapters/in-memory/ (the sample, for fixtures and previews)
  *        ▼
- *   commands (adapters/store/commands.ts) ── thunks and plain actions
+ *   commands (adapters/store/commands.ts) ── the one list
+ *        │  index-commands, pane-commands, session-commands, plus sharing,
+ *        │  access, and model; thunks and plain actions
  *        │  apply use cases (application/usecases/), whose rules are model/
  *        ▼
  *   slice (adapters/store/slice.ts) ──▶ selectors, one per pane and row
@@ -21,7 +23,8 @@
  *   (a session's card, the side columns) ──▶ ../split-panes: <SplitPanes> in
  *                                            ui/panes/pane-grid.tsx, and
  *                                            useSplitPanesDrag and FlipScope
- *                                            in ui/layouts/workspace-shell.tsx
+ *                                            in ui/layouts/use-workspace-window.ts,
+ *                                            rendered by workspace-layout.tsx
  *                                            │ a drop, a resize, an equalize, a fit
  *                                            ▼
  *   commands (commitDrop, resizePanes, equalizePanes, fitPanes) ──▶ slice

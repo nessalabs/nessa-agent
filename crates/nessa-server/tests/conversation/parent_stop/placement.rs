@@ -81,7 +81,7 @@ async fn an_owned_opening_sealed_during_placement_does_not_acquire_a_lease() {
         provider.clone(),
         Environments::new(environment.clone(), BTreeMap::new(), placements.clone()),
     );
-    let coordinator = bind(&service, &storage, &root, true).await;
+    let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
     let parent = id();
     opened(&service, &provider, &parent).await;
     let work = hold_turn(&service, &provider, &parent, "parent").await;
@@ -141,13 +141,58 @@ async fn an_owned_opening_sealed_during_placement_does_not_acquire_a_lease() {
         .await
         .unwrap()
         .unwrap();
-    let after = environment.opened.load(Ordering::SeqCst);
-    drop(work);
-    retire(service, storage, metadata).await;
     assert!(created.is_err());
-    assert!(closed.is_ok(), "{closed:?}");
     assert_eq!(
-        after, before,
+        environment.opened.load(Ordering::SeqCst),
+        before,
         "a lifetime sealed during placement acquired another lease"
     );
+    assert!(matches!(closed, Ok(()) | Err(nessa_sdk::application::agent_execution::subagents::OwnershipFailure::Incomplete)), "{closed:?}");
+    // A close that observed an in-flight factory joins the existing cleanup
+    // owner after its actual opening result has been transferred.
+    coordinator
+        .end_lifetime(CloseCommand {
+            lifetime: lifetime.clone(),
+            cause: LifetimeCause::Deletion,
+            initiator: Initiator::Host(HostActor::new("other", "other", "later-close").unwrap()),
+            external_attachment: false,
+            timeout: None,
+        })
+        .await
+        .unwrap();
+    let original =
+        Initiator::Host(HostActor::new("person", "panel", "close-during-placement").unwrap());
+    assert_eq!(
+        coordinator.lifetime_state(&lifetime),
+        Some(LifetimeState::Closed)
+    );
+    assert_eq!(
+        coordinator.close_cause(&lifetime),
+        Some(LifetimeCause::HostClose)
+    );
+    assert_eq!(
+        coordinator.close_initiator(&lifetime),
+        Some(original.clone())
+    );
+    let snapshot = SqliteOwnershipStore::open(&root.join("ownership.sqlite3"))
+        .unwrap()
+        .read()
+        .await
+        .unwrap();
+    let row = snapshot
+        .lifetimes
+        .iter()
+        .find(|row| row.lifetime_id == lifetime)
+        .unwrap();
+    assert_eq!(row.state, LifetimeState::Closed);
+    assert_eq!(row.cause, Some(LifetimeCause::HostClose));
+    assert_eq!(row.initiator, Some(original));
+    child(&service, &parent, "parent", "after-placement-failure").await;
+    assert_eq!(
+        environment.opened.load(Ordering::SeqCst),
+        before + 1,
+        "the single reserved child capacity was released"
+    );
+    drop(work);
+    retire(service, storage, metadata).await;
 }

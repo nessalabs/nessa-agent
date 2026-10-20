@@ -354,6 +354,8 @@ export const localLifetimeRoles = {
 
 /** Parameterized selectors, built before passing their strings to the page. */
 export const selectorFor = {
+  /** A row in the open Settings tab, by its catalogue id. */
+  settingRow: (id) => `#settings-panel [data-setting="${id}"]`,
   railItem: (id) => `[data-rail-item="${id}"]`, // a place on the side rail: agents, notes, …
   appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, pane, window
   fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
@@ -533,6 +535,9 @@ export const names = {
   connections: "Connections",
   integrations: "Integrations",
   linkedDevices: "Linked devices",
+  /** Settings' category and tab holding the previews, the side rail's switch among them. */
+  advanced: "Advanced",
+  experimental: "Experimental",
   /** A session's menu item that opens the share dialog. */
   share: "Share…",
   /** What Integrations says (`sentences` in src/desktop/settings/model/mcp-servers.ts). */

@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs"
 import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import { RAIL_LOADING_DELAY_MS, RailView, railItems } from "./side-rail"
+import { RAIL_LOADING_DELAY_MS, RailView, railItems, railWidth } from "./side-rail"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -65,4 +66,26 @@ it("stops waiting when the view closes before the delay", async () => {
 
 it("delays the loader by three seconds", () => {
   expect(RAIL_LOADING_DELAY_MS).toBe(3000)
+})
+
+it("holds the macOS traffic lights in the open rail, with the gap they keep from the window's edge past them", () => {
+  const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8")
+  const px = (text: string, pattern: RegExp) => Number(pattern.exec(text)?.[1])
+  // Where the host puts the close button, and the room the page leaves them.
+  const left = px(
+    read("../../../../../src-tauri/src/platform/macos/traffic_lights.rs"),
+    /pub const LEFT: f64 = ([\d.]+);/,
+  )
+  const styles = read("../../../styles.css")
+  const room = px(
+    styles,
+    /\[data-host="macos"\]\[data-surface="window"\] \{\s*--desktop-window-controls-inset: (\d+)px;/,
+  )
+  const gutter = px(styles, /--desktop-gutter: (\d+)px;/)
+  // AppKit's three 14pt-wide buttons, 23pt apart.
+  const lights = 2 * 23 + 14
+  expect([left, room, gutter].every(Number.isFinite)).toBe(true)
+  expect(railWidth("macos")).toBeGreaterThanOrEqual(room)
+  expect(railWidth("macos") + gutter).toBe(left + lights + left)
+  expect(railWidth("browser")).toBe(48)
 })

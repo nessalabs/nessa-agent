@@ -85,6 +85,10 @@ export const KNOBS = {
     default: 1,
     what: "turns where an agent reads the window: beside another pane, then alone",
   },
+  rails: {
+    default: 1,
+    what: "times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off",
+  },
   linkings: {
     default: 1,
     what: "times native linking is turned on and off again from Settings, each restarting the gateway",
@@ -100,6 +104,10 @@ export const KNOBS = {
   pools: {
     default: 1,
     what: "times a conversation placed on any worker moves to another when its worker drains",
+  },
+  upgrades: {
+    default: 1,
+    what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps",
   },
   long: {
     default: 30,
@@ -168,10 +176,12 @@ export function plan(knobs) {
   add(knobs.deletes, () => ({ kind: "delete" }))
   add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
+  add(knobs.rails, () => ({ kind: "rail" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   add(knobs.tables, () => ({ kind: "table" }))
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
+  add(knobs.upgrades, () => ({ kind: "upgrade" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

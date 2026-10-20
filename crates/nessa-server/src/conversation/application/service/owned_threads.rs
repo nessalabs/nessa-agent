@@ -45,7 +45,33 @@ pub(super) struct Ownership {
 /// acquired by creation, separately from its not-yet-installed lifetime gate.
 pub(super) struct PendingPreparation {
     gate: Arc<dyn OwnedLifetime>,
-    resources: Option<Arc<dyn ChildResources>>,
+    resources: Option<PreparationResources>,
+}
+
+struct PreparationResources {
+    resources: Arc<dyn ChildResources>,
+    opening: Arc<super::Slot>,
+}
+
+/// The original opening owner confirmed it acquired nothing. Retain its
+/// immutable result so later slot removal/reopening cannot supply that fact.
+struct UnacquiredPreparation {
+    opening: Arc<super::Slot>,
+}
+#[async_trait]
+impl ChildResources for UnacquiredPreparation {
+    async fn close(&self, _: &LifetimeCause, _: &Initiator) -> ResourceReport {
+        match self.opening.value.get() {
+            Some(Err(failure)) if !failure.holds => ResourceReport {
+                physical: PhysicalFact::Released,
+                evidence: EvidenceFact::Acknowledged,
+            },
+            _ => ResourceReport {
+                physical: PhysicalFact::Failed,
+                evidence: EvidenceFact::Pending,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -506,6 +532,7 @@ impl ConversationService {
         &self,
         id: &ConversationId,
         actor: &ActionContext,
+        opening: Arc<super::Slot>,
     ) -> Result<Option<Arc<dyn OwnedLifetime>>, ConversationError> {
         let Some(ownership) = self.inner.ownership.get() else {
             return Ok(None);
@@ -531,10 +558,13 @@ impl ConversationService {
         if preparation.resources.is_some() {
             return Err(ConversationError::RequestConflict);
         }
-        preparation.resources = Some(Arc::new(Resources {
-            service: Arc::downgrade(&self.inner),
-            id: id.clone(),
-        }));
+        preparation.resources = Some(PreparationResources {
+            resources: Arc::new(Resources {
+                service: Arc::downgrade(&self.inner),
+                id: id.clone(),
+            }),
+            opening,
+        });
         Ok(Some(preparation.gate.clone()))
     }
 
@@ -659,9 +689,21 @@ impl ChildFactory for Factory {
             .and_then(|preparation| preparation.resources);
         if result.is_err() {
             return Err(match resources {
-                Some(resources) => PrepareFailure {
+                Some(held)
+                    if held.opening.value.get().is_some_and(|result| {
+                        result.as_ref().is_err_and(|failure| !failure.holds)
+                    }) =>
+                {
+                    PrepareFailure {
+                        failure: PortFailure::Rejected,
+                        cleanup: Some(Arc::new(UnacquiredPreparation {
+                            opening: held.opening,
+                        })),
+                    }
+                }
+                Some(held) => PrepareFailure {
                     failure: PortFailure::Uncertain,
-                    cleanup: Some(resources),
+                    cleanup: Some(held.resources),
                 },
                 None => refused(),
             });
@@ -671,7 +713,7 @@ impl ChildFactory for Factory {
             cleanup: None,
         })?;
         Ok(PreparedChild {
-            resources,
+            resources: resources.resources,
             submit: Arc::new(NoInitialTurn),
         })
     }
@@ -826,3 +868,7 @@ pub(super) fn creation_request(principal: &str, surface: &str, action: &str) -> 
     let bytes = serde_json::to_vec(&(principal, surface, action)).expect("strings serialize");
     SpawnRequestId::new(format!("create-{:x}", Sha256::digest(bytes))).expect("digest identity")
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/conversation/owned_preparation.rs"]
+mod tests;

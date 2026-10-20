@@ -315,9 +315,18 @@ Experimental turns it on; the rail stands beside the workspace in
   loader before 3 s; still loading at 3 s, the kit's `LoadingText` sweeps
   "Loading Files" with no panel or border around it. _Check:_
   `columns.mjs --only rail-loading`.
+- [ ] **The open rail holds the traffic lights in its top row**: in the macOS
+  window the lights never move; the open rail is wide enough for them, its
+  items are centred under them, and so is its toggle, open or closed; the
+  first card starts as far past the green button as the red one is from the
+  window's edge. Open, closed or off, the titlebar's first control starts
+  where the lights end. _Check:_ `conversation-stress.mjs` step `rail` (the
+  fake host makes the page macOS; `columns.mjs` keeps the browser's rail);
+  `side-rail.test.tsx` ties the rail's width to `traffic_lights.rs` and
+  `styles.css`.
 - [ ] **The titlebar's controls never pass under the window's controls while
   the rail opens or closes**: every frame draws them between where they were
-  and where they land — still, in the macOS window. _Check:_
+  and where they land. _Check:_
   `columns.mjs --only titlebar-steady`.
 - [ ] **Toggling the rail moves things by transform only**: the width lands at
   once and FlipScope plays the columns back, so no frame lays text out again.

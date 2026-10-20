@@ -97,7 +97,7 @@ pub struct LeaseCommit<T> {
 /// Why lease records were not recorded, or not yet saved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeaseRecordError {
-    /// The manager has not loaded the conversation: no Agent has prepared it.
+    /// The manager has not prepared the conversation evidence.
     NotLoaded,
     /// The lease rules refuse a record; nothing was retained.
     Refused(StorageError),
@@ -123,7 +123,7 @@ impl std::error::Error for LeaseRecordError {}
 /// not yet save it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArtifactRecordError {
-    /// The manager has not loaded the conversation: no Agent has prepared it.
+    /// The manager has not prepared the conversation evidence.
     NotLoaded,
     /// The conversation already records
     /// [`ArtifactRecord::MAX_PER_CONVERSATION`] artifacts. Nothing was
@@ -160,7 +160,7 @@ impl std::error::Error for ArtifactRecordError {}
 /// save it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NoteRecordError {
-    /// The manager has not loaded the conversation: no Agent has prepared it.
+    /// The manager has not prepared the conversation evidence.
     NotLoaded,
     /// The principal's request already left another note: another text,
     /// delivery, surface or authority under the same request. Nothing was
@@ -333,6 +333,12 @@ impl Evidence {
 const MESSAGE_COMMIT_DELAY: Duration = Duration::from_millis(100);
 const MESSAGE_COMMIT_BYTES: usize = 16 * 1024;
 const MESSAGE_COMMIT_COUNT: usize = 64;
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Preparation {
+    Provider,
+    LeaseRecord,
+}
+
 impl SessionManager {
     /// Acquires exclusive storage access for one local session.
     ///
@@ -376,7 +382,7 @@ impl SessionManager {
     pub fn id(&self) -> &SessionId {
         &self.id
     }
-    /// Last snapshot acknowledged by storage. None until Agent initialization.
+    /// Last snapshot acknowledged by storage. None until evidence preparation.
     /// Failed writes never appear here as committed evidence.
     ///
     /// Waiting for the evidence lock registers the polling task's `Waker`
@@ -587,9 +593,43 @@ impl SessionManager {
         catch_storage_operation(|| Box::pin(self.save_observed(&mut evidence))).await
     }
 
+    /// Prepare saved evidence for recording a refused lease before an Agent exists.
+    ///
+    /// Uses the same checked load, continuation validation and initialization
+    /// save as Agent preparation. Existing provider identity, context and queue
+    /// are preserved: no provider is restored, opened or dispatched. `provider`
+    /// supplies the initial identity only for a conversation with no history.
+    /// A later `Agent::prepare` still checks its selected provider normally.
+    ///
+    /// The manager retains its exclusive storage lease. Acknowledge retained
+    /// records through their existing save operation before later preparation,
+    /// which reloads storage rather than merging unsaved evidence. Mutable
+    /// access excludes concurrent preparation. Dropping this unattached manager
+    /// releases storage access; no provider resources have been acquired.
+    ///
+    /// # Errors
+    /// Returns an Agent storage error for unreadable or conflicting evidence,
+    /// unresolved initialization, or a failed initialization save.
+    pub async fn prepare_for_lease_record(
+        &mut self,
+        provider: &dyn AgentProvider,
+    ) -> Result<(), AgentError> {
+        self.prepare_evidence(provider, Preparation::LeaseRecord)
+            .await
+            .map(|_| ())
+    }
+
     pub(crate) async fn prepare(
         &mut self,
         provider: &dyn AgentProvider,
+    ) -> Result<ProviderContext, AgentError> {
+        self.prepare_evidence(provider, Preparation::Provider).await
+    }
+
+    async fn prepare_evidence(
+        &mut self,
+        provider: &dyn AgentProvider,
+        preparation: Preparation,
     ) -> Result<ProviderContext, AgentError> {
         let saved = catch_storage_operation(|| self.storage_lease.load())
             .await
@@ -613,8 +653,8 @@ impl SessionManager {
         // context is not restored here (none was saved, or it was saved
         // where this provider does not start, such as another worker) goes
         // on under this provider's fingerprint: the same provider and model.
-        let moved = match &compacted {
-            Some(snapshot) if snapshot.provider != identity => {
+        let moved = match (&compacted, preparation) {
+            (Some(snapshot), Preparation::Provider) if snapshot.provider != identity => {
                 let restores = snapshot
                     .provider_context
                     .recorded()
@@ -633,12 +673,13 @@ impl SessionManager {
             _ => None,
         };
         let created = compacted.is_none();
-        let restore_queue = match &compacted {
-            Some(snapshot) => !super::queue_validation::replay(snapshot)
-                .map_err(AgentError::Storage)?
-                .is_empty(),
-            None => false,
-        };
+        let restore_queue = preparation == Preparation::Provider
+            && match &compacted {
+                Some(snapshot) => !super::queue_validation::replay(snapshot)
+                    .map_err(AgentError::Storage)?
+                    .is_empty(),
+                None => false,
+            };
         let mut observed = Continuation::restore(compacted).map_err(AgentError::Storage)?;
         let mut changes = if created {
             vec![SessionChange::Opened {
@@ -1345,8 +1386,9 @@ impl SessionManager {
     /// a write that fails leaves them retained for the next save, as every
     /// other fact is: [`LeaseCommit::saved`] says which.
     ///
-    /// Only an attached manager records: before [`Agent::prepare`] has loaded
-    /// the conversation this is [`LeaseRecordError::NotLoaded`].
+    /// Only a prepared manager records: before [`Self::prepare_for_lease_record`] or
+    /// [`Agent::prepare`] has loaded the conversation this is
+    /// [`LeaseRecordError::NotLoaded`].
     ///
     /// [`Agent::prepare`]: crate::application::agent_execution::agents::Agent::prepare
     pub async fn record_lease<T>(
@@ -1443,7 +1485,7 @@ impl SessionManager {
     /// [`ArtifactRecordError::Storage`].
     ///
     /// # Errors
-    /// [`ArtifactRecordError::NotLoaded`] before [`Agent::prepare`] has loaded
+    /// [`ArtifactRecordError::NotLoaded`] before [`Self::prepare_for_lease_record`] or [`Agent::prepare`] has loaded
     /// the conversation; [`ArtifactRecordError::Full`],
     /// [`ArtifactRecordError::NotThisLease`] or
     /// [`ArtifactRecordError::UnknownTurn`] when refused;
@@ -1504,7 +1546,7 @@ impl SessionManager {
     /// retained for the next save: [`NoteRecordError::Storage`].
     ///
     /// # Errors
-    /// [`NoteRecordError::NotLoaded`] before [`Agent::prepare`] has loaded
+    /// [`NoteRecordError::NotLoaded`] before [`Self::prepare_for_lease_record`] or [`Agent::prepare`] has loaded
     /// the conversation; [`NoteRecordError::Conflict`],
     /// [`NoteRecordError::Full`] or [`NoteRecordError::RateLimited`] when
     /// refused; [`NoteRecordError::Storage`] when retained but not saved.

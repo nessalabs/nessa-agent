@@ -805,6 +805,20 @@ pub(crate) enum LeaseIssueError {
     OverUnreadable,
 }
 
+impl From<LeaseIssueError> for super::ConversationError {
+    fn from(error: LeaseIssueError) -> Self {
+        match error {
+            LeaseIssueError::OverUnreadable => Self::LeaseUnreadable,
+            LeaseIssueError::Record(
+                LeaseRecordError::Refused(error) | LeaseRecordError::Storage(error),
+            ) => Self::Storage(error),
+            LeaseIssueError::Record(LeaseRecordError::NotLoaded | LeaseRecordError::Unreadable) => {
+                Self::Unavailable
+            }
+        }
+    }
+}
+
 impl std::fmt::Display for LeaseIssueError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
