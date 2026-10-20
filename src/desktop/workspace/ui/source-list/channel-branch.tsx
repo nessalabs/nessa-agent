@@ -9,6 +9,7 @@ import {
   toggleShowAll,
 } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import { usePaintedWithPanes } from "../../adapters/store/paint-with-panes"
 import {
   sameBranch,
   selectBranch,
@@ -44,7 +45,7 @@ export const ChannelBranch = memo(function ChannelBranch({
   const expanded = useWorkspaceSelector((state) =>
     selectChannelExpanded(state, channelId),
   )
-  const current = useWorkspaceSelector(
+  const current = usePaintedWithPanes(
     (state) => selectFocusedChannel(state) === channelId,
   )
   const activity = useWorkspaceSelector(

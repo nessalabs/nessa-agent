@@ -49,6 +49,8 @@ export const Pane = memo(function Pane({
   const store = useWorkspaceStore()
   const focusHandlers = usePaneFocus(key)
   const sessionId = useWorkspaceSelector((state) => selectPaneSession(state, key)) ?? ""
+  // Focus paints in the click. The new pane is not mounted yet; leaving the
+  // mark on this one would send the caret here and it would stay.
   const focused = useWorkspaceSelector((state) => selectFocusedPaneKey(state) === key)
   const draft = useWorkspaceSelector(
     (state) => selectDraft(state, sessionId) !== undefined,

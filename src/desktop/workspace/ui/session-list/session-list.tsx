@@ -1,11 +1,4 @@
-import {
-  memo,
-  useEffect,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from "react"
-import { shallowEqual } from "react-redux"
+import { memo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { Button } from "@nessa-ui/react/button"
 import { EmptyState } from "@nessa-ui/react/empty-state"
 import { GroupHeader } from "@nessa-ui/react/group-header"
@@ -24,6 +17,7 @@ import {
   useWorkspaceSelector,
   useWorkspaceStore,
 } from "../../adapters/store/hooks"
+import { usePaintedWithPanes } from "../../adapters/store/paint-with-panes"
 import {
   sameListGroups,
   selectChannel,
@@ -61,34 +55,6 @@ import { useRowFocusKept } from "../row-focus"
 import { useSessionRowActions, type SessionRowActions } from "../session-row-actions"
 
 /**
- * The focused session, one frame after it changes. Reading it in the list
- * renders the list on the click that opens a pane; the tab stop can wait.
- */
-function useFocusedSessionNextFrame(): string | null {
-  const store = useWorkspaceStore()
-  const [value, setValue] = useState(() => selectFocusedSessionId(store.getState()))
-  const shown = useRef(value)
-  useEffect(() => {
-    let frame = 0
-    const update = () => {
-      const next = selectFocusedSessionId(store.getState())
-      if (Object.is(shown.current, next)) return
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => {
-        shown.current = next
-        setValue(next)
-      })
-    }
-    const unsubscribe = store.subscribe(update)
-    return () => {
-      unsubscribe()
-      cancelAnimationFrame(frame)
-    }
-  }, [store])
-  return value
-}
-
-/**
  * The middle column: what the sidebar chose — a channel's sessions, or every
  * session in one state — grouped "Needs you", "Running", "Earlier", with a
  * search over them. Arrow keys walk the list and open as they go, like Mail's
@@ -115,8 +81,8 @@ export const SessionList = memo(function SessionList() {
   const title = channel?.name ?? ""
   const ordered = groups.flatMap((group) => group.ids)
   // One row takes Tab: the open one, or the first when none here is open.
-  // A frame later, so opening a pane does not render this list in the click.
-  const focusedId = useFocusedSessionNextFrame()
+  // Painted with the new boxes, so opening a pane does not render this list.
+  const focusedId = usePaintedWithPanes(selectFocusedSessionId)
   const tabStop = focusedId && ordered.includes(focusedId) ? focusedId : ordered[0]
 
   // ↑ and ↓ walk the list, Home and End go to its ends, each opening as it
@@ -258,12 +224,11 @@ const SessionRow = memo(function SessionRow({
   tabStop: boolean
 }) {
   const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
-  const { selected, open } = useWorkspaceSelector(
-    (state) => ({
-      selected: selectFocusedSessionId(state) === sessionId,
-      open: selectShownSessionIds(state).includes(sessionId),
-    }),
-    shallowEqual,
+  const open = useWorkspaceSelector((state) =>
+    selectShownSessionIds(state).includes(sessionId),
+  )
+  const selected = usePaintedWithPanes(
+    (state) => selectFocusedSessionId(state) === sessionId,
   )
   const actions = useOpenFromRow()
   const row = useSessionRowActions(sessionId)

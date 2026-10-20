@@ -5,10 +5,10 @@
  * render (`flushSync`) would flush out of turn, resizing the window's columns
  * inside the observer and leaving its notifications undelivered.
  */
-import { act, StrictMode, useEffect } from "react"
+import { act, useEffect } from "react"
 import { createRoot } from "react-dom/client"
 import { expect, it } from "vitest"
-import { useDrawnAfterColumnChange, useFitOnResize } from "./window-width"
+import { useFitOnResize } from "./window-width"
 
 it("fits in the commit that sees the width, before any effect of that commit runs", async () => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -59,77 +59,6 @@ it("fits a new pane column from the next animation frame", async () => {
     expect(queued).toHaveLength(1)
     queued[0](0)
     expect(order).toEqual(["fit 2"])
-    await act(async () => root.unmount())
-  } finally {
-    window.requestAnimationFrame = request
-    window.cancelAnimationFrame = cancel
-  }
-})
-
-it("paints a sidebar fold from the next frame when a pane column appears, and before paint when the person toggles it", async () => {
-  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-  const queued = new Map<number, FrameRequestCallback>()
-  let next = 1
-  const request = window.requestAnimationFrame
-  const cancel = window.cancelAnimationFrame
-  window.requestAnimationFrame = (callback) => {
-    const id = next++
-    queued.set(id, callback)
-    return id
-  }
-  window.cancelAnimationFrame = (id) => {
-    queued.delete(id)
-  }
-  function Window({ open, columns }: { open: boolean; columns: number }) {
-    const drawn = useDrawnAfterColumnChange(open, columns)
-    return <div data-drawn={drawn ? "open" : "closed"} />
-  }
-  const host = document.createElement("div")
-  const root = createRoot(host)
-  const drawn = () => host.querySelector("div")?.getAttribute("data-drawn")
-  const run = () => {
-    const callback = queued.values().next().value
-    queued.clear()
-    callback?.(0)
-  }
-  try {
-    await act(async () =>
-      root.render(
-        <StrictMode>
-          <Window open columns={1} />
-        </StrictMode>,
-      ),
-    )
-    expect(drawn()).toBe("open")
-    queued.clear()
-    await act(async () =>
-      root.render(
-        <StrictMode>
-          <Window open={false} columns={1} />
-        </StrictMode>,
-      ),
-    )
-    expect(drawn()).toBe("closed")
-    expect(queued.size).toBe(0)
-    await act(async () =>
-      root.render(
-        <StrictMode>
-          <Window open columns={1} />
-        </StrictMode>,
-      ),
-    )
-    queued.clear()
-    await act(async () =>
-      root.render(
-        <StrictMode>
-          <Window open={false} columns={2} />
-        </StrictMode>,
-      ),
-    )
-    expect(drawn()).toBe("open")
-    expect(queued.size).toBe(1)
-    await act(async () => run())
-    expect(drawn()).toBe("closed")
     await act(async () => root.unmount())
   } finally {
     window.requestAnimationFrame = request

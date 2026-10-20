@@ -46,9 +46,9 @@ export const SourceList = memo(function SourceList({
 }: {
   variant: "channels" | "tree"
   /**
-   * Whether the sidebar is painted. The shell lags this a frame when a pane
-   * column appears (`useDrawnAfterColumnChange`), so the list does not read
-   * the store's drawn bit and fold in the click.
+   * Whether the sidebar is painted. A pane column paints this with the new
+   * boxes (`usePaintedWithPanes`), so the list does not read the store's
+   * drawn bit and fold in the click.
    */
   open: boolean
   top?: ReactNode

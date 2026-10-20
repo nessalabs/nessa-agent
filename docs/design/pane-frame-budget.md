@@ -93,24 +93,26 @@ starts the measured row.
    `data-scene-complete`. The layers' width is the text's column count.
    A later change of pane width crops them.
 5. A column change paints three frames after the commit that recorded it.
-   The next frame is when a drop's copy lets go and when a side column's
-   fold is painted. A spare fold is already in state (`arranged`); a resize
-   still folds before paint (`useFitOnResize`). Until the new boxes paint,
-   the workspace is `data-spare-held` and a folded sidebar stays in the
-   row, so the conversation does not change measure on the fold. The mark
-   clears in the commit that paints the boxes. The frame after the fold is
-   the column title's glide. The grid mounted with whatever layout it first
-   read; that first paint does not wait. The paint frame marks the grid
-   `data-split-painting`, and scene text that has already laid out stays
-   unpainted until the next frame. The grain comes back the frame after
-   that paint, and the composer's blur the frame after the grain. A drag's
-   copy does not paint the night scene. A pane change does not render the
-   shell. The fitted window renders it, and the columns bail while the
-   sidebar they paint is unchanged. The session list's tab stop follows
-   the focused session a frame later, so the list does not render in the
-   click. It does not render the sidebar unless
-   the reveal itself changed, and it does not render the night scene or
-   the overview unless their own inputs changed.
+   The next frame is when a drop's copy lets go. A spare fold is already
+   in state (`arranged`); a resize still folds before paint
+   (`useFitOnResize`). The window, the focused pane, and the focused row
+   paint that fold with the new boxes (`usePaintedWithPanes`), not in the
+   click and not on the frame after it. Until the new boxes paint, the
+   workspace is `data-spare-held` and a folded sidebar stays in the row.
+   The session list keeps the measure it had while that hold is on. The
+   mark clears in the commit that paints the boxes, and the fold is in
+   that same commit. The frame after the click is the column title's
+   glide, while the grid is still on its last boxes. The grid mounted
+   with whatever layout it first read; that first paint does not wait.
+   The paint frame marks the grid `data-split-painting`, and scene text
+   that has already laid out stays unpainted until the next frame. The
+   grain comes back the frame after that paint, and the composer's blur
+   the frame after the grain. A drag's copy does not paint the night
+   scene. A pane change does not render the shell, and it does not render
+   the fitted window. A person's toggle still paints in the turn. The
+   click does not render the sidebar unless the reveal itself changed,
+   and it does not render the night scene or the overview unless their
+   own inputs changed.
 
 Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read
@@ -132,10 +134,9 @@ layer before the rest:
 
 ```mermaid
 flowchart LR
-  input["keydown, click, or pointerup"] --> script["script; last boxes stay"]
-  script --> fold["next frame: copy lets go, side column folds"]
-  fold --> glide["next frame: column title glides"]
-  glide --> boxes["next frame: new boxes"]
+  input["keydown, click, or pointerup"] --> script["script; window stays as painted"]
+  script --> glide["next frames: copy lets go, column title glides"]
+  glide --> boxes["third frame: new boxes and the spare fold"]
   boxes --> focus["next frame: focus"]
   focus --> dim["next frame: dim layer, width locked"]
   dim --> rest["next frame: rain, lit layer, steam"]
@@ -188,6 +189,12 @@ flowchart LR
   dirty, and the title frame's `getComputedStyle` forced the layout (style
   about 46 ms, frames about 79–85). The hold is the sidebar staying in the
   row, on `data-spare-held`, cleared with the boxes.
+- Painting the spare fold on the frame after the click. The selector
+  still rendered the fitted window in the click (about 9 ms of script,
+  a frame of 56–64 ms at 4×), and the next frame restyled the session
+  list (about 12 ms of script and 17 ms of style, a frame of 63–67 ms).
+  The fold is painted with the boxes, and the list keeps its measure
+  while the sidebar is held in the row.
 
 ## Review brief
 
@@ -201,9 +208,9 @@ flowchart LR
 - Owned scope: `paneBox`, the drop's two callbacks, the grid painting a
   column change three frames later, the workspace marked `data-spare-held`
   for that wait so a folded sidebar stays in the row, the side-column fit
-  waiting one frame when the pane count changes, the sidebar paint waiting
-  that same frame when the count changes (`useDrawnAfterColumnChange`,
-  passed into the source list), the edge peek's stable controls, the shell
+  waiting one frame when the pane count changes, the window painting the
+  fold with the new boxes (`usePaintedWithPanes`, passed into the source
+  list as the open it draws), the edge peek's stable controls, the shell
   leaving a pane change to the fitted window, the night scene and the
   overview layer skipping a render whose inputs did not change, the
   scene-ready and scene-complete marks and the layer rules,

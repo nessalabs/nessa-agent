@@ -528,10 +528,10 @@ describe("a review notice opens its conversation", () => {
   })
 })
 
-describe("a spare sidebar fold paints the frame after the pane that took its room", () => {
+describe("a spare sidebar fold paints with the new boxes, not in the click", () => {
   const narrow = { width: 500, height: 800, spare: 240 }
 
-  it("keeps the sidebar on screen through the commit, then folds it", async () => {
+  it("keeps the sidebar on screen through the commit and the two frames before the boxes", async () => {
     const frames = controlledAnimationFrames()
     const width = window.innerWidth
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 })
@@ -567,6 +567,11 @@ describe("a spare sidebar fold paints the frame after the pane that took its roo
       expect(host.querySelector(".workspace-window")?.getAttribute("data-sidebar")).toBe(
         "open",
       )
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
+      expect(list()?.hasAttribute("inert")).toBe(false)
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
       await act(async () => frames.runFrame())
       expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
       expect(list()?.hasAttribute("inert")).toBe(true)

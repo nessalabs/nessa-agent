@@ -194,9 +194,10 @@ describe("the widget pane", () => {
         openWidget({ widget: sampleWidgets.trail, place: "pane", origin: "a" }),
       )
     })
+    // The grid paints the new pane with the third frame.
+    await frames()
     const pane = host.querySelector("[data-widget-pane]")
     expect(pane?.querySelector("nav")?.textContent).toBe("Session aSample trail")
-    await frames()
     expect(pane?.querySelector("[data-widget-body]")).not.toBeNull()
   })
 
