@@ -254,9 +254,15 @@ export class Follower {
               `a subscription past ${this.limits.conversationTargets} was accepted`,
             )
         } catch (error) {
-          // The gateway restarting, or this connection dropping, ends the
-          // probe: it asks again on a later round.
-          if (error?.code === "temporarily_unavailable" || !isRefusal(error)) return
+          // The gateway restarting, this connection dropping, or a
+          // conversation the list still names being deleted, ends the
+          // probe: it asks again on a later round, against the list then.
+          if (
+            error?.code === "temporarily_unavailable" ||
+            error?.code === "conversation_deleted" ||
+            !isRefusal(error)
+          )
+            return
           if (n === room && error?.code === "subscription_capacity")
             this.counts.refusedAsExpected += 1
           else
