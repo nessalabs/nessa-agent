@@ -31,7 +31,11 @@ import { inModal } from "../../../adapters/modal"
 import type { DesktopStore } from "../../../store"
 import { widgetBodyAttribute } from "../../../widgets"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
-import { selectContentKind, selectFocusedPaneKey, selectWindowWidget } from "../store/selectors"
+import {
+  selectContentKind,
+  selectFocusedPaneKey,
+  selectWindowWidget,
+} from "../store/selectors"
 import { arrivalWaitingAttribute } from "./arrival"
 
 /** Marks the focused pane, whichever layout draws it, for the caret to find. */
