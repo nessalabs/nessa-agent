@@ -56,6 +56,14 @@
  *   delete      another conversation is deleted from its row's More menu,
  *               once asked; the gateway refuses it as deleted, and neither
  *               list nor the window holds it
+ *   rail        the side rail is turned on in Settings › Advanced ›
+ *               Experimental and opened: the window's traffic lights stay
+ *               where the host puts them and the rail holds them in its top
+ *               row, its controls centred under them, the first card past
+ *               them by the gap they keep from the window's edge; a message
+ *               sent with the rail open is answered; closed, opened again,
+ *               and turned off while open, the titlebar's controls go back to
+ *               starting where the lights end
  *   notice      a review waits in another conversation, which the window does
  *               not show: the host's system notice names its tool and the
  *               conversation's title, opening it brings that conversation
@@ -337,6 +345,146 @@ async function untilView(run, conversationId, ready, seconds = 60) {
 }
 
 const ended = (turn) => turnEnded(turn.status)
+
+/**
+ * Turns the side rail preview on or off where a person does: Settings ›
+ * Advanced › Experimental. Leaves Settings, back in the workspace.
+ */
+async function setSideRail(page, on, failures) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.advanced }).click()
+  // A category with one tab draws no tab list.
+  const tab = page.locator(css.settingsTab, { hasText: names.experimental })
+  if (await tab.count()) await tab.click()
+  const toggle = page.locator(`${selectorFor.settingRow("side-rail")} [role='switch']`)
+  if ((await toggle.getAttribute("aria-checked")) !== String(on)) await toggle.click()
+  const switched = await waitFor(
+    async () => (await toggle.getAttribute("aria-checked")) === String(on),
+    5_000,
+  )
+  if (!switched) failures.push(`the side rail's switch did not turn ${on ? "on" : "off"}`)
+  const drawn = await waitFor(
+    async () => (await railLayout(page)).rail === (on ? "open" : "off"),
+    10_000,
+  )
+  if (!drawn) {
+    const now = await railLayout(page)
+    failures.push(
+      on && now.rail === "closed"
+        ? "the window had no room for the side rail"
+        : `under Settings the rail is ${now.rail}, not ${on ? "open" : "off"}`,
+    )
+  }
+  await page.getByRole("button", { name: names.leaveSettings }).first().click()
+  await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
+  const shown = await waitFor(
+    async () => (await page.locator(css.sideRailToggle).count()) === (on ? 1 : 0),
+    10_000,
+  )
+  if (!shown) failures.push(`the side rail's toggle is ${on ? "missing" : "still shown"}`)
+}
+
+/**
+ * The macOS traffic lights, where `traffic_lights.rs` puts them and keeps
+ * them: the close button 16px from the window's edge, the three 23px apart,
+ * so they end 76px in and their middle is 46px in. The page never moves them.
+ */
+const LIGHTS = { left: 16, middle: 46, end: 76 }
+// The page's rail is tied to the host's and the stylesheet's copies in
+// `side-rail.test.tsx`; this copy is the harness's own model of the host.
+
+/**
+ * Waits until the rail is `rail` (open, closed, or off) and laid out around
+ * the traffic lights: open, the rail holds them in its top row, its items
+ * centred under them, and the first card starts past them by the gap they
+ * keep from the window's edge; open or closed, the rail's toggle stays
+ * centred under them; open or not, the titlebar's first control starts
+ * where they end, never under them. False, with the last measurement
+ * said, when that never holds.
+ */
+async function aroundTheLights(page, rail, failures) {
+  const near = (a, b) => Math.abs(a - b) <= 0.5
+  const holds = (now) =>
+    now.rail === rail &&
+    [now.at.workspace, now.at.inset, now.at.control].every(Number.isFinite) &&
+    near(now.at.control, now.at.workspace + now.at.inset) &&
+    now.at.control >= LIGHTS.end &&
+    (rail === "open"
+      ? near(now.at.workspace, now.at.railWidth) &&
+        near(now.at.card, LIGHTS.end + LIGHTS.left) &&
+        near(now.at.item, LIGHTS.middle)
+      : near(now.at.workspace, 0)) &&
+    (rail === "off" || near(now.at.toggle, LIGHTS.middle))
+  if (await waitFor(async () => holds(await railLayout(page)), 10_000)) return true
+  const now = await railLayout(page)
+  failures.push(
+    `rail ${rail} (now ${now.rail}) around lights ending at ${LIGHTS.end}, middle ${LIGHTS.middle}: ` +
+      JSON.stringify(now.at),
+  )
+  return false
+}
+
+/**
+ * The rail's state and, from the window's left edge: its width, the middle of
+ * its first item and of its toggle, where the workspace and its first card start,
+ * the window controls' inset from it, and where its titlebar's first control
+ * starts.
+ */
+function railLayout(page) {
+  return page.evaluate(
+    ({ frame, workspace, control, rail, item, toggle }) => {
+      const box = (selector) => document.querySelector(selector)?.getBoundingClientRect()
+      const middle = (selector) => {
+        const at = box(selector)
+        return at ? at.left + at.width / 2 : NaN
+      }
+      // A length token may be a calc(): resolved by laying it out.
+      const length = (inside, token) => {
+        const probe = document.createElement("div")
+        probe.style.cssText = `position:absolute;visibility:hidden;width:var(${token})`
+        inside.append(probe)
+        const width = probe.getBoundingClientRect().width
+        probe.remove()
+        return width
+      }
+      // The workspace's first card: the rounded panel at its left edge.
+      const card = (inside) => {
+        const left = inside.getBoundingClientRect().left
+        const x = left + length(inside, "--desktop-gutter") + 2
+        const panel = document
+          .elementsFromPoint(x, innerHeight / 2)
+          .find(
+            (e) =>
+              inside.contains(e) &&
+              parseFloat(getComputedStyle(e).borderTopLeftRadius) >= 8 &&
+              e.getBoundingClientRect().height > innerHeight / 2,
+          )
+        return panel?.getBoundingClientRect().left ?? NaN
+      }
+      const at = document.querySelector(workspace)
+      return {
+        rail: document.querySelector(frame)?.dataset.rail,
+        at: {
+          railWidth: box(rail)?.width ?? NaN,
+          item: middle(item),
+          toggle: middle(toggle),
+          workspace: at.getBoundingClientRect().left,
+          card: card(at),
+          inset: length(at, "--desktop-window-controls-inset"),
+          control: box(control)?.left ?? NaN,
+        },
+      }
+    },
+    {
+      frame: css.workspaceWindow,
+      workspace: css.workspace,
+      control: css.titlebarSidebarToggle,
+      rail: css.sideRail,
+      item: `${css.sideRail} [data-rail-item]`,
+      toggle: css.sideRailToggle,
+    },
+  )
+}
 
 /** The row of the conversation `conversationId` in the window's list. */
 const sessionRow = (page, conversationId) =>
@@ -893,6 +1041,29 @@ const steps = {
     })
     // The restarted gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async rail(run, step, failures) {
+    await run.exclusive(async () => {
+      await setSideRail(run.page, true, failures)
+      if (failures.length) return
+      const toggle = run.page.locator(css.sideRailToggle)
+      if ((await toggle.getAttribute("aria-disabled")) === "true") {
+        failures.push("the window had no room for the side rail")
+        return
+      }
+      for (const open of [true, false, true]) {
+        if ((await toggle.getAttribute("aria-expanded")) !== String(open))
+          await toggle.click()
+        if (!(await aroundTheLights(run.page, open ? "open" : "closed", failures))) return
+        // The workspace still takes a message with the rail beside it.
+        if (open && failures.length === 0) await steps.reply(run, step, failures)
+      }
+      // Turned off with the rail open: the rail goes, and back from Settings
+      // the titlebar's controls start where the lights end again.
+      await setSideRail(run.page, false, failures)
+      await aroundTheLights(run.page, "off", failures)
+    })
   },
 
   async pool(run, step, failures) {
