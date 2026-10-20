@@ -72,6 +72,7 @@ import {
   waitingCopy,
 } from "./share-copy"
 import { openSettings } from "../../../settings"
+import { focusSessionRow } from "../row-focus"
 import "./share-dialog.css"
 
 const roles: readonly ShareRole[] = ["read", "comment", "drive"]
@@ -120,12 +121,31 @@ function ShareDialog({ dialog }: { dialog: ShareDialogState }) {
     const grant = grants?.find((each) => each.credentialId === credentialId)
     onDraft(grant ? draftFromGrant(grant) : emptyDraft(credentialId))
   }
+  // The menu item that opened Share is gone with the menu. Focus goes to the
+  // session's row, looked up now, unless something else already took it
+  // (Link a Device opens Settings).
+  const returnFocus = (event: Event) => {
+    event.preventDefault()
+    const ownerDocument =
+      event.currentTarget instanceof Node ? event.currentTarget.ownerDocument : document
+    if (!ownerDocument) return
+    const active = ownerDocument.activeElement
+    if (
+      active instanceof HTMLElement &&
+      active !== ownerDocument.body &&
+      active !== ownerDocument.documentElement
+    ) {
+      return
+    }
+    focusSessionRow(dialog.sessionId, ownerDocument)
+  }
   return (
     <Dialog
       open
       onOpenChange={(next) => {
         if (!next) dispatch(closeShare())
       }}
+      onCloseAutoFocus={returnFocus}
       size="lg"
       title={title ? `Share “${title}”` : "Share"}
       data-share-dialog=""

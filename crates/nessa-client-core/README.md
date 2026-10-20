@@ -87,6 +87,7 @@ borrowed accessors; its compile-fail example checks that the view cannot be muta
 | `src/read_only_sync/entrypoint/` | Argument contract and JSON output over supplied handles. |
 | `src/composition/` | Private profile, device/status admission, protected session and cache construction, independent wall/monotonic adapters, `fetch` (an existing output answered before dialling, then one held file into its part), immutable command diagnostic facade, and executable input/output. The held-file retry pause is `retained::ThreadPause`, re-exported here. |
 | `examples/read_only_sync.rs` | Standalone executable using `composition::run_read_only_example`. |
+| `examples/weak_link_measure.rs` | Prints the #262 schedule report: one real record source, paced and unpaced, reopened. |
 | `tests/protected/` | Shared physical deadline/first-cause and cancellation evidence for the protected byte stream. |
 | `tests/product/` | Real pinned TLS opening, idle/partial traffic, original request IDs, permit retention, typed deadlines/failures and independent physical drain. |
 | `tests/outbox/` | Phone outbox ordering, canonical bytes, and product-frame evidence, included by the library with `#[path]`. `departure.rs` selects initial-read and lease orderings; `lease_wait.rs` tests real SQLite bounded lock refusal. |

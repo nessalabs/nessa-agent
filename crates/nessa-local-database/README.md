@@ -11,26 +11,28 @@ and [ADR 202](../../docs/adr/todo/202-versioned-local-datasets.md).
   it by name, so a process running as this same user could swap the name in
   between; that is not guarded against, since such a process can read the file
   anyway. What this keeps out is every other user.
-- A file at another version is refused before anything persistent in it
-  changes, its journal mode included.
+- A file at a version it cannot open is refused before anything persistent in
+  it changes, its journal mode included.
 - Every connection enforces foreign keys, keeps a rollback journal synced in
   full, and overwrites deleted rows (`secure_delete`). It uses a rollback journal
   rather than a write-ahead log so that erased data leaves no readable page
   image behind.
 - A `Schema` states its version once, as the one `PRAGMA user_version = N;` its
   definition runs. An empty file is given the schema in one transaction; a file
-  at that version is opened; any other version, or tables without a version, are
-  refused as `OpenError::Version` and left untouched. A file that is not a
+  at that version is opened; a file at a version one of the schema's `Upgrade`
+  steps starts from is brought forward by every step from there, in that same
+  kind of transaction, and a failed step is `OpenError::Upgrade` with the file
+  kept at its version and rows; any other version, or tables without a version,
+  are refused as `OpenError::Version` and left untouched. A file that is not a
   database is `OpenError::Unreadable`, and a file at the schema's version that
   SQLite's `quick_check` finds damaged is `OpenError::Damaged`. That check reads
   every page once, at open. Both describe the file,
   not the moment, so a caller can refuse them for good
-  ([ADR 202](../../docs/adr/todo/202-versioned-local-datasets.md)). There are no
-  in-place migrations during alpha.
+  ([ADR 202](../../docs/adr/todo/202-versioned-local-datasets.md), "Migrations").
 
 ## Module map
 
 | Path | Responsibility |
 | --- | --- |
-| `src/lib.rs` | `Schema`, `OpenError`, and `open`: private file creation, connection pragmas, and the version check. Re-exports `rusqlite` so every context uses the one version. |
-| `tests/open.rs` | Schema application and reopening, version refusal, the stated-version rule, pragmas and erasure, and private-file and private-directory refusal. |
+| `src/lib.rs` | `Schema`, `Upgrade`, `OpenError`, and `open`: private file creation, connection pragmas, the version check, and forward upgrade steps. Re-exports `rusqlite` so every context uses the one version. |
+| `tests/open.rs` | Schema application and reopening, version refusal, upgrade steps and their rollback, the stated-version rule, pragmas and erasure, and private-file and private-directory refusal. |

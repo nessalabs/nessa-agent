@@ -10,6 +10,7 @@ sources:
   - "src/desktop/workspace/ui/quick-switcher/quick-switcher.tsx"
   - "src/desktop/workspace/ui/session-list/session-list.tsx"
   - "src/desktop/workspace/ui/layouts/workspace-shell.tsx"
+  - "src/desktop/workspace/ui/layouts/use-workspace-window.ts"
   - "src/desktop/workspace/model/session-search.test.ts"
   - "src/desktop/workspace/ui/quick-switcher/quick-switcher.test.tsx"
   - "src/desktop/workspace/ui/layouts/layouts.test.tsx"

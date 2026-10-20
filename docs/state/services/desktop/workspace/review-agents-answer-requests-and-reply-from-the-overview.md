@@ -12,6 +12,7 @@ sources:
   - "src/desktop/workspace/ui/overview/settling.ts"
   - "src/desktop/workspace/application/usecases/overview.ts"
   - "src/desktop/workspace/adapters/store/commands.ts"
+  - "src/desktop/workspace/adapters/store/session-commands.ts"
   - "src/desktop/workspace/ui/overview/overview.test.tsx"
   - "src/desktop/workspace/model/overview/agents-glance.test.ts"
 diagramLinks: {}

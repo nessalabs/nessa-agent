@@ -1528,7 +1528,11 @@ says why where the conversations would be.
   and different-remote replacements are measured at 360, 600 and 1440 pixels
   in both engines.
   _Check:_ `local-tab-lifetimes.mjs`; ordering rows LT1/LT6/LT7 in
-  [local tab lifetimes](../../docs/design/local-tab-identities.md).
+  [local tab lifetimes](../../docs/design/local-tab-identities.md). Follow,
+  stop and close counts are read from the fixture owner
+  (`__localTabLifetimes.snapshot` in
+  [live owner reads](../../docs/design/live-owner-reads.md)), not from
+  attributes the last render copied.
 
 ## Committed transcript controls
 
@@ -1913,6 +1917,9 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   naming 3 answers "Shared.".
 - [ ] **Tab stays in the dialog; Escape closes it and focus is back on the
   session's row.** _Check:_ `focus` (waits for that end state, 3 s).
+- [ ] **A pinned session under a folded sidebar gets that focus on the list's
+  row, not the inert sidebar copy.** _Check:_ `focus-pinned` (the sample
+  workspace, which can pin; the gateway keeps no pin).
 - [ ] **The panel fits the window.** _Check:_ `fit-1200`, `fit-420`; with
   `--shots <dir>`, screenshots of the grants, Drive form, budget, refusal,
   changed refusal and the narrow panel.
