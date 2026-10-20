@@ -1387,16 +1387,17 @@ async fn k1_a_paired_environment_drains_and_both_sides_record_its_cleanup() {
         .hold
         .ends()
         .expect("a paired environment's lease can end there");
+    let mut changes = a.peers.connections();
+    changes.borrow_and_update();
     host.drain.send_replace(true);
     // E says it is draining before anything else, so the pool sends it no
-    // new lease while it is still connected.
-    tokio::time::timeout(WAIT, async {
-        while !a.peers.serving().iter().any(|(_, load)| load.draining) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("a draining environment is marked so");
+    // new lease while it is still connected, and whoever lists where work
+    // can go is told to read the list again.
+    tokio::time::timeout(WAIT, changes.changed())
+        .await
+        .expect("draining is said to whoever lists environments")
+        .unwrap();
+    assert!(a.peers.serving().iter().any(|(_, load)| load.draining));
     // A system stop, as the gateway retiring is: never a lost lease.
     assert_eq!(
         tokio::time::timeout(WAIT, ends).await.expect("E ends it"),

@@ -1513,7 +1513,7 @@ fn environments(
                 as Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
             crate::product::ConnectedEnvironments {
                 changes,
-                // The pool first, while any worker of it is connected.
+                // The pool first, while any worker of it takes new work.
                 names: Arc::new(move || {
                     use crate::conversation::application::{PairedEnvironments, POOL};
                     let workers: Vec<String> = connected
@@ -1521,8 +1521,8 @@ fn environments(
                         .iter()
                         .map(nessa_sdk::domain::agent_execution::leases::PeerEnvironment::name)
                         .collect();
-                    (!workers.is_empty())
-                        .then(|| POOL.to_owned())
+                    let pool = connected.serving().iter().any(|(_, load)| !load.draining);
+                    pool.then(|| POOL.to_owned())
                         .into_iter()
                         .chain(workers)
                         .collect()

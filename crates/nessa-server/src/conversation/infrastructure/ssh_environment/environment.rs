@@ -268,11 +268,25 @@ impl SshEnvironment {
             replaced.link.close();
         }
         moved(connections);
-        tokio::select! {
-            () = link.ended() => {}
-            () = self.inner.until_revoked(credentials.as_ref(), &proof) => {
-                self.inner.revoke(&link);
-                link.ended().await;
+        let ended = link.ended();
+        let revoked = self.inner.until_revoked(credentials.as_ref(), &proof);
+        let drains = link.drains();
+        tokio::pin!(ended, revoked, drains);
+        let mut draining = false;
+        loop {
+            tokio::select! {
+                () = &mut ended => break,
+                () = &mut revoked => {
+                    self.inner.revoke(&link);
+                    link.ended().await;
+                    break;
+                }
+                // Draining, it is no longer offered new work: whoever lists
+                // where work can go reads that list again.
+                () = &mut drains, if !draining => {
+                    draining = true;
+                    moved(connections);
+                }
             }
         }
         moved(connections);
@@ -557,6 +571,7 @@ impl Environment for SshEnvironment {
                     lease.as_str(),
                     work.agent(),
                     grant.sandbox.into(),
+                    place,
                     self.inner.timings.answer,
                 )
                 .await?;
@@ -573,7 +588,6 @@ impl Environment for SshEnvironment {
                     gone,
                     ending,
                     published: std::sync::Mutex::new(Some(published)),
-                    place,
                 }),
             })
         })
@@ -616,7 +630,7 @@ impl CommandEnvironment for SshEnvironment {
                 .link(Install::IfAbsent(lease.as_str()))
                 .await
                 .map_err(CommandRefusal::Environment)?;
-            let (gone, terms) = link
+            let terms = link
                 .grant_command(
                     lease.as_str(),
                     command
@@ -626,6 +640,7 @@ impl CommandEnvironment for SshEnvironment {
                         .collect(),
                     command.cwd().map(Into::into),
                     command.timeout_ms(),
+                    place,
                     self.inner.timings.answer,
                 )
                 .await
@@ -637,8 +652,6 @@ impl CommandEnvironment for SshEnvironment {
                     inner: self.inner.clone(),
                     link,
                     lease: lease.as_str().into(),
-                    gone,
-                    place,
                 }),
                 granted: granted(terms),
             })
@@ -694,11 +707,6 @@ struct SshCommand {
     inner: Arc<Inner>,
     link: Arc<HostLink>,
     lease: String,
-    /// Closes once the lease is no longer routed on its connection.
-    gone: watch::Receiver<()>,
-    /// Its place in the organization budget, on a paired environment;
-    /// given back once its lease is no longer routed on its connection.
-    place: Option<BudgetPlace>,
 }
 
 impl CommandHold for SshCommand {
@@ -767,7 +775,6 @@ impl Drop for SshCommand {
     fn drop(&mut self) {
         self.link.abandon_lease(&self.lease);
         self.link.forget(&self.lease);
-        release_when_gone(self.place.take(), self.gone.clone());
     }
 }
 
@@ -812,9 +819,6 @@ struct SshHold {
     /// The files published under it, until [`LeaseHold::artifacts`] takes
     /// them.
     published: std::sync::Mutex<Option<mpsc::Receiver<Published>>>,
-    /// Its place in the organization budget, on a paired environment;
-    /// given back once the lease is no longer routed on its connection.
-    place: Option<BudgetPlace>,
 }
 
 impl LeaseHold for SshHold {
@@ -961,28 +965,7 @@ impl Drop for SshHold {
     fn drop(&mut self) {
         self.link.abandon_lease(&self.lease);
         self.link.forget(&self.lease);
-        release_when_gone(self.place.take(), self.gone.clone());
     }
-}
-
-/// Give `place` back once `gone` closes: the lease is no longer routed on
-/// its connection, because the host answered its end or the connection,
-/// and every lease on it, was lost. A hold let go while its end went
-/// unanswered may still be running on the worker, so it still counts
-/// against the organization budget until then.
-fn release_when_gone(place: Option<BudgetPlace>, mut gone: watch::Receiver<()>) {
-    let Some(place) = place else {
-        return;
-    };
-    // With no runtime there is nothing left to wait on.
-    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-        return;
-    };
-    runtime.spawn(async move {
-        // Never sent to: only the route's end, dropping the sender, answers.
-        while gone.changed().await.is_ok() {}
-        drop(place);
-    });
 }
 
 /// The host as a binding sees it, for one lease.

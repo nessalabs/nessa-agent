@@ -69,7 +69,7 @@ use super::audit::{EnvironmentAudit, EnvironmentEvent};
 use super::connector::{ArtifactChannels, ArtifactTransport, LeaseConnection, LeaseConnector};
 use super::transfer::{write_part, WriteFailure};
 use crate::conversation::application::{
-    ArtifactAnswering, FetchAsk, FetchFailure, FetchPlaced, PublishFailure,
+    ArtifactAnswering, BudgetPlace, FetchAsk, FetchFailure, FetchPlaced, PublishFailure,
 };
 use crate::env::LEASE_PROTOCOL;
 use crate::env_serve::application::FrameStream;
@@ -230,6 +230,10 @@ struct LeaseRoute {
     reads: HashMap<(u32, u64), oneshot::Sender<ArtifactReadAnswer>>,
     /// Dropped with the route: the lease is no longer routed here.
     gone: watch::Sender<()>,
+    /// Its place in the organization budget, on a paired environment:
+    /// given back with the route, once the host answered its end or the
+    /// connection was lost, as until then the host may still hold it.
+    _place: Option<BudgetPlace>,
 }
 
 /// What the host answered one read of a published file: its bytes, or why
@@ -255,7 +259,16 @@ struct Routes {
     fetches_asked: u64,
     /// The host said it is stopping (`Draining`), or refused a lease as
     /// draining: it admits nothing new on this connection.
-    draining: bool,
+    draining: Drains,
+}
+
+/// Whether the host said it is stopping, for whoever waits to learn it.
+struct Drains(watch::Sender<bool>);
+
+impl Default for Drains {
+    fn default() -> Self {
+        Self(watch::channel(false).0)
+    }
 }
 
 /// What the host said of a fetch, as the demux hands it on.
@@ -545,7 +558,16 @@ impl HostLink {
     /// Whether the host said it is stopping on this connection: it admits
     /// no new lease here, though those it holds still end through it.
     pub(crate) fn is_draining(&self) -> bool {
-        self.routes().draining
+        *self.routes().draining.0.borrow()
+    }
+
+    /// Answers once the host said it is stopping on this connection: from
+    /// then on it is no longer offered new work.
+    pub(crate) async fn drains(&self) {
+        let mut draining = self.routes().draining.0.subscribe();
+        if draining.wait_for(|draining| *draining).await.is_err() {
+            std::future::pending::<()>().await;
+        }
     }
 
     /// How many leases of an agent this connection holds now: asked for,
@@ -705,6 +727,7 @@ impl HostLink {
         lease: &str,
         agent: &str,
         sandbox: Sandbox,
+        place: Option<BudgetPlace>,
         deadline: Duration,
     ) -> Result<Granted, LeaseRefusal> {
         let (offers, published) = mpsc::channel(MAX_ARTIFACTS_IN_FLIGHT);
@@ -718,7 +741,7 @@ impl HostLink {
             ending,
             terms,
         } = self
-            .admit(lease, frame, Some(offers), deadline)
+            .admit(lease, frame, Some(offers), place, deadline)
             .await
             .map_err(lease_refusal)?;
         Ok(Granted {
@@ -740,8 +763,9 @@ impl HostLink {
         argv: Vec<String>,
         cwd: Option<String>,
         timeout_ms: u64,
+        place: Option<BudgetPlace>,
         deadline: Duration,
-    ) -> Result<(watch::Receiver<()>, GrantedTerms), AdmissionRefused> {
+    ) -> Result<GrantedTerms, AdmissionRefused> {
         let frame = ToEnvironment::GrantCommand {
             lease: lease.into(),
             argv,
@@ -749,8 +773,8 @@ impl HostLink {
             timeout_ms,
         };
         // A command publishes nothing: no file is offered under its lease.
-        let admitted = self.admit(lease, frame, None, deadline).await?;
-        Ok((admitted.gone, admitted.terms))
+        let admitted = self.admit(lease, frame, None, place, deadline).await?;
+        Ok(admitted.terms)
     }
 
     /// Run a granted command lease's command and wait for its `Ran`. The
@@ -784,6 +808,7 @@ impl HostLink {
         lease: &str,
         frame: ToEnvironment,
         published: Option<mpsc::Sender<Published>>,
+        place: Option<BudgetPlace>,
         deadline: Duration,
     ) -> Result<Admitted, AdmissionRefused> {
         let (answer, answered) = oneshot::channel();
@@ -813,6 +838,7 @@ impl HostLink {
                     fetches: HashMap::new(),
                     reads: HashMap::new(),
                     gone: gone_sender,
+                    _place: place,
                 },
             );
             (gone, ending)
@@ -829,18 +855,13 @@ impl HostLink {
                 terms,
             }),
             refused => {
-                self.drop_admission(lease);
                 if refused.is_err() {
                     // No answer in time: the host may still admit it, so it
-                    // is ended there rather than held for nobody.
-                    deliver(
-                        &self.frames,
-                        None,
-                        ToEnvironment::End {
-                            lease: lease.into(),
-                        },
-                        None,
-                    );
+                    // is ended there rather than held for nobody, and its
+                    // route, with its budget place, waits for that end.
+                    self.end_unanswered(lease);
+                } else {
+                    self.drop_admission(lease);
                 }
                 Err(match refused {
                     // A host told it is revoked refuses what it is asked
@@ -849,6 +870,29 @@ impl HostLink {
                     Ok(Ok(Err(reason))) => AdmissionRefused::Host(reason),
                     _ => AdmissionRefused::Unreachable,
                 })
+            }
+        }
+    }
+
+    /// End a lease whose admission went unanswered: no hold will take it,
+    /// and its route stays until the host's `Ended`, or the connection's
+    /// loss, says it is not held there.
+    fn end_unanswered(&self, lease: &str) {
+        let mut routes = self.routes();
+        routes.unaudited.remove(lease);
+        if let Some(route) = routes.leases.get_mut(lease) {
+            route.grant = None;
+            if !route.end_sent {
+                route.end_sent = true;
+                let pumps = begin_end(route);
+                deliver(
+                    &self.frames,
+                    Some(pumps),
+                    ToEnvironment::End {
+                        lease: lease.into(),
+                    },
+                    None,
+                );
             }
         }
     }
@@ -1552,7 +1596,7 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
         // demux's silence bound, and nothing waits on it.
         FromEnvironment::Keepalive => Routed::Done,
         FromEnvironment::Draining => {
-            routes.draining = true;
+            routes.draining.0.send_replace(true);
             Routed::Done
         }
         FromEnvironment::Accounted { lease, cleanup } => match routes.accounts.remove(&lease) {
@@ -1589,7 +1633,9 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             {
                 Some(waiter) => {
                     routes.leases.remove(&lease);
-                    routes.draining |= reason == GrantRefusal::Draining;
+                    if reason == GrantRefusal::Draining {
+                        routes.draining.0.send_replace(true);
+                    }
                     let _ = waiter.send(Err(reason));
                     Routed::Done
                 }

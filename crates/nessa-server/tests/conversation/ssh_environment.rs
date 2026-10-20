@@ -492,6 +492,13 @@ impl LeaseConnector for Connector {
                                     });
                                 }
                             }
+                            ToEnvironment::End { lease } if granted.contains(&lease) => {
+                                granted.retain(|granted| *granted != lease);
+                                said.push(FromEnvironment::Ended {
+                                    lease,
+                                    cleanup: Cleanup::Confirmed { forced: false },
+                                });
+                            }
                             _ => {}
                         }
                         for frame in said {
@@ -3395,6 +3402,7 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
             id.as_str(),
             "claude",
             Sandbox::HarnessDefault,
+            None,
             Duration::from_secs(5),
         )
         .await
@@ -3434,6 +3442,7 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
             lease().as_str(),
             "claude",
             Sandbox::HarnessDefault,
+            None,
             Duration::from_secs(5)
         )
         .await
@@ -3486,6 +3495,40 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
     assert!(revoking < ended, "{entries:?}");
 }
 
+/// A grant the host does not answer in time keeps its organization budget
+/// place: the host may still admit it, so the place is given back only once
+/// the host answers the End it is sent.
+#[tokio::test]
+async fn a_grant_not_answered_in_time_keeps_its_budget_place_until_its_end() {
+    let (open, gate) = tokio::sync::watch::channel(false);
+    let connector = Connector::new(Reach::GrantingLate(gate));
+    let link = dialed_link(&connector, Arc::new(Audit::default())).await;
+    let budgets = crate::conversation::application::OrganizationBudgets::new(Some(1), None);
+    assert_eq!(
+        link.grant(
+            lease().as_str(),
+            "claude",
+            Sandbox::HarnessDefault,
+            budgets.lease(),
+            Duration::from_millis(50),
+        )
+        .await
+        .err(),
+        Some(LeaseRefusal::EnvironmentUnreachable)
+    );
+    assert_eq!(budgets.running(), (1, 0));
+    assert!(budgets.lease().is_none());
+    // The host grants it late, then reads its End and answers it.
+    open.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while budgets.running() != (0, 0) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("its place is given back once the host ends it");
+}
+
 /// A lease the host grants after its connection was revoked, its Grant
 /// already on its way ahead of the `Revoked`, is named in a revocation
 /// record of its own, as every lease the host granted is, and ends as
@@ -3506,6 +3549,7 @@ async fn a_lease_granted_after_its_revocation_is_recorded_revoked_on_its_own() {
                     id.as_str(),
                     "claude",
                     Sandbox::HarnessDefault,
+                    None,
                     Duration::from_secs(5),
                 )
                 .await
@@ -3583,6 +3627,7 @@ async fn a_revoked_link_closes_at_its_bound_when_a_lease_is_never_ended() {
             id.as_str(),
             "claude",
             Sandbox::HarnessDefault,
+            None,
             Duration::from_secs(5),
         )
         .await
@@ -3648,6 +3693,7 @@ async fn a_revocation_whose_audit_fails_leaves_its_leases_unconfirmed() {
             id.as_str(),
             "claude",
             Sandbox::HarnessDefault,
+            None,
             Duration::from_secs(5),
         )
         .await
@@ -3743,6 +3789,7 @@ async fn a_lease_ending_for_one_cause_keeps_it_when_the_other_comes() {
                 id.as_str(),
                 "claude",
                 Sandbox::HarnessDefault,
+                None,
                 Duration::from_secs(5),
             )
             .await
