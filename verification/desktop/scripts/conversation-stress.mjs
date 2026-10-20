@@ -83,6 +83,12 @@
  *               window binds the conversation to the other, with new provider
  *               context, as the window's heading and the binding both say;
  *               both workers stop and linking is turned off again
+ *   upgrade     the gateway is stopped, its conversation metadata turned
+ *               back into the file an older build wrote (version 6, or 7
+ *               when a newer table holds rows), and started again: it
+ *               upgrades the file to the current version, lists every
+ *               conversation it listed before, and the message sent in the
+ *               window after it is answered
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -141,6 +147,7 @@ import {
 } from "./lib/selectors.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
+import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
 import {
   openStressConversation,
   selectedStressConversation,
@@ -150,6 +157,18 @@ import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
 
 const INSTANCE = "conversation-stress"
+/** The conversation metadata version this build writes (`schema.sql`'s last line). */
+const CURRENT_METADATA_VERSION = Number(
+  /PRAGMA user_version = (\d+);\s*$/.exec(
+    readFileSync(
+      new URL(
+        "../../../crates/nessa-server/src/conversation/infrastructure/schema.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  )[1],
+)
 /**
  * The environment that places a conversation on any of the gateway's paired
  * workers (`POOL` in crates/nessa-server/src/conversation/application/placement.rs).
@@ -1040,6 +1059,42 @@ const steps = {
       await closeSettings(run.page)
     })
     // The restarted gateway still answers the conversation, in the window.
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async upgrade(run, step, failures) {
+    const listed = async () =>
+      (await run.client.conversation.list({})).conversations
+        .map((each) => each.conversationId)
+        .sort()
+    await run.exclusive(async () => {
+      const before = await listed()
+      const path = metadataFile(run.stack.gateway.directory)
+      let older
+      await run.restartConsole.during(run.opened, async () => {
+        const count = failures.length
+        const old = run.client
+        run.restarts += 1
+        await run.stack.gateway.restart("SIGTERM", async () => {
+          older = asOlderBuild(path)
+        })
+        old.close()
+        run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+        log(`upgrade: restarted on a version ${older} file`)
+        const version = schemaVersion(path)
+        if (version !== CURRENT_METADATA_VERSION)
+          failures.push(
+            `the gateway left the version ${older} file at ${version}, not ${CURRENT_METADATA_VERSION}`,
+          )
+        const after = await listed()
+        if (JSON.stringify(after) !== JSON.stringify(before))
+          failures.push(
+            `the upgraded gateway lists ${after.length} conversations, not the ${before.length} it did`,
+          )
+        return failures.length === count
+      })
+    })
+    // The upgraded gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
 

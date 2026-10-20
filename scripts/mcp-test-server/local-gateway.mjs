@@ -181,8 +181,8 @@ export async function exited(child, ms) {
  *   (`{ enabled: false, listenAddress: "127.0.0.1:0" }`); absent is none
  * @returns the gateway: `{ directory, token, url, log, server, stop, restart }`.
  *   `token` is the owner token file's path; `log()` the gateway's output so
- *   far; `restart(signal)` kills it (a crash by default) and starts it again
- *   on the same directory and port; `server` the process running now; `stop()`
+ *   far; `restart(signal, whileStopped)` kills it (a crash by default) and
+ *   starts it again on the same directory and port; `server` the process running now; `stop()`
  *   stops it, waits for it and for the rest of its output (up to 2 s more), and
  *   removes its directory, and says whether it exited. On a failed start, the
  *   error carries the gateway's output as `gatewayLog`.
@@ -284,9 +284,11 @@ export async function startLocalGateway(o) {
     /**
      * Stops the gateway and starts it again on the same directory and port:
      * `SIGKILL` is a crash, `SIGTERM` its own shutdown. Resolves once the new
-     * one is healthy. Its output joins the same log.
+     * one is healthy. Its output joins the same log. `whileStopped` runs
+     * once the old one has exited and before the new one starts, for a check
+     * that changes what the gateway will find on disk.
      */
-    const restart = async (signal = "SIGKILL") => {
+    const restart = async (signal = "SIGKILL", whileStopped = async () => {}) => {
       const previous = server
       previous.kill(signal)
       if (!(await exited(previous, 10_000))) {
@@ -295,6 +297,7 @@ export async function startLocalGateway(o) {
           throw new Error(`the gateway (pid ${previous.pid}) did not exit`)
       }
       await Promise.race([closed, sleep(2_000, undefined, { ref: false })])
+      await whileStopped()
       output.push(`\n--- restarted after ${signal} ---\n`)
       await launch()
     }
