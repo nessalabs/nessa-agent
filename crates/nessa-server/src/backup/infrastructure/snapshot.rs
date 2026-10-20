@@ -541,6 +541,79 @@ fn serialized_image(connection: Connection) -> Result<Vec<u8>, ()> {
     Ok(unsafe { std::slice::from_raw_parts(buffer.0, len) }.to_vec())
 }
 
+/// A session image with fenced conversations removed.
+///
+/// `None` means no named conversation was in the image, so the caller keeps
+/// the authenticated bytes. `Some` is that image after those streams were
+/// deleted and the database was vacuumed. An error means the image could
+/// not be checked, and the caller must not keep the original bytes.
+pub(crate) fn without_fenced_conversations(
+    bytes: &[u8],
+    fenced: &[String],
+) -> Result<Option<Vec<u8>>, MaterializeError> {
+    if fenced.is_empty() || !bytes.starts_with(b"SQLite format 3") {
+        return Ok(None);
+    }
+    let mut source = Connection::open_in_memory().map_err(|_| MaterializeError::Unreadable)?;
+    source
+        .deserialize_read_exact("main", std::io::Cursor::new(bytes), bytes.len(), true)
+        .map_err(|_| MaterializeError::Unreadable)?;
+    let present = conversation_ids(&source)?;
+    if !present
+        .iter()
+        .any(|id| fenced.iter().any(|item| item == id))
+    {
+        return Ok(None);
+    }
+    let mut dest = Connection::open_in_memory().map_err(|_| MaterializeError::Unreadable)?;
+    {
+        let backup = Backup::new(&source, &mut dest).map_err(|_| MaterializeError::Unreadable)?;
+        if !matches!(
+            backup.step(-1).map_err(|_| MaterializeError::Unreadable)?,
+            StepResult::Done
+        ) {
+            return Err(MaterializeError::Unreadable);
+        }
+    }
+    for id in fenced {
+        dest.execute(
+            "DELETE FROM event_records WHERE stream_key IN (
+                SELECT stream_key FROM event_streams WHERE public_id = ?1
+             )",
+            [id],
+        )
+        .map_err(|_| MaterializeError::Unreadable)?;
+        dest.execute("DELETE FROM event_streams WHERE public_id = ?1", [id])
+            .map_err(|_| MaterializeError::Unreadable)?;
+        dest.execute("DELETE FROM event_stream_names WHERE public_id = ?1", [id])
+            .map_err(|_| MaterializeError::Unreadable)?;
+    }
+    dest.execute_batch("VACUUM")
+        .map_err(|_| MaterializeError::Unreadable)?;
+    let left = conversation_ids(&dest)?;
+    if left.iter().any(|id| fenced.iter().any(|item| item == id)) {
+        return Err(MaterializeError::Unreadable);
+    }
+    serialized_image(dest)
+        .map_err(|_| MaterializeError::Unreadable)
+        .map(Some)
+}
+
+fn conversation_ids(connection: &Connection) -> Result<Vec<String>, MaterializeError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT public_id FROM event_stream_names
+             UNION
+             SELECT public_id FROM event_streams",
+        )
+        .map_err(|_| MaterializeError::Unreadable)?;
+    let rows = statement
+        .query_map([], |row| row.get(0))
+        .map_err(|_| MaterializeError::Unreadable)?;
+    rows.collect::<Result<Vec<String>, _>>()
+        .map_err(|_| MaterializeError::Unreadable)
+}
+
 /// An image allocated by `sqlite3_malloc`. Drop frees it, including on panic.
 struct SqliteMalloc(*mut u8);
 

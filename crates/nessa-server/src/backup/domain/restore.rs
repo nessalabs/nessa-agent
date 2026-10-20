@@ -38,6 +38,8 @@ pub enum RestoreFault {
     Tamper,
     SessionDiffers,
     Paths,
+    /// A session database still contained a fenced conversation and could not be filtered.
+    FencedBody,
 }
 
 impl RestoreFault {
@@ -61,6 +63,7 @@ impl RestoreFault {
             Self::Tamper => "tamper",
             Self::SessionDiffers => "session-differs",
             Self::Paths => "paths",
+            Self::FencedBody => "fenced-body",
         }
     }
 }

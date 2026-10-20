@@ -16,20 +16,22 @@ use sha2::Digest;
 
 use crate::backup::application::{
     CutMaterializer, DecisionAuditError, ExportClock, FetchProgress, LoadedTree, MacKey,
-    PreparedCut, QuarantineLayout, RestoreAudit, RestoreEvidence, SealedInventoryReader,
-    SessionCut, SessionSourceError, Staging, VerificationFormat, VerificationLimits,
-    VerificationSource,
+    PreparedCut, QuarantineLayout, RestoreAudit, RestoreEvidence, RestoreHold,
+    SealedInventoryReader, SessionCut, SessionSourceError, Staging, VerificationFormat,
+    VerificationLimits, VerificationSource,
 };
 use crate::backup::domain::{
     conversation_is_fenced, credential_is_fenced, encode_deferred, fresher_fences,
     leases_to_interrupt, metadata_omitted, normalized_root, paths_are_distinct,
     relative_path_is_safe, share_grant_is_fenced, CredentialKind, DeferredEntry, DeferredLine,
-    DeletionFence, DeletionLog, Fingerprint, LeaseMark, ManifestListing, MetadataFacts,
+    DeletionFence, DeletionLog, FenceKind, Fingerprint, LeaseMark, ManifestListing, MetadataFacts,
     MetadataRow, RestoreFault, SealedFile, StoreKind, IDENTITY_BODY, MAX_NAME_BYTES, REPLAY_BODY,
 };
 
 use super::log::{authenticate_inventory, exclusive, persist};
-use super::snapshot::{inspect_conversation, materialize_conversation, MaterializeError};
+use super::snapshot::{
+    inspect_conversation, materialize_conversation, without_fenced_conversations, MaterializeError,
+};
 
 /// Reads a later inventory that carries its own mac line.
 pub struct KeyedInventory {
@@ -87,6 +89,10 @@ impl CutMaterializer for DirectoryMaterializer {
                 if Fingerprint::of(&body) != record.fingerprint() {
                     return Err(RestoreFault::Verification);
                 }
+                let body = match session_without_fenced(store.store(), &body, &fence_list)? {
+                    Some(filtered) => filtered,
+                    None => body,
+                };
                 if store.store() == StoreKind::LeaseRecords {
                     lease_files.push((record.encoded_identity(), body));
                     continue;
@@ -160,6 +166,24 @@ impl CutMaterializer for DirectoryMaterializer {
             freshness,
         })
     }
+}
+
+fn session_without_fenced(
+    store: StoreKind,
+    body: &[u8],
+    fences: &[DeletionFence],
+) -> Result<Option<Vec<u8>>, RestoreFault> {
+    if !matches!(store, StoreKind::CanonicalRecords | StoreKind::Notes) {
+        return Ok(None);
+    }
+    let fenced = fences
+        .iter()
+        .filter_map(|fence| match fence.kind() {
+            FenceKind::Conversation { id } => Some(id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    without_fenced_conversations(body, &fenced).map_err(|_| RestoreFault::FencedBody)
 }
 
 fn deferred_line(entry: &DeferredEntry) -> Result<DeferredLine, RestoreFault> {
@@ -509,13 +533,25 @@ impl QuarantineLayout for DirectoryQuarantine {
                 return Err(RestoreFault::Paths);
             }
         }
-        let mut anchored = prefix
-            .canonicalize()
-            .map_err(|_| RestoreFault::Unreadable)?;
+        let mut anchored = plain_absolute(
+            prefix
+                .canonicalize()
+                .map_err(|_| RestoreFault::Unreadable)?,
+        );
         for name in rest.into_iter().rev() {
             anchored.push(name);
         }
         Ok(anchored)
+    }
+
+    fn hold(&self, root: &Path) -> Result<Box<dyn RestoreHold>, RestoreFault> {
+        let parent = root.parent().ok_or(RestoreFault::Paths)?;
+        let mut name = root.file_name().ok_or(RestoreFault::Paths)?.to_os_string();
+        name.push(".restore-lock");
+        let file = open(&parent.join(name), OpenMode::OpenOrCreate)
+            .map_err(|_| RestoreFault::Unreadable)?;
+        file.lock().map_err(|_| RestoreFault::Unreadable)?;
+        Ok(Box::new(RootHold { _file: file }))
     }
 
     fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
@@ -526,6 +562,28 @@ impl QuarantineLayout for DirectoryQuarantine {
             digest: Fingerprint::from_digest(stream.digest),
         })
     }
+}
+
+struct RootHold {
+    _file: File,
+}
+
+impl RestoreHold for RootHold {}
+
+/// `canonicalize` on Windows returns `\\?\C:\...`. The storage opener accepts
+/// only a drive prefix, so the verbatim prefix is removed after the ancestor
+/// is resolved.
+fn plain_absolute(path: PathBuf) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path;
+    };
+    let Some(rest) = text.strip_prefix(r"\\?\") else {
+        return path;
+    };
+    if let Some(unc) = rest.strip_prefix(r"UNC\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    PathBuf::from(rest)
 }
 
 struct PartialTree {
@@ -803,6 +861,14 @@ fn materialize_error(error: MaterializeError) -> SessionSourceError {
         MaterializeError::Interrupted => SessionSourceError::Interrupted,
         MaterializeError::Unreadable => SessionSourceError::Unreadable,
     }
+}
+
+#[test]
+fn a_verbatim_windows_prefix_is_a_drive_path() {
+    let plain = plain_absolute(PathBuf::from(r"\\?\C:\restore\quarantine"));
+    assert_eq!(plain, PathBuf::from(r"C:\restore\quarantine"));
+    let unc = plain_absolute(PathBuf::from(r"\\?\UNC\server\share"));
+    assert_eq!(unc, PathBuf::from(r"\\server\share"));
 }
 
 #[test]

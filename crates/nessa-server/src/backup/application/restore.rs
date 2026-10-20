@@ -34,6 +34,9 @@ use crate::backup::domain::{
     ManifestListing, Posture, RestoreFault, SealedFile,
 };
 
+/// Drop releases the restore-root lock.
+pub trait RestoreHold: Send {}
+
 /// Filesystem effects of a quarantine. Tests substitute a layout that fails.
 pub trait QuarantineLayout {
     fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault>;
@@ -48,6 +51,8 @@ pub trait QuarantineLayout {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault>;
     /// The path after `.` and `..` are removed and an existing ancestor is resolved.
     fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault>;
+    /// One lock for this root, held across publication and the audit that records it.
+    fn hold(&self, root: &Path) -> Result<Box<dyn RestoreHold>, RestoreFault>;
     /// Stream size and fingerprint of one session file.
     fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault>;
 }
@@ -151,6 +156,10 @@ pub fn stage_quarantine(
     if let Err(error) = paths_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
     }
+    let _hold = match layout.hold(&quarantine) {
+        Ok(hold) => hold,
+        Err(error) => return Err(recorded.stop(error)),
+    };
     let authenticated = match authenticated_bundle(
         request.format,
         request.bundle,
@@ -266,6 +275,10 @@ pub fn accept_quarantine(
     if let Err(error) = paths_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
     }
+    let _hold = match layout.hold(&quarantine) {
+        Ok(hold) => hold,
+        Err(error) => return Err(recorded.stop(error)),
+    };
     let loaded = match layout.load(&quarantine) {
         Ok(loaded) => loaded,
         Err(error) => return Err(recorded.stop(error)),
@@ -347,7 +360,15 @@ pub fn open_deferred_conversation(
         initiator: kind,
         policies: &policies,
     };
-    let loaded = match layout.load(request.root) {
+    let root = match layout.anchor(request.root) {
+        Ok(path) => path,
+        Err(error) => return Err(recorded.stop(error)),
+    };
+    let _hold = match layout.hold(&root) {
+        Ok(hold) => hold,
+        Err(error) => return Err(recorded.stop(error)),
+    };
+    let loaded = match layout.load(&root) {
         Ok(loaded) => loaded,
         Err(error) => return Err(recorded.stop(error)),
     };
@@ -355,7 +376,7 @@ pub fn open_deferred_conversation(
         Ok(journal) => journal,
         Err(_) => return Err(recorded.stop(RestoreFault::Tamper)),
     };
-    let lines = match deferred_lines(layout, request.root) {
+    let lines = match deferred_lines(layout, &root) {
         Ok(lines) => lines,
         Err(error) => return Err(recorded.stop(error)),
     };
@@ -370,7 +391,7 @@ pub fn open_deferred_conversation(
         Ok(relative) => relative,
         Err(error) => return Err(recorded.stop(error)),
     };
-    let final_path = match join_relative(request.root, &relative) {
+    let final_path = match join_relative(&root, &relative) {
         Ok(path) => path,
         Err(error) => return Err(recorded.stop(error)),
     };
@@ -392,7 +413,7 @@ pub fn open_deferred_conversation(
             Err(error) => Err(recorded.stop(source_fault(error))),
         };
     }
-    let temp = match layout.session_temp(request.root, &relative) {
+    let temp = match layout.session_temp(&root, &relative) {
         Ok(temp) => temp,
         Err(error) => return Err(recorded.stop(error)),
     };
@@ -589,7 +610,12 @@ impl Recorded<'_> {
     }
 
     fn stop(&self, error: RestoreFault) -> RestoreFault {
-        let _ = self.write("unchanged", "unchanged", error.cause(), "effect");
+        if self
+            .write("unchanged", "unchanged", error.cause(), "effect")
+            .is_err()
+        {
+            return RestoreFault::Audit;
+        }
         error
     }
 

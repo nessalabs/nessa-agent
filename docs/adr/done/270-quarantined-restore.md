@@ -74,4 +74,7 @@ running gateway having been the restore tool. The desktop and the
 `conversation.read` handler do not call this use case yet; a later change
 wires them. Remote executors are not contacted. An authenticated inventory
 that drops a fence the cut already has is refused; a missing later inventory
-does not claim to know revocations made after the cut.
+does not claim to know revocations made after the cut. A fenced conversation
+that is still inside a session database is removed from that restored image.
+Accept and fetch share one lock so a fetch cannot publish a session that
+acceptance then carries onto the live path without its audit.

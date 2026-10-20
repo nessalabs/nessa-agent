@@ -527,6 +527,13 @@ impl QuarantineLayout for StickyQuarantine {
         DirectoryQuarantine.anchor(path)
     }
 
+    fn hold(
+        &self,
+        root: &Path,
+    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+
     fn session_cut(
         &self,
         path: &Path,
@@ -584,6 +591,13 @@ impl QuarantineLayout for KeepsSession {
 
     fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.anchor(path)
+    }
+
+    fn hold(
+        &self,
+        root: &Path,
+    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
     }
 
     fn session_cut(
@@ -1801,4 +1815,270 @@ async fn a_session_over_64_mib_is_restored_when_opened() {
     assert!(record.contains("\"recordId\":\"restore-1\""));
     assert!(record.contains("\"before\":\"absent\""));
     assert!(record.contains("\"after\":\"verified\""));
+}
+
+#[tokio::test]
+async fn a_fenced_conversation_inside_the_session_is_not_restored() {
+    let kept = b"KEPT-STREAM-BYTES";
+    let fenced = b"FENCED-STREAM-BYTES";
+    let bytes = session_database(&[("conv-kept", kept), ("conv-fenced", fenced)]);
+    let later = DeletionLog::default()
+        .append(DeletionFence::conversation("conv-fenced").unwrap())
+        .0;
+    let bundle = publish(
+        vec![Row {
+            store: StoreKind::CanonicalRecords,
+            identity: "records.sqlite3".into(),
+            bytes: Bytes::Public(bytes),
+        }],
+        vec![],
+        None,
+    )
+    .await;
+    let sealed = seal_inventory(bundle.key, &later);
+    let place = roots();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &MemoryAudit::open(),
+        person(RestoreAction::Stage),
+        Some(&sealed),
+    )
+    .unwrap();
+    assert!(holds(&place.quarantine, kept));
+    assert!(!holds(&place.quarantine, fenced));
+    assert!(!holds(&place.quarantine, b"conv-fenced"));
+    assert!(!place.live.exists());
+
+    let absent = DeletionLog::default()
+        .append(DeletionFence::conversation("conv-other").unwrap())
+        .0;
+    let bytes = session_database(&[("conv-kept", kept)]);
+    let bundle = publish(
+        vec![Row {
+            store: StoreKind::CanonicalRecords,
+            identity: "records.sqlite3".into(),
+            bytes: Bytes::Public(bytes),
+        }],
+        vec![],
+        None,
+    )
+    .await;
+    let sealed = seal_inventory(bundle.key, &absent);
+    let place = roots();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &MemoryAudit::open(),
+        person(RestoreAction::Stage),
+        Some(&sealed),
+    )
+    .unwrap();
+    assert!(holds(&place.quarantine, kept));
+}
+
+fn session_database(rows: &[(&str, &[u8])]) -> Vec<u8> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.sqlite3");
+    let database = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    database
+        .execute_batch(
+            "CREATE TABLE event_streams(
+                stream_key INTEGER PRIMARY KEY,
+                public_id TEXT NOT NULL,
+                incarnation BLOB NOT NULL,
+                floor BLOB NOT NULL,
+                tail BLOB NOT NULL,
+                retired INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE event_stream_names(
+                public_id TEXT PRIMARY KEY,
+                latest_incarnation BLOB NOT NULL,
+                active_stream_key INTEGER
+            );
+            CREATE TABLE event_records(
+                stream_key INTEGER NOT NULL,
+                offset BLOB NOT NULL,
+                event_id TEXT NOT NULL,
+                schema_id TEXT NOT NULL,
+                schema_version INTEGER NOT NULL,
+                payload BLOB NOT NULL
+            );",
+        )
+        .unwrap();
+    for (index, (id, payload)) in rows.iter().enumerate() {
+        let key = index as i64 + 1;
+        let incarnation = [u8::try_from(index).unwrap().saturating_add(1); 16];
+        let tail = [0u8, 0, 0, 0, 0, 0, 0, 1];
+        database
+            .execute(
+                "INSERT INTO event_streams(stream_key, public_id, incarnation, floor, tail)
+                 VALUES (?1, ?2, ?3, ?4, ?4)",
+                nessa_local_database::rusqlite::params![
+                    key,
+                    id,
+                    incarnation.as_slice(),
+                    tail.as_slice()
+                ],
+            )
+            .unwrap();
+        database
+            .execute(
+                "INSERT INTO event_stream_names(public_id, latest_incarnation, active_stream_key)
+                 VALUES (?1, ?2, ?3)",
+                nessa_local_database::rusqlite::params![id, incarnation.as_slice(), key],
+            )
+            .unwrap();
+        database
+            .execute(
+                "INSERT INTO event_records(stream_key, offset, event_id, schema_id, schema_version, payload)
+                 VALUES (?1, ?2, 'event', 'nessa.record', 1, ?3)",
+                nessa_local_database::rusqlite::params![key, tail.as_slice(), payload],
+            )
+            .unwrap();
+    }
+    drop(database);
+    fs::read(path).unwrap()
+}
+
+#[tokio::test]
+async fn a_lost_refusal_audit_is_not_a_plain_refusal() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let audit = MemoryAudit::fail_after(1);
+    let error = stage(
+        &bundle,
+        &place.live,
+        &place.live,
+        &audit,
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Audit);
+    assert_eq!(audit.lines().len(), 1);
+    assert_eq!(audit.lines()[0].decision, "allow");
+    let recorded = MemoryAudit::open();
+    let error = stage(
+        &bundle,
+        &place.live,
+        &place.live,
+        &recorded,
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Paths);
+    assert!(recorded
+        .lines()
+        .iter()
+        .any(|line| line.cause == "paths" && line.decision == "effect"));
+    assert!(!place.live.exists());
+}
+
+#[tokio::test]
+async fn accept_and_fetch_wait_for_the_restore_root() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let digest = Fingerprint::of(b"session");
+    let bundle = publish(
+        note_bundle_rows(),
+        deferred_rows("conv-bulk", 7, digest),
+        None,
+    )
+    .await;
+    let place = roots();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &MemoryAudit::open(),
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap();
+    let quarantine = DirectoryQuarantine.anchor(&place.quarantine).unwrap();
+    let live = DirectoryQuarantine.anchor(&place.live).unwrap();
+    let hold = DirectoryQuarantine.hold(&quarantine).unwrap();
+    let (fetch_started, fetch_ready) = mpsc::channel();
+    let (fetch_finished, fetch_result) = mpsc::channel();
+    let fetch_root = quarantine.clone();
+    std::thread::spawn(move || {
+        fetch_started.send(()).unwrap();
+        let outcome = open_deferred_conversation(
+            &OpenRequest {
+                facts: person(RestoreAction::Fetch),
+                root: &fetch_root,
+                conversation_id: "conv-bulk",
+            },
+            &policy(),
+            &MemoryAudit::open(),
+            &DirectoryQuarantine,
+            &FakeSource::matching(7, digest),
+            &mut Quiet,
+        );
+        fetch_finished.send(outcome.map(|_| ())).unwrap();
+    });
+    let (accept_started, accept_ready) = mpsc::channel();
+    let (accept_finished, accept_result) = mpsc::channel();
+    let accept_root = quarantine.clone();
+    let accept_live = live.clone();
+    std::thread::spawn(move || {
+        accept_started.send(()).unwrap();
+        let outcome = accept_quarantine(
+            &AcceptRequest {
+                facts: person(RestoreAction::Accept),
+                quarantine: &accept_root,
+                live: &accept_live,
+                receipts: &NoReceipts,
+            },
+            &policy(),
+            &MemoryAudit::open(),
+            &DirectoryQuarantine,
+        );
+        accept_finished.send(outcome.map(|_| ())).unwrap();
+    });
+    fetch_ready.recv_timeout(Duration::from_secs(10)).unwrap();
+    accept_ready.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(
+        matches!(
+            fetch_result.recv_timeout(Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "fetch must wait for the restore-root lock"
+    );
+    assert!(
+        matches!(
+            accept_result.recv_timeout(Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "accept must wait for the restore-root lock"
+    );
+    assert!(!live.exists());
+    drop(hold);
+    let fetched = fetch_result.recv_timeout(Duration::from_secs(10)).unwrap();
+    let accepted = accept_result.recv_timeout(Duration::from_secs(10)).unwrap();
+    match accepted {
+        Ok(()) => {
+            assert!(live.exists());
+            assert!(!quarantine.exists());
+            if fetched.is_ok() {
+                assert!(live.join("sessions/conv-bulk.sqlite3").is_file());
+            }
+        }
+        Err(RestoreFault::Tamper) => {
+            assert!(
+                !live.exists(),
+                "a refused accept must leave live data alone"
+            );
+        }
+        Err(error) => panic!("accept stopped with {error:?}"),
+    }
+    assert!(!live.join("sessions/conv-bulk.sqlite3.partial").exists());
+    assert!(!quarantine
+        .join("sessions/conv-bulk.sqlite3.partial")
+        .exists());
 }

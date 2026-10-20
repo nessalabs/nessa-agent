@@ -11,12 +11,13 @@ operator ──▶ Cedar (stage | accept | fetch)
                └── effect, or stop when the audit was not stored
 stage ──▶ verify the bundle and keep that authenticated listing
             ├── omit fenced grants, credentials, and live metadata rows
+            ├── delete a fenced conversation from a session database, then vacuum
             ├── append an uncertain end on each still-open lease
             └── seal the quarantine directory
-accept ──▶ seal still matches, live path absent, receipts for open leases
-            └── rename quarantine → live
-open ──▶ stream one deferred conversation into a temp session file
-            └── publish only when size and fingerprint match the sealed line
+accept ──▶ hold the restore-root lock, seal still matches, live path absent
+            └── rename quarantine → live, then store the audit, then release
+open ──▶ hold that same lock, stream one deferred conversation into a temp file
+            └── publish only when size and fingerprint match, then store the audit
 ```
 
 Arrows are the order one call runs. The live path is not created, opened for
@@ -89,6 +90,15 @@ the result is a visible audit failure, not a second rename back.
 - A share grant, credential, or live metadata row named by a fence is not
   copied. A tombstone is. A row of those stores that cannot be checked
   aborts the stage. `a_revoked_grant_is_absent_from_quarantine`
+- A fenced conversation that still sits in a canonical or notes session
+  database is deleted from the restored image, and the image is vacuumed.
+  A session image that cannot be checked is not copied.
+  `a_fenced_conversation_inside_the_session_is_not_restored`
+- Stage, accept, and fetch take one lock on the restore root and hold it
+  across publication and the audit that records it. A refusal whose audit
+  line is not stored is an audit failure.
+  `accept_and_fetch_wait_for_the_restore_root`,
+  `a_lost_refusal_audit_is_not_a_plain_refusal`
 - A lease line `granted` or `command_granted` without a later `ended` gains
   one `ended` line with uncertain cleanup. Accept then requires an operator
   receipt for each such lease. No receipt leaves the tree quarantined.
