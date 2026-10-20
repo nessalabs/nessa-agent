@@ -14,9 +14,9 @@ fingerprint (gate 15).
 
 ## What selects a saved native session
 
-Hashed: the executable, the ordered arguments, the workspace, the token
-limits, the permission decisions, the system prompt, and the environment keys
-that name where the vendor keeps its account:
+The restoration fingerprint keys on the workspace, whether tools are enabled,
+the token limits, the permission decisions, the system prompt, and the
+environment keys that name where the vendor keeps its account:
 
 - `HOME`
 - `CLAUDE_CONFIG_DIR`
@@ -24,17 +24,31 @@ that name where the vendor keeps its account:
 - `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`
   (OpenCode's config roots; the same fact as the vendor directory)
 
-Not hashed, the same way credentials and MCP servers already are not:
-`PATH`, `TMPDIR`, `USER`, `LOGNAME`, `CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`,
-and any other environment key. Those are process plumbing. On macOS, `PATH`
-is `NESSA_AGENT_PATH` from the login shell, rewritten into the launchd job
-whenever an update re-registers it, and `TMPDIR` differs between launchd and
-an app-launched child. Neither chooses which native session to resume.
+The provider name and the model sit beside that hash on `ProviderIdentity`.
+Together those are the whole restoration identity.
 
-There is no reader for a fingerprint computed by the previous list. A saved
-conversation whose fingerprint was computed from the whole environment does
-not match. It takes the context-only row below and opens a new native
-session. Nessa is alpha and has no users, so the old form is not accepted.
+Not in it:
+
+- the executable path and the ordered arguments. Every release stages the
+  runtime (the node binary and the adapter) under a new directory named by
+  the tree's content fingerprint, so those paths move on every update. They
+  do not choose which native session to resume;
+- the runtime environment, which composition keeps in
+  `AcpConfig::runtime_environment` rather than the identity environment:
+  `PATH`, `TMPDIR`, `USER`, `LOGNAME`, `CODEX_PATH`,
+  `CLAUDE_CODE_EXECUTABLE`. On macOS, `PATH` is `NESSA_AGENT_PATH` from the
+  login shell, rewritten into the launchd job whenever an update
+  re-registers it, and `TMPDIR` differs between launchd and an app-launched
+  child;
+- credentials, MCP servers, and any other environment key.
+
+Warm-up keeps a launch fingerprint of its own: the executable, the
+arguments, and the runtime environment. It is recorded beside the
+restoration fingerprint, so a moved runtime re-runs warm-up and does not
+change the restoration identity. A saved conversation whose old fingerprint
+included the executable or the whole environment does not match. It takes
+the context-only row below and opens a new native session. Nessa is alpha
+and has no users, so the old form is not accepted.
 
 ## States
 
@@ -52,8 +66,9 @@ session id.
 | S6 | matches | matches | differs | yes | The saved native session is not resumed. A new one is opened. `ProviderIdentityChanged` and the new `ProviderContext` are one save, after the new session exists. |
 
 S6 is the row that used to refuse with `storage-identity` and strand the
-conversation. `PATH` or `TMPDIR` drift no longer reaches S6: those keys are
-not in the fingerprint, so the row is S3.
+conversation. A moved staged runtime, and `PATH` or `TMPDIR` drift, no
+longer reach S6: they are not in the restoration fingerprint, so the row
+is S3 and the saved native session is resumed.
 
 ## Invariants
 
@@ -77,13 +92,18 @@ not in the fingerprint, so the row is S3.
    as `conversation_configuration_changed`, says the chat cannot be reopened.
    An uncertain model change that is not that refusal still says the change
    is not confirmed.
+7. The executable, the arguments, and the runtime environment are the
+   warm-up's launch fingerprint, not the restoration fingerprint. Moving
+   them leaves S3. Warm-up's key changes, so the next boot prepares that
+   runtime again. S1 and S2 are unchanged.
 
 ## Alternatives
 
-- **Keep hashing `PATH` and `TMPDIR`, and keep refusing S6.** This is the
-  bug. An app update re-registers the launchd job, the shell `PATH` is
-  snapshotted again, and every saved conversation of that agent is refused
-  for good. Retrying cannot succeed.
+- **Keep hashing the executable, the arguments, `PATH`, and `TMPDIR`, and
+  keep refusing S6.** This is the bug. Every release stages the runtime
+  under a new directory, and an update also re-registers the launchd job,
+  so the shell `PATH` is snapshotted again. Either change refuses every
+  saved conversation of that agent for good. Retrying cannot succeed.
 - **Accept the previous fingerprint once** (the issue's step 1). Alpha has
   no users and no migration. S6 already opens a new native session when the
   stored fingerprint was computed from the wider list, so the conversation
@@ -103,12 +123,13 @@ not in the fingerprint, so the row is S3.
 
 ## Consequences
 
-A change to a hashed input, including the staged adapter path moving on an
-update, no longer refuses the conversation. The history continues and the
-native session starts over. `docs/design/mcp-connections.md` ("What still
-strands a saved conversation") is updated to say that: only a different
-provider name or model refuses; a fingerprint change opens a new native
-session.
+A change to a hashed input no longer refuses the conversation. The history
+continues and the native session starts over. A moved staged runtime is not
+a hashed input: the saved native session is resumed, and warm-up records
+the new launch fingerprint separately. `docs/design/mcp-connections.md`
+("What still strands a saved conversation") says the same thing: only a
+different provider name or model refuses; a fingerprint change opens a new
+native session.
 
 A provider that still carries a replaced fingerprint and could resume the
 saved id (the old pool refusal) now opens a new native session instead of

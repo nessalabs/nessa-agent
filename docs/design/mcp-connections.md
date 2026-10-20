@@ -1015,17 +1015,21 @@ not hash the MCP servers. Its inputs are listed once, on `fingerprint` in
   the history continues on a new native session
   ([restoration fingerprint](restoration-fingerprint.md)). Nothing reads the
   earlier fingerprint (one current contract). The same release re-runs the
-  agent warm-up once, since the configuration part of the warm-up's key is
-  this fingerprint
+  agent warm-up once, since the restoration fingerprint is part of the
+  warm-up's key
   ([`RuntimeFingerprint`](../../crates/nessa-server/src/agent_warm_up/domain/value_objects/runtime_fingerprint.rs));
-  that costs one background launch and is harmless.
+  that costs one background launch and is harmless. The warm-up also keeps
+  the launch fingerprint — the executable, the arguments, and the runtime
+  environment — so a later release that only moves the staged runtime
+  re-warms without changing the restoration identity.
 - **What still strands a saved conversation.** A different provider name or
-  model. A hashed input changing does not, and that includes every update
-  that changes the staged runtime tree, which in practice is every release.
+  model. A hashed input changing does not: it opens a new native session
+  and keeps the history. The staged runtime's path is not a hashed input.
   The desktop stages the runtime under a directory named by the prepared
   tree's content fingerprint
   ([`staging.rs`](../../src-tauri/src/gateway/infrastructure/macos/staging.rs), `tree_fingerprint`)
   and launches the agent runtime's executable and entry from it (`configure`
   in [`composition/desktop.rs`](../../crates/nessa-server/src/composition/desktop.rs)),
-  so the executable path and the first argument move with every such update.
-  That opens a new native session and keeps the history.
+  so the executable path and the first argument move with every release.
+  That move is the warm-up's launch fingerprint, not the restoration
+  identity, so the saved native session is resumed.

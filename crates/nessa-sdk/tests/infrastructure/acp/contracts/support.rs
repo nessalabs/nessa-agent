@@ -239,6 +239,7 @@ pub(super) fn test_acp_configuration(
             mode.into(),
         ],
         environment: BTreeMap::new(),
+        runtime_environment: BTreeMap::new(),
         credential_environment: BTreeMap::new(),
         workspace: root.path().to_path_buf(),
         tools_enabled: true,

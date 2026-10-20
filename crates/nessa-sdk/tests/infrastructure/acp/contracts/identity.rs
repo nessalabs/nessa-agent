@@ -34,6 +34,7 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
     );
     let original = provider(config.clone(), &model);
     let identity = original.identity();
+    let launch = original.launch_fingerprint();
     assert!(identity.context().starts_with("sha256:"));
     assert_eq!(identity.context().len(), 71);
     let storage_root = tempfile::tempdir().unwrap();
@@ -65,10 +66,10 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
     agent.close(close_action()).await.unwrap();
     drop(agent);
 
-    // A different account directory, a missing executable, or tools turned
-    // off selects another context. None of them is launched: the fixture
-    // asserts the original account directory, a missing executable cannot
-    // start, and tools off is a different binding.
+    // A different account directory or tools turned off selects another
+    // context. Neither is launched: the fixture asserts the original account
+    // directory, and tools off is a different binding. A moved executable is
+    // the same restoration identity and is not launched either.
     let launches = std::fs::read(root.path().join("launches")).unwrap();
     let mut account = config.clone();
     account
@@ -79,9 +80,12 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
         ExecutableUseSnapshot::unmanaged(PathBuf::from("/nonexistent/different-provider"));
     let mut tools = config.clone();
     tools.tools_enabled = false;
-    for changed in [account, executable, tools] {
+    for changed in [account, tools] {
         assert_ne!(provider(changed, &model).identity(), identity);
     }
+    let moved = provider(executable, &model);
+    assert_eq!(moved.identity(), identity);
+    assert_ne!(moved.launch_fingerprint(), launch);
     assert_eq!(
         std::fs::read(root.path().join("launches")).unwrap(),
         launches
@@ -141,27 +145,37 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
     restored.close(close_action()).await.unwrap();
     drop(restored);
 
-    // An argument change is a different context. The conversation opens a
-    // new native session instead of being refused.
+    // An argument change is a different launch, not a different context.
+    // The saved native session is resumed.
     let mut arguments = config;
     arguments.arguments.push("semantic-setting".into());
     let arguments = provider(arguments, &model);
-    let changed = arguments.identity();
-    assert_ne!(changed, identity);
-    let fresh = attached_agent(Arc::new(arguments), manager().await.unwrap())
+    assert_eq!(arguments.identity(), identity);
+    assert_ne!(arguments.launch_fingerprint(), launch);
+    let resumed_arguments = attached_agent(Arc::new(arguments), manager().await.unwrap())
         .await
         .unwrap();
-    let snapshot = fresh.session_manager().snapshot().await.unwrap();
-    assert_eq!(snapshot.provider, changed);
-    assert_ne!(
-        snapshot.provider_context.recorded().unwrap().as_str(),
+    assert_eq!(
+        resumed_arguments
+            .session_manager()
+            .snapshot()
+            .await
+            .unwrap()
+            .provider_context
+            .recorded()
+            .unwrap()
+            .as_str(),
         saved_context
     );
-    fresh.close(close_action()).await.unwrap();
-    drop(fresh);
+    resumed_arguments.close(close_action()).await.unwrap();
+    drop(resumed_arguments);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("resume-observed")).unwrap(),
+        saved_context
+    );
     assert_eq!(
         std::fs::read_to_string(root.path().join("new-session-count")).unwrap(),
-        "2"
+        "1"
     );
 
     let records = std::fs::read_dir(storage_path)
@@ -326,7 +340,9 @@ fn plumbing_environment_does_not_change_the_fingerprint() {
     config
         .environment
         .insert("CLAUDE_CONFIG_DIR".into(), "/fixture/config-a".into());
-    let original = provider(config.clone(), &model).identity();
+    let original_provider = provider(config.clone(), &model);
+    let original = original_provider.identity();
+    let launch = original_provider.launch_fingerprint();
     let mut plumbing = config.clone();
     for (key, value) in [
         ("PATH", "/opt/homebrew/bin:/usr/bin"),
@@ -335,11 +351,31 @@ fn plumbing_environment_does_not_change_the_fingerprint() {
         ("LOGNAME", "someone"),
         ("CODEX_PATH", "/opt/codex"),
         ("CLAUDE_CODE_EXECUTABLE", "/opt/claude"),
-        ("ANTHROPIC_BASE_URL", "https://fixture.invalid/b"),
     ] {
-        plumbing.environment.insert(key.into(), value.into());
+        plumbing
+            .runtime_environment
+            .insert(key.into(), value.into());
     }
-    assert_eq!(provider(plumbing, &model).identity(), original);
+    // A key that is neither the account nor the runtime still does not
+    // select a saved context, and it is not part of the launch fingerprint.
+    plumbing.environment.insert(
+        "ANTHROPIC_BASE_URL".into(),
+        "https://fixture.invalid/b".into(),
+    );
+    let plumbing = provider(plumbing, &model);
+    assert_eq!(plumbing.identity(), original);
+    assert_ne!(plumbing.launch_fingerprint(), launch);
+    let mut moved = config.clone();
+    moved.executable =
+        ExecutableUseSnapshot::unmanaged(PathBuf::from("/nonexistent/moved-runtime"));
+    let moved = provider(moved, &model);
+    assert_eq!(moved.identity(), original);
+    assert_ne!(moved.launch_fingerprint(), launch);
+    let mut arguments = config.clone();
+    arguments.arguments.push("semantic-setting".into());
+    let arguments = provider(arguments, &model);
+    assert_eq!(arguments.identity(), original);
+    assert_ne!(arguments.launch_fingerprint(), launch);
     let mut account = config.clone();
     account
         .environment
@@ -352,7 +388,7 @@ fn plumbing_environment_does_not_change_the_fingerprint() {
 }
 
 #[test]
-fn fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments() {
+fn fingerprint_tracks_workspace_policy_prompt_and_limits() {
     let (_root, config, model) = test_acp_configuration("echo", 16);
     let original = provider(config.clone(), &model).identity();
     let mut changed = config.clone();
@@ -415,8 +451,8 @@ fn fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments()
     let mut right = config;
     left.arguments = vec!["ab".into(), "c".into()];
     right.arguments = vec!["a".into(), "bc".into()];
-    assert_ne!(
-        provider(left, &model).identity(),
-        provider(right, &model).identity()
-    );
+    let left = provider(left, &model);
+    let right = provider(right, &model);
+    assert_eq!(left.identity(), right.identity());
+    assert_ne!(left.launch_fingerprint(), right.launch_fingerprint());
 }

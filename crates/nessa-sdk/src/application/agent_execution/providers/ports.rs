@@ -370,6 +370,16 @@ pub trait AgentProvider: Send + Sync {
     ) -> Result<Arc<dyn AgentProvider>, AgentError> {
         Err(AgentError::Unsupported("model change configuration".into()))
     }
+    /// The staged runtime this factory launches, separate from [`Self::identity`].
+    ///
+    /// Warm-up records this beside the restoration fingerprint, so an update
+    /// that moves the executable re-runs warm-up without changing which native
+    /// session a saved conversation resumes. Empty means this factory has no
+    /// staged runtime of its own. The inputs are `launch_fingerprint` in
+    /// `acp/sessions/identity.rs`.
+    fn launch_fingerprint(&self) -> String {
+        String::new()
+    }
     /// Exact provider/model/context configuration used to validate restoration.
     fn identity(&self) -> ProviderIdentity;
     /// Immutable configured model and binding capabilities available before open.

@@ -183,8 +183,10 @@ export async function exited(child, ms) {
  *   `token` is the owner token file's path; `log()` the gateway's output so
  *   far; `restart(signal, second)` kills it (a crash by default) and starts
  *   it again on the same directory and port. A function `second` runs once
- *   the old one has exited and before the new one starts; an object is
- *   assigned onto the environment for that launch and the ones after it;
+ *   the old one has exited and before the new one starts. An object is
+ *   assigned onto the environment for that launch and the ones after it,
+ *   unless it has `overlay` or `whileStopped`: then `overlay` is that
+ *   assignment and `whileStopped` is the function that runs in between;
  *   `server` the process running now; `stop()`
  *   stops it, waits for it and for the rest of its output (up to 2 s more), and
  *   removes its directory, and says whether it exited. On a failed start, the
@@ -290,12 +292,20 @@ export async function startLocalGateway(o) {
      * argument runs once the old one has exited and before the new one
      * starts, for a check that changes what the gateway will find on disk.
      * An object is assigned onto the environment for this launch and the
-     * ones after it. Resolves once the new one is healthy. Its output joins
-     * the same log.
+     * ones after it. An object with `overlay` or `whileStopped` does both:
+     * `overlay` is that assignment, and `whileStopped` runs in between.
+     * Resolves once the new one is healthy. Its output joins the same log.
      */
     const restart = async (signal = "SIGKILL", second) => {
-      const whileStopped = typeof second === "function" ? second : async () => {}
-      if (second && typeof second === "object") Object.assign(env, second)
+      let whileStopped = async () => {}
+      if (typeof second === "function") whileStopped = second
+      else if (second && typeof second === "object") {
+        if ("overlay" in second || "whileStopped" in second) {
+          if (second.overlay) Object.assign(env, second.overlay)
+          if (typeof second.whileStopped === "function")
+            whileStopped = second.whileStopped
+        } else Object.assign(env, second)
+      }
       const previous = server
       previous.kill(signal)
       if (!(await exited(previous, 10_000))) {

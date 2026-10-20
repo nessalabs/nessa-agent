@@ -75,10 +75,11 @@
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
  *               message sent after it is answered
- *   drift       the gateway is stopped and started again with a different
- *               agent PATH and TMPDIR, the way an app update re-registers
- *               the launchd job; the next message sent in the window to the
- *               existing conversation is answered
+ *   drift       the gateway is stopped and started again with its staged
+ *               runtime directory moved and a different agent PATH and
+ *               TMPDIR, the way an app update stages a new tree and
+ *               re-registers the launchd job; the next message sent in the
+ *               window to the existing conversation is answered
  *   pool        native linking is turned on in Settings and two real
  *               `nessa env dial` workers pair with the gateway; a
  *               conversation created on `peer:any` is bound to one of them
@@ -115,9 +116,18 @@
  */
 import catalog from "../../../crates/nessa-sdk/data/models.json" with { type: "json" }
 import { randomUUID } from "node:crypto"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
@@ -779,6 +789,29 @@ async function startedBeside(run, client, step, n, failures) {
   )
 }
 
+/**
+ * Points the selected agent's command and its absolute file arguments at
+ * new symlinks. The files stay where they are, so a script's own imports
+ * still resolve; only the paths the gateway launches change.
+ */
+function moveStagedRuntime(directory) {
+  const configPath = join(directory, "ci", "instances", INSTANCE, "config.json")
+  const config = JSON.parse(readFileSync(configPath, "utf8"))
+  const runtime = config.agents.runtimes[config.agents.selected]
+  const staged = mkdtempSync(join(tmpdir(), "nessa-stress-runtime-"))
+  let n = 0
+  const relocate = (path) => {
+    if (typeof path !== "string" || !isAbsolute(path) || !existsSync(path)) return path
+    const dest = join(staged, `${n++}-${basename(path)}`)
+    symlinkSync(path, dest)
+    return dest
+  }
+  runtime.command = relocate(runtime.command)
+  runtime.args = runtime.args.map(relocate)
+  writeFileSync(configPath, JSON.stringify(config))
+  chmodSync(configPath, 0o600)
+}
+
 const steps = {
   async model(run, step, failures) {
     const picker = dock(run.page).locator(css.modelChip)
@@ -1093,9 +1126,12 @@ const steps = {
         const path = `/opt/homebrew/bin:${process.env.PATH ?? ""}`
         try {
           await run.stack.gateway.restart("SIGTERM", {
-            NESSA_AGENT_PATH: path,
-            PATH: path,
-            TMPDIR: drifted,
+            overlay: {
+              NESSA_AGENT_PATH: path,
+              PATH: path,
+              TMPDIR: drifted,
+            },
+            whileStopped: async () => moveStagedRuntime(run.stack.gateway.directory),
           })
           old.close()
           run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")

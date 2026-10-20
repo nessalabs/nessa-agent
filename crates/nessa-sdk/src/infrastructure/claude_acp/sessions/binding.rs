@@ -236,6 +236,7 @@ impl ClaudeAcpProvider {
             .current_dir(&self.config.workspace)
             .env_clear()
             .envs(&self.config.environment)
+            .envs(&self.config.runtime_environment)
             .envs(&self.config.credential_environment)
             .envs(self.launch_environment());
         command
@@ -282,6 +283,9 @@ impl AgentProvider for ClaudeAcpProvider {
         }
         normalized.traces = traces.unwrap_or_else(|| self.traces.clone());
         Ok(Arc::new(normalized))
+    }
+    fn launch_fingerprint(&self) -> String {
+        identity::launch_fingerprint(&self.config)
     }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(

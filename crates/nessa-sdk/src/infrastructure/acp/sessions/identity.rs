@@ -39,24 +39,29 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
 /// match to be restored. This function is the complete list of its inputs;
 /// the `AcpConfig` field docs that state their membership link here.
 ///
-/// Hashed: the executable's path, the ordered arguments, the account
-/// environment ([`CONTEXT_ENVIRONMENT`]), the workspace, whether tools are
-/// enabled, the token limits, the permission decisions, and the composed
-/// system prompt. Changing any of them changes the identity. A saved
-/// conversation whose fingerprint differs opens a new native session; it is
-/// refused only when the provider name or the model differs. The rows are
-/// `docs/design/restoration-fingerprint.md`.
+/// Hashed: the account environment ([`CONTEXT_ENVIRONMENT`]), the workspace,
+/// whether tools are enabled, the token limits, the permission decisions, and
+/// the composed system prompt. The provider name and the model sit beside
+/// this hash on [`ProviderIdentity`]. Changing a hashed input changes the
+/// identity. A saved conversation whose fingerprint differs opens a new
+/// native session; it is refused only when the provider name or the model
+/// differs. The rows are `docs/design/restoration-fingerprint.md`.
 /// (`a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_without_persistence`,
 /// `plumbing_environment_does_not_change_the_fingerprint`,
-/// `fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments`).
+/// `fingerprint_tracks_workspace_policy_prompt_and_limits`).
 ///
 /// Not hashed:
-/// - process plumbing in the environment: `PATH`, `TMPDIR`, `USER`,
-///   `LOGNAME`, `CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`, and any key that is
-///   not in [`CONTEXT_ENVIRONMENT`]. On macOS `PATH` is the login shell's
-///   path, rewritten into the launchd job on every app update, and `TMPDIR`
-///   differs between launchd and an app-launched child. Neither chooses which
-///   native session to resume;
+/// - the executable path and the ordered arguments. A release stages the
+///   runtime under a new directory, so both move on every update. They are
+///   the launch fingerprint ([`launch_fingerprint`]), which warm-up records
+///   separately, and they do not choose which native session to resume;
+/// - [`AcpConfig::runtime_environment`]: `PATH`, `TMPDIR`, `USER`,
+///   `LOGNAME`, `CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`. On macOS `PATH` is
+///   the login shell's path, rewritten into the launchd job on every app
+///   update, and `TMPDIR` differs between launchd and an app-launched child.
+///   Composition puts those keys there rather than in
+///   [`AcpConfig::environment`]. Any other key left in `environment` that is
+///   not in [`CONTEXT_ENVIRONMENT`] is also not hashed;
 /// - the credential environment, so credentials rotate without stranding a
 ///   conversation;
 /// - the stand-in grants (`AcpConfig::stand_ins`), fresh on every open;
@@ -84,11 +89,13 @@ pub(crate) fn model_change_context(config: &AcpConfig, prompt: Option<&SystemPro
     fingerprint_fields(config, None, prompt)
 }
 
-fn fingerprint_fields(
-    config: &AcpConfig,
-    limits: Option<TokenLimits>,
-    prompt: Option<&SystemPrompt>,
-) -> String {
+/// The launch fingerprint warm-up records beside the restoration fingerprint.
+///
+/// Hashed: the executable path, the ordered arguments, and every entry of
+/// [`AcpConfig::runtime_environment`], in key order. A moved staged runtime
+/// changes this and leaves [`fingerprint`] unchanged, so a saved conversation
+/// resumes and the next warm-up prepares the new tree.
+pub(crate) fn launch_fingerprint(config: &AcpConfig) -> String {
     let mut hash = Sha256::new();
     field(
         &mut hash,
@@ -102,6 +109,20 @@ fn fingerprint_fields(
     for argument in &config.arguments {
         field(&mut hash, argument.as_encoded_bytes());
     }
+    hash.update((config.runtime_environment.len() as u64).to_be_bytes());
+    for (key, value) in &config.runtime_environment {
+        field(&mut hash, key.as_encoded_bytes());
+        field(&mut hash, value.as_encoded_bytes());
+    }
+    format!("sha256:{:x}", hash.finalize())
+}
+
+fn fingerprint_fields(
+    config: &AcpConfig,
+    limits: Option<TokenLimits>,
+    prompt: Option<&SystemPrompt>,
+) -> String {
+    let mut hash = Sha256::new();
     let context_environment: Vec<_> = CONTEXT_ENVIRONMENT
         .iter()
         .filter_map(|key| config.environment.get_key_value(OsStr::new(key)))

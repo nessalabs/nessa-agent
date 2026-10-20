@@ -1113,6 +1113,29 @@ pub(super) mod build {
             && runtime.paths().iter().all(|path| path.exists())
     }
 
+    /// Keys composition collects for the process and that do not select a saved
+    /// native session. They move into `AcpConfig::runtime_environment`.
+    const RUNTIME_ENVIRONMENT: &[&str] = &[
+        "PATH",
+        "TMPDIR",
+        "USER",
+        "LOGNAME",
+        "CODEX_PATH",
+        "CLAUDE_CODE_EXECUTABLE",
+    ];
+
+    fn split_runtime_environment(
+        mut environment: BTreeMap<OsString, OsString>,
+    ) -> (BTreeMap<OsString, OsString>, BTreeMap<OsString, OsString>) {
+        let mut runtime = BTreeMap::new();
+        for key in RUNTIME_ENVIRONMENT {
+            if let Some(value) = environment.remove(std::ffi::OsStr::new(key)) {
+                runtime.insert(OsString::from(*key), value);
+            }
+        }
+        (environment, runtime)
+    }
+
     /// The launch configuration composition injects, separated from resolving
     /// what goes into it so a test can read back the values actually used.
     /// Everything here is a decision; nothing here reads the filesystem or this
@@ -1129,10 +1152,12 @@ pub(super) mod build {
         credential_environment: BTreeMap<OsString, OsString>,
         images: Option<Arc<dyn UserImageSource>>,
     ) -> AcpConfig {
+        let (environment, runtime_environment) = split_runtime_environment(environment);
         AcpConfig {
             executable: runtime.command.clone(),
             arguments: runtime.args.iter().map(Into::into).collect(),
             environment,
+            runtime_environment,
             credential_environment,
             workspace,
             tools_enabled: runtime.tools_enabled,

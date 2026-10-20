@@ -85,3 +85,25 @@ stay in the allowlist as OpenCode's vendor directories, the same rule as
 Unverified until the code exists: the recipe in the issue (restart with
 `NESSA_AGENT_PATH`, then with `TMPDIR`), the S6 crash retry, and the
 stress step.
+
+## Scope revision
+
+A later finding changed what the restoration fingerprint hashes. Every
+release stages the node binary and the adapter under a new directory, and
+those paths were still in the fingerprint, so an app update still changed
+the restoration identity. The revision, written into the design note's
+state table and invariant 7:
+
+- the restoration fingerprint no longer hashes the executable or the
+  arguments. A moved runtime with the same provider name and model is S3;
+- `PATH`, `TMPDIR`, `USER`, `LOGNAME`, `CODEX_PATH`, and
+  `CLAUDE_CODE_EXECUTABLE` live in `AcpConfig::runtime_environment`, which
+  the restoration fingerprint does not read;
+- warm-up records a separate launch fingerprint of the executable, the
+  arguments, and that runtime environment;
+- there is still no reader for an older fingerprint format. A saved
+  conversation whose fingerprint included the executable takes S6;
+- a provider name or model change is still S1 or S2.
+
+The stress step restarts with both the runtime directory moved and `PATH`
+changed. The desktop model and the reopen sentence are unchanged.

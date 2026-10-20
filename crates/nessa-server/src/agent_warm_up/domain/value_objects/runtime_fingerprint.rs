@@ -4,21 +4,25 @@ use std::fmt;
 ///
 /// Two launches share a fingerprint when they would run the same provider, the
 /// same model, and the same configuration. The configuration part is the
-/// provider's own credential-free identity; for the ACP providers that is the
-/// SDK's restoration fingerprint, whose inputs are listed on `fingerprint` in
-/// the SDK's `acp/sessions/identity.rs`. This is the one statement of what a
-/// warm-up covers; the gateway's composition links here.
+/// provider's restoration fingerprint, and, when the provider has one, its
+/// launch fingerprint on the next line. The restoration inputs are listed on
+/// `fingerprint` in the SDK's `acp/sessions/identity.rs`; the launch inputs
+/// (the executable, the arguments, and the runtime environment) are listed on
+/// `launch_fingerprint` there. Composition joins the two in
+/// `runtime_fingerprint_for`. This is the one statement of what a warm-up
+/// covers.
 ///
 /// A warm-up exists for the agent runtime's first-execution scan, which is
 /// paid per file. An install, or an update that changes the staged runtime
 /// tree, stages the runtime under a new directory named by that tree's content
 /// fingerprint, and the agent runtime's executable and entry are launched from
-/// it, so their paths, and with them this value, change with every such
-/// update, which in practice is every release.
+/// it. Those paths are the launch fingerprint, so this value changes with
+/// every such update, which in practice is every release, while a saved
+/// conversation's restoration identity does not.
 ///
-/// Because the configuration part is the SDK's restoration fingerprint, the
-/// release that dropped the MCP servers from that fingerprint (#391) re-runs
-/// the warm-up once; that is one background launch, and harmless. What else
+/// Because the configuration part includes the SDK's restoration fingerprint,
+/// the release that dropped the MCP servers from that fingerprint (#391)
+/// re-runs the warm-up once; that is one background launch, and harmless. What else
 /// that release changed is in `docs/design/mcp-connections.md`, "MCP servers
 /// and the restoration identity".
 ///

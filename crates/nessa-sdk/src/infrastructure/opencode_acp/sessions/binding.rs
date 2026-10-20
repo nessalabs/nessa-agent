@@ -328,6 +328,7 @@ impl OpencodeAcpProvider {
             .current_dir(&self.config.workspace)
             .env_clear()
             .envs(&self.config.environment)
+            .envs(&self.config.runtime_environment)
             .envs(&self.config.credential_environment)
             .env_remove("OPENCODE_CONFIG")
             .env_remove("OPENCODE_CONFIG_CONTENT")
@@ -463,6 +464,9 @@ impl AgentProvider for OpencodeAcpProvider {
     ) -> Option<crate::application::agent_execution::providers::ApprovalMode> {
         Some(crate::application::agent_execution::providers::ApprovalMode::Ask)
     }
+    fn launch_fingerprint(&self) -> String {
+        identity::launch_fingerprint(&self.config)
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(
             "opencode-acp",
@@ -537,6 +541,7 @@ fn isolated_config(mut config: AcpConfig) -> AcpConfig {
         "OPENCODE_DB",
     ] {
         config.environment.remove(OsStr::new(key));
+        config.runtime_environment.remove(OsStr::new(key));
         config.credential_environment.remove(OsStr::new(key));
     }
     config

@@ -54,6 +54,7 @@ pub struct CredentialedClaudeProvider {
     native_hooks: NativeHooksSwitch,
     credentials: Arc<dyn AgentCredentialSource>,
     identity: ProviderIdentity,
+    launch: String,
     capabilities: EffectiveCapabilities,
     /// The store every binding this factory builds records into.
     traces: Arc<LocalTraceStore>,
@@ -78,6 +79,7 @@ impl CredentialedClaudeProvider {
         let provider = ClaudeAcpProvider::new(config.clone(), &model, limits, audit.clone())?
             .with_system_prompt(prompt.clone());
         let identity = provider.identity();
+        let launch = provider.launch_fingerprint();
         let capabilities = provider.capabilities().clone();
         Ok(Self {
             config,
@@ -90,6 +92,7 @@ impl CredentialedClaudeProvider {
             native_hooks: NativeHooksSwitch::off(),
             credentials,
             identity,
+            launch,
             capabilities,
             traces: LocalTraceStore::new(),
             deleting: Arc::new(LaunchedDeletions::default()),
@@ -208,6 +211,9 @@ impl AgentProvider for CredentialedClaudeProvider {
         self.native_hooks.allowed()
     }
 
+    fn launch_fingerprint(&self) -> String {
+        self.launch.clone()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.identity.clone()
     }
@@ -350,6 +356,7 @@ mod tests {
             executable: ExecutableUseSnapshot::unmanaged("/bin/true".into()),
             arguments: Vec::new(),
             environment: BTreeMap::new(),
+            runtime_environment: BTreeMap::new(),
             credential_environment: BTreeMap::new(),
             workspace: root.path().into(),
             tools_enabled: true,
