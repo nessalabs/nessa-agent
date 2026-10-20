@@ -29,11 +29,12 @@
  * edge, where the sidebar's card would stand a gutter in. Its content takes
  * that gutter too, so the search field and a row's highlight sit as far from
  * the window's edge as from the panes beside them. A pane change holds the
- * sidebar in the row until the new boxes (`data-spare-held`); the list keeps
- * the measure it had while that hold is on, so the fold does not restyle it
- * on its own frame.
+ * sidebar in the row until the new boxes (`data-spare-held`) and holds this
+ * measure one frame more (`data-list-held`), so the fold does not restyle
+ * the list. The list takes the gutter on the frame after the boxes.
  */
-.workspace[data-sidebar="closed"]:not([data-spare-held]) .workspace-list-inner {
+.workspace[data-sidebar="closed"]:not([data-spare-held]):not([data-list-held])
+  .workspace-list-inner {
   padding-left: var(--desktop-gutter);
 }
 
@@ -64,7 +65,7 @@
   padding-left: 12px;
 }
 
-.workspace[data-sidebar="closed"]:not([data-spare-held])
+.workspace[data-sidebar="closed"]:not([data-spare-held]):not([data-list-held])
   .workspace-list
   .desktop-column-bar {
   padding-left: var(--desktop-titlebar-safe-start);

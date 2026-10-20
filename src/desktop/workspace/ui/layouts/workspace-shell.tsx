@@ -69,7 +69,10 @@ import {
   useWorkspaceStore,
 } from "../../adapters/store/hooks"
 import { reviewToOpen, reviewWaitsIn } from "../../adapters/gateway/review-notices"
-import { usePaintedWithPanes } from "../../adapters/store/paint-with-panes"
+import {
+  listPaintFrame,
+  usePaintedWithPanes,
+} from "../../adapters/store/paint-with-panes"
 import {
   selectChrome,
   selectDraft,
@@ -528,6 +531,7 @@ function FittedWindow({
         sidebarWidth={sidebarWidth}
         listWidth={listWidth}
       />
+      <ListMeasureHold root={root} />
       <ListedChannelProvider value={listOpen ? view.channelId : null}>
         <SidebarPeekProvider value={peek}>
           <FlipScope shape={shape} root={root}>
@@ -659,6 +663,20 @@ function FittedWindow({
       </ListedChannelProvider>
     </>
   )
+}
+
+/**
+ * Holds the session list's measure through the fold. The fold paints with
+ * the new boxes; the list takes its closed measure the frame after
+ * (`listPaintFrame`), so that commit does not restyle the rows.
+ */
+function ListMeasureHold({ root }: { root: RefObject<HTMLElement | null> }) {
+  const columns = useWorkspaceSelector(selectColumnCount)
+  const painted = usePaintedWithPanes(selectColumnCount, listPaintFrame)
+  useLayoutEffect(() => {
+    root.current?.toggleAttribute("data-list-held", columns !== painted)
+  }, [columns, painted, root])
+  return null
 }
 
 /**

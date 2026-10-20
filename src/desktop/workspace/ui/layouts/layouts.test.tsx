@@ -575,9 +575,12 @@ describe("a spare sidebar fold paints with the new boxes, not in the click", () 
       await act(async () => frames.runFrame())
       expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
       expect(list()?.hasAttribute("inert")).toBe(true)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
       expect(host.querySelector(".workspace-window")?.getAttribute("data-sidebar")).toBe(
         "closed",
       )
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
       await act(async () => root.unmount())
     } finally {
       frames.restore()

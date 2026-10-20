@@ -1,3 +1,8 @@
+import { useEffect, useRef, useState } from "react"
+import type { DesktopState, DesktopStore } from "../../../store"
+import { useWorkspaceStore } from "./hooks"
+import { selectColumnCount } from "./selectors"
+
 /**
  * A painted read of the workspace. The click that opens a pane folds the
  * sidebar in the same dispatch (`arranged`). Rendering the window for that
@@ -7,22 +12,34 @@
  *
  * A change that arrives with a new number of pane columns is painted on the
  * third frame, which is when the grid paints the new boxes
- * (`split-panes/ui/split-panes.tsx`). A change that does not — a person's
- * toggle, a focus move between panes already open — is painted in the turn
- * it happens. The value a row or a pane compares is its own boolean, so a
- * focus move renders the rows that gained or lost it.
+ * (`split-panes/ui/split-panes.tsx`). The session list's measure and its tab
+ * stop wait one frame more (`listPaintFrame`), so that commit does not
+ * restyle the list. A change that does not — a person's toggle, a focus move
+ * between panes already open — is painted in the turn it happens. The value
+ * a row or a pane compares is its own boolean, so a focus move renders the
+ * rows that gained or lost it.
  */
-import { useEffect, useRef, useState } from "react"
-import type { DesktopState, DesktopStore } from "../../../store"
-import { useWorkspaceStore } from "./hooks"
-import { selectColumnCount } from "./selectors"
+
+/** The frame, after the commit, on which the grid paints new boxes. */
+export const paneBoxFrame = 3
+
+/**
+ * The frame after the boxes. The session list keeps the measure it had
+ * through the fold, and takes its new one here, with its tab stop.
+ */
+export const listPaintFrame = 4
+
+interface Listener {
+  frames: number
+  notify: () => void
+}
 
 interface Gate {
   painted: number
   /** The column count the wait is already counting down, so a later dispatch of that same count does not start the wait over. */
   waiting: number | null
   frames: number[]
-  listeners: Set<() => void>
+  listeners: Set<Listener>
   unsubscribe: () => void
 }
 
@@ -34,26 +51,29 @@ function cancel(gate: Gate) {
   gate.waiting = null
 }
 
-/** Notifies every painted read once the grid's three frames have run. */
+/** Notifies each painted read on its frame. The last frame ends the wait. */
 function arm(gate: Gate, store: DesktopStore) {
   const columns = selectColumnCount(store.getState())
   if (gate.waiting === columns) return
   cancel(gate)
   gate.waiting = columns
+  let span = paneBoxFrame
+  for (const listener of gate.listeners) span = Math.max(span, listener.frames)
   const queue = (left: number) => {
     const id = requestAnimationFrame(() => {
-      if (left > 1) {
-        queue(left - 1)
-        return
+      const at = span - left + 1
+      if (left > 1) queue(left - 1)
+      for (const listener of gate.listeners) {
+        if (listener.frames === at) listener.notify()
       }
+      if (left > 1) return
       gate.frames = []
       gate.waiting = null
       gate.painted = selectColumnCount(store.getState())
-      for (const listener of gate.listeners) listener()
     })
     gate.frames.push(id)
   }
-  queue(3)
+  queue(span)
 }
 
 function gateFor(store: DesktopStore): Gate {
@@ -63,14 +83,14 @@ function gateFor(store: DesktopStore): Gate {
     painted: selectColumnCount(store.getState()),
     waiting: null,
     frames: [],
-    listeners: new Set(),
+    listeners: new Set<Listener>(),
     unsubscribe: () => {},
   }
   gate.unsubscribe = store.subscribe(() => {
     const columns = selectColumnCount(store.getState())
     if (columns === gate.painted) {
       cancel(gate)
-      for (const listener of gate.listeners) listener()
+      for (const listener of gate.listeners) listener.notify()
       return
     }
     arm(gate, store)
@@ -90,7 +110,10 @@ function release(store: DesktopStore, gate: Gate) {
  * `select` as last painted. The function may close over the caller's props;
  * it is read when the store notifies, not when this hook renders.
  */
-export function usePaintedWithPanes<T>(select: (state: DesktopState) => T): T {
+export function usePaintedWithPanes<T>(
+  select: (state: DesktopState) => T,
+  frames = paneBoxFrame,
+): T {
   const store = useWorkspaceStore()
   const [value, setValue] = useState(() => select(store.getState()))
   const shown = useRef(value)
@@ -98,17 +121,20 @@ export function usePaintedWithPanes<T>(select: (state: DesktopState) => T): T {
   selectRef.current = select
   useEffect(() => {
     const gate = gateFor(store)
-    const listener = () => {
-      const next = selectRef.current(store.getState())
-      if (Object.is(shown.current, next)) return
-      shown.current = next
-      setValue(next)
+    const listener: Listener = {
+      frames,
+      notify: () => {
+        const next = selectRef.current(store.getState())
+        if (Object.is(shown.current, next)) return
+        shown.current = next
+        setValue(next)
+      },
     }
     gate.listeners.add(listener)
     return () => {
       gate.listeners.delete(listener)
       release(store, gate)
     }
-  }, [store])
+  }, [store, frames])
   return value
 }

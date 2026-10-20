@@ -7,15 +7,14 @@ import {
 } from "../../adapters/store/hooks"
 import {
   selectDraft,
-  selectFocusedPaneKey,
   selectPaneSession,
   selectSession,
 } from "../../adapters/store/selectors"
 import { settleOnReshape } from "../../adapters/dom/home-shape"
-import { focusedPaneAttribute, retireHomeFocus } from "../../adapters/dom/focus"
+import { retireHomeFocus } from "../../adapters/dom/focus"
+import { FocusedSliver, PaneFocusMark } from "./pane-focus-mark"
 import { captureArrival, type Arrival } from "../../adapters/dom/arrival"
 import { usePictureInConversationsPreference } from "../../../adapters/window-preferences"
-import { HeaderSliver } from "../../../ui/header-art"
 import type { PaneFrame } from "../../../split-panes"
 import type { PanePlacement } from "../../../split-panes/model/pane-sizing"
 import { Conversation, PaneHome } from "./conversation"
@@ -25,7 +24,8 @@ import { usePaneFocus } from "./use-pane-focus"
 
 /**
  * One pane: its header, and a new session's home or a conversation. It
- * subscribes to which session it shows and whether it is focused; the
+ * subscribes to which session it shows. Focus is a mark on the article
+ * (`PaneFocusMark`), so a click that moves it does not render this pane; the
  * session's own content is read further down, so a reply streaming here
  * renders this pane's transcript and nothing else.
  *
@@ -49,9 +49,6 @@ export const Pane = memo(function Pane({
   const store = useWorkspaceStore()
   const focusHandlers = usePaneFocus(key)
   const sessionId = useWorkspaceSelector((state) => selectPaneSession(state, key)) ?? ""
-  // Focus paints in the click. The new pane is not mounted yet; leaving the
-  // mark on this one would send the caret here and it would stay.
-  const focused = useWorkspaceSelector((state) => selectFocusedPaneKey(state) === key)
   const draft = useWorkspaceSelector(
     (state) => selectDraft(state, sessionId) !== undefined,
   )
@@ -113,14 +110,11 @@ export const Pane = memo(function Pane({
     <article
       className="workspace-pane"
       {...frame}
-      data-focused={(focused && multi) || undefined}
-      {...{ [focusedPaneAttribute]: focused || undefined }}
       aria-label={sessionTitle ?? (draft ? "New session" : "Empty pane")}
       {...focusHandlers}
     >
-      {pictured && filled && listed && !showHome ? (
-        <HeaderSliver moving={focused} />
-      ) : null}
+      <PaneFocusMark paneKey={key} multi={multi} />
+      {pictured && filled && listed && !showHome ? <FocusedSliver paneKey={key} /> : null}
       <PaneHeader
         pane={key}
         sessionId={sessionId}

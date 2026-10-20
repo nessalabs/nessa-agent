@@ -17,7 +17,10 @@ import {
   useWorkspaceSelector,
   useWorkspaceStore,
 } from "../../adapters/store/hooks"
-import { usePaintedWithPanes } from "../../adapters/store/paint-with-panes"
+import {
+  listPaintFrame,
+  usePaintedWithPanes,
+} from "../../adapters/store/paint-with-panes"
 import {
   sameListGroups,
   selectChannel,
@@ -81,8 +84,8 @@ export const SessionList = memo(function SessionList() {
   const title = channel?.name ?? ""
   const ordered = groups.flatMap((group) => group.ids)
   // One row takes Tab: the open one, or the first when none here is open.
-  // Painted with the new boxes, so opening a pane does not render this list.
-  const focusedId = usePaintedWithPanes(selectFocusedSessionId)
+  // The frame after the boxes, so the fold does not render this list.
+  const focusedId = usePaintedWithPanes(selectFocusedSessionId, listPaintFrame)
   const tabStop = focusedId && ordered.includes(focusedId) ? focusedId : ordered[0]
 
   // ↑ and ↓ walk the list, Home and End go to its ends, each opening as it
@@ -229,6 +232,7 @@ const SessionRow = memo(function SessionRow({
   )
   const selected = usePaintedWithPanes(
     (state) => selectFocusedSessionId(state) === sessionId,
+    listPaintFrame,
   )
   const actions = useOpenFromRow()
   const row = useSessionRowActions(sessionId)
