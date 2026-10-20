@@ -1005,6 +1005,17 @@ async fn an_opened_deferred_conversation_matches_the_recorded_fingerprint() {
 }
 
 #[tokio::test]
+async fn a_failed_fetch_audit_removes_the_session() {
+    let digest = Fingerprint::of(b"session-v1");
+    let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
+    let source = FakeSource::matching(11, digest);
+    let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::fail_after(1)).unwrap_err();
+    assert_eq!(error, RestoreFault::Audit);
+    assert!(!place.live.join("sessions/conv-bulk.sqlite3").exists());
+    assert!(partial_names(&place.live).is_empty());
+}
+
+#[tokio::test]
 async fn a_changed_source_is_refused_and_other_conversations_stay() {
     let digest = Fingerprint::of(b"session-v1");
     let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;

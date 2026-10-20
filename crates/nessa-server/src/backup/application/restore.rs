@@ -9,6 +9,7 @@
 //!             ──▶ rename quarantine to live ──▶ outcome audit
 //! open ──▶ policy ──▶ decision audit ──▶ write temp session
 //!             ──▶ fingerprint ──▶ rename into sessions/
+//!             ──▶ outcome audit (failure deletes the session file)
 //! ```
 //!
 //! Arrows are the order one call runs. The live path is not written before
@@ -362,16 +363,16 @@ pub fn open_deferred_conversation(
         let _ = layout.remove_file(&temp);
         return Err(recorded.stop(RestoreFault::SourceChanged));
     }
+    if let Err(error) = layout.publish_file(&temp, &final_path) {
+        let _ = layout.remove_file(&temp);
+        return Err(recorded.stop(error));
+    }
     if recorded
         .write("deferred", "available", "fetched", "effect")
         .is_err()
     {
-        let _ = layout.remove_file(&temp);
+        let _ = layout.remove_file(&final_path);
         return Err(RestoreFault::Audit);
-    }
-    if let Err(error) = layout.publish_file(&temp, &final_path) {
-        let _ = layout.remove_file(&temp);
-        return Err(recorded.stop(error));
     }
     Ok(OpenReport {
         size: cut.size,

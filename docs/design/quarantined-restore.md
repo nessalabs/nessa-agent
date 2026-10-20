@@ -74,7 +74,10 @@ the result is a visible audit failure, not a second rename back.
   `an_unfenced_executor_blocks_acceptance`
 - Deferred lines are not payload. Opening one publishes a session file only
   when the written stream's size and fingerprint equal the sealed line.
-  `an_opened_deferred_conversation_matches_the_recorded_fingerprint`
+  The fetched audit is stored after that rename. If that audit is not stored,
+  the session file is removed and the open does not succeed.
+  `an_opened_deferred_conversation_matches_the_recorded_fingerprint`,
+  `a_failed_fetch_audit_removes_the_session`
 - Source missing, source changed, and an interrupted read delete the temp
   file and do not modify another conversation's session file.
   `a_changed_source_is_refused_and_other_conversations_stay`,
