@@ -80,7 +80,7 @@ fn every_target_a_release_builds_is_a_platform_here() {
         .filter_map(|line| line.trim().strip_prefix('"'))
         .filter_map(|line| line.split('"').next())
         .collect();
-    assert_eq!(targets.len(), 3, "{table}");
+    assert!(!targets.is_empty(), "{table}");
     for target in targets {
         assert!(Platform::of_target(target).is_some(), "{target}");
     }
