@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
 } from "react"
@@ -95,38 +94,72 @@ export const SplitPanes = memo(function SplitPanes({
   renderPane: (pane: ShownPane) => ReactNode
   empty?: ReactNode
 }) {
-  const columns = useSyncExternalStore(
-    source.subscribe,
-    () => source.layout()?.columns ?? null,
-  )
   const gridRef = useRef<HTMLDivElement>(null)
   // What is on screen lags the layout. The frame that commits a split, a
-  // resize, or a drop runs its script only. The next frame is when a drop's
-  // copy lets go and, in the workspace, when a side column folds for the new
-  // count. The frame after that is the column title's glide. The third frame
-  // paints the new boxes, so none of those share a paint. The first paint
-  // uses the layout the grid mounted with.
-  const [drawn, setDrawn] = useState(columns)
+  // resize, or a drop runs its script only — the grid does not render for
+  // it. The next frame is when a drop's copy lets go and, in the workspace,
+  // when a side column folds for the new count. The frame after that is the
+  // column title's glide. The third frame paints the new boxes, so none of
+  // those share a paint. The first paint uses the layout the grid mounted with.
+  const [drawn, setDrawn] = useState(() => source.layout()?.columns ?? null)
+  const drawnRef = useRef(drawn)
+  drawnRef.current = drawn
   const { panes, edges } = useMemo(
     () => (drawn ? placements(drawn) : noPlacements),
     [drawn],
   )
-  useLayoutEffect(() => {
-    if (drawn === columns) return
-    const next = columns
-    let third = 0
-    let second = 0
-    const first = requestAnimationFrame(() => {
-      second = requestAnimationFrame(() => {
-        third = requestAnimationFrame(() => setDrawn(next))
-      })
+  useEffect(() => {
+    type Columns = NonNullable<ReturnType<SplitPanesSource["layout"]>>["columns"] | null
+    let frames: number[] = []
+    let armed = false
+    let waiting: Columns = null
+    const cancel = () => {
+      for (const id of frames) cancelAnimationFrame(id)
+      frames = []
+    }
+    const hold = (on: boolean) => {
+      gridRef.current
+        ?.closest<HTMLElement>("[data-workspace]")
+        ?.toggleAttribute("data-spare-held", on)
+    }
+    const arm = (next: typeof waiting) => {
+      if (armed && waiting === next) return
+      cancel()
+      armed = true
+      waiting = next
+      hold(next !== drawnRef.current)
+      const queue = (left: number) => {
+        const id = requestAnimationFrame(() => {
+          if (left > 1) {
+            queue(left - 1)
+            return
+          }
+          frames = []
+          armed = false
+          waiting = null
+          setDrawn(next)
+        })
+        frames.push(id)
+      }
+      queue(3)
+    }
+    const unsubscribe = source.subscribe(() => {
+      const next = source.layout()?.columns ?? null
+      if (next === drawnRef.current) {
+        if (!armed) return
+        cancel()
+        armed = false
+        waiting = null
+        hold(false)
+        return
+      }
+      arm(next)
     })
     return () => {
-      cancelAnimationFrame(first)
-      cancelAnimationFrame(second)
-      cancelAnimationFrame(third)
+      cancel()
+      unsubscribe()
     }
-  }, [columns, drawn])
+  }, [source])
   // The frame that first paints a new arrangement skips scene text. The text
   // is already laid out at a fixed width; painting it again is the resize.
   useLayoutEffect(() => {
@@ -142,9 +175,10 @@ export const SplitPanes = memo(function SplitPanes({
   useLayoutEffect(() => {
     const workspace = gridRef.current?.closest<HTMLElement>("[data-workspace]")
     if (!workspace) return
-    workspace.toggleAttribute("data-spare-held", drawn !== columns)
+    const live = source.layout()?.columns ?? null
+    workspace.toggleAttribute("data-spare-held", drawn !== live)
     return () => workspace.removeAttribute("data-spare-held")
-  }, [drawn, columns])
+  }, [drawn, source])
   const multi = panes.length > 1
   // In the order the panes were opened, not where they sit: a pane is placed
   // by its fractions, so its node never moves in the document, and a moved
