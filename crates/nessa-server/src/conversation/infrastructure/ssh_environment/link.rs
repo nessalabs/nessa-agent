@@ -570,13 +570,16 @@ impl HostLink {
         }
     }
 
-    /// How many leases of an agent this connection holds now: asked for,
-    /// granted, or ending, until each is let go. Commands are not counted.
+    /// How many leases of an agent this connection holds now: granted, or
+    /// ending, until each is let go. Commands are not counted, nor a lease
+    /// still waiting for its grant: the pool counts that one as reserved
+    /// until it is answered, so counting it here too would count it twice.
+    /// A grant left unanswered is counted, as the host may hold it.
     pub(crate) fn agent_leases(&self) -> usize {
         self.routes()
             .leases
             .values()
-            .filter(|route| !route.command)
+            .filter(|route| !route.command && route.grant.is_none())
             .count()
     }
 

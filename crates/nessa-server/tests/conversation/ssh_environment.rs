@@ -3529,6 +3529,50 @@ async fn a_grant_not_answered_in_time_keeps_its_budget_place_until_its_end() {
     .expect("its place is given back once the host ends it");
 }
 
+/// A lease still waiting for its grant is not yet a lease the connection
+/// carries: the pool counts it as reserved until then, and it is counted
+/// here once granted.
+#[tokio::test]
+async fn a_lease_counts_on_its_connection_once_granted() {
+    let (open, gate) = tokio::sync::watch::channel(false);
+    let connector = Connector::new(Reach::GrantingLate(gate));
+    let link = dialed_link(&connector, Arc::new(Audit::default())).await;
+    let asking = {
+        let link = link.clone();
+        tokio::spawn(async move {
+            link.grant(
+                lease().as_str(),
+                "claude",
+                Sandbox::HarnessDefault,
+                None,
+                Duration::from_secs(5),
+            )
+            .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !connector
+            .frames
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|frame| matches!(frame, ToEnvironment::Grant { .. }))
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the host reads the Grant");
+    assert_eq!(link.agent_leases(), 0);
+    open.send_replace(true);
+    let _granted = tokio::time::timeout(Duration::from_secs(5), asking)
+        .await
+        .expect("answered")
+        .unwrap()
+        .expect("granted");
+    assert_eq!(link.agent_leases(), 1);
+}
+
 /// A lease the host grants after its connection was revoked, its Grant
 /// already on its way ahead of the `Revoked`, is named in a revocation
 /// record of its own, as every lease the host granted is, and ends as
