@@ -1,5 +1,7 @@
 //! What a cut needs from outside the process, and from the admission lock.
 
+use std::path::Path;
+
 use async_trait::async_trait;
 
 use super::super::domain::{DeletionFence, DeletionLog, Fingerprint, SourceCut, StoreKind};
@@ -231,6 +233,94 @@ pub trait InventoryDecisionAudit: Send + Sync {
         facts: &InventoryFacts<'_>,
         decision: &InventoryDecision,
     ) -> Result<(), DecisionAuditError>;
+}
+
+/// Which restore transition was asked. A fact for Cedar, not a verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreAction {
+    Stage,
+    Accept,
+    Fetch,
+}
+
+impl RestoreAction {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stage => "backup.restore.stage",
+            Self::Accept => "backup.restore.accept",
+            Self::Fetch => "backup.deferred.fetch",
+        }
+    }
+}
+
+/// Who is asking to stage, accept, or fetch. `kind` is the same principal
+/// fact the inventory policies already see.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestoreFacts<'a> {
+    pub kind: &'a str,
+    pub cause: InventoryCause,
+    pub action: RestoreAction,
+}
+
+/// Whether this principal may stage, accept, or fetch a deferred conversation.
+pub trait RestorePolicyEvaluator: Send + Sync {
+    fn evaluate(&self, facts: &RestoreFacts<'_>) -> InventoryDecision;
+}
+
+/// One restore audit line, before the adapter adds its clock and record id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestoreEvidence<'a> {
+    pub target: &'a str,
+    pub before: &'a str,
+    pub after: &'a str,
+    pub cause: &'a str,
+    pub initiator: &'a str,
+    pub decision: &'a str,
+    pub policies: &'a [String],
+}
+
+/// Persist one restore transition. Failure means the effect must not be
+/// reported as done. The adapter assigns identity and observation time.
+pub trait RestoreAudit: Send + Sync {
+    fn append(&self, evidence: &RestoreEvidence<'_>) -> Result<(), DecisionAuditError>;
+}
+
+/// Bytes copied while a deferred conversation is fetched.
+pub trait FetchProgress {
+    fn report(&mut self, read: u64, total: u64);
+}
+
+/// Why a deferred source did not produce a session file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionSourceError {
+    Missing,
+    Interrupted,
+    Unreadable,
+}
+
+/// Size and stream fingerprint of one conversation in a session file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionCut {
+    pub size: u64,
+    pub digest: crate::backup::domain::Fingerprint,
+}
+
+/// The store that can still serve a deferred conversation's exact stream.
+pub trait DeferredSessionSource {
+    fn write_session(
+        &self,
+        conversation_id: &str,
+        destination: &Path,
+        progress: &mut dyn FetchProgress,
+    ) -> Result<(), SessionSourceError>;
+
+    fn inspect(&self, conversation_id: &str, path: &Path)
+        -> Result<SessionCut, SessionSourceError>;
+}
+
+/// An operator attestation that one restored lease's executor was stopped.
+pub trait LeaseReceipts {
+    fn receipt(&self, lease_id: &str) -> Option<String>;
 }
 
 impl Authenticator for MacKey {

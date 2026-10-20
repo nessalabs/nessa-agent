@@ -13,6 +13,7 @@ mod jsonl;
 mod log;
 mod manifest_decode;
 mod outbox;
+mod quarantine;
 mod sensitivity;
 mod verification;
 mod verification_format;
@@ -31,6 +32,10 @@ pub use credentials::{read_credentials, CredentialReadError};
 pub use gateway::capture_namespace;
 pub use jsonl::jsonl_cut;
 pub use log::FileDeletionLog;
+pub use quarantine::{
+    DirectoryMaterializer, DirectoryQuarantine, FileRestoreAudit, KeyedInventory,
+    SqliteDeferredSource,
+};
 pub use sensitivity::path_sensitivity;
 
 #[cfg(test)]

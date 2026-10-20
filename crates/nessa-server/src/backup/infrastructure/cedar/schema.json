@@ -19,6 +19,13 @@
           "attributes": {},
           "additionalAttributes": false
         }
+      },
+      "Restore": {
+        "shape": {
+          "type": "Record",
+          "attributes": {},
+          "additionalAttributes": false
+        }
       }
     },
     "actions": {
@@ -42,6 +49,54 @@
         "appliesTo": {
           "principalTypes": ["Principal"],
           "resourceTypes": ["Inventory"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "cause": {
+                "type": "String",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "backup.restore.stage": {
+        "appliesTo": {
+          "principalTypes": ["Principal"],
+          "resourceTypes": ["Restore"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "cause": {
+                "type": "String",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "backup.restore.accept": {
+        "appliesTo": {
+          "principalTypes": ["Principal"],
+          "resourceTypes": ["Restore"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "cause": {
+                "type": "String",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "backup.deferred.fetch": {
+        "appliesTo": {
+          "principalTypes": ["Principal"],
+          "resourceTypes": ["Restore"],
           "context": {
             "type": "Record",
             "attributes": {

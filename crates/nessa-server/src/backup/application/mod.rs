@@ -4,6 +4,7 @@
 mod deletion_inventory;
 mod export;
 mod ports;
+mod restore;
 mod restore_planning;
 mod verification;
 mod verification_format;
@@ -23,8 +24,15 @@ pub use deletion_inventory::{capture_fences, capture_inventory, CaptureError, In
 pub use export::{capture_export, ExportFailure, ExportRequest};
 pub use ports::{
     AdmissionFailure, AdmissionLease, Authenticator, CopiedStore, DecisionAuditError,
-    DeletionLogStore, ExportClock, ExportSource, FenceSource, InventoryAction,
-    InventoryCapturePolicyEvaluator, InventoryCause, InventoryDecision, InventoryDecisionAudit,
-    InventoryDenial, InventoryFacts, InventoryReconciliationLease, LogStoreError, MacError, MacKey,
-    ManifestPublisher, MutationAdmission, PinnedStore, PublishedRecord,
+    DeferredSessionSource, DeletionLogStore, ExportClock, ExportSource, FenceSource, FetchProgress,
+    InventoryAction, InventoryCapturePolicyEvaluator, InventoryCause, InventoryDecision,
+    InventoryDecisionAudit, InventoryDenial, InventoryFacts, InventoryReconciliationLease,
+    LeaseReceipts, LogStoreError, MacError, MacKey, ManifestPublisher, MutationAdmission,
+    PinnedStore, PublishedRecord, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
+    RestorePolicyEvaluator, SessionCut, SessionSourceError,
+};
+pub use restore::{
+    accept_quarantine, open_deferred_conversation, root_posture, stage_quarantine, AcceptReport,
+    AcceptRequest, CutMaterializer, LoadedTree, OpenReport, OpenRequest, PreparedCut,
+    QuarantineLayout, SealedInventoryReader, StageReport, StageRequest, Staging,
 };

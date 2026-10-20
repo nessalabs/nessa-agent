@@ -236,6 +236,275 @@ fn write_prefixed(hasher: &mut Sha256, bytes: &[u8]) -> Result<(), ()> {
     Ok(())
 }
 
+/// Why a deferred conversation could not be read or copied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MaterializeError {
+    Missing,
+    Interrupted,
+    Unreadable,
+}
+
+/// Size and stream digest of one conversation, from the same inputs the export uses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MaterializedStream {
+    pub size: u64,
+    pub digest: [u8; 32],
+}
+
+/// Read one conversation's stream fingerprint. A missing file or a missing
+/// conversation is [`MaterializeError::Missing`].
+pub(crate) fn inspect_conversation(
+    path: &Path,
+    conversation_id: &str,
+) -> Result<MaterializedStream, MaterializeError> {
+    if !path.is_file() {
+        return Err(MaterializeError::Missing);
+    }
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|_| MaterializeError::Unreadable)?;
+    let (_key, stream) = one_stream(&connection, conversation_id)?;
+    Ok(MaterializedStream {
+        size: stream.size,
+        digest: stream.digest,
+    })
+}
+
+/// Copy one conversation into `destination`, streaming each payload.
+///
+/// The destination is removed if the copy does not finish or its digest does
+/// not match the source. `progress` is `(copied, total)` payload bytes.
+pub(crate) fn materialize_conversation(
+    source: &Path,
+    conversation_id: &str,
+    destination: &Path,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<MaterializedStream, MaterializeError> {
+    if !source.is_file() {
+        return Err(MaterializeError::Missing);
+    }
+    let connection = Connection::open_with_flags(
+        source,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|_| MaterializeError::Unreadable)?;
+    let (stream_key, stream) = one_stream(&connection, conversation_id)?;
+    progress(0, stream.size);
+    let mut created = CreatedDestination::new(destination)?;
+    copy_stream(&connection, stream_key, &stream, created.path, progress)?;
+    let copied = inspect_conversation(created.path, conversation_id)?;
+    if copied.size != stream.size || copied.digest != stream.digest {
+        return Err(MaterializeError::Unreadable);
+    }
+    created.keep = true;
+    Ok(copied)
+}
+
+struct CreatedDestination<'a> {
+    path: &'a Path,
+    keep: bool,
+}
+
+impl<'a> CreatedDestination<'a> {
+    fn new(path: &'a Path) -> Result<Self, MaterializeError> {
+        if path.exists() {
+            return Err(MaterializeError::Unreadable);
+        }
+        Ok(Self { path, keep: false })
+    }
+}
+
+impl Drop for CreatedDestination<'_> {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_file(self.path);
+        }
+    }
+}
+
+fn one_stream(
+    connection: &Connection,
+    conversation_id: &str,
+) -> Result<(i64, DeferredStream), MaterializeError> {
+    let found = connection.query_row(
+        "SELECT s.stream_key, s.incarnation, s.floor, s.tail
+         FROM event_stream_names n
+         JOIN event_streams s ON s.stream_key = n.active_stream_key
+         WHERE n.public_id = ?1",
+        [conversation_id],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+            ))
+        },
+    );
+    let (stream_key, incarnation, floor, tail) = match found {
+        Ok(row) => row,
+        Err(nessa_local_database::rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(MaterializeError::Missing);
+        }
+        Err(_) => return Err(MaterializeError::Unreadable),
+    };
+    if incarnation.len() != 16 || floor.len() != 8 || tail.len() != 8 {
+        return Err(MaterializeError::Unreadable);
+    }
+    let size = stream_size(connection, stream_key).map_err(|_| MaterializeError::Interrupted)?;
+    let digest = stream_digest(connection, stream_key, &incarnation, &floor, &tail)
+        .map_err(|_| MaterializeError::Interrupted)?;
+    Ok((
+        stream_key,
+        DeferredStream {
+            conversation_id: conversation_id.to_owned(),
+            size,
+            digest,
+        },
+    ))
+}
+
+const SESSION_SCHEMA: &str = "
+CREATE TABLE event_streams(
+    stream_key INTEGER PRIMARY KEY,
+    public_id TEXT NOT NULL,
+    incarnation BLOB NOT NULL,
+    floor BLOB NOT NULL,
+    tail BLOB NOT NULL,
+    retired INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE event_stream_names(
+    public_id TEXT PRIMARY KEY,
+    latest_incarnation BLOB NOT NULL,
+    active_stream_key INTEGER
+);
+CREATE TABLE event_records(
+    stream_key INTEGER NOT NULL,
+    offset BLOB NOT NULL,
+    event_id TEXT NOT NULL,
+    schema_id TEXT NOT NULL,
+    schema_version INTEGER NOT NULL,
+    payload BLOB NOT NULL
+);";
+
+fn copy_stream(
+    source: &Connection,
+    stream_key: i64,
+    stream: &DeferredStream,
+    destination: &Path,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<(), MaterializeError> {
+    let (incarnation, floor, tail) = source
+        .query_row(
+            "SELECT incarnation, floor, tail FROM event_streams WHERE stream_key = ?1",
+            [stream_key],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            },
+        )
+        .map_err(|_| MaterializeError::Interrupted)?;
+    let records = digest_records(source, stream_key).map_err(|_| MaterializeError::Interrupted)?;
+    let dest = Connection::open(destination).map_err(|_| MaterializeError::Unreadable)?;
+    dest.execute_batch(SESSION_SCHEMA)
+        .map_err(|_| MaterializeError::Unreadable)?;
+    dest.execute(
+        "INSERT INTO event_streams(stream_key, public_id, incarnation, floor, tail)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        nessa_local_database::rusqlite::params![
+            stream_key,
+            stream.conversation_id,
+            incarnation,
+            floor,
+            tail
+        ],
+    )
+    .map_err(|_| MaterializeError::Unreadable)?;
+    dest.execute(
+        "INSERT INTO event_stream_names(public_id, latest_incarnation, active_stream_key)
+         VALUES (?1, ?2, ?3)",
+        nessa_local_database::rusqlite::params![stream.conversation_id, incarnation, stream_key],
+    )
+    .map_err(|_| MaterializeError::Unreadable)?;
+    let mut copied = 0u64;
+    for record in records {
+        let length: i64 = source
+            .query_row(
+                "SELECT length(payload) FROM event_records WHERE rowid = ?1",
+                [record.rowid],
+                |row| row.get(0),
+            )
+            .map_err(|_| MaterializeError::Interrupted)?;
+        dest.execute(
+            "INSERT INTO event_records(stream_key, offset, event_id, schema_id, schema_version, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, zeroblob(?6))",
+            nessa_local_database::rusqlite::params![
+                stream_key,
+                record.offset,
+                record.event_id,
+                record.schema_id,
+                record.schema_version,
+                length
+            ],
+        )
+        .map_err(|_| MaterializeError::Unreadable)?;
+        let dest_row = dest.last_insert_rowid();
+        copy_blob(
+            source,
+            record.rowid,
+            &dest,
+            dest_row,
+            &mut copied,
+            stream.size,
+            progress,
+        )?;
+    }
+    if copied != stream.size {
+        return Err(MaterializeError::Interrupted);
+    }
+    progress(copied, stream.size);
+    Ok(())
+}
+
+fn copy_blob(
+    source: &Connection,
+    source_row: i64,
+    dest: &Connection,
+    dest_row: i64,
+    copied: &mut u64,
+    total: u64,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<(), MaterializeError> {
+    let mut from = source
+        .blob_open("main", "event_records", "payload", source_row, true)
+        .map_err(|_| MaterializeError::Interrupted)?;
+    let mut into = dest
+        .blob_open("main", "event_records", "payload", dest_row, false)
+        .map_err(|_| MaterializeError::Unreadable)?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let read = from
+            .read(&mut buf)
+            .map_err(|_| MaterializeError::Interrupted)?;
+        if read == 0 {
+            break;
+        }
+        use std::io::Write;
+        into.write_all(&buf[..read])
+            .map_err(|_| MaterializeError::Interrupted)?;
+        *copied = copied
+            .checked_add(u64::try_from(read).map_err(|_| MaterializeError::Interrupted)?)
+            .ok_or(MaterializeError::Interrupted)?;
+        progress(*copied, total);
+    }
+    Ok(())
+}
+
 fn snapshot_bytes(connection: &Connection) -> Result<u64, ()> {
     let pages: i64 = connection
         .query_row("PRAGMA page_count", [], |row| row.get(0))
