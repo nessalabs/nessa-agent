@@ -66,9 +66,11 @@ import {
   useWorkspaceSelector,
   useWorkspaceStore,
 } from "../../adapters/store/hooks"
-import { reviewToOpen } from "../../adapters/gateway/review-notices"
+import { reviewToOpen, reviewWaitsIn } from "../../adapters/gateway/review-notices"
 import {
   selectChrome,
+  selectDraft,
+  selectSession,
   selectColumnCount,
   selectFocusedChannel,
   selectFocusedPaneKey,
@@ -277,14 +279,38 @@ export function WorkspaceShell({
   browserSurface: boolean
 }) {
   const dispatch = useWorkspaceDispatch()
+  const store = useWorkspaceStore()
   useEffect(() => {
-    const open = (event: Event) => {
-      const sessionId = reviewToOpen(event)
-      if (sessionId) void dispatch(openSession({ sessionId }))
+    // A notice can name a conversation the list has not shown yet: the
+    // gateway sends a waiting review before the list frame that names it,
+    // and a session the workspace does not hold cannot be opened. The one
+    // clicked last is opened as soon as the window holds it, while a review
+    // there still waits: once none does, the click has nothing left to show,
+    // and a conversation that turns up later does not take a pane.
+    let asked: string | null = null
+    const openAsked = () => {
+      if (asked === null) return
+      if (!reviewWaitsIn(asked)) {
+        asked = null
+        return
+      }
+      const state = store.getState()
+      if (!selectSession(state, asked) && !selectDraft(state, asked)) return
+      const sessionId = asked
+      asked = null
+      void dispatch(openSession({ sessionId }))
     }
+    const open = (event: Event) => {
+      asked = reviewToOpen(event) ?? asked
+      openAsked()
+    }
+    const unsubscribe = store.subscribe(openAsked)
     window.addEventListener("nessa-open-review", open)
-    return () => window.removeEventListener("nessa-open-review", open)
-  }, [dispatch])
+    return () => {
+      unsubscribe()
+      window.removeEventListener("nessa-open-review", open)
+    }
+  }, [dispatch, store])
   // The window tells the person's agents what it shows only while a layout
   // of panes is on screen: the classic shell draws none.
   useEffect(() => {
@@ -293,7 +319,6 @@ export function WorkspaceShell({
       dispatch(arrangementShown({ arrangement: null }))
     }
   }, [dispatch, region.arrangement])
-  const store = useWorkspaceStore()
   const root = useRef<HTMLDivElement>(null)
   const [theme] = useThemePreference()
   const chrome = useWorkspaceSelector(selectChrome)

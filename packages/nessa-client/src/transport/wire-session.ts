@@ -11,7 +11,7 @@ import { NessaRequestTooLargeError } from "../application/request-too-large-erro
 import { NessaRpcError } from "../application/rpc-error.js"
 import { NessaConnectionClosedError } from "../application/connection-closed-error.js"
 import type { RequestDeadline } from "../application/session-port.js"
-import { bounds, ProductMethod } from "../generated/product.js"
+import { bounds, ProductEvent, ProductMethod } from "../generated/product.js"
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 const utf8 = new TextEncoder()
@@ -41,6 +41,16 @@ function boundedTimeout(configuredMs: number, deadline?: RequestDeadline): numbe
   return timeoutMs
 }
 
+/**
+ * Pushes that each carry the whole current state and replace the one before:
+ * the gateway sends the first as soon as the socket is authenticated, before
+ * any caller can have subscribed. The latest is kept and handed to each new
+ * subscriber, so subscribing late cannot miss the state.
+ */
+const REPLACING_EVENTS: ReadonlySet<string> = new Set([
+  ProductEvent.PermissionReviewWaiting,
+])
+
 type PendingRequest = {
   method: string
   resolve: (payload: unknown) => void
@@ -59,6 +69,8 @@ export class WireSession {
     Map<(payload: unknown) => void, symbol>
   >()
   private readonly closeListeners = new Set<(error: NessaConnectionClosedError) => void>()
+  /** The latest payload of each `REPLACING_EVENTS` push on this socket. */
+  private readonly latest = new Map<string, unknown>()
   private closedError: NessaConnectionClosedError | undefined
   private requestSeq = 0
   private readonly requestTimeoutMs: number
@@ -135,13 +147,31 @@ export class WireSession {
     })
   }
 
-  /** Subscribe to a server push event by name. */
+  /**
+   * Subscribe to a server push event by name. For a push that replaces the
+   * one before (`REPLACING_EVENTS`), a new subscriber is handed the latest
+   * one already received, after this returns.
+   */
   onEvent(event: string, handler: (payload: unknown) => void): () => void {
     const registrations =
       this.eventListeners.get(event) ?? new Map<(payload: unknown) => void, symbol>()
-    const registration = registrations.get(handler) ?? Symbol()
+    const known = registrations.get(handler)
+    const registration = known ?? Symbol()
     registrations.set(handler, registration)
     this.eventListeners.set(event, registrations)
+    if (!known && this.latest.has(event)) {
+      const payload = this.latest.get(event)
+      queueMicrotask(() => {
+        // Not if it was removed, or a newer push already reached it.
+        if (this.closedError || registrations.get(handler) !== registration) return
+        if (this.latest.get(event) !== payload) return
+        try {
+          handler(payload)
+        } catch {
+          // Consumer failures are isolated, as they are for live pushes.
+        }
+      })
+    }
     return () => {
       if (registrations.get(handler) === registration) registrations.delete(handler)
     }
@@ -215,6 +245,7 @@ export class WireSession {
   }
 
   private dispatchEvent(event: string, payload: unknown): void {
+    if (REPLACING_EVENTS.has(event)) this.latest.set(event, payload)
     const registrations = this.eventListeners.get(event)
     if (!registrations) return
     for (const [handler, registration] of [...registrations]) {

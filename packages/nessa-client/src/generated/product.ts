@@ -2714,6 +2714,8 @@ export interface PermissionReviewNotice {
   permissionId: string
   /** Tool the review named. */
   tool: string
+  /** The conversation's name as conversation.list shows it, read when this set was published, so a notice can name a conversation the client has not listed yet. Omitted when none is on record. */
+  title?: string
 }
 /** The reviews still waiting. A later event replaces this one; an empty list means none are waiting. */
 export interface PermissionReviewWaiting {

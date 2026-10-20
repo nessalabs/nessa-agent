@@ -355,6 +355,7 @@ function gatewayWithApp() {
           return client.connectionState
         },
         onConnectionStateChange: client.onConnectionStateChange,
+        on: client.on,
         close: client.close,
         workspace: client.workspace,
         mcpApps,

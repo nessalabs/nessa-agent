@@ -231,7 +231,7 @@ export class NessaClient {
     return ready
   }
 
-  /** Subscribe to a typed protocol event. Returns an unsubscribe function. A registration still held survives transient recovery; a second subscription of the same function shares it, and either unsubscribe removes it, so recovery does not bring a removed registration back. Missed events are not replayed. */
+  /** Subscribe to a typed protocol event. Returns an unsubscribe function. A registration still held survives transient recovery; a second subscription of the same function shares it, and either unsubscribe removes it, so recovery does not bring a removed registration back. Missed events are not replayed, except `permission.reviewWaiting`, which carries the whole waiting set: a new subscription is handed the latest one this connection received. */
   on<K extends keyof NessaClientEvents>(event: K, handler: EventHandler<K>): () => void {
     return this.wire.onEvent(event, handler as (payload: unknown) => void)
   }

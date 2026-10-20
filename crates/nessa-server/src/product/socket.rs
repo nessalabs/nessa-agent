@@ -1533,17 +1533,27 @@ async fn forward_review_notices(
         // Stable audited selection admits this candidate. As with other gateway
         // responses, its subsequent UI-capacity wait may finish after revocation;
         // an authority update stays pending for the next replacement.
-        let payload = PermissionReviewWaiting {
-            reviews: visible
-                .into_iter()
-                .map(|review| PermissionReviewNotice {
-                    conversation_id: review.conversation_id,
-                    execution_id: review.execution_id,
-                    permission_id: review.permission_id,
-                    tool: review.tool,
-                })
-                .collect(),
-        };
+        // One title read per conversation, however many of its reviews wait.
+        let mut titles = HashMap::<String, Option<String>>::new();
+        let mut reviews = Vec::with_capacity(visible.len());
+        for review in visible {
+            let title = match titles.get(&review.conversation_id) {
+                Some(title) => title.clone(),
+                None => {
+                    let title = review_title(&state, &review.conversation_id).await;
+                    titles.insert(review.conversation_id.clone(), title.clone());
+                    title
+                }
+            };
+            reviews.push(PermissionReviewNotice {
+                conversation_id: review.conversation_id,
+                execution_id: review.execution_id,
+                permission_id: review.permission_id,
+                tool: review.tool,
+                title,
+            });
+        }
+        let payload = fitted_review_set(reviews);
         let Ok(permit) = slots.clone().acquire_owned().await else {
             break;
         };
@@ -1571,6 +1581,35 @@ async fn forward_review_notices(
         }
     }
     Ok(())
+}
+
+/// The conversation's name as `conversation.list` shows it, so a notice can
+/// name a conversation its client has not listed yet: a review can reach a
+/// client before the list frame that names its conversation.
+async fn review_title(state: &ProductRouteState, conversation_id: &str) -> Option<String> {
+    let conversations = state.conversations.as_ref()?;
+    let id = super::conversation::conversation_id(conversation_id).ok()?;
+    conversations.title(&id).await
+}
+
+/// Room an event frame needs around its payload: its kind, name, number
+/// and generation.
+const REVIEW_FRAME_ROOM: usize = 512;
+
+/// The waiting set, without titles when they would take it past one frame:
+/// a frame over the limit closes the socket, and the client that reconnects
+/// is sent the same set again. A notice without a title names the
+/// conversation by id.
+fn fitted_review_set(reviews: Vec<PermissionReviewNotice>) -> PermissionReviewWaiting {
+    let mut set = PermissionReviewWaiting { reviews };
+    let fits = serde_json::to_vec(&set)
+        .is_ok_and(|bytes| bytes.len() + REVIEW_FRAME_ROOM <= MAX_PAYLOAD_BYTES as usize);
+    if !fits {
+        for review in &mut set.reviews {
+            review.title = None;
+        }
+    }
+    set
 }
 
 /// Give a waiting-review snapshot the next event number. Any other message
