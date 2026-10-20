@@ -92,11 +92,7 @@ pub(crate) async fn report() -> Value {
     let (scope, records) = source_records(&root).await;
     let unpaced = copy(&root, &scope, &records, None);
     let paced = copy(&root, &scope, &records, NonZeroU64::new(PACE));
-    let profiles_match = unpaced["payloadBytes"] == paced["payloadBytes"]
-        && unpaced["downloaded"] == paced["downloaded"]
-        && unpaced["applied"] == paced["applied"]
-        && unpaced["reopenDownloaded"] == unpaced["downloaded"]
-        && paced["reopenApplied"] == paced["applied"];
+    let same = profiles_match(&unpaced, &paced);
     let table = size_table();
     let waits = table
         .iter()
@@ -106,7 +102,7 @@ pub(crate) async fn report() -> Value {
         "unit": "payload bytes",
         "clock": "pace waits are the schedule's virtual clock; wallMs is process time and is not a percentile",
         "profiles": [unpaced, paced],
-        "profilesMatch": profiles_match,
+        "profilesMatch": same,
         "sizeTable": table,
         "orderStatistics": {
             "method": "nearest rank on the size table, ceil(percent * n / 100) - 1",
@@ -125,6 +121,21 @@ pub(crate) async fn report() -> Value {
             "fragment reassembly",
         ],
     })
+}
+
+/// Both profiles kept the same payload and the same positions, and each
+/// reopened at the downloaded and applied positions it had just written.
+fn profiles_match(unpaced: &Value, paced: &Value) -> bool {
+    unpaced["payloadBytes"] == paced["payloadBytes"]
+        && unpaced["downloaded"] == paced["downloaded"]
+        && unpaced["applied"] == paced["applied"]
+        && reopened(unpaced)
+        && reopened(paced)
+}
+
+fn reopened(profile: &Value) -> bool {
+    profile["reopenDownloaded"] == profile["downloaded"]
+        && profile["reopenApplied"] == profile["applied"]
 }
 
 struct Remove<'a>(&'a Path);

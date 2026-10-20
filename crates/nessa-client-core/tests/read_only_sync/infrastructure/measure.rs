@@ -1,5 +1,5 @@
 //! The harness keeps one payload across paced and unpaced copies, and reopens it.
-use super::report;
+use super::{profiles_match, report};
 
 #[test]
 fn paced_and_unpaced_keep_the_same_bytes_and_reopen() {
@@ -19,6 +19,7 @@ fn paced_and_unpaced_keep_the_same_bytes_and_reopen() {
     assert_eq!(unpaced["downloaded"], paced["downloaded"]);
     assert_eq!(unpaced["reopenDownloaded"], unpaced["downloaded"]);
     assert_eq!(unpaced["reopenApplied"], unpaced["applied"]);
+    assert_eq!(paced["reopenDownloaded"], paced["downloaded"]);
     assert_eq!(paced["reopenApplied"], paced["applied"]);
     assert_eq!(unpaced["virtualLagMs"], 0);
     assert!(paced["virtualLagMs"].as_u64().unwrap() >= 1_000);
@@ -83,6 +84,37 @@ fn paced_and_unpaced_keep_the_same_bytes_and_reopen() {
         .unwrap()
         .iter()
         .any(|item| item == "phone radio"));
+}
+
+#[test]
+fn a_stale_reopen_on_either_profile_does_not_match() {
+    let fresh = serde_json::json!({
+        "payloadBytes": 10,
+        "downloaded": 2,
+        "applied": 2,
+        "reopenDownloaded": 2,
+        "reopenApplied": 2,
+    });
+    assert!(profiles_match(&fresh, &fresh));
+    for (side, field) in [
+        ("unpaced", "reopenDownloaded"),
+        ("unpaced", "reopenApplied"),
+        ("paced", "reopenDownloaded"),
+        ("paced", "reopenApplied"),
+    ] {
+        let mut unpaced = fresh.clone();
+        let mut paced = fresh.clone();
+        let profile = if side == "unpaced" {
+            &mut unpaced
+        } else {
+            &mut paced
+        };
+        profile[field] = serde_json::json!(0);
+        assert!(
+            !profiles_match(&unpaced, &paced),
+            "{side}.{field} reopened stale and still matched"
+        );
+    }
 }
 
 fn without_wall(value: &serde_json::Value) -> serde_json::Value {
