@@ -430,15 +430,12 @@ function FittedWindow({
   const listDrawn = useWorkspaceSelector(selectSessionListOpen)
   const listOpen = region.sessionList && listDrawn
   const view = useWorkspaceSelector(selectView)
-  // The fold paints while the spare hold is on. The sidebar's tree waits
-  // until the list's frame, so this render does not reconcile it.
-  const chrome = usePaintedWithPanes(selectChrome, spareFoldFrame)
-  const columns = usePaintedWithPanes(selectColumnCount, spareFoldFrame)
-  const paneShape = usePaintedWithPanes(selectPaneShape, spareFoldFrame)
-  const sidebarSettled = usePaintedWithPanes(
-    (state) => drawn(selectChrome(state).sidebar),
-    listPaintFrame,
-  )
+  // The window renders with the list, one frame after the boxes. The fold's
+  // attribute is set earlier (`FoldMark`), while the spare hold is on, so
+  // this render is not that frame.
+  const chrome = usePaintedWithPanes(selectChrome, listPaintFrame)
+  const columns = usePaintedWithPanes(selectColumnCount, listPaintFrame)
+  const paneShape = usePaintedWithPanes(selectPaneShape, listPaintFrame)
   const sidebarDrawn = drawn(chrome.sidebar)
   const shownRailItem = railOffered
     ? railItems.find((each) => each.id === railItem && each.id !== "agents")
@@ -538,6 +535,7 @@ function FittedWindow({
         listWidth={listWidth}
       />
       <ListMeasureHold root={root} />
+      <FoldMark root={root} />
       <ListedChannelProvider value={listOpen ? view.channelId : null}>
         <SidebarPeekProvider value={peek}>
           <FlipScope shape={shape} root={root}>
@@ -594,7 +592,7 @@ function FittedWindow({
                 data-list={
                   region.sessionList ? (listOpen ? "open" : "closed") : undefined
                 }
-                data-panes-alone={(!sidebarSettled && !listOpen) || undefined}
+                data-panes-alone={(!sidebarDrawn && !listOpen) || undefined}
                 style={
                   {
                     "--workspace-sidebar-width": `${sidebarWidth}px`,
@@ -604,7 +602,7 @@ function FittedWindow({
                   } as CSSProperties
                 }
               >
-                {sidebarSettled ? null : (
+                {sidebarDrawn ? null : (
                   <EdgePeekStrip
                     peek={peek}
                     onDragOut={() => dispatch(toggleSidebar({ open: true }))}
@@ -644,7 +642,7 @@ function FittedWindow({
                 <Columns
                   region={region}
                   root={root}
-                  sidebarOpen={sidebarSettled}
+                  sidebarOpen={sidebarDrawn}
                   listOpen={listOpen}
                   sidebarWidth={sidebarWidth}
                   listWidth={listWidth}
@@ -669,6 +667,24 @@ function FittedWindow({
       </ListedChannelProvider>
     </>
   )
+}
+
+/**
+ * The fold's attribute, without rendering the window. It lands while the
+ * spare hold keeps the sidebar in the row. The window renders the same
+ * fold with the list, on the frame after the boxes.
+ */
+function FoldMark({ root }: { root: RefObject<HTMLElement | null> }) {
+  const chrome = usePaintedWithPanes(selectChrome, spareFoldFrame)
+  const open = drawn(chrome.sidebar)
+  useLayoutEffect(() => {
+    const workspace = root.current
+    const frame = workspace?.closest<HTMLElement>(".workspace-window")
+    const value = open ? "open" : "closed"
+    workspace?.setAttribute("data-sidebar", value)
+    frame?.setAttribute("data-sidebar", value)
+  }, [open, root])
+  return null
 }
 
 /**

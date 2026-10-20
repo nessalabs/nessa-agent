@@ -95,13 +95,14 @@ starts the measured row.
 5. A column change paints three frames after the commit that recorded it.
    The next frame is when a drop's copy lets go. A spare fold is already
    in state (`arranged`); a resize still folds before paint
-   (`useFitOnResize`). The window paints that fold with the new boxes
-   (`usePaintedWithPanes`), not in the click and not on the frame after
-   it. Until the new boxes paint, the workspace is `data-spare-held` and
-   a folded sidebar stays in the row. The session list keeps the measure
-   it had through that commit (`data-list-held`): the gutter and the tab
-   stop paint on the frame after the boxes. The spare mark clears in the
-   commit that paints the boxes, and the fold is in that same commit.
+   (`useFitOnResize`). The fold's attribute is set on the frame before
+   the boxes (`FoldMark`), while the spare hold keeps the sidebar in
+   the row. The window renders that fold with the list, on the frame
+   after the boxes. The click writes neither mark. Until the new boxes
+   paint, the workspace is `data-spare-held`. The session list keeps
+   the measure it had through the box paint (`data-list-held`): the
+   gutter and the tab stop paint on the frame after the boxes. The
+   spare mark clears in the commit that paints the boxes.
    The frame after the click is the column title's glide, while the grid
    is still on its last boxes. The grid mounted with whatever layout it
    first read; that first paint does not wait. The paint frame marks the
