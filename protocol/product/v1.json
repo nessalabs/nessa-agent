@@ -6610,6 +6610,13 @@
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
           "description": "Tool the review named."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The conversation's name as conversation.list shows it, read when this set was published, so a notice can name a conversation the client has not listed yet. Omitted when none is on record."
         }
       },
       "required": ["conversationId", "executionId", "permissionId", "tool"]
