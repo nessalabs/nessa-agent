@@ -2254,7 +2254,7 @@ the existing enrollment worker and purge policy, collecting status/purge effects
 inside physical admission and exposing original durable purge receipts separately.
 The native adapter below provides generated Swift binding and linked library
 execution. `retained/phone.rs` is the phone publication lease and catalogue
-presence: a stamp reads only its bound receiver, and a missing catalogue row
+presence: a stamp reads only its lease instance and bound receiver, and a missing catalogue row
 is not a tombstone. `retained/artifact.rs` fetches one held file through the
 existing range owner and reports local integrity separately from a gateway
 confirmation. Busy-range retries wait on an injected pause; `ThreadPause` is

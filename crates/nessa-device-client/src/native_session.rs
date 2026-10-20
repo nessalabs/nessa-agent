@@ -779,6 +779,10 @@ pub struct NativePhoneStamp {
 }
 #[uniffi::export]
 impl NativePhoneStamp {
+    /// Lease instance this stamp was minted for. A later session mints another.
+    pub fn lease(&self) -> String {
+        self.value.lease().to_string()
+    }
     /// Generation assigned when this receiver was bound.
     pub fn generation(&self) -> u64 {
         self.value.generation()

@@ -213,6 +213,46 @@ fn a_successful_purge_releases_the_publication_without_an_observation() {
 }
 
 #[test]
+fn a_replacement_session_refuses_the_closed_sessions_stamp() {
+    let Opened {
+        root,
+        state,
+        connector,
+        session,
+    } = opened();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let earlier = session.bind_saved_receiver().unwrap();
+    session.close().unwrap();
+    let replacement = NativeSession::compose(Dependencies {
+        state,
+        path: root.path().join("private/cache.sqlite"),
+        address: "127.0.0.1:9".parse().unwrap(),
+        connector: connector.clone(),
+        entropy: Arc::new(OsEntropyFactory),
+        wall: Arc::new(Wall),
+        clock: Arc::new(Monotonic::new()),
+        pause: Arc::new(ThreadPause),
+        runtime: Builder::new_current_thread().enable_all().build().unwrap(),
+        product: ProductDependencies::default(),
+    })
+    .unwrap();
+    let current = replacement.bind_saved_receiver().unwrap();
+    assert_eq!(current.generation(), earlier.generation());
+    assert_eq!(current.receiver(), earlier.receiver());
+    assert_ne!(current.lease(), earlier.lease());
+    assert!(matches!(
+        replacement.published_transcript(&earlier, &conversation, Uuid::nil()),
+        Err(SessionFailure::Fenced(PhoneFence::Replaced))
+    ));
+    assert_eq!(connector.calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        replacement.published_transcript(&current, &conversation, Uuid::nil()),
+        Ok(RetainedTranscript::NotLoaded)
+    ));
+    replacement.close().unwrap();
+}
+
+#[test]
 fn a_local_match_reports_the_session_clock() {
     let Opened {
         root,

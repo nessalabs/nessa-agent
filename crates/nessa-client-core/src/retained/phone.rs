@@ -6,8 +6,8 @@
 //!
 //! ```text
 //! bind(receiver) --> stamp
-//! accept(stamp) --same generation and receiver--> read the existing cache
-//!               --anything else-----------------> no bytes
+//! accept(stamp) --same lease, generation, and receiver--> read the existing cache
+//!               --anything else------------------------> no bytes
 //! release_receiver --> unbound, a later bind may admit the next receiver
 //! close -------------> closed
 //! ```
@@ -18,6 +18,7 @@
 use super::{cache_failure, ReadFailure, RetainedCache};
 use nessa_auth::domain::ResourceId;
 use nessa_sync::replication::domain::Id;
+use uuid::Uuid;
 
 pub use crate::read_only_sync::application::CataloguePresence;
 
@@ -32,20 +33,27 @@ pub enum PhoneFence {
     Replaced,
 }
 
-/// The receiver and generation a publication was admitted under.
-/// Reconstructing one does not bind the lease.
+/// The lease, receiver, and generation a publication was admitted under.
+/// Reconstructing one does not bind the lease. Two leases do not share an
+/// instance, so a generation that starts again still fails `accept`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PhoneStamp {
+    lease: Uuid,
     generation: u64,
     receiver: String,
 }
 impl PhoneStamp {
-    /// A stamp value. It publishes nothing until the lease accepts it.
-    pub fn issue(generation: u64, receiver: impl Into<String>) -> Self {
+    /// A stamp value. It publishes nothing until the lease that minted `lease` accepts it.
+    pub fn issue(lease: Uuid, generation: u64, receiver: impl Into<String>) -> Self {
         Self {
+            lease,
             generation,
             receiver: receiver.into(),
         }
+    }
+    /// Lease instance this stamp was minted for.
+    pub fn lease(&self) -> Uuid {
+        self.lease
     }
     /// Generation assigned when this receiver was bound.
     pub fn generation(&self) -> u64 {
@@ -60,14 +68,17 @@ impl PhoneStamp {
 /// One phone scope's publication generation.
 #[derive(Debug)]
 pub struct PhoneLease {
+    lease: Uuid,
     generation: u64,
     receiver: Option<String>,
     closed: bool,
 }
 impl PhoneLease {
-    /// Unbound and open. Nothing can publish yet.
+    /// Unbound and open. Nothing can publish yet. Each call mints a new instance,
+    /// so a later session does not accept an earlier session's stamp.
     pub fn new() -> Self {
         Self {
+            lease: Uuid::new_v4(),
             generation: 0,
             receiver: None,
             closed: false,
@@ -80,6 +91,7 @@ impl PhoneLease {
         }
         match &self.receiver {
             Some(receiver) => Ok(PhoneStamp {
+                lease: self.lease,
                 generation: self.generation,
                 receiver: receiver.clone(),
             }),
@@ -97,6 +109,7 @@ impl PhoneLease {
             self.receiver = Some(receiver.to_owned());
         }
         Ok(PhoneStamp {
+            lease: self.lease,
             generation: self.generation,
             receiver: receiver.to_owned(),
         })
@@ -126,7 +139,9 @@ impl PhoneLease {
         }
         match &self.receiver {
             Some(receiver)
-                if receiver == &stamp.receiver && self.generation == stamp.generation =>
+                if self.lease == stamp.lease
+                    && receiver == &stamp.receiver
+                    && self.generation == stamp.generation =>
             {
                 Ok(())
             }

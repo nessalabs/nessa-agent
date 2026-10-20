@@ -18,7 +18,7 @@ fn binding_the_same_receiver_keeps_the_stamp_and_replacement_refuses_it() {
     let mut lease = PhoneLease::new();
     assert_eq!(lease.stamp(), Err(PhoneFence::Unbound));
     assert_eq!(
-        lease.accept(&PhoneStamp::issue(1, "a")),
+        lease.accept(&PhoneStamp::issue(uuid::Uuid::new_v4(), 1, "a")),
         Err(PhoneFence::Unbound)
     );
     let first = lease.bind("a").unwrap();
@@ -40,6 +40,20 @@ fn a_purge_releases_the_receiver_and_a_later_bind_is_admitted() {
     let second = lease.bind("b").unwrap();
     assert_eq!(lease.accept(&second), Ok(()));
     assert_eq!(lease.accept(&first), Err(PhoneFence::Replaced));
+}
+
+#[test]
+fn a_new_lease_refuses_the_same_generation_from_an_earlier_lease() {
+    let mut earlier = PhoneLease::new();
+    let old = earlier.bind("a").unwrap();
+    earlier.close();
+    let mut replacement = PhoneLease::new();
+    let current = replacement.bind("a").unwrap();
+    assert_eq!(current.generation(), old.generation());
+    assert_eq!(current.receiver(), old.receiver());
+    assert_ne!(current.lease(), old.lease());
+    assert_eq!(replacement.accept(&old), Err(PhoneFence::Replaced));
+    assert_eq!(replacement.accept(&current), Ok(()));
 }
 
 #[test]

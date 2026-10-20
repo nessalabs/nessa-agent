@@ -190,7 +190,7 @@ flowchart LR
 
 ### Invariants
 
-- A stamp names one generation and one receiver. `accept` returns that receiver's saved rows only while the lease still has that pair.
+- A stamp names one lease instance, one generation, and one receiver. `accept` returns that receiver's saved rows only while that same lease still has that generation and receiver. A new session mints a new instance, so a generation that starts again does not accept the earlier stamp.
 - The same issued receiver keeps the generation. A different receiver, a successful terminal purge, or session close advances it. The previous stamp then fails and no bytes are read.
 - Close is permanent for that session. A successful purge only releases the receiver, so a later enrollment in the same session can bind the next one. That release happens when the purge succeeded, including when the status has no observation. No observation and no successful purge leaves the bound receiver in place.
 - Catalogue presence is one stored identity, read from one snapshot of the fence and the row. A live row is Live. A deletion fence or receiver purge receipt is Tombstone. No row and no fence is Absent. A page that does not mention a chat does not write a tombstone.
@@ -212,6 +212,7 @@ flowchart LR
 | Bound A | successful purge and no observation | Unbound; the credential may remain, and a later bind advances the generation | `a_successful_purge_releases_the_publication_without_an_observation` |
 | Output already the file | session fetch | LocalMatch, source not asked, elapsed is the session clock | `a_local_match_reports_the_session_clock` |
 | Bound | session close | Closed; `bind` stays closed | `close_refuses_the_stamp_and_a_later_bind` |
+| Closed session's stamp for A | a new lease binds A | Replaced, though both generations are 1 | `a_new_lease_refuses_the_same_generation_from_an_earlier_lease` |
 | Live row | page that omits that row | Stays Live | `catalogue_presence_names_a_fence_and_not_an_absent_row` |
 | Live row | deletion commit aborts | Stays Live | `a_deletion_that_does_not_commit_is_not_a_tombstone` |
 | Live row | deletion fence commits | Tombstone | `catalogue_presence_names_a_fence_and_not_an_absent_row` |
