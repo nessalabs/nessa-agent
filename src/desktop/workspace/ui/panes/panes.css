@@ -241,14 +241,6 @@ html:not(.dark) .workspace-pane[data-focused] {
   flex-direction: column;
 }
 
-/* The frame before a new column records each body's width (`split-panes.tsx`).
-   The boxes then paint without reflowing that text. The next frame releases it. */
-.workspace[data-body-held] .workspace-pane-body {
-  width: var(--pane-body-held);
-  flex: none;
-  overflow: hidden;
-}
-
 /* ——— Empty states ——— */
 
 /* Where the workspace's empty state sits (the kit's `EmptyState`, `styles.css`): the room the panes would take. */

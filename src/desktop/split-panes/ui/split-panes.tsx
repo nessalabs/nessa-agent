@@ -122,18 +122,6 @@ export const SplitPanes = memo(function SplitPanes({
         ?.closest<HTMLElement>("[data-workspace]")
         ?.toggleAttribute("data-spare-held", on)
     }
-    const holdBodies = () => {
-      const workspace = gridRef.current?.closest<HTMLElement>("[data-workspace]")
-      if (!workspace) return
-      const bodies = [
-        ...workspace.querySelectorAll<HTMLElement>(".workspace-pane-body"),
-      ]
-      const widths = bodies.map((body) => body.offsetWidth)
-      bodies.forEach((body, index) => {
-        body.style.setProperty("--pane-body-held", `${widths[index]}px`)
-      })
-      workspace.setAttribute("data-body-held", "")
-    }
     const arm = (next: typeof waiting) => {
       if (armed && waiting === next) return
       cancel()
@@ -144,9 +132,6 @@ export const SplitPanes = memo(function SplitPanes({
           // The click paints nothing new. The hold starts on the next frame,
           // before the window records the fold.
           if (left === 3) hold(next !== drawnRef.current)
-          // The frame before the boxes. Each body keeps the width it has, so
-          // the paint of the new boxes does not reflow its text.
-          if (left === 2) holdBodies()
           if (left > 1) {
             queue(left - 1)
             return
@@ -183,11 +168,7 @@ export const SplitPanes = memo(function SplitPanes({
     const grid = gridRef.current
     if (!grid) return
     grid.setAttribute(marks.painting, "")
-    const id = requestAnimationFrame(() => {
-      grid.removeAttribute(marks.painting)
-      const workspace = grid.closest<HTMLElement>("[data-workspace]")
-      workspace?.removeAttribute("data-body-held")
-    })
+    const id = requestAnimationFrame(() => grid.removeAttribute(marks.painting))
     return () => cancelAnimationFrame(id)
   }, [drawn])
   // The workspace holds the sidebar in the row until these boxes paint.
