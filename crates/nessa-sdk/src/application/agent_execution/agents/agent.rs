@@ -305,7 +305,9 @@ fn effective_hook_outcome(
 
 /// The gateway log for a hook that stopped the turn: the tool, which hook, and why.
 ///
-/// A continue is not logged here. Tool arguments are not logged.
+/// Called only after that stop is applied. A continue is not logged here, and
+/// neither is an end-turn whose provider had already settled, nor a close that
+/// did not confirm. Tool arguments are not logged.
 fn log_hook_stop(
     event: &ExecutionEvent,
     index: Option<usize>,
@@ -2565,7 +2567,6 @@ impl Agent {
         };
         let (reason, outcome) = (refusal.reason(), refusal.outcome());
         if outcome == RefusalOutcome::CloseSession {
-            log_hook_stop(event, index, reason, RefusalOutcome::CloseSession);
             let recorded = wait
                 .run(self.withdraw_hook_refusal(
                     session,
@@ -2579,6 +2580,9 @@ impl Agent {
                 .run(self.shutdown_after_failure(SessionCloseRequest::PolicyRefusal))
                 .await;
             let confirmed = cleanup.is_confirmed();
+            if confirmed {
+                log_hook_stop(event, index, reason, RefusalOutcome::CloseSession);
+            }
             let failure = match (recorded.err(), cleanup.into_result().err()) {
                 (Some(operation_error), Some(cleanup_error)) => {
                     Some(AgentError::OperationAndCleanupFailure {
@@ -2599,7 +2603,6 @@ impl Agent {
             deny_option(event).is_some(),
             self.supports_turn_cancel(),
         );
-        log_hook_stop(event, index, reason, effective);
         let delivered = wait
             .run(self.deliver_hook_refusal(session, event, index, reason, effective))
             .await;
@@ -2620,10 +2623,15 @@ impl Agent {
             .run(self.cancel_turn(event.execution_id().clone()))
             .await
         {
-            Ok(()) => AppliedVerdict {
-                closed: None,
-                failure: delivery_failure,
-            },
+            Ok(()) => {
+                if effective == RefusalOutcome::EndTurn {
+                    log_hook_stop(event, index, reason, RefusalOutcome::EndTurn);
+                }
+                AppliedVerdict {
+                    closed: None,
+                    failure: delivery_failure,
+                }
+            }
             // The reply arrived while the cancel ran, so the cancel found no
             // turn and sent nothing. A cancel that reached the provider keeps
             // its failure.
@@ -2652,6 +2660,9 @@ impl Agent {
                         ObservationFailureCause::ExecutionFailed,
                     ))
                     .await;
+                if confirmed && effective == RefusalOutcome::EndTurn {
+                    log_hook_stop(event, index, reason, RefusalOutcome::CloseSession);
+                }
                 AppliedVerdict {
                     closed: Some(confirmed),
                     failure: Some(error),

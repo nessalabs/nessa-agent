@@ -49,7 +49,10 @@ closed, names the tool, and quotes the hook's reason.
 
 The gateway log for a configured stop names the rule id, its revision, and
 the tool. The hook stop log names the tool, the hook index or `runtime`, and
-the reason. Neither log carries tool arguments or the grantor.
+the reason, and it is written only after that stop is applied. An end-turn
+that arrives after the provider has already settled, and a close that does
+not confirm, are not logged as a stop. Neither log carries tool arguments or
+the grantor.
 
 The audit record for the decline says the turn was `running` before the
 decision. After a continue it is still `running`. After an end-turn it is
@@ -67,7 +70,8 @@ first matching row is what happens.
 | The provider's result arrives after that fence | The local outcome and the notice stay. The reply is a late provider result, a different record. |
 | The audit sink fails or stalls | The turn reports the audit failure. The notice already published still names the rule and the tool. Cleanup still finishes. |
 | The session snapshot is restored | The event's rule id, revision, and grantor are the ones that were saved. The panel sentence is computed again from that event. |
-| A hook returns end-turn or close-session | The review is withdrawn as the hook. The notice quotes the hook's reason and names the tool. The audit record is the cancellation, with the hook as initiator. |
+| A hook returns end-turn or close-session | The review is withdrawn as the hook. The notice quotes the hook's reason and names the tool. The audit record is the cancellation, with the hook as initiator. The hook stop log follows the applied stop: the turn cancel, or a confirmed session close. |
+| A hook end-turn arrives after the provider has already settled | The session stays open and no hook stop is logged. The provider finished the turn on its own. |
 | A hook returns continue, or an end-turn the binding cannot perform and so records as continue | No stop sentence. The turn keeps running. |
 | A hook stop's review id is not a notice id | No notice is added, because a notice id that the client rejects would drop the whole view. The cancellation and its audit remain. |
 | Provider notification of the stop fails | The local notice and the local outcome stay. The notification failure is its own log line. |
