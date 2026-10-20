@@ -351,7 +351,8 @@ html:not(.dark) [data-surface] {
 /* The composer's blur would be sampled again on every frame the copy moves.
    The sidebar's tint and resting shadow stay unchanged through the gesture
    (`styles.test.ts`). */
-:root[data-drag-pressing] .desktop-composer {
+:root[data-drag-pressing] .desktop-composer,
+:root[data-drag-blur] .desktop-composer {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   background: var(--background);

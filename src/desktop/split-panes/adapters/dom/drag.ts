@@ -528,16 +528,23 @@ export function useSplitPanesDrag(
       const generation = ++glass
       if (on) {
         reflectMark(scope, marks.pressing, options.previewPanes)
+        reflectMark(scope, marks.blur, false)
         return
       }
-      // Three frames after this one. The new boxes paint on the second, so
-      // the blur comes back on the one after that (`styles.test.ts`).
+      // Three frames after this one the grain comes back. The composer's blur
+      // waits one more, so neither shares the frame that paints the new boxes
+      // (`styles.test.ts`).
       glassFrame = requestAnimationFrame(() => {
         glassFrame = requestAnimationFrame(() => {
           glassFrame = requestAnimationFrame(() => {
             if (!active || generation !== glass) return
-            glassFrame = null
             reflectMark(scope, marks.pressing, false)
+            reflectMark(scope, marks.blur, true)
+            glassFrame = requestAnimationFrame(() => {
+              if (!active || generation !== glass) return
+              glassFrame = null
+              reflectMark(scope, marks.blur, false)
+            })
           })
         })
       })
@@ -1598,6 +1605,7 @@ export function useSplitPanesDrag(
       if (made) releaseMade(made)
       reflectMark(scope, marks.reflow, false)
       reflectMark(scope, marks.pressing, false)
+      reflectMark(scope, marks.blur, false)
       phase = idle
       announcer.remove()
     }

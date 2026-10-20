@@ -73,9 +73,9 @@ starts the measured row.
    The frame between is when a drop's copy lets go. The grid mounted with
    whatever layout it first read; that first paint does not wait. The paint
    frame marks the grid `data-split-painting`, and scene text that has
-   already laid out stays unpainted until the next frame. The glass blur
-   comes back the frame after that paint. A drag's copy does not paint the
-   night scene.
+   already laid out stays unpainted until the next frame. The grain comes
+   back the frame after that paint, and the composer's blur the frame after
+   the grain. A drag's copy does not paint the night scene.
 
 Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read

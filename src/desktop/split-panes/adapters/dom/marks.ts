@@ -51,6 +51,11 @@ export const marks = {
    * (`styles.test.ts`).
    */
   pressing: "data-drag-pressing",
+  /**
+   * On the drag's root for the frame after `pressing` lets go. The composer's
+   * blur stays off while the grain comes back (`styles.css`).
+   */
+  blur: "data-drag-blur",
   /** On the drag's root while carrying (`pane` or `item`), and on what was pressed. */
   carrying: "data-drag-carrying",
   /** On the root while a compact card is carried and live panes remain visible. */

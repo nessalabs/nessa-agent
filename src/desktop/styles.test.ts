@@ -301,7 +301,8 @@ it("holds the ambient blur still while panes travel", () => {
 })
 
 it("drops the composer's blur while a drag is carried and keeps the sidebar treatment stable", () => {
-  const selector = ":root[data-drag-pressing] .desktop-composer {"
+  const selector =
+    ":root[data-drag-pressing] .desktop-composer,\n:root[data-drag-blur] .desktop-composer {"
   expect(styles).toContain(selector)
   const body = styles.slice(styles.indexOf(selector)).split("}")[0]
   expect(body).toMatch(/backdrop-filter:\s*none/)
