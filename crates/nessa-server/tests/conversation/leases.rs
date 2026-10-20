@@ -2742,9 +2742,22 @@ struct CommandHost {
     granted: AtomicUsize,
     finish: tokio::sync::watch::Sender<Option<CommandExit>>,
     stopped: Arc<Mutex<Vec<LeaseEndCause>>>,
+    /// When set, a grant hands the test a sender for files the command
+    /// publishes, and the command keeps the channel open until it ends.
+    publish: bool,
+    offers: Mutex<Option<tokio::sync::mpsc::Sender<ArtifactOffer>>>,
 }
 impl CommandHost {
     fn new() -> Arc<Self> {
+        Self::build(false)
+    }
+
+    /// A host whose commands publish files the test offers.
+    fn publishing() -> Arc<Self> {
+        Self::build(true)
+    }
+
+    fn build(publish: bool) -> Arc<Self> {
         Arc::new(Self {
             refusal: Mutex::new(None),
             terms: Mutex::new(None),
@@ -2752,7 +2765,14 @@ impl CommandHost {
             granted: AtomicUsize::new(0),
             finish: tokio::sync::watch::channel(None).0,
             stopped: Arc::default(),
+            publish,
+            offers: Mutex::new(None),
         })
+    }
+
+    /// The sender for the command granted most recently, once.
+    fn take_offer(&self) -> Option<tokio::sync::mpsc::Sender<ArtifactOffer>> {
+        self.offers.lock().unwrap().take()
     }
 }
 impl Environment for CommandHost {
@@ -2797,11 +2817,20 @@ impl CommandEnvironment for CommandHost {
                 return Err(refusal);
             }
             self.granted.fetch_add(1, Ordering::SeqCst);
+            let (incoming, published) = if self.publish {
+                let (sender, receiver) = tokio::sync::mpsc::channel(4);
+                *self.offers.lock().unwrap() = Some(sender.clone());
+                (Some(receiver), Some(sender))
+            } else {
+                (None, None)
+            };
             Ok(GrantedCommand {
                 hold: Box::new(FakeCommand {
                     finish: self.finish.subscribe(),
                     stopped: self.stopped.clone(),
                     timeouts: self.timeouts.clone(),
+                    incoming,
+                    published,
                 }),
                 granted,
             })
@@ -2813,8 +2842,15 @@ struct FakeCommand {
     stopped: Arc<Mutex<Vec<LeaseEndCause>>>,
     /// The timeout each run was given.
     timeouts: Arc<Mutex<Vec<u64>>>,
+    incoming: Option<tokio::sync::mpsc::Receiver<ArtifactOffer>>,
+    /// Kept until the command ends, so the collector's receive finishes then.
+    published: Option<tokio::sync::mpsc::Sender<ArtifactOffer>>,
 }
 impl CommandHold for FakeCommand {
+    fn publications(&mut self) -> Option<tokio::sync::mpsc::Receiver<ArtifactOffer>> {
+        self.incoming.take()
+    }
+
     fn run(
         self: Box<Self>,
         timeout_ms: u64,
@@ -2823,7 +2859,9 @@ impl CommandHold for FakeCommand {
         let mut finish = self.finish.clone();
         let stopped = self.stopped.clone();
         self.timeouts.lock().unwrap().push(timeout_ms);
+        let published = self.published;
         Box::pin(async move {
+            let _open = published;
             let exit = tokio::select! {
                 Ok(exit) = finish.wait_for(Option::is_some) => exit.unwrap(),
                 Ok(cause) = stop.wait_for(Option::is_some) => {
@@ -2838,6 +2876,7 @@ impl CommandHold for FakeCommand {
                 stderr: Vec::new(),
                 dropped_bytes: 0,
                 cleanup: Some(LeaseCleanup::Confirmed { forced: false }),
+                published: Vec::new(),
             }
         })
     }
@@ -2850,6 +2889,15 @@ fn with_command_host(
     host: Arc<CommandHost>,
     policy: Option<CommandPolicy>,
 ) -> Harness {
+    with_command_host_keeping(root, host, policy, None)
+}
+
+fn with_command_host_keeping(
+    root: &Path,
+    host: Arc<CommandHost>,
+    policy: Option<CommandPolicy>,
+    attachments: Option<Arc<dyn ConversationAttachments>>,
+) -> Harness {
     let mut hosts: BTreeMap<String, Arc<dyn Environment>> = BTreeMap::new();
     hosts.insert("devbox".into(), host);
     let placements =
@@ -2861,7 +2909,15 @@ fn with_command_host(
         Some(policy) => environments.with_commands(commands(&policy)),
         None => environments,
     };
-    harness_in(root, environments, DELETION_BUDGETS.stop, provider, binding)
+    harness_working_in(
+        root,
+        environments,
+        DELETION_BUDGETS.stop,
+        provider,
+        binding,
+        None,
+        attachments,
+    )
 }
 
 /// The command policy over `policy`, as composition builds it.
@@ -2944,6 +3000,167 @@ fn command_actor(record: &LeaseRecord) -> Option<&ActionContext> {
         }
         _ => None,
     }
+}
+
+/// Row C12: a file a command publishes is kept under the command lease, for
+/// the person the command runs for, and `run` lists it.
+#[tokio::test]
+async fn a_command_s_published_file_is_kept_under_its_lease_and_listed_on_its_result() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::publishing();
+    let attachments = Arc::new(MemoryAttachments::default());
+    let harness = with_command_host_keeping(
+        root.path(),
+        host.clone(),
+        Some(devbox_policy()),
+        Some(attachments.clone()),
+    );
+    harness.create().await;
+    let go = harness.running_turn().await;
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let running = tokio::spawn(async move {
+        let (_caller, stop) = tokio::sync::watch::channel(false);
+        service
+            .run_command(&id, command("devbox", &["echo", "hi"], "call-1"), stop)
+            .await
+    });
+    let sender = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(sender) = host.take_offer() {
+                return sender;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the command's publish point");
+    let answered = publish_at(&sender, "shot.dmg", "/srv/work/.nessa/shot.dmg".into()).await;
+    drop(sender);
+    assert_eq!(answered.await.unwrap(), Collection::Held);
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    let CommandAnswer::Ran {
+        lease,
+        result,
+        recorded: true,
+    } = running.await.unwrap().unwrap()
+    else {
+        panic!("the command ran");
+    };
+    assert_eq!(result.published.len(), 1);
+    assert_eq!(result.published[0].name, "shot.dmg");
+    assert_eq!(result.published[0].digest, "ab".repeat(32));
+    assert_eq!(result.published[0].size, b"a disk image".len() as u64);
+    assert_eq!(result.published[0].outcome, super::PublicationOutcome::Held);
+    let published = attachments.published.lock().unwrap().clone();
+    assert_eq!(published.len(), 1);
+    assert_eq!(published[0].0, lease.as_str());
+    assert_eq!(published[0].1, "shot.dmg");
+    let saved = harness.saved_commands();
+    let actor = saved
+        .iter()
+        .find_map(command_actor)
+        .expect("the command was issued")
+        .clone();
+    assert_eq!(
+        attachments.requested_by.lock().unwrap().as_slice(),
+        &[actor]
+    );
+    assert!(saved.iter().any(|record| matches!(
+        record,
+        LeaseRecord::CommandEnded { lease: ended, .. } if ended == &lease
+    )));
+    go.send(()).unwrap();
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+    let snapshot = harness.snapshot().await;
+    assert_eq!(snapshot.artifacts.len(), 1);
+    assert_eq!(snapshot.artifacts[0].lease, lease);
+}
+
+/// Rows C15 and C16: a path this build does not accept, and a file past the
+/// command's own byte budget, are refused and listed. Nothing is held, and
+/// the command's end is still recorded.
+#[tokio::test]
+async fn a_command_s_refused_publish_is_listed_and_the_command_still_ends() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::publishing();
+    let attachments = Arc::new(MemoryAttachments::default());
+    let harness = with_command_host_keeping(
+        root.path(),
+        host.clone(),
+        Some(devbox_policy()),
+        Some(attachments.clone()),
+    );
+    harness.create().await;
+    let _go = harness.running_turn().await;
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let running = tokio::spawn(async move {
+        let (_caller, stop) = tokio::sync::watch::channel(false);
+        service
+            .run_command(&id, command("devbox", &["echo", "hi"], "call-1"), stop)
+            .await
+    });
+    let sender = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(sender) = host.take_offer() {
+                return sender;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the command's publish point");
+    let bad_path = publish_at(&sender, "shot.dmg", "shot.dmg".into()).await;
+    let (over_budget_answered, over_budget) = tokio::sync::oneshot::channel();
+    let mut huge = offer("big.bin", None, move |outcome| {
+        let _ = over_budget_answered.send(outcome);
+    });
+    huge.file.path = "/srv/work/.nessa/big.bin".into();
+    huge.file.size = super::ArtifactBudget::LEASE.bytes + 1;
+    sender.send(huge).await.unwrap();
+    drop(sender);
+    assert_eq!(
+        bad_path.await.unwrap(),
+        Collection::Refused {
+            reason: CollectionRefusal::Invalid,
+        }
+    );
+    assert_eq!(
+        over_budget.await.unwrap(),
+        Collection::Refused {
+            reason: CollectionRefusal::BudgetExceeded,
+        }
+    );
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    let CommandAnswer::Ran {
+        result,
+        recorded: true,
+        ..
+    } = running.await.unwrap().unwrap()
+    else {
+        panic!("the command ran");
+    };
+    assert!(attachments.published.lock().unwrap().is_empty());
+    assert_eq!(result.published.len(), 2);
+    assert!(matches!(
+        result.published[0].outcome,
+        super::PublicationOutcome::Refused(CollectionRefusal::Invalid)
+    ));
+    assert!(matches!(
+        result.published[1].outcome,
+        super::PublicationOutcome::Refused(CollectionRefusal::BudgetExceeded)
+    ));
+    assert!(harness
+        .saved_commands()
+        .iter()
+        .any(|record| { matches!(record, LeaseRecord::CommandEnded { .. }) }));
 }
 
 #[tokio::test]

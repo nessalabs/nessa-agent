@@ -175,6 +175,7 @@ pub(crate) trait CommandRunner: Send + Sync {
         &self,
         command: CommandWork,
         stop: watch::Receiver<Option<CommandStop>>,
+        publish_point: Option<String>,
     ) -> Pin<Box<dyn Future<Output = CommandRan> + Send + 'static>>;
 }
 
@@ -712,20 +713,39 @@ struct Held {
     deadline: Option<(Moment, u64)>,
 }
 
-/// One command lease this connection holds.
+/// One command lease this connection holds. Its publish point stays open
+/// from the grant until the gateway ends the lease, so a file still in
+/// flight can be answered between `Ran` and `End`.
 enum HeldCommand {
-    /// Granted, its command not yet run.
-    Granted(CommandWork),
+    /// Granted, its command not yet run. `artifacts` is its publish point;
+    /// `None` when the point could not be opened.
+    Granted {
+        work: CommandWork,
+        artifacts: Option<LeaseArtifacts>,
+    },
     /// Its command started: `stop` stops it, and `ran` is its cleanup once
     /// its end is recorded and its `Ran` handed on. `ending` turns true,
     /// under its lock, once the command's own task has taken what ended it:
     /// from then on its end is what that task records, and a revocation
-    /// coming after it records nothing of this lease.
+    /// coming after it records nothing of this lease. `artifacts` stays
+    /// until the gateway's `End`, a loss, or the command is dropped finished.
     Running {
         stop: watch::Sender<Option<CommandStop>>,
         ran: watch::Receiver<Option<Cleanup>>,
         ending: Arc<Mutex<bool>>,
+        artifacts: Option<LeaseArtifacts>,
     },
+}
+
+/// Close a command lease's publish point. `unasked` leaves a file still in
+/// flight unanswered; an end the gateway asked answers it `leaseEnded`.
+fn close_command_artifacts(
+    artifacts: Option<LeaseArtifacts>,
+    unasked: bool,
+) -> Vec<JoinHandle<()>> {
+    artifacts
+        .map(|artifacts| artifacts.end(unasked))
+        .unwrap_or_default()
 }
 
 impl HeldCommand {
@@ -862,10 +882,12 @@ impl Served {
                     // answered with what that end took, never as holding
                     // nothing while its harness may still be stopping.
                     None if self.ends.contains_key(&lease) => {
-                        self.answer_ended(lease, move |lease, cleanup| FromEnvironment::Stopped {
-                            lease,
-                            channel,
-                            cleanup,
+                        self.answer_ended(lease, Vec::new(), move |lease, cleanup| {
+                            FromEnvironment::Stopped {
+                                lease,
+                                channel,
+                                cleanup,
+                            }
                         });
                     }
                     None => {
@@ -899,16 +921,15 @@ impl Served {
                     if let Some(cleanup) = self.unrun.remove(&lease) {
                         return self.send(FromEnvironment::Ended { lease, cleanup });
                     }
-                    self.answer_ended(lease, |lease, cleanup| FromEnvironment::Ended {
+                    self.answer_ended(lease, Vec::new(), |lease, cleanup| FromEnvironment::Ended {
                         lease,
                         cleanup,
                     });
                 }
             },
             ToEnvironment::Account { lease } => {
-                self.answer_ended(lease, |lease, cleanup| FromEnvironment::Accounted {
-                    lease,
-                    cleanup,
+                self.answer_ended(lease, Vec::new(), |lease, cleanup| {
+                    FromEnvironment::Accounted { lease, cleanup }
                 });
             }
             ToEnvironment::Keepalive => {}
@@ -919,9 +940,7 @@ impl Served {
                 outcome,
             } => {
                 let answered = self
-                    .leases
-                    .get(&lease)
-                    .and_then(|held| held.artifacts.as_ref())
+                    .artifacts_of(&lease)
                     .is_some_and(|artifacts| artifacts.collected(artifact, outcome));
                 if !answered {
                     self.dropped(Some(&lease), None, "collected");
@@ -991,11 +1010,7 @@ impl Served {
                 offset,
                 length,
             } => {
-                let read = match self
-                    .leases
-                    .get(&lease)
-                    .and_then(|held| held.artifacts.as_ref())
-                {
+                let read = match self.artifacts_of(&lease) {
                     Some(artifacts) => artifacts.read(artifact, offset, length),
                     None => {
                         self.dropped(Some(&lease), None, "read_artifact");
@@ -1074,20 +1089,42 @@ impl Served {
     fn answer_ended(
         &mut self,
         lease: String,
+        reads: Vec<JoinHandle<()>>,
         answer: impl FnOnce(String, Cleanup) -> FromEnvironment + Send + 'static,
     ) {
         let Some(mut ending) = self.ends.get(&lease).cloned() else {
             let cleanup = self.accounted(&lease);
-            return self.send(answer(lease, cleanup));
+            return self.send_after_reads(reads, answer(lease, cleanup));
         };
         let frames = self.frames.clone();
         tokio::spawn(async move {
+            for read in reads {
+                let _ = read.await;
+            }
             // An end that never said (its task failed) is not known done.
             let cleanup = match ending.wait_for(Option::is_some).await {
                 Ok(cleanup) => (*cleanup).unwrap_or(Cleanup::Uncertain),
                 Err(_) => Cleanup::Uncertain,
             };
             let _ = frames.send(answer(lease, cleanup)).await;
+        });
+    }
+
+    /// Send `frame` once `reads` have finished. None waiting: it is queued
+    /// with everything else. Reads under way go out on their own, after
+    /// they finish, so a lease's end is not said over a read still holding
+    /// a file.
+    fn send_after_reads(&mut self, reads: Vec<JoinHandle<()>>, frame: FromEnvironment) {
+        if reads.is_empty() {
+            self.send(frame);
+            return;
+        }
+        let frames = self.frames.clone();
+        tokio::spawn(async move {
+            for read in reads {
+                let _ = read.await;
+            }
+            let _ = frames.send(frame).await;
         });
     }
 
@@ -1652,6 +1689,19 @@ impl Served {
         });
     }
 
+    /// The publish point of `lease`, a harness lease or a command lease.
+    fn artifacts_of(&self, lease: &str) -> Option<&LeaseArtifacts> {
+        self.leases
+            .get(lease)
+            .and_then(|held| held.artifacts.as_ref())
+            .or_else(|| {
+                self.commands.get(lease).and_then(|held| match held {
+                    HeldCommand::Granted { artifacts, .. }
+                    | HeldCommand::Running { artifacts, .. } => artifacts.as_ref(),
+                })
+            })
+    }
+
     /// Admit a command lease, or refuse it, as [`Self::grant`] does a
     /// harness's: only as the peer's grant has it, its timeout narrowed to
     /// the grant's longest, then only on a host that runs commands, and only
@@ -1664,10 +1714,21 @@ impl Served {
         timeout_ms: u64,
     ) {
         // Commands whose end is recorded are the audit's to answer for.
-        self.commands.retain(|_, held| match held {
-            HeldCommand::Granted(_) => true,
-            HeldCommand::Running { ran, .. } => ran.borrow().is_none(),
-        });
+        // Their publish point closes with them: the gateway has not asked
+        // `End`, so a file still in flight is left unanswered.
+        let finished: Vec<String> = self
+            .commands
+            .iter()
+            .filter_map(|(id, held)| match held {
+                HeldCommand::Running { ran, .. } if ran.borrow().is_some() => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        for id in finished {
+            if let Some(HeldCommand::Running { artifacts, .. }) = self.commands.remove(&id) {
+                let _reads = close_command_artifacts(artifacts, true);
+            }
+        }
         let refusal = if LeaseId::new(lease.clone()).is_err() || self.granted.contains(&lease) {
             Err(GrantRefusal::Duplicate)
         } else if let Some(refusal) = self.recorded_before(&lease) {
@@ -1713,8 +1774,15 @@ impl Served {
                     lease_ms: None,
                 };
                 self.granted.insert(lease.clone());
+                let artifacts = LeaseArtifacts::open(
+                    &lease,
+                    self.outbox.clone(),
+                    self.ledger.clone(),
+                    self.frames.clone(),
+                    self.gone.subscribe(),
+                );
                 self.commands
-                    .insert(lease.clone(), HeldCommand::Granted(work));
+                    .insert(lease.clone(), HeldCommand::Granted { work, artifacts });
                 self.send(FromEnvironment::Granted { lease, terms });
             }
             Err(reason) => {
@@ -1750,8 +1818,8 @@ impl Served {
             };
             return self.send(ran(lease, not_started));
         }
-        let work = match self.commands.remove(&lease) {
-            Some(HeldCommand::Granted(work)) => work,
+        let (work, artifacts) = match self.commands.remove(&lease) {
+            Some(HeldCommand::Granted { work, artifacts }) => (work, artifacts),
             // Still running: its own `Ran` will answer.
             Some(running @ HeldCommand::Running { .. }) if running.runs() => {
                 self.commands.insert(lease.clone(), running);
@@ -1776,8 +1844,11 @@ impl Served {
         let entry = LedgerEntry::CommandStarted {
             lease: lease.clone(),
         };
+        let point = artifacts
+            .as_ref()
+            .map(|artifacts| artifacts.address().to_owned());
         let started = match self.ledger.record(&entry) {
-            Ok(()) => Some(runner.run(work, stopped.clone())),
+            Ok(()) => Some(runner.run(work, stopped.clone(), point)),
             Err(error) => {
                 tracing::error!(lease, %error, "a command's start could not be recorded; it is not run");
                 None
@@ -1789,6 +1860,7 @@ impl Served {
                 stop,
                 ran: ran_receiver,
                 ending: ending.clone(),
+                artifacts,
             },
         );
         let ledger = self.ledger.clone();
@@ -1876,18 +1948,25 @@ impl Served {
     /// once that is recorded; one never run ends holding nothing.
     fn end_command(&mut self, lease: String) {
         match self.commands.remove(&lease) {
-            Some(HeldCommand::Running { stop, ran, .. }) => {
+            Some(HeldCommand::Running {
+                stop,
+                ran,
+                artifacts,
+                ..
+            }) => {
+                let reads = close_command_artifacts(artifacts, false);
                 ask_stop(&stop, CommandStop::Ended);
                 self.ends.retain(|_, ended| ended.borrow().is_none());
                 self.ends.insert(lease.clone(), ran);
-                self.answer_ended(lease, |lease, cleanup| FromEnvironment::Ended {
+                self.answer_ended(lease, reads, |lease, cleanup| FromEnvironment::Ended {
                     lease,
                     cleanup,
                 });
             }
-            Some(HeldCommand::Granted(_)) => {
+            Some(HeldCommand::Granted { artifacts, .. }) => {
+                let reads = close_command_artifacts(artifacts, false);
                 let cleanup = self.end_unrun(&lease, EndCause::Asked);
-                self.send(FromEnvironment::Ended { lease, cleanup });
+                self.send_after_reads(reads, FromEnvironment::Ended { lease, cleanup });
             }
             None => unreachable!("only a held command lease is ended here"),
         }
@@ -1955,8 +2034,12 @@ impl Served {
                         ask_stop(stop, CommandStop::Revoked { recorded });
                     }
                 }
-                Some(HeldCommand::Granted(_)) => {
-                    self.commands.remove(&lease);
+                Some(HeldCommand::Granted { .. }) => {
+                    let artifacts = match self.commands.remove(&lease) {
+                        Some(HeldCommand::Granted { artifacts, .. }) => artifacts,
+                        _ => None,
+                    };
+                    let _reads = close_command_artifacts(artifacts, true);
                     let recorded = self.revoking(&lease);
                     let cleanup = if recorded {
                         Cleanup::NotHeld
@@ -2030,8 +2113,12 @@ impl Served {
                         ask_stop(stop, CommandStop::Drained { recorded });
                     }
                 }
-                Some(HeldCommand::Granted(_)) => {
-                    self.commands.remove(&lease);
+                Some(HeldCommand::Granted { .. }) => {
+                    let artifacts = match self.commands.remove(&lease) {
+                        Some(HeldCommand::Granted { artifacts, .. }) => artifacts,
+                        _ => None,
+                    };
+                    let _reads = close_command_artifacts(artifacts, true);
                     let recorded = self.draining_recorded(&lease);
                     let cleanup = if recorded {
                         Cleanup::NotHeld
@@ -2094,11 +2181,18 @@ impl Served {
         let commands: Vec<_> = self.commands.drain().collect();
         for (lease, held) in commands {
             match held {
-                HeldCommand::Running { stop, ran, .. } => {
+                HeldCommand::Running {
+                    stop,
+                    ran,
+                    artifacts,
+                    ..
+                } => {
+                    let _reads = close_command_artifacts(artifacts, true);
                     ask_stop(&stop, CommandStop::Lost);
                     self.ends.insert(lease, ran);
                 }
-                HeldCommand::Granted(_) => {
+                HeldCommand::Granted { artifacts, .. } => {
+                    let _reads = close_command_artifacts(artifacts, true);
                     self.end_unrun(&lease, EndCause::Lost);
                 }
             }

@@ -438,6 +438,7 @@ impl CommandRunner for Echo {
         &self,
         command: CommandWork,
         _stop: watch::Receiver<Option<CommandStop>>,
+        _publish_point: Option<String>,
     ) -> Pin<Box<dyn Future<Output = CommandRan> + Send + 'static>> {
         Box::pin(async move {
             CommandRan {

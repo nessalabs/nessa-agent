@@ -12,6 +12,7 @@
 //!       CommandRefused(environment not granted)
 //!   ──▶ CommandIssued with the terms granted (the turn's person, this call)
 //!       ── unsaved ──▶ the hold dropped
+//!   ──▶ files it publishes, collected under the command lease
 //!   ──▶ CommandHold::run(stop) ──▶ CommandEnded{exit, output, cleanup}
 //! ```
 //!
@@ -38,11 +39,13 @@ use crate::conversation::application::drive_tools::{
     decision, AdmittedPolicies, DriveToolAuditRecord, DriveTools,
 };
 use crate::conversation::application::{
-    admit_command, environment::GrantedTerms, CommandInitiator, CommandPolicyEvaluator,
-    CommandQuestion, CommandResult, Environment, ToolDecision,
+    admit_command, environment::GrantedTerms, ArtifactBudget, ArtifactCollector, CommandInitiator,
+    CommandPolicyEvaluator, CommandPublication, CommandQuestion, CommandResult, Environment,
+    PublicationOutcome, ToolDecision,
 };
 use crate::conversation::domain::{ToolCall, ToolPolicy, ToolSource};
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::lease::Collection;
 use nessa_sdk::application::agent_execution::{
     permissions::ActionContext,
     sessions::{CurrentLease, InvocationRecord, LeaseRecord, SessionSnapshot},
@@ -337,7 +340,7 @@ impl ConversationService {
             let refusal = CommandRefusal::Environment(LeaseRefusal::EnvironmentNotGranted);
             return self.refuse(&live, &refused, refusal).await;
         };
-        let hold = granted.hold;
+        let mut hold = granted.hold;
         // Recorded under the lock as granted, or refused if the lease filled
         // or ended meanwhile: either way the hold goes when not run.
         let issued = LeaseRecord::CommandIssued {
@@ -391,12 +394,36 @@ impl ConversationService {
                 return Err(CommandCallError::Unrecorded);
             }
         }
+        // Collected while the command runs, and finished before its end is
+        // recorded, so the command is still live to admit each file.
+        let offers = hold.publications();
+        let collecting = offers.map(|mut offers| {
+            let live = Arc::clone(&live);
+            let mut collector = ArtifactCollector::new(
+                live.organization_id.clone(),
+                id.clone(),
+                lease.clone(),
+                actor.clone(),
+                self.inner.attachments.clone(),
+                ArtifactBudget::LEASE,
+            );
+            tokio::spawn(async move {
+                let mut published = Vec::new();
+                while let Some(offer) = offers.recv().await {
+                    let outcome = collector
+                        .collect(offer, &live.agent, &live.lease, &live.publishes)
+                        .await;
+                    published.push(publication(outcome));
+                }
+                published
+            })
+        });
         // A caller gone during the grant stops it before it starts.
         let gone = *stop.borrow();
         let (stopping, stopped) = watch::channel(gone.then_some(LeaseEndCause::Closed));
         let mut caller = stop;
         let mut ran = hold.run(terms.command.timeout_ms(), stopped);
-        let result = loop {
+        let mut result = loop {
             tokio::select! {
                 result = &mut ran => break result,
                 // The caller gone: the command is stopped as closed, and its
@@ -408,6 +435,9 @@ impl ConversationService {
                 }
             }
         };
+        if let Some(collecting) = collecting {
+            result.published = collecting.await.unwrap_or_default();
+        }
         let result = CommandResult {
             exit: self.stop_cause(&live, &parent, result.exit).await,
             ..result
@@ -560,6 +590,20 @@ impl ConversationService {
     pub(super) async fn live(&self, id: &ConversationId) -> Option<Arc<LiveConversation>> {
         let slot = self.inner.conversations.lock().await.get(id).cloned()?;
         slot.value.get()?.as_ref().ok().cloned()
+    }
+}
+
+/// One file a command published, as `run` lists it.
+fn publication(outcome: crate::conversation::application::PublishedOutcome) -> CommandPublication {
+    CommandPublication {
+        name: outcome.name,
+        digest: outcome.digest,
+        size: outcome.size,
+        outcome: match outcome.collection {
+            Collection::Held => PublicationOutcome::Held,
+            Collection::AlreadyHeld => PublicationOutcome::AlreadyHeld,
+            Collection::Refused { reason } => PublicationOutcome::Refused(reason),
+        },
     }
 }
 

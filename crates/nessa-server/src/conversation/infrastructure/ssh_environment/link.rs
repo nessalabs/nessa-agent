@@ -293,6 +293,17 @@ pub(crate) struct Published {
     pub(crate) unanswered: OwnedRwLockReadGuard<()>,
 }
 
+/// A command lease the host admitted: the terms it granted, the files
+/// published under it, and the watch that closes when it is no longer routed.
+pub(crate) struct AdmittedCommand {
+    /// As the host answered them.
+    pub(crate) terms: GrantedTerms,
+    /// Closes once the lease is no longer routed here.
+    pub(crate) gone: watch::Receiver<()>,
+    /// Ends once the lease is no longer routed here.
+    pub(crate) published: mpsc::Receiver<Published>,
+}
+
 /// What a granted lease is handed: the terms the host granted, its watch,
 /// and the files published under it.
 pub(crate) struct Granted {
@@ -744,7 +755,7 @@ impl HostLink {
             ending,
             terms,
         } = self
-            .admit(lease, frame, Some(offers), place, deadline)
+            .admit(lease, frame, Some(offers), false, place, deadline)
             .await
             .map_err(lease_refusal)?;
         Ok(Granted {
@@ -768,16 +779,24 @@ impl HostLink {
         timeout_ms: u64,
         place: Option<BudgetPlace>,
         deadline: Duration,
-    ) -> Result<GrantedTerms, AdmissionRefused> {
+    ) -> Result<AdmittedCommand, AdmissionRefused> {
         let frame = ToEnvironment::GrantCommand {
             lease: lease.into(),
             argv,
             cwd,
             timeout_ms,
         };
-        // A command publishes nothing: no file is offered under its lease.
-        let admitted = self.admit(lease, frame, None, place, deadline).await?;
-        Ok(admitted.terms)
+        // The same publish channel a harness lease gets. The route stays a
+        // command route, so an `Ending` is not taken for it.
+        let (offers, published) = mpsc::channel(MAX_ARTIFACTS_IN_FLIGHT);
+        let admitted = self
+            .admit(lease, frame, Some(offers), true, place, deadline)
+            .await?;
+        Ok(AdmittedCommand {
+            terms: admitted.terms,
+            gone: admitted.gone,
+            published,
+        })
     }
 
     /// Run a granted command lease's command and wait for its `Ran`. The
@@ -811,6 +830,7 @@ impl HostLink {
         lease: &str,
         frame: ToEnvironment,
         published: Option<mpsc::Sender<Published>>,
+        command: bool,
         place: Option<BudgetPlace>,
         deadline: Duration,
     ) -> Result<Admitted, AdmissionRefused> {
@@ -827,8 +847,7 @@ impl HostLink {
                 LeaseRoute {
                     grant: Some(answer),
                     ran: None,
-                    // Only a harness's lease publishes.
-                    command: published.is_none(),
+                    command,
                     ended: None,
                     ending: false,
                     end_sent: false,

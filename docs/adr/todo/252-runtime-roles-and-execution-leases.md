@@ -176,7 +176,8 @@ Environments lane, in order:
     - [x] **D3a.** `artifacts_publish` beside `run`: a gateway-initiated
       publish under the agent's Live lease, for the turn's person
       ([The agent publishes a file](../../design/runtime-architecture.md#the-agent-publishes-a-file-slice-d3a)).
-      Command leases publish from [#766](https://github.com/nessalabs/nessa-agent/issues/766).
+      Command leases publish through their own point, the command lease as
+      the cause ([#766](https://github.com/nessalabs/nessa-agent/issues/766)).
     - [x] **D3b.** `artifacts_fetch`: a held file into the workspace where
       the agent runs, by digest, written over sftp into a part on the host,
       verified there and linked, never over anything, on a host that opted

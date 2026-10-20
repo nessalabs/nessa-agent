@@ -1959,6 +1959,7 @@ impl CommandRunner for Commands {
         &self,
         command: CommandWork,
         mut stop: tokio::sync::watch::Receiver<Option<CommandStop>>,
+        _publish_point: Option<String>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CommandRan> + Send + 'static>> {
         Box::pin(async move {
             if command.program() == "echo" {
