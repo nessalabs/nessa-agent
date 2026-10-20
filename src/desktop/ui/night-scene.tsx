@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties } from "react"
+import { memo, useLayoutEffect, useRef, useState, type CSSProperties } from "react"
 import {
   nightSceneDim,
   nightSceneFadeRows,
@@ -58,7 +58,11 @@ const nextPhase: Partial<Record<ScenePhase, ScenePhase>> = {
  * next frame. A later change of pane width only crops them. `still`: its
  * rain and steam hold still, as they do in a conversation pane's sliver of it.
  */
-export function NightScene({ still = false }: { still?: boolean }) {
+export const NightScene = memo(function NightScene({
+  still = false,
+}: {
+  still?: boolean
+}) {
   const frameRef = useRef<HTMLPreElement>(null)
   const metrics = useRef({
     scale: "1",
@@ -170,7 +174,7 @@ export function NightScene({ still = false }: { still?: boolean }) {
       </span>
     </pre>
   )
-}
+})
 
 /**
  * One depth of rain in the window opening: two copies of a vertically tiling

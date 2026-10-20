@@ -47,11 +47,16 @@ frame after the title's glide.
 The click still re-rendered the sidebar. `useEdgePeek` returned a new
 object on every shell render, the shell renders when the panes change, and
 that object is the sidebar's context value, which bypasses the columns'
-memo. The fold then took the sidebar out of the flex row while the grid
-was still painting one pane, so that pane widened and its text laid out,
-and laid out again when the new boxes arrived. The grid is
-`data-split-pending` until those boxes paint, and a hold of the sidebar's
-width keeps the conversation's measure until then.
+memo. The same click re-rendered the night scene and the overview layer,
+whose inputs had not changed. The fold then took the sidebar out of the
+flex row while the grid was still painting one pane, so that pane widened
+and its text laid out, and laid out again when the new boxes arrived.
+Holding the width with an empty item shown through `:has` left that layout
+dirty, and the title's `getComputedStyle` on the next frame forced it.
+The workspace is `data-spare-held` until the new boxes paint, and the
+folded sidebar stays in the row for that wait. The mark clears in the
+commit that paints the boxes, so the sidebar leaves the row and the new
+geometry share one layout.
 
 ## States
 
@@ -91,15 +96,17 @@ starts the measured row.
    The next frame is when a drop's copy lets go and when a side column's
    fold is painted. A spare fold is already in state (`arranged`); a resize
    still folds before paint (`useFitOnResize`). Until the new boxes paint,
-   the grid is `data-split-pending` and the workspace holds the folded
-   sidebar's width, so the conversation does not change measure on the fold.
-   The frame after the fold is the column title's glide. The grid mounted
-   with whatever layout it first read; that first paint does not wait. The
-   paint frame marks the grid `data-split-painting`, and scene text that has
-   already laid out stays unpainted until the next frame. The grain comes
-   back the frame after that paint, and the composer's blur the frame after
-   the grain. A drag's copy does not paint the night scene. A pane change
-   does not render the sidebar unless the reveal itself changed.
+   the workspace is `data-spare-held` and a folded sidebar stays in the
+   row, so the conversation does not change measure on the fold. The mark
+   clears in the commit that paints the boxes. The frame after the fold is
+   the column title's glide. The grid mounted with whatever layout it first
+   read; that first paint does not wait. The paint frame marks the grid
+   `data-split-painting`, and scene text that has already laid out stays
+   unpainted until the next frame. The grain comes back the frame after
+   that paint, and the composer's blur the frame after the grain. A drag's
+   copy does not paint the night scene. A pane change does not render the
+   sidebar unless the reveal itself changed, and it does not render the
+   night scene or the overview unless their own inputs changed.
 
 Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read
@@ -171,8 +178,12 @@ flowchart LR
   store, and that store's updates stay on the click's turn, so the
   transition would not move the render.
 - Letting the fold widen the conversation, since the new boxes follow.
-  The widen is its own frame, and that frame lays the text out. Holding
-  the width costs one empty flex item and no second layout of the text.
+  The widen is its own frame, and that frame lays the text out.
+- Holding that width with an empty flex item the stylesheet shows through
+  `:has([data-split-pending])`. The item's width change left the tree
+  dirty, and the title frame's `getComputedStyle` forced the layout (style
+  about 46 ms, frames about 79–85). The hold is the sidebar staying in the
+  row, on `data-spare-held`, cleared with the boxes.
 
 ## Review brief
 
@@ -184,13 +195,14 @@ flowchart LR
   ≤ 50 ms unrounded. A shown night scene has laid out its text once the
   open has settled. A drop commits on the frame after pointerup paints.
 - Owned scope: `paneBox`, the drop's two callbacks, the grid painting a
-  column change three frames later and marking that wait
-  `data-split-pending`, the side-column fit waiting one frame when the
-  pane count changes, the sidebar paint waiting that same frame when the
-  count changes (`useDrawnAfterColumnChange`, passed into the source
-  list), the spare-width hold, the edge peek's stable controls, the
-  scene-ready and scene-complete marks and the layer rules, the tests
-  that lock those, the settled assertion in `columns.mjs`
+  column change three frames later, the workspace marked `data-spare-held`
+  for that wait so a folded sidebar stays in the row, the side-column fit
+  waiting one frame when the pane count changes, the sidebar paint waiting
+  that same frame when the count changes (`useDrawnAfterColumnChange`,
+  passed into the source list), the edge peek's stable controls, the night
+  scene and the overview layer skipping a render whose inputs did not
+  change, the scene-ready and scene-complete marks and the layer rules,
+  the tests that lock those, the settled assertion in `columns.mjs`
   `content-visible`, and this note.
 - Outside that scope: `FlipScope`'s read when the flight duration is
   nonzero, blanking a conversation, and issues 965, 981, 1038, 1039, 1030,

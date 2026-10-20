@@ -663,10 +663,6 @@ const Columns = memo(function Columns({
   }
   return (
     <>
-      {/* While a pane change has folded the sidebar but the grid still paints
-          the old boxes, this keeps the width the sidebar gave up. Without it
-          the one pane widens for a frame and its text lays out twice. */}
-      <div className="workspace-spare-hold" aria-hidden="true" />
       <SourceList variant={region.sidebar.variant} open={sidebarOpen} top={top} />
       {sidebarOpen ? (
         <ResizeEdge

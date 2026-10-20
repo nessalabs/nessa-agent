@@ -4,22 +4,6 @@
  * Every value comes from the `--desktop-*` scales in `styles.css`.
  */
 
-/*
- * The width a folded sidebar gave up, held until the grid paints the boxes
- * that use it (`data-split-pending`). Folding takes the sidebar out of the
- * flex row at once; without this the conversation widens for that wait and
- * lays its text out, then lays it out again when the new pane arrives.
- */
-.workspace-spare-hold {
-  display: none;
-  flex: none;
-}
-
-.workspace[data-sidebar="closed"]:has([data-split-pending]) .workspace-spare-hold {
-  display: block;
-  width: calc(var(--workspace-sidebar-width) + 2 * var(--desktop-gutter));
-}
-
 .workspace {
   position: relative;
   display: flex;

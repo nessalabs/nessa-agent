@@ -152,16 +152,16 @@ it("shows the host's empty state while there are no panes", async () => {
 })
 
 it("paints a new arrangement on the frame after it commits", async () => {
+  host.setAttribute("data-workspace", "")
   const layout = two()
   const fake = fakeSource(layout)
   await mounted(fake)
   await fake.change(splitPane(layout, 2, "bottom", "c"))
   // The commit's own turn keeps the boxes already painted, and so do the
   // two frames after it: a drop's copy lets go, then a column title glides.
-  // The grid is pending until that paint, so a host can hold the width the
-  // new boxes will take.
+  // The workspace holds a folded sidebar in the row for that wait.
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
-  expect(grid().hasAttribute(marks.pending)).toBe(true)
+  expect(host.hasAttribute("data-spare-held")).toBe(true)
   await act(
     async () =>
       new Promise<void>((resolve) =>
@@ -169,11 +169,12 @@ it("paints a new arrangement on the frame after it commits", async () => {
       ),
   )
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  expect(host.hasAttribute("data-spare-held")).toBe(true)
   await act(
     async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
   )
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
-  expect(grid().hasAttribute(marks.pending)).toBe(false)
+  expect(host.hasAttribute("data-spare-held")).toBe(false)
   // That paint skips scene text. The frame after shows it again.
   expect(grid().hasAttribute(marks.painting)).toBe(true)
   await nextPaint()

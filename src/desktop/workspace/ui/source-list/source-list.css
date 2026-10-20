@@ -5,11 +5,13 @@
  */
 
 /*
- * Folding the sidebar is transform only. A closed sidebar leaves the flow at
- * once, so what is beside it takes its new place in one layout and travels
- * there by transform (FLIP, `split-panes/adapters/dom/flip.tsx`); the sidebar
- * itself slides out on its own without fading, and
- * hides once it is off-screen.
+ * Folding the sidebar is transform only. A closed sidebar leaves the flow,
+ * so what is beside it takes its new place in one layout and travels there
+ * by transform (FLIP, `split-panes/adapters/dom/flip.tsx`); the sidebar
+ * itself slides out on its own without fading, and hides once it is
+ * off-screen. A pane change that folds it waits (`data-spare-held`, below):
+ * the sidebar stays in the row until the new boxes paint, and the two
+ * changes share that one layout.
  */
 .workspace-sidebar {
   position: relative;
@@ -51,6 +53,21 @@ html:not(.dark) .workspace-sidebar {
   transition:
     transform var(--desktop-slow) var(--desktop-out),
     visibility 0s linear var(--desktop-slow);
+}
+
+/*
+ * A pane change folds the sidebar a frame before the grid paints the new
+ * boxes (`data-spare-held`, `split-panes.tsx`). Leaving the row on that
+ * frame widens the one pane. It stays in the row, hidden, until the boxes
+ * paint, and the two changes share one layout.
+ */
+.workspace[data-spare-held][data-sidebar="closed"] .workspace-sidebar {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  transform: none;
 }
 
 /*

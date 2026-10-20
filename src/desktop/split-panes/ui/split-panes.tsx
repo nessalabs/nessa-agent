@@ -136,6 +136,15 @@ export const SplitPanes = memo(function SplitPanes({
     const id = requestAnimationFrame(() => grid.removeAttribute(marks.painting))
     return () => cancelAnimationFrame(id)
   }, [drawn])
+  // The workspace holds the sidebar in the row until these boxes paint.
+  // Folding it out of the row on the earlier frame widens the one pane and
+  // lays its text out, then the boxes lay it out again.
+  useLayoutEffect(() => {
+    const workspace = gridRef.current?.closest<HTMLElement>("[data-workspace]")
+    if (!workspace) return
+    workspace.toggleAttribute("data-spare-held", drawn !== columns)
+    return () => workspace.removeAttribute("data-spare-held")
+  }, [drawn, columns])
   const multi = panes.length > 1
   // In the order the panes were opened, not where they sit: a pane is placed
   // by its fractions, so its node never moves in the document, and a moved
@@ -162,7 +171,6 @@ export const SplitPanes = memo(function SplitPanes({
     <div
       className={classes.grid}
       {...{ [marks.grid]: "" }}
-      {...(drawn !== columns ? { [marks.pending]: "" } : {})}
       ref={gridRef}
       {...{ [marks.multi]: multi || undefined }}
       onKeyDown={tabOrder}
