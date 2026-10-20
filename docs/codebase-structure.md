@@ -72,7 +72,7 @@ src-tauri/src/
     adapters/             storage, OS, IPC command handlers, clock
     contracts/            what other contexts and the frontend may see
 src-tauri/examples/
-  page_load_acceptance/   disposable macOS Tauri lifecycle, deadline and origin controls
+  page_load_acceptance/   disposable macOS Tauri lifecycle, deadline and origin controls; bounded HTTP fixture with portable fragmented-request regressions
 verification/             scripts that drive real browsers against the running app
   desktop/                the desktop window: CHECKLIST.md, scripts/, scripts/lib/
 ```
