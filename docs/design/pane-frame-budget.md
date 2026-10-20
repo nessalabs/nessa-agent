@@ -149,9 +149,12 @@ flowchart LR
 - Moving the spare fold out of `arranged` into the shell. The same fold
   would then have two owners, and a caller that is not the shell would
   open the pane beside a sidebar the room cannot hold.
-- Painting the new boxes on the title's glide frame. The glide reads
-  `offsetTop` after moving the title, which walks the document. The boxes
-  wait one more frame.
+- Painting the new boxes on the title's glide frame. The glide used to
+  read `offsetTop` after moving the title, which walks the document the
+  move just dirtied (one open measured that at 50 ms). It now reads
+  `--desktop-column-title-block` before the move. The boxes still wait
+  one more frame: the glide and the new boxes are each a layout of their
+  own.
 
 ## Review brief
 
