@@ -169,11 +169,15 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
 pub(super) fn continuation(
     snapshot: &SessionSnapshot,
 ) -> Result<Vec<InvocationContinuation>, StorageError> {
-    if snapshot
-        .model_change
-        .as_ref()
-        .is_some_and(|record| record.change().after() != &snapshot.provider)
-    {
+    // The last model change chose the provider and the model. The context
+    // part of the fingerprint may have changed since, when the conversation
+    // moved to where its saved context is not restored
+    // (`ProviderIdentityChanged`, which keeps the name and the model).
+    if snapshot.model_change.as_ref().is_some_and(|record| {
+        let chosen = record.change().after();
+        chosen.name() != snapshot.provider.name()
+            || chosen.model_id() != snapshot.provider.model_id()
+    }) {
         return Err(StorageError::IdentityMismatch);
     }
 

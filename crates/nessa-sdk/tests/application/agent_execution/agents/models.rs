@@ -1272,6 +1272,55 @@ async fn an_explicit_cold_model_change_retains_context_history_and_exact_attribu
     reopened.close(close_action()).await.unwrap();
 }
 
+/// A conversation whose model was changed can still move: the last model
+/// change chose the name and model, and the move keeps both while it
+/// replaces the context fingerprint, so the moved history reopens there.
+#[tokio::test]
+async fn a_conversation_whose_model_changed_still_moves_and_reopens() {
+    let (agent, prior, storage) = prepared(None).await;
+    agent.close(close_action()).await.unwrap();
+    drop(agent);
+    let target = target(&prior);
+    let change = ModelChange::between(prior.as_ref(), target.as_ref()).unwrap();
+    let mut manager = storage.manager().await;
+    manager.change_model(change, close_action()).await.unwrap();
+    attached_agent(target.clone(), manager)
+        .await
+        .unwrap()
+        .close(close_action())
+        .await
+        .unwrap();
+
+    let elsewhere = Arc::new(Provider {
+        context: "another-workspace".into(),
+        elsewhere: Some("context-on-another-worker"),
+        ..(*target).clone()
+    });
+    let moved = attached_agent(elsewhere.clone(), storage.manager().await)
+        .await
+        .expect("a model-changed conversation moves");
+    timeout(Duration::from_secs(3), moved.close(close_action()))
+        .await
+        .expect("agent close settles")
+        .unwrap();
+    drop(moved);
+
+    let holding = Arc::new(Provider {
+        elsewhere: None,
+        ..(*elsewhere).clone()
+    });
+    let reopened = attached_agent(holding, storage.manager().await)
+        .await
+        .expect("the moved history reopens");
+    let snapshot = reopened.session_manager().snapshot().await.unwrap();
+    assert_eq!(snapshot.provider, elsewhere.identity());
+    assert_eq!(
+        snapshot.model_change.unwrap().change().after(),
+        &target.identity()
+    );
+    reopened.close(close_action()).await.unwrap();
+}
+
 #[tokio::test]
 async fn cold_rebinding_refuses_an_inexact_prior_identity() {
     let (agent, prior, storage) = prepared(None).await;
