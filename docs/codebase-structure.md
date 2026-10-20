@@ -265,7 +265,11 @@ against a private scripted gateway.
   `pane-item.ts`, a session or a widget, with the one codec to split panes'
   opaque key), `application/` (the
   `WorkspaceSource` port and pure use cases over the workspace's state),
-  `adapters/` (the Redux slice, commands, effects, typed hooks, selectors and
+  `adapters/` (the Redux slice, commands — one list in `store/commands.ts`,
+  implemented for the index, the panes, and the session in
+  `store/index-commands.ts`, `store/pane-commands.ts`, and
+  `store/session-commands.ts`, [the split](design/workspace-shell-split.md) —
+  effects, typed hooks, selectors and
   the split panes' source in `store/`; the gateway's source and its mapping
   of conversation views in `gateway/` (its `fake-gateway.ts` keeps SDK-typed
   answer records and captured callbacks for tests and the
@@ -328,7 +332,9 @@ against a private scripted gateway.
   [adr/done/238-desktop-workspace-frontend.md](adr/done/238-desktop-workspace-frontend.md).
   `ui/source-list/overview-quiet.ts` owns delayed sidebar metadata for one
   workspace store and DOM root; `WorkspaceShell` supplies that pair through
-  `OverviewQuietProvider`. The overview owns interaction suppression on
+  `OverviewQuietProvider`. The shell coordinates (`use-workspace-window.ts`)
+  and `workspace-layout.tsx` renders; Settings does the same
+  (`use-settings-surface.ts`, `settings-layout.tsx`). The overview owns interaction suppression on
   `.workspace-content`, leaving each region’s independent state intact.
 
 - Widgets are the desktop window's vertical for what a plugin draws
