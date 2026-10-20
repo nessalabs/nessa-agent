@@ -15,6 +15,7 @@ use crate::{
 };
 use serde::Serialize;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use std::{
     io::Error as IoError,
     panic::{catch_unwind, AssertUnwindSafe},
@@ -105,17 +106,31 @@ pub(crate) fn bundled_window(label: &str) -> Result<BundledSurface, String> {
         .ok_or_else(|| "Only a bundled Nessa surface can access the gateway".into())
 }
 
+/// How long the desktop window's read of the gateway waits for a startup
+/// that is still running. Under the window's own budget for a call
+/// (`defaultGatewayTiming.callMs`, 35 s), so a startup that takes longer is
+/// the window's refusal, and its retry clock asks again.
+pub(crate) const DESKTOP_STARTUP_WAIT: Duration = Duration::from_secs(20);
+
+/// How often a waiting desktop window reads the startup state again: one
+/// lock of the host's own state, so a launch is seen within this of `Ready`.
+const STARTUP_POLL: Duration = Duration::from_millis(50);
+
 /// Who may read the local gateway's endpoint and the surface credential, and
 /// how each waits for the gateway first (#419).
 ///
 /// The host starts the gateway at launch (`Gateway::start`), and each
 /// bundled surface waits for it to reconcile, which its load may start again,
 /// on record as the initiator. The desktop window only reads the gateway that
-/// startup brought up: it is served once startup is `Ready` and refused
-/// before that. Its arm of [`GatewayReader::ready`] reads the startup state
-/// and calls nothing that reconciles, so a window polling while it cannot
-/// connect causes no reconciliation (the desktop-window tests in
-/// `surface_credential.rs` and `gateway_endpoint`). It is no bundled surface
+/// startup brought up: it is served once startup is `Ready`. While startup is
+/// still running it waits for it, up to the wait it is given
+/// ([`DESKTOP_STARTUP_WAIT`] from the commands), so a window opened at launch
+/// connects the moment the gateway is up instead of covering itself with the
+/// startup screen; a startup that failed, or one still running when the wait
+/// ends, is refused. Its arm of [`GatewayReader::ready`] only reads the
+/// startup state and calls nothing that reconciles, so a window waiting, or
+/// asking again while it cannot connect, causes no reconciliation (the
+/// desktop-window tests in `surface_credential.rs` and `gateway_endpoint`). It is no bundled surface
 /// ([`bundled_window`]): the `gateway_startup` and `retry_gateway_startup`
 /// commands refuse it, and no startup event is published to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,24 +153,39 @@ impl GatewayReader {
     }
 
     /// Waits for the gateway as this reader may: a bundled surface until it
-    /// reconciles; the desktop window not at all — it is ready now, or the
-    /// read is refused.
-    pub(crate) async fn ready(self, gateway: &Gateway) -> Result<(), GatewayUnread> {
+    /// reconciles; the desktop window, without reconciling, while the startup
+    /// already running goes on, for at most `startup_wait`. A failed startup
+    /// is refused at once: only a bundled surface's retry starts it again.
+    pub(crate) async fn ready(
+        self,
+        gateway: &Gateway,
+        startup_wait: Duration,
+    ) -> Result<(), GatewayUnread> {
         match self {
             Self::Surface(surface) => gateway
                 .wait_ready(surface)
                 .await
                 .map_err(|error| GatewayUnread::Other(error.to_string())),
-            Self::DesktopWindow => match gateway
-                .startup()
-                .map_err(|error| GatewayUnread::Other(error.to_string()))?
-                .phase()
-            {
-                GatewayStartupPhase::Ready => Ok(()),
-                GatewayStartupPhase::Starting(_) | GatewayStartupPhase::Failed(_) => {
-                    Err(GatewayUnread::NotReady)
+            Self::DesktopWindow => {
+                let deadline = Instant::now() + startup_wait;
+                loop {
+                    match gateway
+                        .startup()
+                        .map_err(|error| GatewayUnread::Other(error.to_string()))?
+                        .phase()
+                    {
+                        GatewayStartupPhase::Ready => return Ok(()),
+                        GatewayStartupPhase::Failed(_) => return Err(GatewayUnread::NotReady),
+                        GatewayStartupPhase::Starting(_) => {
+                            let now = Instant::now();
+                            if now >= deadline {
+                                return Err(GatewayUnread::NotReady);
+                            }
+                            tokio::time::sleep(STARTUP_POLL.min(deadline - now)).await;
+                        }
+                    }
                 }
-            },
+            }
         }
     }
 }

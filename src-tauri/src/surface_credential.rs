@@ -1,9 +1,12 @@
 //! Native storage for the panel's surface credential, which the panel, setup and
 //! the desktop window read. Renderer input never selects a file.
 use crate::composition::HostDependencies;
-use crate::gateway::{application::Gateway, infrastructure::GatewayReader};
+use crate::gateway::{
+    application::Gateway,
+    infrastructure::{GatewayReader, DESKTOP_STARTUP_WAIT},
+};
 use crate::host_refusal::SurfaceCommandError;
-use std::{io::Read, path::PathBuf, sync::Arc};
+use std::{io::Read, path::PathBuf, sync::Arc, time::Duration};
 use tauri::State;
 
 /// Why there is no token to hand over.
@@ -244,11 +247,12 @@ async fn load_for(
     credential: &dyn SurfaceCredentials,
     stage: &str,
     url: &str,
+    startup_wait: Duration,
 ) -> Result<String, SurfaceCommandError> {
     let reader = GatewayReader::of_window(label).map_err(SurfaceCommandError::message)?;
     if let Some(gateway) = gateway {
         reader
-            .ready(gateway)
+            .ready(gateway, startup_wait)
             .await
             .map_err(SurfaceCommandError::from)?;
     }
@@ -280,6 +284,7 @@ pub async fn load_surface_credential(
         &*credential,
         &stage,
         &url,
+        DESKTOP_STARTUP_WAIT,
     )
     .await
 }
@@ -357,10 +362,20 @@ mod tests {
         }
     }
 
+    /// A read that does not wait out a startup still running.
     fn load(
         label: &str,
         gateway: Option<&Gateway>,
         credential: &dyn SurfaceCredentials,
+    ) -> Result<String, SurfaceCommandError> {
+        load_waiting(label, gateway, credential, Duration::ZERO)
+    }
+
+    fn load_waiting(
+        label: &str,
+        gateway: Option<&Gateway>,
+        credential: &dyn SurfaceCredentials,
+        startup_wait: Duration,
     ) -> Result<String, SurfaceCommandError> {
         tauri::async_runtime::block_on(load_for(
             label,
@@ -369,6 +384,7 @@ mod tests {
             credential,
             "ci",
             "ws://127.0.0.1:7420",
+            startup_wait,
         ))
     }
 
@@ -454,8 +470,8 @@ mod tests {
         assert_eq!(credential.reads(), 0);
     }
 
-    /// The host's own launch startup is in flight: the desktop window is
-    /// refused, starts no second reconciliation and reads nothing; once that
+    /// The host's own launch startup is in flight: a desktop window that does
+    /// not wait is refused, starts no second reconciliation and reads nothing; once that
     /// startup is ready the window is served, the panel never having asked
     /// (H2″, H9).
     #[test]
@@ -504,6 +520,93 @@ mod tests {
         );
     }
 
+    /// A window opened at launch waits out the host's own startup, joining
+    /// nothing, and is served the moment it is ready: it never sees the
+    /// startup refusal a launch used to show for a few seconds.
+    #[test]
+    fn a_waiting_desktop_window_is_served_once_the_hosts_own_startup_is_ready() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (gateway, host, entered, release) =
+            recording_gateway_held(Ok(reconciled_registration()));
+        let (before_ready, told) = thread::scope(|scope| {
+            let starting = scope.spawn(|| tauri::async_runtime::block_on(gateway.start()));
+            entered.recv().unwrap();
+            let (told_tx, told_rx) = channel();
+            let (window_gateway, window_credential) = (&gateway, &credential);
+            let asking = scope.spawn(move || {
+                told_tx
+                    .send(load_waiting(
+                        DESKTOP_WINDOW,
+                        Some(window_gateway),
+                        window_credential,
+                        Duration::from_secs(10),
+                    ))
+                    .unwrap();
+            });
+            // Still starting: the window is told nothing yet.
+            let before_ready = told_rx.recv_timeout(Duration::from_millis(300)).ok();
+            release.send(()).unwrap();
+            starting.join().unwrap().unwrap();
+            let told = told_rx.recv_timeout(Duration::from_secs(5));
+            asking.join().unwrap();
+            (before_ready, told)
+        });
+        assert_eq!(
+            before_ready, None,
+            "the window was answered before startup ended"
+        );
+        assert_eq!(
+            told.expect("the waiting window was not answered once startup was ready"),
+            Ok("fixture-only".into())
+        );
+        assert_eq!(*host.registrations.lock().unwrap(), 1);
+        assert_eq!(
+            *host.initiators.lock().unwrap(),
+            vec![ReconciliationInitiator::DesktopHost]
+        );
+    }
+
+    /// A startup that failed is refused at once, however long the window
+    /// would wait: only a bundled surface starts it again. One that never
+    /// ends is refused when the wait does.
+    #[test]
+    fn a_waiting_desktop_window_is_refused_a_failed_startup_at_once_and_a_running_one_at_its_deadline(
+    ) {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (failed, _) =
+            recording_gateway(Err(GatewayError::Registration("not installed".into())));
+        let _ = load(panel::MAIN_WINDOW, Some(&failed), &credential);
+        let asked = std::time::Instant::now();
+        assert_eq!(
+            load_waiting(
+                DESKTOP_WINDOW,
+                Some(&failed),
+                &credential,
+                Duration::from_secs(30)
+            )
+            .err(),
+            Some(SurfaceCommandError::not_ready())
+        );
+        assert!(asked.elapsed() < Duration::from_secs(5));
+
+        // Never started: still starting when the wait ends.
+        let (starting, host) = recording_gateway(Ok(reconciled_registration()));
+        let asked = std::time::Instant::now();
+        assert_eq!(
+            load_waiting(
+                DESKTOP_WINDOW,
+                Some(&starting),
+                &credential,
+                Duration::from_millis(200)
+            )
+            .err(),
+            Some(SurfaceCommandError::not_ready())
+        );
+        assert!(asked.elapsed() >= Duration::from_millis(200));
+        assert_eq!(*host.registrations.lock().unwrap(), 0);
+        assert_eq!(credential.reads(), 0);
+    }
+
     /// A build without a managed gateway does not wait for one, for the
     /// desktop window either (H6).
     #[test]
@@ -534,6 +637,7 @@ mod tests {
                 &credential,
                 stage,
                 url,
+                Duration::ZERO,
             ));
             let expected = if stage == "dev" {
                 SurfaceCommandError::wrong_stage("ci", "dev")
@@ -596,6 +700,7 @@ mod tests {
             &credential,
             "ci",
             "ws://127.0.0.1:7420",
+            Duration::ZERO,
         ));
         assert!(result.is_err());
         assert_eq!(credential.reads(), 0);
