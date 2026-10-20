@@ -1340,7 +1340,7 @@ const steps = {
             split: words.filter((word) => lines(table, word) > 1),
             hidden: port.scrollWidth - port.clientWidth,
             within: table.getBoundingClientRect().right <= reply.right + 1,
-            fadedRight: table.hasAttribute("data-more-right"),
+            fadedRight: port.hasAttribute("data-hidden-right"),
           }
         },
       )
@@ -1355,26 +1355,29 @@ const steps = {
     const [narrow, wide] = measured
     if (narrow.hidden > 1 || narrow.fadedRight)
       failures.push(`the narrow table scrolls (${narrow.hidden} px hidden)`)
-    if (wide.hidden <= 1 || !wide.fadedRight)
+    if (wide.hidden <= 1)
       failures.push(
-        `the wide table does not scroll in its panel (${wide.hidden} px hidden, faded: ${wide.fadedRight})`,
+        `the wide table does not scroll in its panel (${wide.hidden} px hidden)`,
+      )
+    const port = tables.nth(1).locator('[data-slot="table-container"]')
+    const faded = (left, right) =>
+      waitFor(
+        async () =>
+          ((await port.getAttribute("data-hidden-left")) !== null) === left &&
+          ((await port.getAttribute("data-hidden-right")) !== null) === right,
+        5_000,
+      )
+    if (!(await faded(false, true)))
+      failures.push(
+        "the wide table does not fade its right side, where columns are hidden",
       )
     if (run.evidence)
       await message.screenshot({
         path: join(run.evidence, `table-${run.engine ?? "window"}.png`),
       })
     // Scrolled to its end, the fade moves to the side now hidden.
-    const last = tables.nth(1)
-    await last
-      .locator('[data-slot="table-container"]')
-      .evaluate((port) => port.scrollTo({ left: port.scrollWidth }))
-    const moved = await waitFor(
-      async () =>
-        (await last.getAttribute("data-more-left")) !== null &&
-        (await last.getAttribute("data-more-right")) === null,
-      5_000,
-    )
-    if (!moved)
+    await port.evaluate((each) => each.scrollTo({ left: each.scrollWidth }))
+    if (!(await faded(true, false)))
       failures.push("scrolled to its end, the wide table did not fade its left side")
   },
 
