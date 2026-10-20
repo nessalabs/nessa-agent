@@ -1,7 +1,7 @@
 //! Host catalogue transactions share the record cache connection and deletion fences.
 use super::{catalogue_rows, raw_records, rows, ReadOnlyCache};
-use crate::read_only_sync::application::CacheError;
-use nessa_local_database::rusqlite::{params, Connection, TransactionBehavior};
+use crate::read_only_sync::application::{CacheError, CataloguePresence};
+use nessa_local_database::rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use nessa_sync::replication::{
     catalogue::{
         catalogue_progress_after_begin, catalogue_progress_after_page,
@@ -36,6 +36,45 @@ impl ReadOnlyCache {
         // Whatever the outcome, no loaded fold may outlive rows it came from.
         self.invalidate_loaded();
         committed.map_err(|_| CacheError::Uncertain)
+    }
+
+    /// One conversation's stored row and fence. A missing row is [`CataloguePresence::Absent`].
+    /// A deleted row without its fence is damaged, matching the catalogue reader.
+    pub(crate) fn catalogue_presence(
+        &mut self,
+        receiver: &Id,
+        origin: &Id,
+        stream: &Id,
+        conversation: &Id,
+    ) -> Result<CataloguePresence, CacheError> {
+        let fenced = rows::fenced_target(&self.connection, receiver, origin, conversation)?;
+        let deleted = self
+            .connection
+            .query_row(
+                "SELECT deleted FROM catalogue_entries
+                 WHERE receiver=?1 AND origin=?2 AND stream=?3 AND entry_id=?4",
+                params![
+                    receiver.as_str(),
+                    origin.as_str(),
+                    stream.as_str(),
+                    conversation.as_str()
+                ],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(rows::database_error)?;
+        match deleted {
+            None => Ok(if fenced {
+                CataloguePresence::Tombstone
+            } else {
+                CataloguePresence::Absent
+            }),
+            Some(0) if fenced => Err(CacheError::Fenced),
+            Some(0) => Ok(CataloguePresence::Live),
+            Some(1) if fenced => Ok(CataloguePresence::Tombstone),
+            Some(1) => Err(CacheError::Corrupt),
+            Some(_) => Err(CacheError::Corrupt),
+        }
     }
 
     pub(crate) fn catalogue_entry(

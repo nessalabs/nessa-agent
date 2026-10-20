@@ -45,14 +45,17 @@ Current development surface:
   admission and checked protocol-bounded serialization.
 
 The explicit saved selector grants no connection, enrollment or command
-permission. It is not the phone repository. The native session and compound
+permission. The phone publication lease (`PhoneLease`) is what a later saved
+read or held-file fetch must present. A stamp from an earlier receiver reads
+nothing and does not dial. Catalogue presence reads one stored identity;
+absence is not a tombstone. Held-file freshness is either a local digest match,
+with no range asked, or a gateway confirmation of the part on disk. The native session and compound
 refresh API have run against paired records through generated Swift on macOS.
 `swift/NativeSessionWorker.swift` supplies pre-queue admission, cancellation latches
 and a shared physical close task around generated calls. The release Apple package
 builds and links for device/simulator; its session runs in the simulator and its
-macOS static package passes the paired/offline/revocation fixture. Nessa's actual
-retained repository, remote artifacts and durable uncertain deletion remain unfinished
-under issue 782. Enrollment retry returns its original receipt only when the
+macOS static package passes the paired/offline/revocation fixture. Saved
+publication and held-file fetch go through the phone lease. Enrollment retry returns its original receipt only when the
 whole retry succeeds. An outer status failure cannot establish absence of purge;
 recover durable receipts using the previously captured receiver separately.
 Caller composition must keep the eventual enrolled session's immutable private

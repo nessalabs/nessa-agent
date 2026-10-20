@@ -18,6 +18,7 @@ pub(crate) mod follow;
 pub(crate) mod held_file;
 pub(crate) mod offline;
 pub(crate) mod reset;
+pub use cache::CataloguePresence;
 pub(crate) use cache::{
     CacheError, CachePolicy, CachedProgress, CatalogueResetReceipt, ResetReceipt,
 };

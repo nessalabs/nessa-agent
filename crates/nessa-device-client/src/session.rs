@@ -26,7 +26,8 @@ use nessa_client_core::{
         ProductWake, ThreadProductWake,
     },
     retained::{
-        FeedEvent, ReadFailure, ReadReport, ReadStop, RetainedCache, RetainedCataloguePage,
+        ArtifactFetch, ArtifactRequest, CataloguePresence, FeedEvent, PhoneFence, PhoneLease,
+        PhoneStamp, ReadFailure, ReadReport, ReadStop, RetainedCache, RetainedCataloguePage,
         RetainedDeviceReader, RetainedEnrollmentClient, RetainedEnrollmentStatus,
         RetainedOwnerStatus, RetainedPurge, RetainedTranscript, HANDSHAKE,
     },
@@ -81,6 +82,8 @@ pub enum SessionFailure {
         /// Actual selected issued-record refusal.
         error: NativeClientError,
     },
+    /// A publication stamp is not the receiver bound now, so no bytes are read.
+    Fenced(PhoneFence),
 }
 impl Display for SessionFailure {
     fn fmt(&self, output: &mut Formatter<'_>) -> FormatResult {
@@ -414,6 +417,11 @@ struct Driver {
     cache: Option<RetainedCache>,
     received: Option<DisclosedConsent>,
     product: ProductDependencies,
+    lease: PhoneLease,
+}
+struct SelectedReader {
+    reader: RetainedDeviceReader,
+    address: SocketAddr,
 }
 struct Dependencies {
     state: Arc<dyn NativePrivateState>,
@@ -500,6 +508,76 @@ impl Driver {
     fn remember(&mut self, status: &NativePairingStatus) {
         self.received = status.consent().cloned();
     }
+    fn note_native(&mut self, status: &NativePairingStatus, purged: bool) {
+        match status {
+            NativePairingStatus::Active { receiver, .. } if !purged => {
+                let _ = self.lease.bind(receiver.as_str());
+            }
+            NativePairingStatus::Terminal { .. } if purged => self.lease.release_receiver(),
+            _ => {}
+        }
+    }
+    fn note_binding(&mut self, status: &SessionStatus) {
+        let Some(native) = status.observation() else {
+            return;
+        };
+        let purged = matches!(status.purge(), Some(Ok(_)));
+        self.note_native(native, purged);
+    }
+    fn select_reader(
+        &self,
+        initial: &SessionStatus,
+    ) -> Result<Option<SelectedReader>, NativeClientError> {
+        let Some(status) = initial.settled_status() else {
+            return Ok(None);
+        };
+        if !matches!(status, NativePairingStatus::Active { .. }) {
+            return Ok(None);
+        }
+        let (selection, address) = match initial {
+            SessionStatus::ReadOnly(_) => (
+                RetainedDeviceReader::from_current(status, self.state.as_ref()),
+                self.address,
+            ),
+            SessionStatus::Owner(Ok(owner)) => {
+                let recovered = owner
+                    .recovery()
+                    .expect("settled owner has a successful recovery");
+                (
+                    issued_owner_phone(self.state.as_ref(), recovered)
+                        .and_then(|issued| RetainedDeviceReader::from_issued(status, issued)),
+                    recovered.preparation().original().endpoint(),
+                )
+            }
+            SessionStatus::Owner(Err(_)) => {
+                unreachable!("settled owner has captured completion")
+            }
+        };
+        match selection {
+            Ok(Some(reader)) => Ok(Some(SelectedReader { reader, address })),
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+    /// The stamp may read only while it names the lease and the saved credential.
+    fn accept_publication(&mut self, stamp: &PhoneStamp) -> Result<(), SessionFailure> {
+        self.lease.accept(stamp).map_err(SessionFailure::Fenced)?;
+        let issued = self
+            .state
+            .load_credential()
+            .map_err(SessionFailure::PrivateState)?;
+        match issued {
+            Some(issued) if issued.receiver().as_str() == stamp.receiver() => Ok(()),
+            Some(issued) => {
+                let _ = self.lease.bind(issued.receiver().as_str());
+                Err(SessionFailure::Fenced(PhoneFence::Replaced))
+            }
+            None => {
+                self.lease.release_receiver();
+                Err(SessionFailure::Fenced(PhoneFence::Unbound))
+            }
+        }
+    }
     fn status(&mut self) -> SessionStatus {
         // Actual same-owner state decides the path; errors never become read-only fallback.
         let expected = match current_owner_phone(self.state.as_ref()) {
@@ -529,6 +607,7 @@ impl Driver {
             if let Some(value) = status.observation() {
                 self.remember(value);
             }
+            self.note_binding(&status);
             status
         } else {
             let value = (|| {
@@ -541,6 +620,7 @@ impl Driver {
             if let Some(value) = status.observation() {
                 self.remember(value);
             }
+            self.note_binding(&status);
             status
         }
     }
@@ -560,23 +640,8 @@ impl Driver {
         }
         // Load the current immutable issued record after status may have saved
         // or removed it. A pending/terminal status starts no product read.
-        let (selection, address) = match &outcome.initial {
-            SessionStatus::ReadOnly(_) => (
-                RetainedDeviceReader::from_current(status, self.state.as_ref()),
-                self.address,
-            ),
-            SessionStatus::Owner(Ok(owner)) => {
-                let recovered = owner
-                    .recovery()
-                    .expect("settled owner has a successful recovery");
-                let selection = issued_owner_phone(self.state.as_ref(), recovered)
-                    .and_then(|issued| RetainedDeviceReader::from_issued(status, issued));
-                (selection, recovered.preparation().original().endpoint())
-            }
-            SessionStatus::Owner(Err(_)) => unreachable!("settled owner has captured completion"),
-        };
-        let reader = match selection {
-            Ok(Some(reader)) => reader,
+        let selected = match self.select_reader(&outcome.initial) {
+            Ok(Some(selected)) => selected,
             Ok(None) => return outcome,
             Err(error) => {
                 outcome.selection_failure = Some(error);
@@ -586,7 +651,7 @@ impl Driver {
         let mut withdrawn = Vec::new();
         let result = self.cache().and_then(|cache| {
             cache.read(
-                reader.access(address, "nessa-ios"),
+                selected.reader.access(selected.address, "nessa-ios"),
                 stop,
                 Duration::from_secs(5),
                 128,
@@ -623,23 +688,8 @@ impl Driver {
         if !matches!(status, NativePairingStatus::Active { .. }) {
             return outcome;
         }
-        let (selection, address) = match &outcome.initial {
-            SessionStatus::ReadOnly(_) => (
-                RetainedDeviceReader::from_current(status, self.state.as_ref()),
-                self.address,
-            ),
-            SessionStatus::Owner(Ok(owner)) => {
-                let recovered = owner
-                    .recovery()
-                    .expect("settled owner has a successful recovery");
-                let selection = issued_owner_phone(self.state.as_ref(), recovered)
-                    .and_then(|issued| RetainedDeviceReader::from_issued(status, issued));
-                (selection, recovered.preparation().original().endpoint())
-            }
-            SessionStatus::Owner(Err(_)) => unreachable!("settled owner has captured completion"),
-        };
-        let reader = match selection {
-            Ok(Some(reader)) => reader,
+        let selected = match self.select_reader(&outcome.initial) {
+            Ok(Some(selected)) => selected,
             Ok(None) => return outcome,
             Err(error) => {
                 outcome.selection_failure = Some(error);
@@ -654,7 +704,7 @@ impl Driver {
             }
         };
         let (followed, authority) = match cache.subscribe(
-            reader.access(address, "nessa-ios"),
+            selected.reader.access(selected.address, "nessa-ios"),
             conversation,
             after,
             stop,
@@ -684,6 +734,16 @@ impl Driver {
         self.runtime.block_on(self.enrollment.shutdown());
     }
 }
+/// A status that produced no reader. A connector failure stays that failure.
+/// A completed status without an active reader has nothing to fetch with.
+fn absent_reader(status: &SessionStatus) -> SessionFailure {
+    match status {
+        SessionStatus::ReadOnly(Err(error)) => SessionFailure::Enrollment(*error),
+        SessionStatus::Owner(Err(_)) => SessionFailure::Owner(Arc::new(status.clone())),
+        _ => SessionFailure::NoCredential,
+    }
+}
+
 /// Views the server still marks `stale` are one replay, sent immediately.
 /// Keep the newest and stop when one is settled, the cursor stops advancing,
 /// or the feed ends. The loop also stops after 32 views. That view may still
@@ -875,6 +935,7 @@ impl NativeSession {
                 cache: None,
                 received: None,
                 product,
+                lease: PhoneLease::new(),
             })),
         })
     }
@@ -976,6 +1037,7 @@ impl NativeSession {
             )
             .map_err(SessionFailure::Enrollment)?;
         driver.remember(&status);
+        driver.note_native(&status, false);
         Ok(status)
     }
     /// Existing exact-operation retry owner decides eligibility before a new attempt.
@@ -1003,6 +1065,7 @@ impl NativeSession {
             ))
             .map_err(SessionFailure::Enrollment)?;
         driver.remember(outcome.retried());
+        driver.note_native(outcome.retried(), false);
         Ok(outcome)
     }
     /// Fresh pinned status retains per-operation purge and outer worker failure.
@@ -1194,6 +1257,135 @@ impl NativeSession {
             )
             .map_err(SessionFailure::Cache)
     }
+    /// Bind the lease to the saved issued receiver without dialing.
+    /// The same receiver keeps its stamp. No credential leaves the lease unbound.
+    pub fn bind_saved_receiver(&self) -> Result<PhoneStamp, SessionFailure> {
+        let mut operation = self.enter(None)?;
+        let driver = operation.driver();
+        let issued = driver
+            .state
+            .load_credential()
+            .map_err(SessionFailure::PrivateState)?
+            .ok_or(SessionFailure::NoCredential)?;
+        driver
+            .lease
+            .bind(issued.receiver().as_str())
+            .map_err(SessionFailure::Fenced)
+    }
+    /// The stamp currently admitted, if a receiver is bound.
+    pub fn publication(&self) -> Result<PhoneStamp, SessionFailure> {
+        let mut operation = self.enter(None)?;
+        operation
+            .driver()
+            .lease
+            .stamp()
+            .map_err(SessionFailure::Fenced)
+    }
+    /// Saved transcript for `stamp`'s receiver. A replaced stamp reads nothing.
+    pub fn published_transcript(
+        &self,
+        stamp: &PhoneStamp,
+        conversation: &ConversationId,
+        revision: Uuid,
+    ) -> Result<RetainedTranscript, SessionFailure> {
+        let mut operation = self.enter(None)?;
+        let driver = operation.driver();
+        driver.accept_publication(stamp)?;
+        let Some(scope) = driver.saved_scope()? else {
+            return Ok(RetainedTranscript::NotLoaded);
+        };
+        driver
+            .cache()
+            .map_err(SessionFailure::Cache)?
+            .transcript_view(
+                scope.receiver().as_str(),
+                scope.origin().as_str(),
+                conversation,
+                revision,
+            )
+            .map_err(SessionFailure::Cache)
+    }
+    /// Saved catalogue page for `stamp`'s receiver. A replaced stamp reads nothing.
+    pub fn published_catalogue_page(
+        &self,
+        stamp: &PhoneStamp,
+        after: Option<&EntryKey>,
+        maximum: usize,
+    ) -> Result<Option<RetainedCataloguePage>, SessionFailure> {
+        let mut operation = self.enter(None)?;
+        let driver = operation.driver();
+        driver.accept_publication(stamp)?;
+        let Some(scope) = driver.saved_scope()? else {
+            return Ok(None);
+        };
+        driver
+            .cache()
+            .map_err(SessionFailure::Cache)?
+            .catalogue_page(
+                scope.receiver().as_str(),
+                scope.origin().as_str(),
+                scope.stream().as_str(),
+                after,
+                maximum,
+            )
+            .map_err(SessionFailure::Cache)
+    }
+    /// Stored presence of one conversation. Absence is not a tombstone.
+    /// A replaced stamp reads nothing.
+    pub fn catalogue_presence(
+        &self,
+        stamp: &PhoneStamp,
+        conversation: &str,
+    ) -> Result<CataloguePresence, SessionFailure> {
+        let mut operation = self.enter(None)?;
+        let driver = operation.driver();
+        driver.accept_publication(stamp)?;
+        driver
+            .cache()
+            .map_err(SessionFailure::Cache)?
+            .catalogue_presence(stamp.receiver(), conversation)
+            .map_err(SessionFailure::Cache)
+    }
+    /// Fetch one held file for `stamp`'s receiver. A replaced stamp does not dial.
+    /// A file already at the request's output is a local match and does not dial either.
+    pub fn fetch_artifact(
+        &self,
+        stamp: &PhoneStamp,
+        request: &ArtifactRequest<'_>,
+        stop: Arc<ReadStop>,
+    ) -> Result<ArtifactFetch, SessionFailure> {
+        let mut operation = self.enter(Some(stop.clone()))?;
+        if stop.is_stopped() {
+            return Err(SessionFailure::Stopped);
+        }
+        let driver = operation.driver();
+        driver.accept_publication(stamp)?;
+        if let Some(outcome) =
+            nessa_client_core::retained::local_held_file(request).map_err(SessionFailure::Cache)?
+        {
+            return Ok(ArtifactFetch::decided(outcome, 0));
+        }
+        let status = driver.status();
+        driver.accept_publication(stamp)?;
+        let selected = match driver.select_reader(&status) {
+            Ok(Some(selected)) => selected,
+            Ok(None) => return Err(absent_reader(&status)),
+            Err(error) => return Err(SessionFailure::Enrollment(error)),
+        };
+        if selected.reader.receiver() != stamp.receiver() {
+            return Err(SessionFailure::Fenced(PhoneFence::Replaced));
+        }
+        driver
+            .cache()
+            .map_err(SessionFailure::Cache)?
+            .fetch_artifact(
+                selected.reader.access(selected.address, "nessa-ios"),
+                &stop,
+                Duration::from_secs(5),
+                request,
+            )
+            .map_err(SessionFailure::Cache)
+    }
     /// Historical lookup remains available after key removal. This receiver
     /// selects original purge evidence, not read or command authority.
     pub fn purge_receipt(&self, receiver: &str) -> Result<Option<RetainedPurge>, SessionFailure> {
@@ -1260,7 +1452,8 @@ impl NativeSession {
         let child_result = product.map_or(Ok(()), |child| {
             child.close().map_err(SessionFailure::Product)
         });
-        if let Some(value) = driver.take() {
+        if let Some(mut value) = driver.take() {
+            value.lease.close();
             drop(value);
         }
         // This line is unreachable if physical join or destruction unwinds.
@@ -1301,6 +1494,10 @@ mod owner_original_tests;
 #[cfg(test)]
 #[path = "../tests/session/owner_recovery.rs"]
 mod owner_recovery_tests;
+
+#[cfg(test)]
+#[path = "../tests/session/phone.rs"]
+mod phone_tests;
 
 #[cfg(test)]
 use nessa_auth::application::pairing::{ClientPendingStore, OwnerPhoneOriginalStore};

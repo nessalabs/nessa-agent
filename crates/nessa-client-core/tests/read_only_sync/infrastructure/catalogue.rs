@@ -1,7 +1,7 @@
 //! Catalogue progress, metadata and deletion effects use the same physical database.
 use super::fixtures::{cache, cache_path, id, plan, scope, source_records};
 use super::ReadOnlyCache;
-use crate::read_only_sync::application::CacheError;
+use crate::read_only_sync::application::{CacheError, CataloguePresence};
 use crate::read_only_sync::domain::CacheReset;
 use nessa_local_database::rusqlite::{params, ErrorCode};
 use nessa_sync::replication::application::{ReplicaStore, StoreError};
@@ -223,6 +223,44 @@ async fn catalogue_deletion_audit_failure_is_atomic() {
         })
         .unwrap();
     assert_eq!(observed, 123000u64.to_be_bytes());
+}
+
+#[test]
+fn a_deletion_that_does_not_commit_is_not_a_tombstone() {
+    let root = tempfile::tempdir().unwrap();
+    let mut cache = cache(&cache_path(root.path(), "cache.sqlite3"));
+    let pass = start(&mut cache, 1);
+    CatalogueStore::apply_page(&mut cache, page(pass, vec![value(1, false)])).unwrap();
+    let catalogue = catalogue_scope();
+    let conversation = scope().stream().clone();
+    assert_eq!(
+        cache
+            .catalogue_presence(
+                catalogue.receiver(),
+                catalogue.origin(),
+                catalogue.stream(),
+                &conversation
+            )
+            .unwrap(),
+        CataloguePresence::Live
+    );
+    cache.connection.execute_batch("CREATE TRIGGER fail_deletion BEFORE INSERT ON catalogue_deletions BEGIN SELECT RAISE(ABORT,'audit refused'); END;").unwrap();
+    let pass = start(&mut cache, 2);
+    assert_eq!(
+        CatalogueStore::apply_page(&mut cache, page(pass, vec![value(2, true)])),
+        Err(CatalogueStoreError::Failed)
+    );
+    assert_eq!(
+        cache
+            .catalogue_presence(
+                catalogue.receiver(),
+                catalogue.origin(),
+                catalogue.stream(),
+                &conversation
+            )
+            .unwrap(),
+        CataloguePresence::Live
+    );
 }
 
 fn reset_request(cache: &mut ReadOnlyCache, operation: &str) -> CacheReset {

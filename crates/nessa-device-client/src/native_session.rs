@@ -19,7 +19,11 @@ use nessa_auth::{
 };
 use nessa_client_core::{
     pairing::{NativeClientError, NativeRetryOutcome},
-    retained::{ReadStop, RetainedCatalogueEntry, RetainedCataloguePage, RetainedPurge},
+    retained::{
+        ArtifactFaultKind, ArtifactFetch, ArtifactFileStep, ArtifactFreshness, ArtifactRequest,
+        CataloguePresence, PhoneStamp, ReadStop, RetainedCatalogueEntry, RetainedCataloguePage,
+        RetainedPurge,
+    },
 };
 use nessa_protocol::{
     conversation::domain::ConversationId,
@@ -768,6 +772,186 @@ impl NativeCloseObservation {
             .map(|value| Arc::new(NativeSessionFailure { value }))
     }
 }
+/// A phone publication stamp. Holding one does not bind the lease.
+#[derive(uniffi::Object)]
+pub struct NativePhoneStamp {
+    value: PhoneStamp,
+}
+#[uniffi::export]
+impl NativePhoneStamp {
+    /// Generation assigned when this receiver was bound.
+    pub fn generation(&self) -> u64 {
+        self.value.generation()
+    }
+    /// Receiver this stamp names.
+    pub fn receiver(&self) -> String {
+        self.value.receiver().to_owned()
+    }
+}
+impl NativePhoneStamp {
+    fn stamp(&self) -> PhoneStamp {
+        self.value.clone()
+    }
+}
+
+/// Stored catalogue identity. Absence is not a tombstone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum NativeCataloguePresence {
+    /// A non-deleted row is stored.
+    Live,
+    /// A deletion fence or receiver purge is stored.
+    Tombstone,
+    /// No row and no fence.
+    Absent,
+}
+impl From<CataloguePresence> for NativeCataloguePresence {
+    fn from(value: CataloguePresence) -> Self {
+        match value {
+            CataloguePresence::Live => Self::Live,
+            CataloguePresence::Tombstone => Self::Tombstone,
+            CataloguePresence::Absent => Self::Absent,
+        }
+    }
+}
+
+/// Local file step from the existing held-file fetch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum NativeArtifactFileStep {
+    /// Existing same-named fetch step.
+    Open,
+    /// Existing same-named fetch step.
+    Locked,
+    /// Existing same-named fetch step.
+    Read,
+    /// Existing same-named fetch step.
+    Restart,
+    /// Existing same-named fetch step.
+    Write,
+    /// Existing same-named fetch step.
+    Sync,
+    /// Existing same-named fetch step.
+    Link,
+    /// Existing same-named fetch step.
+    SyncDirectory,
+    /// Existing same-named fetch step.
+    Remove,
+    /// Existing same-named fetch step.
+    Name,
+    /// Existing same-named fetch step.
+    Changed,
+}
+impl From<ArtifactFileStep> for NativeArtifactFileStep {
+    fn from(value: ArtifactFileStep) -> Self {
+        match value {
+            ArtifactFileStep::Open => Self::Open,
+            ArtifactFileStep::Locked => Self::Locked,
+            ArtifactFileStep::Read => Self::Read,
+            ArtifactFileStep::Restart => Self::Restart,
+            ArtifactFileStep::Write => Self::Write,
+            ArtifactFileStep::Sync => Self::Sync,
+            ArtifactFileStep::Link => Self::Link,
+            ArtifactFileStep::SyncDirectory => Self::SyncDirectory,
+            ArtifactFileStep::Remove => Self::Remove,
+            ArtifactFileStep::Name => Self::Name,
+            ArtifactFileStep::Changed => Self::Changed,
+        }
+    }
+}
+
+/// One held-file fetch. Freshness getters are empty when the fetch faulted.
+#[derive(uniffi::Object)]
+pub struct NativeArtifactFetch {
+    value: ArtifactFetch,
+}
+#[uniffi::export]
+impl NativeArtifactFetch {
+    /// Monotonic milliseconds spent in this fetch. Not model-generation latency.
+    pub fn elapsed_ms(&self) -> u64 {
+        self.value.elapsed_ms()
+    }
+    /// Bytes already on disk when nothing was asked. Empty unless this is a local match.
+    pub fn local_match_bytes(&self) -> Option<u64> {
+        match self.value.outcome() {
+            Ok(ArtifactFreshness::LocalMatch { bytes }) => Some(bytes),
+            _ => None,
+        }
+    }
+    /// Ranges the gateway answered. Empty unless the gateway confirmed the digest.
+    pub fn gateway_ranges(&self) -> Option<u64> {
+        match self.value.outcome() {
+            Ok(ArtifactFreshness::GatewayConfirmed { ranges, .. }) => Some(ranges),
+            _ => None,
+        }
+    }
+    /// Bytes resumed from an earlier part. Empty unless the gateway confirmed the digest.
+    pub fn gateway_resumed_from(&self) -> Option<u64> {
+        match self.value.outcome() {
+            Ok(ArtifactFreshness::GatewayConfirmed { resumed_from, .. }) => Some(resumed_from),
+            _ => None,
+        }
+    }
+    /// Why the file was not kept. Empty when it was kept.
+    pub fn fault(&self) -> Option<NativeArtifactFaultKind> {
+        let kind = self.value.outcome().err()?.kind();
+        Some(match kind {
+            ArtifactFaultKind::Gateway(_) => NativeArtifactFaultKind::Gateway,
+            ArtifactFaultKind::WrongRange => NativeArtifactFaultKind::WrongRange,
+            ArtifactFaultKind::Integrity => NativeArtifactFaultKind::Integrity,
+            ArtifactFaultKind::OutputExists => NativeArtifactFaultKind::OutputExists,
+            ArtifactFaultKind::File(_) => NativeArtifactFaultKind::File,
+        })
+    }
+    /// Gateway refusal, when `fault` is gateway.
+    pub fn gateway_failure(&self) -> Option<NativeReadFailure> {
+        match self.value.outcome().err()?.kind() {
+            ArtifactFaultKind::Gateway(failure) => Some(failure.into()),
+            _ => None,
+        }
+    }
+    /// Local file step, when `fault` is file.
+    pub fn file_step(&self) -> Option<NativeArtifactFileStep> {
+        match self.value.outcome().err()?.kind() {
+            ArtifactFaultKind::File(step) => Some(step.into()),
+            _ => None,
+        }
+    }
+    /// Part progress on a fault. Empty when the file was kept.
+    pub fn reached(&self) -> Option<u64> {
+        self.value.outcome().err().map(|fault| fault.reached())
+    }
+}
+
+/// The file a phone names and the output path it should land in.
+/// Holding one does not read or dial.
+#[derive(uniffi::Record)]
+pub struct NativeArtifactRequest {
+    /// Conversation that holds the file.
+    pub conversation: String,
+    /// Canonical `sha256:` digest.
+    pub digest: String,
+    /// Media type the file is held as.
+    pub media_type: String,
+    /// Size the digest names.
+    pub size: u64,
+    /// Path where a matching file is kept.
+    pub output: String,
+}
+
+/// Why a held file was not kept.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum NativeArtifactFaultKind {
+    /// The gateway or the read stop refused a range.
+    Gateway,
+    /// An answer was not the range asked.
+    WrongRange,
+    /// The part on disk was not the named digest.
+    Integrity,
+    /// Something else is already at the output.
+    OutputExists,
+    /// A local file step failed.
+    File,
+}
+
 /// The generated native session handle. Blocking calls run on the caller's
 /// dedicated worker; close must drain there before releasing/replacing scope.
 #[derive(uniffi::Object)]
@@ -881,6 +1065,84 @@ impl NativeDeviceSession {
         self.value
             .transcript(&conversation, revision)
             .map(|value| Arc::new(NativeTranscript { value }))
+            .map_err(Into::into)
+    }
+    /// Bind the publication lease to the saved issued receiver. Nothing is dialed.
+    pub fn bind_saved_receiver(&self) -> Result<Arc<NativePhoneStamp>, NativeCallError> {
+        self.value
+            .bind_saved_receiver()
+            .map(|value| Arc::new(NativePhoneStamp { value }))
+            .map_err(Into::into)
+    }
+    /// The stamp currently admitted.
+    pub fn publication(&self) -> Result<Arc<NativePhoneStamp>, NativeCallError> {
+        self.value
+            .publication()
+            .map(|value| Arc::new(NativePhoneStamp { value }))
+            .map_err(Into::into)
+    }
+    /// Saved transcript for this stamp. A replaced stamp reads nothing.
+    pub fn published_transcript(
+        &self,
+        stamp: Arc<NativePhoneStamp>,
+        conversation: String,
+        revision: String,
+    ) -> Result<Arc<NativeTranscript>, NativeCallError> {
+        let conversation =
+            ConversationId::new(&conversation).map_err(|_| NativeCallError::InvalidArgument)?;
+        let revision = Uuid::parse_str(&revision).map_err(|_| NativeCallError::InvalidArgument)?;
+        self.value
+            .published_transcript(&stamp.stamp(), &conversation, revision)
+            .map(|value| Arc::new(NativeTranscript { value }))
+            .map_err(Into::into)
+    }
+    /// Saved catalogue page for this stamp. A replaced stamp reads nothing.
+    pub fn published_catalogue_page(
+        &self,
+        stamp: Arc<NativePhoneStamp>,
+        after: Option<Arc<NativeEntryKey>>,
+        maximum: u32,
+    ) -> Result<Option<Arc<NativeCataloguePage>>, NativeCallError> {
+        let maximum = usize::try_from(maximum).map_err(|_| NativeCallError::InvalidArgument)?;
+        self.value
+            .published_catalogue_page(
+                &stamp.stamp(),
+                after.as_ref().map(|value| &value.value),
+                maximum,
+            )
+            .map(|value| value.map(|value| Arc::new(NativeCataloguePage { value })))
+            .map_err(Into::into)
+    }
+    /// Stored presence of one conversation. Absence is not a tombstone.
+    pub fn catalogue_presence(
+        &self,
+        stamp: Arc<NativePhoneStamp>,
+        conversation: String,
+    ) -> Result<NativeCataloguePresence, NativeCallError> {
+        self.value
+            .catalogue_presence(&stamp.stamp(), &conversation)
+            .map(NativeCataloguePresence::from)
+            .map_err(Into::into)
+    }
+    /// Fetch one held file. A replaced stamp does not dial. A local digest match does not dial.
+    pub fn fetch_artifact(
+        &self,
+        stamp: Arc<NativePhoneStamp>,
+        request: NativeArtifactRequest,
+        stop: Arc<NativeReadStop>,
+    ) -> Result<Arc<NativeArtifactFetch>, NativeCallError> {
+        let conversation = ConversationId::new(&request.conversation)
+            .map_err(|_| NativeCallError::InvalidArgument)?;
+        let request = ArtifactRequest::new(
+            &conversation,
+            &request.digest,
+            &request.media_type,
+            request.size,
+            Path::new(&request.output),
+        );
+        self.value
+            .fetch_artifact(&stamp.stamp(), &request, stop.value.clone())
+            .map(|value| Arc::new(NativeArtifactFetch { value }))
             .map_err(Into::into)
     }
     /// Historical receipt recovery can select the prior receiver after key removal.

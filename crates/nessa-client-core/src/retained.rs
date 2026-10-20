@@ -17,6 +17,9 @@
 //! `device` composes the same enrollment worker with purge-before-end; `owner`
 //! stores one immutable original recovery separately from its settlement/purge
 //! outcomes. Failed recovery has no settlement slot in that private sum type.
+//! `phone` is the publication lease and catalogue presence. `artifact` fetches
+//! one held file through the existing range owner. A missing catalogue row is
+//! not a tombstone, and a part on disk is not gateway freshness.
 //!
 //! A read has a budget on the injected monotonic clock. Every physical read
 //! and write waits no longer than it, and no conversation starts after it;
@@ -79,14 +82,21 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 mod active;
+mod artifact;
 mod device;
 mod owner;
 pub use owner::RetainedOwnerStatus;
+mod phone;
 mod relay;
 mod saved;
 mod subscribe;
 pub use active::RetainedDeviceReader;
+pub use artifact::{
+    local_held_file, ArtifactFault, ArtifactFaultKind, ArtifactFetch, ArtifactFileStep,
+    ArtifactFreshness, ArtifactRequest,
+};
 pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
+pub use phone::{CataloguePresence, PhoneFence, PhoneLease, PhoneStamp};
 pub use saved::{
     RetainedCatalogueEntry, RetainedCataloguePage, RetainedProgress, RetainedTranscript,
     RetainedTranscriptSnapshot,
