@@ -878,8 +878,10 @@ sequenceDiagram
   stay fixed. Resuming across workers is
   [#1040](https://github.com/nessalabs/nessa-agent/issues/1040).
 - **Refused, then elsewhere.** An opening refused on a worker that has
-  since drained or gone is asked once more of another; a worker that is
-  simply busy or not granting is reported as any worker's refusal is.
+  since drained or gone is asked once more of another, and the history
+  keeps that refusal as a refused lease before the lease the other worker
+  issued; a worker that is simply busy or not granting is reported as any
+  worker's refusal is.
   With no worker serving, the lease is asked of the bound worker and is
   refused unreachable, as any absent worker's is; a pool conversation
   never bound is unavailable. Placing on `peer:any` is refused

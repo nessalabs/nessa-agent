@@ -7398,6 +7398,24 @@ async fn a_pool_conversation_whose_worker_drains_as_it_is_asked_opens_on_another
     w1.drains.store(true, Ordering::SeqCst);
     harness.turn("turn-2").await;
     assert_eq!((w1.asked(), w2.asked()), (2, 1));
+    // The first worker's refusal is in the history, before the lease the
+    // other worker issued.
+    let opened: Vec<_> = harness
+        .storage
+        .saved
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|record| match record {
+            LeaseRecord::Issued { .. } => Some(None),
+            LeaseRecord::Refused { refusal, .. } => Some(Some(*refusal)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        opened,
+        [None, Some(LeaseRefusal::EnvironmentUnreachable), None]
+    );
     let (moved_context, restored) = harness.last_open();
     // What it opened on the first worker is not on this one.
     assert_eq!(restored, None);

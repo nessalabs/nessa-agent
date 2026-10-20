@@ -1924,7 +1924,9 @@ impl ConversationService {
                             // that refuses it as it starts draining is left
                             // for another.
                             let mut avoid = Vec::new();
-                            let mut refused = None;
+                            // Each refusal left for another worker, recorded
+                            // before the lease this opening ends with.
+                            let mut left = Vec::new();
                             let (environment, opening) = loop {
                                 let place = service
                                     .inner
@@ -1938,8 +1940,8 @@ impl ConversationService {
                                 let worker =
                                     place.context.as_ref().map(|context| context.worker());
                                 // No other worker to ask: the refusal it gave stands.
-                                if let (Some(worker), Some(refused)) = (&worker, refused.take()) {
-                                    if avoid.contains(worker) {
+                                if worker.as_ref().is_some_and(|worker| avoid.contains(worker)) {
+                                    if let Some(refused) = left.pop() {
                                         break refused;
                                     }
                                 }
@@ -1964,9 +1966,6 @@ impl ConversationService {
                                                 .environment
                                                 .left_the_pool(&worker) =>
                                     {
-                                        // Kept in the log, not the records:
-                                        // the lease recorded is the one
-                                        // this opening ends with.
                                         tracing::info!(
                                             conversation_id = %id,
                                             worker = worker.name(),
@@ -1974,7 +1973,7 @@ impl ConversationService {
                                             "a worker that left the pool refused the lease; asking another"
                                         );
                                         avoid.push(worker);
-                                        refused = Some((place.environment, opening));
+                                        left.push((place.environment, opening));
                                     }
                                     _ => break (place.environment, opening),
                                 }
@@ -2012,6 +2011,23 @@ impl ConversationService {
                                     child: id.clone(),
                                 },
                             ));
+                            // A refusal left for another worker is recorded
+                            // as the refused lease it was, so the history says
+                            // which worker was asked and why it moved on. One
+                            // that cannot be recorded is logged; the opening
+                            // goes on to record its own lease.
+                            for (refused_on, refused) in &left {
+                                if let Err(error) = issue(
+                                    agent.session_manager(),
+                                    refused_on.as_ref(),
+                                    refused,
+                                    &actor,
+                                )
+                                .await
+                                {
+                                    tracing::error!(conversation_id = %id, %error, "a refusal left for another worker could not be recorded");
+                                }
+                            }
                             let issued = issue(
                                 agent.session_manager(),
                                 environment.as_ref(),
