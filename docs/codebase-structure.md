@@ -373,6 +373,10 @@ against a private scripted gateway.
   import against that direction, in every form of import it reads, and the
   window's composition (`main.tsx`, `dependencies.ts`), which imports them
   all, is outside the rule.
+  A third-party package that runs as a plugin surface or as its own process
+  is planned in [the application framework](design/application-framework.md).
+  The plan is not built. It starts from this widget host and from the MCP App
+  mount, and it reuses the [access grant](design/access-grants.md).
 - Subagents are the desktop window's vertical for the agents a conversation
   puts to work ([ADR 329](adr/todo/329-subagents.md)): `src/desktop/subagents/`
   (its map is `index.ts`) owns the child as the panel shows it
