@@ -67,6 +67,7 @@ Completed bytes are the sizes from the walk. A later length is not counted.
 | A subscriber starts after a report was emitted | It reads the latest retained report. The host writes that report before emitting it. |
 | A report arrives after subscribe, including while the read is in flight | The event is kept. The read is not applied over it. |
 | No report has been retained | The read is empty. The bar stays absent. |
+| Subscribing fails | The retained report is still read. A failed read leaves the bar absent. |
 
 ## Alternatives considered
 

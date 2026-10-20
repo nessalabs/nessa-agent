@@ -171,3 +171,21 @@ it("follows a later event after the retained report was applied", async () => {
 
   expect(shown()).toBe("settled:0")
 })
+
+it("reads the retained report when subscribing fails", async () => {
+  host.onRuntimeCopy.mockRejectedValue(new Error("listener unavailable"))
+  host.runtimeCopy.mockResolvedValue(copying)
+
+  await render()
+
+  expect(shown()).toBe("copying:1")
+})
+
+it("stays absent when subscribing and the retained read both fail", async () => {
+  host.onRuntimeCopy.mockRejectedValue(new Error("listener unavailable"))
+  host.runtimeCopy.mockRejectedValue(new Error("snapshot unavailable"))
+
+  await render()
+
+  expect(shown()).toBe("absent")
+})
