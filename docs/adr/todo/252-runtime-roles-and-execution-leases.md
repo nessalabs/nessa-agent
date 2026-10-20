@@ -216,8 +216,11 @@ Environments lane, in order:
   local discovery** ([#706](https://github.com/nessalabs/nessa-agent/issues/706)). *Gate:* the peer admits and may
   narrow under its policy; narrowed grants recorded; lease ends on revoke;
   relay fallback converges to the same checkpoint. The relay half landed
-  with [#266](https://github.com/nessalabs/nessa-agent/issues/266). Local
-  discovery is still unresolved and has no issue of its own yet.
+  with [#266](https://github.com/nessalabs/nessa-agent/issues/266), and a
+  command served only through the relay leaves the same command-ledger
+  checkpoint as one served directly (RL14). Local
+  discovery is still unresolved and has no issue of its own yet, so this
+  slice stays open.
 - [ ] **J. Drive role and tool policy per person** ([#707](https://github.com/nessalabs/nessa-agent/issues/707);
   depends on the 0014 hook runtime under
   [#130](https://github.com/nessalabs/nessa-agent/issues/130) and 0011

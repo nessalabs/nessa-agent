@@ -964,6 +964,7 @@ fn nowhere() -> String {
 /// enrolled with the gateway, and then has only a relay path to it, waits
 /// for the owner's approval through the relay, as `env dial --relay` does,
 /// then dials through it and serves leases as over a direct connection.
+/// A command run each way leaves the same command-ledger checkpoint.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it() {
     use crate::env_serve::application::approval;
@@ -1029,6 +1030,72 @@ async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it
     a.until_connected(peer, true).await;
     let ran = a.echo(peer, "through the relay").await.unwrap();
     assert_eq!(ran.stdout, b"through the relay");
+    let relayed = command_checkpoint(&directory.path().join("e"));
+
+    // The same command over a direct connection, on the same gateway.
+    let direct_machine = a
+        .pair(
+            &directory.path().join("direct-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        direct_machine.identity.clone(),
+        direct_machine.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
+    let _direct = serving(&directory.path().join("direct"), direct_machine.pin, stream);
+    a.until_connected(direct_machine.peer, true).await;
+    let ran = a.echo(direct_machine.peer, "direct").await.unwrap();
+    assert_eq!(ran.stdout, b"direct");
+    let direct = command_checkpoint(&directory.path().join("direct"));
+    assert_eq!(relayed, direct);
+    assert_eq!(
+        serde_json::Value::Array(relayed),
+        serde_json::json!([
+            {
+                "kind": "command_granted",
+                "cwd": null,
+                "timeoutMs": 5000,
+                "askedTimeoutMs": 5000,
+                "sandbox": "none"
+            },
+            {"kind": "command_started"},
+            {
+                "kind": "command_ran",
+                "end": {"outcome": "exited", "code": 0},
+                "droppedBytes": 0
+            },
+            {
+                "kind": "ended",
+                "cleanup": {"outcome": "confirmed", "forced": false},
+                "cause": "asked"
+            }
+        ])
+    );
+}
+
+/// A command lease's ledger with the lease id, the arguments and the peer
+/// taken out, so a direct run and a relayed run can be compared.
+fn command_checkpoint(root: &Path) -> Vec<serde_json::Value> {
+    let path = root.canonicalize().unwrap().join("leases.jsonl");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let mut entry: serde_json::Value = serde_json::from_str(line).unwrap();
+            let object = entry.as_object_mut().unwrap();
+            object.remove("lease");
+            object.remove("argv");
+            object.remove("peer");
+            entry
+        })
+        .collect()
 }
 
 /// R4: the relay's `Offline` reaches the dialer as the relay's own answer,
