@@ -19,6 +19,7 @@ import {
   openBeside,
   openWidget,
   showContent,
+  toggleSidebar,
 } from "../../adapters/store/commands"
 import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
 import { controlledAnimationFrames, settle, shownBy, testStore } from "../../testing"
@@ -435,6 +436,16 @@ describe("a pane's close is offered where closing it does something", () => {
     }
     expect(offered()).toEqual([true, true])
     await act(async () => void store.dispatch(closePane()))
+    // The closed pane's box stays through the frames a drop's copy and a
+    // column title take; the grid paints the one pane after that.
+    await act(
+      async () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+        ),
+    )
     expect(offered()).toEqual([true])
     expect(await menuOffers()).toBe(true)
     await act(async () => void store.dispatch(newSession()))
@@ -514,5 +525,89 @@ describe("a review notice opens its conversation", () => {
     await load()
     expect(shown()).not.toContain("b")
     await act(async () => root.unmount())
+  })
+})
+
+describe("a spare sidebar fold paints the frame after the pane that took its room", () => {
+  const narrow = { width: 500, height: 800, spare: 240 }
+
+  it("keeps the sidebar on screen through the commit, then folds it", async () => {
+    const frames = controlledAnimationFrames()
+    const width = window.innerWidth
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 })
+    const store = testStore(undefined, () => narrow)
+    try {
+      await store.dispatch(loadWorkspace())
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      const drain = async () => {
+        for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
+          await act(async () => frames.runFrame())
+      }
+      await drain()
+      const sidebar = () => host.querySelector<HTMLElement>(".workspace")
+      const list = () => host.querySelector<HTMLElement>("#workspace-sidebar")
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
+      expect(list()?.hasAttribute("inert")).toBe(false)
+      await act(async () => {
+        store.dispatch(openBeside({ sessionId: "c" }))
+      })
+      expect(store.getState().workspace.chrome.sidebar.folded).toBe(true)
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
+      expect(list()?.hasAttribute("inert")).toBe(false)
+      expect(host.querySelector(".workspace-window")?.getAttribute("data-sidebar")).toBe(
+        "open",
+      )
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
+      expect(list()?.hasAttribute("inert")).toBe(true)
+      expect(host.querySelector(".workspace-window")?.getAttribute("data-sidebar")).toBe(
+        "closed",
+      )
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: width })
+    }
+  })
+
+  it("folds a sidebar the person closes before paint", async () => {
+    const frames = controlledAnimationFrames()
+    const store = testStore()
+    try {
+      await store.dispatch(loadWorkspace())
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
+        await act(async () => frames.runFrame())
+      await act(async () => {
+        store.dispatch(toggleSidebar())
+      })
+      expect(host.querySelector(".workspace")?.getAttribute("data-sidebar")).toBe(
+        "closed",
+      )
+      expect(frames.pending()).toBe(0)
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
   })
 })

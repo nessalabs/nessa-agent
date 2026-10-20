@@ -39,8 +39,10 @@ on the workspace, and a full-document layout, and the column title then
 read `offsetTop` and computed style on the next frame (a 13–24 ms layout
 of a tree with about 20 dirty objects and the whole document walked).
 Neither read is a pane's landing box. `paneBox` was already what a drag
-asks. The fold now waits a frame, and the new boxes wait until the frame
-after the title's glide.
+asks. The spare fold is still recorded in that click's state (`arranged`);
+deferring `fitToWindow` does not move it. The page paints the fold on the
+next frame (`useDrawnAfterColumnChange`), and the new boxes wait until the
+frame after the title's glide.
 
 ## States
 
@@ -52,7 +54,7 @@ after the title's glide.
 | Focused | The frame after that | The dim layer's text mounts and lays out. The scene is `data-scene-ready`. The layers' width is fixed at that text's width. Rain, the lit layer, and steam are not mounted. |
 | Lit | The frame after that | Those layers mount and lay out at the fixed width. The scene is `data-scene-complete`. |
 | Carrying | `pointerup` on a shown zone | The copy flies to the box `paneBox` already computed. No pane layout is committed. |
-| Painted | The next frame | The drop commits in state. The grid is still on its last boxes. The room is read before the unmark dirties the tree. A side column that no longer fits folds on this frame, not in the commit. |
+| Painted | The next frame | The drop commits in state. The grid is still on its last boxes. The room is read before the unmark dirties the tree. A side column folded for the new count is painted on this frame. The spare fold was recorded in the commit; the page did not restyle it there. |
 | Gliding | The frame after that | The copy has let go. A column title that changed rows glides. The grid is still on its last boxes. |
 | Drawn | The frame after that | The grid paints the new boxes. The grain comes back the frame after that paint, and the composer's blur the frame after the grain. |
 
@@ -77,13 +79,15 @@ starts the measured row.
    `data-scene-complete`. The layers' width is the text's column count.
    A later change of pane width crops them.
 5. A column change paints three frames after the commit that recorded it.
-   The next frame is when a drop's copy lets go and when a side column folds
-   for the new count. The frame after that is the column title's glide. The
-   grid mounted with whatever layout it first read; that first paint does
-   not wait. The paint frame marks the grid `data-split-painting`, and scene
-   text that has already laid out stays unpainted until the next frame. The
-   grain comes back the frame after that paint, and the composer's blur the
-   frame after the grain. A drag's copy does not paint the night scene.
+   The next frame is when a drop's copy lets go and when a side column's
+   fold is painted. A spare fold is already in state (`arranged`); a resize
+   still folds before paint (`useFitOnResize`). The frame after that is the
+   column title's glide. The grid mounted with whatever layout it first
+   read; that first paint does not wait. The paint frame marks the grid
+   `data-split-painting`, and scene text that has already laid out stays
+   unpainted until the next frame. The grain comes back the frame after
+   that paint, and the composer's blur the frame after the grain. A drag's
+   copy does not paint the night scene.
 
 Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read
@@ -137,9 +141,14 @@ flowchart LR
   be a second owner of the same wait.
 - Folding the sidebar in the click's commit. At 1000×560 that commit's
   style and layout, and the title's measure on the next frame, are the
-  open's long frames. The fold is the same `fitToWindow` a resize uses; a
-  resize still folds before paint, and a column-count change folds one
-  frame later.
+  open's long frames. The spare fold stays in `arranged`, because the
+  domain tests and every non-React caller read it there. Deferring only
+  `fitToWindow` leaves the click's restyle in place: that fold is not the
+  resize. The page paints it one frame later, and a resize still folds
+  before paint.
+- Moving the spare fold out of `arranged` into the shell. The same fold
+  would then have two owners, and a caller that is not the shell would
+  open the pane beside a sidebar the room cannot hold.
 - Painting the new boxes on the title's glide frame. The glide reads
   `offsetTop` after moving the title, which walks the document. The boxes
   wait one more frame.
@@ -155,9 +164,11 @@ flowchart LR
   open has settled. A drop commits on the frame after pointerup paints.
 - Owned scope: `paneBox`, the drop's two callbacks, the grid painting a
   column change three frames later, the side-column fit waiting one frame
-  when the pane count changes, the scene-ready and scene-complete marks
-  and the layer rules, the tests that lock those, the settled assertion in
-  `columns.mjs` `content-visible`, and this note.
+  when the pane count changes, the sidebar paint waiting that same frame
+  when the count changes (`useDrawnAfterColumnChange`, passed into the
+  source list), the scene-ready and scene-complete marks and the layer
+  rules, the tests that lock those, the settled assertion in `columns.mjs`
+  `content-visible`, and this note.
 - Outside that scope: `FlipScope`'s read when the flight duration is
   nonzero, blanking a conversation, and issues 965, 981, 1038, 1039, 1030,
   1034, 345, 337, and 746.

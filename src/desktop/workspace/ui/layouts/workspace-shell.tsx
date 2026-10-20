@@ -41,7 +41,10 @@ import {
 } from "../../adapters/dom/widget-escape"
 import type { WindowArrangement } from "../../model/shown-window"
 import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortcuts"
-import { useFitOnResize } from "../../adapters/dom/window-width"
+import {
+  useDrawnAfterColumnChange,
+  useFitOnResize,
+} from "../../adapters/dom/window-width"
 import {
   arrangementShown,
   canOpenBeside,
@@ -327,6 +330,9 @@ export function WorkspaceShell({
   const listOpen = region.sessionList && listDrawn
   const view = useWorkspaceSelector(selectView)
   const columns = useWorkspaceSelector(selectColumnCount)
+  // Painted a frame after a pane column appears. The spare fold is already
+  // in state; painting it in the click walks the document.
+  const sidebarDrawn = useDrawnAfterColumnChange(sidebarOpen, columns)
   const [railOpen, setRailOpen] = useState(true)
   const [railItem, setRailItem] = useState("agents")
   // A preview, off until turned on in Settings › Advanced › Experimental.
@@ -412,11 +418,11 @@ export function WorkspaceShell({
   const splitPanes = useMemo(() => workspaceSplitPanes(store), [store])
   const dragOptions = useMemo(workspaceDragOptions, [])
   useSplitPanesDrag(root, splitPanes, dragOptions)
-  const peek = useEdgePeek(!sidebarOpen, sidebarOpen)
+  const peek = useEdgePeek(!sidebarDrawn, sidebarDrawn)
   // Each widget host on the page, by scope, for Escape to find (`widget-escape.ts`).
   const [escapeScopes] = useState<EscapeScopes>(() => new Map())
   useWidgetEscape({ store, root, scopes: escapeScopes })
-  const shape = useMotionShape(sidebarOpen, listOpen, railDrawn)
+  const shape = useMotionShape(sidebarDrawn, listOpen, railDrawn)
 
   // Beside where the room allows it, in the focused pane's place where not —
   // what ⌘-click does — so a pick never goes nowhere, and a typed message is
@@ -476,7 +482,7 @@ export function WorkspaceShell({
                   data-host={hostKind}
                   data-surface={browserSurface ? "browser" : "window"}
                   data-desktop-theme={theme}
-                  data-sidebar={sidebarOpen ? "open" : "closed"}
+                  data-sidebar={sidebarDrawn ? "open" : "closed"}
                   // The person's own choice, apart from a fold for room: the
                   // rail's toggle hides only with a sidebar they closed.
                   data-sidebar-chosen={chrome.sidebar.open ? "open" : "closed"}
@@ -515,11 +521,11 @@ export function WorkspaceShell({
                     data-surface={browserSurface ? "browser" : "window"}
                     data-desktop-theme={theme}
                     data-peek={(peek.shown && !peek.handedOff) || undefined}
-                    data-sidebar={sidebarOpen ? "open" : "closed"}
+                    data-sidebar={sidebarDrawn ? "open" : "closed"}
                     data-list={
                       region.sessionList ? (listOpen ? "open" : "closed") : undefined
                     }
-                    data-panes-alone={(!sidebarOpen && !listOpen) || undefined}
+                    data-panes-alone={(!sidebarDrawn && !listOpen) || undefined}
                     style={
                       {
                         "--workspace-sidebar-width": `${sidebarWidth}px`,
@@ -529,7 +535,7 @@ export function WorkspaceShell({
                       } as CSSProperties
                     }
                   >
-                    {sidebarOpen ? null : (
+                    {sidebarDrawn ? null : (
                       <EdgePeekStrip
                         peek={peek}
                         onDragOut={() => dispatch(toggleSidebar({ open: true }))}
@@ -538,9 +544,9 @@ export function WorkspaceShell({
                     <WorkspaceTitlebar>
                       <IconButton
                         icon="sidebar"
-                        label={`${sidebarOpen ? "Hide" : "Show"} Sidebar`}
+                        label={`${sidebarDrawn ? "Hide" : "Show"} Sidebar`}
                         shortcut={frame.shortcut("toggleSidebar")}
-                        aria-expanded={sidebarOpen}
+                        aria-expanded={sidebarDrawn}
                         aria-controls="workspace-sidebar"
                         onClick={() => dispatch(toggleSidebar())}
                       />
@@ -559,8 +565,8 @@ export function WorkspaceShell({
                           icon="newSession"
                           label="New Session"
                           shortcut={composeShortcut}
-                          tabIndex={sidebarOpen ? -1 : 0}
-                          aria-hidden={sidebarOpen || undefined}
+                          tabIndex={sidebarDrawn ? -1 : 0}
+                          aria-hidden={sidebarDrawn || undefined}
                           onClick={compose}
                         />
                       )}
@@ -569,7 +575,7 @@ export function WorkspaceShell({
                     <Columns
                       region={region}
                       root={root}
-                      sidebarOpen={sidebarOpen}
+                      sidebarOpen={sidebarDrawn}
                       listOpen={listOpen}
                       sidebarWidth={sidebarWidth}
                       listWidth={listWidth}
@@ -657,7 +663,7 @@ const Columns = memo(function Columns({
   }
   return (
     <>
-      <SourceList variant={region.sidebar.variant} top={top} />
+      <SourceList variant={region.sidebar.variant} open={sidebarOpen} top={top} />
       {sidebarOpen ? (
         <ResizeEdge
           label="Resize Sidebar"
