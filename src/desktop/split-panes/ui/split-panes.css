@@ -201,6 +201,11 @@
   will-change: transform;
 }
 
+/* The night scene is a full-window raster. The copy moves without painting it. */
+.split-panes-ghost .desktop-night-scene {
+  content-visibility: hidden;
+}
+
 /* Made as the press begins, it waits on the page unseen until the press becomes a drag. */
 .split-panes-ghost[data-drag-waiting] {
   opacity: 0;

@@ -261,6 +261,10 @@ it("lifts a drag's copy without painting a shadow", () => {
     .slice(sheet.indexOf(".split-panes-ghost:not([data-drag-waiting]) {"))
     .split("}")[0]
   expect(shown).toMatch(/will-change:\s*transform/)
+  const scene = sheet
+    .slice(sheet.indexOf(".split-panes-ghost .desktop-night-scene {"))
+    .split("}")[0]
+  expect(scene).toMatch(/content-visibility:\s*hidden/)
   // The copy's box is the size `drag.ts` sets. The stylesheet only keeps
   // that box from laying anything out outside itself.
   const band = sheet.slice(sheet.indexOf(`${classes.ghost} {`)).split("}")[0]

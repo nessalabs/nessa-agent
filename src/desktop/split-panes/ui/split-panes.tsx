@@ -111,8 +111,16 @@ export const SplitPanes = memo(function SplitPanes({
   useLayoutEffect(() => {
     if (drawn === columns) return
     const next = columns
-    const id = requestAnimationFrame(() => setDrawn(next))
-    return () => cancelAnimationFrame(id)
+    // Two frames. The first is when a drop's copy lets go; the second paints
+    // the new boxes, so those two paints are not one frame.
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => setDrawn(next))
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
   }, [columns, drawn])
   // The frame that first paints a new arrangement skips scene text. The text
   // is already laid out at a fixed width; painting it again is the resize.

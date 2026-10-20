@@ -117,9 +117,14 @@ const grid = () => {
   return found
 }
 
-/** The frame after a column change, which is when the grid paints it. */
+/** The frame a column change paints on: two frames after it commits. */
 const nextPaint = () =>
-  act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+  act(
+    async () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  )
 
 it("puts the frame on the host's own pane root, with nothing around it", async () => {
   await mounted(fakeSource(two()))

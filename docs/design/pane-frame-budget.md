@@ -72,10 +72,12 @@ starts the measured row.
    in pixels. A change of pane width crops them. `width: max-content` and
    `contain: layout paint style` on the layers are the same rule before that
    lock.
-6. A column change paints on the frame after the commit that recorded it.
-   The grid mounted with whatever layout it first read; that first paint
-   does not wait. The paint frame marks the grid `data-split-painting`, and
-   scene text that has already laid out stays unpainted until the next frame.
+6. A column change paints two frames after the commit that recorded it.
+   The frame between is when a drop's copy lets go. The grid mounted with
+   whatever layout it first read; that first paint does not wait. The paint
+   frame marks the grid `data-split-painting`, and scene text that has
+   already laid out stays unpainted until the next frame. A drag's copy
+   does not paint the night scene.
 
 Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read
