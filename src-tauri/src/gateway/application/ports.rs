@@ -645,8 +645,16 @@ pub trait GatewayStartupEvents: Send + Sync {
     ///
     /// The default ignores it. Publishing it must not write
     /// [`GatewayStartup`]: that projection is what setup treats as readiness.
+    /// The adapter retains the report before it emits, and
+    /// [`Self::latest_runtime_copy`] is what a later subscriber reads.
     #[cfg(any(target_os = "macos", test))]
     fn runtime_copy(&self, _progress: &RuntimeCopyProgress) {}
+
+    /// The latest [`Self::runtime_copy`] report, if the adapter kept one.
+    #[cfg(any(target_os = "macos", test))]
+    fn latest_runtime_copy(&self) -> Option<RuntimeCopyProgress> {
+        None
+    }
 }
 
 /// How much of the private runtime has finished `sync_all`.

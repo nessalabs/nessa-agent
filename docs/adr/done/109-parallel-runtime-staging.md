@@ -31,7 +31,8 @@ then the digest is checked, then one `renamex_np`. The digest overlaps the
 remaining syncs. An already valid generation is not copied.
 
 Progress counts a file only after that file's `sync_all` returns. It is a host
-event, not `GatewayStartup`. Dropped events leave the figure stale. A report
+event, not `GatewayStartup`. The host retains the latest report, and setup
+subscribes before reading it. Dropped events leave the figure stale. A report
 runs to completion before the next file is counted, so a slower report cannot
 move the percent backwards or follow the final file. Setup draws it and does
 not disable agents because of it. The copy still starts only after the
@@ -63,6 +64,9 @@ Completed bytes are the sizes from the walk. A later length is not counted.
 | `sync_all` returned, the percent is not higher than the last report, and files remain | Nothing. The count includes the file. |
 | `sync_all` returned and the percent is higher, or this is the last file | One report. The callback returns before the next file is counted. |
 | The last file's report has been sent | Later reports are dropped. |
+| A subscriber starts after a report was emitted | It reads the latest retained report. The host writes that report before emitting it. |
+| A report arrives after subscribe, including while the read is in flight | The event is kept. The read is not applied over it. |
+| No report has been retained | The read is empty. The bar stays absent. |
 
 ## Alternatives considered
 

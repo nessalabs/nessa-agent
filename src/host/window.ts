@@ -154,6 +154,20 @@ export async function onRuntimeCopy(handler: (progress: RuntimeCopy) => void) {
   return listen<RuntimeCopy>(HOST_EVENTS.runtimeCopy, ({ payload }) => handler(payload))
 }
 
+/**
+ * The latest private-runtime copy report retained by the host.
+ *
+ * A browser has no staged runtime. `null` means the host has not reported.
+ * Subscribe with `onRuntimeCopy` before calling this, and keep an event that
+ * arrives while this read is in flight: that event is newer than a snapshot
+ * taken before it.
+ */
+export async function runtimeCopy(): Promise<RuntimeCopy | null> {
+  if (!inTauri) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<RuntimeCopy | null>("runtime_copy")
+}
+
 /** Asks the host to retry a failed gateway reconciliation. */
 export async function retryGatewayStartup(): Promise<void> {
   if (!inTauri) return

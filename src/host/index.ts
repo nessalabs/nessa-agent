@@ -52,6 +52,7 @@ export {
   onFocusComposer,
   onGatewayStartup,
   onRuntimeCopy,
+  runtimeCopy,
   onLinkNotOpened,
   onLiveResize,
   onSummoned,

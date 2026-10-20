@@ -110,6 +110,36 @@ describe("gateway startup", () => {
     expect(invoke).not.toHaveBeenCalled()
     expect(stop).toHaveBeenCalledOnce()
   })
+
+  it("reads the retained runtime copy without treating it as gateway startup", async () => {
+    const progress = {
+      state: "settled",
+      filesCompleted: 0,
+      filesTotal: 0,
+      bytesCompleted: 0,
+      bytesTotal: 0,
+    } as const
+    invoke.mockResolvedValueOnce(progress)
+    const { runtimeCopy } = await import("./window")
+
+    await expect(runtimeCopy()).resolves.toEqual(progress)
+
+    expect(invoke).toHaveBeenCalledExactlyOnceWith("runtime_copy")
+    expect(listen).not.toHaveBeenCalled()
+  })
+
+  it("has no retained runtime copy in the browser", async () => {
+    vi.stubGlobal("window", {})
+    vi.resetModules()
+    const { onRuntimeCopy, runtimeCopy } = await import("./window")
+
+    await expect(runtimeCopy()).resolves.toBeNull()
+    const unlisten = await onRuntimeCopy(() => undefined)
+    unlisten()
+
+    expect(invoke).not.toHaveBeenCalled()
+    expect(listen).not.toHaveBeenCalled()
+  })
 })
 
 describe("native attachment picker", () => {

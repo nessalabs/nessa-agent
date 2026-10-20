@@ -1588,7 +1588,8 @@ Both cases require zero page errors. The rule is owned by
 
 `node verification/desktop/scripts/runtime-copy.mjs` drives the real setup agent
 list in Chromium and WebKit. The fixture moves a `RuntimeCopy` value; it does
-not stage a runtime. While the value is `copying`, the progress bar is named
+not stage a runtime. The host retains the latest report and setup reads it
+after subscribing; this fixture supplies the value directly. While the value is `copying`, the progress bar is named
 "Preparing the private runtime" and its value follows the reported bytes. A
 ready Claude stays enabled, with no `aria-disabled`. Advancing the report
 moves the value, and `settled` removes the bar. Claude is still enabled.

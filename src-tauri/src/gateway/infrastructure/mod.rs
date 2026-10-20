@@ -24,8 +24,10 @@
 //! failure after the early ready publish carries a strictly newer startup
 //! revision. Directories exist before file workers start. Those workers copy
 //! in parallel, then queue `sync_all` on a second pool. Progress counts a file
-//! only after that sync returns and is a separate host event, not gateway
-//! startup. File durability and the tree digest overlap; both finish before
+//! only after that sync returns. The host retains the latest report and
+//! answers it to a bundled window that subscribes afterwards. The report is a
+//! separate host event, not gateway startup. File durability and the tree
+//! digest overlap; both finish before
 //! the exclusive rename. Existing versions remain available across app
 //! replacement.
 //! Its `pruning` module then collects, under the same lock and only once a
@@ -68,11 +70,11 @@ mod selection;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod unsupported;
 pub use commands::{
-    __cmd__gateway_startup, __cmd__retry_gateway_startup,
+    __cmd__gateway_startup, __cmd__retry_gateway_startup, __cmd__runtime_copy,
     __cmd__set_claude_configuration_directory, __tauri_command_name_gateway_startup,
-    __tauri_command_name_retry_gateway_startup,
+    __tauri_command_name_retry_gateway_startup, __tauri_command_name_runtime_copy,
     __tauri_command_name_set_claude_configuration_directory, gateway_startup,
-    retry_gateway_startup, set_claude_configuration_directory, startup_events,
+    retry_gateway_startup, runtime_copy, set_claude_configuration_directory, startup_events,
 };
 pub(crate) use commands::{GatewayReader, GatewayUnread};
 pub use selection::{

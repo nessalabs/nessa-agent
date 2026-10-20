@@ -56,10 +56,12 @@ pub const LINK_NOT_OPENED: &str = "nessa://link-not-opened";
 pub const GATEWAY_STARTUP: &str = "nessa://gateway-startup";
 /// How many staged runtime files have finished `sync_all`.
 ///
-/// The payload is [`RuntimeCopy`]. It is not [`GatewayStartup`]: setup keeps
-/// answering agent readiness from that projection while this count moves.
-/// Linux does not stage a bundled runtime, so the event exists only where
-/// the copy runs and in tests that exercise the adapter.
+/// The payload is [`RuntimeCopy`]. The host retains the latest one and the
+/// `runtime_copy` command returns it, so a window that listens after the
+/// report was emitted still reads it. It is not [`GatewayStartup`]: setup
+/// keeps answering agent readiness from that projection while this count
+/// moves. Linux does not stage a bundled runtime, so the event and the
+/// retained report exist only where the copy runs and in tests.
 #[cfg(any(target_os = "macos", test))]
 pub const RUNTIME_COPY: &str = "nessa://runtime-copy";
 

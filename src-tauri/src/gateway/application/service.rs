@@ -7,6 +7,8 @@
 )]
 
 use super::host_ownership::DesktopHostOwnership;
+#[cfg(any(target_os = "macos", test))]
+use super::RuntimeCopyProgress;
 #[cfg(test)]
 use super::SystemMonotonicClock;
 use super::{
@@ -1157,6 +1159,15 @@ impl Gateway {
             .lock()
             .map(|lifecycle| lifecycle.startup.clone())
             .map_err(|_| GatewayError::Registration("gateway startup state is unavailable".into()))
+    }
+
+    /// The latest private-runtime copy report, if the event adapter kept one.
+    ///
+    /// This is not startup. A window that subscribes after the report was
+    /// emitted reads this. `None` means the host has not reported.
+    #[cfg(any(target_os = "macos", test))]
+    pub fn runtime_copy(&self) -> Option<RuntimeCopyProgress> {
+        self.startup_events.latest_runtime_copy()
     }
 
     pub async fn start(&self) -> Result<(), GatewayError> {
