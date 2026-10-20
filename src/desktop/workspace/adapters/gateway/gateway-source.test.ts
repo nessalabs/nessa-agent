@@ -23,7 +23,7 @@ import { SessionHealthError } from "../../../../session/adapters/client/dev-sess
 import { WorkspaceSourceError, type WorkspaceUpdate } from "../../application/ports"
 import { composerModels } from "../../../model/composer-options"
 import { atWork, messageText } from "../../model/transcript"
-import { testStore } from "../../testing"
+import { settle, testStore } from "../../testing"
 import { followWorkspace, loadWorkspace, sendMessage } from "../store/commands"
 import { approvalId } from "./gateway-views"
 import {
@@ -1868,7 +1868,7 @@ describe("a connection that could not be made says why (#419)", () => {
     expect(waiting).toEqual([[], []])
   })
 
-  it("a reconnect restores waiting reviews the snapshot missed", async () => {
+  it("a reconnect does not put back the reviews from before it went down", async () => {
     const waiting: (readonly { permissionId: string }[])[] = []
     const gateway = fakeGateway()
     const { clock } = manualClock()
@@ -1881,17 +1881,16 @@ describe("a connection that could not be made says why (#419)", () => {
     await source.index()
     const pending = waitingReview("permission-1")
     gateway.publishEvent("permission.reviewWaiting", { reviews: [pending] })
-    expect(waiting).toEqual([[pending]])
     gateway.setState({
       status: "reconnecting",
       attempt: 1,
       error: new NessaConnectionClosedError(1006, ""),
     })
-    expect(waiting).toEqual([[pending], []])
-    // No snapshot arrives. The one dispatched before the listener was
-    // attached is already gone, so the last set is put back.
+    // It may have been answered elsewhere meanwhile: only the new socket's
+    // own set, which the client hands over, says what still waits.
     gateway.setState({ status: "connected" })
-    expect(waiting).toEqual([[pending], [], [pending]])
+    await settle()
+    expect(waiting).toEqual([[pending], []])
   })
 
   it("a snapshot applied after the clear replaces the retained reviews", async () => {
@@ -1918,42 +1917,15 @@ describe("a connection that could not be made says why (#419)", () => {
     expect(waiting).toEqual([[pending], [], [newer]])
   })
 
-  it("a later client restores waiting reviews the snapshot missed", async () => {
-    const waiting: (readonly { permissionId: string }[])[] = []
-    const first = fakeGateway()
-    const second = fakeGateway()
-    const clients = [first.client, second.client]
-    let attempts = 0
-    const { clock } = manualClock()
-    const source = gatewaySource({
-      connect: () => {
-        const client = clients[attempts]
-        attempts += 1
-        return Promise.resolve(client!)
-      },
-      clock,
-      timing,
-      onReviewWaiting: (reviews) => waiting.push(reviews),
-    })
-    await source.index()
-    const pending = waitingReview("permission-1")
-    first.publishEvent("permission.reviewWaiting", { reviews: [pending] })
-    first.setState({
-      status: "closed",
-      error: new NessaConnectionClosedError(1006, ""),
-    })
-    await source.index()
-    expect(waiting).toEqual([[pending], [], [pending]])
-    expect(attempts).toBe(2)
-  })
-
-  it("a later client restores waiting reviews unless its snapshot arrives with the listener", async () => {
+  it("a later client's first set reaches the window, though it came before the listener", async () => {
     const waiting: (readonly { permissionId: string }[])[] = []
     const first = fakeGateway()
     const second = fakeGateway()
     const newer = waitingReview("permission-2")
     const inner = second.client
-    const replaying = {
+    // As `NessaClient` does: the set the socket already received is handed
+    // to a new listener after `on` returns.
+    const handingOver = {
       conversation: inner.conversation,
       subscriptions: inner.subscriptions,
       get connectionState() {
@@ -1962,12 +1934,12 @@ describe("a connection that could not be made says why (#419)", () => {
       onConnectionStateChange: inner.onConnectionStateChange.bind(inner),
       on: ((event, handler) => {
         const off = inner.on(event, handler)
-        handler({ reviews: [newer] })
+        queueMicrotask(() => handler({ reviews: [newer] }))
         return off
       }) satisfies GatewayClient["on"],
       close: inner.close.bind(inner),
     }
-    const clients = [first.client, replaying]
+    const clients = [first.client, handingOver]
     let attempts = 0
     const { clock } = manualClock()
     const source = gatewaySource({
@@ -1989,6 +1961,7 @@ describe("a connection that could not be made says why (#419)", () => {
     })
     expect(waiting).toEqual([[pending], []])
     await source.index()
+    await settle()
     expect(waiting).toEqual([[pending], [], [newer]])
     expect(attempts).toBe(2)
   })

@@ -23,6 +23,7 @@ import {
 import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
 import { controlledAnimationFrames, settle, shownBy, testStore } from "../../testing"
 import { paneItemOf } from "../../model/pane-item"
+import { openReviewEvent } from "../../adapters/gateway/review-notices"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../../ui/menu"
 import { PaneMenuItems } from "../panes/pane-menu"
 import { SessionsInSidebar } from "./sessions-in-sidebar"
@@ -441,6 +442,48 @@ describe("a pane's close is offered where closing it does something", () => {
     )
     expect(offered()).toEqual([true])
     expect(await menuOffers()).toBe(true)
+    await act(async () => root.unmount())
+  })
+})
+
+describe("a review notice opens its conversation", () => {
+  it("once the list holds it, when the notice came first", async () => {
+    // The gateway can send a waiting review before the list that names its
+    // conversation: the click is kept until the list has it.
+    const store = testStore()
+    const root = createRoot(host)
+    await act(async () =>
+      root.render(
+        <Provider store={store}>
+          <ClockProvider now={() => 1000}>
+            <ThreeColumns hostKind="browser" browserSurface />
+          </ClockProvider>
+        </Provider>,
+      ),
+    )
+    const shown = () =>
+      store
+        .getState()
+        .workspace.panes?.columns.flatMap((column) => column.panes.map(shownBy))
+    const before = shown()
+    await act(async () => {
+      window.dispatchEvent(openReviewEvent("b"))
+    })
+    expect(shown()).toEqual(before)
+    await act(async () => {
+      await store.dispatch(loadWorkspace())
+      await settle()
+    })
+    expect(shown()).toContain("b")
+    // Opened once: a later list change does not open it again.
+    store.dispatch(openBeside({ sessionId: "a" }))
+    await act(async () => {
+      await store.dispatch(loadWorkspace())
+      await settle()
+    })
+    expect(store.getState().workspace.panes?.focused).toBe(
+      store.getState().workspace.panes?.columns.at(-1)?.panes.at(-1)?.key,
+    )
     await act(async () => root.unmount())
   })
 })

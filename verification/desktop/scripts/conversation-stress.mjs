@@ -1162,13 +1162,29 @@ const steps = {
       agent: run.stack.agent,
       approvalMode: "ask",
     })
+    // Named by a first turn: the gateway records a conversation's title just
+    // after the agent takes its first message, and the scripted agent can
+    // ask before that lands, which a model never does.
+    const naming = prompt(run, STRESS.reply, step, " notice")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, naming),
+    )
+    const { view: named } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      naming,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    const title = await titleOf(run, conversationId)
     // The person is on the main conversation: the review waits where the
     // window does not show it, and only the notice says so.
     const first = prompt(run, STRESS.permission, step, " notice")
     await run.client.conversation.submit(
       run.client.conversation.prepare(conversationId, first),
     )
-    const title = await titleOf(run, conversationId)
     const posted = await noticePosted(run, conversationId, failures)
     if (!posted) return
     if (posted.notice.body !== title)
@@ -1201,7 +1217,7 @@ const steps = {
     const { view: before } = await settled(
       run,
       conversationId,
-      new Set(),
+      new Set(named?.messages.map((each) => each.executionId) ?? []),
       first,
       "completed",
       failures,
