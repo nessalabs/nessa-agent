@@ -1,5 +1,6 @@
 //! Foreign passive correlation preserves the existing owners' exact values.
 use super::*;
+use nessa_client_core::retained::ArtifactFault;
 use crate::test_support::PrivateFixture;
 use nessa_auth::domain::{
     pairing::{AttemptId, ConsentIntentId, DisclosedConsent, InvitationId},
@@ -194,4 +195,63 @@ fn follow_rejects_a_cursor_outside_the_published_contract_before_it_dials() {
         Some("99999999999999999999".to_owned())
     )
     .is_err());
+}
+
+#[test]
+fn a_faulted_fetch_reports_the_bytes_it_resumed_from() {
+    let fetch = NativeArtifactFetch {
+        value: ArtifactFetch::decided(
+            Err(ArtifactFault::progress(ArtifactFaultKind::Integrity, 9, 4)),
+            3,
+        ),
+    };
+    assert_eq!(fetch.reached(), Some(9));
+    assert_eq!(fetch.resumed_from(), Some(4));
+    assert_eq!(fetch.gateway_resumed_from(), None);
+    assert_eq!(fetch.elapsed_ms(), 3);
+}
+
+#[test]
+fn a_malformed_artifact_name_is_an_invalid_argument_and_dials_nothing() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let root = PrivateFixture::new();
+    create_directory_beneath(root.path(), Path::new("private")).unwrap();
+    let session = NativeDeviceSession::open(
+        root.path().to_str().unwrap().to_owned(),
+        "private".to_owned(),
+        address.to_string(),
+    )
+    .unwrap();
+    let stamp = Arc::new(NativePhoneStamp {
+        value: PhoneStamp::issue(1, "receiver-a"),
+    });
+    let stop = Arc::new(NativeReadStop::new());
+    let digest = "sha256:fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603";
+    let media = "application/octet-stream";
+    let output = root.path().join("held.bin");
+    let request = |digest: &str, media: &str, size: u64| NativeArtifactRequest {
+        conversation: "00000000-0000-4000-8000-000000000001".into(),
+        digest: digest.into(),
+        media_type: media.into(),
+        size,
+        output: output.display().to_string(),
+    };
+    for bad in [
+        request("sha256:nope", media, 2),
+        request(digest, "Application/octet-stream", 2),
+        request(digest, media, 0),
+        request(digest, media, 64 * 1024 * 1024 + 1),
+    ] {
+        assert!(matches!(
+            session.fetch_artifact(stamp.clone(), bad, stop.clone()),
+            Err(NativeCallError::InvalidArgument)
+        ));
+    }
+    assert!(matches!(
+        session.fetch_artifact(stamp, request(digest, media, 64 * 1024 * 1024), stop),
+        Err(NativeCallError::Session { .. })
+    ));
+    assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
 }

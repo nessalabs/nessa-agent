@@ -193,12 +193,12 @@ flowchart LR
 - A stamp names one generation and one receiver. `accept` returns that receiver's saved rows only while the lease still has that pair.
 - The same issued receiver keeps the generation. A different receiver, a successful terminal purge, or session close advances it. The previous stamp then fails and no bytes are read.
 - Close is permanent for that session. A successful purge only releases the receiver, so a later enrollment in the same session can bind the next one. That release happens when the purge succeeded, including when the status has no observation. No observation and no successful purge leaves the bound receiver in place.
-- Catalogue presence is one stored identity. A live row is Live. A deletion fence or receiver purge receipt is Tombstone. No row and no fence is Absent. A page that does not mention a chat does not write a tombstone.
+- Catalogue presence is one stored identity, read from one snapshot of the fence and the row. A live row is Live. A deletion fence or receiver purge receipt is Tombstone. No row and no fence is Absent. A page that does not mention a chat does not write a tombstone.
 - A deletion whose commit did not land leaves the previous row. Presence after that failure is the previous state, not Tombstone.
 - A withdrawn grant removes the local row and writes no fence. Presence is Absent, so the chat can return with a later grant.
 - `LocalMatch` means the output file already had the named size and digest. No range was asked. It is not a new gateway hold.
 - `GatewayConfirmed` means this run's ranges were answered and the part, read back from disk, matched the digest. A partial part, a wrong range, or a digest mismatch is a fault. `reached` on that fault is not freshness.
-- The fetch reports the monotonic elapsed time of that fetch, including a local match that never dials. That duration is the session or cache clock, not model-generation latency. Busy-range retries wait on the injected pause; production composition uses `ThreadPause`.
+- The fetch reports the monotonic elapsed time of that fetch, including a local match that never dials and, when the file is not local, the status read that selects the gateway. That duration is the session clock, not model-generation latency. Busy-range retries wait on the injected pause; production composition uses `ThreadPause`.
 - `conversation.subscribe` remains the live view. It still does not advance the checkpoint. Command recovery stays in the outbox.
 
 ### State

@@ -20,9 +20,9 @@ use nessa_auth::{
 use nessa_client_core::{
     pairing::{NativeClientError, NativeRetryOutcome},
     retained::{
-        ArtifactFaultKind, ArtifactFetch, ArtifactFileStep, ArtifactFreshness, ArtifactRequest,
-        CataloguePresence, PhoneStamp, ReadStop, RetainedCatalogueEntry, RetainedCataloguePage,
-        RetainedPurge,
+        artifact_name_accepted, ArtifactFaultKind, ArtifactFetch, ArtifactFileStep,
+        ArtifactFreshness, ArtifactRequest, CataloguePresence, PhoneStamp, ReadStop,
+        RetainedCatalogueEntry, RetainedCataloguePage, RetainedPurge,
     },
 };
 use nessa_protocol::{
@@ -919,6 +919,10 @@ impl NativeArtifactFetch {
     pub fn reached(&self) -> Option<u64> {
         self.value.outcome().err().map(|fault| fault.reached())
     }
+    /// Bytes already in the part when this run began. Empty when the file was kept.
+    pub fn resumed_from(&self) -> Option<u64> {
+        self.value.outcome().err().map(|fault| fault.resumed_from())
+    }
 }
 
 /// The file a phone names and the output path it should land in.
@@ -1133,6 +1137,9 @@ impl NativeDeviceSession {
     ) -> Result<Arc<NativeArtifactFetch>, NativeCallError> {
         let conversation = ConversationId::new(&request.conversation)
             .map_err(|_| NativeCallError::InvalidArgument)?;
+        if !artifact_name_accepted(&request.digest, &request.media_type, request.size) {
+            return Err(NativeCallError::InvalidArgument);
+        }
         let request = ArtifactRequest::new(
             &conversation,
             &request.digest,

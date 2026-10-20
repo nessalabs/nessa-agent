@@ -5,7 +5,7 @@
 
 mod held_file;
 mod reset;
-pub(crate) use held_file::{HeldFile, HeldRange};
+pub(crate) use held_file::{HeldFile, HeldRange, MAX_HELD_FILE_BYTES};
 #[cfg(test)]
-pub(crate) use held_file::{HELD_FILE_RANGE_BYTES, MAX_HELD_FILE_BYTES};
+pub(crate) use held_file::HELD_FILE_RANGE_BYTES;
 pub(crate) use reset::CacheReset;

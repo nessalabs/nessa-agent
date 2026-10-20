@@ -1353,6 +1353,8 @@ impl NativeSession {
     }
     /// Fetch one held file for `stamp`'s receiver. A replaced stamp does not dial.
     /// A file already at the request's output is a local match and does not dial either.
+    /// Elapsed time is this call on the session clock, including the status read
+    /// when the file is not already local.
     pub fn fetch_artifact(
         &self,
         stamp: &PhoneStamp,
@@ -1383,7 +1385,7 @@ impl NativeSession {
             return Err(SessionFailure::Fenced(PhoneFence::Replaced));
         }
         let pause = Arc::clone(&driver.pause);
-        driver
+        let fetched = driver
             .cache()
             .map_err(SessionFailure::Cache)?
             .fetch_artifact(
@@ -1393,7 +1395,9 @@ impl NativeSession {
                 request,
                 pause.as_ref(),
             )
-            .map_err(SessionFailure::Cache)
+            .map_err(SessionFailure::Cache)?;
+        let elapsed = driver.clock.elapsed_ms().saturating_sub(started);
+        Ok(ArtifactFetch::decided(fetched.outcome(), elapsed))
     }
     /// Historical lookup remains available after key removal. This receiver
     /// selects original purge evidence, not read or command authority.

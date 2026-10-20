@@ -38,7 +38,8 @@ impl ReadOnlyCache {
         committed.map_err(|_| CacheError::Uncertain)
     }
 
-    /// One conversation's stored row and fence. A missing row is [`CataloguePresence::Absent`].
+    /// One conversation's stored row and fence, from one deferred snapshot.
+    /// A missing row is [`CataloguePresence::Absent`].
     /// A deleted row without its fence is damaged, matching the catalogue reader.
     pub(crate) fn catalogue_presence(
         &mut self,
@@ -47,9 +48,12 @@ impl ReadOnlyCache {
         stream: &Id,
         conversation: &Id,
     ) -> Result<CataloguePresence, CacheError> {
-        let fenced = rows::fenced_target(&self.connection, receiver, origin, conversation)?;
-        let deleted = self
+        let tx = self
             .connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(rows::database_error)?;
+        let fenced = rows::fenced_target(&tx, receiver, origin, conversation)?;
+        let deleted = tx
             .query_row(
                 "SELECT deleted FROM catalogue_entries
                  WHERE receiver=?1 AND origin=?2 AND stream=?3 AND entry_id=?4",
@@ -63,6 +67,7 @@ impl ReadOnlyCache {
             )
             .optional()
             .map_err(rows::database_error)?;
+        tx.commit().map_err(rows::database_error)?;
         match deleted {
             None => Ok(if fenced {
                 CataloguePresence::Tombstone

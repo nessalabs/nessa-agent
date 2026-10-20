@@ -49,10 +49,13 @@ permission. The phone publication lease (`PhoneLease`) is what a later saved
 read or held-file fetch must present. A stamp from an earlier receiver reads
 nothing and does not dial. A successful purge releases that receiver even when
 the status carries no observation. Catalogue presence reads one stored identity;
-absence is not a tombstone. Held-file freshness is either a local digest match,
-with no range asked, or a gateway confirmation of the part on disk. Elapsed time
-on either path is the session clock. Busy-range retries wait on the pause the
-session was composed with. The native session and compound
+absence is not a tombstone, from one snapshot of the fence and the row.
+Held-file freshness is either a local digest match, with no range asked, or a
+gateway confirmation of the part on disk. Elapsed time is the session clock,
+including the status read when the file is not already local. A fault also
+reports the bytes the part had already resumed. A malformed digest, media type,
+or size is an invalid argument on the native call and does not dial. Busy-range
+retries wait on the pause the session was composed with. The native session and compound
 refresh API have run against paired records through generated Swift on macOS.
 `swift/NativeSessionWorker.swift` supplies pre-queue admission, cancellation latches
 and a shared physical close task around generated calls. The release Apple package

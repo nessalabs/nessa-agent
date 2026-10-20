@@ -10,7 +10,7 @@ use super::{failure, ReadFailure, ReadStop, ReaderAccess, RetainedCache, Stoppin
 use crate::read_only_sync::application::held_file::{
     fetch_held_file, kept_output, FetchCause, FetchFailure, FileStep, HeldFileSource, Pause,
 };
-use crate::read_only_sync::domain::HeldFile;
+use crate::read_only_sync::domain::{HeldFile, MAX_HELD_FILE_BYTES};
 use crate::read_only_sync::infrastructure::gateway::GatewayConnection;
 use crate::read_only_sync::infrastructure::held_file::DiskFiles;
 use nessa_protocol::conversation::domain::ConversationId;
@@ -88,6 +88,16 @@ pub struct ArtifactFault {
     resumed_from: u64,
 }
 impl ArtifactFault {
+    /// A fault and the part's progress at that moment.
+    /// `reached` is bytes of the named file still in the part.
+    /// `resumed_from` is bytes already there when this run began.
+    pub fn progress(kind: ArtifactFaultKind, reached: u64, resumed_from: u64) -> Self {
+        Self {
+            kind,
+            reached,
+            resumed_from,
+        }
+    }
     /// Why the file was not kept.
     pub fn kind(self) -> ArtifactFaultKind {
         self.kind
@@ -224,6 +234,15 @@ impl<'a> ArtifactRequest<'a> {
             output,
         }
     }
+}
+
+/// Whether `digest`, `media_type`, and `size` name a held file.
+/// A malformed digest or media type, a size of zero, or a size above the
+/// held-file maximum does not. This reads nothing.
+pub fn artifact_name_accepted(digest: &str, media_type: &str, size: u64) -> bool {
+    Sha256Digest::parse(digest).is_ok()
+        && MediaType::parse(media_type).is_ok()
+        && std::num::NonZeroU64::new(size).is_some_and(|value| value.get() <= MAX_HELD_FILE_BYTES)
 }
 
 /// The output's existing bytes, before any dial. `Ok(None)` means the file
