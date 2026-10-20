@@ -1,4 +1,7 @@
-use super::{ArtifactBytes, CatalogueHead, ConversationError, Reader};
+use super::{
+    ArtifactBytes, CatalogueHead, ConversationError, ConversationModelApplication,
+    ConversationModelRequest, ConversationModelRequestState, Reader,
+};
 use crate::conversation::domain::{
     Capabilities, Conversation, ConversationDeletion, ProviderSessionErasure,
 };
@@ -96,9 +99,9 @@ pub struct ConversationModeRequest {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConversationModeAuditPhase {
-    AdmissionRefused,
     Application,
     RecoveryRestored,
+    RecoveryApplied,
 }
 
 pub trait ConversationModeAudit: Send + Sync {
@@ -225,6 +228,33 @@ pub trait ConversationRepository: Send + Sync {
         id: &ConversationId,
         request_id: &str,
     ) -> ConversationFuture<'_, Option<ConversationModeRequest>>;
+    /// Acknowledge the exact model intent before a native control is sent.
+    fn begin_model_change(
+        &self,
+        request: ConversationModelRequest,
+    ) -> ConversationFuture<'_, ConversationModelRequest>;
+    fn pending_model_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>>;
+    fn model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>>;
+    fn observe_model_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: ConversationModelApplication,
+    ) -> ConversationFuture<'_, ConversationModelRequest>;
+    /// Commit the acknowledged model and approval selection in one transaction.
+    fn finish_model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationModelRequestState,
+    ) -> ConversationFuture<'_, ConversationModelRequest>;
     /// Whether a committed choice was made without an open provider session.
     /// A cold owner must verify its attachment before admitting a turn.
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool>;

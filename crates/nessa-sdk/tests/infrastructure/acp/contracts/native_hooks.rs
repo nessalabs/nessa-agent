@@ -58,7 +58,7 @@ async fn open_and_prompt(binding: &impl AgentProvider) -> OperationCapabilities 
     assert_eq!(
         opened
             .session
-            .execute(prompt("with native hooks allowed"))
+            .execute(prompt("with native hooks allowed"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .expect("a prompt must run while native hooks are allowed"),
@@ -157,7 +157,11 @@ async fn relaunch_after_turning_hooks_off(
         .into_result()
         .unwrap();
     assert_eq!(
-        opened.session.execute(prompt("again")).await.into_result(),
+        opened
+            .session
+            .execute(prompt("again"), Arc::new(|| Ok(())))
+            .await
+            .into_result(),
         Ok(ExecutionOutcome::Completed)
     );
     assert!(!opened

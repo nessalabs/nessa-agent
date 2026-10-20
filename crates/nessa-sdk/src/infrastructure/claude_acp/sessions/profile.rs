@@ -3,7 +3,7 @@ use super::configuration;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::providers::{
-    ApprovalMode, ApprovalModeChoice, NativeHooksSwitch,
+    ApprovalMode, ApprovalModeChoice, ModelChangeTiming, NativeHooksSwitch,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::prompts::SystemPrompt;
@@ -227,6 +227,56 @@ impl AcpProfile for ClaudeProfile {
                 json!({"sessionId":session_id,"configId":"mode","value":native_mode(self.approval_mode)}),
             ])
             .collect()
+    }
+    fn change_model(
+        &mut self,
+        session_id: &str,
+        capabilities: &EffectiveCapabilities,
+    ) -> Result<Value, AgentError> {
+        Ok(
+            json!({"sessionId": session_id, "configId": "model", "value": capabilities.model().model_id()}),
+        )
+    }
+    fn retain_model_configuration(
+        &mut self,
+        capabilities: &EffectiveCapabilities,
+        mode: ApprovalMode,
+        effort: Option<EffortLevel>,
+    ) -> Result<(), AgentError> {
+        let _ = capabilities;
+        self.approval_mode = mode;
+        self.effort_level = effort;
+        Ok(())
+    }
+    fn confirm_model(
+        &mut self,
+        result: &Value,
+        capabilities: &EffectiveCapabilities,
+    ) -> Result<(ApprovalMode, Option<EffortLevel>, ModelChangeTiming), AgentError> {
+        let options = result
+            .get("configOptions")
+            .and_then(Value::as_array)
+            .ok_or_else(|| protocol("missing model configuration"))?;
+        let mut modes = options
+            .iter()
+            .filter(|option| option.get("id").and_then(Value::as_str) == Some("mode"));
+        let mode = modes
+            .next()
+            .and_then(|option| option.get("currentValue"))
+            .and_then(Value::as_str);
+        if modes.next().is_some() {
+            return Err(protocol("duplicate mode config option"));
+        }
+        let mode = match mode {
+            Some("default") => ApprovalMode::Ask,
+            Some("auto") => ApprovalMode::Auto,
+            Some("bypassPermissions") => ApprovalMode::Full,
+            _ => return Err(protocol("unknown mode after model change")),
+        };
+        let effort = thought_level::selected(result, EFFORT)?;
+        self.retain_model_configuration(capabilities, mode, effort.clone())?;
+        self.verify_session(result, capabilities, true)?;
+        Ok((mode, effort, ModelChangeTiming::SubsequentResponses))
     }
     fn change_approval_mode(
         &mut self,

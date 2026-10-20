@@ -109,6 +109,10 @@ pub(crate) enum InstallRefusal {
     Platform,
     /// This build's own executable could not be read here.
     Source,
+    /// The release build for the host's platform (#734) could not be
+    /// downloaded, or what was is not the build this one pins: `seen` is its
+    /// SHA-256 then. Nothing was sent.
+    Release,
     /// What arrived on the host is not what was sent.
     Fingerprint,
     /// What arrived runs, and speaks another lease protocol.

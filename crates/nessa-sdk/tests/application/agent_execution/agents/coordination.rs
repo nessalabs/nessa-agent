@@ -4,6 +4,7 @@ use crate::application::agent_execution::agents::{
     AgentFuture, AttachmentPhase, AttachmentRequest,
 };
 use crate::application::agent_execution::permissions::QuestionAnswer;
+use crate::application::agent_execution::providers::NativeExecutionHandoff;
 use crate::application::{
     agent_execution::{
         executions::{
@@ -26,6 +27,7 @@ use crate::application::{
     },
     dto::{ModalitiesDto, ModelMetadataDto},
 };
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 
 struct AcceptingAudit;
 impl ExecutionAudit for AcceptingAudit {
@@ -181,6 +183,9 @@ struct Backend {
 }
 struct Events(Arc<Backend>);
 impl AgentProvider for Provider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("control-handoff", "fixture", "fixture").unwrap()
     }
@@ -233,6 +238,9 @@ impl AgentProvider for Provider {
     }
 }
 impl AgentProvider for RecoveryOpenFailureProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.inner.harness_host_identity()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.inner.identity()
     }
@@ -251,8 +259,16 @@ impl ProviderSessionBackend for Backend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        _: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             self.executions.fetch_add(1, Ordering::SeqCst);
             self.execute_entered.notify_one();
             let hold = self.execute_hold.lock().unwrap().take();
@@ -272,6 +288,7 @@ impl ProviderSessionBackend for Backend {
         &'a self,
         _target: ExecutionId,
         _input: ExecutionRequest,
+        _capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {

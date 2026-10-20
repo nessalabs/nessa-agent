@@ -29,6 +29,15 @@ describe("waitingReviews", () => {
     expect(waitingReviews({ reviews: [{ conversationId: "c" }] })).toBeNull()
     expect(waitingReviews({ reviews: "p1" })).toBeNull()
   })
+
+  it("keeps the conversation's title the gateway sent, and drops a blank one", () => {
+    expect(waitingReviews({ reviews: [{ ...review("p1"), title: " Fix CI " }] })).toEqual(
+      [{ ...review("p1"), conversationTitle: "Fix CI" }],
+    )
+    expect(waitingReviews({ reviews: [{ ...review("p1"), title: "  " }] })).toEqual([
+      review("p1"),
+    ])
+  })
 })
 
 describe("applyReviewSnapshot", () => {
@@ -123,6 +132,25 @@ describe("browserReviewNotifier names the conversation", () => {
     bindConversationTitles(() => "   ")
     notifier.show(review("p3"))
     expect(created[2]?.body).toBe("11111111-1111-4111-8111-111111111111")
+    bindConversationTitles(() => null)
+    vi.unstubAllGlobals()
+  })
+
+  it("prefers the gateway's title, which a review can carry before the window lists it", () => {
+    const created: string[] = []
+    class FakeNotification {
+      static permission: NotificationPermission = "granted"
+      constructor(_title: string, options?: NotificationOptions) {
+        created.push(options?.body ?? "")
+      }
+      close() {}
+    }
+    vi.stubGlobal("Notification", FakeNotification)
+    const notifier = browserReviewNotifier(() => {})
+    notifier.show({ ...review("p1"), conversationTitle: "Plan the trip" })
+    bindConversationTitles(() => "Older title")
+    notifier.show({ ...review("p2"), conversationTitle: "Plan the trip" })
+    expect(created).toEqual(["Plan the trip", "Plan the trip"])
     bindConversationTitles(() => null)
     vi.unstubAllGlobals()
   })

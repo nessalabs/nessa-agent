@@ -138,7 +138,7 @@ async fn a_session_is_opened_configured_and_prompted_through_the_shared_runtime(
     assert_eq!(
         opened
             .session
-            .execute(prompt("first"))
+            .execute(prompt("first"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .unwrap(),
@@ -195,7 +195,7 @@ async fn instructions_reach_codex_through_its_own_configuration() {
     assert_eq!(
         opened
             .session
-            .execute(prompt("hello"))
+            .execute(prompt("hello"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .unwrap(),
@@ -457,7 +457,7 @@ async fn codex_reporting_its_configuration_while_it_is_being_configured_is_not_a
     assert_eq!(
         opened
             .session
-            .execute(prompt("after the update"))
+            .execute(prompt("after the update"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .unwrap(),
@@ -537,7 +537,7 @@ async fn codex_startup_and_restoration_continue_when_native_hook_suppression_is_
     assert_eq!(
         opened
             .session
-            .execute(prompt("with hooks unproven"))
+            .execute(prompt("with hooks unproven"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .expect("a prompt must run while hook suppression is unsupported"),
@@ -564,7 +564,7 @@ async fn codex_startup_and_restoration_continue_when_native_hook_suppression_is_
     assert_eq!(
         restored
             .session
-            .execute(prompt("restored with hooks unproven"))
+            .execute(prompt("restored with hooks unproven"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .expect("a restored prompt must run while hook suppression is unsupported"),
@@ -591,7 +591,7 @@ async fn a_restored_codex_session_is_configured_again_before_it_is_used() {
     assert_eq!(
         opened
             .session
-            .execute(prompt("before"))
+            .execute(prompt("before"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .unwrap(),
@@ -615,7 +615,7 @@ async fn a_restored_codex_session_is_configured_again_before_it_is_used() {
     assert_eq!(
         restored
             .session
-            .execute(prompt("after"))
+            .execute(prompt("after"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .unwrap(),

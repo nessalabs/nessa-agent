@@ -105,10 +105,15 @@ async fn execution_deadline_audits_context_and_execution_cause() {
         .unwrap();
     // Once the agent has the prompt, the execution's bound passes.
     let (answer, ()) = promptly(async {
-        tokio::join!(opened.session.execute(prompt("deadline")), async {
-            wait_for_file(&root, "prompt-observed").await;
-            clock.advance(limit);
-        })
+        tokio::join!(
+            opened
+                .session
+                .execute(prompt("deadline"), Arc::new(|| Ok(()))),
+            async {
+                wait_for_file(&root, "prompt-observed").await;
+                clock.advance(limit);
+            }
+        )
     })
     .await;
     assert_eq!(answer.into_result(), Err(AgentError::Deadline));
@@ -427,7 +432,11 @@ async fn every_permission_free_outcome_has_once_only_execution_evidence() {
             .await
             .unwrap();
         let session = opened.session.id().clone();
-        let result = opened.session.execute(prompt("test")).await.into_result();
+        let result = opened
+            .session
+            .execute(prompt("test"), Arc::new(|| Ok(())))
+            .await
+            .into_result();
         assert_eq!(result.is_ok(), expected.is_ok());
         opened
             .session
@@ -494,7 +503,10 @@ async fn failed_execution_audit_prevents_success_and_still_cleans_up() {
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
         .unwrap();
-    let ProviderExecutionReply::Finished(settlement) = opened.session.execute(prompt("test")).await
+    let ProviderExecutionReply::Finished(settlement) = opened
+        .session
+        .execute(prompt("test"), Arc::new(|| Ok(())))
+        .await
     else {
         panic!("provider was dispatched")
     };
@@ -571,7 +583,9 @@ async fn malformed_provider_control_fails_unlimited_execution_and_audits_cleanup
             .unwrap();
         let result = timeout(
             Duration::from_secs(3),
-            opened.session.execute(prompt("invalid-control")),
+            opened
+                .session
+                .execute(prompt("invalid-control"), Arc::new(|| Ok(()))),
         )
         .await
         .unwrap()

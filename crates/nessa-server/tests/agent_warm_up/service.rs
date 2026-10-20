@@ -12,6 +12,7 @@ use nessa_sdk::application::agent_execution::agents::{
 use nessa_sdk::application::agent_execution::executions::{
     AttachmentAuditStage, ExecutionAudit, ExecutionAuditRecord,
 };
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::providers::{
     AgentProvider, CleanupFuture, CleanupReport, CloseOutcome, ProviderCleanup, ProviderIdentity,
     ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest, SessionCloseRequest,
@@ -160,6 +161,9 @@ impl ProviderCleanup for OpenFailureCleanup {
     }
 }
 impl AgentProvider for OpenFailureProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.inner.harness_host_identity()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.inner.identity()
     }
@@ -176,6 +180,9 @@ impl AgentProvider for OpenFailureProvider {
     }
 }
 impl AgentProvider for OpenNoResourcesProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.0.harness_host_identity()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.0.identity()
     }

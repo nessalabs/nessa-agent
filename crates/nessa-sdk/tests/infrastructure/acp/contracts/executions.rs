@@ -132,7 +132,7 @@ async fn protocol_failures_and_output_overflow_close_owned_scope() {
             .unwrap();
         let result = timeout(
             Duration::from_secs(3),
-            opened.session.execute(prompt("test")),
+            opened.session.execute(prompt("test"), Arc::new(|| Ok(()))),
         )
         .await
         .unwrap()
@@ -177,7 +177,7 @@ async fn maps_terminal_reasons_and_rejects_client_execution_requests() {
         assert_eq!(
             opened
                 .session
-                .execute(prompt("test"))
+                .execute(prompt("test"), Arc::new(|| Ok(())))
                 .await
                 .into_result()
                 .unwrap(),
@@ -247,7 +247,10 @@ async fn terminal_delivery_failure_is_reported_by_both_prompt_and_event_reader()
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
         .unwrap();
-    let ProviderExecutionReply::Finished(settlement) = opened.session.execute(prompt("full")).await
+    let ProviderExecutionReply::Finished(settlement) = opened
+        .session
+        .execute(prompt("full"), Arc::new(|| Ok(())))
+        .await
     else {
         panic!("provider was dispatched")
     };
@@ -361,7 +364,12 @@ async fn blocked_prompt_write_obeys_execution_deadline_or_the_default_write_boun
         // mebibyte of this two-mebibyte prompt.
         let expected = limit.unwrap_or(Duration::from_secs(3));
         let session = opened.session.clone();
-        let running = tokio::spawn(async move { session.execute(request).await.into_result() });
+        let running = tokio::spawn(async move {
+            session
+                .execute(request, Arc::new(|| Ok(())))
+                .await
+                .into_result()
+        });
         // The blocked write waits for exactly that bound, and the clock goes
         // there and no further before the closure is recorded.
         timeout(
@@ -419,7 +427,10 @@ async fn acp_message_id_is_retained_for_each_streamed_fragment() {
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
         .unwrap();
-    let ProviderExecutionReply::Finished(report) = opened.session.execute(prompt("hello")).await
+    let ProviderExecutionReply::Finished(report) = opened
+        .session
+        .execute(prompt("hello"), Arc::new(|| Ok(())))
+        .await
     else {
         panic!("dispatched")
     };
@@ -466,10 +477,13 @@ async fn an_agent_frame_over_the_inbound_ceiling_fails_although_the_host_writes_
     large.user_message = UserMessage::text_only(PromptText::new(&text).unwrap());
     // This message is eight times the inbound ceiling and is admitted and
     // written; the fixture's twenty-thousand-byte answer is what fails.
-    let result = timeout(Duration::from_secs(5), opened.session.execute(large))
-        .await
-        .unwrap()
-        .into_result();
+    let result = timeout(
+        Duration::from_secs(5),
+        opened.session.execute(large, Arc::new(|| Ok(()))),
+    )
+    .await
+    .unwrap()
+    .into_result();
     assert!(matches!(result, Err(AgentError::Protocol(_))), "{result:?}");
     let observed: Value =
         serde_json::from_str(&read_to_string(root.path().join("prompt-observed")).unwrap())
@@ -497,7 +511,10 @@ async fn authentication_refusal_ends_observation_without_hiding_independent_audi
             .open(ProviderOpenRequest::without_startup_control(None))
             .await
             .unwrap();
-        let reply = opened.session.execute(prompt("auth")).await;
+        let reply = opened
+            .session
+            .execute(prompt("auth"), Arc::new(|| Ok(())))
+            .await;
         let report = match reply {
             ProviderExecutionReply::Finished(report) => report,
             _ => panic!("expected provider settlement"),

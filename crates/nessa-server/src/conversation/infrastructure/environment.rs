@@ -16,6 +16,7 @@ use crate::conversation::application::{
     Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, GrantedTerms,
     LeaseHold, LeaseRelease,
 };
+use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::application::agent_execution::providers::AgentProvider;
 use nessa_sdk::domain::agent_execution::leases::{
     EnvironmentRef, LeaseCleanup, LeaseEndCause, LeaseId, LeaseRefusal, LeaseTerms, SandboxProfiles,
@@ -71,6 +72,13 @@ impl Environment for InProcessEnvironment {
 struct InProcessHold;
 
 impl LeaseHold for InProcessHold {
+    fn model_provider(
+        &self,
+        binding: Arc<dyn AgentProvider>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        Ok(binding)
+    }
+
     fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
         None
     }

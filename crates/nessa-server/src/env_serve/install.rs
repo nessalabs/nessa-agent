@@ -2,7 +2,8 @@
 //! over SSH to find it, put it there, and start it (issue #703).
 //!
 //! ```text
-//! serve_command   ──▶ exec ~/.nessa/env/<digest>/nessa env serve
+//! serve_command   ──▶ exec the first ~/.nessa/env/<digest>/nessa kept there
+//!                     of the digests named, env serve
 //!                     absent: the stream ends with no hello
 //! probe_command   ──▶ "present", or "absent <os> <arch> <libc>"
 //! upload_command  ──▶ stdin to a private temporary file under ~/.nessa/env
@@ -47,29 +48,41 @@ pub const INSTALL_DIRECTORY: &str = ".nessa/env";
 /// before a later install removes it, in minutes.
 const ABANDONED_MINUTES: u32 = 60;
 
-/// The command that starts the build whose SHA-256 is `build` in its
-/// environment role on a host.
+/// The command that starts, in its environment role on a host, the first
+/// copy kept there of the builds whose SHA-256s are `builds`, in that order:
+/// a gateway's own executable, then the release builds of its sources it
+/// pins for each platform (#734). Two gateways of one release on different
+/// platforms may each leave a copy on a host (an app's gateway is not the
+/// standalone build of its own platform); both speak one protocol and share
+/// the host's data directory, so either serves. With none there the stream
+/// ends with no hello.
 #[must_use]
-pub fn serve_command(build: &str) -> String {
-    hex(build);
-    format!("sh -c 'exec \"$HOME/{INSTALL_DIRECTORY}/{build}/nessa\" env serve'")
+pub fn serve_command(builds: &[&str]) -> String {
+    format!(
+        "sh -c 'for d in {}; do \
+p=\"$HOME/{INSTALL_DIRECTORY}/$d/nessa\"; \
+if [ -x \"$p\" ]; then exec \"$p\" env serve; fi; done'",
+        words(builds)
+    )
 }
 
-/// The command that says whether the build whose SHA-256 is `build` is
-/// installed on a host — a copy where it is kept that runs and says it
-/// speaks `protocol` — and if not, what the host runs on. A copy that no longer runs (the host's C library changed, its
-/// home is now mounted without execution) is absent, so it is installed
-/// again or refused with the reason.
+/// The command that says whether one of the builds whose SHA-256s are
+/// `builds` is installed on a host — the first copy kept there, as
+/// [`serve_command`] finds it, runs and says it speaks `protocol` — and if
+/// not, what the host runs on. A copy that no longer runs (the host's C
+/// library changed, its home is now mounted without execution) is absent,
+/// so it is installed again or refused with the reason.
 #[must_use]
-pub fn probe_command(protocol: &str, build: &str) -> String {
+pub fn probe_command(protocol: &str, builds: &[&str]) -> String {
     hex(protocol);
-    hex(build);
     format!(
         "sh -c '\
-p=\"$HOME/{INSTALL_DIRECTORY}/{build}/nessa\"; \
-if [ -x \"$p\" ] && [ \"$(\"$p\" env protocol 2>/dev/null)\" = \"{protocol}\" ]; then echo present; else \
+p=; for d in {}; do \
+if [ -x \"$HOME/{INSTALL_DIRECTORY}/$d/nessa\" ]; then p=\"$HOME/{INSTALL_DIRECTORY}/$d/nessa\"; break; fi; done; \
+if [ -n \"$p\" ] && [ \"$(\"$p\" env protocol 2>/dev/null)\" = \"{protocol}\" ]; then echo present; else \
 if getconf GNU_LIBC_VERSION >/dev/null 2>&1; then l=gnu; else l=other; fi; \
-echo \"absent $(uname -s) $(uname -m) $l\"; fi'"
+echo \"absent $(uname -s) $(uname -m) $l\"; fi'",
+        words(builds)
     )
 }
 
@@ -109,6 +122,16 @@ echo installed'",
     )
 }
 
+/// Digests as the words of a `for` list: at least one, each hex.
+fn words(builds: &[&str]) -> String {
+    assert!(
+        !builds.is_empty(),
+        "a host command names at least one build"
+    );
+    builds.iter().for_each(|build| hex(build));
+    builds.join(" ")
+}
+
 /// A protocol or digest is lowercase hex, so it can sit in a script.
 fn hex(value: &str) {
     assert!(
@@ -146,6 +169,24 @@ impl Platform {
             arch: std::env::consts::ARCH.into(),
             libc: libc.into(),
         }
+    }
+
+    /// The platform a release builds `target` for (#734): one of the
+    /// targets a release publishes a standalone `nessa` for, named by its
+    /// Rust target triple; `None` for any other.
+    #[must_use]
+    pub fn of_target(target: &str) -> Option<Self> {
+        let (os, arch, libc) = match target {
+            "aarch64-apple-darwin" => ("macos", "aarch64", "other"),
+            "x86_64-apple-darwin" => ("macos", "x86_64", "other"),
+            "x86_64-unknown-linux-gnu" => ("linux", "x86_64", "gnu"),
+            _ => return None,
+        };
+        Some(Self {
+            os: os.into(),
+            arch: arch.into(),
+            libc: libc.into(),
+        })
     }
 
     /// A host's platform from its probe's words.

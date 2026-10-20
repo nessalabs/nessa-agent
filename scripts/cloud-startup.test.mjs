@@ -5,9 +5,11 @@ import { createHash } from "node:crypto"
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -85,6 +87,13 @@ else if (tool === 'curl') {
   }
 } else if (tool === 'rustc') console.log('rustc 1.99.1')
 else if (tool === 'cargo') {
+  if (args[0] === 'install') {
+    if (exists('fail-just-install')) process.exit(101)
+    const bin = path.join(args[args.indexOf('--root') + 1], 'bin')
+    fs.mkdirSync(bin, {recursive:true})
+    fs.writeFileSync(path.join(bin, 'just'), '#!/bin/sh\necho "just ' + args[args.indexOf('--version') + 1] + '"\n', {mode:0o755})
+    process.exit(0)
+  }
   if (args.includes('--offline') && !exists('cargo')) process.exit(1)
   touch('cargo')
 } else if (tool === 'pnpm') {
@@ -117,9 +126,13 @@ else if (tool === 'cargo') {
     const mod = path.join(process.cwd(), 'node_modules/playwright')
     fs.mkdirSync(mod, {recursive:true})
     fs.writeFileSync(path.join(mod, 'package.json'), '{"type":"module","exports":"./index.js"}')
-    fs.writeFileSync(path.join(mod, 'index.js'), 'import fs from \'node:fs\';const engine=file=>({executablePath:()=>file,launch:async()=>{if(!fs.existsSync('+JSON.stringify(marker('browser-libraries'))+'))throw new Error(\'missing browser runtime libraries\');return{newPage:async()=>({setContent:async()=>{},textContent:async()=>\'Nessa cloud startup\'}),close:async()=>{}}}});export const chromium=engine('+JSON.stringify(marker('chromium'))+');export const webkit=engine('+JSON.stringify(marker('webkit'))+');')
+    fs.writeFileSync(path.join(mod, 'index.js'), 'import fs from \'node:fs\';import path from \'node:path\';const engine=(file,linked)=>{const executablePath=()=>process.env.PLAYWRIGHT_BROWSERS_PATH?path.join(process.env.PLAYWRIGHT_BROWSERS_PATH,linked):file;return{executablePath,launch:async()=>{if(!fs.existsSync(executablePath()))throw new Error(\'missing browser\');if(!fs.existsSync('+JSON.stringify(marker('browser-libraries'))+'))throw new Error(\'missing browser runtime libraries\');return{newPage:async()=>({setContent:async()=>{},textContent:async()=>\'Nessa cloud startup\'}),close:async()=>{}}}}};export const chromium=engine('+JSON.stringify(marker('chromium'))+',\'chromium-1243/chrome-linux64/chrome\');export const webkit=engine('+JSON.stringify(marker('webkit'))+',\'webkit-2359/pw_run.sh\');')
   } else if (args.includes('playwright')) {
     if(args.includes('--with-deps')) touch('browser-libraries')
+    if (exists('refuse-browser-download')) { console.log("Error: Download failed: server returned code 403 body 'request blocked'"); process.exit(1) }
+    if (exists('fail-browser-install')) process.exit(1)
+    const browsers = process.env.PLAYWRIGHT_BROWSERS_PATH
+    if (browsers) for (const file of ['chromium-1243/chrome-linux64/chrome', 'webkit-2359/pw_run.sh']) { fs.mkdirSync(path.dirname(path.join(browsers, file)), {recursive:true}); fs.writeFileSync(path.join(browsers, file), '', {mode:0o755}) }
     for (const name of ['chromium','webkit']) { touch(name); fs.chmodSync(marker(name),0o755) }
   }
 } else if (tool === 'git') console.log('1111111111111111111111111111111111111111')
@@ -160,8 +173,10 @@ else process.exit(2)
     join(repository, "scripts/ensure-nessa-ui.mjs"),
     `import{existsSync,writeFileSync,rmSync}from'node:fs';import{join}from'node:path';export const checkVendor=({root,requireOwned=false})=>requireOwned&&existsSync(join(root,'.ui-borrowed'))?'Borrowed UI fixture':existsSync(join(root,'.ui-ready'))?null:'UI fixture requires preparation';export const prepareVendor=({root})=>{writeFileSync(join(root,'.ui-ready'),'');rmSync(join(root,'.ui-borrowed'),{force:true})}`,
   )
+  // A sandbox's own browsers would otherwise reach the fallback in every test.
+  const { PLAYWRIGHT_BROWSERS_PATH: _sandboxBrowsers, ...inherited } = process.env
   const env = {
-    ...process.env,
+    ...inherited,
     TEST_FIXTURE: root,
     HOME: home,
     PATH: `${bin}:${process.env.PATH}`,
@@ -269,6 +284,7 @@ test("cold preparation installs owned tools; warm maintenance verifies without n
     node: "installed",
     pnpm: "installed",
     rust: "installed",
+    just: "installed",
     ui: "prepared",
     dependencies: "fetched",
     cargo: "fetched",
@@ -286,6 +302,7 @@ test("cold preparation installs owned tools; warm maintenance verifies without n
     node: "reused",
     pnpm: "reused",
     rust: "reused",
+    just: "reused",
     ui: "reused",
     dependencies: "offline",
     cargo: "offline",
@@ -305,6 +322,7 @@ test("cold preparation installs owned tools; warm maintenance verifies without n
         (tool === "pnpm" &&
           (args.includes("playwright") ||
             (args[0] === "install" && !args.includes("--offline")))) ||
+        (tool === "cargo" && args[0] === "install") ||
         (tool === "cargo" && args[0] === "fetch" && !args.includes("--offline")),
     )
   assert.deepEqual(
@@ -320,12 +338,13 @@ test("cold preparation installs owned tools; warm maintenance verifies without n
       "PATH=/usr/local/bin:/usr/bin:/bin",
       "bash",
       "-lc",
-      'node --version; pnpm --version; command -v pnpm; rustc --version; bash -c "node --version; pnpm --version; command -v pnpm; rustc --version"',
+      'node --version; pnpm --version; command -v pnpm; rustc --version; just --version; bash -c "node --version; pnpm --version; command -v pnpm; rustc --version; just --version"',
     ],
     { encoding: "utf8" },
   )
   assert.equal(shell.status, 0, shell.stderr)
   assert.equal(shell.stdout.split("v24.22.0").length - 1, 2)
+  assert.equal(shell.stdout.split("just 1.").length - 1, 2)
   assert.equal(
     shell.stdout.split(join(f.env.NESSA_CLOUD_ROOT, "node/bin/pnpm")).length - 1,
     2,
@@ -470,6 +489,108 @@ test("a stalled browser repair is bounded and cannot publish success", (t) => {
     "chromium",
     "webkit",
   ])
+})
+
+function sandboxBrowsers(f) {
+  const sandbox = join(f.root, "sandbox-browsers")
+  const chrome = join(sandbox, "chromium-1194/chrome-linux/chrome")
+  const shell = join(sandbox, "chromium_headless_shell-1194/chrome-linux/headless_shell")
+  for (const file of [chrome, shell]) {
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, "#!/bin/sh\n", { mode: 0o755 })
+  }
+  return { sandbox, chrome, shell }
+}
+
+test("a refused browser download falls back to the sandbox's own Chromium", (t) => {
+  const f = bootstrapFixture(t)
+  const { sandbox, chrome, shell } = sandboxBrowsers(f)
+  writeFileSync(join(f.root, "refuse-browser-download"), "")
+  f.env.PLAYWRIGHT_BROWSERS_PATH = sandbox
+  const cold = f.prepare("setup")
+  assert.equal(cold.status, 0, cold.stderr)
+  assert.match(cold.stderr, /WebKit checks cannot run/)
+  assert.equal(f.receipt().steps.browsers, "sandbox-chromium")
+  const links = join(f.env.NESSA_CLOUD_ROOT, "browsers")
+  assert.equal(realpathSync(join(links, "chromium-1243/chrome-linux64/chrome")), chrome)
+  assert.equal(
+    realpathSync(
+      join(
+        links,
+        "chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell",
+      ),
+    ),
+    shell,
+  )
+  const loginShell = (environment) =>
+    spawnSync(
+      "env",
+      [
+        "-i",
+        `HOME=${f.home}`,
+        ...environment,
+        "PATH=/usr/bin:/bin",
+        "bash",
+        "-lc",
+        'printf "%s %s" "$PLAYWRIGHT_BROWSERS_PATH" "$NESSA_BROWSER_CHANNEL"',
+      ],
+      { encoding: "utf8" },
+    ).stdout
+  assert.equal(loginShell([]), `${links} bundled`)
+
+  // A shell that sourced the helper hands the links back; the rerun still
+  // starts from the sandbox's own browsers.
+  f.env.PLAYWRIGHT_BROWSERS_PATH = links
+  const warm = f.prepare("maintenance")
+  assert.equal(warm.status, 0, warm.stderr)
+  assert.equal(f.receipt().steps.browsers, "sandbox-chromium")
+  assert.equal(realpathSync(join(links, "chromium-1243/chrome-linux64/chrome")), chrome)
+  assert.equal(
+    readFileSync(join(f.env.NESSA_CLOUD_ROOT, "browsers-source"), "utf8"),
+    sandbox,
+  )
+
+  // A failed rerun keeps the links the earlier receipt describes.
+  writeFileSync(join(f.root, "fail-just-install"), "")
+  rmSync(join(f.env.NESSA_CLOUD_ROOT, "just"), { recursive: true })
+  assert.notEqual(f.prepare("maintenance").status, 0)
+  assert.equal(loginShell([]), `${links} bundled`)
+  rmSync(join(f.root, "fail-just-install"))
+
+  // Once the download works, Playwright's own browsers replace the links.
+  rmSync(join(f.root, "refuse-browser-download"))
+  const repaired = f.prepare("maintenance")
+  assert.equal(repaired.status, 0, repaired.stderr)
+  assert.equal(f.receipt().steps.browsers, "installed")
+  assert.equal(existsSync(links), false)
+  assert.equal(loginShell([`PLAYWRIGHT_BROWSERS_PATH=${sandbox}`]), `${sandbox} bundled`)
+})
+
+test("a browser install that fails for another reason does not fall back", (t) => {
+  const f = bootstrapFixture(t)
+  const { sandbox } = sandboxBrowsers(f)
+  writeFileSync(join(f.root, "fail-browser-install"), "")
+  f.env.PLAYWRIGHT_BROWSERS_PATH = sandbox
+  const result = f.prepare("setup")
+  assert.equal(result.status, 1, result.stderr)
+  assert.equal(existsSync(join(f.env.NESSA_CLOUD_ROOT, "browsers")), false)
+  assert.equal(existsSync(join(f.env.NESSA_CLOUD_ROOT, "preparation.json")), false)
+})
+
+test("a refused browser download with no sandbox browsers publishes nothing", (t) => {
+  const f = bootstrapFixture(t)
+  writeFileSync(join(f.root, "refuse-browser-download"), "")
+  const result = f.prepare("setup")
+  assert.equal(result.status, 1, result.stderr)
+  assert.equal(existsSync(join(f.env.NESSA_CLOUD_ROOT, "preparation.json")), false)
+})
+
+test("a failed just install cannot publish success", (t) => {
+  const f = bootstrapFixture(t)
+  writeFileSync(join(f.root, "fail-just-install"), "")
+  const result = f.prepare("setup")
+  assert.equal(result.status, 101, result.stderr)
+  assert.equal(existsSync(join(f.env.NESSA_CLOUD_ROOT, "preparation.json")), false)
 })
 
 test("nested UI dependency fetching cannot be reported as offline reuse", (t) => {

@@ -1,6 +1,8 @@
 //! Fast consumption cannot turn one invocation into unbounded retained history.
 use super::{actor, capabilities, request, MemoryStorage};
 use crate::application::agent_execution::support::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 use std::{future::poll_fn, task::Poll, time::Duration};
 use tokio::{
     sync::{oneshot, watch, Notify},
@@ -20,6 +22,9 @@ struct OutputState {
 struct OutputProvider(Arc<OutputState>);
 struct OutputEvents(Arc<OutputState>);
 impl AgentProvider for OutputProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("output", "model", "").unwrap()
     }
@@ -72,8 +77,16 @@ impl ProviderSessionBackend for OutputState {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             let result: Result<ExecutionOutcome, AgentError> = {
                 async move {
                     *self.target.lock().unwrap() = Some(input.execution_id);

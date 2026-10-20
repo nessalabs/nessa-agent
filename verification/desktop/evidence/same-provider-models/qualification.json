@@ -1,0 +1,1806 @@
+{
+  "qualified_runtime_source_commit": "76e33529412a833eeab4c9f00da669f5a1c94774",
+  "qualified_runtime_source_tree": "bd604568d02275faedb7e8dc4c17dd4d9fc62575",
+  "immutable_main": "c0119e8b35b8b537b701638ee87a1a682c74cff8",
+  "integration_checkpoint": "f9b861d7f98547dc98f30f1afdffe6fe0538397f",
+  "ui_pin": "7a8fe71fe996305a71baba319387df6e81ffbe0e",
+  "gateway": {
+    "head": "f9b861d7f98547dc98f30f1afdffe6fe0538397f",
+    "tree": "4dc0b1f7b3c8dfaa76693c141a2a5c08638e4386",
+    "path": "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/target/debug/nessa",
+    "sha256": "000f43485fdd52788dbb747234d63632c27be432dadab75b390d8166c4084acf",
+    "size": 162315912,
+    "mtime_ns": 1792429322756274497,
+    "ui_pin": "7a8fe71fe996305a71baba319387df6e81ffbe0e",
+    "vendor_head": "7a8fe71fe996305a71baba319387df6e81ffbe0e",
+    "vendor_dirty": "",
+    "source_manifest": "/tmp/nessa-975-c011-final-source.json",
+    "moment": "after exact owned gateway build, before any canonical/browser/stress launch"
+  },
+  "source_manifest_sha256": "ee5e8750511fa7010bbbdd382471439016f1c5925535673b58386fcc83326a17",
+  "scope": "Affected f9 integration gates; later runtime delta only session-row checker and CHECKLIST, outside Rust/frontend/canonical execution inputs. No new whole6838/SDK broad/performance claim. Incoming moving main after c011 is not integrated or qualified.",
+  "checks": {
+    "frontend": {
+      "name": "frontend",
+      "command": ["pnpm", "frontend:check"],
+      "exit_code": 0,
+      "disk_floor_stop": false,
+      "minimum_free_bytes": 4901314560,
+      "elapsed_seconds": 184.285172834,
+      "log": "/tmp/nessa-975-c011-frontend.log",
+      "log_sha256": "e8b1dfadefef4c045d3decb92187000de3e0922b840d27d6b79ec90850ad3f99",
+      "source_drift": [],
+      "head": "f9b861d7f98547dc98f30f1afdffe6fe0538397f",
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "1",
+        "target": "default owned target"
+      }
+    },
+    "sdk-paged": {
+      "name": "sdk-paged",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "opening_a_long_history_reads_it_in_pages_not_once_per_save"
+      ],
+      "exit_code": 0,
+      "disk_floor_stop": false,
+      "minimum_free_bytes": 4956549120,
+      "elapsed_seconds": 32.922671542,
+      "log": "/tmp/nessa-975-c011-sdk-paged.log",
+      "log_sha256": "956ddec3f72a49f3cd2ddfecbef8c864baefcbf61b3c4a6758361fe5da4ab18b",
+      "source_drift": [],
+      "head": "f9b861d7f98547dc98f30f1afdffe6fe0538397f",
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "1",
+        "target": "default owned target"
+      }
+    },
+    "server-full-cold": {
+      "name": "server-full-cold",
+      "command": ["cargo", "test", "-p", "nessa-server"],
+      "exit_code": 0,
+      "disk_floor_stop": false,
+      "minimum_floor_bytes": 4294967296,
+      "reaction_stop_threshold_bytes": 5100273664,
+      "minimum_free_bytes": 33127731200,
+      "elapsed_seconds": 619.5721412500001,
+      "log": "/tmp/nessa-975-c011-server-full-cold.log",
+      "log_sha256": "13e6d6457828f9166b7f31d498ef45a47fd130a323edef0ba082be771ca46717",
+      "source_drift": [],
+      "head": "f9b861d7f98547dc98f30f1afdffe6fe0538397f",
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "1",
+        "target": "default owned target"
+      }
+    },
+    "protocol-client": {
+      "name": "protocol-client",
+      "command": ["cargo", "test", "-p", "nessa-protocol", "-p", "nessa-client-core"],
+      "exit_code": 0,
+      "disk_floor_stop": false,
+      "minimum_floor_bytes": 4294967296,
+      "reaction_stop_threshold_bytes": 5100273664,
+      "minimum_free_bytes": 31948886016,
+      "elapsed_seconds": 114.520941292,
+      "log": "/tmp/nessa-975-c011-protocol-client.log",
+      "log_sha256": "f58da24e9d98ff01275b5283b814489b9bf3e5743d23ae6ee1d23e34ca0ad022",
+      "source_drift": [],
+      "head": "f9b861d7f98547dc98f30f1afdffe6fe0538397f",
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "1",
+        "target": "default owned target"
+      }
+    },
+    "clippy-seven": {
+      "name": "clippy-seven",
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-device-client",
+        "-p",
+        "nessa-sdk",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "disk_floor_stop": false,
+      "minimum_floor_bytes": 4294967296,
+      "reaction_stop_threshold_bytes": 5100273664,
+      "minimum_free_bytes": 31577755648,
+      "elapsed_seconds": 157.82409475,
+      "log": "/tmp/nessa-975-c011-clippy-seven.log",
+      "log_sha256": "953f45e76112621dc51e8473c6eb4b5dd47ffd9cf53ea78ff85de8dccfdca659",
+      "source_drift": [],
+      "head": "f9b861d7f98547dc98f30f1afdffe6fe0538397f",
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "1",
+        "target": "default owned target"
+      }
+    },
+    "fmt-seven": {
+      "name": "fmt-seven",
+      "command": [
+        "cargo",
+        "fmt",
+        "--check",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-device-client",
+        "-p",
+        "nessa-sdk"
+      ],
+      "exit_code": 0,
+      "disk_floor_stop": false,
+      "minimum_floor_bytes": 4294967296,
+      "reaction_stop_threshold_bytes": 5100273664,
+      "minimum_free_bytes": 31577444352,
+      "elapsed_seconds": 3.060842834,
+      "log": "/tmp/nessa-975-c011-fmt-seven.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_drift": [],
+      "head": "f9b861d7f98547dc98f30f1afdffe6fe0538397f",
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "1",
+        "target": "default owned target"
+      }
+    },
+    "strict-sdk-docs": {
+      "name": "strict-sdk-docs",
+      "command": ["node", "scripts/check-sdk-docs.mjs"],
+      "exit_code": 0,
+      "disk_floor_stop": false,
+      "minimum_floor_bytes": 4294967296,
+      "reaction_stop_threshold_bytes": 5100273664,
+      "minimum_free_bytes": 31546191872,
+      "elapsed_seconds": 11.323903667,
+      "log": "/tmp/nessa-975-c011-strict-sdk-docs.log",
+      "log_sha256": "50a825e0f917ae8aaf3e9129d90c599cb217de2eedafe6b95de6aa558d9e4535",
+      "source_drift": [],
+      "head": "f9b861d7f98547dc98f30f1afdffe6fe0538397f",
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "1",
+        "target": "default owned target"
+      }
+    },
+    "gateway-build": {
+      "name": "gateway-build",
+      "command": ["cargo", "build", "-p", "nessa-server"],
+      "exit_code": 0,
+      "disk_floor_stop": false,
+      "minimum_floor_bytes": 4294967296,
+      "reaction_stop_threshold_bytes": 5100273664,
+      "minimum_free_bytes": 29963485184,
+      "elapsed_seconds": 75.824284791,
+      "log": "/tmp/nessa-975-c011-gateway-build.log",
+      "log_sha256": "225a2f3fef86fa25666eff9255af8df5280e9d2ab6260008425d26c85110f792",
+      "source_drift": [],
+      "head": "f9b861d7f98547dc98f30f1afdffe6fe0538397f",
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "1",
+        "target": "default owned target"
+      }
+    },
+    "canonical": {
+      "name": "canonical",
+      "command": [
+        "node",
+        "verification/desktop/scripts/scripted-e2e.mjs",
+        "--evidence",
+        "/tmp/nessa-975-c011-canonical"
+      ],
+      "exit_code": 0,
+      "disk_floor_stop": false,
+      "minimum_floor_bytes": 4294967296,
+      "reaction_stop_threshold_bytes": 5100273664,
+      "minimum_free_bytes": 29795659776,
+      "elapsed_seconds": 53.01610125,
+      "log": "/tmp/nessa-975-c011-canonical.log",
+      "log_sha256": "e53403a684f6e6b3549381a4865099cd4b2384b239db437d284a0a917f42059f",
+      "source_drift": [],
+      "head": "f9b861d7f98547dc98f30f1afdffe6fe0538397f",
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "1",
+        "target": "default owned target"
+      }
+    },
+    "restored-affected-browser": {
+      "name": "restored-affected-browser",
+      "command": ["node", "/tmp/nessa-975-c011-restored-affected-browser.mjs"],
+      "exit_code": 0,
+      "disk_floor_stop": false,
+      "minimum_floor_bytes": 4294967296,
+      "reaction_stop_threshold_bytes": 5100273664,
+      "minimum_free_bytes": 29406150656,
+      "elapsed_seconds": 238.53356300000002,
+      "log": "/tmp/nessa-975-c011-restored-affected-browser.log",
+      "log_sha256": "7c04e6bade24a10e780748d9d29a4276d024043c75080644e3a17b2cc2659a74",
+      "source_drift": [],
+      "head": "f9b861d7f98547dc98f30f1afdffe6fe0538397f",
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "1",
+        "target": "default owned target"
+      }
+    }
+  },
+  "counts": {
+    "server_runtime": 3507,
+    "server_ignored": 13,
+    "server_docs": 4,
+    "protocol_client_runtime": 594,
+    "protocol_client_docs": 8,
+    "sdk_new_paged_test": 1,
+    "frontend_tests": 4971,
+    "rows": 11,
+    "share": 24,
+    "linked_devices": 17,
+    "unread": 5,
+    "claude_default_both": 65,
+    "claude_raised6_both": 76,
+    "codex_model_only1_both": 9,
+    "codex_model_only6_both": 19,
+    "chaos_default_seeds1_2": 2
+  },
+  "server_count_groups": [
+    {
+      "harness": "Running unittests src/lib.rs (target/debug/deps/nessa_server-eaa51c8e163e2a4d)",
+      "parent_result": ["3357", "0", "12"],
+      "nested_results_excluded": [["1", "0", "0"]]
+    },
+    {
+      "harness": "Running unittests src/main.rs (target/debug/deps/nessa-9c5f3f0d03d9af7e)",
+      "parent_result": ["0", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Running unittests src/backup_plan_main.rs (target/debug/deps/nessa_backup_plan-2f47d79c09f44dfc)",
+      "parent_result": ["0", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Running unittests src/backup_verify_main.rs (target/debug/deps/nessa_backup_verify-c42ed6cf2d09d811)",
+      "parent_result": ["0", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Running tests/backup_restore_plan.rs (target/debug/deps/backup_restore_plan-839470614a36e2a6)",
+      "parent_result": ["5", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Running tests/backup_verifier.rs (target/debug/deps/backup_verifier-b81997d848a17018)",
+      "parent_result": ["7", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Running tests/credential_registry_refusal.rs (target/debug/deps/credential_registry_refusal-babfea579010242d)",
+      "parent_result": ["13", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Running tests/env_serve_binary.rs (target/debug/deps/env_serve_binary-02f2d8e2759f88cd)",
+      "parent_result": ["5", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Running tests/mcp_authorization_benchmark.rs (target/debug/deps/mcp_authorization_benchmark-b0cef8a1497885f4)",
+      "parent_result": ["0", "0", "1"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Running tests/mcp_relay.rs (target/debug/deps/mcp_relay-e433a73422b465df)",
+      "parent_result": ["3", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Running tests/native_enrollment.rs (target/debug/deps/native_enrollment-37621632b0ad9c01)",
+      "parent_result": ["117", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Doc-tests nessa_server",
+      "parent_result": ["4", "0", "0"],
+      "nested_results_excluded": []
+    }
+  ],
+  "protocol_client_count_groups": [
+    {
+      "harness": "Running unittests src/lib.rs (target/debug/deps/nessa_client_core-42101e8c3f5e3830)",
+      "parent_result": ["417", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Running unittests src/lib.rs (target/debug/deps/nessa_protocol-ff3868fc2a0b4670)",
+      "parent_result": ["171", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Running tests/owner_phone_consent_wire.rs (target/debug/deps/owner_phone_consent_wire-412d188a7ff777aa)",
+      "parent_result": ["4", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Running tests/phone_wire.rs (target/debug/deps/phone_wire-ee871047b4d45bdd)",
+      "parent_result": ["2", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Doc-tests nessa_client_core",
+      "parent_result": ["6", "0", "0"],
+      "nested_results_excluded": []
+    },
+    {
+      "harness": "Doc-tests nessa_protocol",
+      "parent_result": ["2", "0", "0"],
+      "nested_results_excluded": []
+    }
+  ],
+  "journey_commands": {
+    "gatewayBefore": "000f43485fdd52788dbb747234d63632c27be432dadab75b390d8166c4084acf",
+    "gatewayAfter": "000f43485fdd52788dbb747234d63632c27be432dadab75b390d8166c4084acf",
+    "results": [
+      {
+        "label": "claude-models1",
+        "args": [
+          "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/conversation-stress.mjs",
+          "--agent",
+          "claude",
+          "--engine",
+          "chromium,webkit",
+          "--modelSwitches",
+          "1",
+          "--out",
+          "/tmp/nessa-975-c011-claude-models1-result.json",
+          "--evidence",
+          "/tmp/nessa-975-c011-claude-models1-evidence",
+          "--shots",
+          "/tmp/nessa-975-c011-claude-models1-shots"
+        ],
+        "scope": "full default knobs except model count",
+        "status": {
+          "code": 0,
+          "signal": null,
+          "pid": 17074
+        },
+        "elapsedMs": 184751
+      },
+      {
+        "label": "claude-models6",
+        "args": [
+          "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/conversation-stress.mjs",
+          "--agent",
+          "claude",
+          "--engine",
+          "chromium,webkit",
+          "--modelSwitches",
+          "6",
+          "--out",
+          "/tmp/nessa-975-c011-claude-models6-result.json",
+          "--evidence",
+          "/tmp/nessa-975-c011-claude-models6-evidence",
+          "--shots",
+          "/tmp/nessa-975-c011-claude-models6-shots"
+        ],
+        "scope": "full default knobs except model count",
+        "status": {
+          "code": 0,
+          "signal": null,
+          "pid": 21227
+        },
+        "elapsedMs": 193132
+      },
+      {
+        "label": "codex-models1",
+        "args": [
+          "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/conversation-stress.mjs",
+          "--agent",
+          "codex",
+          "--engine",
+          "chromium,webkit",
+          "--modelSwitches",
+          "1",
+          "--out",
+          "/tmp/nessa-975-c011-codex-models1-result.json",
+          "--evidence",
+          "/tmp/nessa-975-c011-codex-models1-evidence",
+          "--shots",
+          "/tmp/nessa-975-c011-codex-models1-shots",
+          "--rounds",
+          "0",
+          "--asides",
+          "0",
+          "--parallel",
+          "0",
+          "--turns",
+          "0",
+          "--switches",
+          "0",
+          "--stops",
+          "0",
+          "--fails",
+          "0",
+          "--reviews",
+          "0",
+          "--large",
+          "0",
+          "--restarts",
+          "0",
+          "--threads",
+          "0",
+          "--awaits",
+          "0",
+          "--watches",
+          "0",
+          "--followers",
+          "0",
+          "--parks",
+          "0",
+          "--renames",
+          "0",
+          "--deletes",
+          "0",
+          "--fresh",
+          "0",
+          "--windows",
+          "0",
+          "--linkings",
+          "0",
+          "--long",
+          "0"
+        ],
+        "scope": "model only; every nonmodel knob zero including rename/delete/await/fresh/window/linking",
+        "status": {
+          "code": 0,
+          "signal": null,
+          "pid": 23090
+        },
+        "elapsedMs": 10304
+      },
+      {
+        "label": "codex-models6",
+        "args": [
+          "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/conversation-stress.mjs",
+          "--agent",
+          "codex",
+          "--engine",
+          "chromium,webkit",
+          "--modelSwitches",
+          "6",
+          "--out",
+          "/tmp/nessa-975-c011-codex-models6-result.json",
+          "--evidence",
+          "/tmp/nessa-975-c011-codex-models6-evidence",
+          "--shots",
+          "/tmp/nessa-975-c011-codex-models6-shots",
+          "--rounds",
+          "0",
+          "--asides",
+          "0",
+          "--parallel",
+          "0",
+          "--turns",
+          "0",
+          "--switches",
+          "0",
+          "--stops",
+          "0",
+          "--fails",
+          "0",
+          "--reviews",
+          "0",
+          "--large",
+          "0",
+          "--restarts",
+          "0",
+          "--threads",
+          "0",
+          "--awaits",
+          "0",
+          "--watches",
+          "0",
+          "--followers",
+          "0",
+          "--parks",
+          "0",
+          "--renames",
+          "0",
+          "--deletes",
+          "0",
+          "--fresh",
+          "0",
+          "--windows",
+          "0",
+          "--linkings",
+          "0",
+          "--long",
+          "0"
+        ],
+        "scope": "model only; every nonmodel knob zero including rename/delete/await/fresh/window/linking",
+        "status": {
+          "code": 0,
+          "signal": null,
+          "pid": 23155
+        },
+        "elapsedMs": 23872
+      },
+      {
+        "label": "chaos-seed1",
+        "args": [
+          "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/conversation-chaos.mjs",
+          "--seed",
+          "1",
+          "--evidence",
+          "/tmp/nessa-975-c011-chaos-seed1-evidence"
+        ],
+        "scope": "full default chaos",
+        "status": {
+          "code": 0,
+          "signal": null,
+          "pid": 23242
+        },
+        "elapsedMs": 78360
+      }
+    ]
+  },
+  "browser_commands": {
+    "owned_url": "http://127.0.0.1:64196/desktop.html",
+    "results": [
+      {
+        "name": "session-rows",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.8.1/bin/node",
+          "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/session-rows.mjs",
+          "--engine",
+          "chromium,webkit",
+          "--url",
+          "http://127.0.0.1:64196/desktop.html",
+          "--mode",
+          "dev",
+          "--out",
+          "/tmp/nessa-975-c011-restored-session-rows-result.json",
+          "--shots",
+          "/tmp/nessa-975-c011-restored-session-rows-shots"
+        ],
+        "exit_code": 0,
+        "elapsed_ms": 27328
+      },
+      {
+        "name": "share-dialog",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.8.1/bin/node",
+          "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/share-dialog.mjs",
+          "--engine",
+          "chromium,webkit",
+          "--url",
+          "http://127.0.0.1:64196/desktop.html",
+          "--mode",
+          "dev",
+          "--out",
+          "/tmp/nessa-975-c011-restored-share-dialog-result.json",
+          "--shots",
+          "/tmp/nessa-975-c011-restored-share-dialog-shots"
+        ],
+        "exit_code": 0,
+        "elapsed_ms": 166237
+      },
+      {
+        "name": "linked-devices",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.8.1/bin/node",
+          "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/linked-devices.mjs",
+          "--engine",
+          "chromium,webkit",
+          "--url",
+          "http://127.0.0.1:64196/desktop.html",
+          "--mode",
+          "dev",
+          "--out",
+          "/tmp/nessa-975-c011-restored-linked-devices-result.json",
+          "--shots",
+          "/tmp/nessa-975-c011-restored-linked-devices-shots"
+        ],
+        "exit_code": 0,
+        "elapsed_ms": 35295
+      },
+      {
+        "name": "conversation-unread",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.8.1/bin/node",
+          "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/conversation-unread.mjs",
+          "--engine",
+          "chromium,webkit",
+          "--url",
+          "http://127.0.0.1:64196/desktop.html",
+          "--mode",
+          "dev",
+          "--out",
+          "/tmp/nessa-975-c011-restored-conversation-unread-result.json",
+          "--shots",
+          "/tmp/nessa-975-c011-restored-conversation-unread-shots"
+        ],
+        "exit_code": 0,
+        "elapsed_ms": 6883
+      }
+    ]
+  },
+  "retirement": {
+    "intendedCommands": {
+      "gatewayBefore": "000f43485fdd52788dbb747234d63632c27be432dadab75b390d8166c4084acf",
+      "gatewayAfter": "000f43485fdd52788dbb747234d63632c27be432dadab75b390d8166c4084acf",
+      "results": [
+        {
+          "label": "claude-models1",
+          "args": [
+            "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/conversation-stress.mjs",
+            "--agent",
+            "claude",
+            "--engine",
+            "chromium,webkit",
+            "--modelSwitches",
+            "1",
+            "--out",
+            "/tmp/nessa-975-c011-claude-models1-result.json",
+            "--evidence",
+            "/tmp/nessa-975-c011-claude-models1-evidence",
+            "--shots",
+            "/tmp/nessa-975-c011-claude-models1-shots"
+          ],
+          "scope": "full default knobs except model count",
+          "status": {
+            "code": 0,
+            "signal": null,
+            "pid": 17074
+          },
+          "elapsedMs": 184751
+        },
+        {
+          "label": "claude-models6",
+          "args": [
+            "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/conversation-stress.mjs",
+            "--agent",
+            "claude",
+            "--engine",
+            "chromium,webkit",
+            "--modelSwitches",
+            "6",
+            "--out",
+            "/tmp/nessa-975-c011-claude-models6-result.json",
+            "--evidence",
+            "/tmp/nessa-975-c011-claude-models6-evidence",
+            "--shots",
+            "/tmp/nessa-975-c011-claude-models6-shots"
+          ],
+          "scope": "full default knobs except model count",
+          "status": {
+            "code": 0,
+            "signal": null,
+            "pid": 21227
+          },
+          "elapsedMs": 193132
+        },
+        {
+          "label": "codex-models1",
+          "args": [
+            "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/conversation-stress.mjs",
+            "--agent",
+            "codex",
+            "--engine",
+            "chromium,webkit",
+            "--modelSwitches",
+            "1",
+            "--out",
+            "/tmp/nessa-975-c011-codex-models1-result.json",
+            "--evidence",
+            "/tmp/nessa-975-c011-codex-models1-evidence",
+            "--shots",
+            "/tmp/nessa-975-c011-codex-models1-shots",
+            "--rounds",
+            "0",
+            "--asides",
+            "0",
+            "--parallel",
+            "0",
+            "--turns",
+            "0",
+            "--switches",
+            "0",
+            "--stops",
+            "0",
+            "--fails",
+            "0",
+            "--reviews",
+            "0",
+            "--large",
+            "0",
+            "--restarts",
+            "0",
+            "--threads",
+            "0",
+            "--awaits",
+            "0",
+            "--watches",
+            "0",
+            "--followers",
+            "0",
+            "--parks",
+            "0",
+            "--renames",
+            "0",
+            "--deletes",
+            "0",
+            "--fresh",
+            "0",
+            "--windows",
+            "0",
+            "--linkings",
+            "0",
+            "--long",
+            "0"
+          ],
+          "scope": "model only; every nonmodel knob zero including rename/delete/await/fresh/window/linking",
+          "status": {
+            "code": 0,
+            "signal": null,
+            "pid": 23090
+          },
+          "elapsedMs": 10304
+        },
+        {
+          "label": "codex-models6",
+          "args": [
+            "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/conversation-stress.mjs",
+            "--agent",
+            "codex",
+            "--engine",
+            "chromium,webkit",
+            "--modelSwitches",
+            "6",
+            "--out",
+            "/tmp/nessa-975-c011-codex-models6-result.json",
+            "--evidence",
+            "/tmp/nessa-975-c011-codex-models6-evidence",
+            "--shots",
+            "/tmp/nessa-975-c011-codex-models6-shots",
+            "--rounds",
+            "0",
+            "--asides",
+            "0",
+            "--parallel",
+            "0",
+            "--turns",
+            "0",
+            "--switches",
+            "0",
+            "--stops",
+            "0",
+            "--fails",
+            "0",
+            "--reviews",
+            "0",
+            "--large",
+            "0",
+            "--restarts",
+            "0",
+            "--threads",
+            "0",
+            "--awaits",
+            "0",
+            "--watches",
+            "0",
+            "--followers",
+            "0",
+            "--parks",
+            "0",
+            "--renames",
+            "0",
+            "--deletes",
+            "0",
+            "--fresh",
+            "0",
+            "--windows",
+            "0",
+            "--linkings",
+            "0",
+            "--long",
+            "0"
+          ],
+          "scope": "model only; every nonmodel knob zero including rename/delete/await/fresh/window/linking",
+          "status": {
+            "code": 0,
+            "signal": null,
+            "pid": 23155
+          },
+          "elapsedMs": 23872
+        },
+        {
+          "label": "chaos-seed1",
+          "args": [
+            "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/verification/desktop/scripts/conversation-chaos.mjs",
+            "--seed",
+            "1",
+            "--evidence",
+            "/tmp/nessa-975-c011-chaos-seed1-evidence"
+          ],
+          "scope": "full default chaos",
+          "status": {
+            "code": 0,
+            "signal": null,
+            "pid": 23242
+          },
+          "elapsedMs": 78360
+        }
+      ]
+    },
+    "completedChaosInvocation": "--seed1 default runs2 -> seed1+seed2,2/2PASS",
+    "runnerSchedulingError": "redundant second --seed2 default-runs2 invocation started after intended gates; own group17073 terminated; partial duplicate excluded",
+    "outerWrapperExit": -15,
+    "ownedGroupRemaining": "",
+    "portsClosed": {
+      "64196": true,
+      "63010": true,
+      "62461": true,
+      "61746": true
+    },
+    "sourceDrift": [],
+    "gatewayAfter": "000f43485fdd52788dbb747234d63632c27be432dadab75b390d8166c4084acf"
+  },
+  "fixture_causal_controls": {
+    "original": "10/11 failure polling signing while split-panes actually opened",
+    "lightweight_original": "4/5 same wrong-row failure",
+    "anchored_only": "4/5; trusted click selected signing before wheel; unchanged no-open assertions failed",
+    "prepared_and_anchored": "5/5",
+    "sole_readiness_omission": "4/5 unchanged no-open assertions failed",
+    "sole_identity_omission": "5/5 with readiness; NOT a negative control",
+    "exact_restoration": "5/5",
+    "normal_unobserved_both": "11/11",
+    "report_sha256": "baac7a503decd215e1edbcabb31e80076fb7defef3df9b95168b92081977f628"
+  },
+  "qualification_limit": "One redundant chaos --seed2 invocation started after completed default two-seed invocation. Owned process group terminated, partial duplicate excluded. Outer runner exit -15 is not a successful gate; five intended subprocess commands each completed0.",
+  "historical_prior_packet": {
+    "qualified_source_commit": "57b0e0f1b637ea0bac61405b5f237ccf6da4415f",
+    "qualified_source_tree": "74edc4a8e5eb5efad6540ec23bdeb531f3add572",
+    "immutable_main": "73fabdb883722c9ecd1c64b46f2ec8c76405342c",
+    "integration_checkpoint": "66f0dfbe78abbf4fe14c190189d2eb4c44d782f9",
+    "ui_pin": "0794a41bb1482aa7e677fd2b7012874bcc3e29b2",
+    "gateway": {
+      "head": "66f0dfbe78abbf4fe14c190189d2eb4c44d782f9",
+      "path": "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/target/debug/nessa",
+      "sha256": "ec0c3b79ccc564a79428102f35ea822ed7d67d114ed86a7d0f2d17192763aaaa",
+      "size": 162180776
+    },
+    "runtime_source_provenance": "Final journeys ran with the exact committed 57b0e0f source bytes, while the three checker/docs paths were staged on 66f0dfb. Commit is byte preserving. Server/strict/canonical ran on 66f0dfb; later delta is only CHECKLIST and shared stress-restart helper/test, outside those execution inputs.",
+    "source_manifest_sha256": "f6d1910fc46b148d1ef6ba74fdb153103f279d3963bb5935b0e67c95f811b907",
+    "unfiltered_server": {
+      "runtime_passed": 3502,
+      "ignored": 13,
+      "doctests_passed": 4,
+      "nested_child_summaries_excluded": 2,
+      "log_sha256": "89f8a6ff38d8ab2c837421531457ec256ec0d6764fd3f944db0eb5fedc7a11fa"
+    },
+    "strict_checks": {
+      "head": "66f0dfbe78abbf4fe14c190189d2eb4c44d782f9",
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_BUILD_JOBS": "1",
+        "target": "default owned checkout"
+      },
+      "checks": [
+        {
+          "name": "server-full",
+          "command": ["cargo", "test", "-p", "nessa-server"],
+          "exit_code": 0,
+          "elapsed_seconds": 408.07321245900005,
+          "minimum_free_bytes": 8965844992,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-73fab-server-full.log",
+          "log_sha256": "89f8a6ff38d8ab2c837421531457ec256ec0d6764fd3f944db0eb5fedc7a11fa"
+        },
+        {
+          "name": "clippy-seven",
+          "command": [
+            "cargo",
+            "clippy",
+            "-p",
+            "nessa-local-storage",
+            "-p",
+            "nessa-auth",
+            "-p",
+            "nessa-server",
+            "-p",
+            "nessa-protocol",
+            "-p",
+            "nessa-client-core",
+            "-p",
+            "nessa-device-client",
+            "-p",
+            "nessa-sdk",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 50.920158958,
+          "minimum_free_bytes": 9069957120,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-73fab-clippy-seven.log",
+          "log_sha256": "4135c0cdc6d6be7750782dba7d08b207eab411a19ae23233ee44661be7acccd5"
+        },
+        {
+          "name": "fmt-seven",
+          "command": [
+            "cargo",
+            "fmt",
+            "--check",
+            "-p",
+            "nessa-local-storage",
+            "-p",
+            "nessa-auth",
+            "-p",
+            "nessa-server",
+            "-p",
+            "nessa-protocol",
+            "-p",
+            "nessa-client-core",
+            "-p",
+            "nessa-device-client",
+            "-p",
+            "nessa-sdk"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 4.242123082999967,
+          "minimum_free_bytes": 9074900992,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-73fab-fmt-seven.log",
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "name": "strict-sdk-docs",
+          "command": ["node", "scripts/check-sdk-docs.mjs"],
+          "exit_code": 0,
+          "elapsed_seconds": 4.25753454200003,
+          "minimum_free_bytes": 9074909184,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-73fab-strict-sdk-docs.log",
+          "log_sha256": "31af8ebf745d4de6f4153af96489130753b5aa76b2d642077042d1cb2b0cdbe6"
+        },
+        {
+          "name": "gateway-build",
+          "command": ["cargo", "build", "-p", "nessa-server"],
+          "exit_code": 0,
+          "elapsed_seconds": 44.83750025000006,
+          "minimum_free_bytes": 7882588160,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-73fab-gateway-build.log",
+          "log_sha256": "46fee8c17eadf3d94a83322b3d1cb3641eaad4b51995fdc2f4ed59db6caa6f7e"
+        },
+        {
+          "name": "diff",
+          "command": ["git", "diff", "--check"],
+          "exit_code": 0,
+          "elapsed_seconds": 2.237182042000086,
+          "minimum_free_bytes": 7715758080,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-73fab-diff.log",
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "drift": []
+    },
+    "canonical": [
+      {
+        "name": "mcp-apps-gateway",
+        "rows_passed": 16,
+        "sha256": "01c5670b4634fee50c2152ef8f41c99389d49d066f85f92148c32de2a2fd5fc1",
+        "engines": ["chromium", "webkit"]
+      },
+      {
+        "name": "gateway-window",
+        "rows_passed": 15,
+        "sha256": "4070694307de7a4978f720c5d87ad959ceb180104cd381c1ff53af98313ac407",
+        "engines": ["chromium", "webkit"]
+      },
+      {
+        "name": "scripted-scenarios",
+        "rows_passed": 9,
+        "sha256": "ee288490472c3610fd34e327b51e3945ed28a14f6909b9a9d36693a7dfec1c59",
+        "engines": ["chromium", "webkit"]
+      }
+    ],
+    "stress": [
+      {
+        "name": "claude-default",
+        "result_sha256": "2573dcc43ade80525e3754b19fd07d09446b91a420bedbc0ff2cb9c1dbf41470",
+        "rows_passed": 60,
+        "confirmed_model_steps": 2,
+        "engines": ["chromium", "webkit"],
+        "scope": "full defaults with awaits 1 /fresh 2 /windows 1 /linkings 1",
+        "result": "/tmp/nessa-975-73fab-restored-claude-default.json"
+      },
+      {
+        "name": "claude-raised",
+        "result_sha256": "f4e74f626e3426c1e3f6d927db1de74b9dabc0151f66e82eb6874166ffededff",
+        "rows_passed": 70,
+        "confirmed_model_steps": 12,
+        "engines": ["chromium", "webkit"],
+        "scope": "full defaults with awaits 1 /fresh 2 /windows 1 /linkings 1",
+        "result": "/tmp/nessa-975-73fab-restored-claude-raised.json"
+      },
+      {
+        "name": "codex-model-1",
+        "result_sha256": "b5eaf6340e45c92485e6fcb9fa83066461951bf5e6c833ba3c39551f583a0856",
+        "rows_passed": 9,
+        "confirmed_model_steps": 2,
+        "engines": ["chromium", "webkit"],
+        "scope": "focused model-only; every other 19 knobs explicitly 0",
+        "result": "/tmp/nessa-975-73fab-restored-codex-model-1.json"
+      },
+      {
+        "name": "codex-model-6",
+        "result_sha256": "d51342486a10baa2768eb8918f8b64349cebfe4ae3594218954ce82d57f26a16",
+        "rows_passed": 19,
+        "confirmed_model_steps": 12,
+        "engines": ["chromium", "webkit"],
+        "scope": "focused model-only; every other 19 knobs explicitly 0",
+        "result": "/tmp/nessa-975-73fab-restored-codex-model-6.json"
+      }
+    ],
+    "chaos": {
+      "runs_passed": 2,
+      "seeds": [1, 2],
+      "report_sha256": "3c2b457d78d34317bef34680b31718ecaaf0a180e66ca62ad80a0a467e6f17e4"
+    },
+    "helper_tests": {
+      "passed": 60,
+      "composition": "50 restart +3 conversation identity +7 planner",
+      "each_final_dialect_omission": {
+        "passed": 49,
+        "failed": 1
+      },
+      "each_exact_restoration": {
+        "passed": 50,
+        "failed": 0
+      },
+      "fresh_identity_omission": "old retained title fails with sole previous-ID exclusion removed; exact restoration passes"
+    },
+    "observed_restart_causes": [
+      {
+        "cause": "The network connection was lost.",
+        "kind": "reset",
+        "public_before": "default 59/60 and focused SIGKILL 4/5 console-only failures",
+        "fixed_focused": "SIGKILL 5/5",
+        "control": "SIGTERM 4/4 had no errors and is not evidence for extending the map",
+        "causal_proof_sha256": "8e610aceaab30628b3c9c8391ba0c2111cc62ea2c6c0d6ca437680c2f3ab9417",
+        "final_sole_omission_sha256": "f4e16c0da848e65e169bd7fe8143050429a8aaa6ae36593e01d35faad617e216"
+      },
+      {
+        "cause": "Could not connect to the server.",
+        "kind": "refused",
+        "public_before": "later default 59/60 and observation-only WebKit 29/30 console-only failures",
+        "causal_proof_sha256": "7336522d8cdc5f07449fe2a1c20903dcd5efeeb3382389c3ef3c94660baa3bc0",
+        "final_sole_omission_sha256": "b102ee914d9adb8c8e7bbeaab7301b9196bb8396124a4a27d18faa63cd7fd65b"
+      }
+    ],
+    "historical_setup_failures": [
+      "first helper41PASS/1stale legacy-plan assertion; original sequence retained by disabling newawait/fresh knobs only in the historical test",
+      "lint found incoming titleOf definition deleted by automatic merge; exact incoming helper restored",
+      "private diagnostic package-resolution failure before causal evidence; fixed temporary lookup only",
+      "chaos unsupported --out argument before test execution; corrected command only"
+    ],
+    "unchanged_scopes": {
+      "sdk_tree": "725049d9936400e112dfe315745119d279dc308a",
+      "sdk_protocol_client_src": "exact8e0; SDK source and priorR7 review/test evidence are reused by byte equivalence, not relabelled as new broad runs",
+      "full_frontend": "not repeated; frontend/client/protocol/pin source unchanged from8e0",
+      "whole6838": "not repeated",
+      "performance": "no claim; no performance matrix rerun"
+    },
+    "photos": {
+      "claude-webkit.png": {
+        "sha256": "c791378b0a9459694d0577e5a6a4d9dee9d4c452ca3c12168bea4ea2696bde2b",
+        "origin": "/tmp/nessa-975-73fab-restored-claude-default/model-webkit-confirmed-review-draft.png",
+        "visually_inspected": true
+      },
+      "codex-chromium.png": {
+        "sha256": "a77d532a5e1c05d680c776af43cbf91a4a41340d8224cf7a9742b8320583d4e1",
+        "origin": "/tmp/nessa-975-73fab-restored-codex-model-1/model-chromium-confirmed-review-draft.png",
+        "visually_inspected": true
+      },
+      "codex-webkit.png": {
+        "sha256": "bb9e3eb97f6716196e5db2bfabfbc4e93ff7002a901d07823a5bf4378bad5e01",
+        "origin": "/tmp/nessa-975-73fab-restored-codex-model-6/model-webkit-confirmed-review-draft.png",
+        "visually_inspected": true
+      }
+    },
+    "limits": [
+      "actual desktop components against scripted native harness data; no installed-app parity claim",
+      "Claude photo confirms model/draft/Stop; original review is offscreen but preservation and answering are asserted by the current window journey",
+      "Codex screenshots show original review/draft/confirmed model/Stop; six operations are proved by assertions, not a single photo",
+      "native linking uses only owned ephemeral ci configuration and allocated loopback ports",
+      "fresh full assembled independent review and current platform CI remain required before merge"
+    ],
+    "historical_5813_and_sdk_scoped_evidence": {
+      "qualified_runtime_source_commit": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+      "qualified_runtime_tree": "3bcc02942dbbc5c0a29979e8bc9929df1c92e740",
+      "base": "5813f349a08e2f3ab1fd585d9ab775655d7e957b",
+      "ui_pin": "0794a41bb1482aa7e677fd2b7012874bcc3e29b2",
+      "source_manifest_sha256": "1085db436bc7b42578b478f7a187194fa5a9da042c691aeb6e5a3b370f7e5c12",
+      "gateway_sha256": "47d7ec4c56cebaf485a61ff9751124d048097150a4b94aa14aca5f752f1c629d",
+      "gateway_build_source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+      "full_frontend": {
+        "source": "81311484005f40cd6a48aafee535be2ad9d07876",
+        "public_tests": 4936,
+        "files": 369,
+        "all_normal_stages": "pass",
+        "source_scope": "Final delta afterward is only ADR/CHECKLIST/linked-devices fixture. Production/client/protocol/pin bytes remain equal; scoped checker format/lint/syntax passed."
+      },
+      "current_scoped_checks": {
+        "native_linking": 11,
+        "self_restart": 9,
+        "runtime_config_selection": 16,
+        "shared_config_MCP_application": 50,
+        "pairing_audit_lib": 5,
+        "native_enrollment_owner_routes": {
+          "passed": 13,
+          "filtered": 104
+        },
+        "model_owner_selected": 12,
+        "wire_model_selected": 2,
+        "cold_preset_selected": 7,
+        "protocol_runtime": [170, 4, 2],
+        "protocol_doctests": 2,
+        "strict_server_clippy": "four packages/all-targets/-D warnings PASS",
+        "server_format": "pass",
+        "planner_tests": 7,
+        "protocol_manifest_methods": 78,
+        "ready_methods": 77,
+        "setup_not_qualification": [
+          "config_store lib filter selected0",
+          "mcp_servers::tests::settings selected0; corrected using current compiled test list"
+        ]
+      },
+      "canonical": {
+        "source": "81311484005f40cd6a48aafee535be2ad9d07876",
+        "programs": ["mcp-apps-gateway", "gateway-window", "scripted-scenarios"],
+        "engines": ["chromium", "webkit"],
+        "verdict": "pass",
+        "gateway_sha256": "25b647ca5e09eaada808532001f5bc3446a04e94f8911c80dc914cdf59bd2deb",
+        "current_source_scope": "Canonical and production source unchanged by subsequent fixture-only correction."
+      },
+      "window_stress": {
+        "claude_default": {
+          "source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+          "passed": 53,
+          "model_steps": 1,
+          "windows": 1,
+          "linkings": 1
+        },
+        "claude_raised_six": {
+          "source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+          "passed": 62,
+          "model_steps": 6,
+          "windows": 1,
+          "linkings": 1
+        },
+        "codex_one": {
+          "source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+          "passed": 8,
+          "model_steps": 1,
+          "windows": 0,
+          "linkings": 0
+        },
+        "codex_six": {
+          "source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+          "passed": 18,
+          "model_steps": 6,
+          "windows": 0,
+          "linkings": 0
+        },
+        "engines": ["chromium", "webkit"],
+        "channel": "bundled",
+        "positive_model_preset": "Real access shield confirms Ask before original review; real picker/native prompt witness/draft/review/Stop retained.",
+        "native_linking_scope": "Full Claude uses real Settings on/off, ephemeral owned ci config/allocatedloopbackport, config readback and samePID selfexec; no installed native configuration touched.",
+        "coverage_limit": "Focused Codex is explicitly model-only, no Codex read_window/nativeLink claim. Current linking step kept incoming semantics; no copied restart console classification."
+      },
+      "chaos": {
+        "source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+        "passed": 2,
+        "seeds": 2,
+        "no_pending_model_or_mode_change": true
+      },
+      "restart_checker_regression": {
+        "identity_witness": {
+          "before": "14/15 FAIL",
+          "fixed": "15/15 PASS",
+          "sole_identity_omission": "14/15 FAIL",
+          "restored": "15/15 PASS",
+          "controlled_condition": "Real WebKit recovery frames held; old pause text visible/current successor absent; release driven by observed predicate checkpoint, no fixed sleep.",
+          "budget": "One existing60s combined current-userText/completion poll."
+        },
+        "held_console_variant": {
+          "actual_owned_outage": {
+            "old_pid": 35181,
+            "old_pid_exit_ms": 1792400245127,
+            "real_app_refusal_ms": 1792400245315,
+            "new_pid": 35313,
+            "new_pid_healthy_ms": 1792400245567,
+            "current_identity_recovered_ms": 1792400245837,
+            "before_held_errors": 0,
+            "after_held_errors": 1,
+            "literal": "Could not connect to the server.",
+            "scope": "Owned newlaunch held after oldPID exited until real app reconnect refused on same endpoint; then normal launch. Controlled diagnostic, not original58/59 timing reconstruction."
+          },
+          "actual_recorded_interval_replay": {
+            "before": "FAIL",
+            "fixed": "PASS",
+            "sole_literal_omission": "FAIL",
+            "restored": "PASS"
+          },
+          "synthetic_controls": [
+            "prior error prevents classification",
+            "wrong endpoint remains error",
+            "neighbor literal remains error",
+            "future matching line remains error",
+            "unproven recovery remains error",
+            "old exact lost-connection literal still classified"
+          ],
+          "classification_scope": "Existing cleanBefore+zeroFailure+identity-proven recovery; only already-held exact owned endpoint lines; no future/global pattern."
+        }
+      },
+      "parent_backend_source_qualified": {
+        "cold_public_matrix": 7,
+        "cold_server_runtime": 3442,
+        "cold_server_ignored": 13,
+        "cold_server_docs": 4,
+        "sdk_unsupported_ack_focused_fixture_tests": 53,
+        "source_equivalence_receipt_sha256": "68e001c14513239614124a69e95a7d87201409bbec158bd90a90d6178f4d06f7",
+        "note": "Parent cold3442/4docs and SDK53 negativefixture receipts remain separately source-qualified; current cold7 rerun above. No new6838/all-package run; new native-linking/root/sharedconfig owners have current selected checks and real ephemeral Settings selfexec stress."
+      },
+      "historical_evidence": {
+        "source_commit": "414ce25f3afa381665bf47bc0ea757069f126dfd",
+        "frontend_files": 365,
+        "frontend_passed": 4906,
+        "frontend_note": "Historical4906 and281b4922 are not current5813 results; current813 frontend4936 is recorded separately.",
+        "backend_union_passed": 6838,
+        "backend_union_ignored": 36,
+        "backend_union_doctests": 69,
+        "backend_note": "Original source-qualified union only; not a current repeated full suite.",
+        "failed_ci_run": "39208371137",
+        "failed_ci_merge": "c38785ae421cc6bc8f824f8c319fcf1a57dac642",
+        "failed_ci_note": "Linux Auto\u2192Fable acknowledged unsupported preset, conservative cancellation/reopen; original exact thrown error uncaptured. Original stress/follower/chaos failures retained, not relabelled."
+      },
+      "local_integration_failures_retained": [
+        {
+          "source": "b725d56f042cd177c928e8bc7fc057144063c952",
+          "result": "44/59 raised; WebKit013 error outbox, later steps unrun; exact original send exception uncaptured"
+        },
+        {
+          "source": "b725d56f042cd177c928e8bc7fc057144063c952",
+          "result": "32/46 matched diagnostic; Chromium013 pre-wire send during recovery; WebKit prefix held; intended preceding fullChromium history incomplete"
+        },
+        {
+          "source": "398eecbd4d213e766bca80ea73b67cca6407eec1",
+          "result": "58/59 raised; all actions held; WebKit console variant not yet classified"
+        },
+        {
+          "source": "398eecbd4d213e766bca80ea73b67cca6407eec1",
+          "result": "15/16 controlled owned-outage; expected retained console variant before classifier fix"
+        }
+      ],
+      "photos": {
+        "claude-webkit.png": {
+          "sha256": "71b1f6d1fec2977bc47ce73270020352adf3a13270008e3fa484753505a4f3c1",
+          "actual_source": "/tmp/nessa-975-5813-corrected-claude-default/model-webkit-confirmed-review-draft.png",
+          "visually_inspected": true
+        },
+        "codex-chromium.png": {
+          "sha256": "59390bd33fe34aaf52f534e80241eaba05d0322e84623622bd6ea1ab92dec92e",
+          "actual_source": "/tmp/nessa-975-5813-corrected-codex-model-1/model-chromium-confirmed-review-draft.png",
+          "visually_inspected": true
+        },
+        "codex-webkit.png": {
+          "sha256": "2b46e142836bc7b455fc2d23bb802e2e853dde2d6ea378d456befc4f47287e95",
+          "actual_source": "/tmp/nessa-975-5813-corrected-codex-model-6/model-webkit-confirmed-review-draft.png",
+          "visually_inspected": true
+        }
+      },
+      "historical_failures_preserved": true,
+      "synthetic_controls_are_not_browser_evidence": true,
+      "installed_app_parity_verified": false,
+      "actual_linux_ci_required_before_merge": true,
+      "fresh_whole_assembly_review_required": true,
+      "performance_claim": false,
+      "gateway_artifact_provenance": {
+        "canonical": {
+          "sourceHead": "81311484005f40cd6a48aafee535be2ad9d07876",
+          "binary": "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/target/debug/nessa",
+          "sha256": "25b647ca5e09eaada808532001f5bc3446a04e94f8911c80dc914cdf59bd2deb",
+          "size": 162607736,
+          "mtimeNs": 1792401861324424418,
+          "gatewayPreparation": "own canonical cargo build -p nessa-server on frozen813 native-linking assembly"
+        },
+        "window_stress_and_chaos": {
+          "sourceHead": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+          "binary": "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/target/debug/nessa",
+          "sha256": "47d7ec4c56cebaf485a61ff9751124d048097150a4b94aa14aca5f752f1c629d",
+          "size": 162661272,
+          "mtimeNs": 1792403111848893298,
+          "buildOwner": "cargo test -p nessa-server --test native_enrollment owner_routes built own package binaries before window journeys",
+          "buildInterval": {
+            "start": 1792403085.28192,
+            "end": 1792403118.2746408
+          },
+          "firstWindowProgramStart": 1792403118.5026848,
+          "subsequentProgramCommandsHaveNoBuild": true,
+          "MCP_LIVE_NESSAOverride": false
+        },
+        "note": "Own native_enrollment integration test rebuilt package executable before the first stress journey; canonical and later journeys used distinct artifacts. Current hash/mtime recorded after journeys; owned build interval precedes all stress/chaos commands, which contain no builds. No same-binary assertion."
+      },
+      "linked_devices_fixture": {
+        "before": "2/16 FAIL",
+        "fixed": "16/16 PASS",
+        "sole_publication_admission_omission": "2/16 FAIL",
+        "exact_restored": "16/16 PASS",
+        "failure_cause": "Actual window publication was omitted by existing fixture;14 rows failed only unexpected workspace.publish. No product/UI defect claim.",
+        "support": "Explicit canonical UUID/safe nonnegative revision receipt; per-connection latest publication; stale same-window revision returns held revision/appliedfalse. Existing unknown-method rejection and pairing assertions retained.",
+        "synthetic_socket_controls": {
+          "passed": 9,
+          "scope": "Temporary VM invokes existing private scriptedGateway route; no production exports/framework or realgateway/policy validation claim",
+          "cases": [
+            "exact receipt",
+            "stale revision",
+            "same revision",
+            "differentwindow replaces connection publication",
+            "canonicalUUID",
+            "safe revision",
+            "negative revision",
+            "newconnection state",
+            "explicitunknown method recorded refusal"
+          ]
+        }
+      },
+      "linked_devices_browser": {
+        "source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+        "passed": 16,
+        "engines": ["chromium", "webkit"],
+        "scope": "Existing whole scripted program; fixture data, not real native configuration."
+      },
+      "main5813_fixture_failures_retained": [
+        {
+          "source": "81311484005f40cd6a48aafee535be2ad9d07876",
+          "result": "linked-devices2/16; only unknown workspace.publish; original and sole-admission omission retained, not relabelled"
+        }
+      ],
+      "old_restart_controls_scope": "The retained identity/console controls were qualified on main281b source; their exact owning hunk remains at current source. No borrowed classifier or outage helper was added to new Settings linking step.",
+      "review_corrections": {
+        "qualified_assembly_source": "f9a1cbf5b",
+        "P2_source": "d7982f5f8bddae3a8971869725f78f6a0f9187cf",
+        "P2": "Retained Changing journal permits deliberate existing-source recovery; actual local asking/access still block, broad Send/draft/outbox fence and authoritative gateway preflight unchanged.",
+        "before": {
+          "failed": 2,
+          "passed": 17
+        },
+        "sole_rule_omission": {
+          "failed": 3,
+          "passed": 17
+        },
+        "restored_focused": 32,
+        "full_frontend": {
+          "passed": 4942,
+          "files": 369,
+          "all_normal_stages": "pass"
+        },
+        "focused_browser": {
+          "claude": 8,
+          "codex": 8,
+          "engines": ["chromium", "webkit"],
+          "model_changes": 1,
+          "windows": 0,
+          "linkings": 0,
+          "other_knobs": 0
+        },
+        "chaos": {
+          "seeds_passed": 2,
+          "actual_model_actions": [2, 6]
+        },
+        "retained_journal_browser_crash_reproduced": false,
+        "reproduction_scope": "Public store/source seam actual before/omission; ordinary real browser model journeys separately qualified. No product test switch or fabricated native crash.",
+        "gateway_prelaunch_and_post_sha256": "47d7ec4c56cebaf485a61ff9751124d048097150a4b94aa14aca5f752f1c629d",
+        "P3": "11-file import-only grouping; expanded paths/aliases, cfg(test) regions and non-import behavior equivalent except two short type references. SDK/server all-target Clippy -D warnings and scoped format pass. No repeated runtime/browser claim for import-only delta.",
+        "earlier_evidence": "All earlier keys retain their recorded sources and build artifacts; photos below predate P2. Fresh whole R4 and current Linux CI remain required."
+      },
+      "hook_normalization_correction": {
+        "source": "352f59b37",
+        "owner": "Existing ModelConfiguration::configured_provider checks native_hooks_allowed equality alongside other binding facts.",
+        "scope": "Custom factory normalization; built-ins already preserve flag. No new policy/cache/API.",
+        "public_before": {
+          "failed": 5,
+          "positive_passed": 1
+        },
+        "fixed": 6,
+        "private_sole_check_omission": {
+          "failed": 5,
+          "positive_passed": 1
+        },
+        "private_exact_recompiled_restore": 6,
+        "proofs": "Public Agent preflight/postACK/approval/effort/saved restoration; exact denied/allowed clones preserve explicit and automatic attachments.",
+        "selected_runtime": {
+          "models": 59,
+          "native_models": 34,
+          "storage_library": 258,
+          "storage_integration": 58,
+          "unique_passed": 409,
+          "ignored": 7
+        },
+        "sdk_doctests": 57,
+        "strict_checks": "Exact seven-package all-target Clippy -D warnings, fmt and strict SDK docs pass.",
+        "limits": "No new frontend/browser/full6838 run for this SDK-only check. Prior evidence retains source scope. New whole R5/current CI required."
+      },
+      "effort_settlement_correction": {
+        "source": "ca898be66",
+        "owner": "Existing effort change separates native outcome from local storage/retention result, then one bounded terminal audit attempt under original scheduler/permit.",
+        "native_ack": "Applied means native verified, not durable saved. Primary local failure retains CleanupRequired; terminal audit error appended primary-first.",
+        "public_before": {
+          "failed": 5,
+          "positive_passed": 3
+        },
+        "fixed": 8,
+        "private_sole_terminal_omission": {
+          "failed": 5,
+          "positive_passed": 3
+        },
+        "private_exact_recompiled_restore": 8,
+        "proofs": "Public Agent plus forwarding real InMemoryStorage: save failure/success, returned retention refusal/panic, combined audit failures, unverified native/panic. Original attribution, known ACK, primary error, committed snapshot at failed return, admission fence and cleanup once.",
+        "affected_unique_runtime": {
+          "effort": 15,
+          "models": 59,
+          "native_effort": 23,
+          "configuration_relation": 1,
+          "total": 98
+        },
+        "sdk_doctests": 57,
+        "strict_checks": "Exact seven-package all-target Clippy -D warnings/fmt and strict SDK docs pass.",
+        "limits": "Terminal audit failure is attempted, not delivered; owning runtime destruction may prevent later polling. No repeated frontend/browser/full6838; prior scopes unchanged. Fresh whole review/current CI required."
+      },
+      "configuration_supervision_correction": {
+        "source": "92b380c8e",
+        "owner": "Existing shared audit_configuration_control supervises prerequisite, operation future, success acknowledgement extraction and explicit future cleanup, then existing bounded terminal audit.",
+        "panic": "Fence captured permit before cleanup; forget hostile panic payload; existing SubmissionUnresolved/CleanupRequired. Preserve recorded ACK, original actor/control and primary error, append terminal audit error. No fabricated verified model ACK or Applied.",
+        "public_before": {
+          "failed": 2,
+          "positive_passed": 2
+        },
+        "existing_post_ack_regression_before_failed": 1,
+        "fixed": 7,
+        "private_sole_poll_supervision_omission": {
+          "failed": 4,
+          "positive_passed": 2,
+          "hostile_case": "Excluded while unguarded"
+        },
+        "private_exact_recompiled_restore": 7,
+        "hostile_payload_destructor_count": 0,
+        "assertion_migration": "First model group65pass/1stale Requested-only expectation failed. Narrow migration now requires original custom actor/target/noACK on Requested+Failed; native0/Closed/cleanup/reopen unchanged. Original failure preserved.",
+        "affected_checks": {
+          "models": 66,
+          "approval": 9,
+          "effort": 15,
+          "native_models": 34,
+          "native_approval": 10,
+          "configuration_relation": 1,
+          "selection_sum": 135,
+          "unique_runtime_passed": 134,
+          "explicit_ignored": 1,
+          "ignore_reason": "Live Codex preset downgrade requires real model/tools"
+        },
+        "sdk_doctests": 57,
+        "strict_checks": "Exact seven-package all-target Clippy -D warnings/fmt and strict SDK docs pass.",
+        "limits": "Private omission proves poll supervision; separate future-drop public ordering not fabricated. Runtime destruction cannot promise audit delivery. No repeated whole frontend/browser/full6838. Fresh whole review/current CI required."
+      }
+    },
+    "latest_sdk_effort_supervision": {
+      "source_commit": "7dcb51d216bb428d6956c36cabe3d2dc44491d2e",
+      "source_tree": "bdb7e1f043ab5a8deb9d770d8e54bb57127b7fb9",
+      "author_selfgate_sha256": "a1d9b819b6382fc2976e40d7f9f762b36624135c37397044afbffbd210e1bc9e",
+      "source_manifest_sha256": "54751edd7658d6a5dfeb8d6d96f83e5cefb4378734260b5dc8163ff5e7d4c10b",
+      "owned_files": {
+        "crates/nessa-sdk/docs/agent_execution/lifecycle.md": "912e7953b2d9a6c7b538cc3d44a77eb48fe3d1a6c06029d4f02c160bc4f5bef7",
+        "crates/nessa-sdk/src/application/agent_execution/agents/agent.rs": "5cde2b92dcdb8e58270ae6da622c9d5d27bc286e9e1498b93c728e388947280f",
+        "crates/nessa-sdk/tests/application/agent_execution/agents/effort/settlement.rs": "8f7ce9f1249db1590277ca6afa156663ddc1a486f9efac90e3883d0176049775"
+      },
+      "runtime_unique_pass": 162,
+      "runtime_sum_with_overlap": 166,
+      "original_live_codex_ignored": 1,
+      "sdk_doctests": 57,
+      "checks": [
+        {
+          "name": "clippy-seven",
+          "command": [
+            "cargo",
+            "clippy",
+            "-p",
+            "nessa-local-storage",
+            "-p",
+            "nessa-auth",
+            "-p",
+            "nessa-server",
+            "-p",
+            "nessa-protocol",
+            "-p",
+            "nessa-client-core",
+            "-p",
+            "nessa-device-client",
+            "-p",
+            "nessa-sdk",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 80.796742083,
+          "minimum_free_bytes": 6411857920,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-r8-effort-clippy-seven.log",
+          "log_sha256": "ee00448bd2d2063369e1b48ffd85109486e8a1209c8f865382976e65bc5e0e8d"
+        },
+        {
+          "name": "fmt-seven",
+          "command": [
+            "cargo",
+            "fmt",
+            "--check",
+            "-p",
+            "nessa-local-storage",
+            "-p",
+            "nessa-auth",
+            "-p",
+            "nessa-server",
+            "-p",
+            "nessa-protocol",
+            "-p",
+            "nessa-client-core",
+            "-p",
+            "nessa-device-client",
+            "-p",
+            "nessa-sdk"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 4.232092292000004,
+          "minimum_free_bytes": 6412058624,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-r8-effort-fmt-seven.log",
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "name": "effort",
+          "command": [
+            "cargo",
+            "test",
+            "-p",
+            "nessa-sdk",
+            "--test",
+            "application",
+            "application::agent_execution::agents::effort",
+            "--",
+            "--nocapture"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 20.634732625000012,
+          "minimum_free_bytes": 6411988992,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-r8-effort-effort.log",
+          "log_sha256": "0a0dfb5b5890870b357fcec6ab881e6ac334266fa9e3a2419e5bc18f8c95cf76"
+        },
+        {
+          "name": "models",
+          "command": [
+            "cargo",
+            "test",
+            "-p",
+            "nessa-sdk",
+            "--test",
+            "application",
+            "application::agent_execution::agents::models"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 2.2295577080000015,
+          "minimum_free_bytes": 6415101952,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-r8-effort-models.log",
+          "log_sha256": "4ec3968c78490c78febde2132d97da050afd33efafb0181bcbc63a8c7b390c01"
+        },
+        {
+          "name": "approval",
+          "command": [
+            "cargo",
+            "test",
+            "-p",
+            "nessa-sdk",
+            "--test",
+            "application",
+            "application::agent_execution::agents::approval"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 2.2241769999999974,
+          "minimum_free_bytes": 6415040512,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-r8-effort-approval.log",
+          "log_sha256": "2fbf33944a684529af827585730e6662dd50f3fcace91ad51da3f391cc21993f"
+        },
+        {
+          "name": "native-effort",
+          "command": ["cargo", "test", "-p", "nessa-sdk", "--lib", "effort"],
+          "exit_code": 0,
+          "elapsed_seconds": 26.29956575,
+          "minimum_free_bytes": 5928329216,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-r8-effort-native-effort.log",
+          "log_sha256": "b67d5212fc841fb80e9d8a50f4fac510067127a5625efea7f14dc47ceba89ecb"
+        },
+        {
+          "name": "native-models",
+          "command": ["cargo", "test", "-p", "nessa-sdk", "--lib", "model_"],
+          "exit_code": 0,
+          "elapsed_seconds": 2.2495187920000035,
+          "minimum_free_bytes": 5928157184,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-r8-effort-native-models.log",
+          "log_sha256": "e60108e13b13229524beee5944016cc60e2e94affd136d2c9a26e5f4d35bcd06"
+        },
+        {
+          "name": "native-approval",
+          "command": ["cargo", "test", "-p", "nessa-sdk", "--lib", "approval"],
+          "exit_code": 0,
+          "elapsed_seconds": 2.2497073330000035,
+          "minimum_free_bytes": 5928001536,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-r8-effort-native-approval.log",
+          "log_sha256": "49133c14d907630b2991ffc538fb56fb1c160d94873ab41a39663c29ba174e4b"
+        },
+        {
+          "name": "configuration-relation",
+          "command": [
+            "cargo",
+            "test",
+            "-p",
+            "nessa-sdk",
+            "--lib",
+            "configuration_relationships"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 2.2265527090000035,
+          "minimum_free_bytes": 5927366656,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-r8-effort-configuration-relation.log",
+          "log_sha256": "8feeff5f5ac48fd4504462286fe05f7e58d660d0c37c30a01ab06a99ab728df0"
+        },
+        {
+          "name": "sdk-doc-tests",
+          "command": ["cargo", "test", "-p", "nessa-sdk", "--doc"],
+          "exit_code": 0,
+          "elapsed_seconds": 6.250469207999998,
+          "minimum_free_bytes": 5921792000,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-r8-effort-sdk-doc-tests.log",
+          "log_sha256": "3f0aa38aae4010205153f0bcde0a33eaf0c4356505a701f7a2fd1b2ec80a3c04"
+        },
+        {
+          "name": "strict-sdk-docs",
+          "command": ["node", "scripts/check-sdk-docs.mjs"],
+          "exit_code": 0,
+          "elapsed_seconds": 4.253496208000001,
+          "minimum_free_bytes": 5924773888,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-r8-effort-strict-sdk-docs.log",
+          "log_sha256": "6837a590d2d54b9f31d7c3b5c560bde41b6b9f5940e934760c1da3a5387f5774"
+        },
+        {
+          "name": "diff",
+          "command": ["git", "diff", "--check"],
+          "exit_code": 0,
+          "elapsed_seconds": 2.2352438329999984,
+          "minimum_free_bytes": 5861208064,
+          "disk_stop": false,
+          "log": "/tmp/nessa-975-r8-effort-diff.log",
+          "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "proof": {
+        "minimal_before": {
+          "log": "/tmp/nessa-975-r8-effort-getter-before.log",
+          "sha256": "821bc4b88f7600e919350beab89c387f8fc104d0251ca9e77379400d5aaa49a5",
+          "results": [
+            "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 601 filtered out; finished in 0.01s"
+          ]
+        },
+        "mixed_before": {
+          "log": "/tmp/nessa-975-r8-effort-matrix-before.log",
+          "sha256": "cec1404d6f4f603ee122c43d8dc255e71a20c7c4278d02ef03826272ddf4fdb2",
+          "results": [
+            "test result: FAILED. 9 passed; 6 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.01s"
+          ]
+        },
+        "first_fixed_with_stale_storage_assertions": {
+          "log": "/tmp/nessa-975-r8-effort-matrix-fixed.log",
+          "sha256": "046f844f0e147b79c801ca5885299cbc05dadba164ecce00a1625a8532f8fbae",
+          "results": [
+            "test result: FAILED. 13 passed; 2 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.01s"
+          ]
+        },
+        "corrected_live_fixed": {
+          "log": "/tmp/nessa-975-r8-effort-matrix-fixed2.log",
+          "sha256": "af911da134ca925d61f402cc2bdac1bf994f9f640864e15d464516b788f1fb2b",
+          "results": [
+            "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.01s"
+          ]
+        },
+        "corrected_private_before": {
+          "log": "/tmp/nessa-975-r8-effort-corrected-private-before.log",
+          "sha256": "529f39b5b62b5293edf266609c7230044b9eddb9ceccc4ecfdcaebd4d0abcece",
+          "results": [
+            "test result: FAILED. 11 passed; 5 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.01s"
+          ]
+        },
+        "private_sole_supervision_omission": {
+          "log": "/tmp/nessa-975-r8-effort-sole-supervision-omission.log",
+          "sha256": "6da5e2a08562a6f4d5a9c328183f26d12a5d201cd424bffbd85b606be7920fd3",
+          "results": [
+            "test result: FAILED. 10 passed; 6 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.01s"
+          ]
+        },
+        "private_exact_restored": {
+          "log": "/tmp/nessa-975-r8-effort-private-restored.log",
+          "sha256": "98dce493ea26fbd01210471d99ac85ddf7b05abd4321e04ff3efd35f4e745f82",
+          "results": [
+            "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.01s"
+          ]
+        }
+      },
+      "baseline_attribution": "Original 9PASS/6FAIL mixed: four real terminal gaps and two incorrect Storage expectations; corrected baseline11PASS/5terminalFAIL includes added native-cleanup witness. First fixed13PASS/2 stale assertions retained; corrected fixed16PASS.",
+      "persistence_order": "Removed redundant postACK preset getter; captured serialized preset reused; required normalization getter fault now follows save, so exact saved low/original actor survives. Historical minimal before had no saved configuration.",
+      "limits": [
+        "No full6838, server runtime, UI/browser or performance repetition for this SDK-only effort owner; prior whole-source gates remain historical scoped evidence.",
+        "One existing native live-Codex approval test ignored with original reason; not counted PASS.",
+        "No audit-delivery guarantee after runtime destruction.",
+        "New whole assembled review, root checkpoint and current CI still required; no publication/merge by author.",
+        "Old standalone temporary probe never executed; all new executable proofs ordinary repository tests."
+      ],
+      "review": "R8 incomplete; new whole assembled review required before publication/current CI/merge",
+      "older_browser_server_photos": "Retain exact prior source scope; no current SDK browser rerun claimed."
+    }
+  }
+}

@@ -100,6 +100,9 @@ export function Composer({
   onPageChange,
   model: shown,
   onModelChange,
+  modelProvider,
+  modelDisabled = false,
+  modelNotice,
   onSend,
   onStop,
   access,
@@ -119,6 +122,10 @@ export function Composer({
   model: { provider: string; modelId: string } | undefined
   /** Told when the person picks another model; the owner decides what is shown. */
   onModelChange?: (model: { provider: string; modelId: string }) => void
+  /** Established chats restrict the existing picker to their source provider. */
+  modelProvider?: string
+  modelDisabled?: boolean
+  modelNotice?: string
   /** Sends a turn; without it nothing can be sent and the send button says so. */
   onSend?: (text: string) => void
   /**
@@ -204,6 +211,11 @@ export function Composer({
           }}
         />
       </div>
+      {modelNotice ? (
+        <StatusLabel role="status" tone="neutral" className="desktop-composer-notice">
+          {modelNotice}
+        </StatusLabel>
+      ) : null}
       {access?.notice ? (
         <StatusLabel
           tone={access.notice.tone}
@@ -234,8 +246,12 @@ export function Composer({
             )}
           >
             <ModelPicker
-              disabled={!onModelChange}
-              groups={pickerGroups}
+              disabled={!onModelChange || modelDisabled}
+              groups={
+                modelProvider
+                  ? pickerGroups.filter((group) => group.id === modelProvider)
+                  : pickerGroups
+              }
               value={shown && { providerId: shown.provider, modelId: shown.modelId }}
               onValueChange={({ providerId, modelId }) => {
                 const next = findComposerModel(providerId, modelId)

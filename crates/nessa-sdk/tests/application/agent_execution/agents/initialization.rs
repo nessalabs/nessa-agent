@@ -1,5 +1,7 @@
 //! Prepared construction and attachment ownership use separate observable phases.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 use nessa_sdk::application::agent_execution::{
     hooks::{AfterInvocation, AfterInvocationEvent},
     sessions::{
@@ -209,6 +211,9 @@ struct PanickingCleanupProvider {
 struct PanickingCleanupBackend(Mutex<Option<CleanupPanic>>);
 struct PanickingCleanupFuture(CleanupPanic);
 impl AgentProvider for PanickingProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("panic-open", "fixture", "test").unwrap()
     }
@@ -223,6 +228,9 @@ impl AgentProvider for PanickingProvider {
     }
 }
 impl AgentProvider for NoResourcesProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("no-resources", "fixture", "test").unwrap()
     }
@@ -234,6 +242,9 @@ impl AgentProvider for NoResourcesProvider {
     }
 }
 impl AgentProvider for RejectingOpenProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("rejected-open", "fixture", "test").unwrap()
     }
@@ -257,6 +268,9 @@ impl ProviderCleanup for GatedFailedOpenCleanup {
     }
 }
 impl AgentProvider for GatedFailedOpenProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("gated-failed-open", "fixture", "test").unwrap()
     }
@@ -273,6 +287,9 @@ impl AgentProvider for GatedFailedOpenProvider {
     }
 }
 impl AgentProvider for GatedOpenProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.inner.harness_host_identity()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.inner.identity()
     }
@@ -307,6 +324,9 @@ impl Drop for PanickingOpen {
     }
 }
 impl AgentProvider for PanickingCleanupProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("panic-cleanup", "fixture", "test").unwrap()
     }
@@ -331,7 +351,11 @@ impl ProviderSessionBackend for PanickingCleanupBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        _input: ExecutionRequest,
+        _handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async { ProviderExecutionReply::Rejected(AgentError::Closed) })
     }
     fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
@@ -662,6 +686,8 @@ async fn initialization_unit_left_unfinished_is_completed_by_the_next_prepare() 
         "only the missing completion is appended"
     );
     let expected = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         id: id.clone(),
         provider: provider.identity(),
         provider_context: ProviderContext::Absent,
@@ -905,6 +931,9 @@ async fn queued_work_admitted_before_attachment_binds_to_the_published_provider(
 
 struct AuthenticationRefusingStartup;
 impl AgentProvider for AuthenticationRefusingStartup {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("codex", "fixture", "unsigned").unwrap()
     }

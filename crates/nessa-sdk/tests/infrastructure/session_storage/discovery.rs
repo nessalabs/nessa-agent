@@ -60,6 +60,8 @@ async fn save_publications(storage: &RecordStorage, id: &SessionId, count: u64) 
             opened(id).1
         } else {
             SessionSnapshot {
+                model_change: None,
+                current_configuration: None,
                 provider_context: ProviderContext::Recorded(
                     ExecutionSessionId::new(format!("context-{generation}")).unwrap(),
                 ),

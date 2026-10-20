@@ -118,6 +118,7 @@ import {
   type ConversationSummary,
   type ConversationView,
   type ConversationViewCursor,
+  type PermissionReviewWaiting,
   type QuestionDetail,
   type QuestionDetails,
   type ReviewDetail,
@@ -133,6 +134,7 @@ import { isSignedOut } from "../../../../session"
 import { agentForProvider } from "../../../model/composer-options"
 import {
   WorkspaceSourceError,
+  WorkspaceModelError,
   type WorkspaceSource,
   type WorkspaceUpdate,
 } from "../../application/ports"
@@ -165,6 +167,8 @@ export interface GatewayClient {
     | "answerQuestion"
     | "stop"
     | "setApprovalMode"
+    | "setModel"
+    | "read"
     | "archive"
     | "rename"
     | "delete"
@@ -174,8 +178,15 @@ export interface GatewayClient {
   stopThread(threadId: string): Promise<StopThreadResult>
   readonly connectionState: ConnectionState
   onConnectionStateChange(handler: (state: ConnectionState) => void): () => void
-  /** Server pushes, when the client has them. Absent on a client that only answers calls. */
-  onEvent?(event: string, handler: (payload: unknown) => void): () => void
+  /**
+   * The gateway's push of the reviews waiting on a person: `NessaClient.on`.
+   * Required, so a client without it fails the type check instead of
+   * leaving every waiting-review notice silently unshown.
+   */
+  on(
+    event: "permission.reviewWaiting",
+    handler: (payload: PermissionReviewWaiting) => void,
+  ): () => void
   close(): void
 }
 
@@ -513,31 +524,15 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   let current: { client: C; off: () => void } | undefined
   let connecting: Promise<C> | undefined
   let connectedBefore = false
-  // The last waiting-review snapshot this source applied, and how many have
-  // been applied. A socket that is down publishes an empty set. The server's
-  // next frame can be dispatched before the replacement listener exists, and
-  // a frame with no listener is dropped, so coming back republishes this set
-  // when nothing newer was applied after that clear
-  // (`a reconnect restores waiting reviews the snapshot missed`).
-  let retainedReviews: readonly WaitingReview[] = []
-  let reviewsApplied = 0
-  let reviewsClearedAt = -1
-  const publishReviews = (reviews: readonly WaitingReview[]) => {
+  // A socket that is down publishes an empty set. The client hands a new
+  // socket's first set to the listener even when it arrived before the
+  // listener was added, so nothing here keeps or replays an older one: an
+  // older set could post a review that settled while the socket was down.
+  const noteReviews = (reviews: readonly WaitingReview[]) => {
     options.onReviewWaiting?.(reviews)
   }
-  const noteReviews = (reviews: readonly WaitingReview[]) => {
-    retainedReviews = reviews.slice()
-    reviewsApplied += 1
-    publishReviews(retainedReviews.slice())
-  }
   const clearReviews = () => {
-    reviewsClearedAt = reviewsApplied
-    publishReviews([])
-  }
-  const restoreReviews = () => {
-    if (reviewsApplied !== reviewsClearedAt || retainedReviews.length === 0) return
-    reviewsClearedAt = -1
-    publishReviews(retainedReviews.slice())
+    options.onReviewWaiting?.([])
   }
   // After a connect that failed — refused, or out of time — nothing in the
   // background connects again until `waitUntil` (#419): each connect asks
@@ -560,18 +555,16 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
    * that failure. The caller closes the client and fails the attempt.
    */
   const adopt = (connected: C): WorkspaceSourceError | undefined => {
-    const offReviews =
-      connected.onEvent?.("permission.reviewWaiting", (payload) => {
-        const reviews = waitingReviews(payload)
-        if (reviews) noteReviews(reviews)
-      }) ?? (() => {})
+    const offReviews = connected.on("permission.reviewWaiting", (payload) => {
+      const reviews = waitingReviews(payload)
+      if (reviews) noteReviews(reviews)
+    })
     const off = connected.onConnectionStateChange((state) => {
       if (current?.client !== connected) return
       if (state.status === "connected") {
         // Back: every subscription ended `disconnected` with the connection.
         restore()
         resync()
-        restoreReviews()
       } else if (state.status === "reconnecting" || state.status === "closed") {
         // A review cannot be answered while this socket is down. An empty
         // snapshot closes the notice (`a connection that is not up clears
@@ -606,7 +599,6 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     if (connectedBefore) {
       restore()
       resync()
-      restoreReviews()
     }
     connectedBefore = true
     return undefined
@@ -1578,6 +1570,57 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           return connected.conversation.setApprovalMode(sessionId, mode)
         })
       }),
+    setModel: (sessionId, { provider, modelId }, requestId, _initiator) =>
+      within(async (live) => {
+        await transcriptOf(sessionId, "person")
+        const current = knownModel(sessionId)
+        if (!current) throw new WorkspaceModelError("unavailable", true)
+        if (current.provider !== provider)
+          throw new WorkspaceModelError("not-supported", false)
+        // Read reconciles a lost native receipt. Refollow uses the existing
+        // bounded frame owner; the read or ACK does not fabricate a frame.
+        const reconcile = async () => {
+          const fresh = await dispatch(live, (connected) =>
+            connected.conversation.read(sessionId),
+          )
+          if (fresh.modelChange || fresh.approvalModeChange)
+            throw new WorkspaceModelError("unavailable", true)
+          const following = views.get(sessionId)
+          if (following) letGo(following)
+          await transcriptOf(sessionId, "person")
+          const applied = reads.get(sessionId)?.view
+          if (
+            !applied ||
+            !runningModel(applied) ||
+            applied.modelChange ||
+            applied.approvalModeChange
+          )
+            throw new WorkspaceModelError("unavailable", true)
+        }
+        let sourceReconciled: boolean
+        let receipt: Awaited<ReturnType<GatewayClient["conversation"]["setModel"]>>
+        try {
+          await reconcile()
+          receipt = await dispatch(live, (connected) => {
+            held(sessionId)
+            return connected.conversation.setModel(sessionId, modelId, { requestId })
+          })
+        } catch (error) {
+          if (error instanceof WorkspaceModelError) throw error
+          const refused = refusalOf(error)
+          throw new WorkspaceModelError(
+            refused instanceof WorkspaceSourceError ? refused.reason : "unavailable",
+            !(error instanceof NessaConversationControlError) || error.uncertain,
+            refused instanceof WorkspaceSourceError ? refused.diagnostic : undefined,
+          )
+        } finally {
+          sourceReconciled = await reconcile().then(
+            () => true,
+            () => false,
+          )
+        }
+        return { ...receipt, sourceReconciled }
+      }),
     // The gateway keeps no pin.
     setPinned: () => Promise.reject(new WorkspaceSourceError("not-supported")),
     archive: (sessionId) =>
@@ -1959,6 +2002,8 @@ function reasonFor(
     // audit that did not answer, an outcome the gateway could not settle.
     case ConversationErrorCode.ApprovalModeNotApplied:
     case ConversationErrorCode.ApprovalModeUncertain:
+    case ConversationErrorCode.ModelChangeNotApplied:
+    case ConversationErrorCode.ModelChangeUncertain:
     case ConversationErrorCode.ApprovalRequestConflict:
     case ConversationErrorCode.TurnRunning:
     case ConversationErrorCode.ConversationCapacity:

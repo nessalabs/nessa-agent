@@ -5106,3 +5106,6 @@ async fn a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes() {
         "the detached write did not revoke the grant"
     );
 }
+
+#[path = "store/model_changes.rs"]
+mod model_changes;

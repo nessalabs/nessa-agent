@@ -95,6 +95,7 @@ const WEIGHTS = {
   note: 5,
   answer: 16,
   mode: 6,
+  model: 4,
   stop: 7,
   remove: 4,
   reorder: 3,

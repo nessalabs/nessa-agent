@@ -8,7 +8,8 @@ use super::{
     connector::{ssh_arguments, LeaseConnection, LeaseConnector},
     environment::{SshEnvironment, SshTimings},
     install::{
-        Build, BuildSource, HostInstaller, InstallTimings, OwnExecutable, RemoteShell, ShellFuture,
+        Build, BuildSource, HostInstaller, InstallTimings, OwnExecutable, ReleaseCopy, RemoteShell,
+        ShellFuture,
     },
     link::{HostLink, Liveness},
     open_ssh::OpenSshConnector,
@@ -27,6 +28,9 @@ use nessa_protocol::lease::{
     decode, encode, Cleanup, CommandEnd, Data, FromEnvironment, GrantedTerms as WireTerms, Sandbox,
     ToEnvironment, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
 };
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::{ApprovalMode, ModelChange};
+use nessa_sdk::application::agent_execution::traces::LocalTraceStore;
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     providers::{
@@ -34,6 +38,7 @@ use nessa_sdk::application::agent_execution::{
         HarnessLaunch, HarnessProcess, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
     },
 };
+use nessa_sdk::domain::model_metadata::value_objects::EffortLevel;
 use nessa_sdk::domain::{
     agent_execution::leases::{
         AgentWork, EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants,
@@ -562,13 +567,39 @@ impl Audit {
 
 /// A binding that hands back itself on any host, remembering the host.
 struct Binding {
+    captured_host: Option<Arc<dyn HarnessHost>>,
     capabilities: EffectiveCapabilities,
     host: Arc<Mutex<Option<Arc<dyn HarnessHost>>>>,
     remote: bool,
 }
 impl AgentProvider for Binding {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.captured_host
+            .as_ref()
+            .map_or_else(HarnessHostIdentity::local, HarnessHostIdentity::hosted)
+    }
+    fn model_change_context(&self) -> Option<String> {
+        Some("fixture-host-context".into())
+    }
+    fn with_model_configuration(
+        &self,
+        mode: Option<ApprovalMode>,
+        effort: Option<EffortLevel>,
+        _traces: Option<Arc<LocalTraceStore>>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        if mode.is_some() || effort.is_some() {
+            return Err(AgentError::Unsupported("fixture settings".into()));
+        }
+        Ok(Arc::new(Self {
+            captured_host: self.captured_host.clone(),
+            capabilities: self.capabilities.clone(),
+            host: self.host.clone(),
+            remote: self.remote,
+        }))
+    }
     fn identity(&self) -> ProviderIdentity {
-        ProviderIdentity::new("fixture", "model", "context").expect("a fixed identity is valid")
+        ProviderIdentity::new("fixture", self.capabilities.model().model_id(), "context")
+            .expect("a fixed identity is valid")
     }
     fn capabilities(&self) -> &EffectiveCapabilities {
         &self.capabilities
@@ -586,8 +617,9 @@ impl AgentProvider for Binding {
         if !self.remote {
             return Err(AgentError::Unsupported("local only".into()));
         }
-        *self.host.lock().unwrap() = Some(host);
+        *self.host.lock().unwrap() = Some(host.clone());
         Ok(Arc::new(Binding {
+            captured_host: Some(host),
             capabilities: self.capabilities.clone(),
             host: self.host.clone(),
             remote: true,
@@ -607,6 +639,7 @@ fn binding(remote: bool) -> (Arc<Binding>, GivenHost) {
     .clone();
     (
         Arc::new(Binding {
+            captured_host: None,
             capabilities,
             host: host.clone(),
             remote,
@@ -1223,13 +1256,16 @@ async fn a_grant_not_answered_in_time_is_ended_on_the_host() {
 fn ssh_is_run_with_the_destination_after_its_options() {
     let host = devbox();
     let digest = "ab".repeat(32);
-    let arguments = ssh_arguments(&host, crate::env_serve::install::serve_command(&digest));
+    let arguments = ssh_arguments(&host, crate::env_serve::install::serve_command(&[&digest]));
     let separator = arguments.iter().position(|word| word == "--").unwrap();
     assert_eq!(
         &arguments[separator + 1..],
         [
             "devbox".to_owned(),
-            format!("sh -c 'exec \"$HOME/.nessa/env/{digest}/nessa\" env serve'")
+            format!(
+                "sh -c 'for d in {digest}; do p=\"$HOME/.nessa/env/$d/nessa\"; \
+                 if [ -x \"$p\" ]; then exec \"$p\" env serve; fi; done'"
+            )
         ]
     );
     assert!(arguments.iter().any(|word| word == "BatchMode=yes"));
@@ -2411,7 +2447,7 @@ async fn a_host_without_this_build_gets_it_installed_and_then_serves() {
     assert_eq!(
         runs[0],
         (
-            crate::env_serve::install::probe_command(LEASE_PROTOCOL, &this_digest()),
+            crate::env_serve::install::probe_command(LEASE_PROTOCOL, &[&this_digest()]),
             None
         )
     );
@@ -2423,7 +2459,7 @@ async fn a_host_without_this_build_gets_it_installed_and_then_serves() {
         )
     );
     assert_eq!(connector.connects.load(Ordering::SeqCst), 2);
-    let serve = crate::env_serve::install::serve_command(&this_digest());
+    let serve = crate::env_serve::install::serve_command(&[&this_digest()]);
     assert_eq!(*connector.commands.lock().unwrap(), [serve.clone(), serve]);
     let installed = |started: bool| {
         let (protocol, digest) = (LEASE_PROTOCOL.to_owned(), this_digest());
@@ -2833,6 +2869,401 @@ async fn an_account_never_installs() {
     assert_eq!(environment.account(&lease()).await, None);
     assert!(shell.runs().is_empty());
     assert!(audit.events().is_empty());
+}
+
+// ---- another platform's release build (#734) ----
+
+/// What is sent as the release build for another platform.
+const RELEASE_BUILD: &[u8] = b"the release's build for macOS on Apple silicon";
+
+fn release_digest() -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(RELEASE_BUILD))
+}
+
+/// Opens `bytes`, measured as they are; counts the opens.
+struct Bytes(Vec<u8>, AtomicUsize);
+impl BuildSource for Bytes {
+    fn open(&self) -> io::Result<Build> {
+        use sha2::Digest;
+        self.1.fetch_add(1, Ordering::SeqCst);
+        let mut file = tempfile::tempfile()?;
+        std::io::Write::write_all(&mut file, &self.0)?;
+        std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(0))?;
+        Ok(Build {
+            file,
+            digest: format!("{:x}", sha2::Sha256::digest(&self.0)),
+        })
+    }
+}
+
+fn apple_silicon() -> Platform {
+    Platform::of_target("aarch64-apple-darwin").unwrap()
+}
+
+/// The installer of a Linux gateway that is a release pinning `bytes`,
+/// opened by `source`, as its macOS on Apple silicon build.
+fn release_installer(shell: Arc<dyn RemoteShell>, source: Arc<dyn BuildSource>) -> HostInstaller {
+    HostInstaller::new(
+        shell,
+        Arc::new(Built),
+        Platform::of_target("x86_64-unknown-linux-gnu").unwrap(),
+        LEASE_PROTOCOL,
+        InstallTimings {
+            probe: Duration::from_secs(5),
+            upload: Duration::from_secs(5),
+        },
+    )
+    .with_releases(vec![ReleaseCopy {
+        platform: apple_silicon(),
+        digest: release_digest(),
+        build: source,
+    }])
+}
+
+fn releasing(
+    connector: Arc<Connector>,
+    shell: Arc<Shell>,
+    audit: Arc<Audit>,
+    source: Arc<dyn BuildSource>,
+) -> SshEnvironment {
+    SshEnvironment::new(
+        devbox(),
+        connector,
+        audit,
+        Arc::new(release_installer(shell, source)),
+        SshTimings {
+            connect: Duration::from_secs(5),
+            answer: Duration::from_secs(5),
+            ..SshTimings::default()
+        },
+    )
+}
+
+/// A host this build does not run on gets the release build this one pins
+/// for its platform: probed and served by each copy's digest, this build's
+/// first, sent with the release build's digest, recorded, then served.
+#[tokio::test]
+async fn a_host_of_another_platform_gets_the_release_build_pinned_for_it() {
+    let connector = Connector::new(Reach::Silent);
+    let shell = Shell::new(
+        "absent Darwin arm64 other\n",
+        "installed\n",
+        connector.clone(),
+    );
+    let audit = Arc::new(Audit::default());
+    let source = Arc::new(Bytes(RELEASE_BUILD.to_vec(), AtomicUsize::new(0)));
+    let environment = releasing(
+        connector.clone(),
+        shell.clone(),
+        audit.clone(),
+        source.clone(),
+    );
+    let (binding, _host) = binding(true);
+    let lease = lease();
+    environment
+        .open(&lease, &terms("claude"), binding)
+        .await
+        .map(|_| ())
+        .unwrap();
+    let builds = [this_digest(), release_digest()];
+    let builds: Vec<&str> = builds.iter().map(String::as_str).collect();
+    assert_eq!(
+        shell.runs(),
+        [
+            (
+                crate::env_serve::install::probe_command(LEASE_PROTOCOL, &builds),
+                None
+            ),
+            (
+                crate::env_serve::install::upload_command(LEASE_PROTOCOL, &release_digest()),
+                Some(RELEASE_BUILD.to_vec())
+            ),
+        ]
+    );
+    let serve = crate::env_serve::install::serve_command(&builds);
+    assert_eq!(*connector.commands.lock().unwrap(), [serve.clone(), serve]);
+    let (host, lease, protocol) = (
+        "devbox".to_owned(),
+        lease.as_str().to_owned(),
+        LEASE_PROTOCOL.to_owned(),
+    );
+    assert_eq!(
+        audit.events(),
+        [
+            EnvironmentEvent::InstallStarted {
+                host: host.clone(),
+                lease: lease.clone(),
+                protocol: protocol.clone(),
+                digest: release_digest(),
+            },
+            EnvironmentEvent::Installed {
+                host,
+                lease,
+                protocol,
+                digest: release_digest(),
+            },
+            EnvironmentEvent::Connected {
+                host: "devbox".into(),
+                workspace: "/srv/work".into(),
+            },
+        ]
+    );
+}
+
+/// A release build that is not the bytes pinned (the download was
+/// replaced, or damaged) is refused before a byte is sent, with the digest
+/// it had; one that could not be downloaded is refused too.
+#[tokio::test]
+async fn a_release_build_that_is_not_the_pinned_one_is_refused_and_sent_nothing() {
+    let cases: [(Arc<dyn BuildSource>, Option<String>); 2] = [
+        (
+            Arc::new(Bytes(b"something else".to_vec(), AtomicUsize::new(0))),
+            Some({
+                use sha2::Digest;
+                format!("{:x}", sha2::Sha256::digest(b"something else"))
+            }),
+        ),
+        (
+            {
+                struct Unreachable;
+                impl BuildSource for Unreachable {
+                    fn open(&self) -> io::Result<Build> {
+                        Err(io::Error::other("the release answered 404"))
+                    }
+                }
+                Arc::new(Unreachable)
+            },
+            None,
+        ),
+    ];
+    for (source, seen) in cases {
+        let connector = Connector::new(Reach::Silent);
+        let shell = Shell::new("absent Darwin arm64 other", "installed", connector.clone());
+        let audit = Arc::new(Audit::default());
+        let environment = releasing(connector.clone(), shell.clone(), audit.clone(), source);
+        let lease = lease();
+        assert_eq!(
+            environment
+                .open(&lease, &terms("claude"), binding_only())
+                .await
+                .err(),
+            Some(LeaseRefusal::EnvironmentInstallFailed),
+            "{seen:?}"
+        );
+        assert_eq!(shell.runs().len(), 1, "probed, and nothing uploaded");
+        assert_eq!(
+            audit.events(),
+            [refused(&lease, InstallRefusal::Release, seen.as_deref())]
+        );
+    }
+}
+
+/// A release build whose copy on the host speaks another protocol is
+/// refused by the host's own check, as this build's would be.
+#[tokio::test]
+async fn a_release_build_speaking_another_protocol_is_refused_by_the_host() {
+    let connector = Connector::new(Reach::Silent);
+    let shell = Shell::new(
+        "absent Darwin arm64 other",
+        "refused version fedcba9876543210",
+        connector.clone(),
+    );
+    let audit = Arc::new(Audit::default());
+    let source = Arc::new(Bytes(RELEASE_BUILD.to_vec(), AtomicUsize::new(0)));
+    let environment = releasing(connector.clone(), shell.clone(), audit.clone(), source);
+    let lease = lease();
+    assert_eq!(
+        environment
+            .open(&lease, &terms("claude"), binding_only())
+            .await
+            .err(),
+        Some(LeaseRefusal::EnvironmentVersionMismatch)
+    );
+    assert_eq!(
+        audit.events().last(),
+        Some(&refused(
+            &lease,
+            InstallRefusal::Version,
+            Some("fedcba9876543210")
+        ))
+    );
+}
+
+/// A host whose platform neither this build nor any it pins runs on is
+/// refused as before; so is every host of another platform for a build
+/// that pins none (a development build), and one whose pins do not read.
+#[tokio::test]
+async fn a_platform_nothing_is_pinned_for_is_still_refused() {
+    let connector = Connector::new(Reach::Silent);
+    let shell = Shell::new("absent Linux aarch64 gnu", "installed", connector.clone());
+    let audit = Arc::new(Audit::default());
+    let source = Arc::new(Bytes(RELEASE_BUILD.to_vec(), AtomicUsize::new(0)));
+    let environment = releasing(
+        connector.clone(),
+        shell.clone(),
+        audit.clone(),
+        source.clone(),
+    );
+    let lease = lease();
+    assert_eq!(
+        environment
+            .open(&lease, &terms("claude"), binding_only())
+            .await
+            .err(),
+        Some(LeaseRefusal::EnvironmentPlatformUnsupported)
+    );
+    assert_eq!(source.1.load(Ordering::SeqCst), 0, "nothing downloaded");
+    assert_eq!(
+        audit.events(),
+        [refused(
+            &lease,
+            InstallRefusal::Platform,
+            Some("linux aarch64 gnu")
+        )]
+    );
+    struct NeverFetched;
+    impl super::release::ReleaseDownload for NeverFetched {
+        fn fetch(&self, _: &str, _: u64, _: &mut std::fs::File) -> io::Result<()> {
+            unreachable!("nothing is pinned")
+        }
+    }
+    let cache = tempfile::tempdir().unwrap();
+    let pin = format!("aarch64-apple-darwin={}:46", release_digest());
+    for (spec, from) in [
+        (None, None),
+        (Some(pin.as_str()), None),
+        (None, Some("https://example.test")),
+        (
+            Some("aarch64-apple-darwin=nope"),
+            Some("https://example.test"),
+        ),
+    ] {
+        assert!(
+            ReleaseCopy::pinned(spec, from, Arc::new(NeverFetched), cache.path()).is_empty(),
+            "{spec:?} {from:?}"
+        );
+    }
+    let pinned = ReleaseCopy::pinned(
+        Some(&pin),
+        Some("https://example.test"),
+        Arc::new(NeverFetched),
+        cache.path(),
+    );
+    assert_eq!(pinned.len(), 1);
+    assert_eq!(pinned[0].platform, apple_silicon());
+    assert_eq!(pinned[0].digest, release_digest());
+}
+
+/// Runs each command with this machine's own `sh` in a home of its own, as
+/// `sshd` hands it to a login shell.
+struct LocalShell(std::path::PathBuf);
+impl RemoteShell for LocalShell {
+    fn run<'a>(
+        &'a self,
+        _host: &'a SshDestination,
+        command: String,
+        input: Option<std::fs::File>,
+    ) -> ShellFuture<'a> {
+        let home = self.0.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let stdin = match input {
+                    Some(file) => std::process::Stdio::from(file),
+                    None => std::process::Stdio::null(),
+                };
+                let output = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&command)
+                    .env_clear()
+                    .env("HOME", &home)
+                    .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+                    .stdin(stdin)
+                    .output()?;
+                Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+            })
+            .await
+            .map_err(io::Error::other)?
+        })
+    }
+}
+
+/// A stand-in `nessa` that answers `env protocol` with `protocol`.
+fn stand_in(protocol: &str) -> Vec<u8> {
+    format!("#!/bin/sh\n[ \"$1 $2\" = \"env protocol\" ] && echo {protocol}\n").into_bytes()
+}
+
+/// The gate of #734 against this machine's own `sh` and tools, which the
+/// gateway treats as another platform's host: a gateway on another platform
+/// installs the release build it pins for this one, verified by the host's
+/// own scripts, and its serve command then finds that copy; a download
+/// that is not the pinned build is refused before anything is sent; a copy
+/// that speaks another protocol is refused by the host.
+#[tokio::test]
+async fn a_gateway_of_another_platform_installs_its_release_build_with_the_hosts_own_scripts() {
+    let here = Platform::this_build();
+    let elsewhere = if here.os == "macos" {
+        Platform::of_target("x86_64-unknown-linux-gnu").unwrap()
+    } else {
+        apple_silicon()
+    };
+    let installer = |home: &std::path::Path, pinned: &[u8], sent: Vec<u8>| {
+        use sha2::Digest;
+        HostInstaller::new(
+            Arc::new(LocalShell(home.into())),
+            Arc::new(Built),
+            elsewhere.clone(),
+            LEASE_PROTOCOL,
+            InstallTimings {
+                probe: Duration::from_secs(30),
+                upload: Duration::from_secs(30),
+            },
+        )
+        .with_releases(vec![ReleaseCopy {
+            platform: here.clone(),
+            digest: format!("{:x}", sha2::Sha256::digest(pinned)),
+            build: Arc::new(Bytes(sent, AtomicUsize::new(0))),
+        }])
+    };
+    let release = stand_in(LEASE_PROTOCOL);
+    let home = tempfile::tempdir().unwrap();
+    let gateway = installer(home.path(), &release, release.clone());
+    let audit = Audit::default();
+    assert_eq!(
+        gateway.ensure(&devbox(), "lease-1", &audit).await,
+        Ok(super::install::Installation::Installed)
+    );
+    assert_eq!(
+        gateway.ensure(&devbox(), "lease-2", &audit).await,
+        Ok(super::install::Installation::Present),
+        "found there by the probe, and not sent again"
+    );
+    let serve = gateway.serve_command().await.unwrap();
+    let said = LocalShell(home.path().into())
+        .run(&devbox(), serve.replace("env serve", "env protocol"), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        said.trim(),
+        LEASE_PROTOCOL,
+        "the serve command runs that copy"
+    );
+
+    let home = tempfile::tempdir().unwrap();
+    let replaced = installer(home.path(), &release, stand_in("0123456789abcdef"));
+    assert_eq!(
+        replaced.ensure(&devbox(), "lease-3", &audit).await,
+        Err(LeaseRefusal::EnvironmentInstallFailed)
+    );
+    assert!(!home.path().join(".nessa").exists(), "nothing was sent");
+
+    let other = stand_in("0123456789abcdef");
+    let home = tempfile::tempdir().unwrap();
+    let speaking = installer(home.path(), &other, other.clone());
+    assert_eq!(
+        speaking.ensure(&devbox(), "lease-4", &audit).await,
+        Err(LeaseRefusal::EnvironmentVersionMismatch)
+    );
 }
 
 /// First use over a real `ssh` and real hosts, run by hand where there are
@@ -3339,4 +3770,78 @@ async fn a_lease_ending_for_one_cause_keeps_it_when_the_other_comes() {
             .count();
         assert_eq!(revoked, 1);
     }
+}
+
+// #922: the lease's host is authority, even when target adaptation happens later.
+#[tokio::test]
+async fn model_targets_and_normalization_retain_the_granted_host() {
+    let connector = Connector::new(Reach::Serving);
+    let environment = environment(connector.clone(), Arc::new(Audit::default()));
+    let (initial, given) = binding(true);
+    let id = lease();
+    let opened = environment
+        .open(&id, &terms("claude"), initial)
+        .await
+        .unwrap();
+    let original_host = given.lock().unwrap().clone().unwrap();
+    assert!(opened.provider.harness_host_identity() == HarnessHostIdentity::hosted(&original_host));
+    let (mut target, target_host) = binding(true);
+    Arc::get_mut(&mut target).unwrap().capabilities =
+        crate::conversation_test_support::Provider::new(Arc::new(
+            crate::conversation_test_support::ProviderFactory::default(),
+        ))
+        .with_model("second-model")
+        .capabilities()
+        .clone();
+    let wrapped = opened.hold.model_provider(target.clone()).unwrap();
+    assert!(ModelChange::between(opened.provider.as_ref(), wrapped.as_ref()).is_ok());
+    let adapted_host = target_host.lock().unwrap().clone().unwrap();
+    assert!(Arc::ptr_eq(&original_host, &adapted_host));
+    assert!(wrapped.harness_host_identity() == HarnessHostIdentity::hosted(&original_host));
+    assert!(ModelChange::between(opened.provider.as_ref(), target.as_ref()).is_err());
+    let normalized = wrapped.with_model_configuration(None, None, None).unwrap();
+    assert!(normalized.harness_host_identity() == HarnessHostIdentity::hosted(&original_host));
+    // Cleanup and a later launch use the same captured host, without another grant.
+    for host in [&original_host, &adapted_host] {
+        let mut process = host.start(HarnessLaunch::default()).unwrap();
+        process.input.write_all(b"same lease").await.unwrap();
+        assert_eq!(read_some(process.output.as_mut()).await, b"same lease");
+        process.input.shutdown().await.unwrap();
+        assert_eq!(
+            process
+                .control
+                .cleanup(Duration::from_millis(10), Duration::from_millis(100))
+                .await
+                .unwrap(),
+            CloseOutcome { forced: false }
+        );
+    }
+    assert_eq!(
+        opened.hold.end(LeaseEndCause::Closed).await,
+        LeaseRelease::Released(LeaseCleanup::Confirmed { forced: false })
+    );
+    let entries = connector.ledger.0.lock().unwrap().clone();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| matches!(e, LedgerEntry::Granted { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| matches!(e, LedgerEntry::Ended { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| matches!(e, LedgerEntry::Started { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(connector.stopped.load(Ordering::SeqCst), 2);
+    connector.cut();
 }

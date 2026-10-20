@@ -443,14 +443,18 @@ async fn admission_rejects_invalid_input_without_using_provider() {
         },
     ] {
         assert!(matches!(
-            opened.session.execute(invalid).await.into_result(),
+            opened
+                .session
+                .execute(invalid, Arc::new(|| Ok(())))
+                .await
+                .into_result(),
             Err(AgentError::InvalidInput(_))
         ));
     }
     assert_eq!(
         opened
             .session
-            .execute(prompt("valid"))
+            .execute(prompt("valid"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .unwrap(),
@@ -1289,7 +1293,7 @@ async fn valid_startup_configuration_and_advisory_updates_preserve_normal_execut
     assert_eq!(
         opened
             .session
-            .execute(prompt("after valid updates"))
+            .execute(prompt("after valid updates"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .unwrap(),
@@ -1309,7 +1313,7 @@ async fn valid_startup_configuration_and_advisory_updates_preserve_normal_execut
     assert_eq!(
         restored
             .session
-            .execute(prompt("after restored valid updates"))
+            .execute(prompt("after restored valid updates"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .unwrap(),
@@ -1396,7 +1400,9 @@ async fn live_duplicate_configuration_retires_context_and_preserves_audit_failur
             };
             let result = timeout(
                 Duration::from_secs(3),
-                opened.session.execute(prompt("hostile config")),
+                opened
+                    .session
+                    .execute(prompt("hostile config"), Arc::new(|| Ok(()))),
             )
             .await
             .unwrap()
@@ -1492,7 +1498,10 @@ async fn a_permission_mode_reported_while_it_is_still_being_set_is_not_the_settl
     assert_eq!(
         opened
             .session
-            .execute(prompt("after the startup notification"))
+            .execute(
+                prompt("after the startup notification"),
+                Arc::new(|| Ok(()))
+            )
             .await
             .into_result()
             .unwrap(),

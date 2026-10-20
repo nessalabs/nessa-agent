@@ -53,9 +53,9 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
   environment_version_mismatch:
     "The copy of Nessa on the SSH host this conversation runs on is not the one this gateway installs there, so nothing was sent to it.",
   environment_platform_unsupported:
-    "The SSH host this conversation runs on has a different operating system or processor than this computer, so Nessa could not install itself there and nothing was sent.",
+    "The SSH host this conversation runs on has an operating system or processor this version of Nessa has no build for, so it could not install itself there and nothing was sent.",
   environment_install_failed:
-    "Nessa could not install itself on the SSH host this conversation runs on: the copy did not verify, did not run there, or could not be stored, so nothing was sent. Retry; the gateway's environment audit says which.",
+    "Nessa could not install itself on the SSH host this conversation runs on: the copy could not be downloaded, did not verify, did not run there, or could not be stored, so nothing was sent. Retry; the gateway's environment audit says which.",
   linked_file_unreachable:
     "This conversation runs on an SSH host, which cannot read files on this computer, so the message was not sent. Remove the linked files, or attach images, whose bytes are sent with them.",
   revoked_after_save:
@@ -126,6 +126,7 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.ModelUnavailable:
     case ConversationErrorCode.ApprovalModeUnavailable:
     case ConversationErrorCode.ApprovalRequestConflict:
+    case ConversationErrorCode.ModelChangeNotApplied:
     case ConversationErrorCode.TurnRunning:
       return true
     // No lease was granted for the agent's run, so the gateway never opened a
@@ -216,6 +217,7 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.ConversationErasureIncomplete:
     case ConversationErrorCode.ApprovalModeNotApplied:
     case ConversationErrorCode.ApprovalModeUncertain:
+    case ConversationErrorCode.ModelChangeUncertain:
       return false
     // An MCP App's request refused before it took effect: for a call
     // (mcp.callTool, mcp.readResource), before anything reached its server;

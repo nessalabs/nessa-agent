@@ -118,9 +118,14 @@ const OPTIONS = {
 
 /**
  * `agent`'s session's config options as ACP lists them, from `values` (option
- * id → current value). Each option offers only its current value: nothing
- * here chooses among models or modes, it reports what it was told.
+ * id → current value). The model option offers the SDK catalog for its current provider; other
+ * options report their current value. The fixture acknowledges the requested
+ * native selection; it does not decide the window's choice.
  */
+const catalog = JSON.parse(
+  readFileSync(join(repoRoot, "crates/nessa-sdk/data/models.json"), "utf8"),
+).models
+
 export const configOptions = (agent, values) =>
   Object.entries(values).map(([id, value]) => ({
     id,
@@ -128,7 +133,16 @@ export const configOptions = (agent, values) =>
     type: "select",
     ...(OPTIONS[agent][id] ? { category: OPTIONS[agent][id] } : {}),
     currentValue: value,
-    options: [{ value, name: value }],
+    options:
+      id === "model"
+        ? catalog
+            .filter(
+              (model) =>
+                model.provider ===
+                catalog.find((current) => current.modelId === value)?.provider,
+            )
+            .map((model) => ({ value: model.modelId, name: model.displayName }))
+        : [{ value, name: value }],
   }))
 
 /**

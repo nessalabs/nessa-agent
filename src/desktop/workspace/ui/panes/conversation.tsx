@@ -1,9 +1,11 @@
+import { modelChanging, modelRequesting } from "../../adapters/store/model-commands"
+import { draftOf, entry } from "../../application/workspace-state"
 import { WorkspaceSendFailure } from "../send-failure"
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
 import { playArrival, type Arrival } from "../../adapters/dom/arrival"
 import { Composer } from "../../../ui/composer"
 import {
-  chooseModel,
+  changeModel as requestModel,
   sendMessage,
   setComposerText,
   stopTurn,
@@ -56,7 +58,7 @@ function useComposerActions(sessionId: string) {
     [dispatch, sessionId],
   )
   const changeModel = useCallback(
-    (model: ModelRef) => dispatch(chooseModel({ sessionId, model })),
+    (model: ModelRef) => void dispatch(requestModel({ sessionId, model })),
     [dispatch, sessionId],
   )
   return { send, changeModel: canChangeModel ? changeModel : undefined }
@@ -99,6 +101,7 @@ export const PaneHome = memo(function PaneHome({
   const { changeModel } = useComposerActions(sessionId)
   const { text, onTextChange } = useComposerText(sessionId)
   const access = useComposerAccess(sessionId)
+
   return (
     <Home
       model={model}
@@ -158,6 +161,36 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
   const { text, onTextChange } = useComposerText(sessionId)
   const stop = useStop(sessionId)
   const access = useComposerAccess(sessionId)
+  const modelChoice = useWorkspaceSelector((state) =>
+    entry(state.workspace.modelChoices, sessionId),
+  )
+  const modelControl = useWorkspaceSelector(
+    (state) => entry(state.workspace.transcripts, sessionId)?.modelControl,
+  )
+  const modelRequest = useWorkspaceSelector((state) =>
+    modelRequesting(state.workspace, sessionId),
+  )
+  const modelBusy = useWorkspaceSelector((state) =>
+    modelChanging(state.workspace, sessionId),
+  )
+  const isDraft = useWorkspaceSelector((state) => !!draftOf(state.workspace, sessionId))
+  const modelNotice =
+    modelControl?.pending?.status === "recovery_required" ||
+    modelChoice?.state === "recovery_required" ||
+    modelChoice?.state === "acknowledged"
+      ? "The model change is not confirmed. Choose again to check and try."
+      : modelBusy
+        ? "Changing model…"
+        : modelChoice?.state === "refused"
+          ? modelChoice.code === "model_change_not_applied"
+            ? "Model didn’t change. Choose again to try."
+            : "The model change could not be confirmed. Choose again to check and try."
+          : modelControl?.effect === "nextTurn"
+            ? "Model applies to the next turn."
+            : modelControl?.effect === "subsequentResponses"
+              ? "Model applies to subsequent responses."
+              : undefined
+
   return (
     <>
       <WorkspaceSendFailure sessionId={sessionId} />
@@ -168,7 +201,10 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
         onPageChange={stayCard}
         model={model}
         onModelChange={changeModel}
-        onSend={send}
+        modelProvider={!isDraft ? model?.provider : undefined}
+        modelDisabled={modelRequest}
+        modelNotice={modelNotice}
+        onSend={modelBusy ? undefined : send}
         onStop={stop}
         access={access}
         // In a conversation the field is a reply, and says so in fewer words than the home's question.

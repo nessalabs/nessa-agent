@@ -273,6 +273,8 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   approval_mode_unavailable: "approval-mode-unavailable",
   approval_mode_not_applied: "approval-mode-not-applied",
   approval_mode_uncertain: "approval-mode-uncertain",
+  // A model-control refusal never answers submit; that is a different command.
+  model_change_not_applied: "invalid-request",
   approval_request_conflict: "approval-request-conflict",
   turn_running: "turn-running",
   conversations_not_configured: "conversations-not-configured",
@@ -408,6 +410,8 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   approval_mode_unavailable: "unavailable",
   approval_mode_not_applied: "unavailable",
   approval_mode_uncertain: "unavailable",
+  model_change_not_applied: "unavailable",
+  model_change_uncertain: "unavailable",
   approval_request_conflict: "unavailable",
   turn_running: "unavailable",
   // An MCP App's calls answer these, never a read; written out so the table

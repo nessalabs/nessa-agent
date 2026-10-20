@@ -143,6 +143,15 @@ tauri-utils = "2"
 # The injected systemd adapter tests also run on Unix hosts without systemd.
 # Native acceptance tests remain Linux-only; production dependencies stay target-specific.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
+# The standalone nil-URL regression must link WebKit itself; no Tauri/Wry
+# webview is constructed in that test process to load the framework for it.
+objc2-web-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "objc2-app-kit",
+  "objc2-core-foundation",
+  "WKWebView",
+  "WKWebViewConfiguration",
+] }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 async-channel = "2"
 async-io = "2"
@@ -163,3 +172,14 @@ custom-protocol = ["tauri/custom-protocol"]
 [[test]]
 name = "traffic_lights"
 harness = false
+
+# WKWebView must be created on the process main thread, like traffic_lights.
+[[test]]
+name = "page_load"
+harness = false
+
+# A real Tauri event loop on the process main thread. An example compiles in
+# normal mode, so importing production modules does not pull in libtest cases.
+[[example]]
+name = "page_load_acceptance"
+path = "examples/page_load_acceptance/main.rs"

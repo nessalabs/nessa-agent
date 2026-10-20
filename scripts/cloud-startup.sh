@@ -7,6 +7,8 @@ umask 077
 [ "$#" -eq 2 ] || { echo 'Usage: cloud-startup.sh setup|maintenance <checkout>' >&2; exit 2; }
 mode=$1
 node_major=24
+# CI installs the latest just (taiki-e/install-action); cloud pins one release.
+just_version=1.59.0
 case "$mode" in setup|maintenance) ;; *) echo 'Expected setup or maintenance' >&2; exit 2 ;; esac
 [ "$(uname -s)" = Linux ] || { echo 'Cloud startup requires Linux.' >&2; exit 2; }
 script_file=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
@@ -107,7 +109,9 @@ python3 - "$cloud_root" <<'PY'
 import pathlib, shlex, sys
 root = pathlib.Path(sys.argv[1])
 helper = root / 'env.sh'
-helper.write_text('export PATH=' + shlex.quote(str(root / 'node/bin')) + ':"$HOME/.cargo/bin:$PATH"\nexport RUSTUP_TOOLCHAIN=stable\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\n')
+# Cloud browsers are Playwright's own: no Google Chrome is installed for the
+# checks' default `chrome` channel (verification/desktop/scripts/lib/cli.mjs).
+helper.write_text('export PATH=' + shlex.quote(str(root / 'node/bin')) + ':' + shlex.quote(str(root / 'just/bin')) + ':"$HOME/.cargo/bin:$PATH"\nexport RUSTUP_TOOLCHAIN=stable\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\nexport NESSA_BROWSER_CHANNEL=bundled\n' + 'if [ -f ' + shlex.quote(str(root / 'browsers.sh')) + ' ]; then . ' + shlex.quote(str(root / 'browsers.sh')) + '; fi\n')
 line = '. ' + shlex.quote(str(helper)) + '\n'
 for name in ('.bashrc', '.bash_profile', '.profile'):
     path = pathlib.Path.home() / name
@@ -187,6 +191,17 @@ if ! rust_ready; then
   rustup toolchain install stable --profile minimal --component rustfmt --component clippy
   rust_ready
 fi
+# The public launch recipes, and the script tests that execute them, run `just`.
+# Version output is its whole capability: it is one static binary.
+just_ready() {
+  [ "$("$cloud_root/just/bin/just" --version 2>/dev/null)" = "just $just_version" ]
+}
+just_status=reused
+if ! just_ready; then
+  just_status=installed
+  cargo install just --locked --force --version "$just_version" --root "$cloud_root/just"
+  just_ready
+fi
 # Invoke the installed canonical owner against the task checkout. Its branch
 # may predate the readiness check; manifests and pin still belong to that task.
 ui_workspace() {
@@ -219,10 +234,11 @@ if ! cargo fetch --offline --locked; then
 fi
 browser_status=reused
 browsers_ready() {
-  node --input-type=module <<'JS'
+  node --input-type=module - "$@" <<'JS'
 import { accessSync, constants } from 'node:fs'
-import { chromium, webkit } from 'playwright'
-for (const engine of [chromium, webkit]) {
+import * as playwright from 'playwright'
+for (const name of process.argv.slice(2)) {
+  const engine = playwright[name]
   accessSync(engine.executablePath(), constants.X_OK)
   const browser = await engine.launch({ headless: true, timeout: 15_000 })
   try {
@@ -235,19 +251,97 @@ for (const engine of [chromium, webkit]) {
 }
 JS
 }
-if ! browsers_ready; then
-  browser_status=installed
-  timeout --kill-after=30s 45m pnpm exec playwright install --with-deps chromium webkit
+# A sandbox whose network refuses Playwright's download host can still ship
+# its own Playwright browsers (PLAYWRIGHT_BROWSERS_PATH). The fallback links
+# that Chromium under the revision this checkout's Playwright expects, in an
+# owned directory, and records the sandbox's original path so a rerun starts
+# from it rather than from the links. WebKit has no such stand-in. The links
+# reach shells through browsers.sh, which only a fallback writes and only a
+# real Chromium-and-WebKit readiness removes, so a failed rerun keeps them.
+browser_links=$cloud_root/browsers
+if [ "${PLAYWRIGHT_BROWSERS_PATH:-}" = "$browser_links" ] && [ -f "$cloud_root/browsers-source" ]; then
+  PLAYWRIGHT_BROWSERS_PATH=$(cat "$cloud_root/browsers-source")
 fi
-browsers_ready
+browser_source=${PLAYWRIGHT_BROWSERS_PATH:-}
+link_sandbox_chromium() {
+  rm -rf "$browser_links.tmp"
+  mkdir -p "$browser_links.tmp"
+  PLAYWRIGHT_BROWSERS_PATH="$browser_links" node --input-type=module - "$browser_source" "$browser_links.tmp" "$browser_links" <<'JS'
+import fs from 'node:fs'
+import path from 'node:path'
+import { chromium } from 'playwright'
+const [source, staging, links] = process.argv.slice(2)
+// Newest revision first; each build directory's name varies by platform.
+const find = (prefix, names) => {
+  const revisions = fs.readdirSync(source)
+    .filter(name => name.startsWith(prefix) && /^\d+$/.test(name.slice(prefix.length)))
+    .sort((a, b) => Number(b.slice(prefix.length)) - Number(a.slice(prefix.length)))
+  for (const entry of revisions)
+    for (const build of fs.readdirSync(path.join(source, entry)))
+      for (const name of names) {
+        const candidate = path.join(source, entry, build, name)
+        if (fs.existsSync(candidate)) return candidate
+      }
+  throw new Error(`No ${prefix}* browser under ${source}`)
+}
+const link = (target, relative) => {
+  const at = path.join(staging, relative)
+  fs.mkdirSync(path.dirname(at), { recursive: true })
+  fs.symlinkSync(target, at)
+}
+const expected = path.relative(links, chromium.executablePath())
+if (expected.startsWith('..')) throw new Error('Playwright ignored PLAYWRIGHT_BROWSERS_PATH.')
+// chromium-<revision>/chrome-<platform>/chrome; Playwright names the headless
+// shell chromium_headless_shell-<revision>/chrome-headless-shell-<platform>.
+const [directory, build] = expected.split(path.sep)
+const revision = directory.slice('chromium-'.length)
+link(find('chromium-', ['chrome']), expected)
+link(
+  find('chromium_headless_shell-', ['chrome-headless-shell', 'headless_shell']),
+  path.join(`chromium_headless_shell-${revision}`, build.replace(/^chrome-/, 'chrome-headless-shell-'), 'chrome-headless-shell'),
+)
+JS
+  rm -rf "$browser_links"
+  mv "$browser_links.tmp" "$browser_links"
+  printf '%s' "$browser_source" > "$cloud_root/browsers-source"
+  export PLAYWRIGHT_BROWSERS_PATH=$browser_links
+  printf 'export PLAYWRIGHT_BROWSERS_PATH=%q\n' "$browser_links" > "$cloud_root/browsers.sh.tmp"
+  mv "$cloud_root/browsers.sh.tmp" "$cloud_root/browsers.sh"
+}
+install_log=$(mktemp)
+trap 'rm -f "$state" "$install_log"; if [ -n "$node_download" ]; then rm -rf "$node_download"; fi' EXIT
+if ! browsers_ready chromium webkit; then
+  browser_status=installed
+  install_status=0
+  timeout --kill-after=30s 45m pnpm exec playwright install --with-deps chromium webkit 2>&1 | tee "$install_log" || install_status=${PIPESTATUS[0]}
+  if [ "$install_status" -ne 0 ]; then
+    # Only a download the network refused falls back: not a stall (124, or
+    # 137 after the forced stop), an apt failure or an unwritable directory.
+    if [ "$install_status" -eq 124 ] || [ "$install_status" -eq 137 ] ||
+      ! grep -q 'Download failed: server returned code 403' "$install_log" ||
+      [ -z "$browser_source" ] || [ ! -d "$browser_source" ]; then
+      exit "$install_status"
+    fi
+    echo "Playwright could not download its browsers; using the sandbox's Chromium from $browser_source. WebKit checks cannot run until the network allows Playwright's download hosts." >&2
+    link_sandbox_chromium
+    browser_status=sandbox-chromium
+  fi
+fi
+if [ "$browser_status" = sandbox-chromium ]; then
+  browsers_ready chromium
+else
+  browsers_ready chromium webkit
+  rm -rf "$cloud_root/browsers.sh" "$cloud_root/browsers-source" "$browser_links"
+fi
 ui_workspace check
 node --version
 pnpm --version
 rustup run stable rustc --version
+just --version
 
 # Commit success only after capability checks. An unsuccessful run leaves the
 # earlier receipt unchanged, so an old success cannot impersonate this attempt.
-python3 - "$cloud_root" "$state" "$mode" "$node_status" "$pnpm_status" "$rust_status" "$ui_status" "$dependencies_status" "$cargo_status" "$browser_status" "$script_file" <<'PY'
+python3 - "$cloud_root" "$state" "$mode" "$node_status" "$pnpm_status" "$rust_status" "$just_status" "$ui_status" "$dependencies_status" "$cargo_status" "$browser_status" "$script_file" <<'PY'
 import datetime, hashlib, json, pathlib, subprocess, sys
 root = pathlib.Path(sys.argv[1])
 before = json.loads(pathlib.Path(sys.argv[2]).read_text())
@@ -256,12 +350,12 @@ receipt = {
     'mode': sys.argv[3],
     'completedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
     'sourceHead': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
-    'prepareSha256': hashlib.sha256(pathlib.Path(sys.argv[11]).read_bytes()).hexdigest(),
+    'prepareSha256': hashlib.sha256(pathlib.Path(sys.argv[12]).read_bytes()).hexdigest(),
     'bootstrapSourceHead': deployment['sourceHead'],
     'nativeSha256': deployment['hashes']['native-build-deps.sh'],
     'uiSha256': deployment['hashes']['ui-workspace.mjs'],
     **before,
-    'steps': dict(zip(('node', 'pnpm', 'rust', 'ui', 'dependencies', 'cargo', 'browsers'), sys.argv[4:11])),
+    'steps': dict(zip(('node', 'pnpm', 'rust', 'just', 'ui', 'dependencies', 'cargo', 'browsers'), sys.argv[4:12])),
 }
 for name, value in (('cache-identity.json', before['cacheIdentity']), ('preparation.json', receipt)):
     temporary = root / (name + '.tmp')

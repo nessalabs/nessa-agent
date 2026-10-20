@@ -30,9 +30,9 @@ impl ConversationModeAudit for DurableConversationModeAudit {
         phase: ConversationModeAuditPhase,
     ) -> ConversationFuture<'_, ()> {
         let phase_name = match phase {
-            ConversationModeAuditPhase::AdmissionRefused => "admission_refused",
             ConversationModeAuditPhase::Application => "application",
             ConversationModeAuditPhase::RecoveryRestored => "recovery_restored",
+            ConversationModeAuditPhase::RecoveryApplied => "recovery_applied",
         };
         let application = request.application.map(|application| match application {
             ConversationModeApplication::Deferred => "deferred",
@@ -59,18 +59,17 @@ impl ConversationModeAudit for DurableConversationModeAudit {
                 "requested": request.requested.as_str(),
                 "application": application,
                 "phase": phase_name,
-                "committedAfterRecovery": if phase == ConversationModeAuditPhase::RecoveryRestored {
-                    Some(request.prior.as_str())
-                } else {
-                    None
+                "committedAfterRecovery": match phase {
+                    ConversationModeAuditPhase::RecoveryRestored => Some(request.prior.as_str()),
+                    ConversationModeAuditPhase::RecoveryApplied => Some(request.requested.as_str()),
+                    ConversationModeAuditPhase::Application => None,
                 },
             },
             "cause": match phase {
-                ConversationModeAuditPhase::AdmissionRefused => "turn_running",
                 ConversationModeAuditPhase::Application => "caller_requested",
-                ConversationModeAuditPhase::RecoveryRestored => "unfinished_change_recovery",
+                ConversationModeAuditPhase::RecoveryRestored | ConversationModeAuditPhase::RecoveryApplied => "unfinished_change_recovery",
             },
-            "initiator": if phase != ConversationModeAuditPhase::RecoveryRestored {
+            "initiator": if matches!(phase, ConversationModeAuditPhase::Application) {
                 json!({"kind":"person","principalId":request.initiator_principal_id.as_str(),
                     "surfaceId":request.initiator_surface_id})
             } else {
@@ -213,6 +212,14 @@ mod tests {
             .record(first.clone(), ConversationModeAuditPhase::RecoveryRestored)
             .await
             .unwrap();
+        audit
+            .record(first.clone(), ConversationModeAuditPhase::RecoveryApplied)
+            .await
+            .unwrap();
+        audit
+            .record(first.clone(), ConversationModeAuditPhase::RecoveryApplied)
+            .await
+            .unwrap();
         let records = std::fs::read_dir(root.path().join("mode"))
             .unwrap()
             .map(|entry| {
@@ -220,7 +227,19 @@ mod tests {
                     .unwrap()
             })
             .collect::<Vec<_>>();
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 3);
+        assert!(records.iter().any(|record| {
+            record["transition"]["phase"] == "recovery_applied"
+                && record["transition"]["committedAfterRecovery"] == "auto"
+                && record["transition"]["before"] == "ask"
+                && record["target"]["conversationId"] == first.conversation_id.to_string()
+                && record["target"]["organizationId"] == "org"
+                && record["initiator"]["kind"] == "system"
+                && record["initiator"]["originalPrincipalId"] == "person"
+                && record["initiator"]["originalSurfaceId"] == "panel"
+                && record["correlationId"] == "mode-auto"
+                && record["cause"] == "unfinished_change_recovery"
+        }));
         assert!(records.iter().any(|record| {
             record["target"]["organizationId"] == "org"
                 && record["transition"]["before"] == "ask"

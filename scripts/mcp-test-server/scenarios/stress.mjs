@@ -13,6 +13,7 @@
 export const STRESS = {
   report: "[Thread report]",
   reply: "stress reply",
+  model: "stress model witness",
   permission: "stress permission",
   reviews: "stress reviews",
   large: "stress large review",
@@ -25,6 +26,7 @@ export const STRESS = {
   watch: "stress watch",
   long: "stress long",
   window: "stress window",
+  table: "stress table",
 }
 
 /**
@@ -37,6 +39,7 @@ const CUT_OFF = "[Nessa restarted while you were working"
 /** What a turn says, by kind. A check looks for these, so they are owned here. */
 export const SAYS = {
   echo: "Echo: ",
+  model: "Native prompt model: ",
   allowed: "Allowed.",
   denied: "Denied.",
   reviewed: "All reviews answered.",
@@ -51,7 +54,27 @@ export const SAYS = {
   watched: "Watched: ",
   long: "Long answer: ",
   window: "Window: ",
+  table: "Tables: ",
 }
+
+/**
+ * The two Markdown tables a `table` turn streams, a chunk per line, so each
+ * table grows a row at a time while the window draws it. The first fits a
+ * reply and carries the short runs a squeezed column used to split letter by
+ * letter ("$16.99", "Price"); the second has more columns than a reply is
+ * wide, so it scrolls in its own panel.
+ */
+export const TABLE_LINES = [
+  "| Option | Price | Includes | Availability |",
+  "| --- | --- | --- | --- |",
+  "| Single ticket | $16.99 CAD | One screening, general admission (unassigned seating) | On sale since Sept 29; per-screening status unconfirmed |",
+  "| Cine-Maniac Pass | $150 CAD | All Scotiabank screenings, rush priority, social events | |",
+  "",
+  "| Film | Venue | Date | Time | Runtime | Format | Language | Seats left |",
+  "| --- | --- | --- | --- | ---: | --- | --- | ---: |",
+  "| The Last Projectionist | Cineplex Scotiabank Theatre | Sat Oct 17 | 12:30 pm | 104 min | DCP | English | 42 |",
+  "| Night Shift at the Lighthouse | CineCycle | Sat Oct 17 | 11:59 pm | 88 min | 16 mm | French, English subtitles | 9 |",
+]
 
 /**
  * How many reads of one thread a watch turn makes at once: more than one
@@ -106,6 +129,13 @@ export function stressScenario({
         steps: [{ do: "text", chunks: [SAYS.resumed] }, { do: "end" }],
       },
       {
+        when: STRESS.model,
+        steps: [
+          { do: "text", chunks: [SAYS.model, "${configuration.model}"] },
+          { do: "end" },
+        ],
+      },
+      {
         when: STRESS.reply,
         steps: [{ do: "text", chunks: [SAYS.echo, "${prompt.text}"] }, { do: "end" }],
       },
@@ -121,6 +151,21 @@ export function stressScenario({
                 { length: longChunks },
                 (_, index) => ` ${index} ${"x".repeat(longChunkBytes)}`,
               ),
+            ],
+          },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.table,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.table,
+              "${prompt.text}",
+              "\n\n",
+              ...TABLE_LINES.map((line) => `${line}\n`),
             ],
           },
           { do: "end" },

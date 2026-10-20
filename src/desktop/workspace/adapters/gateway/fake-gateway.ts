@@ -76,6 +76,8 @@ type Method =
   | "stop"
   | "withdraw"
   | "setApprovalMode"
+  | "setModel"
+  | "read"
   | "archive"
   | "rename"
   | "delete"
@@ -652,6 +654,23 @@ export function fakeGateway(
           return { requestId: "withdraw", stage: "accepted" }
         }) as never,
       // Committed as asked; the view says it from now on.
+      read: (id) => answer("read", [id], () => views.get(id) ?? view(id)) as never,
+      setModel: (...args) =>
+        answer("setModel", args, () => {
+          const [id, model, options] = args
+          const current = views.get(id)
+          if (current)
+            views.set(id, {
+              ...current,
+              runtime: current.runtime && { ...current.runtime, model },
+            })
+          return {
+            requestId: options?.requestId ?? "model",
+            model,
+            approvalMode: current?.approvalMode ?? "ask",
+            effect: "nextTurn",
+          }
+        }) as never,
       setApprovalMode: (...args) =>
         answer("setApprovalMode", args, () => {
           const [conversationId, mode] = args
@@ -774,12 +793,12 @@ export function fakeGateway(
       observers.add(handler)
       return () => observers.delete(handler)
     },
-    onEvent(event: string, handler: (payload: unknown) => void) {
+    on(event: string, handler: (payload: never) => void) {
       const handlers = eventListeners.get(event) ?? new Set()
-      handlers.add(handler)
+      handlers.add(handler as (payload: unknown) => void)
       eventListeners.set(event, handlers)
       return () => {
-        handlers.delete(handler)
+        handlers.delete(handler as (payload: unknown) => void)
       }
     },
     close() {

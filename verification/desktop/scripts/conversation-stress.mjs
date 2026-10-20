@@ -56,6 +56,12 @@
  *   delete      another conversation is deleted from its row's More menu,
  *               once asked; the gateway refuses it as deleted, and neither
  *               list nor the window holds it
+ *   notice      a review waits in another conversation, which the window does
+ *               not show: the host's system notice names its tool and the
+ *               conversation's title, opening it brings that conversation
+ *               up with its card, and answering there takes the notice back;
+ *               a second review there stays up across a reload of the
+ *               window, and is taken back once another client answers it
  *   linking     native linking is turned on, then off, with the switch in
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
@@ -81,6 +87,7 @@
  *   pnpm test:e2e:stress -- --rounds 60 --parallel 12 --seed 7
  *   NESSA_STRESS_ROUNDS=60 pnpm test:e2e:stress # the same, from the environment
  */
+import catalog from "../../../crates/nessa-sdk/data/models.json" with { type: "json" }
 import { randomUUID } from "node:crypto"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -92,6 +99,7 @@ import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
   SAYS,
   STRESS,
+  TABLE_LINES,
   WATCH_CALLS,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
@@ -574,6 +582,109 @@ async function startedBeside(run, client, step, n, failures) {
 }
 
 const steps = {
+  async model(run, step, failures) {
+    const picker = dock(run.page).locator(css.modelChip)
+    if (await picker.isDisabled()) {
+      failures.push("the established conversation's model picker is disabled")
+      return
+    }
+    const before = await readWithReviews(run.client, run.main.id)
+    const current = catalog.models.find(
+      (model) => model.modelId === before.runtime?.model,
+    )
+    const target =
+      current &&
+      catalog.models.find(
+        (model) =>
+          model.provider === current.provider && model.modelId !== current.modelId,
+      )
+    if (!target)
+      throw new CannotRun("no second catalog model in this conversation's provider")
+    const text = prompt(run, STRESS.permission, step)
+    const seen = await send(run, run.main.id, text, failures)
+    if (!(await card(run.page))) {
+      failures.push("no original review before model change")
+      return
+    }
+    const waiting = await readWithReviews(run.client, run.main.id)
+    const original = waiting.permissions.map((review) => ({
+      review: review.review,
+      executionId: review.executionId,
+      options: review.options,
+    }))
+    const draft = prompt(run, STRESS.model, step)
+    const box = dock(run.page).locator("textarea")
+    await box.fill(draft)
+    await picker.click()
+    const photograph = run.evidence && !run.modelPhotographed
+    if (photograph)
+      await run.page.screenshot({
+        path: join(run.evidence, `model-${run.engine}-picker.png`),
+        scale: "css",
+      })
+    const options = run.page.locator(css.modelOption)
+    await options.filter({ hasText: target.displayName }).first().click()
+    const confirmed = await waitFor(async () => {
+      const view = await readWithReviews(run.client, run.main.id)
+      return view.runtime?.model === target.modelId && !view.modelChange ? view : null
+    }, 15_000)
+    if (!confirmed) {
+      failures.push("the window's model choice was not confirmed by the gateway")
+      return
+    }
+    if (
+      !(await waitFor(
+        async () =>
+          (await picker.getAttribute("aria-label"))?.includes(target.displayName),
+        5_000,
+      ))
+    )
+      failures.push("the picker did not show the source-confirmed model")
+    if (photograph) {
+      await run.page.screenshot({
+        path: join(run.evidence, `model-${run.engine}-confirmed-review-draft.png`),
+        scale: "css",
+      })
+      run.modelPhotographed = true
+    }
+    const unchanged = confirmed.permissions.map((review) => ({
+      review: review.review,
+      executionId: review.executionId,
+      options: review.options,
+    }))
+    if (JSON.stringify(original) !== JSON.stringify(unchanged))
+      failures.push("model change replaced the original review or its choices")
+    if ((await box.inputValue()) !== draft)
+      failures.push("model change lost the unsent draft")
+    if (
+      !(await dock(run.page)
+        .getByRole(...composerControls.stop)
+        .count())
+    )
+      failures.push("model change removed Stop while its original turn waits")
+    await answerCard(run, run.main.id, "allow", failures, "Report the rows")
+    await settled(run, run.main.id, seen, text, "completed", failures)
+    if ((await box.inputValue()) !== draft)
+      failures.push("answering the original review lost the model-change draft")
+    const next = await send(run, run.main.id, draft, failures)
+    await settled(run, run.main.id, next, draft, "completed", failures)
+    await expectShown(run.page, `${SAYS.model}${target.modelId}`, failures)
+    if (run.evidence)
+      writeFileSync(
+        join(run.evidence, `model-${run.engine ?? "window"}-${step.index}.json`),
+        JSON.stringify(
+          {
+            before: current.modelId,
+            after: target.modelId,
+            original,
+            confirmed: confirmed.runtime,
+            effect: confirmed.modelChangeEffect,
+          },
+          null,
+          2,
+        ),
+      )
+  },
   async reply(run, step, failures) {
     const text = prompt(run, STRESS.reply, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -743,7 +854,16 @@ const steps = {
         }
         if (!/restarted/i.test(resumed.userText))
           failures.push("the resumed turn does not say Nessa restarted")
-        await expectShown(run.page, SAYS.resumed, failures, 60_000)
+        const resumedInWindow = await waitFor(async () => {
+          const text = await pageText(run.page)
+          return (
+            text.includes(fold(resumed.userText)) && text.includes(fold(SAYS.resumed))
+          )
+        }, 60_000)
+        if (!resumedInWindow)
+          failures.push(
+            "the window does not show the current resumed turn and its completion",
+          )
         return failures.length === before
       })
     })
@@ -993,7 +1113,7 @@ const steps = {
     // sent to at once, so the window's create and send arrive while many
     // other commands are still in flight: a gateway that refuses a command
     // for the commands around it, rather than queueing it, fails here.
-    const text = prompt(run, STRESS.reply, step, " fresh")
+    const text = prompt(run, STRESS.reply, step, ` fresh ${run.engine}`)
     // Spread over clients of their own: one socket takes only so many
     // requests at once, and what this step asks about is the gateway's whole.
     // Each conversation is also read on its own client, for the same reason.
@@ -1033,6 +1153,130 @@ const steps = {
       for (const client of clients) client.close()
     }
     await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
+  async notice(run, step, failures) {
+    const conversationId = randomUUID()
+    run.checked.push(conversationId)
+    await run.client.conversation.create({
+      conversationId,
+      agent: run.stack.agent,
+      approvalMode: "ask",
+    })
+    // Named by a first turn: the gateway records a conversation's title just
+    // after the agent takes its first message, and the scripted agent can
+    // ask before that lands, which a model never does.
+    const naming = prompt(run, STRESS.reply, step, " notice")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, naming),
+    )
+    const { view: named } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      naming,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    const title = await titleOf(run, conversationId)
+    // The person is on the main conversation: the review waits where the
+    // window does not show it, and only the notice says so.
+    const first = prompt(run, STRESS.permission, step, " notice")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const posted = await noticePosted(run, conversationId, failures)
+    if (!posted) return
+    if (posted.notice.body !== title)
+      failures.push(
+        `the notice names ${JSON.stringify(posted.notice.body)}, not the conversation ${JSON.stringify(title)}`,
+      )
+    if (posted.notice.title !== `${posted.review.toolName} needs a decision`)
+      failures.push(
+        `the notice says ${JSON.stringify(posted.notice.title)}, not that ${posted.review.toolName} needs a decision`,
+      )
+    // The person clicks the notice: the host sends its event and the window
+    // opens that conversation on its card.
+    const listening = await run.page.evaluate(
+      (id) => window.__fakeHostOpenNotice?.(id) ?? 0,
+      conversationId,
+    )
+    if (listening !== 1)
+      failures.push(`${listening} windows listened for an opened notice, not 1`)
+    const opened = await run.page
+      .locator(`${selectorFor.sessionListRowFor(conversationId)}[aria-selected=true]`)
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!opened) {
+      failures.push("opening the notice did not bring its conversation up")
+      return
+    }
+    await answerCard(run, conversationId, "allow", failures, "Report the rows")
+    await noticeTakenBack(run, posted.notice, "answered in the window", failures)
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(named?.messages.map((each) => each.executionId) ?? []),
+      first,
+      "completed",
+      failures,
+    )
+    await expectShown(run.page, SAYS.allowed, failures)
+    if (failures.length) return
+    // Back on the main conversation, a second review there is answered by
+    // another of the person's clients: the window was never shown it, and
+    // its notice still goes.
+    await openStressConversation(run.page, run.main.id, run.main.title)
+    const second = prompt(run, STRESS.permission, step, " notice elsewhere")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, second),
+    )
+    const again = await noticePosted(run, conversationId, failures, posted.notice)
+    if (!again) return
+    // The window is reloaded while that review waits. The gateway sends the
+    // waiting set as soon as the new socket is up, before the window listens;
+    // the window must still hand it to the host, which keeps the notice up.
+    await run.page.reload()
+    await run.page
+      .locator(selectorFor.sessionListRowFor(run.main.id))
+      .waitFor({ timeout: 30_000 })
+    const kept = await waitFor(async () => {
+      const notices = await hostNotices(run.page)
+      return (
+        notices !== null &&
+        notices.syncs > 0 &&
+        notices.up.some((each) => sameNotice(each, again.notice))
+      )
+    }, 15_000)
+    if (!kept) {
+      failures.push(
+        "after a reload the window did not hand the waiting review to the host",
+      )
+      return
+    }
+    await openStressConversation(run.page, run.main.id, run.main.title)
+    const { permissionTargets } = await import("@nessa/client")
+    const view = await readWithReviews(run.client, conversationId)
+    const index = view.permissions.findIndex(
+      (each) => each.permissionId === again.review.permissionId,
+    )
+    const deny = view.permissions[index]?.options.find((each) => each.effect === "deny")
+    if (!deny) {
+      failures.push("the second review offers no deny")
+      return
+    }
+    await run.client.conversation.answer(permissionTargets(view)[index], deny.id)
+    await noticeTakenBack(run, again.notice, "answered elsewhere", failures)
+    await settled(
+      run,
+      conversationId,
+      new Set(before?.messages.map((each) => each.executionId) ?? []),
+      second,
+      "completed",
+      failures,
+    )
   },
 
   async park(run, step, failures) {
@@ -1177,6 +1421,119 @@ const steps = {
       15_000,
     )
     if (!hidden) failures.push("the window still lists the deleted conversation")
+  },
+
+  async table(run, step, failures) {
+    const text = prompt(run, STRESS.table, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    // The gateway keeps the answer as it streamed: every line, in order, once.
+    const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    const expected = `${SAYS.table}${text}\n\n${TABLE_LINES.map((line) => `${line}\n`).join("")}`
+    if (said.trimEnd() !== expected.trimEnd())
+      failures.push(`the table answer came back as ${JSON.stringify(said.slice(0, 120))}`)
+    // The window draws both tables in the agent's message, and draws them
+    // whole: no word split across lines, the narrow table inside the reply,
+    // the wide one scrolling in its own panel with its hidden side faded.
+    const message = run.page
+      .locator('.workspace-message[data-role="agent"]')
+      .filter({ hasText: `${SAYS.table}${text}` })
+    const tables = message.locator('[data-slot="markdown-table"]')
+    // Both tables whole: the last cell streamed is drawn, and the window has
+    // finished revealing the answer (no word still in its fade-in span), so
+    // every column has its final width.
+    const lastCell = TABLE_LINES.at(-1).split("|").at(-2).trim()
+    const drawn = await waitFor(
+      async () =>
+        (await tables.count()) === 2 &&
+        (await tables.nth(1).getByText(lastCell, { exact: true }).count()) === 1 &&
+        (await message.locator('span[class*="starting:"]').count()) === 0,
+      15_000,
+    )
+    if (!drawn) {
+      failures.push(
+        `the window drew ${await tables.count()} of 2 tables, or not all of them`,
+      )
+      return
+    }
+    // Short runs each table holds, which a squeezed column used to split.
+    const words = [
+      ["Price", "$16.99", "CAD", "$150"],
+      ["Runtime", "Format", "Projectionist"],
+    ]
+    const measured = await message.evaluate((element, words) => {
+      const lines = (root, word) => {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const at = node.textContent.indexOf(word)
+          if (at < 0) continue
+          const range = document.createRange()
+          range.setStart(node, at)
+          range.setEnd(node, at + word.length)
+          return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)))
+            .size
+        }
+        return 0
+      }
+      const reply = element.getBoundingClientRect()
+      return [...element.querySelectorAll('[data-slot="markdown-table"]')].map(
+        (table, index) => {
+          const port = table.querySelector('[data-slot="table-container"]')
+          return {
+            rows: table.querySelectorAll("tbody tr").length,
+            missing: words[index].filter((word) => lines(table, word) === 0),
+            split: words[index].filter((word) => lines(table, word) > 1),
+            hidden: port.scrollWidth - port.clientWidth,
+            within: table.getBoundingClientRect().right <= reply.right + 1,
+            fadedRight: port.hasAttribute("data-hidden-right"),
+          }
+        },
+      )
+    }, words)
+    // Each table shows its data rows once, as streamed: a table's lines less
+    // its heading and delimiter.
+    const rows = TABLE_LINES.join("\n")
+      .split("\n\n")
+      .map((table) => table.split("\n").length - 2)
+    for (const [index, table] of measured.entries()) {
+      if (table.rows !== rows[index])
+        failures.push(`table ${index + 1} shows ${table.rows} rows, not ${rows[index]}`)
+      if (table.missing.length)
+        failures.push(`table ${index + 1} does not show ${JSON.stringify(table.missing)}`)
+      if (table.split.length)
+        failures.push(
+          `table ${index + 1} split ${JSON.stringify(table.split)} across lines`,
+        )
+      if (!table.within) failures.push(`table ${index + 1} is wider than the reply`)
+    }
+    const [narrow, wide] = measured
+    if (narrow.hidden > 1 || narrow.fadedRight)
+      failures.push(`the narrow table scrolls (${narrow.hidden} px hidden)`)
+    if (wide.hidden <= 1)
+      failures.push(
+        `the wide table does not scroll in its panel (${wide.hidden} px hidden)`,
+      )
+    const port = tables.nth(1).locator('[data-slot="table-container"]')
+    const faded = (left, right) =>
+      waitFor(
+        async () =>
+          ((await port.getAttribute("data-hidden-left")) !== null) === left &&
+          ((await port.getAttribute("data-hidden-right")) !== null) === right,
+        5_000,
+      )
+    if (!(await faded(false, true)))
+      failures.push(
+        "the wide table does not fade its right side, where columns are hidden",
+      )
+    if (run.evidence)
+      await run.page.screenshot({
+        path: join(run.evidence, `table-${run.engine ?? "window"}.png`),
+      })
+    // Scrolled to its end, the fade moves to the side now hidden.
+    await port.evaluate((each) => each.scrollTo({ left: each.scrollWidth }))
+    if (!(await faded(true, false)))
+      failures.push("scrolled to its end, the wide table did not fade its left side")
   },
 
   async long(run, step, failures) {
@@ -1390,16 +1747,6 @@ function watched(turn, failures) {
     failures.push("a read that was taken neither waited nor returned events")
 }
 
-async function titleOf(run, conversationId) {
-  const title = await waitFor(async () => {
-    const { conversations } = await run.client.conversation.list({})
-    return conversations.find((each) => each.conversationId === conversationId)?.title
-  }, 15_000)
-  if (!title)
-    throw new CannotRun(`conversation ${conversationId} has no title to find it by`)
-  return title
-}
-
 /**
  * One background conversation: `turns` turns through the gateway, a reply
  * then a permission it allows, over and over. Waits while a restart holds
@@ -1474,6 +1821,63 @@ async function background(run, n) {
 }
 
 /** What must hold once everything has run, in every conversation the run made. */
+async function titleOf(run, conversationId) {
+  const title = await waitFor(async () => {
+    const { conversations } = await run.client.conversation.list({})
+    return conversations.find((each) => each.conversationId === conversationId)?.title
+  }, 15_000)
+  if (!title)
+    throw new CannotRun(`conversation ${conversationId} has no title to find it by`)
+  return title
+}
+
+/** What the window has told the host about waiting reviews (`fake-host.mjs`). */
+const hostNotices = (page) => page.evaluate(() => window.__fakeHostNotices ?? null)
+
+const sameNotice = (a, b) =>
+  a.conversationId === b.conversationId &&
+  a.executionId === b.executionId &&
+  a.permissionId === b.permissionId
+
+/**
+ * The notice the host shows for the review now waiting in `conversationId`,
+ * and that review read in full; `null` (a failure noted) when none is up
+ * within 30 s. `not` is a notice of the same conversation already settled.
+ */
+async function noticePosted(run, conversationId, failures, not = null) {
+  let found = null
+  await waitFor(async () => {
+    const view = await readWithReviews(run.client, conversationId).catch(() => null)
+    const review = view?.permissions[0]
+    const notices = await hostNotices(run.page)
+    const notice =
+      review &&
+      notices?.up.find(
+        (each) =>
+          each.conversationId === conversationId &&
+          each.executionId === review.executionId &&
+          each.permissionId === review.permissionId,
+      )
+    if (notice && !(not && sameNotice(notice, not))) found = { notice, review }
+    return Boolean(found)
+  }, 30_000)
+  if (!found) failures.push(`no notice was posted for the review in ${conversationId}`)
+  return found
+}
+
+/** Waits for the host to take `notice` back once its review was `how`. */
+async function noticeTakenBack(run, notice, how, failures) {
+  const gone = await waitFor(async () => {
+    const notices = await hostNotices(run.page)
+    return (
+      notices !== null &&
+      !notices.up.some((each) => sameNotice(each, notice)) &&
+      notices.withdrawn.some((each) => sameNotice(each, notice))
+    )
+  }, 15_000)
+  if (!gone) failures.push(`the notice of a review ${how} was not taken back`)
+}
+
 async function atRest(run, ids) {
   const failures = []
   for (const conversationId of ids) {
@@ -1498,6 +1902,19 @@ async function atRest(run, ids) {
         failures.push(`${conversationId}: a review was hidden`)
     }
     if (view.permissions.length) failures.push(`${conversationId} still has open reviews`)
+  }
+  // Every review settled, so the host shows none of their notices.
+  const cleared = await waitFor(async () => {
+    const notices = await hostNotices(run.page)
+    return notices !== null && notices.syncs > 0 && notices.up.length === 0
+  }, 15_000)
+  if (!cleared) {
+    const notices = await hostNotices(run.page)
+    failures.push(
+      !notices?.syncs
+        ? "the window never told the host which reviews wait"
+        : `${notices.up.length} review notices are still up`,
+    )
   }
   const text = await pageText(run.page)
   if (/display limit|Denied automatically/i.test(text))
@@ -1575,10 +1992,15 @@ await main(
         layout,
         lines: { engine, layout },
         initScripts: [
-          [gatewayHost, { endpoint: stack.endpoint, credential: stack.credential }],
+          [
+            gatewayHost,
+            { endpoint: stack.endpoint, credential: stack.credential, notices: true },
+          ],
         ],
       })
       const run = new Run(stack, opened, knobs, restartConsole)
+      run.evidence = options.evidence
+      run.engine = engine
       const base = { engine, layout }
       let followers = []
       try {

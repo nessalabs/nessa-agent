@@ -61,12 +61,18 @@ src-tauri/src/
   diagnostics.rs          debug-only page-to-terminal diagnostic bridge
   host_log.rs             desktop startup log (`{data}/logs/host.log`)
   host_refusal.rs         typed startup refusals shared with the page
+  host_refusal/copy.rs    startup copy consumed by refusals and the load document
+  links/policy.rs         navigation decisions; links.rs owns the opener/plugin
+  app_sandbox/origin.rs   sandbox origin constants consumed by navigation
   page_load.rs            dev-only page when the document never arrives
+  page_load/state.rs      callback-published load facts; no native URL lookup
   <context>/
     domain/               rules, entities, value objects, events
     application/          use cases + ports (traits) the use case needs
     adapters/             storage, OS, IPC command handlers, clock
     contracts/            what other contexts and the frontend may see
+src-tauri/examples/
+  page_load_acceptance/   disposable macOS Tauri lifecycle, deadline and origin controls
 verification/             scripts that drive real browsers against the running app
   desktop/                the desktop window: CHECKLIST.md, scripts/, scripts/lib/
 ```
@@ -384,6 +390,12 @@ against a private scripted gateway.
   (`SessionAccessory`, drawn by the workspace's slot). Counts live in
   `src/desktop/model/counts.ts`. The preview is the window preference
   `useSubagentsPreview`, offered under Settings › Advanced › Experimental.
+- Same-provider model changes use the existing desktop picker and workspace
+  source. `model/model-choice.ts` owns the correlated choice value;
+  `adapters/store/model-commands.ts` owns capture and request settlement. Source
+  model/pending facts remain in the gateway transcript; access stays with its
+  existing owner. `model-commands.test.ts` and the real-window stress model step
+  exercise both acknowledgement/frame orders and retained drafts/reviews.
 - The desktop composer's Send and Stop controls have separate DOM identities
   (`src/desktop/ui/composer.tsx`). A gesture that began on one cannot invoke
   the replacement action after a source phase change; the unsent draft stays.
@@ -955,7 +967,7 @@ source permission or socket capacity. Its lifecycle tests live under
 `tests/core/read_workers.rs`; record-specific admission tests stay with their
 source adapter. Attachment adapters consume this owner when activated.
 
-`conversation/application/metadata_target.rs` correlates existing metadata loads and creation acknowledgements with the requested identity before ownership, selection, grant admission or effects. Created receipts additionally match the admitted full immutable proposal; Existing retains original creator evidence. Current mode intent/terminal/retirement tests live in `tests/conversation/approval_mode.rs`; creation receipt tests in `tests/conversation/creation_metadata.rs`. Projection owns selection/runtime replacements and their revision; no display-history or paging API is added.
+`conversation/application/metadata_target.rs` correlates existing metadata loads and creation acknowledgements with the requested identity before ownership, selection, grant admission or effects. Created receipts additionally match the admitted full immutable proposal; Existing retains original creator evidence. Current mode intent/terminal/retirement tests live in `tests/conversation/approval_mode.rs`, with unchanged-preset publication/recovery in `tests/conversation/approval_mode/unchanged.rs`; creation receipt tests in `tests/conversation/creation_metadata.rs`. Projection owns selection/runtime replacements and their revision; no display-history or paging API is added.
 
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
 `product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`, with scoped-list privacy and cancellation tests under `subscriptions/paired_lists.rs`. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
@@ -1108,6 +1120,39 @@ package list and installed-package check remain with
 [`install-linux-build-deps.sh`](../scripts/desktop/install-linux-build-deps.sh).
 Its adjacent root-level `cloud-startup.test.mjs` exercises cold preparation, warm
 reconciliation, clean login/child shells, missing components and failed receipts.
+
+It also owns `just` (pinned by `just_version`, built from crates.io into the
+cloud root), which the public launch recipes and `scripts/launch-order.test.mjs`
+run, and sets `NESSA_BROWSER_CHANNEL=bundled` so the desktop checks use
+Playwright's Chromium without `--channel bundled`: no Google Chrome is installed.
+
+Where the network refuses Playwright's download hosts (`cdn.playwright.dev`,
+`playwright.download.prss.microsoft.com`), the recipe falls back to the Chromium
+the sandbox already ships in `PLAYWRIGHT_BROWSERS_PATH`: it links that build under
+the revision this checkout's Playwright expects in `<cloud root>/browsers`,
+points `PLAYWRIGHT_BROWSERS_PATH` there through `<cloud root>/browsers.sh` and
+records `browsers=sandbox-chromium`. WebKit has no stand-in, so WebKit checks
+(and `pnpm test:e2e:scripted`, which runs both engines) need those hosts
+allowed. Only a download refused with a 403 falls back; a stall, an apt failure
+or any other install error fails preparation. Once a run gets both of
+Playwright's browsers, it removes the links and `browsers.sh`.
+
+Claude Code cloud sessions with only this repository run the recipe from the
+SessionStart hook in `.claude/settings.json` (`.claude/hooks/session-start.sh`),
+which hands `env.sh` to the session. A session with several repositories loads
+no repository hooks; its cloud environment's setup script runs the recipe
+instead, against the attached checkout:
+
+```bash
+#!/bin/bash
+for repo in /home/*/nessa-agent "$HOME/nessa-agent" "$PWD"; do
+  [ -f "$repo/scripts/cloud-startup.sh" ] && break
+done
+bash "$repo/scripts/cloud-startup.sh" setup "$repo" || echo 'Nessa cloud setup failed' >&2
+```
+
+The sandbox runs as root, so the tests that assert a refused permission or a
+foreign owner fail there and pass in CI; that is not a missing tool.
 
 The bootstrap persists the selected PATH in one owned helper. It records a
 container-minted identity, preexisting identity/previous receipt, actual entry

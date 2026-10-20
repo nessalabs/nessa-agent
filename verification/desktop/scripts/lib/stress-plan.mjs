@@ -12,6 +12,10 @@
 
 /** Every number the check takes: its default, and what it counts. */
 export const KNOBS = {
+  modelSwitches: {
+    default: 1,
+    what: "same-provider model choices through the actual composer picker",
+  },
   seed: { default: 1, what: "the plan's seed; the same seed gives the same plan" },
   rounds: {
     default: 16,
@@ -81,6 +85,14 @@ export const KNOBS = {
     default: 1,
     what: "times native linking is turned on and off again from Settings, each restarting the gateway",
   },
+  tables: {
+    default: 1,
+    what: "turns whose answer streams Markdown tables, one narrow and one wider than the reply",
+  },
+  notices: {
+    default: 1,
+    what: "reviews waiting in a conversation the window does not show: the host's notice opens it and is taken back once answered",
+  },
   long: {
     default: 30,
     what: "turns of long streamed answers one conversation takes before it is talked to in the window",
@@ -139,6 +151,7 @@ export function plan(knobs) {
   add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))
   add(knobs.switches, () => ({ kind: "switch" }))
+  add(knobs.modelSwitches, () => ({ kind: "model" }))
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
@@ -147,6 +160,8 @@ export function plan(knobs) {
   add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
+  add(knobs.tables, () => ({ kind: "table" }))
+  add(knobs.notices, () => ({ kind: "notice" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)
@@ -156,18 +171,28 @@ export function plan(knobs) {
     const j = Math.floor(next() * (i + 1))
     ;[steps[i], steps[j]] = [steps[j], steps[i]]
   }
+  // Preset checks keep their original model. Positive model changes follow
+  // that work, using Ask before their review; chaos keeps concurrent coverage.
+  const sequence = [
+    ...steps.filter((step) => step.kind !== "model"),
+    ...steps.filter((step) => step.kind === "model"),
+  ]
   let mode = "ask"
   const out = []
-  for (const step of steps) {
+  for (const step of sequence) {
     if (step.kind === "switch") {
       const to = pick(MODES.filter((each) => each !== mode))
       out.push({ kind: "switch", from: mode, to, during: next() < 0.5 })
       mode = to
     } else if (step.kind === "permission") {
       out.push({ ...step, answer: next() < 0.7 ? "allow" : "deny", mode })
-    } else if (step.kind === "reviews" || step.kind === "large") {
+    } else if (
+      step.kind === "reviews" ||
+      step.kind === "large" ||
+      step.kind === "model"
+    ) {
       // These are about cards being shown, so they run where the agent asks.
-      if (mode === "full") {
+      if (mode === "full" || (step.kind === "model" && mode !== "ask")) {
         out.push({ kind: "switch", from: mode, to: "ask", during: false })
         mode = "ask"
       }

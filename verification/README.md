@@ -12,6 +12,22 @@ They are **not a CI gate** ([adding a check to CI](../CODING_STANDARDS.md#adding
 they need a browser, a server and minutes. Run them before handing off UI work,
 when reviewing it, and after anything performance-sensitive.
 
+### Concurrent dev servers
+
+`startDevServer({ isolateCache: true }, env)` gives its Vite process a private
+temporary dependency cache. Existing callers keep Vite's default cache. Use
+the option when an external verifier starts another server from this checkout;
+pass `NODE_ENV: "development"` for a development React runtime. The option
+does not change the environment or settings of another server.
+
+| Event | Cache owner and ordering | Regression |
+| --- | --- | --- |
+| Opt-in launch | Allocate a fresh directory and pass it as Vite's inline `cacheDir` | `server-cache.test.mjs`: separate real Vite/React optimizers preserve the canonical cache/runtime |
+| Default launch | Retain the existing CLI and shared cache | Same test's production contamination control |
+| Close or startup failure | Stop and await the owned process, then remove its private directory | `server-cache.test.mjs`: delayed process exit and failed configuration |
+
+These tests prove cache isolation, not the cause of an earlier browser error.
+
 A large-workspace measurement is specified in
 [UI workspace load](../docs/design/ui-workspace-load.md). The seeded page is
 opt-in (`workspace-load.mjs`). Startup, the pane cap, and one long transcript
@@ -45,6 +61,7 @@ verification/
       app-review/           real window over a typed fake gateway whose app's call asks for a review
       clock-snapshots/      public ClockProvider/useNow with injected time crossing a bucket between React reads
     scripts/
+      page-load-regression/ synthetic host diagnostic reproduction; see its README (#916)
       provider-sign-in.mjs compact login recovery geometry, keyboard launch and replacement
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
       onboarding-readiness.mjs readiness deadline and retry in both browser engines

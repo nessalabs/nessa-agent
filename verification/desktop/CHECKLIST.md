@@ -804,6 +804,20 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   `approval-request.tsx`; the `sendMessage` routing in `dependencies.ts`.)
   The real gateway's message path in a browser is #550.
   _Check:_ `app-review.mjs --only message,message-card,message-overview,message-label,message-bidi --shots <dir>`.
+- [ ] **An established conversation changes model through its existing picker,
+  within the same provider.** The source-confirmed model remains shown while
+  the correlated control and authoritative source recovery settle;
+  refusal/recovery is explicit. An unsent draft,
+  original review and Stop survive the control. No automatic native retry.
+  _Check:_ model command/adapter tests; `conversation-stress.mjs`'s actual-window
+  model step (default `--modelSwitches 1`, raised `--modelSwitches 6`), both
+  harness profiles in focused runs; the next native prompt reports its model.
+  Positive model steps follow the existing non-model/preset steps and confirm
+  Ask through the real access shield before creating their original review.
+  The existing chaos model action additionally races controls and checks no
+  pending model change remains; client-only chaos does not replace window proof.
+  Window stress opens each known conversation by its exact existing row ID;
+  equal titles across engines or conversations never choose the send target.
 - [ ] **The model is shown once, in the composer** — not in the pane header
   or the transcript heading. _Check:_ manual (and in shots from `responsive.mjs`).
 - [ ] **Composer controls never overlap**, down to the compact form.
@@ -873,6 +887,9 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
 _ADR 238 › Decision_ (Settings is a typed catalogue; modal; its sidebar folds below a page's 420px).
 
 ### Linked devices
+
+The scripted socket also answers the real window's automatic `workspace.publish`
+with its per-connection revision receipt; unknown methods remain failures.
 
 #462, over the owner pairing routes. The code, fingerprint and orbs are the
 UI kit's; this window wires them to `pairing.*` and owns the sentences. The
@@ -1424,8 +1441,19 @@ says why where the conversations would be.
   through successful existing recovery assertions, may be
   retained as harmless. Older duplicates, later errors, another endpoint or cause,
   missing evidence, failed recovery and overflow stay failures. No permanent
-  pattern is installed. _Check:_ `lib/stress-restart.test.mjs` and the default
+  pattern is installed. Recovery requires the current successor userText and its
+  completion together in one existing60-second window poll. _Check:_ `lib/stress-restart.test.mjs` and the default
   and raised `conversation-stress.mjs` runs in Chromium and WebKit (#1024).
+  The current WebKit SIGKILL probe records the exact reset dialect
+  "The network connection was lost." on both the owned socket and console
+  inside this scope, followed by a distinct receiving connection. That exact
+  cause uses the same bounded observation owner; it is never a permanent
+  console exemption. Before correction, default behavior/followers passed but
+  this console check failed (59/60); the focused probe reproduced it (4/5).
+  A subsequent current linking-on probe separately pairs "Could not connect to
+  the server." on the same owned socket and console before a new receiving
+  connection. Its exact refusal dialect uses the same owner; default59/60 and
+  observation-only WebKit29/30 failures are retained before that correction.
 - _Harmless:_ the first page in a fresh browser asks for `/favicon.ico` and
   gets a 404 (matched by source URL in `lib/selectors.mjs`,
   `harmlessConsole`). Chromium reports a request as failed with
@@ -1520,6 +1548,19 @@ says why where the conversations would be.
   offered choice, then null decline). Source projection/recorder evidence;
   gateway/SDK tests own current-state admission. The primitive and ordering
   table are [question targets](../../docs/design/question-targets.md).
+
+- [ ] **A Markdown table in a reply keeps every word whole and scrolls when wide.**
+  _Check:_ `conversation-stress.mjs`'s `table` step (knob `tables`) sends from
+  the window's composer; the scripted agent streams a narrow and a wide table.
+  Once the last cell is drawn and the reveal has finished, both tables show
+  their data rows once each and no short run ("Price", "$16.99", "Runtime",
+  "Format") is split across lines, even under the transcript's
+  `overflow-wrap: anywhere`. The narrow table fits the reply; the wide one
+  scrolls in its own panel, fades its right side (`data-hidden-right`) and
+  moves the fade left once scrolled to its end. The gateway's view holds the
+  answer exactly as streamed. Chromium in the PR job; WebKit with the stress
+  load run. The table itself is nessa_ui's `MessageMarkdown` / `Table`
+  (`edgeFade`), with its own story checks.
 
 ### Onboarding readiness recovery
 
@@ -1895,7 +1936,13 @@ row.
   slid aside, with Archive and Delete, and opens nothing; Delete asks
   "Confirm" in place, then removes the row; a long swipe archives. On a Mac
   trackpad by hand: the swipe follows the fingers and a flick rests open,
-  never archives.
+  never archives. The mouse check waits for the published prepared ghost and
+  then its carrying mark before release, and keeps the captured row identity:
+  an unprepared flick is a click, which can retarget a live unselected-row
+  locator. The original 10/11 run and lightweight wrong-row trace failed;
+  anchoring alone exposed two no-open failures (4/5). The private prepared
+  check and exact restoration held 5/5; omitting readiness failed 4/5, while
+  omitting the anchor with readiness held 5/5 (not a negative control).
 
 ## A record the chat could not read
 
