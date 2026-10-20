@@ -2567,6 +2567,9 @@ impl Agent {
         };
         let (reason, outcome) = (refusal.reason(), refusal.outcome());
         if outcome == RefusalOutcome::CloseSession {
+            // The withdrawal is the audit record, and the session can record
+            // it only while it is still open, so it precedes the close. The
+            // panel sentence is that cancellation.
             let recorded = wait
                 .run(self.withdraw_hook_refusal(
                     session,
@@ -2603,16 +2606,24 @@ impl Agent {
             deny_option(event).is_some(),
             self.supports_turn_cancel(),
         );
+        // An end-turn the provider has already finished is continue: the
+        // cancellation would say the turn stopped, and it did not.
+        let recorded = if effective == RefusalOutcome::EndTurn && wait.provider_settled() {
+            RefusalOutcome::Continue
+        } else {
+            effective
+        };
         let delivered = wait
-            .run(self.deliver_hook_refusal(session, event, index, reason, effective))
+            .run(self.deliver_hook_refusal(session, event, index, reason, recorded))
             .await;
         let delivery_failure = delivered.err();
-        if delivery_failure.is_none() && effective != RefusalOutcome::EndTurn {
+        if delivery_failure.is_none() && recorded != RefusalOutcome::EndTurn {
             return AppliedVerdict::default();
         }
-        // The provider can settle while the hook runs. Only its captured reply
-        // shows that: a turn no longer active may instead have been retired by
-        // cleanup a failed control reported, and that still needs the stop.
+        // The provider can settle while the refusal is delivered. Only its
+        // captured reply shows that: a turn no longer active may instead have
+        // been retired by cleanup a failed control reported, and that still
+        // needs the stop.
         if wait.provider_settled() {
             return AppliedVerdict {
                 closed: None,
@@ -2624,7 +2635,7 @@ impl Agent {
             .await
         {
             Ok(()) => {
-                if effective == RefusalOutcome::EndTurn {
+                if recorded == RefusalOutcome::EndTurn {
                     log_hook_stop(event, index, reason, RefusalOutcome::EndTurn);
                 }
                 AppliedVerdict {
@@ -2660,7 +2671,7 @@ impl Agent {
                         ObservationFailureCause::ExecutionFailed,
                     ))
                     .await;
-                if confirmed && effective == RefusalOutcome::EndTurn {
+                if confirmed && recorded == RefusalOutcome::EndTurn {
                     log_hook_stop(event, index, reason, RefusalOutcome::CloseSession);
                 }
                 AppliedVerdict {

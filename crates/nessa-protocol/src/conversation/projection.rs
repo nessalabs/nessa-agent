@@ -285,6 +285,10 @@ pub struct Projection {
     /// execution runs on one process start, so its events agree. `None`
     /// marks saved events that disagree: no choice can be shown for them.
     execution_hooks: HashMap<String, Option<bool>>,
+    /// End-turn hook sentences waiting for the execution to be cancelled.
+    /// A finish that is not a cancel drops them: the provider completed the
+    /// turn, so the sentence must not say the hook stopped it.
+    pending_hook_stops: HashMap<String, Vec<(String, String)>>,
     /// The execution this replacement was told is active. It is who may be
     /// offered an interaction. It does not, by itself, decide that every
     /// other unfinished record was interrupted.
@@ -409,9 +413,13 @@ fn decline_notice(review: &DeclinedReview) -> String {
 }
 
 /// A hook that ended the turn or closed the session. Continue stays quiet
-/// here: the turn is still running. A review id that is not a notice id is
-/// skipped, because the client rejects the whole view for one bad notice id.
-fn hook_stop_notice(cancellation: &PermissionCancellation) -> Option<(String, String)> {
+/// here: the turn is still running. An end-turn sentence is held until that
+/// execution is cancelled, and dropped if it finishes any other way. A
+/// review id that is not a notice id is skipped, because the client rejects
+/// the whole view for one bad notice id.
+fn hook_stop_notice(
+    cancellation: &PermissionCancellation,
+) -> Option<(String, String, RefusalOutcome)> {
     let PermissionStateView::Cancelled { reason } = cancellation.request().state() else {
         return None;
     };
@@ -437,6 +445,7 @@ fn hook_stop_notice(cancellation: &PermissionCancellation) -> Option<(String, St
             "Nessa {verb} before {tool} ran because a hook refused it: {}.",
             custom.explanation()
         ),
+        outcome,
     ))
 }
 // A provider report owns dispatched settlement. Before dispatch, the retained
@@ -590,6 +599,7 @@ impl Projection {
             terminal_executions: HashSet::new(),
             tool_parts: HashMap::new(),
             execution_hooks: HashMap::new(),
+            pending_hook_stops: HashMap::new(),
             live_here: live_here.clone(),
             unfinished_at_fold,
             history_accepted,
@@ -1137,6 +1147,49 @@ impl Projection {
     }
 
     /// Render one observation from a validated committed SDK record.
+    /// Show held end-turn hook sentences once the execution is cancelled, and
+    /// drop them when it finishes any other way.
+    fn take_hook_stops(&mut self, id: &str, index: usize, cancelled: bool) {
+        let Some(pending) = self.pending_hook_stops.remove(id) else {
+            return;
+        };
+        if !cancelled {
+            return;
+        }
+        for (notice_id, text) in pending {
+            let already = self.view.messages[index]
+                .parts
+                .iter()
+                .any(|part| part.kind == "local_notice" && part.notice_id == notice_id);
+            if already {
+                continue;
+            }
+            let retained = self.view.messages[index].retained_text;
+            let available = (MAX_TEXT * 2).saturating_sub(retained);
+            let bounded = clipped(&text, available);
+            if bounded.len() != text.len() {
+                self.view.truncated = true;
+            }
+            let offset = self.view.messages[index].event_count.saturating_sub(1);
+            let part = ConversationPart {
+                message_id: None,
+                offset,
+                kind: "local_notice".into(),
+                text: bounded,
+                tool_id: String::new(),
+                notice_id,
+            };
+            let message = &mut self.view.messages[index];
+            if message.parts.len() < 512 && message.retained_text + part.text.len() <= MAX_TEXT * 2
+            {
+                message.retained_text += part.text.len();
+                message.parts.push(part);
+            } else {
+                self.view.truncated = true;
+            }
+        }
+    }
+
     fn observe(&mut self, event: &ExecutionEvent) {
         let id = event.execution_id().as_str();
         let index = self.ensure_message(id);
@@ -1262,28 +1315,40 @@ impl Projection {
                     })
                 }
             }
-            ExecutionUpdate::PermissionCancelled(cancellation) => hook_stop_notice(cancellation)
-                .and_then(|(notice_id, text)| {
-                    let already = self.view.messages[index]
-                        .parts
-                        .iter()
-                        .any(|part| part.kind == "local_notice" && part.notice_id == notice_id);
-                    if already {
-                        return None;
+            ExecutionUpdate::PermissionCancelled(cancellation) => {
+                match hook_stop_notice(cancellation) {
+                    Some((notice_id, text, RefusalOutcome::EndTurn)) => {
+                        self.pending_hook_stops
+                            .entry(id.to_owned())
+                            .or_default()
+                            .push((notice_id, text));
+                        None
                     }
-                    let bounded = clipped(&text, available);
-                    if bounded.len() != text.len() {
-                        self.view.truncated = true;
+                    Some((notice_id, text, RefusalOutcome::CloseSession)) => {
+                        let already = self.view.messages[index]
+                            .parts
+                            .iter()
+                            .any(|part| part.kind == "local_notice" && part.notice_id == notice_id);
+                        if already {
+                            None
+                        } else {
+                            let bounded = clipped(&text, available);
+                            if bounded.len() != text.len() {
+                                self.view.truncated = true;
+                            }
+                            Some(ConversationPart {
+                                message_id: None,
+                                offset,
+                                kind: "local_notice".into(),
+                                text: bounded,
+                                tool_id: String::new(),
+                                notice_id,
+                            })
+                        }
                     }
-                    Some(ConversationPart {
-                        message_id: None,
-                        offset,
-                        kind: "local_notice".into(),
-                        text: bounded,
-                        tool_id: String::new(),
-                        notice_id,
-                    })
-                }),
+                    Some((_, _, RefusalOutcome::Continue)) | None => None,
+                }
+            }
             _ => None,
         };
         if let Some(part) = part {
@@ -1308,7 +1373,9 @@ impl Projection {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
             }
             ExecutionUpdate::Finished(result) => {
-                self.view.messages[index].status = outcome(*result);
+                let status = outcome(*result);
+                self.view.messages[index].status = status;
+                self.take_hook_stops(id, index, status == ConversationMessageStatus::Cancelled);
             }
             ExecutionUpdate::QuestionAsked { .. } | ExecutionUpdate::PermissionRequested { .. } => {
                 self.view.messages[index].status = ConversationMessageStatus::Running;

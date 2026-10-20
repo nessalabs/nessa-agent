@@ -2381,8 +2381,26 @@ fn a_hook_stop_names_the_tool_and_the_hook_reason() {
     );
     let view = shown(vec![
         review("{}".into()),
-        cancelled_review(reason, origin.clone()),
+        cancelled_review(reason.clone(), origin.clone()),
+        event(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)),
     ]);
+    let unfinished = shown(vec![
+        review("{}".into()),
+        cancelled_review(reason.clone(), origin.clone()),
+    ]);
+    assert!(unfinished.messages[0]
+        .parts
+        .iter()
+        .all(|part| part.kind != "local_notice"));
+    let completed = shown(vec![
+        review("{}".into()),
+        cancelled_review(reason, origin.clone()),
+        event(ExecutionUpdate::Finished(ExecutionOutcome::Completed)),
+    ]);
+    assert!(completed.messages[0]
+        .parts
+        .iter()
+        .all(|part| part.kind != "local_notice"));
     let notice = local_notice(&view.messages[0]);
     assert_eq!(
         notice.text,

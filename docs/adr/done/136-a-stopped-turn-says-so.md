@@ -70,8 +70,10 @@ first matching row is what happens.
 | The provider's result arrives after that fence | The local outcome and the notice stay. The reply is a late provider result, a different record. |
 | The audit sink fails or stalls | The turn reports the audit failure. The notice already published still names the rule and the tool. Cleanup still finishes. |
 | The session snapshot is restored | The event's rule id, revision, and grantor are the ones that were saved. The panel sentence is computed again from that event. |
-| A hook returns end-turn or close-session | The review is withdrawn as the hook. The notice quotes the hook's reason and names the tool. The audit record is the cancellation, with the hook as initiator. The hook stop log follows the applied stop: the turn cancel, or a confirmed session close. |
-| A hook end-turn arrives after the provider has already settled | The session stays open and no hook stop is logged. The provider finished the turn on its own. |
+| A hook returns end-turn or close-session | The stop is applied first. The review is then withdrawn as that stop, and that cancellation is the notice: the tool and the hook's reason. The hook stop log is the same applied stop. |
+| A hook end-turn arrives after the provider has already settled | The refusal is recorded as continue. The panel does not say the turn stopped, and no hook stop is logged. |
+| A hook end-turn cancellation is followed by a finish that is not a cancel | The sentence stays off the turn. It is shown when that execution is cancelled. |
+| A hook close-session | The withdrawal is recorded while the session can still record it, then the session is closed. The panel sentence is that cancellation. |
 | A hook returns continue, or an end-turn the binding cannot perform and so records as continue | No stop sentence. The turn keeps running. |
 | A hook stop's review id is not a notice id | No notice is added, because a notice id that the client rejects would drop the whole view. The cancellation and its audit remain. |
 | Provider notification of the stop fails | The local notice and the local outcome stay. The notification failure is its own log line. |
