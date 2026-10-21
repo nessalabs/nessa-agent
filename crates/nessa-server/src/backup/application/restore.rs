@@ -216,7 +216,8 @@ pub fn stage_quarantine(
         }
     }
     if let Err(error) = staging.finish(&journal) {
-        let _ = layout.remove_tree(&quarantine);
+        // `finish` deletes only a tree this attempt renamed into place.
+        // A quarantine that appeared underneath it belongs to someone else.
         return Err(recorded.stop(error));
     }
     if recorded
@@ -228,8 +229,20 @@ pub fn stage_quarantine(
         return Err(RestoreFault::Audit);
     }
     if let Err(error) = layout.mark_ready(&quarantine) {
-        let _ = layout.remove_tree(&quarantine);
-        return Err(recorded.stop(error));
+        if layout.remove_tree(&quarantine).is_ok() {
+            if recorded
+                .write("verified", "absent", error.cause(), "effect")
+                .is_err()
+            {
+                return Err(RestoreFault::Audit);
+            }
+        } else if recorded
+            .write("verified", "unready", error.cause(), "effect")
+            .is_err()
+        {
+            return Err(RestoreFault::Audit);
+        }
+        return Err(error);
     }
     Ok(StageReport {
         leases: prepared.leases,
@@ -455,7 +468,12 @@ pub fn open_deferred_conversation(
         return Err(retire_or_audit(layout, &temp));
     }
     if let Err(error) = layout.publish_file(&temp, &final_path) {
-        if !retire_session(layout, &temp) {
+        let leftover = if layout.exists(&final_path).unwrap_or(false) {
+            &final_path
+        } else {
+            &temp
+        };
+        if !retire_session(layout, leftover) {
             return Err(RestoreFault::Retained);
         }
         return Err(recorded.stop(error));

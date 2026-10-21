@@ -160,6 +160,7 @@ pub fn share_grant_is_fenced(
     conversation_id: &str,
     receiver_id: &str,
     credential_id: &str,
+    policy_revision: Option<u64>,
     fences: &[DeletionFence],
 ) -> bool {
     fences.iter().any(|fence| {
@@ -169,10 +170,12 @@ pub fn share_grant_is_fenced(
                 conversation_id: conversation,
                 receiver_id: receiver,
                 credential_id: credential,
+                sequence,
                 ..
             } if conversation == conversation_id
                 && receiver == receiver_id
                 && credential == credential_id
+                && policy_revision.is_none_or(|revision| revision <= *sequence)
         )
     })
 }
@@ -584,9 +587,29 @@ mod tests {
                 .unwrap(),
             DeletionFence::conversation("conv-1").unwrap(),
         ];
-        assert!(share_grant_is_fenced("conv-1", "recv-1", "cred-1", &fences));
+        assert!(share_grant_is_fenced(
+            "conv-1",
+            "recv-1",
+            "cred-1",
+            Some(4),
+            &fences
+        ));
         assert!(!share_grant_is_fenced(
-            "conv-1", "recv-2", "cred-1", &fences
+            "conv-1",
+            "recv-1",
+            "cred-1",
+            Some(5),
+            &fences
+        ));
+        assert!(share_grant_is_fenced(
+            "conv-1", "recv-1", "cred-1", None, &fences
+        ));
+        assert!(!share_grant_is_fenced(
+            "conv-1",
+            "recv-2",
+            "cred-1",
+            Some(4),
+            &fences
         ));
         assert!(credential_is_fenced(
             CredentialKind::Device,

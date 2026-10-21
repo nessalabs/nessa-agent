@@ -239,6 +239,7 @@ fn omit_record(
             &grant.conversation_id,
             &grant.receiver_id,
             &grant.credential_id,
+            grant.policy_revision,
             fences,
         ));
     }
@@ -276,6 +277,9 @@ struct GrantFields {
     conversation_id: String,
     receiver_id: String,
     credential_id: String,
+    /// Absent when the exported row does not name an epoch. A fence then
+    /// still matches, because a newer re-grant cannot be proved.
+    policy_revision: Option<u64>,
 }
 
 fn read_grant(bytes: &[u8]) -> Result<GrantFields, ()> {
@@ -287,10 +291,16 @@ fn read_grant(bytes: &[u8]) -> Result<GrantFields, ()> {
         .or_else(|| value.get("principalId").and_then(Value::as_str))
         .ok_or(())?
         .to_owned();
+    let policy_revision = match value.get("policyRevision") {
+        None | Some(Value::Null) => None,
+        Some(Value::Number(number)) => Some(number.as_u64().ok_or(())?),
+        Some(_) => return Err(()),
+    };
     Ok(GrantFields {
         conversation_id,
         receiver_id,
         credential_id: text_field(&value, "credentialId")?,
+        policy_revision,
     })
 }
 
@@ -521,6 +531,11 @@ impl QuarantineLayout for DirectoryQuarantine {
             return Err(RestoreFault::SessionDiffers);
         }
         fs::rename(temp, final_path).map_err(|_| RestoreFault::Rename)?;
+        let published = File::open(final_path).map_err(|_| RestoreFault::Unreadable)?;
+        published.sync_all().map_err(|_| RestoreFault::Unreadable)?;
+        if let Some(parent) = final_path.parent() {
+            sync_directory(parent).map_err(|_| RestoreFault::Unreadable)?;
+        }
         Ok(())
     }
 
@@ -680,7 +695,10 @@ impl Staging for PartialTree {
         }
         fs::rename(&self.partial, &self.quarantine).map_err(|_| RestoreFault::Rename)?;
         if let Some(parent) = self.quarantine.parent() {
-            let _ = sync_directory(parent);
+            if sync_directory(parent).is_err() {
+                let _ = fs::remove_dir_all(&self.quarantine);
+                return Err(RestoreFault::Unreadable);
+            }
         }
         self.armed = false;
         Ok(())

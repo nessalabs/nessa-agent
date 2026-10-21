@@ -90,8 +90,10 @@ the result is a visible audit failure, not a second rename back.
 - A share grant, credential, or live metadata row named by a fence is not
   copied. A tombstone is. A row of those stores that cannot be checked
   aborts the stage. A worker fence and an environment-peer fence name the
-  same stored credential. `a_revoked_grant_is_absent_from_quarantine`,
-  `a_worker_fence_omits_the_environment_peer_credential`
+  same stored credential. A grant whose `policyRevision` is newer than the
+  fenced epoch is the reissued grant and is kept. `a_revoked_grant_is_absent_from_quarantine`,
+  `a_worker_fence_omits_the_environment_peer_credential`,
+  `a_reissued_grant_is_kept_and_the_revoked_epoch_is_not`
 - A fenced conversation that still sits in a canonical or notes session
   database is deleted from the restored image, and the image is vacuumed.
   A session image that cannot be checked is not copied.
@@ -104,7 +106,11 @@ the result is a visible audit failure, not a second rename back.
 - A quarantine is acceptable only after the sealed audit is stored. The
   marker is a file inside that quarantine, not a sibling, and it is not part
   of the seal. A stage whose cleanup cannot delete the tree is still refused
-  by accept. `a_failed_stage_cleanup_still_refuses_acceptance`
+  by accept. A failed readiness mark records whether that tree was removed
+  or left unready. A finish that finds the quarantine already occupied does
+  not delete it. `a_failed_stage_cleanup_still_refuses_acceptance`,
+  `a_failed_readiness_mark_records_whether_the_tree_remains`,
+  `a_quarantine_owned_by_someone_else_is_not_deleted`
 - A fetched session is checked by the layout, not by the source that wrote
   it. The match is stored before the session name exists. The session is
   available only after the following effect line is stored. If that line is

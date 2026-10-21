@@ -1179,6 +1179,277 @@ async fn a_worker_fence_omits_the_environment_peer_credential() {
 }
 
 #[tokio::test]
+async fn a_reissued_grant_is_kept_and_the_revoked_epoch_is_not() {
+    let revoked = br#"{"conversationId":"conv-1","receiverId":"recv-1","credentialId":"cred-1","policyRevision":4}"#;
+    let renewed = br#"{"conversationId":"conv-1","receiverId":"recv-1","credentialId":"cred-1","policyRevision":9}"#;
+    let log = DeletionLog::default()
+        .append(
+            DeletionFence::share_grant("conv-1", "recv-1", "cred-1", GrantRole::Read, 4).unwrap(),
+        )
+        .0;
+    let bundle = publish(
+        vec![
+            Row {
+                store: StoreKind::ShareGrants,
+                identity: "grant-revoked".into(),
+                bytes: Bytes::Public(revoked.to_vec()),
+            },
+            Row {
+                store: StoreKind::ShareGrants,
+                identity: "grant-renewed".into(),
+                bytes: Bytes::Public(renewed.to_vec()),
+            },
+        ],
+        vec![],
+        Some(log),
+    )
+    .await;
+    let place = roots();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &MemoryAudit::open(),
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap();
+    assert!(!holds(&place.quarantine, revoked));
+    assert!(holds(&place.quarantine, renewed));
+}
+
+struct OtherQuarantine {
+    quarantine: PathBuf,
+}
+
+impl Staging for OtherQuarantine {
+    fn write(&mut self, _relative: &str, _bytes: &[u8]) -> Result<(), RestoreFault> {
+        Ok(())
+    }
+
+    fn finish(self: Box<Self>, _journal: &str) -> Result<(), RestoreFault> {
+        fs::create_dir_all(&self.quarantine).map_err(|_| RestoreFault::Unreadable)?;
+        fs::write(self.quarantine.join("owned-by-other"), b"keep")
+            .map_err(|_| RestoreFault::Unreadable)?;
+        Err(RestoreFault::QuarantineOccupied)
+    }
+}
+
+struct ReportsOccupied {
+    quarantine: PathBuf,
+}
+
+impl QuarantineLayout for ReportsOccupied {
+    fn begin(&self, _quarantine: &Path, _live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+        Ok(Box::new(OtherQuarantine {
+            quarantine: self.quarantine.clone(),
+        }))
+    }
+    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+        DirectoryQuarantine.load(root)
+    }
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live)
+    }
+    fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_tree(path)
+    }
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
+        DirectoryQuarantine.read_bytes(path)
+    }
+    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.session_temp(root, relative)
+    }
+    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_file(path)
+    }
+    fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.exists(path)
+    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.canonicalize(path)
+    }
+    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.anchor(path)
+    }
+    fn hold(
+        &self,
+        root: &Path,
+    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root)
+    }
+    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.spoil(path)
+    }
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        DirectoryQuarantine.session_cut(path, conversation_id)
+    }
+}
+
+#[tokio::test]
+async fn a_quarantine_owned_by_someone_else_is_not_deleted() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let source = DirectoryVerificationSource::open(bundle.root.clone()).unwrap();
+    let error = stage_quarantine(
+        &StageRequest {
+            facts: person(RestoreAction::Stage),
+            bundle: &source,
+            format: &ExportFormat,
+            verifier: &bundle.key,
+            limits: VerificationLimits::default(),
+            later_inventory: None,
+            quarantine: &place.quarantine,
+            live: &place.live,
+        },
+        &policy(),
+        &MemoryAudit::open(),
+        &ReportsOccupied {
+            quarantine: place.quarantine.clone(),
+        },
+        &DirectoryMaterializer,
+        &KeyedInventory::new(bundle.key),
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::QuarantineOccupied);
+    assert_eq!(
+        fs::read(place.quarantine.join("owned-by-other")).unwrap(),
+        b"keep"
+    );
+    assert!(!place.live.exists());
+}
+
+struct ReadyFails {
+    keep: bool,
+}
+
+impl QuarantineLayout for ReadyFails {
+    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+        DirectoryQuarantine.begin(quarantine, live)
+    }
+    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+        DirectoryQuarantine.load(root)
+    }
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live)
+    }
+    fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
+        if self.keep {
+            return Err(RestoreFault::Unreadable);
+        }
+        DirectoryQuarantine.remove_tree(path)
+    }
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
+        DirectoryQuarantine.read_bytes(path)
+    }
+    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.session_temp(root, relative)
+    }
+    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_file(path)
+    }
+    fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.exists(path)
+    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.canonicalize(path)
+    }
+    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.anchor(path)
+    }
+    fn hold(
+        &self,
+        root: &Path,
+    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+    fn mark_ready(&self, _root: &Path) -> Result<(), RestoreFault> {
+        Err(RestoreFault::Unreadable)
+    }
+    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.spoil(path)
+    }
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        DirectoryQuarantine.session_cut(path, conversation_id)
+    }
+}
+
+#[tokio::test]
+async fn a_failed_readiness_mark_records_whether_the_tree_remains() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let removed = roots();
+    let source = DirectoryVerificationSource::open(bundle.root.clone()).unwrap();
+    let removed_audit = MemoryAudit::open();
+    let error = stage_quarantine(
+        &StageRequest {
+            facts: person(RestoreAction::Stage),
+            bundle: &source,
+            format: &ExportFormat,
+            verifier: &bundle.key,
+            limits: VerificationLimits::default(),
+            later_inventory: None,
+            quarantine: &removed.quarantine,
+            live: &removed.live,
+        },
+        &policy(),
+        &removed_audit,
+        &ReadyFails { keep: false },
+        &DirectoryMaterializer,
+        &KeyedInventory::new(bundle.key),
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Unreadable);
+    assert!(!removed.quarantine.exists());
+    assert!(removed_audit.lines().iter().any(|line| {
+        line.before == "verified" && line.after == "absent" && line.cause == "unreadable"
+    }));
+
+    let kept = roots();
+    let kept_audit = MemoryAudit::open();
+    let error = stage_quarantine(
+        &StageRequest {
+            facts: person(RestoreAction::Stage),
+            bundle: &source,
+            format: &ExportFormat,
+            verifier: &bundle.key,
+            limits: VerificationLimits::default(),
+            later_inventory: None,
+            quarantine: &kept.quarantine,
+            live: &kept.live,
+        },
+        &policy(),
+        &kept_audit,
+        &ReadyFails { keep: true },
+        &DirectoryMaterializer,
+        &KeyedInventory::new(bundle.key),
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Unreadable);
+    assert!(kept.quarantine.join("journal.txt").is_file());
+    assert!(kept_audit.lines().iter().any(|line| {
+        line.before == "verified" && line.after == "unready" && line.cause == "unreadable"
+    }));
+    let accepted = accept(&kept, &MemoryAudit::open(), &NoReceipts).unwrap_err();
+    assert_eq!(accepted, RestoreFault::Tamper);
+    assert!(!kept.live.exists());
+}
+
+#[tokio::test]
 async fn a_newer_fence_omits_the_grant() {
     let grant = br#"{"conversationId":"conv-2","principalId":"recv-2","credentialId":"cred-2"}"#;
     let bundle = publish(
