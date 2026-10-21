@@ -6,7 +6,7 @@ use nessa_sdk::application::agent_execution::agents::AgentError;
 use serde_json::Value;
 use std::{
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Condvar, Mutex,
@@ -19,6 +19,15 @@ use tokio::{
 };
 
 const WATCHDOG: Duration = Duration::from_secs(5);
+
+// TempDir inherits the process umask. The actual private-file writer requires
+// an explicitly private parent, created by the same storage owner as production.
+fn private_audit_directory() -> (tempfile::TempDir, PathBuf) {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    nessa_local_storage::create_directory(&directory).unwrap();
+    (root, directory)
+}
 
 #[derive(Default)]
 struct Gate {
@@ -318,8 +327,8 @@ fn decline_bytes(writer: &str, sequence: u64, at: u64, actor: &str) -> Vec<u8> {
 #[test]
 fn stable_decline_publication_preserves_first_metadata_and_rejects_conflicting_input() {
     use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("decline.json");
+    let (_root, directory) = private_audit_directory();
+    let path = directory.join("decline.json");
     let first = decline_bytes("11111111-1111-4111-8111-111111111111", 0, 100, "close");
     let retry = decline_bytes("22222222-2222-4222-8222-222222222222", 8, 200, "close");
     PrivateExecutionAuditFileWriter
@@ -348,8 +357,8 @@ fn stable_decline_publication_preserves_first_metadata_and_rejects_conflicting_i
 #[test]
 fn concurrent_decline_writers_acknowledge_one_create_only_winner() {
     use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
-    let root = tempfile::tempdir().unwrap();
-    let path = Arc::new(root.path().join("decline.json"));
+    let (_root, directory) = private_audit_directory();
+    let path = Arc::new(directory.join("decline.json"));
     let barrier = Arc::new(std::sync::Barrier::new(2));
     let writes: Vec<_> = [
         "11111111-1111-4111-8111-111111111111",
@@ -369,7 +378,7 @@ fn concurrent_decline_writers_acknowledge_one_create_only_winner() {
     for write in writes {
         write.join().unwrap().unwrap();
     }
-    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
     let value: Value = serde_json::from_slice(&fs::read(path.as_ref()).unwrap()).unwrap();
     assert_eq!(value["record"]["actor"]["requestId"], "close");
 }
@@ -391,8 +400,8 @@ fn a_lost_decline_write_ack_rejoins_the_same_durable_record() {
             }
         }
     }
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("decline.json");
+    let (_root, directory) = private_audit_directory();
+    let path = directory.join("decline.json");
     let writer = LoseAck(AtomicUsize::new(0));
     let bytes = decline_bytes("11111111-1111-4111-8111-111111111111", 0, 100, "close");
     assert_eq!(
@@ -402,14 +411,14 @@ fn a_lost_decline_write_ack_rejoins_the_same_durable_record() {
     let original = fs::read(&path).unwrap();
     writer.write_once(&path, &bytes).unwrap();
     assert_eq!(fs::read(&path).unwrap(), original);
-    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
 }
 
 #[test]
 fn malformed_oversized_or_duplicate_decline_receipts_are_never_replaced() {
     use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("decline.json");
+    let (_root, directory) = private_audit_directory();
+    let path = directory.join("decline.json");
     let bytes = decline_bytes("11111111-1111-4111-8111-111111111111", 0, 100, "close");
     PrivateExecutionAuditFileWriter
         .write_once(&path, &bytes)
@@ -489,9 +498,9 @@ async fn prepared_cancellation_rejection_and_lost_ack_rejoin_one_exact_durable_i
         }
     }
     for commit in [false, true] {
-        let root = tempfile::tempdir().unwrap();
+        let (_root, directory) = private_audit_directory();
         let sink = DurableExecutionAudit::with_writer(
-            root.path().into(),
+            directory.clone(),
             Arc::new(TestClock),
             Arc::new(FaultOnce {
                 calls: AtomicUsize::new(0),
@@ -503,20 +512,20 @@ async fn prepared_cancellation_rejection_and_lost_ack_rejoin_one_exact_durable_i
             sink.record(prepared_cancellation("first-close")).await,
             Err(AgentError::AuditFailure)
         );
-        let first = fs::read_dir(root.path())
+        let first = fs::read_dir(&directory)
             .unwrap()
             .map(|entry| fs::read(entry.unwrap().path()).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(first.len(), usize::from(commit));
         drop(sink);
         let restored =
-            DurableExecutionAudit::new(root.path().into(), Arc::new(CountingClock::default()))
+            DurableExecutionAudit::new(directory.clone(), Arc::new(CountingClock::default()))
                 .unwrap();
         restored
             .record(prepared_cancellation("first-close"))
             .await
             .unwrap();
-        let records = fs::read_dir(root.path())
+        let records = fs::read_dir(&directory)
             .unwrap()
             .map(|entry| fs::read(entry.unwrap().path()).unwrap())
             .collect::<Vec<_>>();
@@ -533,7 +542,7 @@ async fn prepared_cancellation_rejection_and_lost_ack_rejoin_one_exact_durable_i
                 .await,
             Err(AgentError::AuditFailure)
         );
-        let after = fs::read_dir(root.path())
+        let after = fs::read_dir(&directory)
             .unwrap()
             .map(|entry| fs::read(entry.unwrap().path()).unwrap())
             .collect::<Vec<_>>();
@@ -564,13 +573,13 @@ async fn prepared_cancellation_late_physical_ack_keeps_one_winner_and_releases_i
             Ok(())
         }
     }
-    let root = tempfile::tempdir().unwrap();
+    let (_root, directory) = private_audit_directory();
     let gate = Arc::new(Gate::default());
     let release = ReleaseOnDrop(gate.clone());
     let (entered, waiting) = oneshot::channel();
     let sink = Arc::new(
         DurableExecutionAudit::with_writer(
-            root.path().into(),
+            directory.clone(),
             Arc::new(TestClock),
             Arc::new(LateAck {
                 gate,
@@ -589,11 +598,11 @@ async fn prepared_cancellation_late_physical_ack_keeps_one_winner_and_releases_i
         .unwrap();
     observer.abort();
     assert!(observer.await.unwrap_err().is_cancelled());
-    let original = fs::read_dir(root.path())
+    let original = fs::read_dir(&directory)
         .unwrap()
         .map(|entry| fs::read(entry.unwrap().path()).unwrap())
         .collect::<Vec<_>>();
-    let restored = DurableExecutionAudit::new(root.path().into(), Arc::new(TestClock)).unwrap();
+    let restored = DurableExecutionAudit::new(directory.clone(), Arc::new(TestClock)).unwrap();
     tokio::time::timeout(
         WATCHDOG,
         restored.record(prepared_cancellation("first-close")),
@@ -606,7 +615,7 @@ async fn prepared_cancellation_late_physical_ack_keeps_one_winner_and_releases_i
         .await
         .unwrap()
         .unwrap();
-    let after = fs::read_dir(root.path())
+    let after = fs::read_dir(&directory)
         .unwrap()
         .map(|entry| fs::read(entry.unwrap().path()).unwrap())
         .collect::<Vec<_>>();
