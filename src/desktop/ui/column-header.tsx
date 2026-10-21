@@ -159,9 +159,10 @@ function useTitlePlacement(
         if (next === "inline") holdStill(moved)
         moved.animate([{ opacity: 0 }, { opacity: 1 }], { duration, easing })
       }
-      // The body travels by the below title's block: up when that row goes
-      // away, down when it arrives.
-      const delta = next === "inline" ? -shift : shift
+      // The body has already moved by the below title's block. The first
+      // frame puts it back where it was: down when that row has gone, up
+      // when it has arrived.
+      const delta = next === "inline" ? shift : -shift
       if (Math.abs(delta) < 0.5) return
       for (const element of below)
         element.animate(
