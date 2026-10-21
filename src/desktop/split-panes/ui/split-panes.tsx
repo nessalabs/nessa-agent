@@ -145,7 +145,10 @@ export const SplitPanes = memo(function SplitPanes({
       }
       queue(3)
     }
-    const unsubscribe = source.subscribe(() => {
+    // Subscribing does not call back. A layout that landed before this
+    // effect, or a source this grid just took, is read now and still waits
+    // its frames.
+    const reconcile = () => {
       const next = source.layout()?.columns ?? null
       if (next === drawnRef.current) {
         if (!armed) return
@@ -156,7 +159,9 @@ export const SplitPanes = memo(function SplitPanes({
         return
       }
       arm(next)
-    })
+    }
+    const unsubscribe = source.subscribe(reconcile)
+    reconcile()
     return () => {
       cancel()
       unsubscribe()

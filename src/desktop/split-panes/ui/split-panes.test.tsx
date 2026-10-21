@@ -182,6 +182,28 @@ it("paints a new arrangement on the frame after it commits", async () => {
   expect(grid().hasAttribute(marks.painting)).toBe(false)
 })
 
+it("paints a replaced source's layout though that source never notifies", async () => {
+  await mounted(fakeSource(two()))
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  const next = fakeSource(splitPane(two(), 2, "bottom", "c"))
+  await act(async () => {
+    root.render(
+      <StrictMode>
+        <SplitPanes
+          source={next.source}
+          renderPane={renderPane}
+          empty={<p className="host-empty">Nothing open</p>}
+        />
+      </StrictMode>,
+    )
+  })
+  // The commit keeps the boxes already painted. The new source's columns
+  // were never announced; the grid reads them when it subscribes.
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  await nextPaint()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
+})
+
 it("renders again when the arrangement changes, and not when only focus moves", async () => {
   const layout = two()
   const fake = fakeSource(layout)
