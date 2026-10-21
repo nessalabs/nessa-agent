@@ -1320,25 +1320,27 @@ async fn wire_view(
         runtime.insert("reasoning".into(), Value::Bool(model.reasoning));
     }
     if let Some(service) = state.conversations.as_ref() {
-        let enabled = service.usage_limit_auto_continue().await.unwrap_or(false);
+        // Unbound storage is off and has no row. A read that fails is not
+        // that: the view would otherwise show the preference off and drop
+        // auto-resuming while the durable row is still open.
+        let enabled = service.usage_limit_auto_continue().await?;
         fields.insert("usageLimitAutoContinue".into(), json!(enabled));
-        if let Ok(id) = ConversationId::new(&conversation_id) {
-            if let Ok(Some(open)) = service.usage_limit_schedule(&id).await {
-                if let Some(messages) = fields.get_mut("messages").and_then(Value::as_array_mut) {
-                    for message in messages {
-                        let Some(object) = message.as_object_mut() else {
-                            continue;
-                        };
-                        if object.get("executionId").and_then(Value::as_str)
-                            != Some(open.causal_execution.as_str())
-                        {
-                            continue;
-                        }
-                        if let Some(limit) =
-                            object.get_mut("usageLimit").and_then(Value::as_object_mut)
-                        {
-                            limit.insert("autoResuming".into(), json!(true));
-                        }
+        let id =
+            ConversationId::new(&conversation_id).map_err(|_| ConversationError::InvalidInput)?;
+        if let Some(open) = service.usage_limit_schedule(&id).await? {
+            if let Some(messages) = fields.get_mut("messages").and_then(Value::as_array_mut) {
+                for message in messages {
+                    let Some(object) = message.as_object_mut() else {
+                        continue;
+                    };
+                    if object.get("executionId").and_then(Value::as_str)
+                        != Some(open.causal_execution.as_str())
+                    {
+                        continue;
+                    }
+                    if let Some(limit) = object.get_mut("usageLimit").and_then(Value::as_object_mut)
+                    {
+                        limit.insert("autoResuming".into(), json!(true));
                     }
                 }
             }

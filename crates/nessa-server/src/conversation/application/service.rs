@@ -857,6 +857,10 @@ struct Inner {
         OnceLock<Arc<dyn super::usage_limit_policy::UsageLimitPreferencePolicyEvaluator>>,
     /// Wakes the continuation loop when a row is accepted or the preference changes.
     schedule_wakeup: Arc<Notify>,
+    /// Applied model changes whose continuation plan has not committed.
+    /// [`ConversationService::commit_applied_model_plan`] is the only writer.
+    /// A crash drops the set; catch-up runs the same plan while the preference is on.
+    model_reconcile_owed: std::sync::Mutex<HashSet<ConversationId>>,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1379,6 +1383,7 @@ impl ConversationService {
                 scheduled_messages: OnceLock::new(),
                 preference_policy: OnceLock::new(),
                 schedule_wakeup: Arc::new(Notify::new()),
+                model_reconcile_owed: std::sync::Mutex::default(),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),

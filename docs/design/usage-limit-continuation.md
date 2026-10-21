@@ -111,7 +111,7 @@ so a later causal turn can still be accepted after a terminal row.
 | `submitting` | The mutation journal returns `Interrupted` | `finish_fenced_submit` | `unconfirmed` | Status and audit `submission_interrupted`. No second submit |
 | `submitting` | Preference off, and `fence_until_ms` is at or before the clock | `record_preference_decision`, `set_preference`, or `retire_unfenced_submissions` | `cancelled` | Status and audit. A later pass waits until a still-live lease and then cancels it |
 | `submitting` | Preference off, and the lease is still live | the owning process | `submitting` | The submit finishes into `delivered`, `refused`, or `unconfirmed` |
-| `scheduled` or `delivering` | An applied model change | `change_model`, then `apply_usage_limit_plan` | `cancelled` or `scheduled` | The command returns the applied selection only after the plan commits. A retry of the same action reconciles again. Delivery does not submit while the plan returns an error |
+| `scheduled` or `delivering` | An applied model change | `commit_applied_model_plan`, from `change_model` or from `recover_model_change` | `cancelled` or `scheduled` | An applied transition returns only after the plan commits, including one recovery finishes from a stopped request. A failed plan stays owed. The next open read or submit runs it again. A refusal is not reconciled. Delivery does not submit while the plan returns an error |
 | preference | Cedar allow or deny | `record_preference_decision` | the stored boolean, unchanged on a deny | One audit with the policy ids, in the same transaction as any preference write. A failed audit is an error and leaves the preference as it was. An allow publishes every followed conversation. A deny does not |
 | any row that still holds a prompt | Conversation deletion | `erase_conversation` | `cancelled` for `scheduled`, `delivering`, and a `submitting` row whose lease has expired; the same status otherwise | Payload blanked and one new audit, one transaction |
 
@@ -162,6 +162,8 @@ confirmed view catches up. Both follow this order.
 | The planner read the preference on at revision R | `accept` has not committed | The insert runs only in a transaction that still sees revision R enabled. A disable, or a later enable, has another revision. The stale accept writes nothing, so a later enable does not deliver a row whose reset is already past |
 | An authorized disable committed | A planner that read the previous revision calls `accept` | Open rows from the disable are cancelled. The new insert matches nothing and the preference stays off |
 | The person turned the preference on and the command has not finished | The checkbox is pending. The confirmed preference is still off. No row is auto-resuming | The checkbox shows on. The line under the title follows the confirmed preference and says when the limit resets |
+| The command has settled | The confirmed preference is not the pending choice, including when another client left it unchanged | The checkbox releases and shows the confirmed value. A later click is accepted. The line still follows the confirmed preference |
+| A conversation view is assembled | The schedule store's preference or open read fails | The view is an error. It does not say the preference is off, and it does not drop auto-resuming. No schedule database stays off and has no row |
 | The confirmed preference is on, the reset is still ahead, and no row is auto-resuming | Nothing | The line says scheduling failed |
 
 ### Crash between durable writes
@@ -181,6 +183,7 @@ confirmed view catches up. Both follow this order.
 | preference turns off | a live lease expires | preference off; `scheduled`, `delivering`, and expired `submitting` cancelled | A live lease finishes its submit. The off path waits until that lease and then cancels it, so a later enable does not deliver it |
 | `erase_conversation` commits | the tombstone is marked erased | prompt and identifying fields blank, one new audit per row that still held them | A crash before the commit leaves the payload. Deletion stays unfinished and the next attempt scrubs again. A second scrub writes no audit. Older audit rows stay |
 | the outcome is observed | the audit timestamp is chosen | the clock is read when the saved execution or the `submit_command` result is in hand | The audit names that observation. A reading taken before the submit is not reused |
+| an applied model change finishes | the continuation plan commits | the new model is durable; an open row may still name the previous model | This process keeps the conversation owed. The next open read or submit runs the plan. A crash drops that memory. Catch-up, while the preference is on, traverses every owner and runs the same plan against the model at that later pass |
 
 The wakeup is not a durable write. The loop creates the notification future
 before it reads the preference for the catch-up scan and before
@@ -294,9 +297,13 @@ turn with no saved result clears it.
     `submitting` under a new lease, or adopts a `submitting` row whose lease
     has expired, and arms the id only after the commit. Cancel, defer, and a
     model change match `scheduled` and `delivering` only. An applied model
-    change is not complete until `apply_usage_limit_plan` commits, including
-    when the same action is retried from its saved result. Delivery does not
-    submit when that plan fails.
+    change is not complete until `apply_usage_limit_plan` commits.
+    `commit_applied_model_plan` is the only caller, from the command that
+    returns the selection and from recovery of a stopped request. A failed
+    plan stays owed. The next open read or submit runs it again, including
+    when the request is no longer pending. A refusal is not reconciled.
+    Delivery does not submit when that plan fails. A crash drops the owed
+    set; catch-up runs the plan again while the preference is on.
 15. `MutationFailure::Interrupted` settles the row to `unconfirmed` once.
     The same execution id is not submitted again.
 16. Deleting a conversation blanks `prompt` and the identifying fields on
@@ -315,13 +322,17 @@ turn with no saved result clears it.
 19. `accept` writes only while the preference revision the planner read is
     still enabled, in that same transaction. A preference change that commits
     first leaves no new row. The card's line follows the confirmed preference.
-    The checkbox may show a pending choice. Scheduling failed is the line only
-    when that confirmed preference is on, the reset is still ahead, and no
-    row is auto-resuming.
+    The checkbox may show a pending choice until the command settles. Once it
+    has settled, a confirmed value that is not that choice releases the
+    checkbox. Scheduling failed is the line only when that confirmed
+    preference is on, the reset is still ahead, and no row is auto-resuming.
 20. A failed turn may carry `requiredWorkFailed` beside a usage limit or an
     authentication refusal. The turn is failed and the diagnostic is present.
     The client accepts that view. A required-work flag with neither typed
     refusal is rejected.
+21. A conversation view that cannot read the schedule store is an error.
+    Unbound storage, with no schedule database, is preference off and no open
+    row. A failed preference or open read is neither of those.
 
 ## Card
 
@@ -331,7 +342,9 @@ has been accepted shows **Auto-resuming** plus the local date and time. The
 local zone is the environment zone, the same way other desktop labels format
 time. The checkbox is the gateway preference, not a per-turn flag. While a
 choice has not landed, the checkbox shows it and the line under the title
-keeps the confirmed preference.
+keeps the confirmed preference. After the command has settled, a confirmed
+value that is not the pending choice releases the checkbox, so another
+client's preference is what the next click changes.
 
 ## Review brief
 

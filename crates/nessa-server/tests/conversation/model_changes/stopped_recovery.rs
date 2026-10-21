@@ -1,10 +1,24 @@
 //! Explicit reads retry stopped cleanup without replaying an acknowledged control.
 use super::*;
+use crate::conversation::application::{
+    PreferenceUpdate, ScheduleActor, ScheduleDraft, ScheduledMessageStore,
+};
+use crate::conversation::domain::ContinuationCause;
+use crate::conversation::infrastructure::LocalScheduledMessages;
+use crate::conversation_test_support::ProviderFactory;
 
 #[derive(Clone, Copy)]
 enum Control {
     Model,
     Preset,
+}
+
+struct PreparedStop {
+    service: ConversationService,
+    provider: Arc<ProviderFactory>,
+    id: ConversationId,
+    actor: ConversationCaller,
+    directory: tempfile::TempDir,
 }
 
 #[tokio::test]
@@ -17,7 +31,129 @@ async fn acknowledged_preset_recovery_retries_the_stopped_owner() {
     stopped_acknowledgement(Control::Preset).await;
 }
 
+#[tokio::test]
+async fn a_recovered_model_change_cancels_the_open_continuation() {
+    let prepared = prepare_stopped(Control::Model).await;
+    let store = Arc::new(
+        LocalScheduledMessages::open(
+            &prepared
+                .directory
+                .path()
+                .join("conversations")
+                .join("scheduled-chat-messages.sqlite3"),
+        )
+        .unwrap(),
+    );
+    let recorded = store
+        .record_preference_decision(
+            true,
+            true,
+            &["usage-limit-preference.admin-grant".into()],
+            ScheduleActor::system(),
+            1,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(recorded.update, PreferenceUpdate::Stored(true)));
+    let accepted = store
+        .accept(
+            ScheduleDraft {
+                conversation: prepared.id.to_string(),
+                causal_execution: "causal".into(),
+                execution_id: "exec-1".into(),
+                due_at_ms: 9_000_000_000_000,
+                cause: ContinuationCause::ProviderLimit,
+                actor: ScheduleActor::system(),
+                agent: "claude".into(),
+                model: "test".into(),
+                prompt: "continue".into(),
+                organization_id: "org".into(),
+                principal_id: "person".into(),
+                surface_id: "desktop".into(),
+                action_id: "action".into(),
+                initiation: "owner".into(),
+                grant_id: None,
+                policy_revision: None,
+                tools_checked: false,
+                preference_revision: recorded.revision,
+            },
+            2,
+        )
+        .await
+        .unwrap();
+    assert!(accepted.is_some());
+    assert_eq!(
+        store.status("exec-1").await.unwrap().as_deref(),
+        Some("scheduled")
+    );
+    prepared.service.bind_scheduled_messages(store.clone());
+    let recovered = tokio::time::timeout(
+        Duration::from_secs(5),
+        prepared.service.read(prepared.id.clone(), caller()),
+    )
+    .await
+    .unwrap()
+    .expect("recovery reconciles the open continuation");
+    assert_eq!(recovered.selection.unwrap().model, "second-model");
+    assert_eq!(
+        store.status("exec-1").await.unwrap().as_deref(),
+        Some("cancelled")
+    );
+    prepared.service.shutdown().await.unwrap();
+}
+
 async fn stopped_acknowledgement(control: Control) {
+    let prepared = prepare_stopped(control).await;
+    let PreparedStop {
+        service,
+        provider,
+        id,
+        actor,
+        directory: _directory,
+    } = prepared;
+    let recovered =
+        tokio::time::timeout(Duration::from_secs(5), service.read(id.clone(), caller()))
+            .await
+            .unwrap()
+            .expect("Open retries cleanup after the fault is released");
+    assert!(recovered.model_change.is_none() && recovered.approval_mode_change.is_none());
+    let selection = recovered.selection.unwrap();
+    match control {
+        Control::Model => {
+            assert_eq!(selection.model, "second-model");
+            assert_eq!(selection.approval_mode, ConversationApprovalMode::Ask);
+            service
+                .set_model(
+                    id.clone(),
+                    actor.clone(),
+                    ConversationModelId::new("second-model").unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(provider.model_updates.lock().unwrap().len(), 1);
+        }
+        Control::Preset => {
+            assert_eq!(selection.model, "test");
+            assert_eq!(selection.approval_mode, ConversationApprovalMode::Auto);
+            service
+                .set_approval_mode(id.clone(), actor.clone(), ConversationApprovalMode::Auto)
+                .await
+                .unwrap();
+            assert_eq!(provider.mode_updates.lock().unwrap().len(), 1);
+        }
+    }
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
+    let live = service.live_now(&id, &caller()).await.unwrap().unwrap();
+    let snapshot = live.agent.session_manager().snapshot().await.unwrap();
+    let retained = snapshot.current_configuration.unwrap();
+    assert_eq!(retained.actor().principal_id(), actor.principal_id.as_str());
+    assert_eq!(retained.actor().surface_id(), actor.surface_id);
+    assert_eq!(retained.actor().request_id(), actor.action_id);
+    drop(live);
+    service.shutdown().await.unwrap();
+}
+
+async fn prepare_stopped(control: Control) -> PreparedStop {
     let directory = tempfile::tempdir().unwrap();
     let private = directory.path().join("conversations");
     nessa_local_storage::create_directory(&private).unwrap();
@@ -105,44 +241,11 @@ async fn stopped_acknowledgement(control: Control) {
         Control::Preset => assert!(metadata.pending_mode_change(&id).await.unwrap().is_some()),
     }
     *provider.close_failure.lock().unwrap() = None;
-    let recovered =
-        tokio::time::timeout(Duration::from_secs(5), service.read(id.clone(), caller()))
-            .await
-            .unwrap()
-            .expect("Open retries cleanup after the fault is released");
-    assert!(recovered.model_change.is_none() && recovered.approval_mode_change.is_none());
-    let selection = recovered.selection.unwrap();
-    match control {
-        Control::Model => {
-            assert_eq!(selection.model, "second-model");
-            assert_eq!(selection.approval_mode, ConversationApprovalMode::Ask);
-            service
-                .set_model(
-                    id.clone(),
-                    actor.clone(),
-                    ConversationModelId::new("second-model").unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(provider.model_updates.lock().unwrap().len(), 1);
-        }
-        Control::Preset => {
-            assert_eq!(selection.model, "test");
-            assert_eq!(selection.approval_mode, ConversationApprovalMode::Auto);
-            service
-                .set_approval_mode(id.clone(), actor.clone(), ConversationApprovalMode::Auto)
-                .await
-                .unwrap();
-            assert_eq!(provider.mode_updates.lock().unwrap().len(), 1);
-        }
+    PreparedStop {
+        service,
+        provider,
+        id,
+        actor,
+        directory,
     }
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
-    let live = service.live_now(&id, &caller()).await.unwrap().unwrap();
-    let snapshot = live.agent.session_manager().snapshot().await.unwrap();
-    let retained = snapshot.current_configuration.unwrap();
-    assert_eq!(retained.actor().principal_id(), actor.principal_id.as_str());
-    assert_eq!(retained.actor().surface_id(), actor.surface_id);
-    assert_eq!(retained.actor().request_id(), actor.action_id);
-    drop(live);
-    service.shutdown().await.unwrap();
 }

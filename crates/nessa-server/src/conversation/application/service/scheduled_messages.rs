@@ -2199,6 +2199,76 @@ mod catalogue_pages {
         assert_eq!(store.opens.load(Ordering::SeqCst), opens);
     }
 
+    #[tokio::test]
+    async fn a_failed_model_reconciliation_is_retried_when_nothing_is_pending() {
+        let repository = Arc::new(MemoryRepository::default());
+        let id = ConversationId::new("11111111-1111-4111-8111-111111111111").unwrap();
+        let organization = OrganizationId::new("org").unwrap();
+        let principal = PrincipalId::new("person").unwrap();
+        let prior_model = ConversationModelId::new("opus").unwrap();
+        let requested = ConversationModelId::new("sonnet").unwrap();
+        repository.records.lock().unwrap().insert(
+            id.clone(),
+            crate::conversation::domain::Conversation::restore(
+                id.clone(),
+                organization.clone(),
+                principal.clone(),
+                "desktop".into(),
+                "create".into(),
+                1,
+                None,
+                prior_model.clone(),
+                ConversationApprovalMode::Ask,
+            )
+            .unwrap(),
+        );
+        repository.model_requests.lock().unwrap().insert(
+            (id.clone(), "toggle".into()),
+            ConversationModelRequest {
+                conversation_id: id.clone(),
+                organization_id: organization,
+                request_id: "toggle".into(),
+                initiator_principal_id: principal,
+                initiator_surface_id: "desktop".into(),
+                prior_identity: ProviderIdentity::new("fixture", "opus", "").unwrap(),
+                requested_identity: ProviderIdentity::new("fixture", "sonnet", "").unwrap(),
+                prior_model,
+                prior_approval_mode: ConversationApprovalMode::Ask,
+                requested_model: requested.clone(),
+                state: ConversationModelRequestState::Applied,
+                application: Some(ConversationModelApplication::Applied(
+                    ConversationModelSelection {
+                        model: requested.clone(),
+                        approval_mode: ConversationApprovalMode::Ask,
+                        effect: ConversationModelChangeEffect::NextTurn,
+                    },
+                )),
+                requested_at_ms: 1,
+            },
+        );
+        let service = service_over(
+            repository,
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            Arc::new(TestClock),
+        );
+        let store = Arc::new(RecordingStore::new(false));
+        service.bind_scheduled_messages(store.clone());
+        let caller = caller();
+        assert!(service.change_model(&id, &caller, requested).await.is_err());
+        assert_eq!(store.opens.load(Ordering::SeqCst), 1);
+        assert!(service.recover_model_change(&id, &caller).await.is_err());
+        assert_eq!(store.opens.load(Ordering::SeqCst), 2);
+        store.fail_open.store(false, Ordering::SeqCst);
+        service.recover_model_change(&id, &caller).await.unwrap();
+        assert_eq!(store.opens.load(Ordering::SeqCst), 3);
+        let opens = store.opens.load(Ordering::SeqCst);
+        service.recover_model_change(&id, &caller).await.unwrap();
+        assert_eq!(store.opens.load(Ordering::SeqCst), opens);
+    }
+
     /// A catalogue page that settles the enable, then fails the walk.
     struct SettleThenFail {
         store: Arc<RecordingStore>,

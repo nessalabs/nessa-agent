@@ -69,6 +69,76 @@ it("keeps the reset line while an enable is still pending", async () => {
   })
 })
 
+it("releases the checkbox when the confirmed preference is not the pending choice", async () => {
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let clicks = 0
+  await act(async () => {
+    root.render(
+      <UsageLimitCard
+        limit={limit}
+        enabled={false}
+        nowMs={reset - 1}
+        onChange={() => {
+          clicks += 1
+          return held
+        }}
+      />,
+    )
+  })
+  const box = host.querySelector("input")
+  if (!(box instanceof HTMLInputElement)) throw new Error("missing checkbox")
+  await act(async () => {
+    box.click()
+  })
+  expect(box.checked).toBe(true)
+  expect(clicks).toBe(1)
+  await act(async () => {
+    box.click()
+  })
+  expect(clicks).toBe(1)
+  await act(async () => {
+    release()
+  })
+  expect(box.checked).toBe(false)
+  expect(
+    host.querySelector("[data-usage-limit]")?.hasAttribute("data-usage-limit-pending"),
+  ).toBe(false)
+  expect(detail()).toBe(`Resets ${formatUsageLimitReset(reset)}`)
+  let again: () => void = () => {}
+  const next = new Promise<void>((resolve) => {
+    again = resolve
+  })
+  await act(async () => {
+    root.render(
+      <UsageLimitCard
+        limit={limit}
+        enabled={false}
+        nowMs={reset - 1}
+        onChange={() => {
+          clicks += 1
+          return next
+        }}
+      />,
+    )
+  })
+  const retry = host.querySelector("input")
+  if (!(retry instanceof HTMLInputElement)) throw new Error("missing checkbox")
+  await act(async () => {
+    retry.click()
+  })
+  expect(clicks).toBe(2)
+  expect(retry.checked).toBe(true)
+  expect(
+    host.querySelector("[data-usage-limit]")?.hasAttribute("data-usage-limit-pending"),
+  ).toBe(true)
+  await act(async () => {
+    again()
+  })
+})
+
 it("says scheduling failed once the confirmed preference is on and nothing is auto-resuming", async () => {
   await act(async () => {
     root.render(

@@ -10,9 +10,10 @@ import "./usage-limit-card.css"
 /**
  * The usage-limit card: the title, when the limit ends, and the gateway
  * preference. The checkbox shows the choice at once and keeps it until the
- * refreshed view agrees, or snaps back when the command fails. The line
- * under the title follows the confirmed preference, so a choice that has
- * not landed does not read as a scheduling failure.
+ * refreshed view agrees, the command fails, or the command has settled and
+ * the confirmed preference is a different value. The line under the title
+ * follows the confirmed preference, so a choice that has not landed does
+ * not read as a scheduling failure.
  */
 export function UsageLimitCard({
   limit,
@@ -27,9 +28,14 @@ export function UsageLimitCard({
   onChange?: (enabled: boolean) => Promise<void> | void
 }) {
   const [pending, setPending] = useState<boolean | null>(null)
+  const [settled, setSettled] = useState(false)
   useEffect(() => {
-    if (pending !== null && pending === enabled) setPending(null)
-  }, [pending, enabled])
+    if (pending === null) return
+    if (pending === enabled || settled) {
+      setPending(null)
+      setSettled(false)
+    }
+  }, [pending, enabled, settled])
   const shown = pending ?? enabled
   const detail = usageLimitDetail(limit, enabled, nowMs ?? Date.now())
   return (
@@ -57,7 +63,11 @@ export function UsageLimitCard({
             }
             const next = event.target.checked
             setPending(next)
-            void Promise.resolve(onChange(next)).catch(() => setPending(null))
+            setSettled(false)
+            void Promise.resolve(onChange(next)).then(
+              () => setSettled(true),
+              () => setPending(null),
+            )
           }}
         />
         <span>{USAGE_LIMIT_TOGGLE}</span>

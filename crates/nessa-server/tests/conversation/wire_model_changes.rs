@@ -1,6 +1,12 @@
 //! A confirmed model effect survives the real application-to-product boundary.
 use super::{wire_view, ConversationModelChangeEffect, ProductRouteState};
 use crate::agents_test_support::StubAgentProbe;
+use crate::conversation::application::{
+    ConversationError, ConversationFuture, PreferenceReading, RecordedPreference, ScheduleActor,
+    ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
+};
+use crate::conversation::domain::ContinuationCause;
+use crate::conversation_test_support::mode_fixture;
 use crate::product::ProductDependencies;
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
 use nessa_auth::application::pairing::{OwnerPhonePurpose, OwnerPhonePurposeSource};
@@ -278,5 +284,245 @@ impl OwnerPhonePurposeSource for UnusedAuthority {
         _: &'a dyn Clock,
     ) -> PortFuture<'a, Option<OwnerPhonePurpose>> {
         panic!("wire enrichment must not classify credentials")
+    }
+}
+
+#[tokio::test]
+async fn a_schedule_store_failure_fails_the_conversation_view() {
+    let mut state = reading_state();
+    let projection = reading_projection();
+
+    let (unbound, _, _, _, _) = mode_fixture();
+    state.conversations = Some(Arc::new(unbound));
+    let wire = wire_view(&state, projection.read())
+        .await
+        .expect("no schedule database is preference off");
+    assert_eq!(
+        serde_json::to_value(wire).unwrap()["usageLimitAutoContinue"],
+        false
+    );
+    state
+        .conversations
+        .take()
+        .unwrap()
+        .shutdown()
+        .await
+        .unwrap();
+
+    let (off, _, _, _, _) = mode_fixture();
+    off.bind_scheduled_messages(Arc::new(ScheduleReads {
+        fail_preference: false,
+        fail_open: false,
+        enabled: false,
+    }));
+    state.conversations = Some(Arc::new(off));
+    let wire = wire_view(&state, projection.read())
+        .await
+        .expect("a stored off preference is off");
+    assert_eq!(
+        serde_json::to_value(wire).unwrap()["usageLimitAutoContinue"],
+        false
+    );
+    state
+        .conversations
+        .take()
+        .unwrap()
+        .shutdown()
+        .await
+        .unwrap();
+
+    let (preference, _, _, _, _) = mode_fixture();
+    preference.bind_scheduled_messages(Arc::new(ScheduleReads {
+        fail_preference: true,
+        fail_open: false,
+        enabled: true,
+    }));
+    state.conversations = Some(Arc::new(preference));
+    assert!(
+        wire_view(&state, projection.read()).await.is_err(),
+        "a preference read failure is not preference off"
+    );
+    state
+        .conversations
+        .take()
+        .unwrap()
+        .shutdown()
+        .await
+        .unwrap();
+
+    let (open, _, _, _, _) = mode_fixture();
+    open.bind_scheduled_messages(Arc::new(ScheduleReads {
+        fail_preference: false,
+        fail_open: true,
+        enabled: true,
+    }));
+    state.conversations = Some(Arc::new(open));
+    assert!(
+        wire_view(&state, projection.read()).await.is_err(),
+        "an open-row read failure does not drop auto-resuming"
+    );
+    state
+        .conversations
+        .take()
+        .unwrap()
+        .shutdown()
+        .await
+        .unwrap();
+}
+
+fn reading_state() -> ProductRouteState {
+    let unused = Arc::new(UnusedAuthority);
+    let mut state = ProductRouteState::new(
+        ResourceId::new("gateway").unwrap(),
+        OrganizationId::new("organization").unwrap(),
+        AudienceId::new("gateway").unwrap(),
+        ProductDependencies {
+            verifier: unused.clone(),
+            owner_phone_purpose: unused.clone(),
+            owner_phone_policy: Arc::new(
+                crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+            ),
+            owner_phone_receivers: None,
+            access: unused.clone(),
+            clock: unused.clone(),
+            policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
+            uptime_clock: unused,
+            agent_probe: Arc::new(StubAgentProbe::answering(false, false)),
+        },
+    );
+    let catalog: AgentsListResult = serde_json::from_value(json!({
+        "agents":[{"agent":"claude","defaultModel":"selected-model","models":[{
+            "modelId":"selected-model","displayName":"Selected model",
+            "maxContextWindowTokens":100000,"reasoning":false,"imageInput":false,
+            "approvalModes":[{"id":"ask","name":"Ask","description":"Ask first"}]
+        }]}],"environments":[],"commandHosts":[],
+        "nativeHooks":{"claude":"off","codex":"off"}
+    }))
+    .unwrap();
+    state.agents_catalog = Some(Arc::new(catalog));
+    state
+}
+
+fn reading_projection() -> Projection {
+    let mut projection = Projection::new(
+        "11111111-1111-4111-8111-111111111111".into(),
+        ConversationCapabilities::read_only(),
+        None,
+    );
+    projection.selection(ConversationSelectionView {
+        agent: AgentId::Claude,
+        model: "selected-model".into(),
+        approval_mode: ConversationApprovalMode::Ask,
+    });
+    projection
+}
+
+/// A schedule store whose reads fail, or return a stored preference.
+struct ScheduleReads {
+    fail_preference: bool,
+    fail_open: bool,
+    enabled: bool,
+}
+
+fn schedule_unavailable<'a, T: Send + 'static>() -> ConversationFuture<'a, T> {
+    Box::pin(async { Err(ConversationError::Unavailable) })
+}
+
+impl ScheduledMessageStore for ScheduleReads {
+    fn preference(&self) -> ConversationFuture<'_, PreferenceReading> {
+        if self.fail_preference {
+            return schedule_unavailable();
+        }
+        let enabled = self.enabled;
+        Box::pin(async move {
+            Ok(PreferenceReading {
+                enabled,
+                revision: 1,
+            })
+        })
+    }
+    fn set_preference(&self, _: bool, _: ScheduleActor, _: u64) -> ConversationFuture<'_, bool> {
+        schedule_unavailable()
+    }
+    fn open(&self, _: &str) -> ConversationFuture<'_, Option<ScheduledMessage>> {
+        if self.fail_open {
+            return schedule_unavailable();
+        }
+        Box::pin(async { Ok(None) })
+    }
+    fn accept(&self, _: ScheduleDraft, _: u64) -> ConversationFuture<'_, Option<ScheduledMessage>> {
+        schedule_unavailable()
+    }
+    fn move_due(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+        schedule_unavailable()
+    }
+    fn defer_claim(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+        schedule_unavailable()
+    }
+    fn cancel_open(
+        &self,
+        _: &str,
+        _: ContinuationCause,
+        _: ScheduleActor,
+        _: u64,
+    ) -> ConversationFuture<'_, bool> {
+        schedule_unavailable()
+    }
+    fn claim_due(&self, _: u64, _: usize) -> ConversationFuture<'_, Vec<ScheduledMessage>> {
+        schedule_unavailable()
+    }
+    fn next_due(&self, _: u64) -> ConversationFuture<'_, Option<u64>> {
+        schedule_unavailable()
+    }
+    fn begin_submit(&self, _: &str, _: u64) -> ConversationFuture<'_, bool> {
+        schedule_unavailable()
+    }
+    fn renew_fence(&self, _: &str, _: u64) -> ConversationFuture<'_, bool> {
+        schedule_unavailable()
+    }
+    fn release_submit(&self, _: &str) -> ConversationFuture<'_, ()> {
+        schedule_unavailable()
+    }
+    fn retire_unfenced_submissions(&self, _: u64) -> ConversationFuture<'_, usize> {
+        schedule_unavailable()
+    }
+    fn next_live_fence(&self, _: u64) -> ConversationFuture<'_, Option<u64>> {
+        schedule_unavailable()
+    }
+    fn record_preference_decision(
+        &self,
+        _: bool,
+        _: bool,
+        _: &[String],
+        _: ScheduleActor,
+        _: u64,
+    ) -> ConversationFuture<'_, RecordedPreference> {
+        schedule_unavailable()
+    }
+    fn settle_installed_preference(&self, _: u64) -> ConversationFuture<'_, bool> {
+        schedule_unavailable()
+    }
+    fn revert_installed_preference(
+        &self,
+        _: u64,
+        _: ScheduleActor,
+        _: u64,
+    ) -> ConversationFuture<'_, bool> {
+        schedule_unavailable()
+    }
+    fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
+        schedule_unavailable()
+    }
+    fn record_outcome(
+        &self,
+        _: &str,
+        _: ScheduleSettlement,
+        _: &str,
+        _: u64,
+    ) -> ConversationFuture<'_, ()> {
+        schedule_unavailable()
+    }
+    fn erase_conversation(&self, _: &str, _: u64) -> ConversationFuture<'_, ()> {
+        schedule_unavailable()
     }
 }
