@@ -15,7 +15,9 @@ use super::view::{
     ConversationTranscriptState, ConversationUnreadable, ConversationView, NativeHooksChoice,
     MAX_STRUCTURED_CONTENT_BYTES,
 };
-use nessa_sdk::application::agent_execution::permissions::CancellationOrigin;
+use nessa_sdk::application::agent_execution::permissions::{
+    ApprovalRuleReference, CancellationOrigin, DeclinedReview, PermissionCancellation,
+};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
@@ -32,9 +34,9 @@ use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{
-        PendingQuestion, PendingReview, PermissionEffect, PermissionReviewDeadline,
-        PermissionScope, RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineReason,
-        ReviewDeclineStage,
+        PendingQuestion, PendingReview, PermissionCancellationReasonView, PermissionEffect,
+        PermissionReviewDeadline, PermissionScope, PermissionStateView, RefusalOutcome,
+        ReviewDecline, ReviewDeclineId, ReviewDeclineReason, ReviewDeclineStage,
     },
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
@@ -283,6 +285,10 @@ pub struct Projection {
     /// execution runs on one process start, so its events agree. `None`
     /// marks saved events that disagree: no choice can be shown for them.
     execution_hooks: HashMap<String, Option<bool>>,
+    /// End-turn hook sentences waiting for the execution to be cancelled.
+    /// A finish that is not a cancel drops them: the provider completed the
+    /// turn, so the sentence must not say the hook stopped it.
+    pending_hook_stops: HashMap<String, Vec<(String, String)>>,
     /// The execution this replacement was told is active. It is who may be
     /// offered an interaction. It does not, by itself, decide that every
     /// other unfinished record was interrupted.
@@ -343,7 +349,45 @@ fn deadline_notice(effect: PermissionEffect, reason: &str) -> String {
     };
     format!("{verb}: {reason}")
 }
-fn decline_notice(decline: &ReviewDecline, delivery: ReviewDeclineStage) -> String {
+fn decline_reason(reason: ReviewDeclineReason) -> &'static str {
+    match reason {
+        ReviewDeclineReason::ToolNotReviewable => "That tool is not reviewable here.",
+        ReviewDeclineReason::UnreadableRequest => "The request could not be read safely.",
+        ReviewDeclineReason::UnusableOptions => "The request offered no usable choices.",
+    }
+}
+
+fn stopped_tool(name: Option<&str>) -> &str {
+    name.unwrap_or("the requested tool")
+}
+
+/// The sentence for a configured stop. The rule and the tool come from the
+/// event, not from the audit sink.
+fn stopping_rule_notice(decline: &ReviewDecline, rule: &ApprovalRuleReference) -> String {
+    let verb = match decline.outcome() {
+        RefusalOutcome::EndTurn => "stopped this turn",
+        // The decline requests the close. Cleanup can still be unconfirmed,
+        // and this projection does not see that confirmation. The confirmed
+        // transition is the session_closed audit, not this sentence.
+        RefusalOutcome::CloseSession => "is closing the session",
+        RefusalOutcome::Continue => "declined a tool review",
+    };
+    format!(
+        "Nessa {verb} before {} ran because rule {} (revision {}) refused it. {}",
+        stopped_tool(decline.declared()),
+        rule.rule_id(),
+        rule.revision(),
+        decline_reason(decline.reason()),
+    )
+}
+
+fn decline_notice(review: &DeclinedReview) -> String {
+    if let Some(rule) = review.rule() {
+        // The stop is published once, before the turn finishes. A later
+        // delivery stage stays in the audit. The sentence keeps the rule.
+        return stopping_rule_notice(review.decline(), rule);
+    }
+    let decline = review.decline();
     let target = decline
         .declared()
         .map(|tool| format!(" labeled {tool}"))
@@ -353,36 +397,73 @@ fn decline_notice(decline: &ReviewDecline, delivery: ReviewDeclineStage) -> Stri
         ReviewDeclineReason::UnreadableRequest => "the request could not be read safely",
         ReviewDeclineReason::UnusableOptions => "the request offered no usable choices",
     };
-    let delivery = match decline.outcome() {
-        RefusalOutcome::Continue => match delivery {
-            ReviewDeclineStage::Selected => {
-                "Nessa has not confirmed writing the refusal to the agent."
-            }
-            ReviewDeclineStage::WriteConfirmed => "",
-            ReviewDeclineStage::WriteUnconfirmed => {
-                "Nessa could not confirm writing the refusal to the agent."
-            }
-            ReviewDeclineStage::WriteNotAttempted => {
-                "Nessa did not attempt to write the refusal to the agent."
-            }
-        },
-        // The stop is published once, before the turn finishes. A later
-        // delivery stage would be output after that finish, so the write
-        // stays in the audit and the panel keeps the reason.
-        RefusalOutcome::EndTurn | RefusalOutcome::CloseSession => "",
-    };
-    let stopped = match decline.outcome() {
-        RefusalOutcome::Continue => "",
-        RefusalOutcome::EndTurn => " The turn stopped because of that refusal.",
-        RefusalOutcome::CloseSession => " The session closed because of that refusal.",
+    let delivery = match review.stage() {
+        ReviewDeclineStage::Selected => "Nessa has not confirmed writing the refusal to the agent.",
+        ReviewDeclineStage::WriteConfirmed => "",
+        ReviewDeclineStage::WriteUnconfirmed => {
+            "Nessa could not confirm writing the refusal to the agent."
+        }
+        ReviewDeclineStage::WriteNotAttempted => {
+            "Nessa did not attempt to write the refusal to the agent."
+        }
     };
     let mut text = format!("Nessa declined a tool review{target} because {reason}.");
     if !delivery.is_empty() {
         text.push(' ');
         text.push_str(delivery);
     }
-    text.push_str(stopped);
     text
+}
+
+/// A declined review. Its decimal is the decline id.
+const REVIEW_NOTICE: &str = "review";
+/// A hook that stopped the turn. Its decimal is the permission's, which is a
+/// different identity from a review decline even when the text matches.
+const HOOK_NOTICE: &str = "hook";
+/// A deadline that settled its review. Its decimal is the permission's.
+/// A declined review may use the same decimal; this kind keeps that sentence.
+const DEADLINE_NOTICE: &str = "deadline";
+
+fn same_notice(part: &ConversationPart, kind: &str, id: &str) -> bool {
+    part.kind == "local_notice" && part.notice_kind == kind && part.notice_id == id
+}
+
+/// A hook that ended the turn or closed the session. Continue stays quiet
+/// here: the turn is still running. An end-turn sentence is held until that
+/// execution is cancelled, and dropped if it finishes any other way. A
+/// review id that is not a notice id is skipped, because the client rejects
+/// the whole view for one bad notice id. The notice is a hook notice, so a
+/// declined review that already used the same decimal stays beside it.
+fn hook_stop_notice(
+    cancellation: &PermissionCancellation,
+) -> Option<(String, String, RefusalOutcome)> {
+    let PermissionStateView::Cancelled { reason } = cancellation.request().state() else {
+        return None;
+    };
+    let PermissionCancellationReasonView::Custom(custom) = reason.view() else {
+        return None;
+    };
+    let outcome = custom.hook_stop()?;
+    let id = ReviewDeclineId::new(cancellation.request().id().as_str()).ok()?;
+    let verb = match outcome {
+        RefusalOutcome::EndTurn => "stopped this turn",
+        RefusalOutcome::CloseSession => "closed the session",
+        RefusalOutcome::Continue => return None,
+    };
+    let tool = cancellation.input().name.as_str();
+    let tool = if tool.is_empty() {
+        "the requested tool"
+    } else {
+        tool
+    };
+    Some((
+        id.as_str().to_owned(),
+        format!(
+            "Nessa {verb} before {tool} ran because a hook refused it: {}.",
+            custom.explanation()
+        ),
+        outcome,
+    ))
 }
 // A provider report owns dispatched settlement. Before dispatch, the retained
 // terminal result owns automatic-attachment failure, including its primary cause
@@ -535,6 +616,7 @@ impl Projection {
             terminal_executions: HashSet::new(),
             tool_parts: HashMap::new(),
             execution_hooks: HashMap::new(),
+            pending_hook_stops: HashMap::new(),
             live_here: live_here.clone(),
             unfinished_at_fold,
             history_accepted,
@@ -1082,16 +1164,61 @@ impl Projection {
     }
 
     /// Render one observation from a validated committed SDK record.
+    /// Show held end-turn hook sentences once the execution is cancelled, and
+    /// drop them when it finishes any other way.
+    fn take_hook_stops(&mut self, id: &str, index: usize, cancelled: bool) {
+        let Some(pending) = self.pending_hook_stops.remove(id) else {
+            return;
+        };
+        if !cancelled {
+            return;
+        }
+        for (notice_id, text) in pending {
+            let already = self.view.messages[index]
+                .parts
+                .iter()
+                .any(|part| same_notice(part, HOOK_NOTICE, &notice_id));
+            if already {
+                continue;
+            }
+            let retained = self.view.messages[index].retained_text;
+            let available = (MAX_TEXT * 2).saturating_sub(retained);
+            let bounded = clipped(&text, available);
+            if bounded.len() != text.len() {
+                self.view.truncated = true;
+            }
+            let offset = self.view.messages[index].event_count.saturating_sub(1);
+            let part = ConversationPart {
+                message_id: None,
+                offset,
+                kind: "local_notice".into(),
+                text: bounded,
+                tool_id: String::new(),
+                notice_id,
+                notice_kind: HOOK_NOTICE.into(),
+            };
+            let message = &mut self.view.messages[index];
+            if message.parts.len() < 512 && message.retained_text + part.text.len() <= MAX_TEXT * 2
+            {
+                message.retained_text += part.text.len();
+                message.parts.push(part);
+            } else {
+                self.view.truncated = true;
+            }
+        }
+    }
+
     fn observe(&mut self, event: &ExecutionEvent) {
         let id = event.execution_id().as_str();
         let index = self.ensure_message(id);
         // Decided once, before this event changes anything: a notice is shown
         // for the deadline that settled its review, and only the first time.
         // The notice part is that record, so a replayed record shows it again.
-        // The review's id becomes the notice's, and a notice id is the decimal
-        // a review decline has; a saved history may hold any permission id, so
-        // one that is not a notice id shows no notice rather than a view the
-        // client refuses whole.
+        // The permission id becomes the notice's. A notice id is a decimal a
+        // review decline can use; a saved history may hold any permission id,
+        // so one that is not a notice id shows no notice rather than a view
+        // the client refuses whole. A hook notice and a declined-review
+        // notice use different kinds, so neither counts as this deadline.
         let deadline_notice_shown = match event.update() {
             ExecutionUpdate::DeadlineAnswered {
                 id: permission,
@@ -1102,9 +1229,10 @@ impl Projection {
                     && self.deadline_settled(id, permission.as_str(), |published| {
                         published.effect() == *effect && published.reason() == reason.as_str()
                     })
-                    && !self.view.messages[index].parts.iter().any(|part| {
-                        part.kind == "local_notice" && part.notice_id == permission.as_str()
-                    })
+                    && !self.view.messages[index]
+                        .parts
+                        .iter()
+                        .any(|part| same_notice(part, DEADLINE_NOTICE, permission.as_str()))
             }
             _ => false,
         };
@@ -1132,6 +1260,7 @@ impl Projection {
                 text: clipped(chunk.as_str(), available),
                 tool_id: String::new(),
                 notice_id: String::new(),
+                notice_kind: String::new(),
             }),
             // One part per tool call, where it was first seen: a call's later
             // updates change its `tools` entry, not the turn's parts.
@@ -1148,6 +1277,7 @@ impl Projection {
                     text: String::new(),
                     tool_id,
                     notice_id: String::new(),
+                    notice_kind: String::new(),
                 })
             }
             ExecutionUpdate::DeadlineAnswered {
@@ -1170,16 +1300,17 @@ impl Projection {
                         text: bounded,
                         tool_id: String::new(),
                         notice_id: permission.as_str().into(),
+                        notice_kind: DEADLINE_NOTICE.into(),
                     })
                 }
             }
-            ExecutionUpdate::ReviewDeclined(observation) => {
-                let notice_id = observation.id().as_str();
-                let text = decline_notice(observation.decline(), observation.stage());
+            ExecutionUpdate::ReviewDeclined(review) => {
+                let notice_id = review.id().as_str();
+                let text = decline_notice(review);
                 if let Some(position) = self.view.messages[index]
                     .parts
                     .iter()
-                    .position(|part| part.kind == "local_notice" && part.notice_id == notice_id)
+                    .position(|part| same_notice(part, REVIEW_NOTICE, notice_id))
                 {
                     let previous = self.view.messages[index].parts[position].text.len();
                     let budget =
@@ -1204,7 +1335,43 @@ impl Projection {
                         text: bounded,
                         tool_id: String::new(),
                         notice_id: notice_id.into(),
+                        notice_kind: REVIEW_NOTICE.into(),
                     })
+                }
+            }
+            ExecutionUpdate::PermissionCancelled(cancellation) => {
+                match hook_stop_notice(cancellation) {
+                    Some((notice_id, text, RefusalOutcome::EndTurn)) => {
+                        self.pending_hook_stops
+                            .entry(id.to_owned())
+                            .or_default()
+                            .push((notice_id, text));
+                        None
+                    }
+                    Some((notice_id, text, RefusalOutcome::CloseSession)) => {
+                        let already = self.view.messages[index]
+                            .parts
+                            .iter()
+                            .any(|part| same_notice(part, HOOK_NOTICE, &notice_id));
+                        if already {
+                            None
+                        } else {
+                            let bounded = clipped(&text, available);
+                            if bounded.len() != text.len() {
+                                self.view.truncated = true;
+                            }
+                            Some(ConversationPart {
+                                message_id: None,
+                                offset,
+                                kind: "local_notice".into(),
+                                text: bounded,
+                                tool_id: String::new(),
+                                notice_id,
+                                notice_kind: HOOK_NOTICE.into(),
+                            })
+                        }
+                    }
+                    Some((_, _, RefusalOutcome::Continue)) | None => None,
                 }
             }
             _ => None,
@@ -1231,7 +1398,9 @@ impl Projection {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
             }
             ExecutionUpdate::Finished(result) => {
-                self.view.messages[index].status = outcome(*result);
+                let status = outcome(*result);
+                self.view.messages[index].status = status;
+                self.take_hook_stops(id, index, status == ConversationMessageStatus::Cancelled);
             }
             ExecutionUpdate::QuestionAsked { .. } | ExecutionUpdate::PermissionRequested { .. } => {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
@@ -1242,8 +1411,8 @@ impl Projection {
                     self.view.messages[index].status = ConversationMessageStatus::Running;
                 }
             }
-            ExecutionUpdate::ReviewDeclined(observation) => {
-                if observation.decline().outcome() == RefusalOutcome::Continue {
+            ExecutionUpdate::ReviewDeclined(review) => {
+                if review.decline().outcome() == RefusalOutcome::Continue {
                     self.view.messages[index].status = ConversationMessageStatus::Running;
                 }
             }

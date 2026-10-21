@@ -1,7 +1,7 @@
 //! A stopping decline names the rule that stopped it, and a continue decline names none.
 use nessa_sdk::application::agent_execution::permissions::{
-    ActionContext, ApprovalRuleReference, CancellationOrigin, PermissionAnswerDelivery,
-    ReviewDeclineRecord,
+    ActionContext, ApprovalRuleReference, CancellationOrigin, DeclinedReview,
+    PermissionAnswerDelivery, ReviewDeclineRecord,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError, executions::ExecutionController,
@@ -10,7 +10,7 @@ use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome},
     permissions::{
         PermissionCancellationReason, RefusalOutcome, ReviewDecline, ReviewDeclineId,
-        ReviewDeclineReason,
+        ReviewDeclineReason, ReviewDeclineStage,
     },
     sessions::ExecutionSessionId,
 };
@@ -58,6 +58,33 @@ fn a_decline_record_rejects_an_outcome_that_disagrees_with_its_rule() {
             Err(AgentError::InvalidInput(_))
         ));
     }
+}
+
+#[test]
+fn a_declined_review_event_uses_the_same_rule_pairing() {
+    let decline = |outcome| {
+        ReviewDecline::new(
+            Some("Bash"),
+            ReviewDeclineReason::ToolNotReviewable,
+            outcome,
+        )
+    };
+    let id = ReviewDeclineId::new("1").unwrap();
+    assert!(DeclinedReview::selected(id.clone(), decline(RefusalOutcome::Continue), None).is_ok());
+    let stopped =
+        DeclinedReview::selected(id.clone(), decline(RefusalOutcome::EndTurn), Some(rule()))
+            .unwrap();
+    assert_eq!(stopped.rule().unwrap().rule_id(), "refuse-shell");
+    assert_eq!(stopped.rule().unwrap().revision(), "1");
+    let advanced = stopped.advance(ReviewDeclineStage::WriteConfirmed).unwrap();
+    assert_eq!(advanced.rule().unwrap().granted_by().principal_id(), "host");
+    assert_eq!(advanced.decline(), stopped.decline());
+    assert!(
+        DeclinedReview::selected(id.clone(), decline(RefusalOutcome::Continue), Some(rule()))
+            .is_err()
+    );
+    assert!(DeclinedReview::selected(id.clone(), decline(RefusalOutcome::EndTurn), None).is_err());
+    assert!(DeclinedReview::selected(id, decline(RefusalOutcome::CloseSession), None).is_err());
 }
 
 #[test]

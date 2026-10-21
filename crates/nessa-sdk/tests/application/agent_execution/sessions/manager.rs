@@ -151,6 +151,7 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
         })),
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
+        open_fresh_context: AtomicBool::new(false),
     });
     manager.begin_dispatch(&active_id);
     let waiting = manager.clone();
@@ -253,6 +254,7 @@ async fn measure_growing_history_message_commit_latency() {
         })),
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
+        open_fresh_context: AtomicBool::new(false),
     };
     manager.begin_dispatch(&active_id);
     let mut latencies = Vec::new();
@@ -408,6 +410,7 @@ async fn measure_save_cost_as_history_grows() {
             })),
             dispatched: RwLock::new(HashMap::new()),
             attachment: Arc::new(AttachmentLease::empty()),
+            open_fresh_context: AtomicBool::new(false),
         };
         manager.begin_dispatch(&active_id);
         let mut saves = Vec::new();
@@ -497,6 +500,7 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
         })),
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
+        open_fresh_context: AtomicBool::new(false),
     };
     manager.begin_dispatch(&active_id);
     for _ in 0..7 {
@@ -732,6 +736,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         })),
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
+        open_fresh_context: AtomicBool::new(false),
     };
     manager.begin_dispatch(&active_id);
     (manager, lease, active_id)
@@ -2376,4 +2381,46 @@ async fn evidence_preparation_preserves_retained_refusal_across_failed_save_and_
         manager.prepare(&RecordOnlyProvider).await,
         Err(AgentError::Storage(StorageError::IdentityMismatch))
     ));
+}
+
+#[tokio::test]
+async fn lease_record_preparation_preserves_a_selected_fresh_context() {
+    struct MovedRuntime;
+    impl AgentProvider for MovedRuntime {
+        fn harness_host_identity(
+            &self,
+        ) -> crate::application::agent_execution::providers::HarnessHostIdentity<'_> {
+            panic!("evidence preparation does not acquire a host")
+        }
+        fn identity(&self) -> ProviderIdentity {
+            ProviderIdentity::new("fixture", "model", "new-runtime-context").unwrap()
+        }
+        fn capabilities(
+            &self,
+        ) -> &crate::domain::effective_capabilities::value_objects::EffectiveCapabilities {
+            panic!("evidence preparation does not inspect capabilities")
+        }
+        fn open(
+            &self,
+            _: ProviderOpenRequest,
+        ) -> crate::application::agent_execution::providers::ProviderOpenFuture<'_> {
+            panic!("evidence preparation does not open a provider")
+        }
+    }
+    let (mut manager, lease, _) = manager(0).await;
+    let before = lease.load().await.unwrap().snapshot().unwrap().clone();
+    assert_eq!(
+        manager.prepare(&MovedRuntime).await.unwrap(),
+        ProviderContext::Absent
+    );
+    assert!(manager.open_fresh_context.load(Ordering::Relaxed));
+    manager
+        .prepare_for_lease_record(&RecordOnlyProvider)
+        .await
+        .unwrap();
+    assert!(
+        manager.open_fresh_context.load(Ordering::Relaxed),
+        "a cleanup-only write cannot authorize restoring the old native context"
+    );
+    assert_eq!(lease.load().await.unwrap().snapshot().unwrap(), &before);
 }

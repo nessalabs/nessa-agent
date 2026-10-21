@@ -178,8 +178,14 @@ function streams(kind, timing = "after-open-answer") {
 
 for (const kind of ["view", "list", "events"]) {
   for (const timing of ["before-open-answer", "after-open-answer"]) {
-    for (const reason of ["source_closed", "disconnected", "lagging", "invalid_frame"]) {
-      test(`${kind}: ${reason} ${timing} retires, resumes and rejects stale callbacks`, async () => {
+    for (const reason of [
+      "source_closed",
+      "disconnected",
+      "lagging",
+      "invalid_frame",
+      "too_large",
+    ]) {
+      test(`${kind}: ${reason} ${timing} retires, classifies reopening and rejects stale callbacks`, async () => {
         const f = streams(kind, timing)
         const pending = f.open()
         await f.opening
@@ -189,10 +195,11 @@ for (const kind of ["view", "list", "events"]) {
         f.release()
         await pending
         assert.equal(f.held().subscription, null)
-        assert.equal(f.held().lost, true)
+        const resumable = ["source_closed", "disconnected", "lagging"].includes(reason)
+        assert.equal(f.held().lost, resumable)
         assert.equal(f.subject.held(), 0)
         assert.deepEqual(f.closed, timing === "before-open-answer" ? [0] : [])
-        const failed = reason === "invalid_frame" ? 1 : 0
+        const failed = resumable ? 0 : 1
         assert.equal(f.subject.failures.length, failed)
         await f.open()
         assert.equal(f.held().subscription, f.calls[1].handle)

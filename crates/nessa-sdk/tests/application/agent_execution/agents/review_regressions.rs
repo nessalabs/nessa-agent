@@ -1217,11 +1217,18 @@ async fn custom_storage_cannot_cancel_a_review_by_a_deadline_it_did_not_publish(
 }
 
 #[tokio::test]
-async fn custom_storage_cannot_give_a_review_and_a_decline_one_identity() {
-    // The decline's identity, whether it comes before the review, and
-    // whether the review shares it.
-    let cases = [("8", false, false), ("7", false, true), ("7", true, true)];
-    for (decline, before, shared) in cases {
+async fn custom_storage_keeps_a_review_beside_a_decline_with_the_same_decimal() {
+    // Decline id, whether that decline is recorded before the review, whether
+    // the permission request itself is repeated, and whether restoration is
+    // corrupt. A permission id and a decline id are different identities, so
+    // the same decimal restores. One permission requested twice does not.
+    let cases = [
+        ("8", false, false, false),
+        ("7", false, false, false),
+        ("7", true, false, false),
+        ("8", false, true, true),
+    ];
+    for (decline, before, repeated_review, corrupt) in cases {
         let (agent, _, storage) = probe(false).await;
         agent
             .invoke(input("saved-review"), Submitter::owner(actor()))
@@ -1286,15 +1293,22 @@ async fn custom_storage_cannot_give_a_review_and_a_decline_one_identity() {
                 options,
                 deadline: None,
             }];
-            let declined = ExecutionUpdate::ReviewDeclined(ReviewDeclineObservation::selected(
-                ReviewDeclineId::new(decline).unwrap(),
-                ReviewDecline::new(
-                    Some("Write"),
-                    ReviewDeclineReason::ToolNotReviewable,
-                    RefusalOutcome::Continue,
-                ),
-            ));
-            events.insert(if before { 0 } else { 1 }, declined);
+            let declined = ExecutionUpdate::ReviewDeclined(
+                DeclinedReview::selected(
+                    ReviewDeclineId::new(decline).unwrap(),
+                    ReviewDecline::new(
+                        Some("Write"),
+                        ReviewDeclineReason::ToolNotReviewable,
+                        RefusalOutcome::Continue,
+                    ),
+                    None,
+                )
+                .unwrap(),
+            );
+            if repeated_review {
+                events.insert(0, events[0].clone());
+            }
+            events.insert(if before { 0 } else { events.len() }, declined);
             events.push(ExecutionUpdate::PermissionCancelled(cancellation));
             for (at, update) in events.into_iter().enumerate() {
                 saved.invocations[0]
@@ -1312,13 +1326,15 @@ async fn custom_storage_cannot_give_a_review_and_a_decline_one_identity() {
             storage.manager().await,
         )
         .await;
-        if shared {
+        if corrupt {
             assert!(
                 matches!(
                     &restored,
-                    Err(AgentError::Storage(StorageError::Corrupt(_)))
+                    Err(AgentError::Storage(StorageError::Corrupt(message)))
+                        if message.contains("permission identity is repeated")
                 ),
-                "a review and a decline restored under one identity"
+                "one permission id restored as two reviews: {:?}",
+                restored.as_ref().err()
             );
         } else {
             assert!(restored.is_ok(), "{:?}", restored.err());

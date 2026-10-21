@@ -103,6 +103,7 @@ pub(super) enum Shape {
     Deadline,
     DeadlineNotice,
     Decline,
+    StoppingRule,
     Ask,
     AskedQuestions,
     Asked,
@@ -296,6 +297,11 @@ impl Shape {
             (Decline, "id") => Text(20),
             (Decline, "tool") => Text(128),
             (Decline, "reason" | "delivery" | "outcome") => Text(32),
+            (Decline, "rule") => StoppingRule,
+            (StoppingRule, "rule_id" | "revision") => Text(
+                crate::application::agent_execution::permissions::ActionContext::MAX_IDENTITY_BYTES,
+            ),
+            (StoppingRule, "granted_by") => Actor,
             (Error, "BeforeInvocationHook") => Generic,
             (Error, "Provider") => ProviderError,
             (Error, "AuthenticationRequired") => AuthenticationError,
@@ -367,6 +373,11 @@ impl Shape {
                 "Io" | "Corrupt" | "ChangesRequired" | "Unresolved" | "ShutdownFailures"
             ),
             StorageChildren => matches!(key, "read" | "runtime"),
+            Decline => matches!(
+                key,
+                "id" | "tool" | "reason" | "outcome" | "delivery" | "rule"
+            ),
+            StoppingRule => matches!(key, "rule_id" | "revision" | "granted_by"),
             _ => true,
         }
     }

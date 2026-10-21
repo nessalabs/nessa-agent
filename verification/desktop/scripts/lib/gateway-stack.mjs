@@ -73,11 +73,6 @@ export async function panelTarget(stack, fields = {}) {
 
 const recorder = join(repoRoot, "scripts/mcp-test-server/acp-recorder.mjs")
 
-/** `argv` with `acp-recorder.mjs` writing `logPath` in front of it. */
-function recorded(logPath, argv) {
-  return [process.execPath, recorder, logPath, ...argv]
-}
-
 /**
  * How the gateway starts the scripted agent as `agent`'s runtime, and how it
  * starts `mcptest`. `tool` is the recorded-frame default; `scenario` is a
@@ -88,14 +83,9 @@ function recorded(logPath, argv) {
  */
 export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
   if (!scenario && !tool) throw new Error("a scripted launch names a tool or a scenario")
-  const argv = [
-    process.execPath,
-    join(repoRoot, "scripts/mcp-test-server/scripted-agent.mjs"),
-    agent,
-  ]
-  if (scenario) argv.push("--scenario", scenario)
-  else argv.push(tool)
-  let commandArgv = argv
+  const script = join(repoRoot, "scripts/mcp-test-server/scripted-agent.mjs")
+  const semanticArgs = scenario ? [agent, "--scenario", scenario] : [agent, tool]
+  let stagedRuntime = [script]
   let mcp = { command: process.execPath, args: [serverScript] }
   if (evidence) {
     mkdirSync(evidence, { recursive: true })
@@ -103,14 +93,21 @@ export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
     const mcpLog = join(evidence, "mcp.jsonl")
     writeFileSync(acp, "")
     writeFileSync(mcpLog, "")
-    commandArgv = recorded(acp, argv)
+    stagedRuntime = [recorder, acp, process.execPath, script]
     mcp = {
       command: process.execPath,
       args: [recorder, mcpLog, process.execPath, serverScript],
     }
   }
+  const argv = [process.execPath, ...stagedRuntime, ...semanticArgs]
   return {
-    command: { argv: commandArgv, model: MODELS[agent], path: null },
+    command: {
+      argv,
+      stagedRuntime,
+      semanticArgs,
+      model: MODELS[agent],
+      path: null,
+    },
     mcp,
     signedOut: true,
   }
@@ -155,6 +152,8 @@ export async function startGatewayStack(
     port: await freePort(),
     instance,
     agentArgv: command.argv,
+    stagedRuntime: command.stagedRuntime,
+    semanticArgs: command.semanticArgs,
     model: command.model,
     path: command.path,
     mcpServer: launch?.mcp ?? { command: process.execPath, args: [serverScript] },

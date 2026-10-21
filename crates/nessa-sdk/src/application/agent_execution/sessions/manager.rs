@@ -41,7 +41,10 @@ use std::{
     fmt,
     future::poll_fn,
     panic::{catch_unwind, AssertUnwindSafe},
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
     task::Poll,
     time::Duration,
 };
@@ -246,6 +249,12 @@ pub struct SessionManager {
     // Imported history never reconstructs this live authority.
     dispatched: RwLock<HashMap<ExecutionId, ObservationAuthority>>,
     attachment: Arc<AttachmentLease>,
+    // Set by prepare when the fingerprint differs and this provider would
+    // resume the saved native session. attach opens a new one and saves the
+    // new fingerprint with that session's id, in one write. In memory only:
+    // a crash before that save leaves the durable identity unchanged, so the
+    // next open takes the same path (docs/design/restoration-fingerprint.md, S6).
+    open_fresh_context: AtomicBool,
 }
 #[derive(Clone, Copy)]
 enum ObservationAuthority {
@@ -376,6 +385,7 @@ impl SessionManager {
             evidence: Arc::new(Mutex::new(Evidence::default())),
             dispatched: RwLock::new(HashMap::new()),
             attachment: Arc::new(AttachmentLease::empty()),
+            open_fresh_context: AtomicBool::new(false),
         })
     }
     /// Returns the local conversation key used to acquire storage access.
@@ -651,27 +661,32 @@ impl SessionManager {
             saved.into_checked(&self.id).map_err(AgentError::Storage)?;
         let compacted = saved;
         let identity = provider.identity();
-        // The context fingerprint binds a saved provider context, so it must
-        // match only where that context is restored. A history whose saved
-        // context is not restored here (none was saved, or it was saved
-        // where this provider does not start, such as another worker) goes
-        // on under this provider's fingerprint: the same provider and model.
+        // Provider preparation follows the restoration-fingerprint table. A
+        // lease-only cleanup record neither changes provider identity nor
+        // cancels an already selected fresh-context attachment.
+        if preparation == Preparation::Provider {
+            self.open_fresh_context.store(false, Ordering::Relaxed);
+        }
         let moved = match (&compacted, preparation) {
             (Some(snapshot), Preparation::Provider) if snapshot.provider != identity => {
-                let restores = snapshot
-                    .provider_context
-                    .recorded()
-                    .is_some_and(|saved| provider.restores_saved_context(saved));
-                if restores
-                    || snapshot.provider.name() != identity.name()
+                if snapshot.provider.name() != identity.name()
                     || snapshot.provider.model_id() != identity.model_id()
                 {
                     return Err(AgentError::Storage(StorageError::IdentityMismatch));
                 }
-                Some(SessionChange::ProviderIdentityChanged {
-                    before: snapshot.provider.clone(),
-                    after: identity.clone(),
-                })
+                let restores = snapshot
+                    .provider_context
+                    .recorded()
+                    .is_some_and(|saved| provider.restores_saved_context(saved));
+                if restores {
+                    self.open_fresh_context.store(true, Ordering::Relaxed);
+                    None
+                } else {
+                    Some(SessionChange::ProviderIdentityChanged {
+                        before: snapshot.provider.clone(),
+                        after: identity.clone(),
+                    })
+                }
             }
             _ => None,
         };
@@ -727,12 +742,19 @@ impl SessionManager {
                 .next_for(&save_generation, 1)
                 .map_err(AgentError::Storage)?;
         }
-        let context = observed
-            .snapshot
-            .as_ref()
-            .expect("prepared session")
-            .provider_context
-            .clone();
+        // S6 returns no recorded context so the lifecycle opens as an initial
+        // attachment. The evidence keeps the saved context until attach
+        // replaces it: clearing it to Absent would fail once a turn has run.
+        let context = if self.open_fresh_context.load(Ordering::Relaxed) {
+            ProviderContext::Absent
+        } else {
+            observed
+                .snapshot
+                .as_ref()
+                .expect("prepared session")
+                .provider_context
+                .clone()
+        };
         *self.evidence.lock().await = Evidence {
             save_generation: Some(save_generation),
             event_usage: HashMap::new(),
@@ -752,18 +774,23 @@ impl SessionManager {
         // Held until this returns: every path that keeps what the open
         // launched arms the lease first, so an observer never sees neither.
         let _open = self.attachment.opening();
-        // Saved context is restored only where it was saved: a provider that
-        // starts elsewhere opens new context, recorded in its place below.
-        let restore = self
-            .evidence
-            .lock()
-            .await
-            .observed()
-            .expect("prepared session evidence")
-            .provider_context
-            .recorded()
-            .cloned()
-            .filter(|saved| provider.restores_saved_context(saved));
+        // Saved context is restored only where it was saved and the durable
+        // fingerprint still matches. A context-only mismatch (S6) and a
+        // provider that starts elsewhere open new context, recorded below.
+        let fresh = self.open_fresh_context.load(Ordering::Relaxed);
+        let restore = if fresh {
+            None
+        } else {
+            self.evidence
+                .lock()
+                .await
+                .observed()
+                .expect("prepared session evidence")
+                .provider_context
+                .recorded()
+                .cloned()
+                .filter(|saved| provider.restores_saved_context(saved))
+        };
         let opening = catch_unwind(AssertUnwindSafe(|| {
             provider.open(ProviderOpenRequest::new(
                 self.id.clone(),
@@ -903,16 +930,33 @@ impl SessionManager {
         // while open was pending cannot be overwritten by the pre-open view.
         let save_result = {
             let mut evidence = self.evidence.lock().await;
+            let mut changes = Vec::new();
+            // The new fingerprint and the new session id are one save. Writing
+            // the fingerprint first would make a crash resume the old session
+            // under the new fingerprint.
+            if self.open_fresh_context.load(Ordering::Relaxed) {
+                let current = provider.identity();
+                let saved = evidence.observed().expect("prepared session evidence");
+                if saved.provider != current {
+                    changes.push(SessionChange::ProviderIdentityChanged {
+                        before: saved.provider.clone(),
+                        after: current,
+                    });
+                }
+            }
             let before = evidence
                 .observed()
                 .expect("prepared session evidence")
                 .provider_context
                 .clone();
             let after = ProviderContext::Recorded(session.id().clone());
-            let recorded = if before == after {
+            if before != after {
+                changes.push(SessionChange::ProviderContext { before, after });
+            }
+            let recorded = if changes.is_empty() {
                 Ok(())
             } else {
-                evidence.record(vec![SessionChange::ProviderContext { before, after }])
+                evidence.record(changes)
             };
             match recorded {
                 Err(error) => Err(error),
@@ -941,6 +985,9 @@ impl SessionManager {
                 },
             ));
         }
+        // Cleared only after the save. A failed save retries this path
+        // instead of resuming the saved session under the new fingerprint.
+        self.open_fresh_context.store(false, Ordering::Relaxed);
         Ok(AttachedProvider { session, events })
     }
     pub(crate) fn attachment(&self) -> Arc<AttachmentLease> {

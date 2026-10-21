@@ -21,7 +21,7 @@ const clock: GatewayClock = { now: () => 1_000_000, after: () => () => {} }
 async function ready() {
   const gateway = fakeGateway()
   gateway.rows.set("a", row("a"))
-  gateway.views.set("a", view("a", { runtime }))
+  gateway.views.set("a", view("a", { model: old, runtime }))
   const source = gatewaySource({
     connect: async () => gateway.client,
     clock,
@@ -170,7 +170,10 @@ describe("same-provider gateway control", () => {
     const { gateway, source } = await ready()
     const other = "claude-fable-5-1"
     gateway.once("setModel", () => {
-      gateway.views.set("a", view("a", { runtime: { ...runtime, model: other } }))
+      gateway.views.set(
+        "a",
+        view("a", { model: other, runtime: { ...runtime, model: other } }),
+      )
       return Promise.resolve({
         requestId: "request",
         model: next.modelId,
@@ -225,7 +228,13 @@ describe("same-provider gateway control", () => {
   })
   it("keeps recovery required when the current source model is unknown, before any native control", async () => {
     const { gateway, source } = await ready()
-    gateway.views.set("a", view("a", { runtime: undefined }))
+    gateway.views.set(
+      "a",
+      view("a", {
+        model: "not-in-the-catalogue",
+        runtime: { ...runtime, model: "not-in-the-catalogue" },
+      }),
+    )
     gateway.publish("a")
     for (let i = 0; i < 20; i++) await Promise.resolve()
     await expect(source.setModel("a", next, "request", "person")).rejects.toMatchObject({
@@ -233,6 +242,38 @@ describe("same-provider gateway control", () => {
       uncertain: true,
     })
     expect(gateway.count("setModel")).toBe(0)
+    source.dispose()
+  })
+  it("does not send a model change when the view names no model and no agent is open", async () => {
+    const { gateway, source } = await ready()
+    gateway.views.set("a", view("a", { runtime: undefined, model: "" }))
+    gateway.publish("a")
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    await expect(source.setModel("a", next, "request", "person")).rejects.toMatchObject({
+      reason: "not-supported",
+      uncertain: false,
+      diagnostic: { code: "conversation_configuration_changed" },
+    })
+    expect(gateway.count("setModel")).toBe(0)
+    source.dispose()
+  })
+  it("sends a model change for the conversation's model when no agent is open", async () => {
+    const { gateway, source } = await ready()
+    gateway.views.set("a", view("a", { runtime: undefined, model: old }))
+    gateway.publish("a")
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    gateway.once("setModel", () =>
+      Promise.resolve({
+        requestId: "request",
+        model: next.modelId,
+        approvalMode: "ask",
+        effect: "nextTurn",
+      }),
+    )
+    await expect(source.setModel("a", next, "request", "person")).resolves.toMatchObject({
+      model: next.modelId,
+    })
+    expect(gateway.count("setModel")).toBe(1)
     source.dispose()
   })
 })

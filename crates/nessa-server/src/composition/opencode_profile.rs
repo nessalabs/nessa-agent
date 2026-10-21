@@ -217,6 +217,7 @@ impl OpenCodeRuntimePolicy {
     fn runtime(&self, command: ExecutableUseSnapshot, args: Vec<String>) -> AgentRuntime {
         AgentRuntime {
             command,
+            staged_runtime: Vec::new(),
             args,
             model: self.model.clone(),
             tools_enabled: self.tools_enabled,

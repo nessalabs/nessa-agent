@@ -428,11 +428,24 @@ fn declined(record: &ReviewDeclineRecord) -> Value {
             "grantedBy":actor(rule.granted_by()),
         }),
     };
+    // The turn was running when the tool was about to run. Continue leaves it
+    // running. An end-turn has already finished that execution locally, so
+    // the record says stopped. A close-session is the requested close:
+    // cleanup can still be unconfirmed when this record is written, and the
+    // confirmed transition is the separate session_closed record. The
+    // provider's later result is a different record.
+    let after = match decline.outcome() {
+        RefusalOutcome::Continue => "running",
+        RefusalOutcome::EndTurn => "stopped",
+        RefusalOutcome::CloseSession => "closing",
+    };
     json!({
         "kind":"review_declined",
         "sessionId":record.session_id().as_str(),
         "executionId":record.execution_id().as_str(),
         "declineId":record.id().as_str(),
+        "before":"running",
+        "after":after,
         "declaredTool":decline.declared(),
         "reason":match decline.reason() {
             ReviewDeclineReason::ToolNotReviewable => "tool_not_reviewable",
