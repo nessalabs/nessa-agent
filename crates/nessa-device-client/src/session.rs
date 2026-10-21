@@ -331,7 +331,9 @@ impl FollowedConversation {
 
 /// One admitted held-file fetch. Status and binding selection match a refresh.
 /// A local match asks no status. An authority refusal, including a handshake
-/// that refuses before a fetch exists, keeps its recheck.
+/// that refuses before a fetch exists, keeps its recheck. Any other dial or
+/// handshake failure except a stop keeps that failure with the initial status
+/// and does not ask again.
 #[derive(Debug)]
 pub struct SessionArtifact {
     initial: Option<SessionStatus>,
@@ -349,7 +351,8 @@ impl SessionArtifact {
         self.selection_failure
     }
     /// The fetch, absent when status or binding selected no reader.
-    /// `Err` is the handshake refusal, kept with [`Self::recheck`].
+    /// `Err` is a dial or handshake failure. An authority refusal is kept
+    /// with [`Self::recheck`]. Any other failure has no recheck.
     pub fn fetched(&self) -> Option<&Result<ArtifactFetch, ReadFailure>> {
         self.fetched.as_ref()
     }
@@ -1419,9 +1422,11 @@ impl NativeSession {
     /// including its purge, and nothing is fetched. A gateway authority refusal
     /// asks status again, as a refused catalogue read does. That includes a product
     /// handshake that refuses, and a refusal that settled before a later stop.
-    /// A stop the fetch itself observed does not ask. A stop during the
-    /// product handshake is [`SessionFailure::Stopped`], as a stop before
-    /// the fetch starts is.
+    /// A stop the fetch itself observed does not ask. A dial or handshake
+    /// that fails as `Away`, `Unreachable`, `Protocol`, or any other read
+    /// failure keeps that failure beside the initial status and does not ask
+    /// again. A stop during the product handshake is
+    /// [`SessionFailure::Stopped`], as a stop before the fetch starts is.
     pub fn fetch_artifact(
         &self,
         stamp: &PhoneStamp,
@@ -1498,7 +1503,14 @@ impl NativeSession {
                 });
             }
             Err(ReadFailure::Stopped) => return Err(SessionFailure::Stopped),
-            Err(error) => return Err(SessionFailure::Cache(error)),
+            Err(error) => {
+                return Ok(SessionArtifact {
+                    initial: Some(status),
+                    selection_failure: None,
+                    fetched: Some(Err(error)),
+                    recheck: None,
+                });
+            }
         };
         let outcome = fetched.outcome();
         let recheck = if artifact_authority_refused(outcome) {

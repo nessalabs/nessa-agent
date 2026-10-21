@@ -358,6 +358,13 @@ impl Fixture {
                     let _ = channel.receive_envelope();
                     continue;
                 }
+                if matches!(reply, Reply::DropProduct) {
+                    assert!(matches!(
+                        wire::decode_request(&channel.receive_envelope().unwrap()).unwrap(),
+                        NativePairingRequest::OpenProduct
+                    ));
+                    continue;
+                }
                 if matches!(reply, Reply::ReadRefused) {
                     assert!(matches!(
                         wire::decode_request(&channel.receive_envelope().unwrap()).unwrap(),
@@ -457,7 +464,10 @@ impl Fixture {
                             &DevicePairingStatus::Claimed(Box::new(ended)),
                         )
                     }
-                    Reply::Product | Reply::ReadRefused | Reply::HoldHandshake => unreachable!(),
+                    Reply::Product
+                    | Reply::ReadRefused
+                    | Reply::HoldHandshake
+                    | Reply::DropProduct => unreachable!(),
                     Reply::WrongPublic => {
                         wire::encode_owner_phone_recovery(request_id, digest, public, &status)
                     }
@@ -488,6 +498,8 @@ enum Reply {
     ReadRefused,
     /// Accept the product handshake and hold it until the client stops.
     HoldHandshake,
+    /// Accept the product open and drop the connection before a session exists.
+    DropProduct,
     WrongDisclosure,
     WrongPublic,
     WrongId,
@@ -931,6 +943,34 @@ impl Drop for ReleaseHeld {
     fn drop(&mut self) {
         self.0.release();
     }
+}
+
+#[test]
+fn an_artifact_dial_failure_keeps_the_initial_status() {
+    let fixture = Fixture::new(Mode::Good);
+    let parent = fixture.parent();
+    let peer = fixture.peer(vec![Reply::Active, Reply::Active, Reply::DropProduct]);
+    captured(parent.status().unwrap());
+    let stamp = parent.publication().unwrap();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let output = fixture.root.path().join("private/missing-held.bin");
+    let request = ArtifactRequest::new(
+        &conversation,
+        "sha256:fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+        "application/octet-stream",
+        2,
+        &output,
+    );
+    let admitted = parent
+        .fetch_artifact(&stamp, &request, ReadStop::new())
+        .unwrap();
+    assert!(admitted.initial().is_some());
+    assert!(matches!(
+        admitted.fetched().unwrap().as_ref().unwrap_err(),
+        ReadFailure::Unreachable | ReadFailure::Protocol | ReadFailure::Away
+    ));
+    assert!(admitted.recheck().is_none());
+    peer.join().unwrap();
 }
 
 #[test]

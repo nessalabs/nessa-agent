@@ -866,8 +866,9 @@ impl From<ArtifactFileStep> for NativeArtifactFileStep {
 
 /// Initial status, selection, held-file fetch, and optional refusal recheck.
 /// A local match has no initial status. A terminal status or a connector
-/// failure that selected no reader has no fetch. A handshake refusal is
-/// [`Self::failure`], kept with [`Self::recheck`].
+/// failure that selected no reader has no fetch. A dial or handshake
+/// failure is [`Self::failure`]. An authority refusal is kept with
+/// [`Self::recheck`]; any other failure has no recheck.
 #[derive(uniffi::Object)]
 pub struct NativeArtifactAdmission {
     value: SessionArtifact,
