@@ -411,6 +411,25 @@ fn a_budget_that_cancels_a_range_is_unreachable_and_a_stop_stays_stopped() {
 }
 
 #[test]
+fn a_settled_refusal_survives_a_later_stop() {
+    let stop = ReadStop::new();
+    let ending = running(stop.clone());
+    let fault = ArtifactFault::progress(ArtifactFaultKind::Gateway(ReadFailure::Refused), 4, 1);
+    stop.stop();
+    let kept = super::classify_artifact_fault(fault, &stop, &ending);
+    assert_eq!(
+        kept.kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Refused)
+    );
+    assert_eq!(kept.reached(), 4);
+    assert_eq!(kept.resumed_from(), 1);
+    assert_eq!(
+        super::dial_failure(ReadFailure::Refused, &stop, &ending, false),
+        ReadFailure::Refused
+    );
+}
+
+#[test]
 fn a_spent_budget_is_unreachable_and_an_explicit_stop_stays_stopped() {
     let identity = nessa_auth::adapters::pairing::NativeIdentity::generate(
         &mut nessa_auth::adapters::pairing::OsEntropy,
@@ -488,6 +507,43 @@ fn a_stop_does_not_publish_a_local_match() {
         local_held_file(&request)
     });
     assert_eq!(stopped, Err(ReadFailure::Stopped));
+}
+
+#[test]
+fn a_settled_local_fault_survives_a_later_stop() {
+    let bytes = b"ab";
+    let conversation = conversation();
+    let digest = digest_of(bytes);
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("held.bin");
+    fs::create_dir(&directory).unwrap();
+    let occupied = request(&conversation, &digest, &directory);
+    let stop = ReadStop::new();
+    let outcome = super::local_held_outcome(&stop, || {
+        let found = local_held_file(&occupied);
+        stop.stop();
+        found
+    });
+    let Ok(Some(Err(fault))) = outcome else {
+        panic!("settled output fault was replaced: {outcome:?}");
+    };
+    assert_eq!(fault.kind(), ArtifactFaultKind::OutputExists);
+    assert!(stop.is_stopped());
+
+    let unnamed = root.path().join("a".repeat(220));
+    let stop = ReadStop::new();
+    let outcome = super::local_held_outcome(&stop, || {
+        let found = local_held_file(&request(&conversation, &digest, &unnamed));
+        stop.stop();
+        found
+    });
+    let Ok(Some(Err(fault))) = outcome else {
+        panic!("settled name fault was replaced: {outcome:?}");
+    };
+    assert_eq!(
+        fault.kind(),
+        ArtifactFaultKind::File(super::ArtifactFileStep::Name)
+    );
 }
 
 #[test]

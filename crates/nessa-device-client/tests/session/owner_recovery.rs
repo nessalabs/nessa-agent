@@ -923,6 +923,38 @@ impl Drop for ReleaseHeld {
 }
 
 #[test]
+fn an_artifact_handshake_refusal_rechecks_and_releases_the_lease() {
+    let fixture = Fixture::new(Mode::Good);
+    let parent = fixture.parent();
+    let peer = fixture.peer(vec![
+        Reply::Active,
+        Reply::Active,
+        Reply::ReadRefused,
+        Reply::Terminal,
+    ]);
+    captured(parent.status().unwrap());
+    let stamp = parent.publication().unwrap();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let output = fixture.root.path().join("private/missing-held.bin");
+    let request = ArtifactRequest::new(
+        &conversation,
+        "sha256:fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+        "application/octet-stream",
+        2,
+        &output,
+    );
+    let failure = parent
+        .fetch_artifact(&stamp, &request, ReadStop::new())
+        .unwrap_err();
+    assert_eq!(failure, SessionFailure::Cache(ReadFailure::Refused));
+    assert!(matches!(
+        parent.publication(),
+        Err(SessionFailure::Fenced(PhoneFence::Unbound))
+    ));
+    peer.join().unwrap();
+}
+
+#[test]
 fn actual_owner_read_refusal_rechecks_through_original_recovery_and_retains_both_outcomes() {
     for final_reply in [Reply::Active, Reply::Refused] {
         let fixture = Fixture::new(Mode::Good);

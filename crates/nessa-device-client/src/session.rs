@@ -1395,7 +1395,9 @@ impl NativeSession {
     /// A stop already set, or set while that file is read, is `Stopped` and not a match.
     /// Elapsed time is this call on the session clock, including the status read
     /// when the file is not already local. A gateway authority refusal asks
-    /// status again, as a refused catalogue read does, unless the caller stopped.
+    /// status again, as a refused catalogue read does. That includes a product
+    /// handshake that refuses, and a refusal that settled before a later stop.
+    /// A stop the fetch itself observed does not ask.
     pub fn fetch_artifact(
         &self,
         stamp: &PhoneStamp,
@@ -1432,7 +1434,7 @@ impl NativeSession {
             return Err(SessionFailure::Fenced(PhoneFence::Replaced));
         }
         let pause = Arc::clone(&driver.pause);
-        let fetched = driver
+        let fetched = match driver
             .cache()
             .map_err(SessionFailure::Cache)?
             .fetch_artifact(
@@ -1441,12 +1443,20 @@ impl NativeSession {
                 Duration::from_secs(5),
                 request,
                 pause.as_ref(),
-            )
-            .map_err(SessionFailure::Cache)?;
+            ) {
+            Ok(fetched) => fetched,
+            // The handshake refused before a fetch existed. Ask status again
+            // so the revocation can purge, then return that refusal.
+            Err(ReadFailure::Refused) => {
+                let _ = driver.status();
+                return Err(SessionFailure::Cache(ReadFailure::Refused));
+            }
+            Err(error) => return Err(SessionFailure::Cache(error)),
+        };
         let outcome = fetched.outcome();
-        // The same authority refusal as a catalogue read: ask status again so
-        // a revocation can purge and fence this publication. A stop does not.
-        if !stop.is_stopped() && artifact_authority_refused(outcome) {
+        // A range refusal that already settled, including one a later stop
+        // did not cause. Ask status again so the revocation can purge.
+        if artifact_authority_refused(outcome) {
             let _ = driver.status();
         }
         let elapsed = driver.clock.elapsed_ms().saturating_sub(started);

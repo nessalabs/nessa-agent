@@ -370,9 +370,10 @@ pub fn local_held_file(
     }
 }
 
-/// A local inspection published only while `stop` stayed clear. A stop that
-/// is already set, or that arrives while the file is read, is `Stopped`
-/// and is not a local match.
+/// A local match is published only while `stop` stayed clear. A stop that
+/// is already set, or that arrives while a matching file is read, is
+/// `Stopped` and is not a match. A fault the inspection already produced
+/// stays that fault: a later stop did not cause it.
 pub fn local_held_outcome(
     stop: &ReadStop,
     inspect: impl FnOnce() -> Result<Option<Result<ArtifactFreshness, ArtifactFault>>, ReadFailure>,
@@ -381,7 +382,8 @@ pub fn local_held_outcome(
         return Err(ReadFailure::Stopped);
     }
     let outcome = inspect();
-    if stop.is_stopped() {
+    let settled_fault = matches!(outcome, Err(_) | Ok(Some(Err(_))));
+    if stop.is_stopped() && !settled_fault {
         return Err(ReadFailure::Stopped);
     }
     outcome
@@ -621,15 +623,18 @@ impl RetainedCache {
     }
 }
 
-/// A dial that never reached the gateway. A caller stop stays a stop. A
-/// relay `Offline` is `Away`. A spent budget is `Unreachable`.
+/// A dial that never reached the gateway. A settled authority refusal stays
+/// a refusal, including when `stop` is set afterwards. Any other caller stop
+/// stays a stop. A relay `Offline` is `Away`. A spent budget is `Unreachable`.
 fn dial_failure(
     failure: ReadFailure,
     stop: &ReadStop,
     ending: &Stopping,
     offline: bool,
 ) -> ReadFailure {
-    if stop.is_stopped() {
+    if matches!(failure, ReadFailure::Refused) {
+        failure
+    } else if stop.is_stopped() {
         ReadFailure::Stopped
     } else if offline && matches!(failure, ReadFailure::Unreachable) {
         ReadFailure::Away
@@ -641,7 +646,8 @@ fn dial_failure(
 }
 
 /// A range the budget cancelled is not a caller stop. `failure` maps that
-/// cancellation to `Stopped` before this sees it.
+/// cancellation to `Stopped` before this sees it. A gateway `Refused` that
+/// already settled stays `Refused` when `stop` is set afterwards.
 fn classify_artifact_fault(
     fault: ArtifactFault,
     stop: &ReadStop,

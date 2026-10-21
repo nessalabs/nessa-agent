@@ -231,6 +231,9 @@ flowchart LR
 | Short answer or wrong digest | fetch | Fault, not fresh | same |
 | Stale stamp | fetch or saved read | Fenced, connector not called | `a_replaced_receiver_stamp_reads_nothing_and_dials_nothing` |
 | Local file, stop already set or set while it is read | fetch | Stopped, not a local match | `a_stop_does_not_publish_a_local_match` |
+| Local inspection already produced a typed fault, stop set afterwards | fetch | That fault remains | `a_settled_local_fault_survives_a_later_stop` |
+| Gateway refusal already settled, stop set afterwards | fetch | Refused remains, so status is asked again | `a_settled_refusal_survives_a_later_stop` |
+| Product handshake refuses the artifact fetch | fetch | Refused, and status is asked again; a terminal status releases the lease | `an_artifact_handshake_refusal_rechecks_and_releases_the_lease` |
 | Stop during the part re-read | fetch | Stopped, output not linked | `a_stop_during_the_part_reread_does_not_keep_the_file` |
 | Waiting: stop during a busy pause | fetch | Stopped within one stop slice; no later range; output absent | `a_stop_during_a_busy_pause_returns_within_one_slice`, `a_busy_pause_that_has_ended_asks_no_further_range` |
 | Waiting: budget spent during a busy pause | fetch | Unreachable within one stop slice; no later range; output absent | `a_budget_that_ends_during_a_busy_pause_is_unreachable` |
