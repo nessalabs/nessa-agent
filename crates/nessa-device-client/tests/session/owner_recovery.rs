@@ -313,6 +313,7 @@ impl Fixture {
             state: self.state.clone(),
             connector,
             entropy: Arc::new(NoEntropy(AtomicUsize::new(0))),
+            files: Arc::new(OsCacheFiles),
             path: self.root.path().join("private/cache.sqlite"),
             // A different valid configured address must never substitute for the original.
             address: "127.0.0.1:9".parse().unwrap(),

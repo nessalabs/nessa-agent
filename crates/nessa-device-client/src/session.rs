@@ -122,6 +122,29 @@ impl EnrollmentEntropyFactory for OsEntropyFactory {
         Box::new(OsEntropy)
     }
 }
+
+/// Whether the retained cache path is a file. Absence is not an I/O failure.
+enum CacheFilePresence {
+    Absent,
+    Present,
+}
+trait CacheFiles: Send + Sync {
+    fn presence(&self, path: &Path) -> Result<CacheFilePresence, std::io::Error>;
+}
+struct OsCacheFiles;
+impl CacheFiles for OsCacheFiles {
+    fn presence(&self, path: &Path) -> Result<CacheFilePresence, std::io::Error> {
+        match std::fs::metadata(path) {
+            Ok(meta) if meta.is_file() => Ok(CacheFilePresence::Present),
+            Ok(_) => Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "cache path is not a file",
+            )),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(CacheFilePresence::Absent),
+            Err(error) => Err(error),
+        }
+    }
+}
 struct Entropy(Box<dyn EnrollmentEntropy>);
 impl RngCore for Entropy {
     fn next_u32(&mut self) -> u32 {
@@ -411,6 +434,7 @@ struct Driver {
     state: Arc<dyn NativePrivateState>,
     connector: Arc<dyn EnrollmentConnector>,
     entropy: Arc<dyn EnrollmentEntropyFactory>,
+    files: Arc<dyn CacheFiles>,
     address: SocketAddr,
     path: PathBuf,
     wall: Arc<dyn WallClock>,
@@ -429,6 +453,7 @@ struct Dependencies {
     state: Arc<dyn NativePrivateState>,
     connector: Arc<dyn EnrollmentConnector>,
     entropy: Arc<dyn EnrollmentEntropyFactory>,
+    files: Arc<dyn CacheFiles>,
     path: PathBuf,
     address: SocketAddr,
     wall: Arc<dyn WallClock>,
@@ -892,6 +917,7 @@ impl NativeSession {
             pause: Arc::new(ThreadPause),
             connector: Arc::new(SocketConnector),
             entropy: Arc::new(OsEntropyFactory),
+            files: Arc::new(OsCacheFiles),
             runtime,
             product: ProductDependencies::default(),
         })
@@ -906,6 +932,7 @@ impl NativeSession {
             pause,
             connector,
             entropy,
+            files,
             runtime,
             product,
         } = dependencies;
@@ -933,6 +960,7 @@ impl NativeSession {
                 state,
                 connector,
                 entropy,
+                files,
                 address,
                 path,
                 wall,
@@ -1277,7 +1305,8 @@ impl NativeSession {
     /// Bind the lease to the saved issued receiver without dialing.
     /// The same receiver keeps its stamp. No credential leaves the lease unbound.
     /// A receiver with a successful purge receipt is not bound again, even when
-    /// that credential is still stored.
+    /// that credential is still stored. A cache path that cannot be stated is
+    /// a cache failure and does not mint a stamp.
     pub fn bind_saved_receiver(&self) -> Result<PhoneStamp, SessionFailure> {
         let mut operation = self.enter(None)?;
         let driver = operation.driver();
@@ -1287,7 +1316,15 @@ impl NativeSession {
             .map_err(SessionFailure::PrivateState)?
             .ok_or(SessionFailure::NoCredential)?;
         let receiver = issued.receiver().as_str();
-        if driver.path.is_file() {
+        let present = match driver
+            .files
+            .presence(&driver.path)
+            .map_err(|_| SessionFailure::Cache(ReadFailure::Cache))?
+        {
+            CacheFilePresence::Absent => false,
+            CacheFilePresence::Present => true,
+        };
+        if present {
             let purged = driver
                 .cache()
                 .map_err(SessionFailure::Cache)?

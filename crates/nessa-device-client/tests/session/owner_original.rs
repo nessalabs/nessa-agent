@@ -118,6 +118,7 @@ fn parent(root: &Path, state: Arc<dyn NativePrivateState>, counts: Arc<Counts>) 
             counts,
             path: root.join("private/owner-phone-original"),
         }),
+        files: Arc::new(OsCacheFiles),
         path: root.join("private/cache.sqlite"),
         address: "127.0.0.1:9".parse().unwrap(),
         wall: Arc::new(Wall),

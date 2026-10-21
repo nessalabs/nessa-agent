@@ -69,6 +69,7 @@ fn compose(root: &Path, connector: Arc<dyn EnrollmentConnector>) -> NativeSessio
         address: "127.0.0.1:9".parse().unwrap(),
         connector,
         entropy: Arc::new(OsEntropyFactory),
+        files: Arc::new(OsCacheFiles),
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
         pause: Arc::new(ThreadPause),

@@ -85,6 +85,7 @@ fn compose_opened(clock: Arc<dyn Clock>) -> Opened {
         address: "127.0.0.1:9".parse().unwrap(),
         connector: connector.clone(),
         entropy: Arc::new(OsEntropyFactory),
+        files: Arc::new(OsCacheFiles),
         wall: Arc::new(Wall),
         clock,
         pause: Arc::new(ThreadPause),
@@ -229,6 +230,7 @@ fn a_replacement_session_refuses_the_closed_sessions_stamp() {
         address: "127.0.0.1:9".parse().unwrap(),
         connector: connector.clone(),
         entropy: Arc::new(OsEntropyFactory),
+        files: Arc::new(OsCacheFiles),
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
         pause: Arc::new(ThreadPause),
@@ -303,6 +305,13 @@ fn compose_with(
     root: &PrivateFixture,
     entropy: Arc<dyn EnrollmentEntropyFactory>,
 ) -> Result<NativeSession, SessionFailure> {
+    compose_files(root, entropy, Arc::new(OsCacheFiles))
+}
+fn compose_files(
+    root: &PrivateFixture,
+    entropy: Arc<dyn EnrollmentEntropyFactory>,
+    files: Arc<dyn CacheFiles>,
+) -> Result<NativeSession, SessionFailure> {
     let state = Arc::new(FilePairingState::open(root.path(), Path::new("private")).unwrap());
     issued(&state, "issued-a", "receiver-a");
     NativeSession::compose(Dependencies {
@@ -313,6 +322,7 @@ fn compose_with(
             calls: AtomicUsize::new(0),
         }),
         entropy,
+        files,
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
         pause: Arc::new(ThreadPause),
@@ -341,6 +351,37 @@ fn the_publication_lease_is_the_identity_composition_injected() {
     ));
     session.close().unwrap();
     other.close().unwrap();
+}
+
+struct BlindFiles;
+impl CacheFiles for BlindFiles {
+    fn presence(&self, _: &Path) -> Result<CacheFilePresence, std::io::Error> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "cache metadata",
+        ))
+    }
+}
+
+#[test]
+fn a_cache_file_that_cannot_be_stated_does_not_bind() {
+    let root = PrivateFixture::new();
+    create_directory_beneath(root.path(), Path::new("private")).unwrap();
+    let session = compose_files(
+        &root,
+        Arc::new(StampFactory([1u8; 16])),
+        Arc::new(BlindFiles),
+    )
+    .unwrap();
+    assert!(matches!(
+        session.bind_saved_receiver(),
+        Err(SessionFailure::Cache(ReadFailure::Cache))
+    ));
+    assert!(matches!(
+        session.publication(),
+        Err(SessionFailure::Fenced(PhoneFence::Unbound))
+    ));
+    session.close().unwrap();
 }
 
 #[test]

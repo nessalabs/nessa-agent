@@ -194,7 +194,7 @@ flowchart LR
 - The same issued receiver keeps the generation. A different receiver, a successful terminal purge, or session close advances it. The previous stamp then fails and no bytes are read.
 - Close is permanent for that session. A successful purge only releases the receiver, so a later enrollment in the same session can bind the next one. That release happens when the purge succeeded, including when the status has no observation. No observation and no successful purge leaves the bound receiver in place.
 - Catalogue presence is one stored identity, read from one snapshot of the fence, the row, and the purge receipt. A live row is Live. A deletion fence or receiver purge receipt is Tombstone. No row, no fence, and no receipt is Absent. A page that does not mention a chat does not write a tombstone.
-- A saved credential whose receiver has a successful purge receipt is not bound again. Bind returns Purged and does not mint a stamp.
+- A saved credential whose receiver has a successful purge receipt is not bound again. Bind returns Purged and does not mint a stamp. Whether that cache file is present is an injected read: absence still binds, and a metadata failure is a cache failure that does not mint a stamp.
 - A deletion whose commit did not land leaves the previous row. Presence after that failure is the previous state, not Tombstone.
 - A withdrawn grant removes the local row and writes no fence. Presence is Absent, so the chat can return with a later grant.
 - `LocalMatch` means the output file already had the named size and digest. No range was asked. It is not a new gateway hold.
@@ -220,6 +220,7 @@ flowchart LR
 | Live row | withdraw, no fence | Absent | same |
 | No catalogue row | presence | Absent | same |
 | Receiver purge receipt | presence, rows gone | Tombstone | same |
+| Saved credential, cache metadata unreadable | `bind` | Cache failure; lease stays unbound | `a_cache_file_that_cannot_be_stated_does_not_bind` |
 | Output already the file | fetch | LocalMatch, source not asked | `a_file_already_on_disk_is_a_local_match_and_asks_nothing` |
 | Gateway answers every range and the digest matches | fetch | GatewayConfirmed | `a_gateway_answer_is_fresh_only_when_the_digest_matches` |
 | Short answer or wrong digest | fetch | Fault, not fresh | same |
@@ -230,6 +231,7 @@ flowchart LR
 
 - A second Swift checkpoint or fold. The shared cache already owns progress, tombstones and projection. A copy will disagree.
 - Treating a missing inbox row as deleted. Owner and granted catalogues omit rows for reasons other than deletion: a partial page, a grant filter, a withdraw. The deletion fence is the tombstone. Absence is not.
+- Treating an unreadable cache path as absence. Absence has no purge receipt to consult. A metadata failure has not established that, so bind must fail closed.
 - Confirming a file because a part is already complete. The existing fetch asks the last range again so a part cannot stand in for the gateway. Reporting that part as fresh would undo that rule.
 - Blocking the UI thread on the fetch. The session methods stay synchronous and the existing Swift worker admits them off the UI queue. This slice does not add a second queue.
 - Rebuilding #783, #785 and #789. Those pulls are merged. This slice starts from current main.
