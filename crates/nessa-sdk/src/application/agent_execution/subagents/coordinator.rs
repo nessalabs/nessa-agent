@@ -3019,19 +3019,11 @@ mod lifetime_races {
             }),
             room: Arc::new(LiveCapacity::new(4)),
         });
-        let root = AgentLifetimeId::new("cleanup-scope-root").unwrap();
         let session = SessionId::new("cleanup-scope-session").unwrap();
-        coordinator.inner.with_graph(|graph| {
-            let _ = graph
-                .open_root(session.clone(), root.clone(), Initiator::Runtime)
-                .unwrap();
-            coordinator.inner.remember(
-                Arc::downgrade(&coordinator.inner),
-                root.clone(),
-                false,
-                CleanupOwner::Attachment,
-            );
-        });
+        let root = coordinator
+            .open_root(session.clone(), Initiator::Runtime)
+            .await
+            .unwrap();
         let original = coordinator.participation(&root).unwrap();
         let scope = original
             .cleanup_scope()
@@ -3048,6 +3040,12 @@ mod lifetime_races {
         assert!(
             original.cleanup_scope().is_none(),
             "revoked installation cannot publish cleanup proof"
+        );
+        coordinator.inner.remember(
+            Arc::downgrade(&coordinator.inner),
+            root.clone(),
+            false,
+            CleanupOwner::Attachment,
         );
         let replacement = coordinator.participation(&root).unwrap();
         assert!(replacement.cleanup_scope().is_some());
