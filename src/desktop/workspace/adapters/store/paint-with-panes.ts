@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useLayoutEffect, useRef, useState } from "react"
 import { useStore } from "react-redux"
 import type { DesktopState, DesktopStore } from "../../../store"
 import { selectColumnCount } from "./selectors"
@@ -130,7 +130,7 @@ export function usePaintedWithPanes<T>(
   const shown = useRef(value)
   const selectRef = useRef(select)
   selectRef.current = select
-  useEffect(() => {
+  useLayoutEffect(() => {
     const gate = gateFor(store)
     const listener: Listener = {
       frames,
@@ -142,6 +142,19 @@ export function usePaintedWithPanes<T>(
       },
     }
     gate.listeners.add(listener)
+    // A mount folds the side columns in a layout effect before this gate
+    // exists, so the subscription never hears it. The store has already
+    // moved, and that fold is this frame. A change the gate is counting
+    // keeps its own frames.
+    const live = selectRef.current(store.getState())
+    if (
+      gate.waiting === null &&
+      selectColumnCount(store.getState()) === gate.painted &&
+      !Object.is(shown.current, live)
+    ) {
+      shown.current = live
+      setValue(live)
+    }
     return () => {
       gate.listeners.delete(listener)
       release(store, gate)
