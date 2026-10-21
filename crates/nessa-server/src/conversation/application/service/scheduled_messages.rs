@@ -11,8 +11,9 @@
 //! enter that work before `retry_at_ms`. When the durable retry does not
 //! commit, this process keeps the same attempt. A lost lease writes nothing.
 //! An unread execution, and a `begin_submit` whose transaction does not
-//! commit, write no `retry_at_ms` and are still that attempt. A committed
-//! outcome, or a missing row, drops the attempt this process kept.
+//! commit, write no `retry_at_ms` and are still that attempt while the row
+//! is `delivering` or `submitting`. A committed outcome, a cancelled row,
+//! and a missing row drop the attempt this process kept.
 //! Cancel, defer, and a
 //! model change lose to that transition and win against a claim that has not
 //! made it. An applied model change is not complete until that plan commits.
@@ -1010,6 +1011,26 @@ impl ConversationService {
             .remove(execution_id);
     }
 
+    /// The attempt this process kept applies only while the row can still
+    /// be retried. `delivering` and `submitting` keep it. A cancel, a
+    /// terminal status, and a missing row drop it. A status read that fails
+    /// leaves it.
+    async fn retire_finished_submit_retries(&self, store: &Arc<dyn ScheduledMessageStore>) {
+        for (execution_id, _) in self.submit_retries() {
+            match store.status(&execution_id).await {
+                Ok(Some(status)) if status == "delivering" || status == "submitting" => {}
+                Ok(_) => self.forget_submit_retry(&execution_id),
+                Err(error) => {
+                    tracing::warn!(
+                        %execution_id,
+                        %error,
+                        "a scheduled submit retry could not be read; the attempt stays"
+                    );
+                }
+            }
+        }
+    }
+
     /// The next attempt for a submit or an outcome whose durable retry did
     /// not commit. Nothing is written on the row. The loop waits this long
     /// and does not enter the submit again before then.
@@ -1468,6 +1489,7 @@ impl ConversationService {
     /// unbound store, or a schedule with nothing due and no live lease.
     pub async fn deliver_due_scheduled(&self) -> Option<u64> {
         let store = self.scheduled_messages()?;
+        self.retire_finished_submit_retries(&store).await;
         let now = self.inner.clock.unix_milliseconds();
         let preference = match store.preference().await {
             Ok(preference) => preference.enabled,
@@ -2419,6 +2441,9 @@ mod catalogue_pages {
         fail_defer: AtomicBool,
         /// The next `begin_submit` returns an error and does not claim the row.
         fail_begin: AtomicBool,
+        /// `status` returns this. The outer `None` means the read fails.
+        /// The inner `None` means the row is gone.
+        known_status: Mutex<Option<Option<String>>>,
     }
 
     impl RecordingStore {
@@ -2452,6 +2477,7 @@ mod catalogue_pages {
                 outcome_missing: AtomicBool::new(false),
                 fail_defer: AtomicBool::new(false),
                 fail_begin: AtomicBool::new(false),
+                known_status: Mutex::new(None),
             }
         }
 
@@ -2834,7 +2860,12 @@ mod catalogue_pages {
             })
         }
         fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
-            refused()
+            let known = self.known_status.lock().unwrap().clone();
+            if let Some(status) = known {
+                Box::pin(async move { Ok(status) })
+            } else {
+                refused()
+            }
         }
         fn record_outcome(
             &self,
@@ -3711,6 +3742,54 @@ mod catalogue_pages {
         assert_eq!(store.submits.load(Ordering::SeqCst), 2);
         assert!(store.outcomes.lock().unwrap().is_empty());
         assert!(store.defers.lock().unwrap().is_empty());
+    }
+
+    /// A `begin_submit` error keeps its attempt only while the row is still
+    /// `delivering`. A cancel, including a preference that is now off, and a
+    /// missing row drop it before the backoff ends.
+    #[tokio::test]
+    async fn a_cancelled_or_missing_row_drops_the_submit_attempt_this_process_kept() {
+        let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+        let store = Arc::new(RecordingStore::new(true));
+        store.fail_begin.store(true, Ordering::SeqCst);
+        *store.known_status.lock().unwrap() = Some(Some("delivering".into()));
+        let service = delivering(&clock, &store, "grant");
+
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert!(service
+            .submit_retries()
+            .iter()
+            .any(|(id, _)| id == "exec-1"));
+        for _ in 0..5 {
+            assert_eq!(
+                service.deliver_due_scheduled().await,
+                Some(SCHEDULE_RETRY_MS)
+            );
+        }
+        assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+
+        store.due_row.lock().unwrap().take();
+        store.enabled.store(false, Ordering::SeqCst);
+        *store.known_status.lock().unwrap() = Some(Some("cancelled".into()));
+        let _ = service.deliver_due_scheduled().await;
+        assert!(service.submit_retries().is_empty());
+
+        let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+        let store = Arc::new(RecordingStore::new(true));
+        store.fail_begin.store(true, Ordering::SeqCst);
+        *store.known_status.lock().unwrap() = Some(Some("delivering".into()));
+        let service = delivering(&clock, &store, "grant");
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        store.due_row.lock().unwrap().take();
+        *store.known_status.lock().unwrap() = Some(None);
+        assert_eq!(service.deliver_due_scheduled().await, None);
+        assert!(service.submit_retries().is_empty());
     }
 
     /// A retry the database refused is dropped once the outcome commits.
