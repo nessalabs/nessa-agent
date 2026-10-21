@@ -2,6 +2,8 @@
 
 use std::fs::File;
 use std::io::Read;
+#[cfg(unix)]
+use std::io::{Seek, SeekFrom};
 use std::path::Path;
 
 use nessa_local_database::rusqlite::backup::{Backup, StepResult};
@@ -268,6 +270,33 @@ pub(crate) fn inspect_conversation(
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|_| MaterializeError::Unreadable)?;
+    let (_key, stream) = one_stream(&connection, conversation_id)?;
+    Ok(MaterializedStream {
+        size: stream.size,
+        digest: stream.digest,
+    })
+}
+
+/// Stream fingerprint of a database image this process still holds.
+///
+/// The inode has no directory entry, so SQLite cannot open it by path. The
+/// image is copied once into a private database and the stream is then read
+/// from that copy. Publication links the inode that was read, not a path.
+#[cfg(unix)]
+pub(crate) fn inspect_open_file(
+    file: &mut File,
+    conversation_id: &str,
+) -> Result<MaterializedStream, MaterializeError> {
+    let len = file
+        .seek(SeekFrom::End(0))
+        .map_err(|_| MaterializeError::Unreadable)?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| MaterializeError::Unreadable)?;
+    let size = usize::try_from(len).map_err(|_| MaterializeError::Unreadable)?;
+    let mut connection = Connection::open_in_memory().map_err(|_| MaterializeError::Unreadable)?;
+    connection
+        .deserialize_read_exact("main", &mut *file, size, true)
+        .map_err(|_| MaterializeError::Unreadable)?;
     let (_key, stream) = one_stream(&connection, conversation_id)?;
     Ok(MaterializedStream {
         size: stream.size,

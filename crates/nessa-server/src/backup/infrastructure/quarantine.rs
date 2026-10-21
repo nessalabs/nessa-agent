@@ -5,13 +5,15 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 #[cfg(any(test, windows))]
 use nessa_local_storage::create_directory_exclusive;
+#[cfg(windows)]
+use nessa_local_storage::create_no_writers;
 use nessa_local_storage::{create_directory, open, publish_new, sync_directory, OpenMode};
 use serde_json::{json, Value};
 
@@ -34,6 +36,8 @@ use crate::backup::domain::{
 };
 
 use super::log::{authenticate_inventory, exclusive, persist};
+#[cfg(unix)]
+use super::snapshot::inspect_open_file;
 use super::snapshot::{
     inspect_conversation, materialize_conversation, without_fenced_conversations, MaterializeError,
 };
@@ -534,36 +538,68 @@ impl QuarantineLayout for DirectoryQuarantine {
             identity: created_id,
             ..
         } = sealed_beside(&live_parent, &live_name)?;
-        let copied = match copy_at(&opened, &created) {
+        // Copied bytes stay on the handles that wrote them. On Unix those
+        // inodes have no names yet, so a writer cannot open them. On Windows
+        // the names exist and the handles do not share write access.
+        let mut held = Vec::new();
+        let copied = match copy_at(&opened, &created, &mut held) {
             Ok(token) => token,
             Err(error) => {
+                drop(held);
                 let _ = remove_opened(&created, &created_id);
                 return Err(error);
             }
         };
+        let mut journal = match create_unpublished(
+            &created,
+            OsStr::new("journal.txt"),
+            "journal.txt",
+            false,
+            RestoreFault::Tamper,
+        ) {
+            Ok(file) => file,
+            Err(error) => {
+                drop(held);
+                let _ = remove_opened(&created, &created_id);
+                return Err(error);
+            }
+        };
+        if journal.store(loaded.journal.as_bytes()).is_err() || journal.sync_file().is_err() {
+            drop(held);
+            drop(journal);
+            let _ = remove_opened(&created, &created_id);
+            return Err(RestoreFault::Unreadable);
+        }
         if copied != loaded.content || tree_id_of(&opened)? != loaded.identity {
+            drop(held);
+            drop(journal);
             let _ = remove_opened(&created, &created_id);
             return Err(RestoreFault::Tamper);
         }
-        if write_at(
-            &created,
-            OsStr::new("journal.txt"),
-            loaded.journal.as_bytes(),
-        )
-        .is_err()
-        {
-            let _ = remove_opened(&created, &created_id);
-            return Err(RestoreFault::Unreadable);
-        }
         if sync_tree_at(&created).is_err() {
+            drop(held);
+            drop(journal);
             let _ = remove_opened(&created, &created_id);
             return Err(RestoreFault::Unreadable);
         }
-        // The directory we created, re-read immediately before the rename.
-        if let Err(error) = still_sealed(&created, &created_id, loaded) {
+        if let Err(error) =
+            held_still_sealed(&created, &created_id, loaded, &mut held, &mut journal)
+        {
+            drop(held);
+            drop(journal);
             if tree_id_of(&created).ok().as_ref() == Some(&created_id) {
                 let _ = remove_opened(&created, &created_id);
             }
+            return Err(error);
+        }
+        // The link is the publication of each inode. The directory rename
+        // then makes those names live. A descriptor opened on a predictable
+        // copy name is not one of these inodes. The handles stay open across
+        // that rename so the bytes cannot be replaced first.
+        if let Err(error) = publish_held(&mut held, &mut journal) {
+            drop(held);
+            drop(journal);
+            let _ = remove_opened(&created, &created_id);
             return Err(error);
         }
         let published = created_id;
@@ -576,6 +612,8 @@ impl QuarantineLayout for DirectoryQuarantine {
             &live_name,
             RestoreFault::LiveOccupied,
         ) {
+            drop(held);
+            drop(journal);
             let _ = remove_opened(&created, &published);
             return Err(error);
         }
@@ -607,10 +645,10 @@ impl QuarantineLayout for DirectoryQuarantine {
         // synced does not put it back, and does not make the promotion a
         // refusal.
         let mut durable = true;
-        if live_parent.sync_all().is_err() {
+        if sync_dir(&live_parent).is_err() {
             durable = false;
         }
-        if source_parent.sync_all().is_err() {
+        if sync_dir(&source_parent).is_err() {
             durable = false;
         }
         Ok(Promoted { durable })
@@ -652,57 +690,38 @@ impl QuarantineLayout for DirectoryQuarantine {
         let directory = directory_for(root, relative)?;
         let leaf = relative_leaf(relative)?;
         let temp_name = temp.file_name().ok_or(RestoreFault::Tamper)?;
-        let mut staged_name = leaf.to_os_string();
-        staged_name.push(format!(
-            ".verified-{}-{}",
-            std::process::id(),
-            ATTEMPT.fetch_add(1, Ordering::Relaxed)
-        ));
-        // The name is opened from the held directory. A symlink at that name
-        // is not the file, and a write through the temp inode is not copied.
+        // The copy has no directory entry until the session name is linked.
+        // On Windows the session name is created here and held without write
+        // share, so another open cannot change it before this handle closes.
         let mut input = open_file_at(&directory, temp_name, OpenMode::Read)?;
-        let mut output = create_private_at(&directory, &staged_name)?;
-        let mut buffer = [0u8; 8192];
-        let copied = loop {
-            let count = match input.read(&mut buffer) {
-                Ok(0) => break Ok(()),
-                Ok(count) => count,
-                Err(_) => break Err(RestoreFault::Unreadable),
-            };
-            if output.write_all(&buffer[..count]).is_err() {
-                break Err(RestoreFault::Unreadable);
-            }
-        };
-        if copied.is_err() || output.sync_all().is_err() {
-            drop(output);
-            let _ = unlink_at(&directory, &staged_name);
-            return Err(RestoreFault::Unreadable);
-        }
-        drop(output);
-        let staged = path_of_handle(&directory)?.join(&staged_name);
-        let verified = match self.session_cut(&staged, conversation_id) {
-            Ok(cut) if cut.digest == *digest => true,
-            Ok(_) | Err(RestoreFault::Tamper) => false,
-            Err(error) => {
-                let _ = unlink_at(&directory, &staged_name);
-                return Err(error);
-            }
-        };
-        if !verified {
-            let _ = unlink_at(&directory, &staged_name);
-            return Err(RestoreFault::SourceChanged);
-        }
-        if let Err(error) = rename_exclusive_at(
-            &directory,
-            &staged_name,
+        let mut output = create_unpublished(
             &directory,
             &leaf,
+            relative,
+            true,
             RestoreFault::SessionDiffers,
-        ) {
-            let _ = unlink_at(&directory, &staged_name);
-            return Err(error);
+        )?;
+        let mut buffer = [0u8; 8192];
+        loop {
+            let count = match input.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => count,
+                Err(_) => return Err(RestoreFault::Unreadable),
+            };
+            if output.store(&buffer[..count]).is_err() {
+                return Err(RestoreFault::Unreadable);
+            }
         }
-        if directory.sync_all().is_err() {
+        if output.sync_file().is_err() {
+            return Err(RestoreFault::Unreadable);
+        }
+        let verified = unpublished_matches(&mut output, conversation_id, digest)?;
+        // The name is linked only after the held bytes matched.
+        if !verified {
+            return Err(RestoreFault::SourceChanged);
+        }
+        output.publish_in(RestoreFault::SessionDiffers)?;
+        if sync_dir(&directory).is_err() {
             let _ = unlink_at(&directory, &leaf);
             return Err(RestoreFault::Unreadable);
         }
@@ -840,6 +859,29 @@ impl QuarantineLayout for DirectoryQuarantine {
         }
     }
 
+    fn retire_ready(&self, root: &AnchoredRoot) -> Result<(), RestoreFault> {
+        let directory = open_root_dir(root)?;
+        let name = OsStr::new("accept-ready");
+        if kind_at(&directory, name)? == EntryKind::Missing {
+            return Ok(());
+        }
+        let _ = unlink_at(&directory, name);
+        if kind_at(&directory, name)? == EntryKind::Missing {
+            return Ok(());
+        }
+        if let Ok(file) = open_file_at(&directory, name, OpenMode::ReadWrite) {
+            let _ = file.set_len(0);
+            let _ = file.sync_all();
+        }
+        match read_bytes_at(&directory, name) {
+            Ok(bytes) => match read_marker_bytes(&bytes)? {
+                Some(_) => Err(RestoreFault::Retained),
+                None => Ok(()),
+            },
+            Err(_) => Err(RestoreFault::Retained),
+        }
+    }
+
     fn occupied(&self, root: &AnchoredRoot) -> Result<bool, RestoreFault> {
         let (parent, name) = parent_of_root(root)?;
         name_exists_at(&parent, &name)
@@ -894,7 +936,7 @@ impl QuarantineLayout for DirectoryQuarantine {
         file.write_all(b"\n")
             .map_err(|_| RestoreFault::Unreadable)?;
         file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
-        directory.sync_all().map_err(|_| RestoreFault::Unreadable)?;
+        sync_dir(&directory)?;
         Ok(())
     }
 
@@ -1054,7 +1096,7 @@ impl Staging for PartialTree {
         if tree_id_of(&published)? != identity {
             return Err(RestoreFault::Tamper);
         }
-        if self.parent.sync_all().is_err() {
+        if sync_dir(&self.parent).is_err() {
             return match remove_opened(&published, &identity) {
                 Ok(()) => Err(RestoreFault::Unreadable),
                 Err(_) => Err(RestoreFault::Retained),
@@ -1677,14 +1719,6 @@ fn read_bytes_at(directory: &File, name: &OsStr) -> Result<Vec<u8>, RestoreFault
     Ok(bytes)
 }
 
-fn write_at(directory: &File, name: &OsStr, bytes: &[u8]) -> Result<(), RestoreFault> {
-    let mut file = open_file_at(directory, name, OpenMode::CreateNew)?;
-    file.write_all(bytes)
-        .map_err(|_| RestoreFault::Unreadable)?;
-    file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
-    Ok(())
-}
-
 fn hash_at(directory: &File, name: &OsStr) -> Result<Fingerprint, RestoreFault> {
     let mut file = open_file_at(directory, name, OpenMode::Read)?;
     let mut hasher = sha2::Sha256::new();
@@ -1781,9 +1815,13 @@ fn collect_at(directory: &File, prefix: &str, lines: &mut Vec<String>) -> Result
     Ok(())
 }
 
-fn copy_at(source: &File, dest: &File) -> Result<Fingerprint, RestoreFault> {
+fn copy_at(
+    source: &File,
+    dest: &File,
+    held: &mut Vec<Unpublished>,
+) -> Result<Fingerprint, RestoreFault> {
     let mut lines = Vec::new();
-    copy_entries(source, dest, "", &mut lines)?;
+    copy_entries(source, dest, "", &mut lines, held)?;
     lines.sort();
     Ok(Fingerprint::of(lines.join("\n").as_bytes()))
 }
@@ -1793,6 +1831,7 @@ fn copy_entries(
     dest: &File,
     prefix: &str,
     lines: &mut Vec<String>,
+    held: &mut Vec<Unpublished>,
 ) -> Result<(), RestoreFault> {
     for name in list_names(source)? {
         let relative = child_relative(prefix, &name)?;
@@ -1800,13 +1839,13 @@ fn copy_entries(
             EntryKind::Directory => {
                 let child = open_dir_at(source, &name)?;
                 let created = ensure_dir_at(dest, &name)?;
-                copy_entries(&child, &created, &relative, lines)?;
+                copy_entries(&child, &created, &relative, lines, held)?;
             }
             EntryKind::File => {
                 if relative == "journal.txt" || relative == "accept-ready" {
                     continue;
                 }
-                let fingerprint = copy_bytes_at(source, dest, &name)?;
+                let fingerprint = copy_bytes_at(source, dest, &name, &relative, held)?;
                 lines.push(format!("{relative} {}", fingerprint.hex()));
             }
             EntryKind::Symlink | EntryKind::Other => return Err(RestoreFault::Tamper),
@@ -1816,9 +1855,15 @@ fn copy_entries(
     Ok(())
 }
 
-fn copy_bytes_at(source: &File, dest: &File, name: &OsStr) -> Result<Fingerprint, RestoreFault> {
+fn copy_bytes_at(
+    source: &File,
+    dest: &File,
+    name: &OsStr,
+    relative: &str,
+    held: &mut Vec<Unpublished>,
+) -> Result<Fingerprint, RestoreFault> {
     let mut input = open_file_at(source, name, OpenMode::Read)?;
-    let mut output = open_file_at(dest, name, OpenMode::CreateNew)?;
+    let mut output = create_unpublished(dest, name, relative, false, RestoreFault::Tamper)?;
     let mut hasher = sha2::Sha256::new();
     let mut buffer = [0u8; 8192];
     loop {
@@ -1829,12 +1874,382 @@ fn copy_bytes_at(source: &File, dest: &File, name: &OsStr) -> Result<Fingerprint
             break;
         }
         sha2::Digest::update(&mut hasher, &buffer[..count]);
-        output
-            .write_all(&buffer[..count])
-            .map_err(|_| RestoreFault::Unreadable)?;
+        output.store(&buffer[..count])?;
     }
-    output.sync_all().map_err(|_| RestoreFault::Unreadable)?;
-    Ok(Fingerprint::from_digest(hasher.finalize().into()))
+    output.sync_file()?;
+    let fingerprint = Fingerprint::from_digest(hasher.finalize().into());
+    output.fingerprint = fingerprint;
+    held.push(output);
+    Ok(fingerprint)
+}
+
+/// A file this attempt wrote and still holds.
+///
+/// On Linux and macOS it has no directory entry until [`Unpublished::publish_in`].
+/// On Windows it is `name` in `parent`, and the handle does not share write
+/// access, so another open cannot change the bytes.
+struct Unpublished {
+    parent: File,
+    name: OsString,
+    relative: String,
+    file: Option<File>,
+    fingerprint: Fingerprint,
+    /// Windows created `name`. Unix did not.
+    named: bool,
+    /// The name is the one publication keeps. Drop must not remove it.
+    published: bool,
+}
+
+impl Unpublished {
+    fn file_mut(&mut self) -> Result<&mut File, RestoreFault> {
+        self.file.as_mut().ok_or(RestoreFault::Unreadable)
+    }
+
+    fn store(&mut self, bytes: &[u8]) -> Result<(), RestoreFault> {
+        self.file_mut()?
+            .write_all(bytes)
+            .map_err(|_| RestoreFault::Unreadable)
+    }
+
+    fn sync_file(&mut self) -> Result<(), RestoreFault> {
+        self.file_mut()?
+            .sync_all()
+            .map_err(|_| RestoreFault::Unreadable)
+    }
+
+    fn rehash(&mut self) -> Result<Fingerprint, RestoreFault> {
+        let file = self.file_mut()?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|_| RestoreFault::Unreadable)?;
+        let mut hasher = sha2::Sha256::new();
+        let mut buffer = [0u8; 8192];
+        loop {
+            let count = file
+                .read(&mut buffer)
+                .map_err(|_| RestoreFault::Unreadable)?;
+            if count == 0 {
+                break;
+            }
+            sha2::Digest::update(&mut hasher, &buffer[..count]);
+        }
+        Ok(Fingerprint::from_digest(hasher.finalize().into()))
+    }
+
+    fn read_back(&mut self) -> Result<Vec<u8>, RestoreFault> {
+        let file = self.file_mut()?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|_| RestoreFault::Unreadable)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|_| RestoreFault::Unreadable)?;
+        Ok(bytes)
+    }
+
+    /// Path SQLite can open while this handle denies other writers.
+    #[cfg(not(unix))]
+    fn bytes_path(&self) -> Result<PathBuf, RestoreFault> {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::io::AsRawFd;
+            let file = self.file.as_ref().ok_or(RestoreFault::Unreadable)?;
+            Ok(PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd())))
+        }
+        #[cfg(all(unix, not(target_os = "linux")))]
+        {
+            use std::os::unix::io::AsRawFd;
+            let file = self.file.as_ref().ok_or(RestoreFault::Unreadable)?;
+            Ok(PathBuf::from(format!("/dev/fd/{}", file.as_raw_fd())))
+        }
+        #[cfg(windows)]
+        {
+            Ok(path_of_handle(&self.parent)?.join(&self.name))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = self;
+            Err(RestoreFault::Unreadable)
+        }
+    }
+
+    /// Give `name` to this inode. On Windows the name already exists.
+    fn publish_in(&mut self, occupied: RestoreFault) -> Result<(), RestoreFault> {
+        #[cfg(unix)]
+        {
+            let file = self.file.as_ref().ok_or(RestoreFault::Unreadable)?;
+            link_unpublished(file, &self.parent, &self.name, occupied)?;
+        }
+        #[cfg(windows)]
+        {
+            let _ = occupied;
+        }
+        self.published = true;
+        Ok(())
+    }
+}
+
+impl Drop for Unpublished {
+    fn drop(&mut self) {
+        // Close first. A Windows handle that does not share delete cannot be
+        // removed while it is still open.
+        self.file.take();
+        if self.published || !self.named {
+            return;
+        }
+        let _ = unlink_at(&self.parent, &self.name);
+    }
+}
+
+fn unpublished_matches(
+    output: &mut Unpublished,
+    conversation_id: &str,
+    digest: &Fingerprint,
+) -> Result<bool, RestoreFault> {
+    #[cfg(unix)]
+    {
+        let matched = match inspect_open_file(output.file_mut()?, conversation_id) {
+            Ok(stream) if Fingerprint::from_digest(stream.digest) == *digest => true,
+            Ok(_) | Err(_) => false,
+        };
+        Ok(matched)
+    }
+    #[cfg(not(unix))]
+    {
+        let staged = output.bytes_path()?;
+        let matched = match inspect_conversation(&staged, conversation_id) {
+            Ok(stream) if Fingerprint::from_digest(stream.digest) == *digest => true,
+            Ok(_) | Err(_) => false,
+        };
+        Ok(matched)
+    }
+}
+
+fn create_unpublished(
+    parent: &File,
+    name: &OsStr,
+    relative: &str,
+    private: bool,
+    occupied: RestoreFault,
+) -> Result<Unpublished, RestoreFault> {
+    let parent = duplicate(parent)?;
+    #[cfg(not(windows))]
+    {
+        let _ = (private, occupied);
+    }
+    #[cfg(target_os = "linux")]
+    let file = {
+        use std::os::unix::io::{AsRawFd, FromRawFd};
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                c".".as_ptr(),
+                libc::O_TMPFILE | libc::O_RDWR | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(RestoreFault::Unreadable);
+        }
+        unsafe { File::from_raw_fd(fd) }
+    };
+    #[cfg(all(unix, not(target_os = "linux")))]
+    let file = {
+        let mut temp_name = OsString::from(".held-");
+        temp_name.push(std::process::id().to_string());
+        temp_name.push("-");
+        temp_name.push(ATTEMPT.fetch_add(1, Ordering::Relaxed).to_string());
+        let created = open_file_at(&parent, &temp_name, OpenMode::CreateNew)?;
+        unlink_at(&parent, &temp_name)?;
+        created
+    };
+    #[cfg(windows)]
+    let file = {
+        let path = path_of_handle(&parent)?.join(name);
+        let opened = if private {
+            create_no_writers(&path)
+        } else {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_SHARE_READ: u32 = 0x0000_0001;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .share_mode(FILE_SHARE_READ)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(&path)
+        };
+        match opened {
+            Ok(file) => {
+                let _ = windows_file_id(&file)?;
+                file
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(occupied);
+            }
+            Err(_) => return Err(RestoreFault::Unreadable),
+        }
+    };
+    #[cfg(not(any(unix, windows)))]
+    let file = {
+        let _ = (parent, name);
+        return Err(RestoreFault::Unreadable);
+    };
+    Ok(Unpublished {
+        parent,
+        name: name.to_os_string(),
+        relative: relative.to_owned(),
+        file: Some(file),
+        fingerprint: Fingerprint::of(b""),
+        named: cfg!(windows),
+        published: false,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn link_unpublished(
+    file: &File,
+    parent: &File,
+    name: &OsStr,
+    occupied: RestoreFault,
+) -> Result<(), RestoreFault> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::AsRawFd;
+    let proc = format!("/proc/self/fd/{}", file.as_raw_fd());
+    let source = std::ffi::CString::new(proc).map_err(|_| RestoreFault::Unreadable)?;
+    let target = std::ffi::CString::new(name.as_bytes()).map_err(|_| RestoreFault::Unreadable)?;
+    let linked = unsafe {
+        libc::linkat(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            parent.as_raw_fd(),
+            target.as_ptr(),
+            libc::AT_SYMLINK_FOLLOW,
+        )
+    };
+    if linked != 0 {
+        let error = std::io::Error::last_os_error();
+        return if error.kind() == std::io::ErrorKind::AlreadyExists {
+            Err(occupied)
+        } else {
+            Err(RestoreFault::Unreadable)
+        };
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn link_unpublished(
+    file: &File,
+    parent: &File,
+    name: &OsStr,
+    occupied: RestoreFault,
+) -> Result<(), RestoreFault> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::AsRawFd;
+    let target = std::ffi::CString::new(name.as_bytes()).map_err(|_| RestoreFault::Unreadable)?;
+    let cloned =
+        unsafe { libc::fclonefileat(file.as_raw_fd(), parent.as_raw_fd(), target.as_ptr(), 0) };
+    if cloned != 0 {
+        let error = std::io::Error::last_os_error();
+        return if error.kind() == std::io::ErrorKind::AlreadyExists {
+            Err(occupied)
+        } else {
+            Err(RestoreFault::Unreadable)
+        };
+    }
+    Ok(())
+}
+
+fn publish_held(held: &mut [Unpublished], journal: &mut Unpublished) -> Result<(), RestoreFault> {
+    for file in held.iter_mut() {
+        file.publish_in(RestoreFault::Tamper)?;
+    }
+    journal.publish_in(RestoreFault::Tamper)
+}
+
+fn held_still_sealed(
+    directory: &File,
+    identity: &TreeId,
+    loaded: &LoadedTree,
+    held: &mut [Unpublished],
+    journal: &mut Unpublished,
+) -> Result<(), RestoreFault> {
+    if tree_id_of(directory)? != *identity {
+        return Err(RestoreFault::Tamper);
+    }
+    if journal.read_back()? != loaded.journal.as_bytes() {
+        return Err(RestoreFault::Tamper);
+    }
+    let mut lines = Vec::new();
+    for file in held.iter_mut() {
+        let fingerprint = file.rehash()?;
+        if fingerprint != file.fingerprint {
+            return Err(RestoreFault::Tamper);
+        }
+        lines.push(format!("{} {}", file.relative, fingerprint.hex()));
+    }
+    lines.sort();
+    if Fingerprint::of(lines.join("\n").as_bytes()) != loaded.content {
+        return Err(RestoreFault::Tamper);
+    }
+    // Unix files are not named yet. A named file is one this attempt did not write.
+    #[cfg(unix)]
+    if contains_file(directory)? {
+        return Err(RestoreFault::Tamper);
+    }
+    // Windows names the files while the handles deny writers. An extra name is
+    // not the seal. The check does not reopen the files.
+    #[cfg(windows)]
+    {
+        let mut expected: Vec<String> = held.iter().map(|file| file.relative.clone()).collect();
+        expected.push(String::from("journal.txt"));
+        if unexpected_file(directory, "", &expected)? {
+            return Err(RestoreFault::Tamper);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn unexpected_file(
+    directory: &File,
+    prefix: &str,
+    expected: &[String],
+) -> Result<bool, RestoreFault> {
+    for name in list_names(directory)? {
+        let relative = child_relative(prefix, &name)?;
+        match kind_at(directory, &name)? {
+            EntryKind::Directory => {
+                if unexpected_file(&open_dir_at(directory, &name)?, &relative, expected)? {
+                    return Ok(true);
+                }
+            }
+            EntryKind::File => {
+                if !expected.iter().any(|item| item == &relative) {
+                    return Ok(true);
+                }
+            }
+            EntryKind::Symlink | EntryKind::Other => return Ok(true),
+            EntryKind::Missing => return Err(RestoreFault::Unreadable),
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn contains_file(directory: &File) -> Result<bool, RestoreFault> {
+    for name in list_names(directory)? {
+        match kind_at(directory, &name)? {
+            EntryKind::File | EntryKind::Symlink | EntryKind::Other => return Ok(true),
+            EntryKind::Directory => {
+                if contains_file(&open_dir_at(directory, &name)?)? {
+                    return Ok(true);
+                }
+            }
+            EntryKind::Missing => return Err(RestoreFault::Unreadable),
+        }
+    }
+    Ok(false)
 }
 
 fn sync_tree_at(directory: &File) -> Result<(), RestoreFault> {
@@ -1844,22 +2259,21 @@ fn sync_tree_at(directory: &File) -> Result<(), RestoreFault> {
             sync_tree_at(&child)?;
         }
     }
-    directory.sync_all().map_err(|_| RestoreFault::Unreadable)
+    sync_dir(directory)
 }
 
-fn still_sealed(
-    directory: &File,
-    identity: &TreeId,
-    loaded: &LoadedTree,
-) -> Result<(), RestoreFault> {
-    if tree_id_of(directory)? != *identity {
-        return Err(RestoreFault::Tamper);
+/// Directory durability. Windows has no directory fsync; a read-only handle
+/// fails `FlushFileBuffers`, so this is the same no-op as `sync_directory`.
+fn sync_dir(directory: &File) -> Result<(), RestoreFault> {
+    #[cfg(windows)]
+    {
+        let _ = directory;
+        Ok(())
     }
-    let journal = read_file_at(directory, OsStr::new("journal.txt"))?;
-    if journal != loaded.journal || content_of(directory)? != loaded.content {
-        return Err(RestoreFault::Tamper);
+    #[cfg(not(windows))]
+    {
+        directory.sync_all().map_err(|_| RestoreFault::Unreadable)
     }
-    Ok(())
 }
 
 fn sealed_beside(parent: &File, live_name: &OsStr) -> Result<SealedDir, RestoreFault> {
@@ -1929,7 +2343,7 @@ fn publish_marker_at(directory: &File, body: &[u8]) -> Result<(), RestoreFault> 
         let _ = unlink_at(directory, marker);
         return Err(RestoreFault::Unreadable);
     }
-    if directory.sync_all().is_err() {
+    if sync_dir(directory).is_err() {
         return match unlink_at(directory, marker) {
             Ok(()) => Err(RestoreFault::Unreadable),
             Err(_) => Err(RestoreFault::Retained),
@@ -2093,25 +2507,6 @@ fn open_dir_at(parent: &File, name: &OsStr) -> Result<File, RestoreFault> {
             .map_err(|_| RestoreFault::Unreadable)?;
         let _ = windows_file_id(&file)?;
         Ok(file)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (parent, name);
-        Err(RestoreFault::Unreadable)
-    }
-}
-
-fn create_private_at(parent: &File, name: &OsStr) -> Result<File, RestoreFault> {
-    #[cfg(unix)]
-    {
-        open_file_at(parent, name, OpenMode::CreateNew)
-    }
-    #[cfg(windows)]
-    {
-        // The held directory is not shared for delete. The new file carries
-        // the private descriptor `open` trusts, which a plain create omits.
-        let path = path_of_handle(parent)?.join(name);
-        open(&path, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -2452,6 +2847,7 @@ fn case_of_file(file: &File) -> Result<VolumeCase, RestoreFault> {
 }
 
 /// Decode a `/proc/self/mountinfo` field. Octal escapes are three digits.
+#[cfg(any(test, target_os = "linux"))]
 fn decode_mount_field(field: &str) -> String {
     let bytes = field.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -2474,6 +2870,7 @@ fn decode_mount_field(field: &str) -> String {
 
 /// Filesystem type of `target` in a mountinfo table. The longest decoded
 /// mount point wins.
+#[cfg(any(test, target_os = "linux"))]
 fn fstype_at_mount(text: &str, target: &str) -> Option<String> {
     let mut best: Option<(usize, String)> = None;
     for line in text.lines() {
@@ -3501,6 +3898,81 @@ fn a_write_through_the_temp_inode_does_not_change_the_published_file() {
     writer.write_all(b"tampered-bytes!!").unwrap();
     writer.sync_all().unwrap();
     assert_eq!(fs::read(live.join(relative)).unwrap(), bytes);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_held_file_is_not_a_directory_entry_until_publication() {
+    let root = tempfile::tempdir().unwrap();
+    let parent = open_directory(root.path(), false).unwrap();
+    let mut held = create_unpublished(
+        &parent,
+        OsStr::new("note"),
+        "note",
+        false,
+        RestoreFault::Tamper,
+    )
+    .unwrap();
+    held.store(b"sealed").unwrap();
+    assert!(list_names(&parent).unwrap().is_empty());
+    fs::write(root.path().join("note"), b"tampered").unwrap();
+    assert_eq!(held.read_back().unwrap(), b"sealed");
+    assert_eq!(
+        held.publish_in(RestoreFault::Tamper).unwrap_err(),
+        RestoreFault::Tamper
+    );
+    fs::remove_file(root.path().join("note")).unwrap();
+    held.publish_in(RestoreFault::Tamper).unwrap();
+    assert_eq!(fs::read(root.path().join("note")).unwrap(), b"sealed");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_cut_reads_the_unnamed_inode() {
+    let root = tempfile::tempdir().unwrap();
+    let parent = open_directory(root.path(), false).unwrap();
+    let (bytes, digest) = one_conversation("conv", b"verified-bytes");
+    let mut held = create_unpublished(
+        &parent,
+        OsStr::new("conv.sqlite3"),
+        "conv.sqlite3",
+        true,
+        RestoreFault::SessionDiffers,
+    )
+    .unwrap();
+    held.store(&bytes).unwrap();
+    held.sync_file().unwrap();
+    assert!(list_names(&parent).unwrap().is_empty());
+    let stream = inspect_open_file(held.file_mut().unwrap(), "conv").unwrap();
+    assert_eq!(Fingerprint::from_digest(stream.digest), digest);
+    assert!(list_names(&parent).unwrap().is_empty());
+    held.publish_in(RestoreFault::SessionDiffers).unwrap();
+    assert_eq!(fs::read(root.path().join("conv.sqlite3")).unwrap(), bytes);
+    assert!(list_names(&parent)
+        .unwrap()
+        .iter()
+        .all(|name| !name.to_string_lossy().contains("verified-")));
+}
+
+#[cfg(windows)]
+#[test]
+fn a_held_file_rejects_a_second_writer() {
+    let root = tempfile::tempdir().unwrap();
+    let parent = open_directory(root.path(), false).unwrap();
+    let held = create_unpublished(
+        &parent,
+        OsStr::new("note"),
+        "note",
+        false,
+        RestoreFault::Tamper,
+    )
+    .unwrap();
+    let error = fs::OpenOptions::new()
+        .write(true)
+        .open(root.path().join("note"))
+        .unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(32));
+    drop(held);
 }
 
 #[test]

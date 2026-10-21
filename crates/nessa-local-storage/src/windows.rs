@@ -203,12 +203,27 @@ fn raw_open(
     disposition: u32,
     attributes: *const SECURITY_ATTRIBUTES,
 ) -> io::Result<File> {
+    raw_open_sharing(
+        path,
+        access,
+        disposition,
+        attributes,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    )
+}
+fn raw_open_sharing(
+    path: &Path,
+    access: u32,
+    disposition: u32,
+    attributes: *const SECURITY_ATTRIBUTES,
+    share: u32,
+) -> io::Result<File> {
     unsafe {
         let path = wide(path)?;
         let handle = CreateFileW(
             path.as_ptr(),
             access,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            share,
             attributes,
             disposition,
             FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
@@ -312,6 +327,30 @@ pub fn verify_file(file: &File) -> io::Result<()> {
 }
 pub fn open(path: &Path, mode: OpenMode) -> io::Result<File> {
     open_with_additional_access(path, mode, 0)
+}
+
+/// Create `path` and hold it so a second write open fails until this handle closes.
+///
+/// The descriptor is the private one `open` trusts. Share mode is read only, so
+/// a descriptor opened on the name cannot change the bytes this handle wrote.
+pub fn create_no_writers(path: &Path) -> io::Result<File> {
+    check_parents(path)?;
+    let user = User::current()?;
+    let descriptor = user.descriptor(false)?;
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: 0,
+    };
+    let file = raw_open_sharing(
+        path,
+        GENERIC_READ | GENERIC_WRITE,
+        CREATE_NEW,
+        &attributes,
+        FILE_SHARE_READ,
+    )?;
+    verify_file(&file)?;
+    Ok(file)
 }
 fn open_with_additional_access(
     path: &Path,

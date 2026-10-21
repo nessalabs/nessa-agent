@@ -749,6 +749,182 @@ async fn a_failed_cleanup_removes_the_journal() {
     assert!(!place.live.exists());
 }
 
+struct SpendMissed {
+    keep_marker: bool,
+}
+
+impl QuarantineLayout for SpendMissed {
+    fn begin(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
+        DirectoryQuarantine.begin(quarantine, live)
+    }
+
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
+        DirectoryQuarantine.load(root)
+    }
+
+    fn promote(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+        loaded: &LoadedTree,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, loaded)
+    }
+
+    fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_tree(path)
+    }
+
+    fn remove_known(&self, _path: &Path, _identity: &TreeId) -> Result<(), RestoreFault> {
+        Err(RestoreFault::Unreadable)
+    }
+
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
+        DirectoryQuarantine.read_bytes(path)
+    }
+
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.session_temp(root, relative)
+    }
+
+    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.publish_file(temp, final_path)
+    }
+
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_publication(session)
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
+        if self.keep_marker
+            && path.file_name().and_then(|name| name.to_str()) == Some("accept-ready")
+        {
+            return Err(RestoreFault::Unreadable);
+        }
+        DirectoryQuarantine.remove_file(path)
+    }
+
+    fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.exists(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.canonicalize(path)
+    }
+
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
+        DirectoryQuarantine.anchor(path)
+    }
+
+    fn hold(
+        &self,
+        root: &AnchoredRoot,
+    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root, staging_id)?;
+        Err(RestoreFault::Unreadable)
+    }
+
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.spoil(path)
+    }
+
+    fn session_cut(
+        &self,
+        path: &Path,
+        conversation_id: &str,
+    ) -> Result<crate::backup::application::SessionCut, RestoreFault> {
+        DirectoryQuarantine.session_cut(path, conversation_id)
+    }
+}
+
+#[tokio::test]
+async fn a_failed_spend_retires_the_readiness_marker() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let audit = MemoryAudit::fail_after(2);
+    let source = DirectoryVerificationSource::open(bundle.root.clone()).unwrap();
+    let error = stage_quarantine(
+        &StageRequest {
+            facts: person(RestoreAction::Stage),
+            bundle: &source,
+            format: &ExportFormat,
+            verifier: &bundle.key,
+            limits: VerificationLimits::default(),
+            later_inventory: None,
+            quarantine: &place.quarantine,
+            live: &place.live,
+        },
+        &policy(),
+        &audit,
+        &SpendMissed { keep_marker: false },
+        &DirectoryMaterializer,
+        &KeyedInventory::new(bundle.key),
+        &OsStagingIds,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Audit);
+    assert!(place.quarantine.join("journal.txt").is_file());
+    assert!(!place.quarantine.join("accept-ready").exists());
+    assert!(audit.lines().iter().any(|line| line.cause == "sealed"));
+    assert!(audit.lines().iter().all(|line| line.cause != "spent"));
+    let accepted = accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap_err();
+    assert_eq!(accepted, RestoreFault::Tamper);
+    assert!(!place.live.exists());
+}
+
+#[tokio::test]
+async fn a_marker_that_survives_a_failed_spend_is_retained() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let audit = MemoryAudit::fail_after(2);
+    let source = DirectoryVerificationSource::open(bundle.root.clone()).unwrap();
+    let error = stage_quarantine(
+        &StageRequest {
+            facts: person(RestoreAction::Stage),
+            bundle: &source,
+            format: &ExportFormat,
+            verifier: &bundle.key,
+            limits: VerificationLimits::default(),
+            later_inventory: None,
+            quarantine: &place.quarantine,
+            live: &place.live,
+        },
+        &policy(),
+        &audit,
+        &SpendMissed { keep_marker: true },
+        &DirectoryMaterializer,
+        &KeyedInventory::new(bundle.key),
+        &OsStagingIds,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Retained);
+    let marker = fs::read(place.quarantine.join("accept-ready")).unwrap();
+    assert!(marker.starts_with(b"stage-"));
+    assert!(marker.ends_with(b"\n"));
+    assert!(audit.lines().iter().all(|line| line.cause != "spent"));
+    assert!(!place.live.exists());
+}
+
 fn accept(
     place: &Roots,
     audit: &dyn RestoreAudit,

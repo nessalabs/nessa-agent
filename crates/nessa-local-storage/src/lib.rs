@@ -21,6 +21,8 @@ mod windows;
 #[cfg(windows)]
 use windows as platform;
 
+#[cfg(windows)]
+pub use platform::create_no_writers;
 pub use platform::{
     create_directory, create_directory_beneath, create_directory_exclusive, open, open_beneath,
     remove_directory_beneath, remove_file_beneath, replace, replace_beneath, sync_directory,

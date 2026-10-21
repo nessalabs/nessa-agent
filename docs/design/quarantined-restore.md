@@ -93,6 +93,8 @@ supplies the id.
 | Sealed journal | The audit. Attestations are the journal digest and the staging id | `absent → verified`, cause `sealed` | |
 | The same journal bytes staged again after that id was spent | A new staging id. The old marker is not this generation | The latest unspent seal. A spent id is not current | Tamper when the marker is the spent id or `ready` |
 | Readiness failed and the marker still names the id | The quarantine, unready. The id is spent | `verified → unready` or `verified → absent`. Attestations are the staging id | The error. A later accept does not promote that marker |
+| Readiness failed, the tree remains, and the spend line is not stored | The quarantine, without its marker. The id is not spent | The spend line is missing | Audit. A later accept does not promote that tree |
+| Readiness failed, the spend line is not stored, and the marker still names the id | The quarantine. The marker is still that id | The spend line is missing | Retained |
 | Staging id fails and the published tree is removed | No quarantine | `unchanged → unchanged` | The id error |
 | Staging id fails and the published tree remains | The quarantine, unready | `absent → unready`, cause `retained` | Retained. Not an unchanged refusal |
 | The quarantine directory is replaced after it was read | The substitute stays at the quarantine path. The verified directory is not renamed | `unchanged → unchanged` | Tamper |
@@ -111,6 +113,8 @@ supplies the id.
 | `sessions/` is a symlink when the session file is reserved | The symlink. The target is not created | `unchanged → unchanged`, or retained when a partial name remains | Unreadable. The reservation is created beneath that directory |
 | The ancestor is renamed and a symlink takes its name after the root is anchored | The held ancestor. The symlink's target is not created | The symlink target is unchanged | The lock and the partial directory are created under the held ancestor |
 | A writer still holds the temp session and writes after the matching bytes were copied | The new session file. The temp inode is not that file | `held → available` names the copied bytes | The published file is those bytes. A different byte is not published |
+| A writer opens the predictable verified name after the stream matches | That name is not a file. The session name is the inode that was checked | `held → available` names that inode | The published file is those bytes |
+| A writer opens a file under the predictable sealed directory after the seal check | Those bytes have no name until they are linked for the rename. The live file is that inode | The live path, when the rename finishes | The live file is the sealed bytes |
 | The quarantine directory is renamed aside and the original path is gone | The directory the open handle names, removed, including its readiness marker | `verified → spent` when that retirement succeeds | The missing original path is not success |
 | mountinfo encodes a space in the mount point | That mount's filesystem, after the octal escape is decoded | One lock order for the two spellings | The case rule of that filesystem, not of `/` |
 | Two restores whose roots differ only by case on a folding volume | One lock order, from the folded identity | Each waits for the same first lock | Neither deadlocks on the other spelling |
@@ -149,12 +153,16 @@ supplies the id.
   `a_different_published_directory_is_not_removed`
 - The sealed copy is the directory this attempt created, in the live
   directory's parent, so the rename stays on the live volume. Its identity is
-  that open. Immediately before the rename, that directory is still at the
-  path and its bytes still match the seal. A replacement directory is not
-  adopted and is not deleted. A changed file in the copy is not promoted.
+  that open. The copied bytes stay on the handles that wrote them and have no
+  directory entry until the link that publication uses. Immediately before
+  that link, those handles still hold the seal, and the directory is still
+  the one this attempt created. A replacement directory is not adopted and is
+  not deleted. A changed file in the copy is not promoted. A file created at
+  the name the copy will use is a different inode.
   `a_changed_sealed_copy_is_not_promoted`,
   `a_replaced_sealed_directory_is_not_published`,
-  `the_sealed_copy_is_created_beside_live`
+  `the_sealed_copy_is_created_beside_live`,
+  `a_held_file_is_not_a_directory_entry_until_publication`
 - Cleanup deletes the directory the open handle names. A directory renamed
   aside is the one removed. A replacement at the old path stays.
   `a_renamed_directory_is_removed_by_its_handle`
@@ -190,11 +198,13 @@ supplies the id.
   `a_symlink_planted_after_reserve_is_not_opened`,
   `a_symlink_sessions_directory_is_not_the_reservation`
 - The published session is a new file of the bytes whose digest matched.
-  It is created beneath the held session directory. A write through the
-  temp file's descriptor does not change it. A different byte is not given
-  the session name, and no verified partial remains.
+  It is created beneath the held session directory. Those bytes have no
+  directory entry until the check has passed and the session name is linked.
+  A write through the temp file's descriptor does not change it. A different
+  byte is not given the session name, and no verified partial remains.
   `a_write_through_the_temp_inode_does_not_change_the_published_file`,
-  `a_different_byte_is_not_published`
+  `a_different_byte_is_not_published`,
+  `a_session_cut_reads_the_unnamed_inode`
 - That directory is opened as a directory. On Windows the open sets backup
   semantics, so the handle names the directory. A reparse point is not that
   directory. The volume of the temporary directory is read the same way.
@@ -358,7 +368,11 @@ supplies the id.
   readiness marker is the staging id, written under its final name after its
   bytes are synced, and the quarantine directory is synced after that rename.
   A failed directory sync retires the marker. Retirement that leaves a valid
-  id returns retained. `a_lock_file_is_not_the_live_path`,
+  id returns retained. A readiness failure whose spend line is not stored
+  removes the marker; a marker that still names the id is retained.
+  `a_failed_spend_retires_the_readiness_marker`,
+  `a_marker_that_survives_a_failed_spend_is_retained`,
+  `a_lock_file_is_not_the_live_path`,
   `an_injected_publication_suffix_is_not_promoted`,
   `a_readiness_directory_sync_failure_clears_the_marker`,
   `a_marker_that_cannot_be_cleared_is_retained`,

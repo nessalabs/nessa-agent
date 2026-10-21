@@ -135,9 +135,11 @@ pub trait QuarantineLayout {
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault>;
     /// Publish a new file of the session whose stream hashed to `digest`.
     ///
-    /// The default renames `temp`. The directory adapter copies into a file
-    /// this attempt creates and checks that copy, so a descriptor already
-    /// open on `temp` is not the published file.
+    /// The default renames `temp`. The directory adapter writes the bytes into
+    /// an inode it still holds, checks that inode, and only then gives it the
+    /// session name. A descriptor opened on `temp`, or on a name that existed
+    /// before that link, is not the published file. On Windows the session
+    /// name is held without write share until the check has passed.
     fn publish_verified(
         &self,
         root: &AnchoredRoot,
@@ -206,6 +208,15 @@ pub trait QuarantineLayout {
     fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault>;
     /// The staging id stored by [`QuarantineLayout::mark_ready`], when the marker is intact.
     fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault>;
+    /// Remove the readiness marker. [`RestoreFault::Retained`] means it still names an id.
+    fn retire_ready(&self, root: &AnchoredRoot) -> Result<(), RestoreFault> {
+        let marker = join_relative(root.path(), "accept-ready")?;
+        let _ = self.remove_file(&marker);
+        match self.ready(root) {
+            Ok(None) => Ok(()),
+            Ok(Some(_)) | Err(_) => Err(RestoreFault::Retained),
+        }
+    }
     /// Make a published session unreadable in place.
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault>;
     /// Stream size and fingerprint of one session file.
@@ -453,15 +464,17 @@ pub fn stage_quarantine(
     if let Err(error) = layout.mark_ready(&quarantine, &staging_id) {
         // The id is spent either way. A marker that remains is not a later accept.
         // A different directory at this path is left in place.
-        let after = if layout.remove_known(quarantine.path(), &published).is_ok() {
-            "absent"
-        } else {
-            "unready"
-        };
+        let removed = layout.remove_known(quarantine.path(), &published).is_ok();
+        let after = if removed { "absent" } else { "unready" };
         if recorded
             .record("verified", after, error.cause(), "effect", &staging_id)
             .is_err()
         {
+            // The spend line was the only record that this id is finished.
+            // Without it, a marker that still names the id can be promoted.
+            if !removed {
+                layout.retire_ready(&quarantine)?;
+            }
             return Err(RestoreFault::Audit);
         }
         return Err(error);

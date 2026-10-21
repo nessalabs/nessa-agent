@@ -124,8 +124,12 @@ the lock, the partial tree, the fetch, and promotion use the handle. The
 session file is the regular file this attempt still holds when SQLite opens
 it. That file is created beneath its parent directory, and that open does
 not follow a symlink. The published session is a new file of the bytes that
-matched the fingerprint. Promotion retires the quarantine directory the
-open handle still names when the original path is gone. A mount point is
+matched the fingerprint. That file has no name until the check has passed.
+Promotion links the sealed bytes, which were not directory entries, and then
+renames the directory. It retires the quarantine directory the
+open handle still names when the original path is gone. A readiness failure
+whose spend record is not stored removes the marker, and a marker that still
+names the id is retained. A mount point is
 read after octal escapes in mountinfo are decoded. A folding volume
 compares names by uppercase then lowercase, so final sigma and sigma are
 one path.
