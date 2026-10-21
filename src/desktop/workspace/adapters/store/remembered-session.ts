@@ -8,8 +8,9 @@
  * A new session's draft goes the same way. `withPanes` lets it go in the
  * close, and the home would go with it while the box is still there. An
  * established session the source removes does too: `forgetSession` drops
- * its unsent reply, and the composer would clear while the box stays.
- * What the composer was showing stays with the component.
+ * its unsent reply and its outbox, and the composer and the message still
+ * on its way would clear while the box stays. What the composer was
+ * showing, and that message, stay with the component.
  */
 import { useRef } from "react"
 import type { Transcript } from "../../model/transcript"

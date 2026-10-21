@@ -888,6 +888,12 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   text at once and keeps the box. On the next frame that box still shows
   the reply. After the box goes, the pane count is what it was before the
   split. _Check:_ `columns.mjs --only reply-held`.
+- [ ] **A message still on its way stays until that box goes.** The source
+  removing the session drops the outbox at once, including a send it
+  refused. The box still shows that message and the send failure until
+  the box itself goes. The sample source takes a send before the next
+  paint, so this is the layout test that puts the message on screen and
+  then removes the session.
 - [ ] **First-message handoff has one composer.** Sending from a new-session
   home replaces it without overlapping composer instances; the reply receives
   the caret and keeps the next draft. The composer glides into its dock and

@@ -569,6 +569,71 @@ describe("a source removing a session", () => {
       frames.restore()
     }
   })
+
+  it("keeps a message still on its way until the box goes", async () => {
+    // The conversation fills on a frame. The message has to be on screen
+    // before the source removes the session, or the box has nothing to keep.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      for (let step = 0; step < 8 && !pane()?.querySelector("textarea"); step++)
+        await act(async () => frames.runFrame())
+      expect(pane()?.querySelector("textarea")).not.toBeNull()
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.messageSent({
+            sessionId: "b",
+            initiator: "person",
+            message: {
+              id: "m-out",
+              role: "user",
+              at: 1000,
+              parts: [{ kind: "text", text: "still sending" }],
+              delivery: { state: "sending" },
+            },
+          }),
+        )
+      })
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sendFailed({
+            sessionId: "b",
+            messageId: "m-out",
+            reason: "unavailable",
+          }),
+        )
+      })
+      const bubble = () => pane()?.querySelector('[data-role="user"]')
+      const failure = () => pane()?.querySelector("[data-send-failure]")
+      expect(bubble()?.textContent).toContain("still sending")
+      expect(failure()).not.toBeNull()
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.outbox).not.toHaveProperty("b")
+      expect(bubble()?.textContent).toContain("still sending")
+      expect(failure()).not.toBeNull()
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(bubble()?.textContent).toContain("still sending")
+      expect(failure()).not.toBeNull()
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
 })
 
 describe("a draft's close", () => {

@@ -21,6 +21,7 @@ import { selectOutbox, selectTranscriptFailure } from "../../adapters/store/sele
 import {
   useRememberedSession,
   useRememberedTranscript,
+  useRememberedValue,
 } from "../../adapters/store/remembered-session"
 import { ProviderSignIn } from "./provider-sign-in"
 import { ApprovalCard } from "./approval-card"
@@ -83,7 +84,8 @@ export const Transcript = memo(function Transcript({
 }) {
   const dispatch = useWorkspaceDispatch()
   const transcript = useRememberedTranscript(sessionId)
-  const outbox = useWorkspaceSelector((state) => selectOutbox(state, sessionId))
+  const liveOutbox = useWorkspaceSelector((state) => selectOutbox(state, sessionId))
+  const outbox = useRememberedValue(sessionId, liveOutbox)
   const failure = useWorkspaceSelector((state) =>
     selectTranscriptFailure(state, sessionId),
   )
