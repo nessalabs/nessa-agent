@@ -836,7 +836,7 @@ pub trait ExecutionAudit: Send + Sync {
     /// Errors or bounded adapter timeouts prevent successful audited acknowledgements
     /// but must not prevent necessary cleanup. Delivery observations never establish
     /// provider acknowledgement or tool execution. Record every new decision in order.
-    /// A repeated TurnResumed::Declined record has stable (session, execution)
+    /// A prepared QueueSettled cancellation or TurnResumed::Declined record has stable (session, execution)
     /// identity: acknowledge the same complete semantic payload idempotently,
     /// preserving its first metadata, and reject any conflicting payload.
     ///
@@ -847,8 +847,8 @@ pub trait ExecutionAudit: Send + Sync {
     /// finishes, and bound their own retained work. Dropping the returned future
     /// does not prove that a write was cancelled or rolled back. The SDK does not
     /// retry an unacknowledged Agent audit record automatically, except the
-    /// prepared historical Declined decision whose exact identity/input survives
-    /// restart. An adapter must
+    /// prepared historical Declined decision or queued-cancellation receipt whose
+    /// exact identity/input survives restart. Other audit records are not replayed. An adapter must
     /// report success only at its documented durability boundary.
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()>;
 }

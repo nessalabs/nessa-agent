@@ -345,6 +345,12 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
                 .as_ref()
                 .map_or(0, |decision| scheduling_payload(decision.event())),
         )
+        .saturating_add(
+            record
+                .cancellation_delivery
+                .as_ref()
+                .map_or(0, |decision| scheduling_payload(decision.event())),
+        )
         .saturating_add(prompt)
         .saturating_add(events)
         .saturating_add(scheduling)
@@ -453,6 +459,13 @@ pub(super) fn touched(
                 .map_or(0, |decision| scheduling_payload(decision.event()))
         }),
         SessionChange::DeclineAcknowledged { .. } => 0,
+        SessionChange::CancellationPrepared { .. } => record.map_or(0, |record| {
+            record
+                .cancellation_delivery
+                .as_ref()
+                .map_or(0, |decision| scheduling_payload(decision.event()))
+        }),
+        SessionChange::CancellationAcknowledged { .. } => 0,
         SessionChange::SchedulingTransition { .. } => record.map_or(0, |record| {
             record
                 .scheduling

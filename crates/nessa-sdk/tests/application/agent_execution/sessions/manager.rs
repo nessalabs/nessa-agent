@@ -630,6 +630,7 @@ fn invocation(id: &str, complete: bool) -> InvocationRecord {
     let id = ExecutionId::new(id).unwrap();
     InvocationRecord {
         decline: None,
+        cancellation_delivery: None,
         resumed_from: None,
         target_event_offset: None,
         submission: SubmissionMode::Immediate,

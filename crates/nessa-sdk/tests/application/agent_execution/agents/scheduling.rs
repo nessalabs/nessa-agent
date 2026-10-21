@@ -1405,21 +1405,39 @@ async fn report_retains_failed_pending_cancellation_separately_from_cleanup() {
     let derived = report.clone().with_cleanup(report.cleanup().clone());
     assert_eq!(derived.scheduling(), report.scheduling());
     assert!(derived.into_result().is_err());
-    let failed = report.scheduling().clone();
     assert!(report.into_result().is_err());
     assert_eq!(audit.attempts.lock().unwrap().len(), 2);
     assert!(first.wait().await.is_err());
     assert_eq!(second.wait().await, Err(AgentError::Closed));
     let retried = agent.close_report(actor()).await.unwrap();
-    assert_eq!(
-        retried.scheduling(),
-        &failed,
-        "empty pending work retains the same actual cancelled-input audit obligation"
+    assert!(
+        retried.scheduling().is_ok(),
+        "actual original audit receipt is now acknowledged"
     );
     assert_eq!(
+        audit.attempts.lock().unwrap().as_slice(),
+        &[
+            ExecutionId::new("report-first").unwrap(),
+            ExecutionId::new("report-second").unwrap(),
+            ExecutionId::new("report-first").unwrap(),
+        ]
+    );
+    let snapshot = agent.inner.manager.snapshot().await.unwrap();
+    assert!(snapshot.invocations.iter().all(|record| record
+        .cancellation_delivery
+        .as_ref()
+        .unwrap()
+        .acknowledged()));
+    assert!(agent
+        .close_report(actor())
+        .await
+        .unwrap()
+        .scheduling()
+        .is_ok());
+    assert_eq!(
         audit.attempts.lock().unwrap().len(),
-        2,
-        "no blind audit redelivery"
+        3,
+        "acknowledged inputs are not replayed"
     );
 }
 

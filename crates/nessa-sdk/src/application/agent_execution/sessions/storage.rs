@@ -398,6 +398,31 @@ impl DeclineDecision {
     }
 }
 
+/// The original preparation and audit acknowledgement of one queued cancellation.
+/// The preparation is saved before its Cancelled edge can be applied, so a
+/// failed terminal save cannot orphan an audit from its original caller.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CancellationDecision {
+    event: InvocationSchedulingEvent,
+    acknowledged: bool,
+}
+impl CancellationDecision {
+    pub(crate) fn new(event: InvocationSchedulingEvent, acknowledged: bool) -> Self {
+        Self {
+            event,
+            acknowledged,
+        }
+    }
+    /// The once-only queued cancellation transition, including its original caller.
+    pub fn event(&self) -> &InvocationSchedulingEvent {
+        &self.event
+    }
+    /// Whether the idempotent audit delivery was durably acknowledged.
+    pub fn acknowledged(&self) -> bool {
+        self.acknowledged
+    }
+}
+
 /// Retained application evidence, not the authoritative live execution aggregate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSnapshot {
@@ -469,6 +494,18 @@ pub enum SessionChange {
         execution_id: ExecutionId,
         /// The validated new edge.
         event: InvocationSchedulingEvent,
+    },
+    /// Save the original queued cancellation before attempting its audit.
+    CancellationPrepared {
+        /// Accepted input whose queued work is being cancelled.
+        execution_id: ExecutionId,
+        /// Original immutable transition and unanswered delivery receipt.
+        decision: CancellationDecision,
+    },
+    /// The prepared cancellation audit's exact payload was acknowledged.
+    CancellationAcknowledged {
+        /// Accepted input with an original cancellation preparation.
+        execution_id: ExecutionId,
     },
     /// Retain the original decline preparation before applying its terminal edge.
     DeclinePrepared {
@@ -625,6 +662,8 @@ pub struct InvocationRecord {
     /// Original historical-decline preparation and independent audit receipt.
     /// Absence is no evidence of delivery for a historical untracked decision.
     pub decline: Option<DeclineDecision>,
+    /// Original queued cancellation and its independent durable audit receipt.
+    pub cancellation_delivery: Option<CancellationDecision>,
     /// Source execution admitted by the SDK resumption owner, saved atomically
     /// with this input. Ordinary enqueue/invoke never set this fact. It is
     /// independent of the later TurnResumed audit acknowledgement.
@@ -1224,6 +1263,7 @@ mod committed_tests {
             provider_context: ProviderContext::Absent,
             invocations: vec![InvocationRecord {
                 decline: None,
+                cancellation_delivery: None,
                 resumed_from: None,
                 request: ExecutionRequest {
                     execution_id: ExecutionId::new("execution").unwrap(),

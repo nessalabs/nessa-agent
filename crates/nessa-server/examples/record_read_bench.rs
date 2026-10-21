@@ -318,6 +318,7 @@ fn turn_record(
     let assistant = filler(turn, length, "Answer");
     Ok(InvocationRecord {
         decline: None,
+        cancellation_delivery: None,
         resumed_from: None,
         target_event_offset: None,
         submission: SubmissionMode::Immediate,

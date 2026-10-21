@@ -1115,6 +1115,7 @@ impl SessionManager {
                 super::notes::select(snapshot, &notes.candidates, notes.takes_notes, now_ms);
             let record = InvocationRecord {
                 decline: None,
+                cancellation_delivery: None,
                 resumed_from,
                 target_event_offset,
                 submission,
@@ -1725,6 +1726,26 @@ impl SessionManager {
         self.save_observed(&mut evidence).await
     }
 
+    pub(crate) async fn flush_cancellation_receipts(&self) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let pending = evidence
+            .pending
+            .iter()
+            .flat_map(SessionSaveUnit::changes)
+            .any(|change| {
+                matches!(
+                    change,
+                    SessionChange::CancellationPrepared { .. }
+                        | SessionChange::CancellationAcknowledged { .. }
+                )
+            });
+        if pending {
+            self.save_observed(&mut evidence).await
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) async fn flush_decline_receipts(&self) -> Result<(), StorageError> {
         let mut evidence = self.evidence.lock().await;
         let pending = evidence
@@ -1745,6 +1766,60 @@ impl SessionManager {
         }
     }
 
+    pub(crate) async fn prepare_cancellation(
+        &self,
+        index: usize,
+        event: InvocationSchedulingEvent,
+    ) -> Result<super::CancellationDecision, StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let record = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.invocations.get(index))
+            .ok_or_else(|| StorageError::Corrupt("cancellation has no invocation".into()))?;
+        if record.cancellation_delivery.is_none() {
+            let execution_id = record.request.execution_id.clone();
+            let decision = super::CancellationDecision::new(event, false);
+            evidence.record(vec![SessionChange::CancellationPrepared {
+                execution_id,
+                decision,
+            }])?;
+        }
+        // The preparation, unlike the terminal edge, must be acknowledged
+        // before its independently durable audit can be attempted.
+        self.save_observed(&mut evidence).await?;
+        Ok(evidence.observed().unwrap().invocations[index]
+            .cancellation_delivery
+            .clone()
+            .unwrap())
+    }
+
+    pub(crate) async fn acknowledge_cancellation(
+        &self,
+        index: usize,
+        save: bool,
+    ) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let record = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.invocations.get(index))
+            .ok_or_else(|| {
+                StorageError::Corrupt("cancellation acknowledgement has no invocation".into())
+            })?;
+        let decision = record.cancellation_delivery.as_ref().ok_or_else(|| {
+            StorageError::Corrupt("cancellation acknowledgement has no preparation".into())
+        })?;
+        if !decision.acknowledged() {
+            let execution_id = record.request.execution_id.clone();
+            evidence.record(vec![SessionChange::CancellationAcknowledged {
+                execution_id,
+            }])?;
+        }
+        if save {
+            self.save_observed(&mut evidence).await
+        } else {
+            Ok(())
+        }
+    }
     pub(crate) async fn prepare_decline(
         &self,
         index: usize,

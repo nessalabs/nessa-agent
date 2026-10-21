@@ -872,9 +872,13 @@ impl Resources {
                 .is_some_and(|snapshot| {
                     snapshot.invocations.iter().any(|record| {
                         record
-                            .decline
+                            .cancellation_delivery
                             .as_ref()
                             .is_some_and(|decision| !decision.acknowledged())
+                            || record
+                                .decline
+                                .as_ref()
+                                .is_some_and(|decision| !decision.acknowledged())
                     }) || !owed_turn_ids(&snapshot.invocations).is_empty()
                 });
             if !has_decline {
@@ -909,6 +913,10 @@ impl Resources {
             *history = Some(agent);
         }
         let agent = history.as_ref().expect("restored decline owner");
+        agent
+            .retry_cancelled_receipts()
+            .await
+            .map_err(ConversationError::Agent)?;
         for turn in agent.owed_turns().await {
             agent
                 .decline_turn(&turn, actor.clone())

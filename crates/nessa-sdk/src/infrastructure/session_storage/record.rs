@@ -797,6 +797,7 @@ mod tests {
         };
         SessionChange::InputAccepted(Box::new(InvocationRecord {
             decline: None,
+            cancellation_delivery: None,
             request: ExecutionRequest {
                 user_message: UserMessage::text_only(PromptText::new("x".repeat(bytes)).unwrap()),
                 ..record.request.clone()
@@ -827,6 +828,7 @@ mod tests {
     ) -> SessionChange {
         SessionChange::InputAccepted(Box::new(InvocationRecord {
             decline: None,
+            cancellation_delivery: None,
             resumed_from: None,
             target_event_offset: None,
             submission,
@@ -1160,6 +1162,7 @@ mod tests {
         let secret = "NESSA_ERASE_PRIVATE_INPUT_275";
         let input = InvocationRecord {
             decline: None,
+            cancellation_delivery: None,
             resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
@@ -1495,6 +1498,7 @@ mod tests {
         let execution_id = ExecutionId::new("execution").unwrap();
         let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
             decline: None,
+            cancellation_delivery: None,
             resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
@@ -2444,6 +2448,7 @@ mod tests {
         let input = |execution_id: ExecutionId| {
             SessionChange::InputAccepted(Box::new(InvocationRecord {
                 decline: None,
+                cancellation_delivery: None,
                 resumed_from: None,
                 target_event_offset: None,
                 submission: SubmissionMode::Immediate,
@@ -3157,6 +3162,7 @@ mod tests {
         let execution_id = ExecutionId::new("accepted").unwrap();
         let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
             decline: None,
+            cancellation_delivery: None,
             resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,

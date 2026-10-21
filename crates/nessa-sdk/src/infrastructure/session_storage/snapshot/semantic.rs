@@ -201,6 +201,13 @@ enum WireChange<E = Event> {
     DeclineAcknowledged {
         execution_id: String,
     },
+    CancellationPrepared {
+        execution_id: String,
+        decision: super::records::SavedCancellation,
+    },
+    CancellationAcknowledged {
+        execution_id: String,
+    },
     ProviderObservation(E),
     ReceiptUpdated {
         execution_id: String,
@@ -314,6 +321,18 @@ impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
             SessionChange::DeclineAcknowledged { execution_id } => Self::DeclineAcknowledged {
                 execution_id: execution_id.as_str().into(),
             },
+            SessionChange::CancellationPrepared {
+                execution_id,
+                decision,
+            } => Self::CancellationPrepared {
+                execution_id: execution_id.as_str().into(),
+                decision: decision.into(),
+            },
+            SessionChange::CancellationAcknowledged { execution_id } => {
+                Self::CancellationAcknowledged {
+                    execution_id: execution_id.as_str().into(),
+                }
+            }
             SessionChange::ProviderObservation(event) => Self::ProviderObservation(event.into()),
             SessionChange::ReceiptUpdated {
                 execution_id,
@@ -416,6 +435,18 @@ impl TryFrom<WireChange> for SessionChange {
             WireChange::DeclineAcknowledged { execution_id } => Self::DeclineAcknowledged {
                 execution_id: ExecutionId::new(execution_id).map_err(corrupt)?,
             },
+            WireChange::CancellationPrepared {
+                execution_id,
+                decision,
+            } => Self::CancellationPrepared {
+                execution_id: ExecutionId::new(execution_id).map_err(corrupt)?,
+                decision: decision.decode()?,
+            },
+            WireChange::CancellationAcknowledged { execution_id } => {
+                Self::CancellationAcknowledged {
+                    execution_id: ExecutionId::new(execution_id).map_err(corrupt)?,
+                }
+            }
             WireChange::ProviderObservation(_) => {
                 return Err(corrupt("provider observation requires folded context"));
             }
@@ -746,6 +777,7 @@ mod tests {
         let id = ExecutionId::new("one").unwrap();
         let record = InvocationRecord {
             decline: None,
+            cancellation_delivery: None,
             resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
@@ -921,6 +953,7 @@ mod tests {
             ImageReference::new(Sha256Digest::from_bytes([1; 32]), ImageMediaType::Png, 1).unwrap();
         let record = InvocationRecord {
             decline: None,
+            cancellation_delivery: None,
             resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
@@ -977,6 +1010,7 @@ mod tests {
     fn semantic_admission_restores_who_started_the_turn() {
         let record = |initiation| InvocationRecord {
             decline: None,
+            cancellation_delivery: None,
             resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Queued,
@@ -1124,6 +1158,7 @@ mod tests {
             .unwrap();
         let record = InvocationRecord {
             decline: None,
+            cancellation_delivery: None,
             resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,

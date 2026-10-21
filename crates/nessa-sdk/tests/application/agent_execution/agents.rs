@@ -1105,6 +1105,7 @@ async fn unfinished_saved_invocations_are_retained_without_automatic_replay() {
         ),
         invocations: vec![InvocationRecord {
             decline: None,
+            cancellation_delivery: None,
             resumed_from: None,
             target_event_offset: None,
             provider_report: None,
@@ -1237,6 +1238,7 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
             ),
             invocations: vec![InvocationRecord {
                 decline: None,
+                cancellation_delivery: None,
                 resumed_from: None,
                 target_event_offset: None,
                 provider_report: None,

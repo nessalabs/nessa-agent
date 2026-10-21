@@ -30,7 +30,7 @@ pub trait ExecutionAuditFileWriter: Send + Sync {
     /// Publish one record. Failure may follow a physical effect; it is not rollback.
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), AgentError>;
 
-    /// Publish a stable decline identity exactly once, or acknowledge its exact
+    /// Publish a stable prepared decision identity exactly once, or acknowledge its exact
     /// existing semantic payload after syncing the winner. Never replace an
     /// existing record. Unsupported injected writers fail conservatively.
     fn write_once(&self, _path: &Path, _bytes: &[u8]) -> Result<(), AgentError> {
@@ -189,6 +189,13 @@ impl ExecutionAudit for DurableExecutionAudit {
                             ))
                             .map_err(|_| AgentError::AuditFailure)?;
                             Some(format!("decline-{:x}", Sha256::digest(key)))
+                        }
+                        ExecutionAuditRecord::QueueSettled(record)
+                            if record.after() == nessa_sdk::domain::agent_execution::executions::InvocationStage::Cancelled =>
+                        {
+                            let key = serde_json::to_vec(&(record.session_id().as_str(), record.execution_id().as_str()))
+                                .map_err(|_| AgentError::AuditFailure)?;
+                            Some(format!("cancellation-{:x}", Sha256::digest(key)))
                         }
                         _ => None,
                     };

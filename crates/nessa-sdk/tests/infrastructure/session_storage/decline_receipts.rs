@@ -211,3 +211,70 @@ fn sdk_close_acknowledgement_requires_exact_lease_operation_target_and_atomic_hi
         )])
         .is_err());
 }
+
+#[test]
+fn cancellation_receipt_semantic_checkpoint_and_refusal_keep_original_input() {
+    use crate::application::agent_execution::sessions::CancellationDecision;
+    let mut original = history_fixture(1);
+    let record = &mut original.invocations[0];
+    record.submission = crate::application::agent_execution::executions::SubmissionMode::Queued;
+    record.scheduling = vec![InvocationSchedulingEvent {
+        kind: InvocationKind::Queued,
+        target: None,
+        before: None,
+        stage: InvocationStage::Queued,
+        cause: SchedulingCause::Submitted,
+        actor: Some(record.actor.clone()),
+    }];
+    let id = record.request.execution_id.clone();
+    let event = InvocationSchedulingEvent {
+        kind: InvocationKind::Queued,
+        target: None,
+        before: Some(InvocationStage::Queued),
+        stage: InvocationStage::Cancelled,
+        cause: SchedulingCause::SessionClosed,
+        actor: Some(ActionContext::new("first-person", "panel", "original-cancel").unwrap()),
+    };
+    let prep = SessionChange::CancellationPrepared {
+        execution_id: id.clone(),
+        decision: CancellationDecision::new(event.clone(), false),
+    };
+    let ack = SessionChange::CancellationAcknowledged {
+        execution_id: id.clone(),
+    };
+    let mut state = Continuation::restore(Some(original.clone())).unwrap();
+    assert!(state.apply_unit(std::slice::from_ref(&ack)).is_err());
+    assert_eq!(state.snapshot.as_ref(), Some(&original));
+    for change in [
+        prep.clone(),
+        ack.clone(),
+        SessionChange::SchedulingTransition {
+            execution_id: id,
+            event: event.clone(),
+        },
+    ] {
+        let encoded = super::super::semantic::encode_batch(std::slice::from_ref(&change)).unwrap();
+        let decoded =
+            super::super::semantic::decode_batch(&encoded, &original.provider_context).unwrap();
+        assert_eq!(decoded, vec![change]);
+        state.apply_unit(&decoded).unwrap();
+        let snapshot = state.snapshot.as_ref().unwrap();
+        let bytes = serde_json::to_vec(&SnapshotRef(snapshot)).unwrap();
+        let restored: Snapshot = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(&restored.decode().unwrap(), snapshot);
+    }
+    let before = state.snapshot.clone();
+    let bytes = state.snapshot_bytes;
+    assert!(state.apply_unit(&[ack, prep]).is_err());
+    assert_eq!(state.snapshot, before);
+    assert_eq!(state.snapshot_bytes, bytes);
+    let receipt = state
+        .snapshot
+        .unwrap()
+        .invocations
+        .remove(0)
+        .cancellation_delivery
+        .unwrap();
+    assert_eq!(receipt.event(), &event);
+    assert!(receipt.acknowledged());
+}

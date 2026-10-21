@@ -1166,3 +1166,72 @@ async fn close_joins_prepared_decline_evidence_even_when_no_work_is_owed() {
         .acknowledged());
     assert!(backend.executions.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn prepared_cancellation_receipt_restarts_under_its_original_decision_and_joins_only_real_ack(
+) {
+    let saved = cut_off_while_running("cancellation-restart").await;
+    let (agent, backend, storage, hold) = restore_holding(saved).await;
+    backend.audit.reject.store(true, Ordering::SeqCst);
+    let turn = agent.owed_turns().await.remove(0);
+    let Resumed::ContinuedUnaudited { admission, .. } =
+        bounded(agent.resume_turn(&turn, resumer())).await.unwrap()
+    else {
+        panic!("audit rejection must remain visible")
+    };
+    let _ = hold.send(());
+    let _ = bounded(admission.wait()).await;
+    let before = storage.snapshot();
+    let cancellation = before
+        .invocations
+        .iter()
+        .find(|record| record.cancellation_delivery.is_some())
+        .unwrap();
+    let id = cancellation.request.execution_id.clone();
+    let decision = cancellation.cancellation_delivery.clone().unwrap();
+    assert!(!decision.acknowledged());
+    let restart = MemoryStorage::default();
+    restart.0.lock().unwrap().snapshot = Some(before);
+    backend.audit.reject.store(false, Ordering::SeqCst);
+    bounded(agent.close(actor())).await.unwrap();
+    let (restored, fresh, storage) = workflow_from_storage(restart).await;
+    fresh.audit.reject.store(true, Ordering::SeqCst);
+    assert_eq!(
+        bounded(restored.retry_cancelled_receipts()).await,
+        Err(AgentError::AuditFailure)
+    );
+    let failed = storage.snapshot();
+    assert_eq!(
+        failed
+            .invocations
+            .iter()
+            .find(|record| record.request.execution_id == id)
+            .unwrap()
+            .cancellation_delivery
+            .as_ref(),
+        Some(&decision)
+    );
+    fresh.audit.reject.store(false, Ordering::SeqCst);
+    bounded(restored.retry_cancelled_receipts()).await.unwrap();
+    let acknowledged = storage.snapshot();
+    let record = acknowledged
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id == id)
+        .unwrap();
+    let receipt = record.cancellation_delivery.as_ref().unwrap();
+    assert!(receipt.acknowledged());
+    assert_eq!(receipt.event(), decision.event());
+    assert_eq!(
+        record
+            .scheduling
+            .iter()
+            .filter(|edge| *edge == decision.event())
+            .count(),
+        1
+    );
+    let calls = fresh.audit.records.lock().unwrap().len();
+    bounded(restored.retry_cancelled_receipts()).await.unwrap();
+    assert_eq!(fresh.audit.records.lock().unwrap().len(), calls);
+    bounded(restored.close(actor())).await.unwrap();
+}

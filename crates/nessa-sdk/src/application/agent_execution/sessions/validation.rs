@@ -361,6 +361,9 @@ pub(super) fn validate_observation_identity(event: &ExecutionEvent) -> Result<()
 pub(super) fn invocation_history(
     invocation: &InvocationRecord,
 ) -> Result<InvocationHistory, StorageError> {
+    if let Some(decision) = &invocation.cancellation_delivery {
+        validate_cancellation_delivery(invocation, decision)?;
+    }
     if let Some(decision) = &invocation.decline {
         validate_decline(invocation, decision)?;
     }
@@ -590,4 +593,31 @@ pub(super) fn local_result_transition(
         .record_local_result(result.as_ref().copied().map_err(|_| ()))
         .map_err(corrupt)?;
     Ok(history.local_outcome())
+}
+
+/// Validate the saved original queued cancellation against its admitted input.
+pub(super) fn validate_cancellation_delivery(
+    invocation: &InvocationRecord,
+    decision: &super::CancellationDecision,
+) -> Result<(), StorageError> {
+    let event = decision.event();
+    let applied = invocation.scheduling.iter().position(|edge| edge == event);
+    let prefix = applied.map_or(&invocation.scheduling[..], |at| {
+        &invocation.scheduling[..at]
+    });
+    let preceding = prefix
+        .last()
+        .ok_or_else(|| corrupt("cancellation preparation has no queued input"))?;
+    if preceding.stage != InvocationStage::Queued
+        || event.kind != preceding.kind
+        || event.target != preceding.target
+        || event.before != Some(InvocationStage::Queued)
+        || event.stage != InvocationStage::Cancelled
+    {
+        return Err(corrupt(
+            "cancellation preparation contradicts its queued input",
+        ));
+    }
+    event.transition().map_err(corrupt)?;
+    Ok(())
 }
