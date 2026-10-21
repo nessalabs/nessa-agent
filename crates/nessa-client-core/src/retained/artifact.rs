@@ -605,10 +605,12 @@ impl RetainedCache {
     /// that runs out during a busy pause, the part's re-read, the sync
     /// before the hard link, or inside the publication gate before that
     /// link starts, is `Unreachable`. A link that takes the
-    /// publication gate stays published. `ReadStop::stop` stays `Stopped`,
-    /// including a local match that was cancelled while the output was read.
-    /// A relay that says
-    /// the gateway is offline, when the direct dial did not connect, is `Away`.
+    /// publication gate stays published. A stop the operation observed stays
+    /// `Stopped`, including a local match cancelled while the output was
+    /// read. A `Protocol` or `Unreachable` result that already settled stays
+    /// that result when `stop` is set afterwards. A relay that says the
+    /// gateway is offline, when the direct dial did not connect, is `Away`,
+    /// including after that later stop.
     pub fn fetch_artifact(
         &mut self,
         access: ReaderAccess<'_>,
@@ -662,21 +664,22 @@ impl RetainedCache {
     }
 }
 
-/// A dial that never reached the gateway. A settled authority refusal stays
-/// a refusal, including when `stop` is set afterwards. Any other caller stop
-/// stays a stop. A relay `Offline` is `Away`. A spent budget is `Unreachable`.
+/// A failure the operation already returned. `Stopped` is that failure when
+/// the operation observed cancellation, and a later `stop` keeps it, ahead of
+/// a spent budget. `Protocol`, `Unreachable`, and `Refused` stay when `stop`
+/// is set afterwards. A relay `Offline` on an unreachable dial is `Away`,
+/// including after that later stop. A spent budget, with the stop clear,
+/// reports the cancellation it caused as `Unreachable`.
 fn dial_failure(
     failure: ReadFailure,
     stop: &ReadStop,
     ending: &Stopping,
     offline: bool,
 ) -> ReadFailure {
-    if matches!(failure, ReadFailure::Refused) {
-        failure
-    } else if stop.is_stopped() {
-        ReadFailure::Stopped
-    } else if offline && matches!(failure, ReadFailure::Unreachable) {
+    if offline && matches!(failure, ReadFailure::Unreachable) {
         ReadFailure::Away
+    } else if matches!(failure, ReadFailure::Stopped) && stop.is_stopped() {
+        ReadFailure::Stopped
     } else if ending.spent() && matches!(failure, ReadFailure::Stopped | ReadFailure::Unreachable) {
         ReadFailure::Unreachable
     } else {
@@ -685,8 +688,9 @@ fn dial_failure(
 }
 
 /// A range the budget cancelled is not a caller stop. `failure` maps that
-/// cancellation to `Stopped` before this sees it. A gateway `Refused` that
-/// already settled stays `Refused` when `stop` is set afterwards.
+/// cancellation to `Stopped` before this sees it. A gateway `Refused`,
+/// `Protocol`, or `Unreachable` that already settled stays that cause when
+/// `stop` is set afterwards.
 fn classify_artifact_fault(
     fault: ArtifactFault,
     stop: &ReadStop,

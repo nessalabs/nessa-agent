@@ -430,6 +430,33 @@ fn a_settled_refusal_survives_a_later_stop() {
 }
 
 #[test]
+fn a_settled_gateway_fault_survives_a_later_stop() {
+    let stop = ReadStop::new();
+    let ending = running(stop.clone());
+    stop.stop();
+    for failure in [ReadFailure::Protocol, ReadFailure::Unreachable] {
+        let fault = ArtifactFault::progress(ArtifactFaultKind::Gateway(failure), 4, 1);
+        let kept = super::classify_artifact_fault(fault, &stop, &ending);
+        assert_eq!(
+            kept.kind(),
+            ArtifactFaultKind::Gateway(failure),
+            "{failure:?}"
+        );
+        assert_eq!(kept.reached(), 4);
+        assert_eq!(kept.resumed_from(), 1);
+        assert_eq!(
+            super::dial_failure(failure, &stop, &ending, false),
+            failure,
+            "{failure:?}"
+        );
+    }
+    assert_eq!(
+        super::dial_failure(ReadFailure::Unreachable, &stop, &ending, true),
+        ReadFailure::Away
+    );
+}
+
+#[test]
 fn a_spent_budget_is_unreachable_and_an_explicit_stop_stays_stopped() {
     let identity = nessa_auth::adapters::pairing::NativeIdentity::generate(
         &mut nessa_auth::adapters::pairing::OsEntropy,
