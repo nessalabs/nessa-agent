@@ -160,10 +160,12 @@ supplies the id.
 - A credential record is restored only when its JSON id is the manifest
   identity. The fence is applied to that id.
   `a_credential_body_must_name_the_manifest_identity`
-- A file is created only beneath a directory this attempt holds. A symlink
-  at a parent inside the partial directory is not that directory, and the
-  write does not create the file in the link's target. The sealed copy uses
-  the same create. `a_symlink_parent_is_not_a_staging_directory`
+- A file is created only beneath a directory this attempt holds. That
+  directory is a new private directory; an existing path is not adopted.
+  A symlink at a parent inside the partial directory is not that directory,
+  and the write does not create the file in the link's target. The sealed
+  copy uses the same create. `a_symlink_parent_is_not_a_staging_directory`,
+  `an_existing_directory_is_not_a_new_private_directory`
 - The session file is the regular file this attempt still holds when SQLite
   opens it. It is created beneath its parent directory, so a symlink at
   `sessions/` is not that directory and the file is not created in the

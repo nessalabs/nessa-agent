@@ -379,6 +379,31 @@ pub fn create_directory(path: &Path) -> io::Result<()> {
     }
     verify_directory(path)
 }
+
+/// Create one private directory. An existing path is `AlreadyExists` and is
+/// not adopted. The descriptor is what `open_beneath` accepts as its root.
+pub fn create_directory_exclusive(path: &Path) -> io::Result<()> {
+    if path.parent().is_none_or(|parent| !parent.exists()) {
+        return Err(unsafe_file());
+    }
+    check_parents(path)?;
+    let descriptor = User::current()?.descriptor(true)?;
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: 0,
+    };
+    let result = unsafe { CreateDirectoryW(wide(path)?.as_ptr(), &attributes) };
+    if result == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if let Err(error) = verify_directory(path) {
+        let _ = fs::remove_dir(path);
+        return Err(error);
+    }
+    Ok(())
+}
+
 pub fn create_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
     if relative.components().next().is_none()
         || relative

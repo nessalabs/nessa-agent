@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use nessa_local_storage::{
-    create_directory, create_directory_beneath, open, open_beneath, publish_new, sync_directory,
-    OpenMode,
+    create_directory, create_directory_beneath, create_directory_exclusive, open, open_beneath,
+    publish_new, sync_directory, OpenMode,
 };
 use serde_json::{json, Value};
 
@@ -1725,22 +1725,9 @@ fn macos_case(dir: &Path) -> Result<VolumeCase, RestoreFault> {
 }
 
 fn mkdir_exclusive(path: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::ffi::CString;
-        use std::os::unix::ffi::OsStrExt;
-        let name = CString::new(path.as_os_str().as_bytes())
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "nul"))?;
-        if unsafe { libc::mkdir(name.as_ptr(), 0o700) } == 0 {
-            Ok(())
-        } else {
-            Err(std::io::Error::last_os_error())
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        fs::create_dir(path)
-    }
+    // Private, and new. `open_beneath` accepts this directory as its root and
+    // refuses one that already existed.
+    create_directory_exclusive(path)
 }
 
 fn sync_writable(path: &Path) -> Result<(), RestoreFault> {
@@ -1984,6 +1971,17 @@ fn materialize_error(error: MaterializeError) -> SessionSourceError {
         MaterializeError::Interrupted => SessionSourceError::Interrupted,
         MaterializeError::Unreadable => SessionSourceError::Unreadable,
     }
+}
+
+#[test]
+fn an_existing_directory_is_not_a_new_private_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("once");
+    mkdir_exclusive(&path).unwrap();
+    fs::write(path.join("sentinel"), b"keep").unwrap();
+    let error = mkdir_exclusive(&path).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read(path.join("sentinel")).unwrap(), b"keep");
 }
 
 #[cfg(unix)]

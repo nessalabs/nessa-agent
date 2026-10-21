@@ -632,8 +632,9 @@ path the caller trusts, and a `_beneath` one that walks a relative path down
 from an already-verified root, refusing anything that is not a private
 directory of this user's and never following a symbolic link. A caller whose
 tree can be written to by anything else uses the second.
-`create_private_directory_tree_beneath` establishes a nested private tree one
-name at a time. Unix syncs each parent before descent and the final leaf before
+`create_directory_exclusive` creates one new private directory and leaves an
+existing path in place. `create_private_directory_tree_beneath` establishes a
+nested private tree one name at a time. Unix syncs each parent before descent and the final leaf before
 success. Windows revalidates the anchored tree because it has no directory-fsync
 equivalent; sinks flush record files before atomic publication. The
 [storage owner](../crates/nessa-local-storage/README.md) documents native

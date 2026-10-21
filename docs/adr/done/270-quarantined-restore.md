@@ -117,8 +117,9 @@ Cleanup deletes the directory the open handle names. A source that remains
 after that removal fails loses its readiness marker before promotion
 succeeds, and a marker that still names an id is retained. A credential
 body whose id is not the manifest identity is not restored.
-A file is created only beneath a directory this attempt holds, so a symlink
-inside the partial tree is not a staging directory. The session file is the
+A file is created only beneath a directory this attempt holds. That directory
+is a new private directory, so a symlink inside the partial tree is not a
+staging directory. The session file is the
 regular file this attempt still holds when SQLite opens it. That file is
 created beneath its parent directory, and that open does not follow a
 symlink. A folding volume compares names by uppercase then lowercase, so

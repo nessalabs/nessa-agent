@@ -22,9 +22,9 @@ mod windows;
 use windows as platform;
 
 pub use platform::{
-    create_directory, create_directory_beneath, open, open_beneath, remove_directory_beneath,
-    remove_file_beneath, replace, replace_beneath, sync_directory, sync_directory_beneath,
-    verify_directory, verify_file,
+    create_directory, create_directory_beneath, create_directory_exclusive, open, open_beneath,
+    remove_directory_beneath, remove_file_beneath, replace, replace_beneath, sync_directory,
+    sync_directory_beneath, verify_directory, verify_file,
 };
 #[cfg(unix)]
 pub use platform::{
