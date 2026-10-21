@@ -13,10 +13,12 @@ use crate::read_only_sync::application::held_file::{
     fetch_held_file, kept_output, FetchCause, FetchFailure, FetchFiles, FileStep, HeldFileSource,
     KeepRefusal, OutputFound, PartCleanup, Pause,
 };
+use crate::read_only_sync::application::{GatewayError, HeldFileRefusal};
 use crate::read_only_sync::domain::{HeldFile, MAX_HELD_FILE_BYTES};
 use crate::read_only_sync::infrastructure::gateway::GatewayConnection;
 use crate::read_only_sync::infrastructure::held_file::DiskFiles;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -287,9 +289,21 @@ fn file_step(step: FileStep) -> ArtifactFileStep {
     }
 }
 
+/// A range that stayed busy through every retry is unreachable, the same
+/// outcome as a subscription that answers `temporarily_unavailable`.
+/// `fetch_held_file` has already asked the range again for each busy pause.
+fn held_file_failure(error: GatewayError) -> ReadFailure {
+    match error {
+        GatewayError::HeldFile(HeldFileRefusal::Conversation(
+            ConversationErrorCode::TemporarilyUnavailable,
+        )) => ReadFailure::Unreachable,
+        other => failure(other),
+    }
+}
+
 fn fault_from(fetch_failure: FetchFailure) -> ArtifactFault {
     let kind = match fetch_failure.cause {
-        FetchCause::Gateway(error) => ArtifactFaultKind::Gateway(failure(error)),
+        FetchCause::Gateway(error) => ArtifactFaultKind::Gateway(held_file_failure(error)),
         FetchCause::WrongRange => ArtifactFaultKind::WrongRange,
         FetchCause::Integrity { cleanup } => ArtifactFaultKind::Integrity {
             cleanup: part_cleanup(cleanup),

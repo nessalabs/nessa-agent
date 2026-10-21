@@ -653,6 +653,51 @@ impl HeldFileSource for BusyOnce {
     }
 }
 
+struct AlwaysBusy {
+    reads: Arc<AtomicUsize>,
+}
+impl HeldFileSource for AlwaysBusy {
+    fn read(
+        &mut self,
+        _: &crate::read_only_sync::domain::HeldFile,
+        _: HeldRange,
+    ) -> Result<RangeAnswer, GatewayError> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        Err(GatewayError::HeldFile(HeldFileRefusal::Conversation(
+            ConversationErrorCode::TemporarilyUnavailable,
+        )))
+    }
+}
+
+#[test]
+fn an_exhausted_busy_retry_is_unreachable() {
+    let bytes = b"ab";
+    let conversation = conversation();
+    let digest = digest_of(bytes);
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("file.bin");
+    let reads = Arc::new(AtomicUsize::new(0));
+    let mut source = AlwaysBusy {
+        reads: reads.clone(),
+    };
+    let fault = confirmed_held_file(
+        &mut source,
+        &Still,
+        &request(&conversation, &digest, &output),
+        &running(ReadStop::new()),
+    )
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(
+        fault.kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
+    );
+    assert_eq!(fault.reached(), 0);
+    // The first answer, then one ask after each of the three busy pauses.
+    assert_eq!(reads.load(Ordering::SeqCst), 4);
+    assert!(!output.exists());
+}
+
 #[test]
 fn a_stop_during_a_busy_pause_returns_within_one_slice() {
     let bytes = b"ab";
