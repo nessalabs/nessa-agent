@@ -226,6 +226,7 @@ flowchart LR
 | Gateway answers every range and the digest matches | fetch | GatewayConfirmed | `a_gateway_answer_is_fresh_only_when_the_digest_matches` |
 | Short answer or wrong digest | fetch | Fault, not fresh | same |
 | Stale stamp | fetch or saved read | Fenced, connector not called | `a_replaced_receiver_stamp_reads_nothing_and_dials_nothing` |
+| Local file, stop already set or set while it is read | fetch | Stopped, not a local match | `a_stop_does_not_publish_a_local_match` |
 | Bound, file not on disk | fetch | The connector's typed failure, one dial | `a_missing_file_reports_the_connector_failure` |
 
 ### Alternatives that lose

@@ -275,6 +275,23 @@ pub fn local_held_file(
     }
 }
 
+/// A local inspection published only while `stop` stayed clear. A stop that
+/// is already set, or that arrives while the file is read, is `Stopped`
+/// and is not a local match.
+pub fn local_held_outcome(
+    stop: &ReadStop,
+    inspect: impl FnOnce() -> Result<Option<Result<ArtifactFreshness, ArtifactFault>>, ReadFailure>,
+) -> Result<Option<Result<ArtifactFreshness, ArtifactFault>>, ReadFailure> {
+    if stop.is_stopped() {
+        return Err(ReadFailure::Stopped);
+    }
+    let outcome = inspect();
+    if stop.is_stopped() {
+        return Err(ReadFailure::Stopped);
+    }
+    outcome
+}
+
 /// Ask the gateway and keep the file only when the part matches. The caller
 /// has already applied [`local_held_file`].
 pub(crate) fn confirmed_held_file(
@@ -314,8 +331,9 @@ impl RetainedCache {
     ///
     /// A socket registered on `stop` is released on every exit after the dial,
     /// including a handshake that fails. A budget that cancels a range is
-    /// `Unreachable`. `ReadStop::stop` stays `Stopped`. A relay that says the
-    /// gateway is offline, when the direct dial did not connect, is `Away`.
+    /// `Unreachable`. `ReadStop::stop` stays `Stopped`, including a local
+    /// match that was cancelled while the output was read. A relay that says
+    /// the gateway is offline, when the direct dial did not connect, is `Away`.
     pub fn fetch_artifact(
         &mut self,
         access: ReaderAccess<'_>,
@@ -326,7 +344,7 @@ impl RetainedCache {
     ) -> Result<ArtifactFetch, ReadFailure> {
         let started = self.clock.elapsed_ms();
         let elapsed = |cache: &Self| cache.clock.elapsed_ms().saturating_sub(started);
-        if let Some(outcome) = local_held_file(request)? {
+        if let Some(outcome) = local_held_outcome(stop, || local_held_file(request))? {
             return Ok(ArtifactFetch {
                 outcome,
                 elapsed_ms: elapsed(self),

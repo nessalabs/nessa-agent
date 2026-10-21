@@ -1428,6 +1428,7 @@ impl NativeSession {
     }
     /// Fetch one held file for `stamp`'s receiver. A replaced stamp does not dial.
     /// A file already at the request's output is a local match and does not dial either.
+    /// A stop already set, or set while that file is read, is `Stopped` and not a match.
     /// Elapsed time is this call on the session clock, including the status read
     /// when the file is not already local.
     pub fn fetch_artifact(
@@ -1443,11 +1444,17 @@ impl NativeSession {
         let driver = operation.driver();
         driver.accept_publication(stamp)?;
         let started = driver.clock.elapsed_ms();
-        if let Some(outcome) =
-            nessa_client_core::retained::local_held_file(request).map_err(SessionFailure::Cache)?
-        {
-            let elapsed = driver.clock.elapsed_ms().saturating_sub(started);
-            return Ok(ArtifactFetch::decided(outcome, elapsed));
+        let inspected = nessa_client_core::retained::local_held_outcome(&stop, || {
+            nessa_client_core::retained::local_held_file(request)
+        });
+        match inspected {
+            Err(ReadFailure::Stopped) => return Err(SessionFailure::Stopped),
+            Err(error) => return Err(SessionFailure::Cache(error)),
+            Ok(Some(outcome)) => {
+                let elapsed = driver.clock.elapsed_ms().saturating_sub(started);
+                return Ok(ArtifactFetch::decided(outcome, elapsed));
+            }
+            Ok(None) => {}
         }
         let status = driver.status();
         driver.accept_publication(stamp)?;

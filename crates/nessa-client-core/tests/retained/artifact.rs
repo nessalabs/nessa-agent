@@ -317,6 +317,46 @@ fn a_spent_budget_is_unreachable_and_an_explicit_stop_stays_stopped() {
 }
 
 #[test]
+fn a_stop_does_not_publish_a_local_match() {
+    let bytes = b"ab";
+    let conversation = conversation();
+    let digest = digest_of(bytes);
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("held.bin");
+    fs::write(&output, bytes).unwrap();
+    let request = request(&conversation, &digest, &output);
+    let stop = ReadStop::new();
+    stop.stop();
+    let identity = nessa_auth::adapters::pairing::NativeIdentity::generate(
+        &mut nessa_auth::adapters::pairing::OsEntropy,
+    )
+    .unwrap();
+    let pin = identity.public_spki();
+    let (_cache_root, mut cache) = cache();
+    assert_eq!(
+        cache.fetch_artifact(
+            access(
+                std::net::SocketAddr::from(([127, 0, 0, 1], 9)),
+                None,
+                &identity,
+                &pin,
+            ),
+            &stop,
+            Duration::from_secs(5),
+            &request,
+            &Still,
+        ),
+        Err(ReadFailure::Stopped)
+    );
+    let during = ReadStop::new();
+    let stopped = super::local_held_outcome(&during, || {
+        during.stop();
+        local_held_file(&request)
+    });
+    assert_eq!(stopped, Err(ReadFailure::Stopped));
+}
+
+#[test]
 fn a_failed_handshake_releases_the_socket_the_stop_registered() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();

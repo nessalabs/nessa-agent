@@ -93,8 +93,8 @@ mod subscribe;
 pub use crate::read_only_sync::application::held_file::Pause;
 pub use active::RetainedDeviceReader;
 pub use artifact::{
-    artifact_name_accepted, local_held_file, ArtifactFault, ArtifactFaultKind, ArtifactFetch,
-    ArtifactFileStep, ArtifactFreshness, ArtifactRequest, ThreadPause,
+    artifact_name_accepted, local_held_file, local_held_outcome, ArtifactFault, ArtifactFaultKind,
+    ArtifactFetch, ArtifactFileStep, ArtifactFreshness, ArtifactRequest, ThreadPause,
 };
 pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
 pub use phone::{CataloguePresence, PhoneFence, PhoneLease, PhoneStamp};
