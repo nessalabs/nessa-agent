@@ -2031,3 +2031,30 @@ Only the test oracle changes: use the UUID minted at each actual backend open,
 verify the original remains represented, IDs are unique, every acquired backend
 is closed exactly once, and the global call trace agrees. No production close,
 errors, capacity, concurrency or deadlines change.
+
+### Owner-directed bare SDK root release correction
+
+The unchanged-production public SDK probe on20c394ae reproduced a bare root
+reaching Closed while ReleasePending retained its executable-use owner. This
+mapping also exists in integrated main202251f2; no historical gateway or child
+capacity failure is inferred. Explicit owner direction authorizes this separate
+bounded local correction/review cycle, preserving all earlier rounds and receipts.
+Frozen29688b46 is retained independently; its original failure probe is unchanged.
+
+The existing lifecycle producer supplies whole-resource confirmation to the same
+gate, independently of audit acknowledgement. Presence of a physical process
+outcome is a weaker fact and cannot stand for executable-use release. No second
+cleanup owner, diagnostic exemption, new state or retry budget is introduced.
+
+| Ordering | Required result and enforcer |
+| --- | --- |
+| Bare sealed root reports physical process exit but ReleasePending | Keep Closing, the exact scope and actual provider owner; the original public regression preserves its captured-state assertion |
+| Same backend retry waits for its actual release receipt | No graph release while held; ACK then confirms whole cleanup in Final/Suspend, forced/unforced matrix |
+| Resource ACK succeeds while audit remains failed | Keep the independent audit failure and root Closing; the eight-case receipt matrix checks both facts |
+| Unconfirmed diagnostic embeds a successful close outcome | No whole release from diagnostic text or inner result; typed diagnostic control |
+| Ordinary unsealed suspend | Root remains Open until explicitly sealed; ordinary-suspend control |
+| Registered resource owner, disposal or descendants | Existing owner and nonblocking phase handoff remain unchanged; existing authority and real-Agent disposal/descendant controls remain required |
+
+The enforcers above live in conformance/close_reports/owned_root.rs. All original
+two-second workflow bounds remain unchanged. The frozen source and all failed
+receipts remain preserved; this is not a review-cap reset or a merge-readiness claim.

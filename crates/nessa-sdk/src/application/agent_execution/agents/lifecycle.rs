@@ -2013,10 +2013,7 @@ impl SessionLifecycle {
         if self.lifetime_sealed() {
             if let Some(slot) = self.owned.get() {
                 slot.gate
-                    .note_attachment(
-                        cleanup.physical_outcome().is_some(),
-                        cleanup.audit().is_ok(),
-                    )
+                    .note_attachment(cleanup.is_confirmed(), cleanup.audit().is_ok())
                     .await;
             }
         }

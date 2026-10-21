@@ -106,6 +106,11 @@ pub trait OwnedLifetime: Send + Sync {
     /// A registered resource owner remains the authority for whole-lifetime
     /// release: its close consumes this Agent's result and any surrounding
     /// resources. Bare attachment-owned roots may publish their own observation.
+    /// `released` confirms all of this Agent's owned resources, including its
+    /// executable-use guard; a process outcome with release pending does not.
+    /// `bare_owned_root_cannot_acknowledge_pending_executable_use_release` and
+    /// `bare_root_pending_release_waits_for_real_receipt_in_both_close_modes`
+    /// enforce this producer distinction at the real Agent/gate boundary.
     /// Returns after handing off the phase and scheduling reconciliation;
     /// it does not await the resource close that may be producing this callback.
     /// Audit and persistence outcomes belong to [`Self::join_descendants`] and

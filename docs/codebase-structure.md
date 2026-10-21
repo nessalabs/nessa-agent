@@ -2545,6 +2545,9 @@ unfinished mark clears. `conformance/resumption/cleanup_proof_panics.rs` exercis
 retirement save construction, poll and drop faults for start, abandonment and
 Authorized-close through that same writer. `lifecycle_cleanup_proof.rs` polls the
 new evidence boundary behind an admitted proof writer before any audit effect.
+`conformance/close_reports/owned_root.rs` keeps bare SDK roots Closing until the
+same provider's actual executable-use release receipt, independently of audit;
+its late-receipt matrix covers Final/Suspend without inventing child capacity.
 `conversation/leases/cleanup_counts.rs` checks each actual backend cleanup identity
 across late End acknowledgement and a later opening, including duplicate/missing
 cleanup counterexamples. The SDK session manager distinguishes an applied scheduling

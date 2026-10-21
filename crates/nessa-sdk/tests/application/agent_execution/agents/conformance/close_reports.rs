@@ -1,6 +1,8 @@
 //! Public close/suspend preserve the same transaction's resource and evidence facts.
 use super::*;
 
+mod owned_root;
+
 #[tokio::test]
 async fn close_reports_preserve_actual_resources_and_independent_failures_in_both_modes() {
     for suspend in [false, true] {

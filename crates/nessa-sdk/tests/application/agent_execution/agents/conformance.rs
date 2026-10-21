@@ -98,6 +98,8 @@ struct WorkflowBackend {
     steering_gate: Mutex<Option<oneshot::Receiver<()>>>,
     closed: watch::Sender<bool>,
     cleanup: Mutex<CleanupReport>,
+    cleanup_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    cleanup_entered: Notify,
     execution_fault: Mutex<Option<ProviderOperationFailure>>,
     execution_report: Mutex<Option<ExecutionReport>>,
     report_polled: watch::Sender<bool>,
@@ -309,6 +311,11 @@ impl ProviderSessionBackend for WorkflowBackend {
     fn close(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
         Box::pin(async move {
             self.shutdowns.lock().unwrap().push(request);
+            let gate = self.cleanup_gate.lock().unwrap().take();
+            if let Some(held) = gate {
+                self.cleanup_entered.notify_one();
+                held.await.expect("the cleanup owner receives its actual receipt");
+            }
             let report = self.cleanup.lock().unwrap().clone();
             if report.is_confirmed() {
                 self.closed.send_replace(true);
@@ -385,6 +392,8 @@ fn workflow_backend() -> Arc<WorkflowBackend> {
         steering_gate: Mutex::new(None),
         closed: watch::channel(false).0,
         cleanup: Mutex::new(CleanupReport::confirmed(CloseOutcome { forced: false })),
+        cleanup_gate: Mutex::new(None),
+        cleanup_entered: Notify::new(),
         execution_fault: Mutex::new(None),
         execution_report: Mutex::new(None),
         report_polled: watch::channel(false).0,
