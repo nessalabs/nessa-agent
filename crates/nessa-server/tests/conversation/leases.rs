@@ -82,6 +82,15 @@ use tokio::sync::{mpsc, oneshot, Notify};
 
 const CONVERSATION: &str = "5c0a9f2e-1d3b-4c7a-8e6f-2b9d4a1c7e30";
 
+/// How long a completion wait may take while the Windows server library
+/// suite is running. That suite takes about fifteen minutes with the tests
+/// in parallel. Five seconds was not enough for a turn to be recorded
+/// completed, and ten seconds was not enough for admission to read the
+/// policy: both elapsed while the work was still going. A step that never
+/// finishes still fails this bound. A wait that proves something has not
+/// happened yet stays short.
+const LOADED_SUITE_WAIT: Duration = Duration::from_secs(60);
+
 fn caller(action: &str) -> ConversationCaller {
     ConversationCaller {
         organization_id: OrganizationId::new("org").unwrap(),
@@ -542,7 +551,7 @@ impl Harness {
             )
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(LOADED_SUITE_WAIT, async {
             loop {
                 let view = self
                     .service
@@ -565,7 +574,7 @@ impl Harness {
     /// The conversation's stream once no agent holds it.
     async fn snapshot(&self) -> SessionSnapshot {
         let session = SessionId::new(self.id.to_string()).unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(LOADED_SUITE_WAIT, async {
             loop {
                 match self.storage.open_existing(session.clone()).await {
                     Ok(Some(lease)) => break lease.load().await.unwrap().snapshot().cloned(),
@@ -2557,7 +2566,7 @@ async fn b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_
         harness.create_on("devbox").await.unwrap();
         harness.turn("turn-1").await;
         host.lose.send_replace(Some(LeaseEndCause::Lost));
-        let lease = tokio::time::timeout(Duration::from_secs(5), async {
+        let lease = tokio::time::timeout(LOADED_SUITE_WAIT, async {
             loop {
                 let lease = harness.lease().await;
                 if kinds(&lease).len() == 3 {
@@ -2639,7 +2648,7 @@ async fn an_environment_ends_the_lease(
     harness.create_on("devbox").await.unwrap();
     harness.turn("turn-1").await;
     host.lose.send_replace(Some(cause));
-    let lease = tokio::time::timeout(Duration::from_secs(5), async {
+    let lease = tokio::time::timeout(LOADED_SUITE_WAIT, async {
         loop {
             let lease = harness.lease().await;
             if kinds(&lease).len() == 3 {
@@ -6793,7 +6802,7 @@ async fn moved_during_admission(revoke: bool) {
             )
             .await
     });
-    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+    tokio::time::timeout(LOADED_SUITE_WAIT, entered.notified())
         .await
         .expect("admission read the policy");
     if revoke {
@@ -6812,7 +6821,7 @@ async fn moved_during_admission(revoke: bool) {
         .await;
     }
     release.notify_one();
-    let sent = tokio::time::timeout(Duration::from_secs(10), sent)
+    let sent = tokio::time::timeout(LOADED_SUITE_WAIT, sent)
         .await
         .expect("the send finishes")
         .expect("the send task");
@@ -6893,12 +6902,12 @@ async fn a_revoked_admission_settles_the_command_and_the_same_request_is_revoked
             )
             .await
     });
-    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+    tokio::time::timeout(LOADED_SUITE_WAIT, entered.notified())
         .await
         .expect("admission read the policy");
     assert!(revoke_drive(&harness.metadata, &harness.id, "phone").await);
     release.notify_one();
-    let sent = tokio::time::timeout(Duration::from_secs(10), sent)
+    let sent = tokio::time::timeout(LOADED_SUITE_WAIT, sent)
         .await
         .expect("the send finishes")
         .expect("the send task");
