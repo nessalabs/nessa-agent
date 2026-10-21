@@ -2832,8 +2832,8 @@ async fn wait_generation(
 #[cfg(test)]
 mod lifetime_races {
     use super::{
-        CloseCommand, OwnershipCoordinator, OwnershipDependencies, OwnershipFailure, PublishPause,
-        SpawnCommand,
+        CleanupOwner, CloseCommand, OwnershipCoordinator, OwnershipDependencies, OwnershipFailure,
+        PublishPause, SpawnCommand,
     };
     use crate::application::agent_execution::subagents::{
         ChildFactory, ChildResources, InitialSubmit, LiveCapacity, MemoryOwnershipStore,
