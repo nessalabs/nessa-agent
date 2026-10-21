@@ -4,7 +4,9 @@
 -- second delivery of the same causal turn cannot mint another execution.
 CREATE TABLE preference (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    revision INTEGER NOT NULL DEFAULT 0,
+    settled INTEGER NOT NULL DEFAULT 1 CHECK (settled IN (0, 1))
 ) STRICT;
 
 CREATE TABLE message (

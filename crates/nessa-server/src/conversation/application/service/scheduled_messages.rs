@@ -16,16 +16,25 @@ pub(crate) const FENCE_LEASE_MS: u64 = 30_000;
 /// How often the owner extends a lease it still holds.
 pub(crate) const FENCE_RENEW_EVERY_MS: u64 = 10_000;
 
+/// How long a delivery pass waits after a schedule-store read fails.
+pub(crate) const SCHEDULE_RETRY_MS: u64 = 1_000;
+
+/// How long renewal waits after `renew_fence` returns an error.
+pub(crate) const FENCE_RENEW_RETRY_MS: u64 = 1_000;
+
 use super::{ConversationCaller, ConversationError, ConversationId, ConversationService};
 use crate::conversation::application::usage_limit_policy::{
     UsageLimitPreferenceDecision, UsageLimitPreferenceFacts, UsageLimitPreferencePolicyEvaluator,
 };
 use crate::conversation::application::ConversationFuture;
 use crate::conversation::domain::{ContinuationCause, ContinuationPlan};
+use nessa_auth::application::ports::Clock;
 use nessa_sdk::domain::agent_execution::executions::{
     ExecutionId, GrantInitiator, Initiation, Initiator, ToolChecking,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Who an audit row names. A provider limit is the system. The person is named
 /// only for the preference change and the cancellations that change causes.
@@ -144,6 +153,20 @@ pub enum PreferenceUpdate {
     Refused { policies: Vec<String> },
 }
 
+/// Cedar's decision as it committed, and which enable this request installed.
+///
+/// `installed_enable` is true only when this transaction changed the boolean
+/// from off to on. That write leaves `revision` unsettled. A later scan settles
+/// it, and only a still-unsettled revision may be reverted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedPreference {
+    pub update: PreferenceUpdate,
+    /// The preference revision after this decision committed.
+    pub revision: u64,
+    /// This decision moved the preference from off to on and left it unsettled.
+    pub installed_enable: bool,
+}
+
 /// The private dataset of scheduled continuations.
 pub trait ScheduledMessageStore: Send + Sync {
     /// The gateway preference. Absent means off.
@@ -225,7 +248,9 @@ pub trait ScheduledMessageStore: Send + Sync {
     /// Record Cedar's decision. Allow writes the preference, the audit, and
     /// any cancellations in one transaction. Deny writes only the audit.
     /// `Err` means the audit did not commit and the preference is unchanged.
-    /// An unchanged allow is still audited.
+    /// An unchanged allow is still audited. An allow that changes off to on
+    /// installs one unsettled revision; any other allow leaves the revision
+    /// where it was, or settles a disable.
     fn record_preference_decision(
         &self,
         allowed: bool,
@@ -233,7 +258,20 @@ pub trait ScheduledMessageStore: Send + Sync {
         policies: &[String],
         actor: ScheduleActor,
         at_ms: u64,
-    ) -> ConversationFuture<'_, PreferenceUpdate>;
+    ) -> ConversationFuture<'_, RecordedPreference>;
+    /// Mark `revision` settled when it is still the enabled preference.
+    /// True when this call settled it, or it was already settled at that
+    /// same revision. False when the preference was reverted or replaced.
+    fn settle_installed_preference(&self, revision: u64) -> ConversationFuture<'_, bool>;
+    /// Turn off the unsettled enable at `revision`, as `actor`, and cancel
+    /// open rows in that transaction. False when that revision is no longer
+    /// an unsettled enable, which leaves the preference as it stands.
+    fn revert_installed_preference(
+        &self,
+        revision: u64,
+        actor: ScheduleActor,
+        at_ms: u64,
+    ) -> ConversationFuture<'_, bool>;
     /// The row's status text, when it exists.
     fn status(&self, execution_id: &str) -> ConversationFuture<'_, Option<String>>;
     /// After the outcome has been observed. The status change and the audit
@@ -297,8 +335,9 @@ impl ConversationService {
 
     /// Turn the preference on or off. Cedar decides first. Off cancels open
     /// rows as this person. On scans every catalogue owner and schedules each
-    /// currently blocked eligible turn; a failed scan restores an off
-    /// preference that this call turned on.
+    /// currently blocked eligible turn. A failed scan reverts only the
+    /// unsettled revision this call installed. A finished scan settles the
+    /// revision it observed.
     pub async fn set_usage_limit_auto_continue(
         &self,
         enabled: bool,
@@ -323,9 +362,8 @@ impl ConversationService {
             UsageLimitPreferenceDecision::Allow { policies } => (true, policies),
             UsageLimitPreferenceDecision::Deny { policies } => (false, policies),
         };
-        let previous = store.preference().await?;
         let at_ms = self.inner.clock.unix_milliseconds();
-        let PreferenceUpdate::Stored(stored) = store
+        let recorded = store
             .record_preference_decision(
                 allowed,
                 enabled,
@@ -333,8 +371,8 @@ impl ConversationService {
                 ScheduleActor::person(&caller),
                 at_ms,
             )
-            .await?
-        else {
+            .await?;
+        let PreferenceUpdate::Stored(stored) = recorded.update else {
             return Ok(PreferenceUpdate::Refused { policies });
         };
         if stored {
@@ -343,14 +381,25 @@ impl ConversationService {
                 .schedule_every_owner(&store, true, ScheduleActor::person(&caller), &mut visited)
                 .await
             {
-                if !previous {
+                if recorded.installed_enable {
                     let now = self.inner.clock.unix_milliseconds();
                     store
-                        .set_preference(false, ScheduleActor::system(), now)
+                        .revert_installed_preference(
+                            recorded.revision,
+                            ScheduleActor::system(),
+                            now,
+                        )
                         .await?;
                 }
                 self.publish_preference(&visited);
                 return Err(error);
+            }
+            // A scan that finished settles the revision it saw, including one
+            // a concurrent request installed. That request's later revert then
+            // matches nothing.
+            if !store.settle_installed_preference(recorded.revision).await? {
+                self.publish_preference(&visited);
+                return Err(ConversationError::Unavailable);
             }
             self.publish_preference(&visited);
         } else {
@@ -661,60 +710,96 @@ impl ConversationService {
     }
 
     /// Deliver continuations that are due. Returns how long to wait for the
-    /// next one, when a scheduled row is still ahead of the clock.
+    /// next one, when a scheduled row is still ahead of the clock. A store
+    /// error waits [`SCHEDULE_RETRY_MS`] and passes again. `None` is an
+    /// unbound store, or a schedule with nothing due and no live lease.
     pub async fn deliver_due_scheduled(&self) -> Option<u64> {
         let store = self.scheduled_messages()?;
         let now = self.inner.clock.unix_milliseconds();
-        let preference = store.preference().await.ok()?;
+        let preference = match store.preference().await {
+            Ok(preference) => preference,
+            Err(_) => return Some(SCHEDULE_RETRY_MS),
+        };
         if !preference {
-            let _ = store.retire_unfenced_submissions(now).await;
-            let until = store.next_live_fence(now).await.ok().flatten()?;
-            return Some(until.saturating_sub(now).max(1));
+            if store.retire_unfenced_submissions(now).await.is_err() {
+                return Some(SCHEDULE_RETRY_MS);
+            }
+            return match store.next_live_fence(now).await {
+                Ok(Some(until)) => Some(until.saturating_sub(now).max(1)),
+                Ok(None) => None,
+                Err(_) => Some(SCHEDULE_RETRY_MS),
+            };
         }
-        let rows = store.claim_due(now, 8).await.ok()?;
+        let rows = match store.claim_due(now, 8).await {
+            Ok(rows) => rows,
+            Err(_) => return Some(SCHEDULE_RETRY_MS),
+        };
         for row in rows {
             self.deliver_scheduled(store.clone(), row).await;
         }
-        let next = store
-            .next_due(self.inner.clock.unix_milliseconds())
-            .await
-            .ok()
-            .flatten()?;
+        let next = match store.next_due(self.inner.clock.unix_milliseconds()).await {
+            Ok(next) => next,
+            Err(_) => return Some(SCHEDULE_RETRY_MS),
+        };
+        let next = next?;
         let now = self.inner.clock.unix_milliseconds();
         Some(next.saturating_sub(now).max(1))
     }
 
     /// Run delivery until the gateway retires.
     ///
-    /// While the preference is on, the first pass scans every catalogue owner
-    /// so a crash during an earlier enable finishes. Each later pass creates
-    /// the wakeup before it reads the schedule: a continuation accepted during
-    /// that read notifies a waiter that already exists.
+    /// The wakeup is registered before the catch-up scan and before each
+    /// schedule read. While the preference is on, the first pass that can
+    /// read it scans every catalogue owner, so a crash during an earlier
+    /// enable finishes. A preference read that fails retries that scan on a
+    /// later pass.
     pub async fn run_scheduled_messages(&self) {
-        if let Some(store) = self.scheduled_messages() {
-            if store.preference().await.unwrap_or(false) {
-                let mut visited = Vec::new();
-                if let Err(error) = self
-                    .schedule_every_owner(&store, false, ScheduleActor::system(), &mut visited)
-                    .await
-                {
-                    tracing::warn!(%error, "a usage-limit continuation scan did not finish");
-                }
-                for id in &visited {
-                    self.inner.live_changes.publish(id);
-                }
-            }
-        }
+        let mut caught_up = self.scheduled_messages().is_none();
         loop {
             if self.inner.retirement.get().is_some() {
                 return;
             }
             let wakeup = self.inner.schedule_wakeup.notified();
+            if !caught_up {
+                if let Some(store) = self.scheduled_messages() {
+                    match store.preference().await {
+                        Ok(enabled) => {
+                            if enabled {
+                                let mut visited = Vec::new();
+                                if let Err(error) = self
+                                    .schedule_every_owner(
+                                        &store,
+                                        false,
+                                        ScheduleActor::system(),
+                                        &mut visited,
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        %error,
+                                        "a usage-limit continuation scan did not finish"
+                                    );
+                                }
+                                for id in &visited {
+                                    self.inner.live_changes.publish(id);
+                                }
+                            }
+                            caught_up = true;
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                %error,
+                                "the usage-limit preference could not be read; the catch-up scan waits"
+                            );
+                        }
+                    }
+                }
+            }
             let wait = self.deliver_due_scheduled().await;
             tokio::select! {
                 () = async {
                     match wait {
-                        Some(wait) => tokio::time::sleep(std::time::Duration::from_millis(wait)).await,
+                        Some(wait) => tokio::time::sleep(Duration::from_millis(wait)).await,
                         None => std::future::pending().await,
                     }
                 } => {}
@@ -759,19 +844,14 @@ impl ConversationService {
         id: ConversationId,
         row: &ScheduledMessage,
     ) {
+        let lost = Arc::new(AtomicBool::new(false));
         let renew = {
             let store = store.clone();
             let execution_id = row.execution_id.clone();
             let clock = self.inner.clock.clone();
+            let lost = lost.clone();
             tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(FENCE_RENEW_EVERY_MS))
-                        .await;
-                    let now = clock.unix_milliseconds();
-                    if !store.renew_fence(&execution_id, now).await.unwrap_or(false) {
-                        break;
-                    }
-                }
+                renew_while_held(store, execution_id, clock, lost).await;
             })
         };
         let _renew = StopRenew(renew);
@@ -808,6 +888,11 @@ impl ConversationService {
                 return;
             }
         };
+        // The store said this process no longer owns the row. Do not start a
+        // second effect. A submit that has already run still records below.
+        if lost.load(Ordering::SeqCst) {
+            return;
+        }
         match self
             .submit_command(
                 commands,
@@ -857,6 +942,41 @@ impl ConversationService {
                 .iter()
                 .any(|invocation| invocation.request.execution_id.as_str() == execution_id)
         })
+    }
+}
+
+/// Renew `execution_id` until the store says this process does not own it.
+///
+/// `Ok(true)` waits [`FENCE_RENEW_EVERY_MS`] and renews again. `Err` waits
+/// [`FENCE_RENEW_RETRY_MS`] and renews again, and leaves `lost` false. `Ok(false)`
+/// sets `lost` and stops. A transient renew failure does not abandon a submit
+/// that is still running.
+async fn renew_while_held(
+    store: Arc<dyn ScheduledMessageStore>,
+    execution_id: String,
+    clock: Arc<dyn Clock>,
+    lost: Arc<AtomicBool>,
+) {
+    loop {
+        tokio::time::sleep(Duration::from_millis(FENCE_RENEW_EVERY_MS)).await;
+        loop {
+            let now = clock.unix_milliseconds();
+            match store.renew_fence(&execution_id, now).await {
+                Ok(true) => break,
+                Ok(false) => {
+                    lost.store(true, Ordering::SeqCst);
+                    return;
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        %error,
+                        %execution_id,
+                        "the submitting lease could not be renewed; retrying"
+                    );
+                    tokio::time::sleep(Duration::from_millis(FENCE_RENEW_RETRY_MS)).await;
+                }
+            }
+        }
     }
 }
 
@@ -1065,6 +1185,7 @@ mod catalogue_pages {
 
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use nessa_auth::application::ports::{AccessError, Clock};
     use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -1073,8 +1194,9 @@ mod catalogue_pages {
     };
 
     use super::{
-        PreferenceUpdate, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage,
-        ScheduledMessageStore,
+        renew_while_held, PreferenceUpdate, RecordedPreference, ScheduleActor, ScheduleDraft,
+        ScheduleSettlement, ScheduledMessage, ScheduledMessageStore, FENCE_RENEW_EVERY_MS,
+        FENCE_RENEW_RETRY_MS, SCHEDULE_RETRY_MS,
     };
     use crate::conversation::application::{
         ConversationCaller, ConversationDependencies, ConversationFuture, ConversationLimits,
@@ -1183,6 +1305,9 @@ mod catalogue_pages {
     /// Preference changes and outcome timestamps, without a database.
     struct RecordingStore {
         enabled: AtomicBool,
+        revision: AtomicU64,
+        /// False only for an enable this store has not settled or reverted.
+        settled: AtomicBool,
         /// `(enabled, person)` for each change. An unchanged write is absent.
         changes: Mutex<Vec<(bool, bool)>>,
         outcomes: Mutex<Vec<(String, u64)>>,
@@ -1199,6 +1324,8 @@ mod catalogue_pages {
         fn new(enabled: bool) -> Self {
             Self {
                 enabled: AtomicBool::new(enabled),
+                revision: AtomicU64::new(0),
+                settled: AtomicBool::new(true),
                 changes: Mutex::new(Vec::new()),
                 outcomes: Mutex::new(Vec::new()),
                 decisions: Mutex::new(Vec::new()),
@@ -1206,6 +1333,18 @@ mod catalogue_pages {
                 submits: AtomicUsize::new(0),
                 opens: AtomicUsize::new(0),
                 fail_open: AtomicBool::new(true),
+            }
+        }
+
+        /// Settle `revision` when it is still the enabled preference.
+        fn settle_revision(&self, revision: u64) -> bool {
+            if self.revision.load(Ordering::SeqCst) == revision
+                && self.enabled.load(Ordering::SeqCst)
+            {
+                self.settled.store(true, Ordering::SeqCst);
+                true
+            } else {
+                false
             }
         }
     }
@@ -1227,6 +1366,8 @@ mod catalogue_pages {
         ) -> ConversationFuture<'_, bool> {
             let was = self.enabled.swap(enabled, Ordering::SeqCst);
             if was != enabled {
+                self.revision.fetch_add(1, Ordering::SeqCst);
+                self.settled.store(true, Ordering::SeqCst);
                 self.changes.lock().unwrap().push((enabled, actor.person));
             }
             Box::pin(async move { Ok(enabled) })
@@ -1290,7 +1431,7 @@ mod catalogue_pages {
             policies: &[String],
             actor: ScheduleActor,
             _: u64,
-        ) -> ConversationFuture<'_, PreferenceUpdate> {
+        ) -> ConversationFuture<'_, RecordedPreference> {
             if self.fail_decision.swap(false, Ordering::SeqCst) {
                 return Box::pin(async { Err(ConversationError::Metadata) });
             }
@@ -1300,13 +1441,51 @@ mod catalogue_pages {
                 .push((allowed, policies.to_vec()));
             if !allowed {
                 let policies = policies.to_vec();
-                return Box::pin(async move { Ok(PreferenceUpdate::Refused { policies }) });
+                let revision = self.revision.load(Ordering::SeqCst);
+                return Box::pin(async move {
+                    Ok(RecordedPreference {
+                        update: PreferenceUpdate::Refused { policies },
+                        revision,
+                        installed_enable: false,
+                    })
+                });
             }
             let was = self.enabled.swap(enabled, Ordering::SeqCst);
+            let installed_enable = !was && enabled;
             if was != enabled {
+                self.revision.fetch_add(1, Ordering::SeqCst);
+                self.settled.store(!installed_enable, Ordering::SeqCst);
                 self.changes.lock().unwrap().push((enabled, actor.person));
             }
-            Box::pin(async move { Ok(PreferenceUpdate::Stored(enabled)) })
+            let revision = self.revision.load(Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(RecordedPreference {
+                    update: PreferenceUpdate::Stored(enabled),
+                    revision,
+                    installed_enable,
+                })
+            })
+        }
+        fn settle_installed_preference(&self, revision: u64) -> ConversationFuture<'_, bool> {
+            let settled = self.settle_revision(revision);
+            Box::pin(async move { Ok(settled) })
+        }
+        fn revert_installed_preference(
+            &self,
+            revision: u64,
+            actor: ScheduleActor,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
+            let matches = self.revision.load(Ordering::SeqCst) == revision
+                && self.enabled.load(Ordering::SeqCst)
+                && !self.settled.load(Ordering::SeqCst);
+            if matches {
+                self.enabled.store(false, Ordering::SeqCst);
+                self.revision.fetch_add(1, Ordering::SeqCst);
+                self.settled.store(true, Ordering::SeqCst);
+                self.changes.lock().unwrap().push((false, actor.person));
+            }
+            Box::pin(async move { Ok(matches) })
         }
         fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
             refused()
@@ -1462,8 +1641,19 @@ mod catalogue_pages {
             _: &[String],
             _: ScheduleActor,
             _: u64,
-        ) -> ConversationFuture<'_, PreferenceUpdate> {
+        ) -> ConversationFuture<'_, RecordedPreference> {
             Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+        fn settle_installed_preference(&self, _: u64) -> ConversationFuture<'_, bool> {
+            Box::pin(async { Ok(false) })
+        }
+        fn revert_installed_preference(
+            &self,
+            _: u64,
+            _: ScheduleActor,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
+            Box::pin(async { Ok(false) })
         }
         fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
             Box::pin(async { Err(ConversationError::Unavailable) })
@@ -1911,5 +2101,325 @@ mod catalogue_pages {
             Err(ConversationError::ModelChangeNotApplied)
         ));
         assert_eq!(store.opens.load(Ordering::SeqCst), opens);
+    }
+
+    /// A catalogue page that settles the enable, then fails the walk.
+    struct SettleThenFail {
+        store: Arc<RecordingStore>,
+    }
+
+    impl ConversationListing for SettleThenFail {
+        fn list(
+            &self,
+            _: &OrganizationId,
+            _: &PrincipalId,
+            _: bool,
+            _: usize,
+        ) -> ConversationFuture<'_, ListedConversations> {
+            Box::pin(async { Ok(ListedConversations::default()) })
+        }
+        fn observe(
+            &self,
+            _: &OrganizationId,
+            _: &PrincipalId,
+            _: bool,
+            _: Option<ObservationCursor>,
+        ) -> ConversationFuture<'_, ObservedConversations> {
+            let revision = self.store.revision.load(Ordering::SeqCst);
+            self.store.settle_revision(revision);
+            Box::pin(async {
+                Ok(ObservedConversations {
+                    conversations: Vec::new(),
+                    complete: false,
+                    cursor: None,
+                })
+            })
+        }
+        fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>> {
+            Box::pin(async {
+                Ok(vec![(
+                    OrganizationId::new("org-a").unwrap(),
+                    PrincipalId::new("person-a").unwrap(),
+                )])
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_settled_enable_is_not_rolled_back_by_a_later_scan_failure() {
+        let store = Arc::new(RecordingStore::new(false));
+        let service = service(
+            Arc::new(SettleThenFail {
+                store: store.clone(),
+            }),
+            Arc::new(TestClock),
+        );
+        bind(&service, store.clone());
+        let error = service
+            .set_usage_limit_auto_continue(true, caller(), facts("admin"))
+            .await;
+        assert!(error.is_err());
+        assert!(store.preference().await.unwrap());
+        assert_eq!(store.changes.lock().unwrap().as_slice(), &[(true, true)]);
+    }
+
+    /// Schedule-store reads that fail a counted number of times, and a scripted renew.
+    struct ScriptedSchedule {
+        enabled: AtomicBool,
+        preference_failures: AtomicUsize,
+        claim_failures: AtomicUsize,
+        next_due_failures: AtomicUsize,
+        fence_failures: AtomicUsize,
+        retire_failures: AtomicUsize,
+        renew: Mutex<Vec<Result<bool, ConversationError>>>,
+        renew_calls: AtomicUsize,
+    }
+
+    impl ScriptedSchedule {
+        fn new(enabled: bool) -> Self {
+            Self {
+                enabled: AtomicBool::new(enabled),
+                preference_failures: AtomicUsize::new(0),
+                claim_failures: AtomicUsize::new(0),
+                next_due_failures: AtomicUsize::new(0),
+                fence_failures: AtomicUsize::new(0),
+                retire_failures: AtomicUsize::new(0),
+                renew: Mutex::new(Vec::new()),
+                renew_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    fn failing(counter: &AtomicUsize) -> bool {
+        loop {
+            let left = counter.load(Ordering::SeqCst);
+            if left == 0 {
+                return false;
+            }
+            if counter
+                .compare_exchange(left, left - 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+
+    fn store_error() -> ConversationFuture<'static, bool> {
+        Box::pin(async { Err(ConversationError::Metadata) })
+    }
+
+    impl ScheduledMessageStore for ScriptedSchedule {
+        fn preference(&self) -> ConversationFuture<'_, bool> {
+            if failing(&self.preference_failures) {
+                return Box::pin(async { Err(ConversationError::Metadata) });
+            }
+            let enabled = self.enabled.load(Ordering::SeqCst);
+            Box::pin(async move { Ok(enabled) })
+        }
+        fn set_preference(
+            &self,
+            _: bool,
+            _: ScheduleActor,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
+            store_error()
+        }
+        fn open(&self, _: &str) -> ConversationFuture<'_, Option<ScheduledMessage>> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn accept(
+            &self,
+            _: ScheduleDraft,
+            _: u64,
+        ) -> ConversationFuture<'_, Option<ScheduledMessage>> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn move_due(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+            store_error()
+        }
+        fn defer_claim(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+            store_error()
+        }
+        fn cancel_open(
+            &self,
+            _: &str,
+            _: ContinuationCause,
+            _: ScheduleActor,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
+            store_error()
+        }
+        fn claim_due(&self, _: u64, _: usize) -> ConversationFuture<'_, Vec<ScheduledMessage>> {
+            if failing(&self.claim_failures) {
+                return Box::pin(async { Err(ConversationError::Metadata) });
+            }
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn next_due(&self, _: u64) -> ConversationFuture<'_, Option<u64>> {
+            if failing(&self.next_due_failures) {
+                return Box::pin(async { Err(ConversationError::Metadata) });
+            }
+            Box::pin(async { Ok(None) })
+        }
+        fn begin_submit(&self, _: &str, _: u64) -> ConversationFuture<'_, bool> {
+            store_error()
+        }
+        fn renew_fence(&self, _: &str, _: u64) -> ConversationFuture<'_, bool> {
+            self.renew_calls.fetch_add(1, Ordering::SeqCst);
+            let next = {
+                let mut renew = self.renew.lock().unwrap();
+                if renew.is_empty() {
+                    None
+                } else {
+                    Some(renew.remove(0))
+                }
+            };
+            Box::pin(async move {
+                match next {
+                    Some(result) => result,
+                    None => Ok(true),
+                }
+            })
+        }
+        fn release_submit(&self, _: &str) -> ConversationFuture<'_, ()> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn retire_unfenced_submissions(&self, _: u64) -> ConversationFuture<'_, usize> {
+            if failing(&self.retire_failures) {
+                return Box::pin(async { Err(ConversationError::Metadata) });
+            }
+            Box::pin(async { Ok(0) })
+        }
+        fn next_live_fence(&self, _: u64) -> ConversationFuture<'_, Option<u64>> {
+            if failing(&self.fence_failures) {
+                return Box::pin(async { Err(ConversationError::Metadata) });
+            }
+            Box::pin(async { Ok(None) })
+        }
+        fn record_preference_decision(
+            &self,
+            _: bool,
+            _: bool,
+            _: &[String],
+            _: ScheduleActor,
+            _: u64,
+        ) -> ConversationFuture<'_, RecordedPreference> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn settle_installed_preference(&self, _: u64) -> ConversationFuture<'_, bool> {
+            store_error()
+        }
+        fn revert_installed_preference(
+            &self,
+            _: u64,
+            _: ScheduleActor,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
+            store_error()
+        }
+        fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn record_outcome(
+            &self,
+            _: &str,
+            _: ScheduleSettlement,
+            _: &str,
+            _: u64,
+        ) -> ConversationFuture<'_, ()> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+        fn erase_conversation(&self, _: &str, _: u64) -> ConversationFuture<'_, ()> {
+            Box::pin(async { Err(ConversationError::Metadata) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_store_error_retries_delivery_instead_of_parking() {
+        let listing = Arc::new(TwoOwners {
+            seen: Mutex::new(Vec::new()),
+            fail: false,
+        });
+        let unbound = service(listing.clone(), Arc::new(TestClock));
+        assert_eq!(unbound.deliver_due_scheduled().await, None);
+
+        let schedule = Arc::new(ScriptedSchedule::new(false));
+        let service = service(listing, Arc::new(TestClock));
+        service.bind_scheduled_messages(schedule.clone());
+
+        schedule.preference_failures.store(1, Ordering::SeqCst);
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        schedule.retire_failures.store(1, Ordering::SeqCst);
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        schedule.fence_failures.store(1, Ordering::SeqCst);
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert_eq!(service.deliver_due_scheduled().await, None);
+
+        schedule.enabled.store(true, Ordering::SeqCst);
+        schedule.claim_failures.store(1, Ordering::SeqCst);
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        schedule.next_due_failures.store(1, Ordering::SeqCst);
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert_eq!(service.deliver_due_scheduled().await, None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_transient_fence_renewal_is_retried() {
+        let schedule = Arc::new(ScriptedSchedule::new(true));
+        schedule
+            .renew
+            .lock()
+            .unwrap()
+            .push(Err(ConversationError::Metadata));
+        schedule.renew.lock().unwrap().push(Ok(true));
+        let lost = Arc::new(AtomicBool::new(false));
+        let task = tokio::spawn(renew_while_held(
+            schedule.clone(),
+            "exec-1".into(),
+            Arc::new(TestClock),
+            lost.clone(),
+        ));
+        tokio::time::sleep(Duration::from_millis(
+            FENCE_RENEW_EVERY_MS + FENCE_RENEW_RETRY_MS + 1,
+        ))
+        .await;
+        assert!(schedule.renew_calls.load(Ordering::SeqCst) >= 2);
+        assert!(!lost.load(Ordering::SeqCst));
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lost_fence_stops_renewal() {
+        let schedule = Arc::new(ScriptedSchedule::new(true));
+        schedule.renew.lock().unwrap().push(Ok(false));
+        let lost = Arc::new(AtomicBool::new(false));
+        let task = tokio::spawn(renew_while_held(
+            schedule.clone(),
+            "exec-1".into(),
+            Arc::new(TestClock),
+            lost.clone(),
+        ));
+        tokio::time::sleep(Duration::from_millis(FENCE_RENEW_EVERY_MS + 1)).await;
+        assert!(lost.load(Ordering::SeqCst));
+        assert_eq!(schedule.renew_calls.load(Ordering::SeqCst), 1);
+        tokio::time::sleep(Duration::from_millis(FENCE_RENEW_EVERY_MS)).await;
+        assert_eq!(schedule.renew_calls.load(Ordering::SeqCst), 1);
+        task.abort();
     }
 }

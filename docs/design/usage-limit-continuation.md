@@ -103,7 +103,9 @@ so a later causal turn can still be accepted after a terminal row.
 | `scheduled` | Due, and still the open row | `claim_due` | `delivering` | Status only. The claim is not an audit row |
 | `delivering` | `begin_submit` compare-and-set | the store | `submitting` | Status, `fence_owner`, and `fence_until_ms` in one update. The in-memory arm is inserted only after that commit |
 | `submitting` | Lease expired, or this process already owns it and is not inside it | `begin_submit` | `submitting` | One update replaces `fence_owner` and `fence_until_ms`. A live lease owned by someone else matches nothing |
-| `submitting` | While `finish_fenced_submit` runs | the owning process | `submitting` | `renew_fence` extends `fence_until_ms` for `fence_owner` only |
+| `submitting` | `renew_fence` succeeds | the owning process | `submitting` | `renew_fence` extends `fence_until_ms` for `fence_owner` only |
+| `submitting` | `renew_fence` returns an error | the owning process | `submitting` | The lease stays. Renewal tries again after one second. A `submit_command` already running keeps running |
+| `submitting` | `renew_fence` returns false | no longer this process | `submitting`, or the status the owner left | Renewal stops and `lost` is set. `submit_command` does not start. A submit that already ran still records its outcome |
 | `submitting` | Execution already saved, or `submit_command` admits | `finish_fenced_submit`, then `record_outcome` | `delivered` | Status and audit, after the observation. The clock is read then |
 | `submitting` | `submit_command` returns a terminal refusal, or the caller cannot be rebuilt | `finish_fenced_submit` | `refused` | Status and audit, after the observation |
 | `submitting` | The mutation journal returns `Interrupted` | `finish_fenced_submit` | `unconfirmed` | Status and audit `submission_interrupted`. No second submit |
@@ -138,8 +140,16 @@ not publish. Subscribers then re-read `usageLimitAutoContinue` and
 Turning the preference on and scanning the catalogue are one operation. The
 scan asks every catalogue owner, then every page of that owner's
 conversations. The catalogue is another database, so the two writes are not
-one SQLite transaction. The operation's result is the pair: the preference
-and a finished scan, or the previous preference when the scan fails.
+one SQLite transaction. The preference row carries a `revision` and a
+`settled` flag. Only the transaction that changes the boolean from off to on
+installs an enable: it increments `revision`, leaves `settled` at 0, and
+returns that revision as the one this request may roll back. An allow that
+finds the preference already on does not bump the revision and installs
+nothing. A finished scan settles the revision it observed. A failed scan
+reverts only while that same revision is still enabled and unsettled, as the
+system, in one compare-and-set. A later request that already settled it is
+left on. A direct preference write bumps the revision and settles it, so it
+supersedes an unsettled enable.
 
 ### Crash between durable writes
 
@@ -154,23 +164,41 @@ and a finished scan, or the previous preference when the scan fails.
 | the journal records `Attempted` | the invocation is saved | `submitting`, journal `Attempted` | The retry returns `Interrupted` and does not run the effect. One audit moves the row to `unconfirmed`. `next_due` stops returning it |
 | the invocation is saved | `record_outcome` commits | `submitting`, execution present | The next pass records `delivered` from the saved execution and does not enqueue |
 | `record_outcome` fails | its commit | the previous status | The next pass records the same outcome. It does not mint an execution id |
-| preference turns on | the owner scan finishes | preference on, and any rows the scan had accepted | If the scan returns an error and the previous value was off, the operation sets the preference back off as the system, which cancels those rows. If it was already on, it stays on and the error is returned. If the process dies during the scan, the next start of the delivery loop scans every owner before it waits |
+| preference turns on | the owner scan finishes | preference on at the revision this request installed, unsettled, and any rows the scan had accepted | A scan error reverts that revision only while it is still unsettled, as the system, which cancels those rows. A scan that finishes settles the revision. A request that did not install it does not turn it off. If the process dies during the scan, the next start of the delivery loop scans every owner once the preference can be read |
 | preference turns off | a live lease expires | preference off; `scheduled`, `delivering`, and expired `submitting` cancelled | A live lease finishes its submit. The off path waits until that lease and then cancels it, so a later enable does not deliver it |
 | `erase_conversation` commits | the tombstone is marked erased | prompt and identifying fields blank, one new audit per row that still held them | A crash before the commit leaves the payload. Deletion stays unfinished and the next attempt scrubs again. A second scrub writes no audit. Older audit rows stay |
 | the outcome is observed | the audit timestamp is chosen | the clock is read when the saved execution or the `submit_command` result is in hand | The audit names that observation. A reading taken before the submit is not reused |
 
 The wakeup is not a durable write. The loop creates the notification future
-before `deliver_due_scheduled` reads the schedule. A continuation accepted
-during that read notifies a waiter that already exists, so the loop does not
-sleep through it. `notify_waiters` does not keep a permit for a waiter
-created afterwards.
+before it reads the preference for the catch-up scan and before
+`deliver_due_scheduled` reads the schedule. A continuation accepted during
+that read notifies a waiter that already exists, so the loop does not sleep
+through it. `notify_waiters` does not keep a permit for a waiter created
+afterwards.
+
+### Delivery loop and the lease
+
+Who holds a `submitting` lease, what a transient error does, and when the
+loop tries again. `None` from a delivery pass is an unbound store, or a
+schedule with nothing due and no live lease. A store error is never that.
+
+| State | Who owns the fence | Transient error | What the pass does | When it tries again |
+| --- | --- | --- | --- | --- |
+| No open submit | Nobody. `fence_owner` is empty | `preference`, `retire_unfenced_submissions`, `next_live_fence`, `claim_due`, or `next_due` returns an error | The pass waits one second (`SCHEDULE_RETRY_MS`). It does not park until a notification storage recovery will not send | That one second, or sooner when a wakeup fires |
+| Preference off, lease still live | `fence_owner` until `fence_until_ms` | `retire_unfenced_submissions` or `next_live_fence` returns an error | Same one-second wait. A successful read waits until the live lease and then cancels it | `SCHEDULE_RETRY_MS`, or until `fence_until_ms` when the read succeeded |
+| `submitting`, this process inside `finish_fenced_submit` | This process, while `renew_fence` returns true | `renew_fence` returns an error, such as SQLite busy | Renewal continues. `lost` stays false. `submit_command` is not abandoned | `FENCE_RENEW_RETRY_MS` (one second) until a renew succeeds, then every ten seconds |
+| `submitting`, renew reports this process does not own the row | Whoever the store now names, or nobody | `renew_fence` returns false | `lost` is set and renewal stops. `submit_command` does not start. A submit that already ran still records its outcome | No further renew from this process. The next due pass, or the process that adopted the expired lease, continues the row |
+| Enable in progress, this request installed the revision | The decision transaction, then the scan | The catalogue scan fails | Revert that revision only while it is still enabled and unsettled. The audit cause is `preference` and the initiator is the system | The revert is one compare-and-set. A revision a later request already settled matches nothing and stays on |
+| Enable in progress, this request did not install the revision | The earlier installer until a scan settles it | This request's scan fails | This request does not turn the preference off. A scan that finishes settles the revision it observed, so the installer's later revert matches nothing | None for this request |
 
 A past reset does not schedule. An overdue row that was accepted while the
 reset was still in the future is delivered after the process starts. Nothing
 promises that minute while the process is down. Two overlapping loops in one
 process, or two processes on the file, take the compare-and-set. A live lease
 has one owner. The loser does not submit. The owner renews the lease until
-the outcome is recorded. The lease is thirty seconds, renewed every ten.
+the outcome is recorded. A renew that returns an error is tried again after
+one second and does not drop the lease. The lease is thirty seconds, renewed
+every ten while the renew succeeds.
 
 A pass claims at most eight due rows. A scheduled row still due at that
 clock, or a row left delivering or submitting, is due on the next pass. The
@@ -197,7 +225,12 @@ turn with no saved result clears it.
    process already owns and is not inside. The id enters `armed` only after
    that transaction commits. `armed` is this process's re-entry guard. A
    failed commit leaves the id unarmed and the row `delivering`. A second
-   process does not submit while the lease is live.
+   process does not submit while the lease is live. A `renew_fence` error
+   does not drop the lease or set `lost`: renewal tries again after one
+   second until the store extends it or reports that this process does not
+   own the row. `lost` is that false result. It stops a `submit_command`
+   that has not started. A submit that has already run still records its
+   outcome.
 6. Schedule and cancellation audits commit with the status change. The
    outcome audit commits after the observation, with the clock read at that
    observation. If that audit fails, the row stays `submitting` and the next
@@ -212,11 +245,15 @@ turn with no saved result clears it.
    refused, the refusal is that audit, and the store's boolean is unchanged.
    Turning it on scans every catalogue owner and every page, and schedules
    each currently blocked eligible turn. The newest-first list bound does
-   not apply. A scan that fails restores the previous off value, as the
-   system. Turning it off cancels open rows whose submit lease has expired.
+   not apply. A scan that fails reverts only the unsettled revision this
+   request installed, as the system. A scan that finishes settles the revision
+   it observed, so a later failure cannot turn that enable off. A request that
+   found the preference already on does not revert it. Turning it off cancels
+   open rows whose submit lease has expired.
    An allow publishes every followed conversation. A deny does not. The
-   delivery loop, on start, scans every owner again while the preference is
-   on, so a crash during an earlier scan is finished.
+   delivery loop, once it can read a preference that is on, scans every owner
+   again, so a crash during an earlier scan is finished. A failed read retries
+   that scan on a later pass.
 9. OpenCode frames are not classified as usage limits.
 10. Audit initiator for a provider limit is the system. The person is the
     initiator of the preference decision, allow and deny, and of the
@@ -250,6 +287,11 @@ turn with no saved result clears it.
     audit table's older rows are not deleted or rewritten.
 17. The delivery loop registers its wakeup before it reads the schedule. A
     continuation accepted during that read is waited on by the same pass.
+18. A store error on a delivery pass waits one second and passes again.
+    `None` is an unbound store, or a schedule with nothing due and no live
+    lease. A preference read that fails at the start of the loop retries the
+    catch-up scan on a later pass; it does not treat the preference as off
+    for the life of the process.
 
 ## Card
 
