@@ -490,6 +490,16 @@ async fn a_live_root_waits_for_its_environment_release() {
     );
     assert_eq!(provider.close_calls.load(Ordering::SeqCst), 1);
     assert_eq!(host.held(), 1);
+    let owned = SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap();
+    let observed = nessa_sdk::domain::agent_execution::subagents::OwnershipGraph::restore(
+        owned.read().await.unwrap(),
+    );
+    assert_eq!(
+        observed.physical(&lifetime, &lifetime),
+        Some(nessa_sdk::domain::agent_execution::subagents::PhysicalFact::Failed),
+        "an unanswered environment cannot publish physical release"
+    );
+
     host.release();
     tokio::time::timeout(TURN_HOLD_HANG, async {
         while host.held() != 0 {
