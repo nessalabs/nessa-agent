@@ -558,14 +558,22 @@ const body = {
       }
     }
     try {
+      // The pane already open still shows a finished scene. The one just
+      // mounted is still taking its frames. Returning on the first finished
+      // scene would read the new one before it is ready.
       await page.waitForFunction(
-        () =>
-          [...document.querySelectorAll(".desktop-night-scene")].some((scene) => {
-            const box = scene.getBoundingClientRect()
-            return (
-              box.width > 0 && box.height > 0 && scene.hasAttribute("data-scene-complete")
-            )
-          }),
+        () => {
+          const shown = [...document.querySelectorAll(".desktop-night-scene")].filter(
+            (scene) => {
+              const box = scene.getBoundingClientRect()
+              return box.width > 0 && box.height > 0
+            },
+          )
+          return (
+            shown.length > 0 &&
+            shown.every((scene) => scene.hasAttribute("data-scene-complete"))
+          )
+        },
         null,
         { timeout: 1000, polling: "raf" },
       )

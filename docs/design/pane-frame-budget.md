@@ -300,7 +300,7 @@ box frame.
   overview layer skipping a render whose inputs did not change, the
   scene-ready and scene-complete marks and the layer rules,
   the tests that lock those, the settled assertion in `columns.mjs`
-  `content-visible`, the rewrite that names the utility as the subject of
+  `content-visible` (every shown night scene, not the first), the rewrite that names the utility as the subject of
   a generated group or peer selector (`limitGroupSelectors`), and this note.
 - Outside that scope: `FlipScope`'s read when the flight duration is
   nonzero, blanking a conversation, and issues 965, 981, 1038, 1039, 1030,

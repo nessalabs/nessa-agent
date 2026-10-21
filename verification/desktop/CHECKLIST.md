@@ -300,8 +300,10 @@ Experimental turns it on; the rail stands beside the workspace in
   cumulative ancestor opacity, visible content and unit root/header transform.
   Once that split has settled, each shown night scene has laid out its text
   (`data-scene-ready` and `data-scene-complete`, content-visibility not hidden,
-  layers wider than nothing). The dim layer lays out first; rain, the lit
-  layer, and steam lay out on the frame after.
+  layers wider than nothing). The wait returns when every shown scene is
+  complete, not when the first one is: the pane already open is finished
+  while the one just mounted is still taking its frames. The dim layer lays
+  out first; rain, the lit layer, and steam lay out on the frame after.
   Drag previews must also retain content; verify
   these with the drag and focus checks when changing their motion.
 - [ ] **No two columns overlap**, and nothing sits under the rail, in any
