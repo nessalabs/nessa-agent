@@ -1168,6 +1168,83 @@ async fn close_joins_prepared_decline_evidence_even_when_no_work_is_owed() {
 }
 
 #[tokio::test]
+async fn prepared_cancellation_delivery_waits_for_its_own_history_ack_before_retry() {
+    let saved = cut_off_while_running("cancellation-history-ack").await;
+    let (agent, backend, storage, hold) = restore_holding(saved).await;
+    backend.audit.reject.store(true, Ordering::SeqCst);
+    let turn = agent.owed_turns().await.remove(0);
+    let Resumed::ContinuedUnaudited { admission, .. } =
+        bounded(agent.resume_turn(&turn, resumer())).await.unwrap()
+    else {
+        panic!("audit rejection must retain the original cancellation receipt")
+    };
+    let _ = hold.send(());
+    let _ = bounded(admission.wait()).await;
+    let before = storage.snapshot();
+    let original = before
+        .invocations
+        .iter()
+        .find(|record| record.cancellation_delivery.is_some())
+        .unwrap();
+    let id = original.request.execution_id.clone();
+    let decision = original.cancellation_delivery.clone().unwrap();
+    assert!(!decision.acknowledged());
+    let restart = MemoryStorage::default();
+    restart.0.lock().unwrap().snapshot = Some(before);
+    backend.audit.reject.store(false, Ordering::SeqCst);
+    bounded(agent.close(actor())).await.unwrap();
+
+    let (restored, fresh, storage) = workflow_from_storage(restart).await;
+    let (entered, waiting) = oneshot::channel();
+    let (release, held) = oneshot::channel();
+    *fresh.audit.pause.lock().unwrap() = Some((entered, held));
+    let delivery = tokio::spawn({
+        let restored = restored.clone();
+        async move { restored.retry_cancelled_receipts().await }
+    });
+    bounded(waiting).await.unwrap();
+    // Preparation is already saved. Fail precisely the write after audit ACK,
+    // before any second retry can flush that first owner's pending receipt.
+    storage.fail_next();
+    release.send(()).unwrap();
+    assert!(matches!(
+        bounded(delivery).await.unwrap(),
+        Err(AgentError::Storage(_))
+    ));
+    let failed = storage.snapshot();
+    assert_eq!(
+        failed
+            .invocations
+            .iter()
+            .find(|record| record.request.execution_id == id)
+            .unwrap()
+            .cancellation_delivery
+            .as_ref(),
+        Some(&decision),
+        "successful audit delivery cannot acknowledge its rejected history write"
+    );
+    let deliveries = fresh.audit.records.lock().unwrap().len();
+    bounded(restored.retry_cancelled_receipts()).await.unwrap();
+    assert_eq!(
+        fresh.audit.records.lock().unwrap().len(),
+        deliveries,
+        "the real writer's retry must persist its retained ACK without redelivery"
+    );
+    let acknowledged = storage.snapshot();
+    let receipt = acknowledged
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id == id)
+        .unwrap()
+        .cancellation_delivery
+        .as_ref()
+        .unwrap();
+    assert!(receipt.acknowledged());
+    assert_eq!(receipt.event(), decision.event());
+    bounded(restored.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
 async fn prepared_cancellation_receipt_restarts_under_its_original_decision_and_joins_only_real_ack(
 ) {
     let saved = cut_off_while_running("cancellation-restart").await;
