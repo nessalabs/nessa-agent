@@ -13,7 +13,14 @@ CREATE TABLE message (
     execution_id TEXT NOT NULL UNIQUE,
     due_at_ms INTEGER NOT NULL,
     status TEXT NOT NULL CHECK (
-        status IN ('scheduled', 'delivering', 'delivered', 'cancelled', 'refused')
+        status IN (
+            'scheduled',
+            'delivering',
+            'submitting',
+            'delivered',
+            'cancelled',
+            'refused'
+        )
     ),
     agent TEXT NOT NULL,
     model TEXT NOT NULL,
@@ -30,7 +37,7 @@ CREATE TABLE message (
 ) STRICT;
 
 CREATE UNIQUE INDEX message_one_open ON message (conversation)
-    WHERE status IN ('scheduled', 'delivering');
+    WHERE status IN ('scheduled', 'delivering', 'submitting');
 
 CREATE TABLE audit (
     id INTEGER PRIMARY KEY,

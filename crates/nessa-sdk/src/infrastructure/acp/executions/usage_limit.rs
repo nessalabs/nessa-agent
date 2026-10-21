@@ -8,6 +8,7 @@
 use crate::application::agent_execution::agents::{
     ProviderDiagnostic, UsageLimit, UsageLimitKind, UsageLimitProvider,
 };
+use crate::infrastructure::acp::profile::UsageLimitWire;
 use serde_json::Value;
 
 /// Unix milliseconds for 2024-01-01T00:00:00Z.
@@ -61,19 +62,25 @@ pub(in crate::infrastructure::acp) struct UsageLimitFrame<'a> {
     pub observed: Option<&'a ObservedRateLimit>,
 }
 
-/// `Some` when the frame is a usage limit. Auth (`-32000`) is not asked here.
-pub(in crate::infrastructure::acp) fn classify(frame: UsageLimitFrame<'_>) -> Option<UsageLimit> {
+/// `Some` when `wire` is the harness this frame belongs to and the frame is a
+/// usage limit for that harness. `None` is every other profile, including
+/// OpenCode and a custom ACP agent. Auth (`-32000`) is not asked here.
+pub(in crate::infrastructure::acp) fn classify(
+    wire: Option<UsageLimitWire>,
+    frame: UsageLimitFrame<'_>,
+) -> Option<UsageLimit> {
     let diagnostic = frame.message.map(ProviderDiagnostic::new);
-    if let Some(limit) = codex_limit(frame.data, diagnostic.clone()) {
-        return Some(limit);
+    match wire {
+        Some(UsageLimitWire::Codex) => codex_limit(frame.data, diagnostic),
+        Some(UsageLimitWire::Claude) => claude_limit(
+            frame.code,
+            frame.message,
+            frame.data,
+            frame.observed,
+            diagnostic,
+        ),
+        None => None,
     }
-    claude_limit(
-        frame.code,
-        frame.message,
-        frame.data,
-        frame.observed,
-        diagnostic,
-    )
 }
 
 fn codex_limit(data: Option<&Value>, diagnostic: Option<ProviderDiagnostic>) -> Option<UsageLimit> {
@@ -248,10 +255,18 @@ mod tests {
         }
     }
 
+    fn claude(frame: UsageLimitFrame<'_>) -> Option<UsageLimit> {
+        classify(Some(UsageLimitWire::Claude), frame)
+    }
+
+    fn codex(frame: UsageLimitFrame<'_>) -> Option<UsageLimit> {
+        classify(Some(UsageLimitWire::Codex), frame)
+    }
+
     #[test]
     fn codex_usage_limit_is_unknown_and_keeps_no_invented_reset() {
         let data = json!({"codexErrorInfo": "usageLimitExceeded", "message": "limit"});
-        let limit = classify(frame(-32603, Some("limit"), Some(&data), None)).unwrap();
+        let limit = codex(frame(-32603, Some("limit"), Some(&data), None)).unwrap();
         assert_eq!(limit.provider(), UsageLimitProvider::Codex);
         assert_eq!(
             limit.recovery(),
@@ -271,7 +286,7 @@ mod tests {
             json!({"codexErrorInfo": "serverOverloaded"}),
         ] {
             assert!(
-                classify(frame(-32603, Some("no"), Some(&data), None)).is_none(),
+                codex(frame(-32603, Some("no"), Some(&data), None)).is_none(),
                 "{data}"
             );
         }
@@ -288,7 +303,7 @@ mod tests {
         });
         let observed = ObservedRateLimit { claude: Some(meta) };
         let data = json!({"errorKind": "rate_limit"});
-        let limit = classify(frame(-32603, Some("slow"), Some(&data), Some(&observed))).unwrap();
+        let limit = claude(frame(-32603, Some("slow"), Some(&data), Some(&observed))).unwrap();
         assert_eq!(limit.kind(), UsageLimitKind::Overage);
         assert_eq!(limit.resets_at_ms(), Some(1_800_000_000_000));
     }
@@ -302,7 +317,7 @@ mod tests {
         });
         let observed = ObservedRateLimit { claude: Some(meta) };
         let data = json!({"errorKind": "rate_limit"});
-        let limit = classify(frame(-32603, Some("buy"), Some(&data), Some(&observed))).unwrap();
+        let limit = claude(frame(-32603, Some("buy"), Some(&data), Some(&observed))).unwrap();
         assert_eq!(
             limit.recovery(),
             crate::application::agent_execution::agents::UsageLimitRecovery::UserAction
@@ -312,7 +327,7 @@ mod tests {
         let billing = json!({"errorKind": "billing_error"});
         let held = json!({"errorKind": "account_on_hold"});
         for data in [&billing, &held] {
-            let limit = classify(frame(-32603, Some("pay"), Some(data), Some(&observed))).unwrap();
+            let limit = claude(frame(-32603, Some("pay"), Some(data), Some(&observed))).unwrap();
             assert_eq!(limit.resets_at_ms(), None);
         }
     }
@@ -321,7 +336,7 @@ mod tests {
     fn synthetic_window_prefix_can_merge_and_action_prefixes_cannot() {
         let meta = json!({"status": "rejected", "rateLimitType": "seven_day", "resetsAt": 1_800_000_000_000_u64});
         let observed = ObservedRateLimit { claude: Some(meta) };
-        let window = classify(frame(
+        let window = claude(frame(
             -32603,
             Some("You've hit your weekly limit"),
             None,
@@ -329,7 +344,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(window.resets_at_ms(), Some(1_800_000_000_000));
-        let action = classify(frame(
+        let action = claude(frame(
             -32603,
             Some("Your org is out of usage · add funds to continue"),
             None,
@@ -337,14 +352,14 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(action.resets_at_ms(), None);
-        assert!(classify(frame(
+        assert!(claude(frame(
             -32603,
             Some("something else failed"),
             None,
             Some(&observed)
         ))
         .is_none());
-        assert!(classify(frame(
+        assert!(claude(frame(
             -32001,
             Some("You've hit your weekly limit"),
             None,
@@ -357,7 +372,7 @@ mod tests {
     fn warnings_do_not_become_a_timed_reset_without_a_terminal_signal() {
         let meta = json!({"status": "allowed_warning", "resetsAt": 1_800_000_000_000_u64});
         let observed = ObservedRateLimit { claude: Some(meta) };
-        assert!(classify(frame(-32603, Some("ok"), None, Some(&observed))).is_none());
+        assert!(claude(frame(-32603, Some("ok"), None, Some(&observed))).is_none());
     }
 
     #[test]
@@ -365,11 +380,32 @@ mod tests {
         let meta = json!({"status": "rejected", "rateLimitType": "five_hour", "resetsAt": 1});
         let observed = ObservedRateLimit { claude: Some(meta) };
         let data = json!({"errorKind": "rate_limit"});
-        let limit = classify(frame(-32603, None, Some(&data), Some(&observed))).unwrap();
+        let limit = claude(frame(-32603, None, Some(&data), Some(&observed))).unwrap();
         assert_eq!(
             limit.recovery(),
             crate::application::agent_execution::agents::UsageLimitRecovery::Unknown
         );
         assert_eq!(limit.kind(), UsageLimitKind::FiveHour);
+    }
+
+    #[test]
+    fn another_profiles_matching_text_is_not_a_usage_limit() {
+        let codex_data = json!({"codexErrorInfo": "usageLimitExceeded"});
+        let claude_data = json!({"errorKind": "rate_limit"});
+        let codex_frame = || frame(-32603, Some("limit"), Some(&codex_data), None);
+        let claude_frame = || {
+            frame(
+                -32603,
+                Some("You've hit your weekly limit"),
+                Some(&claude_data),
+                None,
+            )
+        };
+        assert!(classify(None, codex_frame()).is_none());
+        assert!(classify(None, claude_frame()).is_none());
+        assert!(claude(codex_frame()).is_none());
+        assert!(codex(claude_frame()).is_none());
+        assert!(codex(codex_frame()).is_some());
+        assert!(claude(claude_frame()).is_some());
     }
 }

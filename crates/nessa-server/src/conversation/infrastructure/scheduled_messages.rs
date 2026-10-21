@@ -3,8 +3,11 @@
 //!
 //! Schedule and cancellation audits commit with the status change. The
 //! delivery audit commits in the transaction that records the outcome, which
-//! runs only after submit has admitted or refused the turn. If that
-//! transaction fails, the row stays `delivering` and keeps its execution id.
+//! runs only after `begin_submit` has moved the row to `submitting`. Cancel,
+//! defer, and a model change match `scheduled` and `delivering` only, so they
+//! cannot land once that transition has, and the transition fails once they
+//! have. If the outcome transaction fails, the row stays `submitting` and
+//! keeps its execution id.
 
 use crate::conversation::application::{
     ConversationError, ConversationFuture, ScheduleActor, ScheduleDraft, ScheduledMessage,
@@ -18,6 +21,7 @@ use nessa_local_database::{
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
+    collections::HashSet,
     path::Path,
     sync::{Arc, Mutex, PoisonError},
 };
@@ -27,6 +31,12 @@ const DEFINITION: &str = include_str!("scheduled_messages.sql");
 /// Scheduled continuations, one open row per conversation.
 pub struct LocalScheduledMessages {
     connection: Arc<Mutex<Connection>>,
+    /// Execution ids whose `submitting` row this process is inside.
+    ///
+    /// The connection mutex is taken before this one. A restart drops the set,
+    /// so a `submitting` row left by a crash can be adopted. Preference off
+    /// cancels a `submitting` row only when it is not in this set.
+    armed: Arc<Mutex<HashSet<String>>>,
     /// The next delivery-outcome transaction fails before it commits.
     #[cfg(test)]
     fail_outcome_audit: AtomicBool,
@@ -38,6 +48,7 @@ impl LocalScheduledMessages {
         let connection = nessa_local_database::open(path, &Schema::new(DEFINITION)?)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            armed: Arc::new(Mutex::new(HashSet::new())),
             #[cfg(test)]
             fail_outcome_audit: AtomicBool::new(false),
         })
@@ -120,7 +131,7 @@ fn read_message(
         causal_execution: row.get(1)?,
         execution_id: row.get(2)?,
         due_at_ms: u64::try_from(row.get::<_, i64>(3)?).unwrap_or(0),
-        delivering: status == "delivering",
+        delivering: status == "delivering" || status == "submitting",
         agent: row.get(5)?,
         model: row.get(6)?,
         prompt: row.get(7)?,
@@ -147,7 +158,7 @@ fn load_open(
         .query_row(
             &format!(
                 "SELECT {MESSAGE_COLUMNS} FROM message \
-                 WHERE conversation = ?1 AND status IN ('scheduled', 'delivering')"
+                 WHERE conversation = ?1 AND status IN ('scheduled', 'delivering', 'submitting')"
             ),
             params![conversation],
             read_message,
@@ -216,6 +227,70 @@ fn cancel_matching(
     Ok(cancelled)
 }
 
+/// Cancel `submitting` rows this process is not inside. A held fence stays.
+fn cancel_unarmed_submitting(
+    transaction: &Transaction<'_>,
+    armed: &HashSet<String>,
+    actor: &ScheduleActor,
+    at_ms: i64,
+    cause: &str,
+) -> Result<usize, ConversationError> {
+    let rows = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT conversation, causal_execution, execution_id FROM message \
+                 WHERE status = 'submitting'",
+            )
+            .map_err(failed)?;
+        let selected = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(failed)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(failed)?;
+        selected
+    };
+    let mut cancelled = 0;
+    for (conversation, causal, execution) in rows {
+        if armed.contains(&execution) {
+            continue;
+        }
+        let changed = transaction
+            .execute(
+                "UPDATE message SET status = 'cancelled' \
+                 WHERE execution_id = ?1 AND status = 'submitting'",
+                params![execution],
+            )
+            .map_err(failed)?;
+        if changed == 1 {
+            audit(
+                transaction,
+                &AuditChange {
+                    at_ms,
+                    conversation: &conversation,
+                    causal_execution: &causal,
+                    execution_id: &execution,
+                    before_status: Some("submitting"),
+                    after_status: "cancelled",
+                    cause,
+                    actor,
+                },
+            )?;
+            cancelled += 1;
+        }
+    }
+    Ok(cancelled)
+}
+
+fn holds(armed: &Mutex<HashSet<String>>) -> std::sync::MutexGuard<'_, HashSet<String>> {
+    armed.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 impl ScheduledMessageStore for LocalScheduledMessages {
     fn preference(&self) -> ConversationFuture<'_, bool> {
         self.run(|connection| {
@@ -235,6 +310,7 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         actor: ScheduleActor,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool> {
+        let armed = self.armed.clone();
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
             let transaction = connection.transaction().map_err(failed)?;
@@ -278,6 +354,13 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                     &actor,
                     at_ms,
                 )?;
+                cancel_unarmed_submitting(
+                    &transaction,
+                    &holds(&armed),
+                    &actor,
+                    at_ms,
+                    ContinuationCause::PreferenceDisabled.as_str(),
+                )?;
             }
             transaction.commit().map_err(failed)?;
             Ok(enabled)
@@ -308,6 +391,10 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 .optional()
                 .map_err(failed)?;
             if let Some((execution_id, status, due_at_ms)) = existing {
+                if status == "submitting" {
+                    transaction.commit().map_err(failed)?;
+                    return Ok(None);
+                }
                 if status != "scheduled" && status != "delivering" {
                     transaction.commit().map_err(failed)?;
                     return Ok(None);
@@ -361,6 +448,20 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 }
                 transaction.commit().map_err(failed)?;
                 return load_open(connection, &draft.conversation);
+            }
+            let submitting: bool = transaction
+                .query_row(
+                    "SELECT EXISTS( \
+                         SELECT 1 FROM message \
+                         WHERE conversation = ?1 AND status = 'submitting' \
+                     )",
+                    params![draft.conversation],
+                    |row| row.get(0),
+                )
+                .map_err(failed)?;
+            if submitting {
+                transaction.commit().map_err(failed)?;
+                return Ok(None);
             }
             cancel_matching(
                 &transaction,
@@ -597,7 +698,8 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             }
             let mut statement = connection
                 .prepare(&format!(
-                    "SELECT {MESSAGE_COLUMNS} FROM message WHERE status = 'delivering' \
+                    "SELECT {MESSAGE_COLUMNS} FROM message \
+                     WHERE status IN ('delivering', 'submitting') \
                      ORDER BY due_at_ms LIMIT ?1"
                 ))
                 .map_err(failed)?;
@@ -632,7 +734,7 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 .query_row(
                     "SELECT EXISTS( \
                          SELECT 1 FROM message \
-                         WHERE status = 'delivering' \
+                         WHERE status IN ('delivering', 'submitting') \
                             OR (status = 'scheduled' AND due_at_ms <= ?1) \
                      )",
                     params![now],
@@ -651,6 +753,79 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 )
                 .map_err(failed)?;
             Ok(due.and_then(|due| u64::try_from(due).ok()))
+        })
+    }
+
+    fn begin_submit(&self, execution_id: &str) -> ConversationFuture<'_, bool> {
+        let execution_id = execution_id.to_owned();
+        let armed = self.armed.clone();
+        self.run(move |connection| {
+            let transaction = connection.transaction().map_err(failed)?;
+            let status: Option<String> = transaction
+                .query_row(
+                    "SELECT status FROM message WHERE execution_id = ?1",
+                    params![execution_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(failed)?;
+            let mut held = holds(&armed);
+            let won = match status.as_deref() {
+                Some("delivering") => {
+                    let changed = transaction
+                        .execute(
+                            "UPDATE message SET status = 'submitting' \
+                             WHERE execution_id = ?1 AND status = 'delivering'",
+                            params![execution_id],
+                        )
+                        .map_err(failed)?;
+                    if changed == 1 {
+                        held.insert(execution_id)
+                    } else {
+                        false
+                    }
+                }
+                Some("submitting") => held.insert(execution_id),
+                _ => false,
+            };
+            transaction.commit().map_err(failed)?;
+            Ok(won)
+        })
+    }
+
+    fn release_submit(&self, execution_id: &str) -> ConversationFuture<'_, ()> {
+        let execution_id = execution_id.to_owned();
+        let armed = self.armed.clone();
+        self.run(move |_connection| {
+            holds(&armed).remove(&execution_id);
+            Ok(())
+        })
+    }
+
+    fn retire_unfenced_submissions(&self, at_ms: u64) -> ConversationFuture<'_, usize> {
+        let armed = self.armed.clone();
+        self.run(move |connection| {
+            let at_ms = millis(at_ms)?;
+            let transaction = connection.transaction().map_err(failed)?;
+            let enabled: Option<i64> = transaction
+                .query_row("SELECT enabled FROM preference WHERE id = 1", [], |row| {
+                    row.get(0)
+                })
+                .optional()
+                .map_err(failed)?;
+            if enabled == Some(1) {
+                transaction.commit().map_err(failed)?;
+                return Ok(0);
+            }
+            let cancelled = cancel_unarmed_submitting(
+                &transaction,
+                &holds(&armed),
+                &ScheduleActor::system(),
+                at_ms,
+                ContinuationCause::PreferenceDisabled.as_str(),
+            )?;
+            transaction.commit().map_err(failed)?;
+            Ok(cancelled)
         })
     }
 
@@ -704,14 +879,15 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 transaction.commit().map_err(failed)?;
                 return Ok(());
             }
-            if status != "delivering" {
+            if status != "delivering" && status != "submitting" {
                 transaction.commit().map_err(failed)?;
                 return Ok(());
             }
             transaction
                 .execute(
-                    "UPDATE message SET status = ?2 WHERE execution_id = ?1 AND status = 'delivering'",
-                    params![execution_id, after],
+                    "UPDATE message SET status = ?2 \
+                     WHERE execution_id = ?1 AND status = ?3",
+                    params![execution_id, after, status],
                 )
                 .map_err(failed)?;
             audit(
@@ -721,7 +897,7 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                     conversation: &conversation,
                     causal_execution: &causal,
                     execution_id: &execution_id,
-                    before_status: Some("delivering"),
+                    before_status: Some(&status),
                     after_status: after,
                     cause: &cause,
                     actor: &ScheduleActor::system(),
@@ -767,6 +943,10 @@ mod tests {
             surface_id: Some("desktop".into()),
             action_id: Some("toggle".into()),
         }
+    }
+
+    async fn open_messages() -> LocalScheduledMessages {
+        store().await
     }
 
     async fn store() -> LocalScheduledMessages {
@@ -973,5 +1153,136 @@ mod tests {
             .unwrap();
         assert_eq!(store.next_due(10).await.unwrap(), Some(80));
         assert_eq!(store.next_due(80).await.unwrap(), Some(80));
+    }
+
+    #[tokio::test]
+    async fn a_cancel_before_the_fence_is_not_submitted_and_the_fence_blocks_a_later_cancel() {
+        let store = store().await;
+        store.set_preference(true, person(), 1).await.unwrap();
+        store
+            .accept(draft("conversation", "causal", "exec-1", 10), 1)
+            .await
+            .unwrap();
+        store.claim_due(10, 4).await.unwrap();
+        assert!(!store.set_preference(false, person(), 2).await.unwrap());
+        assert!(!store.begin_submit("exec-1").await.unwrap());
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("cancelled")
+        );
+
+        let held = open_messages().await;
+        held.set_preference(true, person(), 1).await.unwrap();
+        held.accept(draft("conversation", "causal", "exec-1", 10), 1)
+            .await
+            .unwrap();
+        held.claim_due(10, 4).await.unwrap();
+        assert!(held.begin_submit("exec-1").await.unwrap());
+        assert!(!held.begin_submit("exec-1").await.unwrap());
+        assert!(!held.set_preference(false, person(), 3).await.unwrap());
+        assert_eq!(
+            held.status("exec-1").await.unwrap().as_deref(),
+            Some("submitting")
+        );
+        assert!(!held
+            .cancel_open(
+                "conversation",
+                ContinuationCause::ModelChanged,
+                ScheduleActor::system(),
+                4
+            )
+            .await
+            .unwrap());
+        assert!(!held
+            .defer_claim("conversation", "causal", 80, 5)
+            .await
+            .unwrap());
+        assert!(held
+            .accept(draft("conversation", "other", "exec-2", 90), 6)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            held.status("exec-1").await.unwrap().as_deref(),
+            Some("submitting")
+        );
+        held.record_outcome("exec-1", true, "delivered", 7)
+            .await
+            .unwrap();
+        assert_eq!(
+            held.status("exec-1").await.unwrap().as_deref(),
+            Some("delivered")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_defer_or_model_change_before_the_fence_refuses_the_submit() {
+        let store = store().await;
+        store
+            .accept(draft("conversation", "causal", "exec-1", 10), 1)
+            .await
+            .unwrap();
+        store.claim_due(10, 4).await.unwrap();
+        assert!(store
+            .defer_claim("conversation", "causal", 80, 2)
+            .await
+            .unwrap());
+        assert!(!store.begin_submit("exec-1").await.unwrap());
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("scheduled")
+        );
+
+        let changed = open_messages().await;
+        changed
+            .accept(draft("conversation", "causal", "exec-1", 10), 1)
+            .await
+            .unwrap();
+        changed.claim_due(10, 4).await.unwrap();
+        assert!(changed
+            .cancel_open(
+                "conversation",
+                ContinuationCause::ModelChanged,
+                ScheduleActor::system(),
+                2
+            )
+            .await
+            .unwrap());
+        assert!(!changed.begin_submit("exec-1").await.unwrap());
+        assert_eq!(
+            changed.status("exec-1").await.unwrap().as_deref(),
+            Some("cancelled")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_released_fence_can_be_adopted_and_preference_off_retires_an_unheld_one() {
+        let store = store().await;
+        store.set_preference(true, person(), 1).await.unwrap();
+        store
+            .accept(draft("conversation", "causal", "exec-1", 10), 2)
+            .await
+            .unwrap();
+        store.claim_due(10, 4).await.unwrap();
+        assert!(store.begin_submit("exec-1").await.unwrap());
+        store.release_submit("exec-1").await.unwrap();
+        let again = store.claim_due(11, 4).await.unwrap();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].execution_id, "exec-1");
+        assert!(store.begin_submit("exec-1").await.unwrap());
+        // Off while the fence is held leaves the row. Releasing it, with the
+        // preference still off, lets the next pass cancel rather than submit.
+        assert!(!store.set_preference(false, person(), 3).await.unwrap());
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("submitting")
+        );
+        store.release_submit("exec-1").await.unwrap();
+        assert_eq!(store.retire_unfenced_submissions(4).await.unwrap(), 1);
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("cancelled")
+        );
+        assert!(!store.begin_submit("exec-1").await.unwrap());
     }
 }

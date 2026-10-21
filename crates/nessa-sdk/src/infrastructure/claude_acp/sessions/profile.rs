@@ -11,7 +11,7 @@ use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::domain::model_metadata::value_objects::EffortLevel;
 use crate::infrastructure::acp::fields::{identifier, string};
-use crate::infrastructure::acp::profile::AcpProfile;
+use crate::infrastructure::acp::profile::{AcpProfile, UsageLimitWire};
 use crate::infrastructure::acp::sessions::{thought_level, AcpConfig};
 use crate::infrastructure::json_rpc::protocol;
 use serde_json::{json, Value};
@@ -121,6 +121,10 @@ impl ClaudeProfile {
     }
 }
 impl AcpProfile for ClaudeProfile {
+    fn usage_limit_wire(&self) -> Option<UsageLimitWire> {
+        Some(UsageLimitWire::Claude)
+    }
+
     fn for_open(mut self, config: &AcpConfig) -> Self {
         self.mcp_prefixes = config
             .mcp_servers

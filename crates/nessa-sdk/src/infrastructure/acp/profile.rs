@@ -12,6 +12,18 @@ use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::domain::model_metadata::value_objects::EffortLevel;
 use serde_json::Value;
 
+/// Which pinned harness's usage-limit wire this profile has been checked against.
+///
+/// OpenCode and any other profile have none. A prompt error is then a generic
+/// provider failure even when its text matches a Claude or Codex limit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UsageLimitWire {
+    /// Claude ACP 0.76.0 and Agent SDK 0.3.257.
+    Claude,
+    /// Codex ACP 1.12.0. The reset is not on this wire.
+    Codex,
+}
+
 /// Infrastructure strategy for differences between ACP implementations.
 /// Standard ACP transport and domain execution rules stay in the shared runtime.
 pub(crate) trait AcpProfile: Send + Sync + 'static {
@@ -45,6 +57,13 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     /// The harness name and the launch choice, when this profile is Claude or
     /// Codex. Other profiles have no such launch and record nothing.
     fn native_hooks_launch(&self) -> Option<(&'static str, bool)> {
+        None
+    }
+    /// The usage-limit wire this profile has been verified against.
+    ///
+    /// The default is none. A custom profile does not inherit Claude's or
+    /// Codex's classifier because an error string happened to match.
+    fn usage_limit_wire(&self) -> Option<UsageLimitWire> {
         None
     }
     /// Whether user-configured executable hooks are proven disabled.

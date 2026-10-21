@@ -3,8 +3,9 @@
 //! The preference is one boolean for this gateway, default off. A row is the
 //! durable one-shot message. Delivery calls [`ConversationService::submit_command`]
 //! with the causal turn's initiation, so Cedar and a deleted conversation are
-//! decided there. The compare-and-set to `delivering` is the only thing that
-//! may submit.
+//! decided there. The compare-and-set from `delivering` to `submitting` is the
+//! only permission to submit. Cancel, defer, and a model change lose to that
+//! transition and win against a claim that has not made it.
 
 use super::{ConversationCaller, ConversationError, ConversationId, ConversationService};
 use crate::conversation::application::ConversationFuture;
@@ -153,10 +154,22 @@ pub trait ScheduledMessageStore: Send + Sync {
     fn claim_due(&self, now_ms: u64, limit: usize)
         -> ConversationFuture<'_, Vec<ScheduledMessage>>;
     /// When the next pass should run. `Some(now_ms)` when a scheduled row is
-    /// already due or a row is still delivering, so a claim that stopped at
-    /// its limit, or a delivery audit that failed, is retried on the next
-    /// pass. Otherwise the soonest scheduled due time strictly after `now_ms`.
+    /// already due, or a row is `delivering` or `submitting`, so a claim that
+    /// stopped at its limit, or a delivery audit that failed, is retried on
+    /// the next pass. Otherwise the soonest scheduled due time strictly after
+    /// `now_ms`.
     fn next_due(&self, now_ms: u64) -> ConversationFuture<'_, Option<u64>>;
+    /// Move `delivering` to `submitting`, or adopt a `submitting` row this
+    /// process is not already inside. True is the only permission to submit.
+    /// Cancel, defer, and a model change match `scheduled` and `delivering`
+    /// only, so exactly one of those and this transition can win.
+    fn begin_submit(&self, execution_id: &str) -> ConversationFuture<'_, bool>;
+    /// Drop this process's hold on a `submitting` row without changing its
+    /// status. The next pass can adopt it.
+    fn release_submit(&self, execution_id: &str) -> ConversationFuture<'_, ()>;
+    /// When the preference is off, cancel `submitting` rows no process is
+    /// inside. A held fence is left to finish its submit.
+    fn retire_unfenced_submissions(&self, at_ms: u64) -> ConversationFuture<'_, usize>;
     /// The row's status text, when it exists.
     fn status(&self, execution_id: &str) -> ConversationFuture<'_, Option<String>>;
     /// After submit has admitted or refused the turn. The status change and
@@ -469,21 +482,11 @@ impl ConversationService {
     }
 
     async fn publish_owned_conversations(&self, caller: &ConversationCaller) {
-        let Ok(listed) = self
-            .inner
-            .listing
-            .list(
-                &caller.organization_id,
-                &caller.principal_id,
-                false,
-                super::MAX_LISTED_CONVERSATIONS,
-            )
-            .await
-        else {
+        let Ok(ids) = self.owned_conversations(caller).await else {
             return;
         };
-        for row in listed.conversations {
-            self.inner.live_changes.publish(row.conversation.id());
+        for id in ids {
+            self.inner.live_changes.publish(&id);
         }
     }
 
@@ -491,22 +494,43 @@ impl ConversationService {
         &self,
         caller: &ConversationCaller,
     ) -> Result<(), ConversationError> {
-        let listed = self
-            .inner
-            .listing
-            .list(
-                &caller.organization_id,
-                &caller.principal_id,
-                false,
-                super::MAX_LISTED_CONVERSATIONS,
-            )
-            .await?;
         let actor = ScheduleActor::person(caller);
-        for row in listed.conversations {
-            self.consider_usage_limit(row.conversation.id(), true, actor.clone())
-                .await;
+        for id in self.owned_conversations(caller).await? {
+            self.consider_usage_limit(&id, true, actor.clone()).await;
         }
         Ok(())
+    }
+
+    /// Every non-archived conversation this caller owns, one catalogue page
+    /// after another. The newest-first list stops at
+    /// [`super::MAX_LISTED_CONVERSATIONS`]; this does not.
+    async fn owned_conversations(
+        &self,
+        caller: &ConversationCaller,
+    ) -> Result<Vec<ConversationId>, ConversationError> {
+        let mut cursor = None::<crate::conversation::application::ObservationCursor>;
+        let mut ids = Vec::new();
+        loop {
+            let page = self
+                .inner
+                .listing
+                .observe(
+                    &caller.organization_id,
+                    &caller.principal_id,
+                    false,
+                    cursor.clone(),
+                )
+                .await?;
+            let complete = page.complete;
+            let next = page.cursor;
+            let page_ids = page
+                .conversations
+                .into_iter()
+                .map(|row| row.conversation.id().clone());
+            if fold_catalogue_page(&mut cursor, complete, next, page_ids, &mut ids)? {
+                return Ok(ids);
+            }
+        }
     }
 
     /// Deliver continuations that are due. Returns how long to wait for the
@@ -516,6 +540,7 @@ impl ConversationService {
         let now = self.inner.clock.unix_milliseconds();
         let preference = store.preference().await.ok()?;
         if !preference {
+            let _ = store.retire_unfenced_submissions(now).await;
             return None;
         }
         let rows = store.claim_due(now, 8).await.ok()?;
@@ -561,14 +586,25 @@ impl ConversationService {
         };
         self.consider_usage_limit(&id, false, ScheduleActor::system())
             .await;
-        let Ok(Some(status)) = store.status(&row.execution_id).await else {
+        // Reconciliation above may cancel or defer while the row is still
+        // `delivering`. The transition below is the decision to submit: a
+        // cancel, model change, or later reset that wins first leaves this
+        // false, and one that arrives after cannot undo it.
+        let Ok(true) = store.begin_submit(&row.execution_id).await else {
             return;
         };
-        if status != "delivering" {
-            return;
-        }
+        self.finish_fenced_submit(store.clone(), id, &row).await;
+        let _ = store.release_submit(&row.execution_id).await;
+    }
+
+    async fn finish_fenced_submit(
+        &self,
+        store: Arc<dyn ScheduledMessageStore>,
+        id: ConversationId,
+        row: &ScheduledMessage,
+    ) {
+        let now = self.inner.clock.unix_milliseconds();
         if self.execution_saved(&id, &row.execution_id).await {
-            let now = self.inner.clock.unix_milliseconds();
             let _ = store
                 .record_outcome(&row.execution_id, true, "delivered", now)
                 .await;
@@ -577,11 +613,10 @@ impl ConversationService {
         let Some(commands) = self.commands() else {
             return;
         };
-        let now = self.inner.clock.unix_milliseconds();
         // A stored caller or grant that cannot be rebuilt will never pass
-        // submit. Refuse it once. Leaving it delivering would claim it again
-        // on every pass.
-        let (caller, initiation) = match (schedule_caller(&row), continuation_initiation(&row)) {
+        // submit. Refuse it once. The row stays out of `delivering`, so the
+        // next pass adopts `submitting` only until this refusal is recorded.
+        let (caller, initiation) = match (schedule_caller(row), continuation_initiation(row)) {
             (Ok(caller), Ok(initiation)) => (caller, initiation),
             _ => {
                 let _ = store
@@ -649,6 +684,28 @@ struct UsageLimitFacts {
     grant_id: Option<String>,
     policy_revision: Option<u64>,
     tools_checked: bool,
+}
+
+/// Read one catalogue page into `out`. `Ok(true)` is the last page. An
+/// unfinished page with no new cursor is an error, so the walk cannot stop
+/// early and report that every conversation was seen.
+fn fold_catalogue_page<T, C: Clone + PartialEq>(
+    cursor: &mut Option<C>,
+    complete: bool,
+    next: Option<C>,
+    items: impl IntoIterator<Item = T>,
+    out: &mut Vec<T>,
+) -> Result<bool, ConversationError> {
+    out.extend(items);
+    if complete {
+        return Ok(true);
+    }
+    let next = next.ok_or(ConversationError::Unavailable)?;
+    if cursor.as_ref() == Some(&next) {
+        return Err(ConversationError::Unavailable);
+    }
+    *cursor = Some(next);
+    Ok(false)
 }
 
 fn facts_causal(facts: &UsageLimitFacts) -> String {
@@ -756,5 +813,44 @@ pub(crate) fn initiation_fields(
             Some(grant.policy_revision()),
             initiation.tools() == ToolChecking::Checked,
         ),
+    }
+}
+
+#[cfg(test)]
+mod catalogue_pages {
+    use super::fold_catalogue_page;
+    use crate::conversation::application::ConversationError;
+
+    #[test]
+    fn enabling_the_preference_reads_past_the_list_bound() {
+        let mut cursor = None;
+        let mut ids = Vec::new();
+        let first: Vec<_> = (0..500).collect();
+        let second: Vec<_> = (500..600).collect();
+        assert!(!fold_catalogue_page(&mut cursor, false, Some(1_u32), first, &mut ids).unwrap());
+        assert!(!fold_catalogue_page(&mut cursor, false, Some(2), second, &mut ids).unwrap());
+        assert!(
+            fold_catalogue_page(&mut cursor, true, None, std::iter::empty(), &mut ids).unwrap()
+        );
+        assert_eq!(ids.len(), 600);
+        assert_eq!(ids[0], 0);
+        assert_eq!(ids[599], 599);
+    }
+
+    #[test]
+    fn an_unfinished_catalogue_page_without_a_cursor_fails_the_walk() {
+        let mut cursor = None::<u32>;
+        let mut ids = Vec::new();
+        let error = fold_catalogue_page(&mut cursor, false, None, ["older"], &mut ids);
+        assert!(matches!(error, Err(ConversationError::Unavailable)));
+    }
+
+    #[test]
+    fn a_catalogue_cursor_that_does_not_move_fails_the_walk() {
+        let mut cursor = None;
+        let mut ids = Vec::new();
+        assert!(!fold_catalogue_page(&mut cursor, false, Some(1_u32), ["a"], &mut ids).unwrap());
+        let error = fold_catalogue_page(&mut cursor, false, Some(1), ["a"], &mut ids);
+        assert!(matches!(error, Err(ConversationError::Unavailable)));
     }
 }

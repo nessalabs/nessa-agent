@@ -82,12 +82,17 @@ there, not as the owner.
 | Blocked | Preference on and `resets_at_ms` is after the gateway clock | Scheduled | One row. Audit `scheduled`, initiator system or the person who enabled the preference. Card may say auto-resuming |
 | Scheduled | Same causal turn reports a later future reset | Scheduled | Same row, due time replaced. No second row |
 | Scheduled | Preference off, a later invocation exists (settled or not), or agent/model changed | Cancelled | Audit `cancelled`. No submit. A committed model change reconciles immediately |
-| Scheduled | Due, preference on, causal turn still the latest usage-limit failure, agent and model match | Delivering | One compare-and-set wins. Only that claim may submit |
-| Delivering | `submit_command` admits the stored execution id | Delivered | Audit `delivered` in a following transaction. One admission |
-| Delivering | `submit_command` returns deleted, not found, revoked, or the causal turn is no longer the usage limit | Refused | Audit `refused`. The command's own refusal is the deletion fact |
-| Delivering | Submit admitted the turn, then the delivery audit fails | Delivering | No second execution id. The next claim retries the audit and does not enqueue again |
-| Delivering | Restart, execution id absent from the session | Delivering | The same id is submitted once |
-| Delivering | Restart, execution id already saved | Delivered or refused | No second enqueue. Not `resume_turn` |
+| Scheduled | Due, preference on, causal turn still the latest usage-limit failure, agent and model match | Delivering | One compare-and-set wins the claim. It may not submit yet |
+| Delivering | Cancel, defer, or a model change | Cancelled or scheduled | That wins. `begin_submit` is false. No submit |
+| Delivering | `begin_submit` | Submitting | That wins. Cancel, defer, and a model change no longer match this row |
+| Submitting | Submit admits or refuses | Delivered or refused | The outcome audit follows. A second pass does not submit again |
+| Submitting | Preference off while this process holds the fence | Submitting | The submit finishes |
+| Submitting | Preference off and no process holds the fence | Cancelled | A restart does not submit it |
+| Submitting | `submit_command` admits the stored execution id | Delivered | Audit `delivered` in a following transaction. One admission |
+| Submitting | `submit_command` returns deleted, not found, revoked, or the causal turn is no longer the usage limit | Refused | Audit `refused`. The command's own refusal is the deletion fact |
+| Submitting | Submit admitted the turn, then the delivery audit fails | Submitting | No second execution id. The next pass records the audit and does not enqueue again |
+| Submitting | Restart, execution id absent from the session | Submitting | The same id is submitted once |
+| Submitting | Restart, execution id already saved | Delivered or refused | No second enqueue. Not `resume_turn` |
 | Scheduled | Due, but the observed reset is now later | Scheduled | Due time moves. The claim is released. No submit |
 | Delivered, cancelled, or refused | Another due scan | Unchanged | No second submit |
 
@@ -98,7 +103,7 @@ process, or two processes on the file, take the compare-and-set; the loser
 does not submit.
 
 A pass claims at most eight due rows. A scheduled row still due at that
-clock, or a row left delivering, is due on the next pass. The loop waits
+clock, or a row left delivering or submitting, is due on the next pass. The loop waits
 until the clock for that pass. It does not wait for a separate notification.
 A row due later waits until that time. The usage limit on the schedule is the
 newest invocation, and only when that invocation is itself the limit. A later
@@ -113,19 +118,19 @@ turn with no saved result clears it.
    nothing for them.
 3. `resets_at_ms` is set only for `TimedReset`, from a parsed absolute
    instant in 2024–2100. User action never carries one.
-4. At most one open schedule (`scheduled` or `delivering`) exists per
-   conversation and causal execution. The open row's execution id is minted
-   once.
-5. Only a compare-and-set from `scheduled` to `delivering` may call
-   `submit_command`. A second scanner observes `delivering` and does not
-   submit.
+4. At most one open schedule (`scheduled`, `delivering`, or `submitting`)
+   exists per conversation. The open row's execution id is minted once.
+5. Only `begin_submit`, the compare-and-set from `delivering` to
+   `submitting`, may call `submit_command`. A second scanner does not submit.
 6. Schedule and cancellation audits commit with the status change. Delivery
    audit commits after admission. If that audit fails, the row stays
-   `delivering` and the next pass records the audit without a new execution id.
-7. The card copies "Auto-resuming" only when the open row is `scheduled` or
-   `delivering` and the preference is on.
-8. The preference defaults to off. Turning it on schedules currently blocked
-   eligible turns. Turning it off cancels open rows.
+   `submitting` and the next pass records the audit without a new execution id.
+7. The card copies "Auto-resuming" only when the open row is `scheduled`,
+   `delivering`, or `submitting` and the preference is on.
+8. The preference defaults to off. Turning it on walks every catalogue page
+   and schedules each currently blocked eligible turn. The newest-first list
+   bound does not apply. Turning it off cancels open rows that are not inside
+   a submit that has already been fenced.
 9. OpenCode frames are not classified as usage limits.
 10. Audit initiator for a provider limit is the system. The person is the
     initiator only for the preference change and the cancellations it causes.
@@ -140,8 +145,11 @@ turn with no saved result clears it.
     is the owner of that choice. A later invocation clears it, and the plan
     cancels an open row.
 13. `next_due` is the owner of the loop's next wait. A scheduled row at or
-    before the clock, or any delivering row, is due now. Only a later
-    scheduled time waits.
+    before the clock, or any delivering or submitting row, is due now. Only a
+    later scheduled time waits.
+14. `begin_submit` is the only permission to submit. It moves `delivering` to
+    `submitting`, or adopts a `submitting` row this process is not inside.
+    Cancel, defer, and a model change match `scheduled` and `delivering` only.
 
 ## Card
 
