@@ -488,3 +488,26 @@ test("a macOS build that would not keep the .app is refused before it starts", (
     assert.equal(status, 0, bundles)
   }
 })
+
+/**
+ * `just release` picks its macOS bundles only on a Mac, and no pull request job
+ * runs the recipe there, so the choice is held to the macOS build's own refusal
+ * here, where every platform runs it.
+ */
+test("the justfile's macOS bundle choices pass the macOS build's own check", () => {
+  const recipe = readFileSync("justfile", "utf8")
+  for (const name of ["release-bundles", "fast-bundles"]) {
+    const [, choice] =
+      new RegExp(`^${name} := if os\\(\\) == "macos" \\{ "([^"]*)" \\}`, "m").exec(
+        recipe,
+      ) ?? []
+    assert.ok(choice, `${name} names no macOS choice`)
+    const status = runDesktopBuild({
+      args: choice.split(" "),
+      environment: { APPLE_SIGNING_IDENTITY: "-" },
+      platform: "darwin",
+      spawn: () => ({ status: 0 }),
+    })
+    assert.equal(status, 0, `${name}: ${choice}`)
+  }
+})
