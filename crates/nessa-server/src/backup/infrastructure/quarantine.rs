@@ -737,7 +737,9 @@ impl QuarantineLayout for DirectoryQuarantine {
             return Err(RestoreFault::Unreadable);
         }
         // The temp inode is not the published file. Removing it does not
-        // change the bytes that matched `digest`.
+        // change the bytes that matched `digest`. Close the read first:
+        // Windows will not delete a file this handle still has open.
+        drop(input);
         let _ = self.remove_file(temp);
         Ok(())
     }

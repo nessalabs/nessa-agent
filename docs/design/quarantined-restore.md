@@ -203,7 +203,8 @@ supplies the id.
   It is created beneath the held session directory. Those bytes have no
   directory entry until the check has passed and the session name is linked.
   A write through the temp file's descriptor does not change it. A different
-  byte is not given the session name, and no verified partial remains.
+  byte is not given the session name. The read handle closes before the
+  partial name is removed, and no verified partial remains.
   `a_write_through_the_temp_inode_does_not_change_the_published_file`,
   `a_different_byte_is_not_published`,
   `a_session_cut_reads_the_unnamed_inode`
