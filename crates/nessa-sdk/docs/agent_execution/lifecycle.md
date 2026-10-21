@@ -724,3 +724,36 @@ terminal attempt remain present in the omission. The original mixed baseline
 and the first fixed run's two stale storage assertions remain separate records.
 This evidence covers executable task completion, not audit delivery after
 runtime destruction.
+
+## Reports from supervised close and suspend
+
+`Agent::close_report(action)` and `Agent::suspend_report(action)` return an
+`AgentCloseReport` from the same supervised transaction used by `close` and
+`suspend`. They add no cleanup owner or retry. Final cancellation stays final;
+suspend retains its owed-work meaning. Dropping the caller stops its wait, while
+the transaction continues on the owning Tokio runtime. The outer error means
+that transaction did not return a report.
+
+Read `cleanup()` for the full lifecycle `CleanupReport`, and `scheduling()` for
+pending-work cancellation persistence and audit. Confirmed resources can coexist
+with failed audit or completion. `ResourceCleanup::ReleasePending` confirms
+process cleanup while retaining an executable-use release owner; a successful
+`physical_outcome()` alone does not acknowledge that owner. The report's
+`operation_failure` retains its historical meaning and is not automatically a
+failure of an otherwise successful cleanup.
+
+`into_result()` gives the ordinary close result, retaining scheduling storage
+failure together with its cleanup result and other independent failures. It
+does not mutate Agent ownership. An encompassing environment's real cleanup
+receipt may resolve physical uncertainty in a derived report; this cannot release
+an independent SDK executable-use owner or acknowledge audit/storage debt. A
+report concerns its transaction, not an aggregate claim about an Agent that a
+later invocation has already attached again.
+
+The `close_reports` public conformance matrix checks both modes, physical facts,
+forced status and independent fields. Scheduling tests
+`report_modes_keep_final_and_suspend_pending_work_semantics` and
+`report_retains_failed_pending_cancellation_separately_from_cleanup` check saved
+work and failed evidence. The gateway's
+`remote_ack_cannot_release_the_sdk_executable_use_owner` checks the separate
+remote and SDK release acknowledgements.
