@@ -108,7 +108,10 @@ starts the measured row.
    first read; that first paint does not wait.    The paint frame marks the
    grid `data-split-painting`, and scene text that has already laid out
    stays unpainted until the next frame. A resize that keeps the same
-   panes paints on the frame it happens, and does not mark that. The grain comes back the frame
+   panes paints on the frame it happens, and does not mark that. A draw
+   already handed to React is still that wait: when the source leaves
+   those columns before the commit, the grid replaces the draw and keeps
+   the boxes it is showing. The grain comes back the frame
    after that paint, and the composer's blur the frame after the grain.
    A drag's copy does not paint the night scene. A pane change does not
    render the shell, and it does not render the fitted window. A person's
@@ -279,7 +282,8 @@ box frame.
   open has settled. A drop commits on the frame after pointerup paints.
 - Owned scope: `paneBox`, the drop's two callbacks, the grid painting a
   column change three frames later and a same-pane resize on the frame
-  it happens, a removed session staying in its box until that box goes,
+  it happens, a draw the source leaves before that commit does not land,
+  a removed session staying in its box until that box goes,
   the workspace marked `data-spare-held`
   for that wait so a folded sidebar stays in the row, the side-column fit
   waiting one frame when the pane count changes,   the window painting the

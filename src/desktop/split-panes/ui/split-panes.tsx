@@ -109,8 +109,10 @@ export const SplitPanes = memo(function SplitPanes({
   // side column folds for the new count. The frame after that is the column
   // title's glide. The third frame paints the new boxes, so none of those
   // share a paint. A resize of the same panes paints on the frame it happens,
-  // so a separator follows the pointer. The first paint uses the layout the
-  // grid mounted with.
+  // so a separator follows the pointer. A draw already handed to React is
+  // still open: a later callback in that frame can put the source back
+  // before the commit, and the grid replaces the draw. The first paint
+  // uses the layout the grid mounted with.
   const [drawn, setDrawn] = useState(() => source.layout()?.columns ?? null)
   const drawnRef = useRef(drawn)
   drawnRef.current = drawn
@@ -123,6 +125,10 @@ export const SplitPanes = memo(function SplitPanes({
     let frames: number[] = []
     let armed = false
     let waiting: Columns = null
+    // Columns passed to React that this commit has not rendered. The ref
+    // above updates in render, so a callback later in the same frame still
+    // sees the previous arrangement.
+    let pending: { columns: Columns } | null = null
     const cancel = () => {
       for (const id of frames) cancelAnimationFrame(id)
       frames = []
@@ -132,11 +138,18 @@ export const SplitPanes = memo(function SplitPanes({
         ?.closest<HTMLElement>("[data-workspace]")
         ?.toggleAttribute("data-spare-held", on)
     }
+    const draw = (columns: Columns) => {
+      pending = { columns }
+      setDrawn(columns)
+    }
     const arm = (next: typeof waiting) => {
       if (armed && waiting === next) return
       cancel()
       armed = true
       waiting = next
+      // The queued draw is another arrangement. Replace it before React
+      // commits it, then count this arrangement's own frames.
+      if (pending && pending.columns !== next) draw(drawnRef.current)
       const queue = (left: number) => {
         const id = requestAnimationFrame(() => {
           // The click paints nothing new. The hold starts on the next frame,
@@ -149,7 +162,7 @@ export const SplitPanes = memo(function SplitPanes({
           frames = []
           armed = false
           waiting = null
-          setDrawn(next)
+          draw(next)
         })
         frames.push(id)
       }
@@ -160,8 +173,16 @@ export const SplitPanes = memo(function SplitPanes({
     // its frames.
     const reconcile = () => {
       const next = source.layout()?.columns ?? null
-      if (next === drawnRef.current) {
-        if (!armed) return
+      const shown = drawnRef.current
+      if (pending?.columns === shown) pending = null
+      // This arrangement is already the update React will commit.
+      if (pending?.columns === next) return
+      if (next === shown) {
+        // The source came back. A draw of the arrangement it left is still
+        // queued, and returning here would let that commit land.
+        const stale = pending !== null
+        if (stale) draw(shown)
+        if (!armed && !stale) return
         cancel()
         armed = false
         waiting = null
@@ -170,12 +191,12 @@ export const SplitPanes = memo(function SplitPanes({
       }
       // The same panes, resized. Waiting three frames would restart on every
       // pointer frame, and the separator would not follow the pointer.
-      if (arrangementOf(next) === arrangementOf(drawnRef.current)) {
+      if (arrangementOf(next) === arrangementOf(shown)) {
         cancel()
         armed = false
         waiting = null
         hold(false)
-        setDrawn(next)
+        draw(next)
         return
       }
       arm(next)

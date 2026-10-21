@@ -122,6 +122,12 @@ function fakeSource(
       layout = next
       await act(async () => listeners.forEach((listener) => listener()))
     },
+    // Notifies without wrapping `act`, so a frame callback can run it while
+    // a draw is still queued.
+    replace: (next: PaneLayout | null) => {
+      layout = next
+      for (const listener of listeners) listener()
+    },
   }
 }
 
@@ -211,6 +217,54 @@ it("paints a new arrangement on the frame after it commits", async () => {
   expect(grid().hasAttribute(marks.painting)).toBe(true)
   await nextPaint()
   expect(grid().hasAttribute(marks.painting)).toBe(false)
+})
+
+it("replaces a draw the source left before that draw commits", async () => {
+  host.setAttribute("data-workspace", "")
+  const layout = two()
+  const fake = fakeSource(layout)
+  await mounted(fake)
+  const stacked = splitPane(layout, 2, "bottom", "c")
+  await fake.change(stacked)
+  await frames.run()
+  await frames.run()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  expect(host.hasAttribute("data-spare-held")).toBe(true)
+  // Queued behind the callback that hands React the new boxes, so both run
+  // before that update commits. The source is back on the painted arrangement.
+  requestAnimationFrame(() => fake.replace(layout))
+  await frames.run()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  expect(host.hasAttribute("data-spare-held")).toBe(false)
+  // The grid is still following the source. A later split waits, then paints.
+  await fake.change(stacked)
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  await nextPaint()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
+  expect(host.hasAttribute("data-spare-held")).toBe(false)
+})
+
+it("does not paint a draw a later callback in that frame replaced", async () => {
+  host.setAttribute("data-workspace", "")
+  const layout = two()
+  const fake = fakeSource(layout)
+  await mounted(fake)
+  await fake.change(splitPane(layout, 2, "bottom", "c"))
+  await frames.run()
+  await frames.run()
+  const beside = splitPane(layout, 1, "left", "d")
+  requestAnimationFrame(() => fake.replace(beside))
+  await frames.run()
+  // The boxes that were about to commit stay off the screen. The replacement
+  // arrangement waits its own three frames, and the spare hold stays up.
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  expect(host.hasAttribute("data-spare-held")).toBe(true)
+  await frames.run()
+  await frames.run()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  await frames.run()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
+  expect(host.hasAttribute("data-spare-held")).toBe(false)
 })
 
 it("paints a replaced source's layout though that source never notifies", async () => {
