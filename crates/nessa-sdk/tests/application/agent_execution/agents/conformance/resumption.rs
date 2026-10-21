@@ -1637,15 +1637,39 @@ async fn cycle9_decline_joiners_share_failure_deadline_then_explicit_retry() {
 
 #[tokio::test]
 async fn cycle9_abandoned_authorization_audit_cannot_reuse_prior_sdk_proof() {
-    no_acquisition_evidence_retires_prior_proof(false).await;
+    no_acquisition_evidence_retires_prior_proof(false, RetirementWrite::Acknowledged).await;
 }
 
 #[tokio::test]
 async fn cycle10_authorized_close_audit_cannot_reuse_prior_sdk_proof() {
-    no_acquisition_evidence_retires_prior_proof(true).await;
+    no_acquisition_evidence_retires_prior_proof(true, RetirementWrite::Acknowledged).await;
 }
 
-async fn no_acquisition_evidence_retires_prior_proof(close_authorized: bool) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RetirementWrite {
+    Acknowledged,
+    Rejected,
+    LostAcknowledgement,
+    Held,
+}
+
+#[tokio::test]
+async fn cycle10_retirement_writer_ack_precedes_no_resource_audit() {
+    for close_authorized in [false, true] {
+        for write in [
+            RetirementWrite::Rejected,
+            RetirementWrite::LostAcknowledgement,
+            RetirementWrite::Held,
+        ] {
+            no_acquisition_evidence_retires_prior_proof(close_authorized, write).await;
+        }
+    }
+}
+
+async fn no_acquisition_evidence_retires_prior_proof(
+    close_authorized: bool,
+    write: RetirementWrite,
+) {
     for reject in [false, true] {
         use nessa_sdk::application::agent_execution::{sessions::LeaseRecord, subagents::*};
         use nessa_sdk::domain::agent_execution::{leases::*, subagents::*};
@@ -1726,16 +1750,58 @@ async fn no_acquisition_evidence_retires_prior_proof(close_authorized: bool) {
             .unwrap()
             .sdk_cleanup_acknowledged(&scope));
 
-        backend.audit.reject.store(reject, Ordering::SeqCst);
-        let authorization = agent
-            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
-            .unwrap();
-        let report = if close_authorized {
-            let report = bounded(agent.close_report(actor())).await.unwrap();
-            drop(authorization);
-            report
+        let before_audit = backend.audit.records.lock().unwrap().len();
+        let paused = if write == RetirementWrite::Held {
+            Some(storage.pause_next_save())
         } else {
-            drop(authorization);
+            None
+        };
+        {
+            let mut saved = storage.0.lock().unwrap();
+            let next = saved.writes + 1;
+            match write {
+                RetirementWrite::Rejected => saved.fail_write = Some(next),
+                RetirementWrite::LostAcknowledgement => saved.lose_write_ack = Some(next),
+                _ => {}
+            }
+        }
+        backend.audit.reject.store(reject, Ordering::SeqCst);
+        let mut authorization = Some(
+            agent
+                .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+                .unwrap(),
+        );
+        let closing = if close_authorized {
+            Some(tokio::spawn({
+                let agent = agent.clone();
+                async move { agent.close_report(actor()).await }
+            }))
+        } else {
+            drop(authorization.take());
+            None
+        };
+        if let Some((started, release)) = paused {
+            bounded(started).await.unwrap();
+            assert_eq!(
+                backend.audit.records.lock().unwrap().len(),
+                before_audit,
+                "mandatory attachment audit waits for the actual retirement writer ACK"
+            );
+            assert!(
+                storage
+                    .snapshot()
+                    .lease
+                    .as_ref()
+                    .unwrap()
+                    .sdk_cleanup_acknowledged(&scope),
+                "an unanswered retirement write has not published a new fact"
+            );
+            assert!(!agent.may_hold_provider_resources());
+            release.send(()).unwrap();
+        }
+        let report = if let Some(closing) = closing {
+            bounded(closing).await.unwrap().unwrap()
+        } else {
             bounded(async {
                 while agent.attachment_status().phase() == AttachmentPhase::Waiting {
                     tokio::task::yield_now().await;
@@ -1756,12 +1822,39 @@ async fn no_acquisition_evidence_retires_prior_proof(close_authorized: bool) {
             !agent.may_hold_provider_resources(),
             "authorization alone acquired no provider resources"
         );
+        let writer_failed = matches!(
+            write,
+            RetirementWrite::Rejected | RetirementWrite::LostAcknowledgement
+        );
+        if writer_failed {
+            assert_eq!(
+                backend.audit.records.lock().unwrap().len(),
+                before_audit,
+                "a rejected retirement or lost ACK cannot dispatch mandatory audit"
+            );
+            assert!(
+                !agent
+                    .session_manager()
+                    .snapshot()
+                    .await
+                    .unwrap()
+                    .lease
+                    .as_ref()
+                    .unwrap()
+                    .sdk_cleanup_acknowledged(&scope),
+                "the same owner retains unacknowledged retirement"
+            );
+            bounded(agent.session_manager().save_retained_lease_records())
+                .await
+                .unwrap();
+        }
+        drop(authorization);
         assert!(report.cleanup().is_confirmed());
-        assert_eq!(report.cleanup().audit().is_err(), reject);
+        assert_eq!(report.cleanup().audit().is_err(), reject || writer_failed);
         let result = report.into_result();
         assert_eq!(
             result.is_err(),
-            reject,
+            reject || writer_failed,
             "live close keeps the actual abandonment audit outcome"
         );
         let committed = storage.snapshot();
@@ -1771,7 +1864,8 @@ async fn no_acquisition_evidence_retires_prior_proof(close_authorized: bool) {
             .unwrap()
             .sdk_cleanup_acknowledged(&scope);
         assert_eq!(
-            certified, !reject,
+            certified,
+            !(reject || writer_failed),
             "a failed later SDK attachment audit cannot reuse an earlier cleanup acknowledgement"
         );
     }
