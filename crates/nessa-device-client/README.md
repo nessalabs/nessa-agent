@@ -46,8 +46,10 @@ Current development surface:
 
 The explicit saved selector grants no connection, enrollment or command
 permission. The phone publication lease (`PhoneLease`) is what a later saved
-read or held-file fetch must present. A stamp from an earlier receiver, or from
-an earlier session's lease, reads nothing and does not dial. A successful purge releases that receiver even when
+read or held-file fetch must present. Session composition mints that lease's
+instance from the injected entropy; a source that refuses opens no session.
+A stamp from an earlier receiver, or from an earlier session's lease, reads
+nothing and does not dial. A successful purge releases that receiver even when
 the status carries no observation. A later bind refuses that receiver while the purge receipt remains, including when the credential itself is still stored. Catalogue presence reads one stored identity;
 absence is not a tombstone, from one snapshot of the fence and the row.
 Held-file freshness is either a local digest match, with no range asked, or a

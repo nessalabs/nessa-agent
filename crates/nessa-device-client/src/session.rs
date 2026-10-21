@@ -909,6 +909,7 @@ impl NativeSession {
             runtime,
             product,
         } = dependencies;
+        let lease = PhoneLease::new(Self::lease_instance(entropy.as_ref())?);
         let enrollment = Arc::new(
             RetainedEnrollmentClient::owner_phone(
                 state.clone(),
@@ -940,9 +941,20 @@ impl NativeSession {
                 cache: None,
                 received: None,
                 product,
-                lease: PhoneLease::new(),
+                lease,
             })),
         })
+    }
+    /// This session's publication identity: sixteen bytes from the injected
+    /// entropy. A source that refuses is an enrollment entropy failure, and
+    /// compose returns before the session exists.
+    fn lease_instance(entropy: &dyn EnrollmentEntropyFactory) -> Result<Uuid, SessionFailure> {
+        let mut source = entropy.create();
+        let mut bytes = [0; 16];
+        source
+            .try_fill_bytes(&mut bytes)
+            .map_err(|_| SessionFailure::Enrollment(NativeClientError::Entropy))?;
+        Ok(Uuid::from_bytes(bytes))
     }
     fn enter(&self, stop: Option<Arc<ReadStop>>) -> Result<Operation<'_>, SessionFailure> {
         let driver = match self.driver.try_lock() {

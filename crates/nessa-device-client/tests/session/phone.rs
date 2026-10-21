@@ -252,6 +252,107 @@ fn a_replacement_session_refuses_the_closed_sessions_stamp() {
     replacement.close().unwrap();
 }
 
+struct StampEntropy([u8; 16]);
+impl RngCore for StampEntropy {
+    fn next_u32(&mut self) -> u32 {
+        0
+    }
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        self.try_fill_bytes(dest).unwrap();
+    }
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        dest.copy_from_slice(&self.0);
+        Ok(())
+    }
+}
+impl CryptoRng for StampEntropy {}
+struct StampFactory([u8; 16]);
+impl EnrollmentEntropyFactory for StampFactory {
+    fn create(&self) -> Box<dyn EnrollmentEntropy> {
+        Box::new(StampEntropy(self.0))
+    }
+}
+struct DryEntropy;
+impl RngCore for DryEntropy {
+    fn next_u32(&mut self) -> u32 {
+        0
+    }
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        self.try_fill_bytes(dest).unwrap();
+    }
+    fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), EntropyError> {
+        Err(EntropyError::from(
+            std::num::NonZeroU32::new(EntropyError::CUSTOM_START).unwrap(),
+        ))
+    }
+}
+impl CryptoRng for DryEntropy {}
+struct DryFactory;
+impl EnrollmentEntropyFactory for DryFactory {
+    fn create(&self) -> Box<dyn EnrollmentEntropy> {
+        Box::new(DryEntropy)
+    }
+}
+fn compose_with(
+    root: &PrivateFixture,
+    entropy: Arc<dyn EnrollmentEntropyFactory>,
+) -> Result<NativeSession, SessionFailure> {
+    let state = Arc::new(FilePairingState::open(root.path(), Path::new("private")).unwrap());
+    issued(&state, "issued-a", "receiver-a");
+    NativeSession::compose(Dependencies {
+        state,
+        path: root.path().join("private/cache.sqlite"),
+        address: "127.0.0.1:9".parse().unwrap(),
+        connector: Arc::new(Refusing {
+            calls: AtomicUsize::new(0),
+        }),
+        entropy,
+        wall: Arc::new(Wall),
+        clock: Arc::new(Monotonic::new()),
+        pause: Arc::new(ThreadPause),
+        runtime: Builder::new_current_thread().enable_all().build().unwrap(),
+        product: ProductDependencies::default(),
+    })
+}
+
+#[test]
+fn the_publication_lease_is_the_identity_composition_injected() {
+    let first = PrivateFixture::new();
+    let second = PrivateFixture::new();
+    create_directory_beneath(first.path(), Path::new("private")).unwrap();
+    create_directory_beneath(second.path(), Path::new("private")).unwrap();
+    let instance = [9u8; 16];
+    let session = compose_with(&first, Arc::new(StampFactory(instance))).unwrap();
+    let stamp = session.bind_saved_receiver().unwrap();
+    assert_eq!(stamp.lease().as_bytes(), &instance);
+    let other = compose_with(&second, Arc::new(StampFactory([4u8; 16]))).unwrap();
+    let rebound = other.bind_saved_receiver().unwrap();
+    assert_eq!(rebound.lease().as_bytes(), &[4u8; 16]);
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    assert!(matches!(
+        other.published_transcript(&stamp, &conversation, Uuid::nil()),
+        Err(SessionFailure::Fenced(PhoneFence::Replaced))
+    ));
+    session.close().unwrap();
+    other.close().unwrap();
+}
+
+#[test]
+fn a_lease_identity_the_source_refuses_opens_no_session() {
+    let root = PrivateFixture::new();
+    create_directory_beneath(root.path(), Path::new("private")).unwrap();
+    assert!(matches!(
+        compose_with(&root, Arc::new(DryFactory)),
+        Err(SessionFailure::Enrollment(NativeClientError::Entropy))
+    ));
+}
+
 #[test]
 fn a_local_match_reports_the_session_clock() {
     let Opened {

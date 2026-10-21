@@ -13,12 +13,16 @@ use nessa_sync::replication::domain::{Id, Scope};
 use serde_json::json;
 use std::sync::Arc;
 
+fn lease(instance: u128) -> PhoneLease {
+    PhoneLease::new(uuid::Uuid::from_u128(instance))
+}
+
 #[test]
 fn binding_the_same_receiver_keeps_the_stamp_and_replacement_refuses_it() {
-    let mut lease = PhoneLease::new();
+    let mut lease = lease(1);
     assert_eq!(lease.stamp(), Err(PhoneFence::Unbound));
     assert_eq!(
-        lease.accept(&PhoneStamp::issue(uuid::Uuid::new_v4(), 1, "a")),
+        lease.accept(&PhoneStamp::issue(uuid::Uuid::from_u128(0), 1, "a")),
         Err(PhoneFence::Unbound)
     );
     let first = lease.bind("a").unwrap();
@@ -32,7 +36,7 @@ fn binding_the_same_receiver_keeps_the_stamp_and_replacement_refuses_it() {
 
 #[test]
 fn a_purge_releases_the_receiver_and_a_later_bind_is_admitted() {
-    let mut lease = PhoneLease::new();
+    let mut lease = lease(2);
     let first = lease.bind("a").unwrap();
     lease.release_receiver();
     assert_eq!(lease.accept(&first), Err(PhoneFence::Unbound));
@@ -44,10 +48,10 @@ fn a_purge_releases_the_receiver_and_a_later_bind_is_admitted() {
 
 #[test]
 fn a_new_lease_refuses_the_same_generation_from_an_earlier_lease() {
-    let mut earlier = PhoneLease::new();
+    let mut earlier = lease(3);
     let old = earlier.bind("a").unwrap();
     earlier.close();
-    let mut replacement = PhoneLease::new();
+    let mut replacement = lease(4);
     let current = replacement.bind("a").unwrap();
     assert_eq!(current.generation(), old.generation());
     assert_eq!(current.receiver(), old.receiver());
@@ -57,8 +61,23 @@ fn a_new_lease_refuses_the_same_generation_from_an_earlier_lease() {
 }
 
 #[test]
+fn the_injected_instance_is_what_accept_compares() {
+    let mut same_a = lease(8);
+    let mut same_b = lease(8);
+    let mut other = lease(9);
+    let stamp = same_a.bind("a").unwrap();
+    let twin = same_b.bind("a").unwrap();
+    let foreign = other.bind("a").unwrap();
+    assert_eq!(twin.generation(), stamp.generation());
+    assert_eq!(twin.lease(), stamp.lease());
+    assert_eq!(same_b.accept(&stamp), Ok(()));
+    assert_eq!(other.accept(&stamp), Err(PhoneFence::Replaced));
+    assert_eq!(same_a.accept(&foreign), Err(PhoneFence::Replaced));
+}
+
+#[test]
 fn close_refuses_the_stamp_and_a_later_bind() {
-    let mut lease = PhoneLease::new();
+    let mut lease = lease(5);
     let stamp = lease.bind("a").unwrap();
     lease.close();
     lease.close();

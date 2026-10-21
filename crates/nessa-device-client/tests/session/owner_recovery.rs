@@ -224,12 +224,32 @@ impl EnrollmentConnector for Connector {
             .map_err(|error| NativeClientError::Io(error.kind()))
     }
 }
-struct NoEntropy;
+struct NoEntropy(AtomicUsize);
 impl EnrollmentEntropyFactory for NoEntropy {
     fn create(&self) -> Box<dyn EnrollmentEntropy> {
-        panic!("recovery generated entropy");
+        if self.0.fetch_add(1, Ordering::SeqCst) > 0 {
+            panic!("recovery generated entropy");
+        }
+        Box::new(LeaseIdentity)
     }
 }
+struct LeaseIdentity;
+impl RngCore for LeaseIdentity {
+    fn next_u32(&mut self) -> u32 {
+        0
+    }
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        self.try_fill_bytes(dest).unwrap();
+    }
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        dest.fill(0);
+        Ok(())
+    }
+}
+impl CryptoRng for LeaseIdentity {}
 struct Fixture {
     root: PrivateFixture,
     listener: TcpListener,
@@ -292,7 +312,7 @@ impl Fixture {
         NativeSession::compose(Dependencies {
             state: self.state.clone(),
             connector,
-            entropy: Arc::new(NoEntropy),
+            entropy: Arc::new(NoEntropy(AtomicUsize::new(0))),
             path: self.root.path().join("private/cache.sqlite"),
             // A different valid configured address must never substitute for the original.
             address: "127.0.0.1:9".parse().unwrap(),

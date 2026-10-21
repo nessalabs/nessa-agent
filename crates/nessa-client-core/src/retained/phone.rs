@@ -76,11 +76,14 @@ pub struct PhoneLease {
     closed: bool,
 }
 impl PhoneLease {
-    /// Unbound and open. Nothing can publish yet. Each call mints a new instance,
-    /// so a later session does not accept an earlier session's stamp.
-    pub fn new() -> Self {
+    /// Unbound and open. Nothing can publish yet.
+    ///
+    /// `instance` is this lease's identity. The caller mints it; this
+    /// constructor does not read a random source. A different instance does
+    /// not accept this lease's stamp, even at the same generation and receiver.
+    pub fn new(instance: Uuid) -> Self {
         Self {
-            lease: Uuid::new_v4(),
+            lease: instance,
             generation: 0,
             receiver: None,
             closed: false,
@@ -152,12 +155,6 @@ impl PhoneLease {
         }
     }
 }
-impl Default for PhoneLease {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl RetainedCache {
     fn receiver_purged(&mut self, receiver: &str) -> Result<bool, ReadFailure> {
         let Ok(resource) = ResourceId::new(receiver) else {
