@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react"
 import { useStore } from "react-redux"
 import type { DesktopState, DesktopStore } from "../../../store"
-import { selectColumnCount } from "./selectors"
+import { selectColumnCount, selectPaneShape } from "./selectors"
 
 /**
  * A painted read of the workspace. The click that opens a pane folds the
@@ -10,15 +10,18 @@ import { selectColumnCount } from "./selectors"
  * budget: the click was the window's render, and the next frame restyled
  * the session list.
  *
- * A change that arrives with a new number of pane columns is painted on the
- * third frame, which is when the grid paints the new boxes
+ * A change that arrives with a new number of pane columns, or the same
+ * number in a new shape (a swap, a drop, a pane moved under another), is
+ * painted on the third frame, which is when the grid paints the new boxes
  * (`split-panes/ui/split-panes.tsx`). The next frame shows scene text that
  * was already laid out. The session list's measure and its tab stop wait
  * one frame more (`listPaintFrame`), so that commit does not restyle the
- * list. A change that does not — a person's toggle, a focus move
- * between panes already open — is painted in the turn it happens. The value
- * a row or a pane compares is its own boolean, so a focus move renders the
- * rows that gained or lost it.
+ * list. The count and the shape are recorded as painted on the box frame,
+ * so a command that puts the old arrangement back waits for the grid again.
+ * A change that does neither — a person's toggle, a focus move between
+ * panes already open — is painted in the turn it happens. The value a row
+ * or a pane compares is its own boolean, so a focus move renders the rows
+ * that gained or lost it.
  */
 
 /**
@@ -43,10 +46,18 @@ interface Listener {
   notify: () => void
 }
 
+interface Arrangement {
+  columns: number
+  shape: string
+}
+
 interface Gate {
   painted: number
-  /** The column count the wait is already counting down, so a later dispatch of that same count does not start the wait over. */
+  /** Which pane is where, as last recorded on the box frame. */
+  shape: string
+  /** The arrangement the wait is already counting down, so a later dispatch of that same arrangement does not start the wait over. */
   waiting: number | null
+  waitingShape: string | null
   /** How far that wait has run. A listener at or before this has already painted it. */
   at: number
   frames: number[]
@@ -56,19 +67,42 @@ interface Gate {
 
 const gates = new WeakMap<DesktopStore, Gate>()
 
+function arrangement(store: DesktopStore): Arrangement {
+  const state = store.getState()
+  return { columns: selectColumnCount(state), shape: selectPaneShape(state) }
+}
+
+function sameArrangement(
+  columns: number,
+  shape: string,
+  otherColumns: number,
+  otherShape: string,
+) {
+  return columns === otherColumns && shape === otherShape
+}
+
 function cancel(gate: Gate) {
   for (const id of gate.frames) cancelAnimationFrame(id)
   gate.frames = []
   gate.waiting = null
+  gate.waitingShape = null
   gate.at = 0
+}
+
+/** Records the arrangement the grid is showing once the box frame has run. */
+function recordPainted(gate: Gate, now: Arrangement) {
+  gate.painted = now.columns
+  gate.shape = now.shape
 }
 
 /** Notifies each painted read on its frame. The last frame ends the wait. */
 function arm(gate: Gate, store: DesktopStore) {
-  const columns = selectColumnCount(store.getState())
-  if (gate.waiting === columns) return
+  const now = arrangement(store)
+  if (gate.waiting === now.columns && gate.waitingShape === now.shape) return
   cancel(gate)
-  gate.waiting = columns
+  const paint = now
+  gate.waiting = paint.columns
+  gate.waitingShape = paint.shape
   let span = paneBoxFrame
   for (const listener of gate.listeners) span = Math.max(span, listener.frames)
   const queue = (left: number) => {
@@ -79,10 +113,16 @@ function arm(gate: Gate, store: DesktopStore) {
       for (const listener of gate.listeners) {
         if (listener.frames === at) listener.notify()
       }
+      // A listener can dispatch a new arrangement and replace this wait.
+      if (gate.waiting !== paint.columns || gate.waitingShape !== paint.shape) return
+      // The boxes paint on this frame. A later command that restores the
+      // previous count has to wait again, with the grid.
+      if (at === paneBoxFrame) recordPainted(gate, paint)
       if (left > 1) return
       gate.frames = []
       gate.waiting = null
-      gate.painted = selectColumnCount(store.getState())
+      gate.waitingShape = null
+      recordPainted(gate, paint)
     })
     gate.frames.push(id)
   }
@@ -92,28 +132,33 @@ function arm(gate: Gate, store: DesktopStore) {
 function gateFor(store: DesktopStore): Gate {
   const existing = gates.get(store)
   if (existing) return existing
+  const now = arrangement(store)
   const gate: Gate = {
-    painted: selectColumnCount(store.getState()),
+    painted: now.columns,
+    shape: now.shape,
     waiting: null,
+    waitingShape: null,
     at: 0,
     frames: [],
     listeners: new Set<Listener>(),
     unsubscribe: () => {},
   }
   gate.unsubscribe = store.subscribe(() => {
-    const columns = selectColumnCount(store.getState())
-    if (columns === gate.painted) {
-      cancel(gate)
-      for (const listener of gate.listeners) listener.notify()
-      return
-    }
-    // The same column change is still waiting. Listeners that already
-    // painted it take a later toggle now; the ones still waiting read the
-    // store on their own frame.
-    if (gate.waiting === columns) {
+    const next = arrangement(store)
+    // The same arrangement is still waiting. This check is first: the box
+    // frame records that arrangement as painted while the list's frame is
+    // still ahead, and a toggle then must not cancel the rest of the wait.
+    // Listeners that already painted it take the toggle now; the ones still
+    // waiting read the store on their own frame.
+    if (gate.waiting === next.columns && gate.waitingShape === next.shape) {
       for (const listener of gate.listeners) {
         if (listener.frames <= gate.at) listener.notify()
       }
+      return
+    }
+    if (sameArrangement(next.columns, next.shape, gate.painted, gate.shape)) {
+      cancel(gate)
+      for (const listener of gate.listeners) listener.notify()
       return
     }
     arm(gate, store)
@@ -161,9 +206,10 @@ export function usePaintedWithPanes<T>(
     // moved, and that fold is this frame. A change the gate is counting
     // keeps its own frames.
     const live = selectRef.current(store.getState())
+    const mounted = arrangement(store)
     if (
       gate.waiting === null &&
-      selectColumnCount(store.getState()) === gate.painted &&
+      sameArrangement(mounted.columns, mounted.shape, gate.painted, gate.shape) &&
       !Object.is(shown.current, live)
     ) {
       shown.current = live

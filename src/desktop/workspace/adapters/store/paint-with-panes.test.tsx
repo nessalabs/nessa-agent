@@ -9,8 +9,16 @@ import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import { drawn } from "../../../model/side-column"
-import { fitToWindow, loadWorkspace, openBeside, toggleSidebar } from "./commands"
-import { selectChrome, selectColumnCount } from "./selectors"
+import { panesOf } from "../../../split-panes/model/pane-layout"
+import {
+  closePane,
+  fitToWindow,
+  loadWorkspace,
+  movePane,
+  openBeside,
+  toggleSidebar,
+} from "./commands"
+import { selectChrome, selectColumnCount, selectPaneShape } from "./selectors"
 import { controlledAnimationFrames, settle, testStore } from "../../testing"
 import { listPaintFrame, paneBoxFrame, usePaintedWithPanes } from "./paint-with-panes"
 import { useWorkspaceDispatch } from "./hooks"
@@ -110,6 +118,103 @@ it("forwards a sidebar toggle to listeners that already painted the column chang
     await act(async () => frames.runFrame())
     await act(async () => frames.runFrame())
     expect(painted("late")).toBe(open())
+  } finally {
+    frames.restore()
+  }
+})
+
+const valueOf = (mark: string) =>
+  host.querySelector(`output[data-mark="${mark}"]`)?.getAttribute("data-value")
+
+function PaintedShape({ frames, mark }: { frames: number; mark: string }) {
+  const shape = usePaintedWithPanes(selectPaneShape, frames)
+  return <output data-mark={mark} data-value={shape} />
+}
+
+function PaintedCount({ frames, mark }: { frames: number; mark: string }) {
+  const count = usePaintedWithPanes(selectColumnCount, frames)
+  return <output data-mark={mark} data-value={String(count)} />
+}
+
+/** Runs `count` frames the gate already asked for. */
+async function runFrames(
+  frames: ReturnType<typeof controlledAnimationFrames>,
+  count: number,
+) {
+  for (let index = 0; index < count; index++) await act(async () => frames.runFrame())
+}
+
+it("holds a same-column shape change until the box frame", async () => {
+  const store = testStore()
+  await store.dispatch(loadWorkspace())
+  await settle()
+  const frames = controlledAnimationFrames()
+  try {
+    await act(async () => {
+      root.render(
+        <Provider store={store}>
+          <PaintedShape frames={paneBoxFrame} mark="box" />
+        </Provider>,
+      )
+    })
+    await act(async () => {
+      store.dispatch(openBeside({ sessionId: "b" }))
+    })
+    await runFrames(frames, paneBoxFrame)
+    const shown = valueOf("box")
+    expect(shown).toBe(selectPaneShape(store.getState()))
+    const panes = store.getState().workspace.panes
+    if (!panes) throw new Error("open beside left no panes")
+    const [first, second] = panesOf(panes).map((pane) => pane.key)
+    const columns = selectColumnCount(store.getState())
+    await act(async () => {
+      store.dispatch(movePane({ pane: first, target: second, zone: "center" }))
+    })
+    expect(selectColumnCount(store.getState())).toBe(columns)
+    expect(selectPaneShape(store.getState())).not.toBe(shown)
+    expect(valueOf("box")).toBe(shown)
+    await runFrames(frames, paneBoxFrame - 1)
+    expect(valueOf("box")).toBe(shown)
+    await runFrames(frames, 1)
+    expect(valueOf("box")).toBe(selectPaneShape(store.getState()))
+  } finally {
+    frames.restore()
+  }
+})
+
+it("holds a column count that returns after the boxes have painted", async () => {
+  const store = testStore()
+  await store.dispatch(loadWorkspace())
+  await settle()
+  const frames = controlledAnimationFrames()
+  try {
+    await act(async () => {
+      root.render(
+        <Provider store={store}>
+          <PaintedCount frames={paneBoxFrame} mark="box" />
+          <PaintedCount frames={listPaintFrame} mark="late" />
+        </Provider>,
+      )
+    })
+    const before = selectColumnCount(store.getState())
+    await act(async () => {
+      store.dispatch(openBeside({ sessionId: "b" }))
+    })
+    expect(selectColumnCount(store.getState())).toBeGreaterThan(before)
+    await runFrames(frames, paneBoxFrame)
+    const shown = valueOf("box")
+    expect(shown).toBe(String(selectColumnCount(store.getState())))
+    expect(valueOf("late")).toBe(String(before))
+    await act(async () => {
+      store.dispatch(closePane())
+    })
+    expect(selectColumnCount(store.getState())).toBe(before)
+    expect(valueOf("box")).toBe(shown)
+    expect(valueOf("late")).toBe(String(before))
+    await runFrames(frames, paneBoxFrame - 1)
+    expect(valueOf("box")).toBe(shown)
+    await runFrames(frames, 1)
+    expect(valueOf("box")).toBe(String(before))
   } finally {
     frames.restore()
   }
