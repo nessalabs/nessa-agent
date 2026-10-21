@@ -17,6 +17,8 @@
 //!                              |                   |-> shared bounded AuditObserver
 //!                              |-> cleanup joins physical result + bounded evidence slots
 //!                              |-> shared stop -> cleanup attempts / retained lease
+//!       |-> historical decline -> saved original preparation -> terminal edge
+//!                                |-> idempotent audit -> saved acknowledgement
 //!       |-> AgentCloseReport -> same close transaction cleanup + scheduling evidence
 //!                              |-> optional owned-lifetime seal read before admission
 //!       |-> event subscribers
@@ -65,7 +67,7 @@ pub use error::{
 };
 pub use initialization::AgentInitializationError;
 pub use lifetime::{lifetime_disposition, LifetimeDisposition, OwnedLifetime};
-pub(crate) use resumption::validate_saved_resumption;
+pub(crate) use resumption::{decline_stop_is_owed, validate_saved_resumption};
 pub use resumption::{owed_turn_ids, resumed_turn_id, OwedTurn, Resumed};
 pub use scheduling::{
     AdmissionEvidence, AdmissionEvidenceFailure, QueueAdmission, QueueRemoval, QueueReorder,

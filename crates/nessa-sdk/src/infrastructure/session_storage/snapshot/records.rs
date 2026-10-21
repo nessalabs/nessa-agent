@@ -174,6 +174,8 @@ pub(super) struct Metadata {
     /// Absence is no resumption evidence; never infer origin from input shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) resumed_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) decline: Option<SavedDecline>,
     pub(super) target_event_offset: Option<usize>,
     pub(super) submission: Submission,
     pub(super) execution_id: String,
@@ -386,10 +388,37 @@ pub(super) enum DeclineDelivery {
     WriteUnconfirmed,
     WriteNotAttempted,
 }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SavedDecline {
+    event: super::scheduling::SchedulingEvent,
+    acknowledged: bool,
+}
+impl From<&crate::application::agent_execution::sessions::DeclineDecision> for SavedDecline {
+    fn from(value: &crate::application::agent_execution::sessions::DeclineDecision) -> Self {
+        Self {
+            event: value.event().clone().into(),
+            acknowledged: value.acknowledged(),
+        }
+    }
+}
+impl SavedDecline {
+    pub(super) fn decode(
+        self,
+    ) -> Result<crate::application::agent_execution::sessions::DeclineDecision, StorageError> {
+        Ok(
+            crate::application::agent_execution::sessions::DeclineDecision::new(
+                self.event.decode()?,
+                self.acknowledged,
+            ),
+        )
+    }
+}
 impl From<&InvocationRecord> for Metadata {
     fn from(value: &InvocationRecord) -> Self {
         Self {
             resumed_from: value.resumed_from.as_ref().map(|id| id.as_str().into()),
+            decline: value.decline.as_ref().map(Into::into),
             target_event_offset: value.target_event_offset,
             submission: value.submission.into(),
             execution_id: value.request.execution_id.as_str().into(),
@@ -588,6 +617,7 @@ impl Provider {
 impl Metadata {
     pub(super) fn decode(self) -> Result<InvocationRecord, StorageError> {
         Ok(InvocationRecord {
+            decline: self.decline.map(SavedDecline::decode).transpose()?,
             resumed_from: self
                 .resumed_from
                 .map(ExecutionId::new)

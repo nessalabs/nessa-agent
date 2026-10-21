@@ -796,6 +796,7 @@ mod tests {
             unreachable!("input helper constructs an accepted input")
         };
         SessionChange::InputAccepted(Box::new(InvocationRecord {
+            decline: None,
             request: ExecutionRequest {
                 user_message: UserMessage::text_only(PromptText::new("x".repeat(bytes)).unwrap()),
                 ..record.request.clone()
@@ -825,6 +826,7 @@ mod tests {
         scheduling: Vec<InvocationSchedulingEvent>,
     ) -> SessionChange {
         SessionChange::InputAccepted(Box::new(InvocationRecord {
+            decline: None,
             resumed_from: None,
             target_event_offset: None,
             submission,
@@ -1157,6 +1159,7 @@ mod tests {
             .unwrap();
         let secret = "NESSA_ERASE_PRIVATE_INPUT_275";
         let input = InvocationRecord {
+            decline: None,
             resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
@@ -1491,6 +1494,7 @@ mod tests {
             .unwrap();
         let execution_id = ExecutionId::new("execution").unwrap();
         let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
+            decline: None,
             resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
@@ -2439,6 +2443,7 @@ mod tests {
         };
         let input = |execution_id: ExecutionId| {
             SessionChange::InputAccepted(Box::new(InvocationRecord {
+                decline: None,
                 resumed_from: None,
                 target_event_offset: None,
                 submission: SubmissionMode::Immediate,
@@ -3151,6 +3156,7 @@ mod tests {
             .unwrap();
         let execution_id = ExecutionId::new("accepted").unwrap();
         let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
+            decline: None,
             resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,

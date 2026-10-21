@@ -361,6 +361,9 @@ pub(super) fn validate_observation_identity(event: &ExecutionEvent) -> Result<()
 pub(super) fn invocation_history(
     invocation: &InvocationRecord,
 ) -> Result<InvocationHistory, StorageError> {
+    if let Some(decision) = &invocation.decline {
+        validate_decline(invocation, decision)?;
+    }
     #[cfg(test)]
     VALIDATION_CALLS.with(|calls| {
         let (full, history) = calls.get();
@@ -412,6 +415,54 @@ pub(super) fn invocation_history(
     )?;
     history.validate_checkpoint().map_err(corrupt)?;
     Ok(history)
+}
+
+/// A prepared decline keeps its original edge before and after application.
+pub(super) fn validate_decline(
+    invocation: &InvocationRecord,
+    decision: &super::DeclineDecision,
+) -> Result<(), StorageError> {
+    let event = decision.event();
+    if event.cause != SchedulingCause::NotResumed || event.actor.is_none() {
+        return Err(corrupt(
+            "decline preparation has no attributed NotResumed decision",
+        ));
+    }
+    let applied = invocation.scheduling.last() == Some(event);
+    if decision.acknowledged() && !applied {
+        return Err(corrupt(
+            "decline audit acknowledgement precedes its decision",
+        ));
+    }
+    let prefix = if applied {
+        &invocation.scheduling[..invocation.scheduling.len() - 1]
+    } else {
+        &invocation.scheduling[..]
+    };
+    let preceding = prefix
+        .last()
+        .ok_or_else(|| corrupt("decline has no owed stop"))?;
+    if !crate::application::agent_execution::agents::decline_stop_is_owed(invocation, preceding) {
+        return Err(corrupt("decline preparation does not follow owed work"));
+    }
+    if event.kind != preceding.kind
+        || event.target != preceding.target
+        || event.before != Some(preceding.stage)
+    {
+        return Err(corrupt("decline preparation contradicts its original stop"));
+    }
+    let mut history = InvocationHistory::new(
+        invocation.request.execution_id.clone(),
+        invocation.submission,
+    );
+    for edge in prefix {
+        history
+            .schedule(edge.transition().map_err(corrupt)?)
+            .map_err(corrupt)?;
+    }
+    history
+        .schedule(event.transition().map_err(corrupt)?)
+        .map_err(corrupt)
 }
 
 /// Check one acknowledgement before it can be overwritten by another fact.

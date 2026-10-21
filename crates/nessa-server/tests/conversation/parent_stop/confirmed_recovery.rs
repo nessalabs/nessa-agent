@@ -542,3 +542,483 @@ async fn direct_root_close_declines_preexisting_owed_history_and_its_unfinished_
     .is_none());
     retire(service, storage, metadata).await;
 }
+
+struct DeclineAuditFault {
+    durable: Arc<crate::conversation::infrastructure::DurableExecutionAudit>,
+    commit_lost_ack: bool,
+    reject: AtomicBool,
+    attempts: Mutex<Vec<nessa_sdk::application::agent_execution::executions::TurnResumptionRecord>>,
+}
+impl nessa_sdk::application::agent_execution::executions::ExecutionAudit for DeclineAuditFault {
+    fn record(
+        &self,
+        record: nessa_sdk::application::agent_execution::executions::ExecutionAuditRecord,
+    ) -> nessa_sdk::application::agent_execution::agents::AgentFuture<'_, ()> {
+        use nessa_sdk::application::agent_execution::executions::{
+            ExecutionAuditRecord, TurnResumption,
+        };
+        Box::pin(async move {
+            if let ExecutionAuditRecord::TurnResumed(record) = record {
+                if record.resumption() == &TurnResumption::Declined {
+                    self.attempts.lock().unwrap().push(record.clone());
+                    let reject = self.reject.load(Ordering::SeqCst);
+                    if !reject || self.commit_lost_ack {
+                        self.durable
+                            .record(ExecutionAuditRecord::TurnResumed(record))
+                            .await?;
+                    }
+                    if reject {
+                        return Err(AgentError::AuditFailure);
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn historical_decline_audit_failure_cannot_acknowledge_root_release() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let target = id();
+    crash_after_stop(&root, &target, false, "owed-root-close").await;
+    let provider = Arc::new(ProviderFactory::default());
+    let (mut service, storage, metadata) = fixture(&root, provider.clone());
+    let audit = Arc::new(DeclineAuditFault {
+        durable: Arc::new(
+            crate::conversation::infrastructure::DurableExecutionAudit::new(
+                root.join("decline-audit"),
+                Arc::new(TestClock),
+            )
+            .unwrap(),
+        ),
+        commit_lost_ack: false,
+        reject: AtomicBool::new(true),
+        attempts: Mutex::new(Vec::new()),
+    });
+    Arc::get_mut(&mut service.inner).unwrap().agents =
+        crate::conversation_test_support::mode_agents(provider, audit.clone());
+    let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
+    service.bind_unfinished_turns(metadata.clone(), FailureBackoff::default());
+    service.mark_unfinished(&target).await.unwrap();
+    let live = service
+        .resolve(&target, &caller("read-before-close"))
+        .await
+        .unwrap();
+    let opening = Arc::downgrade(
+        service
+            .inner
+            .conversations
+            .lock()
+            .await
+            .get(&target)
+            .unwrap(),
+    );
+    let lifetime = coordinator
+        .active_lifetime_for_session(&conversation_session(&target))
+        .unwrap();
+    let command = || CloseCommand {
+        lifetime: lifetime.clone(),
+        cause: LifetimeCause::HostClose,
+        initiator: Initiator::Host(HostActor::new("person", "panel", "failed-decline").unwrap()),
+        external_attachment: false,
+        timeout: None,
+    };
+    let result = tokio::time::timeout(TURN_HOLD_HANG, coordinator.end_lifetime(command()))
+        .await
+        .unwrap();
+    assert!(
+        result.is_err(),
+        "independent declined-decision audit failure must remain observable; got {result:?}"
+    );
+    assert!(
+        live.agent.owed_turns().await.is_empty(),
+        "the once-only decision happened despite audit failure"
+    );
+    assert!(
+        opening.upgrade().is_some(),
+        "the exact evidence owner must remain joinable"
+    );
+    assert_ne!(
+        coordinator.lifetime_state(&lifetime),
+        Some(LifetimeState::Closed)
+    );
+    let first = audit.attempts.lock().unwrap()[0].clone();
+    assert_eq!(first.execution_id().as_str(), "parent");
+    assert_eq!(first.resumed_by().request_id(), "failed-decline");
+    audit.reject.store(false, Ordering::SeqCst);
+    tokio::time::timeout(TURN_HOLD_HANG, coordinator.end_lifetime(command()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        coordinator.lifetime_state(&lifetime),
+        Some(LifetimeState::Closed)
+    );
+    assert!(opening.upgrade().is_none());
+    assert!(audit
+        .attempts
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|record| record == &first));
+    drop(live);
+    retire(service, storage, metadata).await;
+}
+
+/// Pause only the final terminal save. The preceding preparation is real
+/// committed SQLite evidence; a killed process cannot orphan its audit actor.
+struct PreparedDeclineStorage {
+    storage: Arc<RecordStorage>,
+    root: PathBuf,
+}
+struct PreparedDeclineLease {
+    lease: Box<dyn SessionStorageLease>,
+    root: PathBuf,
+}
+impl SessionStorage for PreparedDeclineStorage {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        Box::pin(async move {
+            Ok(Box::new(PreparedDeclineLease {
+                lease: self.storage.open(id).await?,
+                root: self.root.clone(),
+            }) as Box<dyn SessionStorageLease>)
+        })
+    }
+    fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        self.storage.read_committed(id)
+    }
+}
+impl SessionStorageLease for PreparedDeclineLease {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
+        self.lease.load()
+    }
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.lease.erase()
+    }
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
+        Box::pin(async move {
+            if units.iter().flat_map(SessionSaveUnit::changes).any(|change| matches!(change,SessionChange::SchedulingTransition { event,.. } if event.cause==SchedulingCause::NotResumed)) {
+                std::fs::write(self.root.join("decline-ready"),b"1").unwrap();
+                return std::future::pending().await;
+            }
+            self.lease.save_changes(binding, units).await
+        })
+    }
+}
+
+#[test]
+#[ignore = "invoked only by the historical decline crash parent"]
+fn historical_decline_crash_child() {
+    let root = PathBuf::from(std::env::var_os("NESSA_MUTATION_ROOT").unwrap());
+    let target = ConversationId::new(&std::env::var("NESSA_MUTATION_TARGET").unwrap()).unwrap();
+    let stage = std::env::var("NESSA_DECLINE_STAGE").unwrap();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let provider = Arc::new(ProviderFactory::default());
+            let (mut service, storage, metadata) = fixture(&root, provider.clone());
+            let audit = Arc::new(DeclineAuditFault {
+                durable: Arc::new(
+                    crate::conversation::infrastructure::DurableExecutionAudit::new(
+                        root.join("decline-audit"),
+                        Arc::new(TestClock),
+                    )
+                    .unwrap(),
+                ),
+                commit_lost_ack: stage == "audit-lost-ack",
+                reject: AtomicBool::new(true),
+                attempts: Mutex::new(Vec::new()),
+            });
+            let inner = Arc::get_mut(&mut service.inner).unwrap();
+            inner.agents = crate::conversation_test_support::mode_agents(provider, audit);
+            if stage == "prepared" {
+                inner.storage = Arc::new(PreparedDeclineStorage {
+                    storage: storage.clone(),
+                    root: root.clone(),
+                });
+            }
+            let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
+            service.bind_unfinished_turns(metadata.clone(), FailureBackoff::default());
+            service.mark_unfinished(&target).await.unwrap();
+            let live = service
+                .resolve(&target, &caller("inspect-before-crash"))
+                .await
+                .unwrap();
+            let lifetime = coordinator
+                .active_lifetime_for_session(&conversation_session(&target))
+                .unwrap();
+            std::fs::write(root.join("decline-lifetime"), lifetime.as_str()).unwrap();
+            let close = coordinator.end_lifetime(CloseCommand {
+                lifetime,
+                cause: LifetimeCause::HostClose,
+                initiator: Initiator::Host(
+                    HostActor::new("person", "panel", "original-crash-close").unwrap(),
+                ),
+                external_attachment: false,
+                timeout: None,
+            });
+            if stage == "prepared" {
+                let _ = close.await;
+                unreachable!("the terminal save is held until process loss");
+            }
+            assert!(close.await.is_err());
+            assert!(live.agent.owed_turns().await.is_empty());
+            assert!(!live
+                .agent
+                .session_manager()
+                .snapshot()
+                .await
+                .unwrap()
+                .invocations[0]
+                .decline
+                .as_ref()
+                .unwrap()
+                .acknowledged());
+            std::fs::write(root.join("decline-ready"), b"1").unwrap();
+            std::future::pending::<()>().await;
+        });
+}
+
+#[tokio::test]
+async fn original_decline_preparation_and_audit_receipt_survive_actual_process_loss() {
+    use nessa_sdk::domain::agent_execution::subagents::AgentLifetimeId;
+    for stage in ["prepared", "audit-rejected", "audit-lost-ack"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("data");
+        let target = id();
+        crash_after_stop(&root, &target, false, "owed-root-close").await;
+        let log = root.with_extension(format!("{stage}.log"));
+        let output = std::fs::File::create(&log).unwrap();
+        let mut process=ChildOwner(Command::new(std::env::current_exe().unwrap())
+            .args(["--exact","conversation::application::service::mutation::tests::parent_stop::confirmed_recovery::historical_decline_crash_child","--ignored","--nocapture"])
+            .env("NESSA_MUTATION_ROOT",&root).env("NESSA_MUTATION_TARGET",target.to_string()).env("NESSA_DECLINE_STAGE",stage)
+            .stdout(Stdio::from(output.try_clone().unwrap())).stderr(Stdio::from(output)).spawn().unwrap());
+        wait_marker(&root, "decline-ready", &mut process, &log).await;
+        process.0.kill().unwrap();
+        assert!(!process.0.wait().unwrap().success());
+        drop(process);
+        let lifetime =
+            AgentLifetimeId::new(std::fs::read_to_string(root.join("decline-lifetime")).unwrap())
+                .unwrap();
+        let original_audit = std::fs::read_dir(root.join("decline-audit"))
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                (path.clone(), std::fs::read(path).unwrap())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(original_audit.len(), usize::from(stage == "audit-lost-ack"));
+        let provider = Arc::new(ProviderFactory::default());
+        let (mut service, storage, metadata) = fixture(&root, provider.clone());
+        let audit = Arc::new(DeclineAuditFault {
+            durable: Arc::new(
+                crate::conversation::infrastructure::DurableExecutionAudit::new(
+                    root.join("decline-audit"),
+                    Arc::new(TestClock),
+                )
+                .unwrap(),
+            ),
+            commit_lost_ack: false,
+            reject: AtomicBool::new(false),
+            attempts: Mutex::new(Vec::new()),
+        });
+        Arc::get_mut(&mut service.inner).unwrap().agents =
+            crate::conversation_test_support::mode_agents(provider.clone(), audit.clone());
+        service.bind_unfinished_turns(metadata.clone(), FailureBackoff::default());
+        let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            coordinator.end_lifetime(CloseCommand {
+                lifetime: lifetime.clone(),
+                cause: LifetimeCause::HostClose,
+                initiator: Initiator::Host(
+                    HostActor::new("different-person", "different-panel", "later-retry").unwrap(),
+                ),
+                external_attachment: false,
+                timeout: None,
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            coordinator.lifetime_state(&lifetime),
+            Some(LifetimeState::Closed)
+        );
+        let committed = storage
+            .read_committed(conversation_session(&target))
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .clone();
+        let record = committed
+            .invocations
+            .iter()
+            .find(|record| record.request.execution_id.as_str() == "parent")
+            .unwrap();
+        assert!(record.decline.as_ref().unwrap().acknowledged());
+        assert_eq!(
+            record
+                .decline
+                .as_ref()
+                .unwrap()
+                .event()
+                .actor
+                .as_ref()
+                .unwrap()
+                .request_id(),
+            "original-crash-close"
+        );
+        assert_eq!(
+            record
+                .scheduling
+                .iter()
+                .filter(|edge| edge.cause == SchedulingCause::NotResumed)
+                .count(),
+            1
+        );
+        assert_eq!(
+            provider.open_calls.load(Ordering::SeqCst),
+            0,
+            "cleanup recovery must not dispatch another provider"
+        );
+        assert!(provider.executions.lock().unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_dir(root.join("decline-audit"))
+                .unwrap()
+                .count(),
+            1
+        );
+        for (path, bytes) in original_audit {
+            assert_eq!(
+                std::fs::read(path).unwrap(),
+                bytes,
+                "lost ACK reuses original durable metadata"
+            );
+        }
+        for record in audit.attempts.lock().unwrap().iter() {
+            assert_eq!(record.resumed_by().request_id(), "original-crash-close");
+        }
+        retire(service, storage, metadata).await;
+    }
+}
+
+struct UnfinishedClearFault {
+    inner: Arc<LocalConversationStore>,
+    reject: AtomicBool,
+    commit: bool,
+}
+impl UnfinishedTurns for UnfinishedClearFault {
+    fn mark(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.mark(id)
+    }
+    fn clear(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        let id = id.clone();
+        Box::pin(async move {
+            let reject = self.reject.load(Ordering::SeqCst);
+            if !reject || self.commit {
+                UnfinishedTurns::clear(self.inner.as_ref(), &id).await?;
+            }
+            if reject {
+                Err(ConversationError::Metadata)
+            } else {
+                Ok(())
+            }
+        })
+    }
+    fn defer(
+        &self,
+        id: &ConversationId,
+        failures: u32,
+        retry_at_ms: u64,
+    ) -> ConversationFuture<'_, ()> {
+        self.inner.defer(id, failures, retry_at_ms)
+    }
+    fn marked(
+        &self,
+    ) -> ConversationFuture<'_, Vec<crate::conversation::application::UnfinishedMark>> {
+        self.inner.marked()
+    }
+}
+
+#[tokio::test]
+async fn unfinished_clear_rejection_or_lost_ack_cannot_retire_the_root_evidence_owner() {
+    for commit in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("data");
+        let provider = Arc::new(ProviderFactory::default());
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
+        let marks = Arc::new(UnfinishedClearFault {
+            inner: metadata.clone(),
+            reject: AtomicBool::new(true),
+            commit,
+        });
+        service.bind_unfinished_turns(marks.clone(), FailureBackoff::default());
+        let target = id();
+        opened(&service, &provider, &target).await;
+        service.mark_unfinished(&target).await.unwrap();
+        let opening = Arc::downgrade(
+            service
+                .inner
+                .conversations
+                .lock()
+                .await
+                .get(&target)
+                .unwrap(),
+        );
+        let lifetime = coordinator
+            .active_lifetime_for_session(&conversation_session(&target))
+            .unwrap();
+        let command = || CloseCommand {
+            lifetime: lifetime.clone(),
+            cause: LifetimeCause::HostClose,
+            initiator: Initiator::Host(HostActor::new("person", "panel", "clear-mark").unwrap()),
+            external_attachment: false,
+            timeout: None,
+        };
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), coordinator.end_lifetime(command()))
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert!(opening.upgrade().is_some());
+        assert_ne!(
+            coordinator.lifetime_state(&lifetime),
+            Some(LifetimeState::Closed)
+        );
+        assert_eq!(
+            UnfinishedTurns::marked(metadata.as_ref())
+                .await
+                .unwrap()
+                .is_empty(),
+            commit
+        );
+        marks.reject.store(false, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(5), coordinator.end_lifetime(command()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            coordinator.lifetime_state(&lifetime),
+            Some(LifetimeState::Closed)
+        );
+        assert!(opening.upgrade().is_none());
+        assert!(UnfinishedTurns::marked(metadata.as_ref())
+            .await
+            .unwrap()
+            .is_empty());
+        retire(service, storage, metadata).await;
+    }
+}

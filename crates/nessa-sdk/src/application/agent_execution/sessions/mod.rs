@@ -13,6 +13,9 @@
 //! before another command can reorder the remainder; it is not provider dispatch.
 //!
 //! SessionManager owns local session identity, saved evidence, and the storage lease.
+//! InvocationRecord.decline retains original preparation and audit acknowledgement;
+//! the same semantic writer/validator and checkpoint codec own both. No empty
+//! owed-work observation can acknowledge that separate receipt.
 //! Hosts can use [`SessionManager::prepare_for_lease_record`] to record a refused
 //! lease before an Agent exists. This shares the evidence preparation owner while
 //! preserving saved provider identity and queue state. Ordinary Agent preparation
@@ -115,11 +118,11 @@ pub use notes::{
     NoteRetirement, NoteRetirementReason, NoteState, NoteText, NoteValueError,
 };
 pub use storage::{
-    CommittedSession, InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent,
-    ProviderContext, QueueHistoryRecord, SessionChange, SessionLoad, SessionLoadState,
-    SessionSaveBackend, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
-    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
-    StorageShutdownFailure, SubmissionAcknowledgement, UnreadablePart,
+    CommittedSession, DeclineDecision, InvocationCancellationEvent, InvocationRecord,
+    InvocationSchedulingEvent, ProviderContext, QueueHistoryRecord, SessionChange, SessionLoad,
+    SessionLoadState, SessionSaveBackend, SessionSaveGeneration, SessionSaveReceipt,
+    SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+    StorageFuture, StorageShutdownFailure, SubmissionAcknowledgement, UnreadablePart,
 };
 
 pub(crate) use transcript::CommittedTransactionState;

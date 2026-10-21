@@ -1721,6 +1721,41 @@ result. No second cleanup or last-generation lookup is introduced.
 | ByAgentClose returns Deadline or CleanupUncertain | Preserve that one original failure; there is no independent environment uncertainty. Existing deletion/desktop-close regressions retain exact error assertions. |
 | SDK reports ReleasePending | Preserve the complete report, executable-use retry owner and independent fields. Physical outcome alone does not establish whole release; close-report matrix exercises both modes. `remote_ack_cannot_release_the_sdk_executable_use_owner` reproduces false graph Released at10991ad3 and requires original Slot/SDK owner retention until its real retry acknowledges. |
 | Remote End goes unanswered | Retain actual owner and Interrupted cause/order under the original bound; observe committed history without taking its writer. Revocation/expiry/lost controls then supply real ACK and verify once-only retirement. |
-| Actual remote End confirms cleanup | Its physical answer can resolve the provider's physical uncertainty, while ReleasePending and audit/scheduling/completion failures remain independent obligations. No diagnostic-based physical exemption. |
+| Actual remote End confirms cleanup | Its physical answer is recorded independently; cycle6 below requires the actual SDK owner to reconcile whole release. ReleasePending and audit/scheduling/completion failures remain independent obligations. No diagnostic-based physical exemption. |
 | Concurrent callers, cancellation or replacement attachment | Each report comes from its supervised transaction and lifecycle attempt; never read a previous generation's report or start another cleanup owner. |
 | A direct root lifetime close meets earlier owed history | The real SQLite/SIGKILL probe `direct_root_close_declines_preexisting_owed_history_and_its_unfinished_mark` reproduces missed decline at10991ad3. Resource cleanup joins existing stopping with HoldSlot, preserving first actor, historical decline and unfinished-mark acknowledgement before exact retirement. |
+
+### Cycle 6: acknowledge each existing owner
+
+Explicit owner direction continues the bounded correction after cycle5's two
+P2 findings; all prior review caps and failure receipts remain recorded. Both
+failures were reproduced against unchanged production at a6fbbb68: a rejected
+historical Declined audit still returned successful root close, and a real
+hosted ACP executable-use guard remained admitted after remote End while the
+graph-facing close returned success.
+
+The SDK's existing session writer now retains the original decline preparation
+before applying NotResumed. That preparation is acknowledged first; its terminal
+edge and audit then keep the existing independent failure contract. No new
+scheduler, cleanup registry or execution owner is added. The SDK rejoins pending
+receipts even when no work is owed. The durable audit adapter uses create-only
+publication and exact canonical semantic input comparison for the stable
+(session, execution, Declined) identity. Retrying reuses the original metadata
+and syncs the winning file and directory; uncertainty is never inferred away
+from matching visible bytes alone. An older NotResumed record without this
+preparation does not prove audit delivery; this change claims no historical
+namespace migration or repair of previously untracked evidence.
+
+| Ordering | Required result and owner |
+| --- | --- |
+| Preparation rejects or loses its ACK | Retain original actor locally; do not apply the terminal edge or publish an orphan audit. Retry the same session writer; restored committed preparation owns the same decision. |
+| Prepared intent acknowledged, terminal save fails | Keep NotResumed locally and attempt its audit independently as before. The original actor is already durable; a later actual writer ACK can repair scheduling debt. |
+| Audit rejects, times out, or commits then loses ACK | Physical cleanup continues, evidence remains incomplete and the exact Slot/writer stays available. Empty owed history cannot acknowledge the decision. Idempotent delivery rejoins the same original record. |
+| Audit succeeds, acknowledgement save fails | Keep audit and storage status distinct; a later flush persists the receipt without another decision or reattribution. |
+| Caller loss or concurrent different callers | The supervised decision and the existing writer keep the first preparation; later callers join it. An audit identity conflict cannot overwrite original evidence. |
+| Restart after preparation, terminal edge, or audit | Reconstruct the original input/actor/cause from validated history and preparation, retry its audit receipt, and persist acknowledgement before clearing the unfinished mark. No turn or tool is replayed. |
+| Remote Stop lacks ACK; actual End confirms physical release | Record true remote physical release, then rejoin the same SDK close owner within End's remaining deadline. Unconfirmed may still contain a real executable-use guard; a derived report is not its release authority. |
+| End/account is acknowledged and the old SSH connection disappears | This lease shares its actual audited physical receipt with its existing harness controls. SDK cleanup can join it without another network reply, then explicitly release its own executable-use guard. There is no global receipt cache or second cleanup owner. |
+| SDK guard release rejects after remote End | Preserve ReleasePending and independent evidence failures; retain exact Slot/writer and graph uncertainty until that SDK owner acknowledges. Remote End remains once-only. |
+| Reconciliation sees later independent failures | Preserve initial and new audit/scheduling/completion failures, without duplicating identical cached diagnostics. Final/Suspend retain their original intent and actor. |
+| Unfinished mark clear rejects or loses ACK | Return its failure and retain the owner; a completed physical close does not acknowledge a failed metadata write. |

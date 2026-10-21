@@ -6478,13 +6478,18 @@ impl ConversationService {
                         // rather than waiting unresolved for a resume that
                         // will not come
                         // (`a_close_ends_the_turns_a_restart_cut_off`).
-                        let mut owes_nothing = true;
+                        let mut decline_failure = None;
                         if end == AgentEnd::Close {
                             for turn in live.agent.owed_turns().await {
                                 if let Err(error) =
                                     live.agent.decline_turn(&turn, actor.clone()).await
                                 {
-                                    owes_nothing = false;
+                                    decline_failure = Some(match decline_failure {
+                                        None => error.clone(),
+                                        Some(first) => {
+                                            first.with_independent_failure(error.clone())
+                                        }
+                                    });
                                     tracing::warn!(conversation_id = %id, execution_id = %turn.execution_id().as_str(), %error, "a turn the close ends could not be recorded ended; it stays marked, and the next start resumes it");
                                 }
                             }
@@ -6493,6 +6498,28 @@ impl ConversationService {
                             .close_leased(live, cause, actor.clone(), end)
                             .await
                             .map(|_| ());
+                        // Physical cleanup continues despite a historical settlement failure.
+                        // Neither a successful close nor an empty owed list acknowledges it.
+                        let closed = match (decline_failure, closed) {
+                            (None, closed) => closed,
+                            (Some(error), Ok(())) => Err(error),
+                            (Some(first), Err(second)) => {
+                                Err(first.with_independent_failure(second))
+                            }
+                        };
+                        let closed = if end == AgentEnd::Close && closed.is_ok() {
+                            self.forget_unfinished(id)
+                                .await
+                                .map_err(|error| match error {
+                                    ConversationError::Storage(error) => AgentError::Storage(error),
+                                    ConversationError::Agent(error) => error,
+                                    error => {
+                                        AgentError::Storage(StorageError::Io(error.to_string()))
+                                    }
+                                })
+                        } else {
+                            closed
+                        };
                         // Owned cleanup keeps its actual evidence writer until
                         // acknowledgement. Unowned reopening, or the durable
                         // deletion's explicit erasure handoff, can relinquish
@@ -6500,9 +6527,6 @@ impl ConversationService {
                         if self.close_releases_owner(id, &closed, on_confirm) {
                             // Closed for good: whatever it was doing ended
                             // with it, so a restart has nothing to resume.
-                            if end == AgentEnd::Close && owes_nothing {
-                                self.forget_unfinished(id).await;
-                            }
                             let _ = live.join_attachment_owner().await;
                             if on_confirm != ConfirmedClose::HoldSlot {
                                 self.release_slot(id, &slot).await;

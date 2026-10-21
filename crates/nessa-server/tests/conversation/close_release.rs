@@ -53,6 +53,7 @@ fn invocation(
         UserMessage::text_only(PromptText::new("hello").unwrap())
     };
     InvocationRecord {
+        decline: None,
         resumed_from: None,
         target_event_offset: None,
         submission: SubmissionMode::Queued,

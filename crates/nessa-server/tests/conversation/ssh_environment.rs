@@ -4260,3 +4260,42 @@ pub(crate) fn preparation_environment() -> (Arc<dyn Environment>, Arc<Preparatio
         pause,
     )
 }
+
+#[tokio::test]
+async fn confirmed_lease_end_remains_the_harness_cleanup_receipt_after_disconnect() {
+    let connector = Connector::new(Reach::Serving);
+    let environment = environment(connector.clone(), Arc::new(Audit::default()));
+    let (binding, given) = binding(true);
+    let opened = environment
+        .open(&lease(), &terms("claude"), binding)
+        .await
+        .unwrap();
+    let host = given.lock().unwrap().clone().unwrap();
+    let mut process = host.start(HarnessLaunch::default()).unwrap();
+    process.input.write_all(b"before End").await.unwrap();
+    assert_eq!(read_some(process.output.as_mut()).await, b"before End");
+    assert_eq!(
+        opened.hold.end(LeaseEndCause::Closed).await,
+        LeaseRelease::Released(LeaseCleanup::Confirmed { forced: false })
+    );
+    assert_eq!(connector.stopped.load(Ordering::SeqCst), 1);
+    connector.cut();
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            process
+                .control
+                .cleanup(Duration::from_millis(10), Duration::from_millis(100))
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        CloseOutcome { forced: false },
+        "the original actual End receipt survives the old connection"
+    );
+    assert_eq!(
+        connector.stopped.load(Ordering::SeqCst),
+        1,
+        "joining End does not clean the native scope again"
+    );
+}

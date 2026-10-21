@@ -648,6 +648,7 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
             ExecutionSessionId::new("saved-context").unwrap(),
         ),
         invocations: vec![InvocationRecord {
+            decline: None,
             resumed_from: None,
             target_event_offset: None,
             provider_report: None,

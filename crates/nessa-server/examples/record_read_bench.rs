@@ -317,6 +317,7 @@ fn turn_record(
     let length = assistant_bytes.unwrap_or(400 + (turn * 211) % 2000);
     let assistant = filler(turn, length, "Answer");
     Ok(InvocationRecord {
+        decline: None,
         resumed_from: None,
         target_event_offset: None,
         submission: SubmissionMode::Immediate,

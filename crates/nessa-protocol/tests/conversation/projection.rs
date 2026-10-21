@@ -377,6 +377,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
         ),
         queue_history: vec![],
         invocations: vec![InvocationRecord {
+            decline: None,
             resumed_from: None,
             target_event_offset: None,
             submission: InvocationSubmissionMode::Immediate,

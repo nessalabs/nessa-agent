@@ -33,6 +33,9 @@ use sha2::{Digest, Sha256};
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use tokio::sync::Notify;
+#[cfg(unix)]
+#[path = "parent_stop/hosted_release.rs"]
+mod hosted_release;
 #[path = "parent_stop/placement.rs"]
 mod placement;
 #[cfg(unix)]

@@ -66,4 +66,52 @@ impl AgentCloseReport {
     pub fn with_cleanup(self, cleanup: CleanupReport) -> Self {
         Self { cleanup, ..self }
     }
+
+    /// Join a later observation from the same cleanup owner. Only its actual
+    /// resource report supersedes the earlier resource observation. Independent
+    /// evidence failures from either attempt remain observable, with cached
+    /// identical failures represented once. This value releases no owner.
+    pub fn after_retry(self, retry: Self) -> Self {
+        let audit =
+            join_acknowledgements(self.cleanup.audit().clone(), retry.cleanup.audit().clone());
+        let completion = join_failures(
+            self.cleanup.completion_failure().cloned(),
+            retry.cleanup.completion_failure().cloned(),
+        );
+        let operation = join_failures(
+            self.cleanup.operation_failure().cloned(),
+            retry.cleanup.operation_failure().cloned(),
+        );
+        let cleanup = self
+            .cleanup
+            .with_resources(retry.cleanup.resources().clone())
+            .with_audit(audit)
+            .with_completion_failure(completion)
+            .with_operation_failure(operation);
+        Self::new(
+            cleanup,
+            join_acknowledgements(self.scheduling, retry.scheduling),
+        )
+    }
+}
+
+fn join_failures(first: Option<AgentError>, second: Option<AgentError>) -> Option<AgentError> {
+    match (first, second) {
+        (None, other) | (other, None) => other,
+        (Some(first), Some(second)) if first == second => Some(first),
+        (Some(first), Some(second)) => Some(
+            AgentError::MultipleOperationFailures {
+                first_error: Box::new(first),
+                subsequent_error: Box::new(second),
+            }
+            .bounded(),
+        ),
+    }
+}
+
+pub(super) fn join_acknowledgements(
+    first: Result<(), AgentError>,
+    second: Result<(), AgentError>,
+) -> Result<(), AgentError> {
+    join_failures(first.err(), second.err()).map_or(Ok(()), Err)
 }

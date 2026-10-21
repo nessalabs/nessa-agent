@@ -55,6 +55,7 @@ async fn worker_projection_after_reload(
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
         provider_context: ProviderContext::Recorded(ExecutionSessionId::new("context").unwrap()),
         invocations: vec![InvocationRecord {
+            decline: None,
             resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,

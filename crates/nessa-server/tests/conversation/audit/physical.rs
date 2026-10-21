@@ -304,3 +304,139 @@ fn audit_without_a_runtime_is_a_typed_pre_effect_failure() {
 
 #[path = "physical/attachment_deadlines.rs"]
 mod attachment_deadlines;
+
+fn decline_bytes(writer: &str, sequence: u64, at: u64, actor: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "recordId":"decline-stable-identity", "writerId":writer, "sequence":sequence,
+        "observedAtMs":at,
+        "record":{"kind":"turn_resumed","sessionId":"session","executionId":"turn",
+            "cause":"interrupted","dispatched":true,"submittedBy":{"principalId":"person","surfaceId":"panel","requestId":"submit"},
+            "actor":{"principalId":"person","surfaceId":"panel","requestId":actor},"resumption":{"kind":"declined"}}
+    })).unwrap()
+}
+
+#[test]
+fn stable_decline_publication_preserves_first_metadata_and_rejects_conflicting_input() {
+    use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("decline.json");
+    let first = decline_bytes("11111111-1111-4111-8111-111111111111", 0, 100, "close");
+    let retry = decline_bytes("22222222-2222-4222-8222-222222222222", 8, 200, "close");
+    PrivateExecutionAuditFileWriter
+        .write_once(&path, &first)
+        .unwrap();
+    let original = fs::read(&path).unwrap();
+    PrivateExecutionAuditFileWriter
+        .write_once(&path, &retry)
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert_eq!(
+        PrivateExecutionAuditFileWriter.write_once(
+            &path,
+            &decline_bytes(
+                "22222222-2222-4222-8222-222222222222",
+                9,
+                300,
+                "other-close"
+            )
+        ),
+        Err(AgentError::AuditFailure)
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn concurrent_decline_writers_acknowledge_one_create_only_winner() {
+    use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
+    let root = tempfile::tempdir().unwrap();
+    let path = Arc::new(root.path().join("decline.json"));
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let writes: Vec<_> = [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+    ]
+    .into_iter()
+    .map(|id| {
+        let path = path.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            let bytes = decline_bytes(id, 0, 100, "close");
+            PrivateExecutionAuditFileWriter.write_once(&path, &bytes)
+        })
+    })
+    .collect();
+    for write in writes {
+        write.join().unwrap().unwrap();
+    }
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    let value: Value = serde_json::from_slice(&fs::read(path.as_ref()).unwrap()).unwrap();
+    assert_eq!(value["record"]["actor"]["requestId"], "close");
+}
+
+#[test]
+fn a_lost_decline_write_ack_rejoins_the_same_durable_record() {
+    use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
+    struct LoseAck(AtomicUsize);
+    impl ExecutionAuditFileWriter for LoseAck {
+        fn write(&self, _: &Path, _: &[u8]) -> Result<(), AgentError> {
+            unreachable!()
+        }
+        fn write_once(&self, path: &Path, bytes: &[u8]) -> Result<(), AgentError> {
+            PrivateExecutionAuditFileWriter.write_once(path, bytes)?;
+            if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(AgentError::AuditFailure)
+            } else {
+                Ok(())
+            }
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("decline.json");
+    let writer = LoseAck(AtomicUsize::new(0));
+    let bytes = decline_bytes("11111111-1111-4111-8111-111111111111", 0, 100, "close");
+    assert_eq!(
+        writer.write_once(&path, &bytes),
+        Err(AgentError::AuditFailure)
+    );
+    let original = fs::read(&path).unwrap();
+    writer.write_once(&path, &bytes).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn malformed_oversized_or_duplicate_decline_receipts_are_never_replaced() {
+    use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("decline.json");
+    let bytes = decline_bytes("11111111-1111-4111-8111-111111111111", 0, 100, "close");
+    PrivateExecutionAuditFileWriter
+        .write_once(&path, &bytes)
+        .unwrap();
+    let duplicate = String::from_utf8(bytes.clone())
+        .unwrap()
+        .replacen("\"sequence\":0", "\"sequence\":0,\"sequence\":0", 1)
+        .into_bytes();
+    let nested = String::from_utf8(bytes.clone())
+        .unwrap()
+        .replacen(
+            "\"kind\":\"declined\"",
+            "\"kind\":\"declined\",\"kind\":\"declined\"",
+            1,
+        )
+        .into_bytes();
+    for invalid in [
+        b"{}".to_vec(),
+        vec![b' '; bytes.len() + 4097],
+        duplicate,
+        nested,
+    ] {
+        fs::write(&path, &invalid).unwrap();
+        assert_eq!(
+            PrivateExecutionAuditFileWriter.write_once(&path, &bytes),
+            Err(AgentError::AuditFailure)
+        );
+        assert_eq!(fs::read(&path).unwrap(), invalid);
+    }
+}

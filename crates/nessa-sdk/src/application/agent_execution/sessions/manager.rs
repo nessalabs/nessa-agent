@@ -1113,6 +1113,7 @@ impl SessionManager {
             let NoteSelection { retired, taken } =
                 super::notes::select(snapshot, &notes.candidates, notes.takes_notes, now_ms);
             let record = InvocationRecord {
+                decline: None,
                 resumed_from,
                 target_event_offset,
                 submission,
@@ -1687,6 +1688,84 @@ impl SessionManager {
     }
     /// Return the locally applied decision even if its save is not acknowledged.
     /// Validation failure returns no commit and grants no decision authority.
+    pub(crate) async fn prepare_decline(
+        &self,
+        index: usize,
+        event: InvocationSchedulingEvent,
+    ) -> Result<super::DeclineDecision, StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let record = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.invocations.get(index))
+            .ok_or_else(|| StorageError::Corrupt("decline has no invocation".into()))?;
+        if record.decline.is_none() {
+            let execution_id = record.request.execution_id.clone();
+            let decision = super::DeclineDecision::new(event, false);
+            evidence.record(vec![SessionChange::DeclinePrepared {
+                execution_id,
+                decision,
+            }])?;
+        }
+        // The preparation, unlike the terminal edge, must be acknowledged
+        // before its independently durable audit can be attempted.
+        self.save_observed(&mut evidence).await?;
+        Ok(evidence.observed().unwrap().invocations[index]
+            .decline
+            .clone()
+            .unwrap())
+    }
+
+    pub(crate) async fn apply_decline(
+        &self,
+        index: usize,
+    ) -> Result<SchedulingCommit, StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let record = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.invocations.get(index))
+            .ok_or_else(|| StorageError::Corrupt("decline has no invocation".into()))?;
+        let decision = record
+            .decline
+            .as_ref()
+            .ok_or_else(|| StorageError::Corrupt("decline has no preparation".into()))?;
+        if record.scheduling.last() != Some(decision.event()) {
+            let change = SessionChange::SchedulingTransition {
+                execution_id: record.request.execution_id.clone(),
+                event: decision.event().clone(),
+            };
+            evidence.record(vec![change])?;
+        }
+        Ok(SchedulingCommit {
+            saved: self.save_observed(&mut evidence).await,
+        })
+    }
+
+    pub(crate) async fn acknowledge_decline(
+        &self,
+        index: usize,
+        save: bool,
+    ) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let record = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.invocations.get(index))
+            .ok_or_else(|| {
+                StorageError::Corrupt("decline acknowledgement has no invocation".into())
+            })?;
+        let decision = record.decline.as_ref().ok_or_else(|| {
+            StorageError::Corrupt("decline acknowledgement has no preparation".into())
+        })?;
+        if !decision.acknowledged() {
+            let execution_id = record.request.execution_id.clone();
+            evidence.record(vec![SessionChange::DeclineAcknowledged { execution_id }])?;
+        }
+        if save {
+            self.save_observed(&mut evidence).await
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) async fn record_scheduling_commit(
         &self,
         index: usize,

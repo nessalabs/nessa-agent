@@ -2557,6 +2557,10 @@ impl Agent {
                 let mut scheduler = agent.inner.scheduler.lock().await;
                 let saved = agent.cancel_pending(&mut scheduler, cause, actor).await;
                 drop(scheduler);
+                let saved = super::closing::join_acknowledgements(
+                    saved,
+                    agent.retry_declined_turns().await,
+                );
                 let _invocation = agent.inner.invocation.lock().await;
                 agent.inner.manager.await_admission_writes().await;
                 agent.inner.lifecycle.wait_for_work().await;

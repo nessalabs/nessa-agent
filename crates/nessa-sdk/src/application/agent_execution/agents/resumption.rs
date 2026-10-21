@@ -21,6 +21,7 @@
 #![deny(missing_docs)]
 
 use super::{Agent, AgentError, QueueAdmission};
+use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
 use crate::application::agent_execution::{
     executions::{
         ExecutionAuditRecord, ExecutionRequest, Submitter, TurnResumption, TurnResumptionRecord,
@@ -64,6 +65,11 @@ pub struct OwedTurn {
     submitted_by: ActionContext,
     initiation: Initiation,
     dispatched: bool,
+}
+
+enum OwedDecision {
+    Resume(Option<ActionContext>),
+    PrepareDecline,
 }
 
 struct OwedSettlement {
@@ -308,6 +314,9 @@ fn owed(
     live: impl Fn(&ExecutionId) -> bool,
 ) -> Option<Stop> {
     let id = &record.request.execution_id;
+    if record.decline.is_some() {
+        return None;
+    }
     if record.submission == SubmissionMode::Immediate || resumed {
         return None;
     }
@@ -377,6 +386,14 @@ fn recorded_resume_stop(
         ) && edge.cause.stopped_by_failure()
             && !superseded
             && failure_owed(record))
+}
+
+/// Shared saved-history eligibility for an original decline preparation.
+pub(crate) fn decline_stop_is_owed(
+    record: &InvocationRecord,
+    edge: &InvocationSchedulingEvent,
+) -> bool {
+    recorded_resume_stop(record, edge, false)
 }
 
 /// Whether `record` is a turn that moved past every failure before it: one
@@ -591,7 +608,7 @@ impl Agent {
             record,
             cause,
             saved,
-        }) = self.settle_owed(turn, end).await?
+        }) = self.settle_owed(turn, OwedDecision::Resume(end)).await?
         else {
             return Ok(Resumed::NotOwed);
         };
@@ -652,28 +669,185 @@ impl Agent {
         turn: &OwedTurn,
         actor: ActionContext,
     ) -> Result<(), AgentError> {
-        let Some(OwedSettlement {
-            record,
-            cause,
-            saved,
-        }) = self.settle_owed(turn, Some(actor.clone())).await?
-        else {
-            return Ok(());
+        let agent = self.clone();
+        let turn = turn.clone();
+        contain_caller_wake(
+            CallerWaiter::Decline(self.inner.manager.id().clone()),
+            tokio::spawn(async move { agent.decline_owned(&turn, actor).await }),
+        )
+        .await
+        .map_err(|_| AgentError::Closed)?
+    }
+
+    async fn decline_owned(&self, turn: &OwedTurn, actor: ActionContext) -> Result<(), AgentError> {
+        let existing = self
+            .inner
+            .manager
+            .read_invocations(|history| {
+                history
+                    .get(turn.index)
+                    .filter(|record| record.request.execution_id == turn.execution_id)
+                    .and_then(|record| record.decline.clone())
+            })
+            .await;
+        let event = match existing {
+            Some(decision) => decision.event().clone(),
+            None => {
+                let Some(settlement) = self.settle_owed(turn, OwedDecision::PrepareDecline).await?
+                else {
+                    return Ok(());
+                };
+                let edge = settlement.record.scheduling.last().cloned();
+                // settle_owed may have just recorded Interrupted, so read its
+                // canonical locally observed edge under the writer owner.
+                let edge = self
+                    .inner
+                    .manager
+                    .read_invocations(|history| history[turn.index].scheduling.last().cloned())
+                    .await
+                    .or(edge)
+                    .ok_or(AgentError::SubmissionConflict)?;
+                not_resumed(&edge, actor)?
+            }
         };
+        let scheduler = self.inner.scheduler.lock().await;
+        let still_owned = self
+            .inner
+            .manager
+            .read_invocations(|history| {
+                let record = &history[turn.index];
+                record.decline.is_some()
+                    || OwedHistory::new(history, |id| {
+                        scheduler.has_receipt(id)
+                            || self.inner.lifecycle.active().as_ref() == Some(id)
+                    })
+                    .at(turn.index)
+                    .is_some()
+            })
+            .await;
+        if !still_owned {
+            return Ok(());
+        }
+        let decision = self
+            .inner
+            .manager
+            .prepare_decline(turn.index, event)
+            .await
+            .map_err(AgentError::Storage)?;
+        drop(scheduler);
+        if decision.acknowledged() {
+            return Ok(());
+        }
+        let saved = self
+            .inner
+            .manager
+            .apply_decline(turn.index)
+            .await
+            .map_err(AgentError::Storage)?
+            .saved;
+        let (cause, reached, submitted) = self
+            .inner
+            .manager
+            .read_invocations(|history| {
+                let record = history
+                    .get(turn.index)
+                    .ok_or(AgentError::SubmissionConflict)?;
+                let previous = record
+                    .scheduling
+                    .get(record.scheduling.len().saturating_sub(2))
+                    .ok_or(AgentError::SubmissionConflict)?;
+                Ok::<_, AgentError>((previous.cause, dispatched(record), record.actor.clone()))
+            })
+            .await?;
         let audited = self
             .record_resumption_audit(ExecutionAuditRecord::TurnResumed(
                 TurnResumptionRecord::new(
                     self.inner.manager.id().clone(),
                     turn.execution_id.clone(),
                     cause,
-                    turn.dispatched,
-                    record.actor,
-                    actor,
+                    reached,
+                    submitted,
+                    decision
+                        .event()
+                        .actor
+                        .clone()
+                        .ok_or(AgentError::SubmissionConflict)?,
                     TurnResumption::Declined,
                 ),
             ))
             .await;
-        decision_evidence(saved, audited)
+        let acknowledged = match audited {
+            Ok(()) => self
+                .inner
+                .manager
+                .acknowledge_decline(turn.index, saved.is_ok())
+                .await
+                .map_err(AgentError::Storage),
+            Err(error) => Err(error),
+        };
+        decision_evidence(saved, acknowledged)
+    }
+
+    /// Join historical decline receipts whose audit acknowledgement is pending.
+    /// This does not resume work or choose another caller. Original preparations
+    /// survive empty owed lists and are retried through the same writer and audit.
+    ///
+    /// # Errors
+    /// Retains independent audit and storage failures; every record gets an attempt.
+    pub async fn retry_declined_turns(&self) -> Result<(), AgentError> {
+        let turns = self
+            .inner
+            .manager
+            .read_invocations(|history| {
+                history
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, record)| {
+                        record
+                            .decline
+                            .as_ref()
+                            .filter(|decision| !decision.acknowledged())
+                            .map(|decision| {
+                                (
+                                    OwedTurn {
+                                        index,
+                                        execution_id: record.request.execution_id.clone(),
+                                        submitted_by: record.actor.clone(),
+                                        initiation: record.initiation.clone(),
+                                        dispatched: dispatched(record),
+                                    },
+                                    decision
+                                        .event()
+                                        .actor
+                                        .clone()
+                                        .expect("validated decline actor"),
+                                )
+                            })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await;
+        let mut failure = None;
+        for (turn, actor) in turns {
+            if let Err(error) = self.decline_turn(&turn, actor).await {
+                failure = Some(match failure {
+                    None => error,
+                    Some(first) => AgentError::MultipleOperationFailures {
+                        first_error: Box::new(first),
+                        subsequent_error: Box::new(error),
+                    }
+                    .bounded(),
+                });
+            }
+        }
+        if let Err(error) = self.inner.manager.flush_observed().await {
+            let error = AgentError::Storage(error);
+            failure = Some(match failure {
+                None => error,
+                Some(first) => first.with_independent_failure(error),
+            });
+        }
+        failure.map_or(Ok(()), Err)
     }
 
     /// Find `turn` if it is still owed and record its owed stop if it was
@@ -683,8 +857,12 @@ impl Agent {
     async fn settle_owed(
         &self,
         turn: &OwedTurn,
-        end: Option<ActionContext>,
+        decision: OwedDecision,
     ) -> Result<Option<OwedSettlement>, AgentError> {
+        let (end, resuming) = match decision {
+            OwedDecision::Resume(end) => (end, true),
+            OwedDecision::PrepareDecline => (None, false),
+        };
         let scheduler = self.inner.scheduler.lock().await;
         let active = self.inner.lifecycle.active();
         let live = |id: &ExecutionId| scheduler.has_receipt(id) || active.as_ref() == Some(id);
@@ -698,6 +876,7 @@ impl Agent {
                     .filter(|record| record.request.execution_id == turn.execution_id)
                     .and_then(|record| read.at(turn.index).map(|stop| (record.clone(), stop)));
                 if found.is_some()
+                    && resuming
                     && end.is_none()
                     && Resumption::of(&turn.execution_id)
                         .successor()

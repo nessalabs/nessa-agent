@@ -629,6 +629,7 @@ impl SessionStorageLease for FaultLease {
 fn invocation(id: &str, complete: bool) -> InvocationRecord {
     let id = ExecutionId::new(id).unwrap();
     InvocationRecord {
+        decline: None,
         resumed_from: None,
         target_event_offset: None,
         submission: SubmissionMode::Immediate,
@@ -2423,4 +2424,75 @@ async fn lease_record_preparation_preserves_a_selected_fresh_context() {
         "a cleanup-only write cannot authorize restoring the old native context"
     );
     assert_eq!(lease.load().await.unwrap().snapshot().unwrap(), &before);
+}
+
+fn prepared_decline_record(applied: bool, acknowledged: bool) -> InvocationRecord {
+    let mut record = invocation("historical-decline", false);
+    record.submission = SubmissionMode::Queued;
+    let queued = InvocationSchedulingEvent {
+        kind: InvocationKind::Queued,
+        target: None,
+        before: None,
+        stage: InvocationStage::Queued,
+        cause: SchedulingCause::Submitted,
+        actor: Some(record.actor.clone()),
+    };
+    let interrupted = InvocationSchedulingEvent {
+        kind: InvocationKind::Queued,
+        target: None,
+        before: Some(InvocationStage::Queued),
+        stage: InvocationStage::Cancelled,
+        cause: SchedulingCause::Interrupted,
+        actor: None,
+    };
+    let declined = InvocationSchedulingEvent {
+        kind: InvocationKind::Queued,
+        target: None,
+        before: Some(InvocationStage::Cancelled),
+        stage: InvocationStage::Cancelled,
+        cause: SchedulingCause::NotResumed,
+        actor: Some(ActionContext::new("person", "panel", "original-close").unwrap()),
+    };
+    record.scheduling = vec![queued, interrupted];
+    if applied {
+        record.scheduling.push(declined.clone());
+    }
+    record.decline = Some(super::super::DeclineDecision::new(declined, acknowledged));
+    record
+}
+
+#[test]
+fn decline_receipts_validate_original_decision_and_acknowledgement_order() {
+    for (applied, acknowledged) in [(false, false), (true, false), (true, true)] {
+        let record = prepared_decline_record(applied, acknowledged);
+        super::super::validation::invocation_history(&record).unwrap();
+    }
+    assert!(
+        super::super::validation::invocation_history(&prepared_decline_record(false, true))
+            .is_err(),
+        "audit acknowledgement cannot precede application"
+    );
+    let mut changed = prepared_decline_record(true, true);
+    changed.scheduling.last_mut().unwrap().actor =
+        Some(ActionContext::new("other", "elsewhere", "later-close").unwrap());
+    assert!(
+        super::super::validation::invocation_history(&changed).is_err(),
+        "terminal attribution cannot replace original preparation"
+    );
+    for field in ["actor", "target", "before", "cause"] {
+        let mut record = prepared_decline_record(false, false);
+        let mut event = record.decline.as_ref().unwrap().event().clone();
+        match field {
+            "actor" => event.actor = None,
+            "target" => event.target = Some(ExecutionId::new("foreign").unwrap()),
+            "before" => event.before = Some(InvocationStage::Running),
+            "cause" => event.cause = SchedulingCause::SessionClosed,
+            _ => unreachable!(),
+        }
+        record.decline = Some(super::super::DeclineDecision::new(event, false));
+        assert!(
+            super::super::validation::invocation_history(&record).is_err(),
+            "invalid original decline {field}"
+        );
+    }
 }

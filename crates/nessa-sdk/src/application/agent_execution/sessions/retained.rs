@@ -330,6 +330,12 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
         );
     let acknowledgment = acknowledgement(&record.acknowledgement);
     let bytes = 0usize
+        .saturating_add(
+            record
+                .decline
+                .as_ref()
+                .map_or(0, |decision| scheduling_payload(decision.event())),
+        )
         .saturating_add(prompt)
         .saturating_add(events)
         .saturating_add(scheduling)
@@ -431,6 +437,13 @@ pub(super) fn touched(
                 0
             }
         }
+        SessionChange::DeclinePrepared { .. } => record.map_or(0, |record| {
+            record
+                .decline
+                .as_ref()
+                .map_or(0, |decision| scheduling_payload(decision.event()))
+        }),
+        SessionChange::DeclineAcknowledged { .. } => 0,
         SessionChange::SchedulingTransition { .. } => record.map_or(0, |record| {
             record
                 .scheduling

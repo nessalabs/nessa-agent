@@ -533,6 +533,12 @@ impl ConversationService {
         {
             return Ok(());
         }
+        // Empty owed work is not an acknowledgement of an earlier decline.
+        // Replay the original receipt before retiring its durable recovery mark.
+        live.agent
+            .retry_declined_turns()
+            .await
+            .map_err(ConversationError::Agent)?;
         live.agent
             .session_manager()
             .save_retained_lease_records()
@@ -736,16 +742,16 @@ impl ConversationService {
         }
     }
 
-    /// Clear `id`'s mark once its agent is closed for good, logging a mark
-    /// that could not be cleared: the next start opens it, finds nothing
-    /// owed, and clears it then.
-    pub(super) async fn forget_unfinished(&self, id: &ConversationId) {
+    /// Clear the unfinished mark only after the same settlement owner has
+    /// acknowledged its decision. A failed clear remains a required receipt.
+    pub(super) async fn forget_unfinished(
+        &self,
+        id: &ConversationId,
+    ) -> Result<(), ConversationError> {
         if !self.unfinished_marked().contains_key(id) {
-            return;
+            return Ok(());
         }
-        if let Err(error) = self.clear_mark(id).await {
-            tracing::warn!(conversation_id = %id, %error, "a closed conversation's mark could not be cleared");
-        }
+        self.clear_mark(id).await
     }
 
     async fn clear_mark(&self, id: &ConversationId) -> Result<(), ConversationError> {

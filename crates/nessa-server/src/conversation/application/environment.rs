@@ -1164,22 +1164,50 @@ impl LiveLease {
             .await;
         self.fence.ending();
         let close = match end {
-            AgentEnd::Close => agent.close_report(actor),
-            AgentEnd::Suspend => agent.suspend_report(actor),
+            AgentEnd::Close => agent.close_report(actor.clone()),
+            AgentEnd::Suspend => agent.suspend_report(actor.clone()),
         };
         tokio::pin!(close);
         let within = tokio::select! {
             result = &mut close => Some(result),
             () = tokio::time::sleep(cleanup_deadline) => None,
         };
-        let result = match within {
+        let mut result = match within {
             Some(result) => result,
             None => {
                 self.interrupt(manager).await;
                 close.await
             }
         };
+        // Reconciliation shares End's original budget; it cannot extend it.
+        let release_deadline = tokio::time::Instant::now() + cleanup_deadline;
         let release = self.release(cause, cleanup_deadline).await;
+        if matches!(
+            release,
+            LeaseRelease::Released(LeaseCleanup::Confirmed { .. })
+        ) && result
+            .as_ref()
+            .is_ok_and(|report| !report.cleanup().is_confirmed())
+        {
+            let retry = match end {
+                AgentEnd::Close => agent.close_report(actor),
+                AgentEnd::Suspend => agent.suspend_report(actor),
+            };
+            if let Ok(retried) = tokio::time::timeout_at(release_deadline, retry).await {
+                result = match (result, retried) {
+                    (Ok(first), Ok(retry)) => Ok(first.after_retry(retry)),
+                    (Ok(first), Err(error)) => Err(match first.into_result() {
+                        Ok(_) => error,
+                        Err(first) if first == error => first,
+                        Err(first) => AgentError::MultipleOperationFailures {
+                            first_error: Box::new(first),
+                            subsequent_error: Box::new(error),
+                        },
+                    }),
+                    (Err(first), _) => Err(first),
+                };
+            }
+        }
         let confirmed = result
             .as_ref()
             .ok()
@@ -1203,52 +1231,22 @@ impl LiveLease {
         };
         // The environment acknowledges its process tree. An SDK executable-use
         // release is a separate retained owner, even with that physical answer.
-        let sdk_release_pending = result.as_ref().is_ok_and(|report| {
-            matches!(
-                report.cleanup().resources(),
-                ResourceCleanup::ReleasePending { .. }
-            )
-        });
-        *self.cleanup.lock().unwrap() = if sdk_release_pending { None } else { evidence };
+        let sdk_released = result
+            .as_ref()
+            .is_ok_and(|report| report.cleanup().is_confirmed());
+        *self.cleanup.lock().unwrap() = if sdk_released { evidence } else { None };
         match evidence {
             Some(cleanup) => self.cleaned(manager, cleanup).await,
             None => self.interrupt(manager).await,
         }
-        // The environment confirmed its process tree gone: that answers the
-        // close's doubt about what it still holds, and nothing else. A failed
-        // audit, a failed save or any other failure of the close is its own
-        // fact and stays in the answer.
+        // Remote physical cleanup does not acknowledge the SDK's executable-use
+        // guard. Only the actual retry above can supply whole-resource evidence.
         let result = result
-            .map(|report| {
-                // An encompassing environment ACK resolves physical uncertainty,
-                // not executable-use release or any independent evidence failure.
-                match release {
-                    LeaseRelease::Released(LeaseCleanup::Confirmed { forced }) => {
-                        let resources = match report.cleanup().resources() {
-                            ResourceCleanup::Confirmed(outcome) => {
-                                ResourceCleanup::Confirmed(CloseOutcome {
-                                    forced: forced || outcome.forced,
-                                })
-                            }
-                            ResourceCleanup::ReleasePending { physical, failure } => {
-                                ResourceCleanup::ReleasePending {
-                                    physical: CloseOutcome {
-                                        forced: forced || physical.forced,
-                                    },
-                                    failure: failure.clone(),
-                                }
-                            }
-                            ResourceCleanup::Unconfirmed(_) => {
-                                ResourceCleanup::Confirmed(CloseOutcome { forced })
-                            }
-                        };
-                        let cleanup = report.cleanup().clone().with_resources(resources);
-                        report.with_cleanup(cleanup)
-                    }
-                    _ => report,
-                }
-            })
-            .and_then(|report| report.into_result());
+            .and_then(|report| report.into_result())
+            .map(|outcome| CloseOutcome {
+                forced: outcome.forced
+                    || matches!(evidence, Some(LeaseCleanup::Confirmed { forced: true })),
+            });
         let result = match (result, release) {
             (Ok(_), LeaseRelease::Unanswered) => Err(AgentError::CleanupUncertain),
             (Err(error), LeaseRelease::Unanswered) => Err(AgentError::MultipleOperationFailures {

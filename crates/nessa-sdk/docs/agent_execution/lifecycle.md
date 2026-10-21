@@ -745,8 +745,9 @@ failure of an otherwise successful cleanup.
 `into_result()` gives the ordinary close result, retaining scheduling storage
 failure together with its cleanup result and other independent failures. It
 does not mutate Agent ownership. An encompassing environment's real cleanup
-receipt may resolve physical uncertainty in a derived report; this cannot release
-an independent SDK executable-use owner or acknowledge audit/storage debt. A
+receipt confirms that environment's physical release. Whole SDK release still
+requires its actual attachment owner's acknowledgement, including any
+executable-use guard; a derived report cannot acknowledge that obligation. A
 report concerns its transaction, not an aggregate claim about an Agent that a
 later invocation has already attached again.
 
@@ -757,3 +758,33 @@ forced status and independent fields. Scheduling tests
 work and failed evidence. The gateway's
 `remote_ack_cannot_release_the_sdk_executable_use_owner` checks the separate
 remote and SDK release acknowledgements.
+
+## Historical decline acknowledgement
+
+`decline_turn` supervises its receipt through caller loss. It first saves a
+`DeclineDecision` preparation containing the original attributed terminal edge.
+Only an acknowledged preparation can apply NotResumed and publish its audit.
+Once the terminal edge is applied locally, audit is attempted independently even
+if saving that edge fails. The first preparation remains authoritative when
+another caller retries. `retry_declined_turns()` joins pending receipts without
+choosing another actor or resuming work, including after restoration with an
+empty owed list. A prepared decline excludes a competing resume.
+
+`InvocationRecord::decline` retains preparation and audit acknowledgement.
+Application/snapshot validation correlates the legal owed stop, original edge,
+caller and acknowledgement. Audit acknowledgement cannot precede the terminal
+edge or regress. A durable audit adapter must make repeated Declined input for
+the same session/execution idempotent: preserve original metadata and reject a
+conflicting semantic payload. An acknowledgement save failure remains a storage
+failure; a later flush can publish that already-observed receipt without another
+audit delivery. No audit delivery is inferred from older untracked NotResumed
+history, and no provider/tool work is replayed.
+
+`AgentCloseReport::after_retry` joins an actual later observation from the same
+cleanup owner. Its resource observation supersedes earlier uncertainty while
+independent audit, scheduling and completion failures remain observable. The
+value itself releases no Agent resources. In particular, remote physical End
+must be reconciled through that SDK owner; Unconfirmed can still contain an
+unattempted executable-use guard. Public report projections are not release
+acknowledgements. SDK close/suspend also joins already-prepared decline receipts;
+it does not automatically choose to decline otherwise owed work.

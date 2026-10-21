@@ -336,9 +336,10 @@ async fn a_decline_audits_its_applied_decision_despite_a_failed_terminal_save() 
         let saved = cut_off_while_running("decline-save").await;
         let (agent, backend, storage, _hold) = restore_holding(saved).await;
         let turn = agent.owed_turns().await.remove(0);
-        // Interrupted commits; the final NotResumed decision is retained but
-        // its adapter rejects the write without committing it.
-        let failed_write = storage.writes() + 2;
+        // Interrupted and the original decline preparation commit; the final
+        // NotResumed decision is retained but its adapter rejects that write.
+        // The additional preparation protects audit attribution through restart.
+        let failed_write = storage.writes() + 3;
         storage.0.lock().unwrap().fail_write = Some(failed_write);
         backend.audit.reject.store(reject_audit, Ordering::SeqCst);
         let error = bounded(agent.decline_turn(&turn, resumer()))
@@ -1001,4 +1002,136 @@ async fn a_completed_ordinary_resume_shaped_id_is_a_person_intervention() {
 #[tokio::test]
 async fn an_ordinary_resume_shaped_id_moves_past_a_failed_retry() {
     person_message_while_retry_waits(ordinary_resume_shaped_id().as_str()).await;
+}
+
+#[tokio::test]
+async fn a_rejected_decline_preparation_retains_first_actor_without_a_terminal_or_audit() {
+    let saved = cut_off_while_running("prepared-decline").await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    let failed_write = storage.writes() + 2;
+    storage.0.lock().unwrap().fail_write = Some(failed_write);
+    assert!(matches!(
+        bounded(agent.decline_turn(&turn, resumer())).await,
+        Err(AgentError::Storage(_))
+    ));
+    assert_eq!(
+        storage.snapshot().invocations[0]
+            .scheduling
+            .last()
+            .unwrap()
+            .cause,
+        SchedulingCause::Interrupted
+    );
+    assert!(
+        resumptions(&backend).is_empty(),
+        "no audit can orphan an unacknowledged preparation"
+    );
+    assert!(
+        agent.owed_turns().await.is_empty(),
+        "the original preparation already owns this decision locally"
+    );
+    let later = ActionContext::new("other", "another_surface", "later-close").unwrap();
+    bounded(agent.decline_turn(&turn, later)).await.unwrap();
+    let records = backend.audit.records.lock().unwrap();
+    let declined = records
+        .iter()
+        .find_map(|record| match record {
+            ExecutionAuditRecord::TurnResumed(record) => Some(record),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(declined.resumed_by(), &resumer());
+    drop(records);
+    assert!(storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn an_empty_owed_list_after_restart_rejoins_the_original_decline_audit() {
+    let saved = cut_off_while_running("restore-decline-audit").await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    backend.audit.reject.store(true, Ordering::SeqCst);
+    assert_eq!(
+        bounded(agent.decline_turn(&turn, resumer())).await,
+        Err(AgentError::AuditFailure)
+    );
+    let snapshot = storage.snapshot();
+    assert!(!snapshot.invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    assert!(agent.owed_turns().await.is_empty());
+    let saved = MemoryStorage::default();
+    saved.0.lock().unwrap().snapshot = Some(snapshot);
+    let (restored, new_backend, new_storage, _new_hold) = restore_holding(saved).await;
+    assert!(restored.owed_turns().await.is_empty());
+    bounded(restored.retry_declined_turns()).await.unwrap();
+    let original = backend
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|record| match record {
+            ExecutionAuditRecord::TurnResumed(record) => Some(record.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let replay = new_backend
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|record| match record {
+            ExecutionAuditRecord::TurnResumed(record) => Some(record.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(replay, original);
+    assert!(new_storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    let count = new_backend.audit.records.lock().unwrap().len();
+    bounded(restored.retry_declined_turns()).await.unwrap();
+    assert_eq!(new_backend.audit.records.lock().unwrap().len(), count);
+    backend.audit.reject.store(false, Ordering::SeqCst);
+    bounded(agent.close(actor())).await.unwrap();
+    bounded(restored.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_decline_audit_ack_save_failure_is_independent_and_retry_does_not_redeliver() {
+    let saved = cut_off_while_running("decline-ack-save").await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    let failed_write = storage.writes() + 4;
+    storage.0.lock().unwrap().fail_write = Some(failed_write);
+    assert!(matches!(
+        bounded(agent.decline_turn(&turn, resumer())).await,
+        Err(AgentError::Storage(_))
+    ));
+    assert_eq!(resumptions(&backend), [TurnResumption::Declined]);
+    assert!(!storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    bounded(agent.retry_declined_turns()).await.unwrap();
+    assert_eq!(resumptions(&backend), [TurnResumption::Declined]);
+    assert!(storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    bounded(agent.close(actor())).await.unwrap();
 }

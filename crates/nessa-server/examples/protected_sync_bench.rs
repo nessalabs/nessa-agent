@@ -1147,6 +1147,7 @@ fn turn_record(turn: usize) -> (InvocationRecord, String, String) {
     let user = filler(turn, 80 + (turn * 37) % 320, "Question");
     let assistant = filler(turn, 400 + (turn * 211) % 2000, "Answer");
     let record = InvocationRecord {
+        decline: None,
         resumed_from: None,
         target_event_offset: None,
         submission: SubmissionMode::Immediate,
