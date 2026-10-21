@@ -464,8 +464,15 @@ describe("a pane's close is offered where closing it does something", () => {
           pane.getAttribute("aria-label"),
         ),
       ).toEqual(["Session a", "Session b"])
+      expect(offered()).toEqual([true, true])
       await act(async () => frames.runFrame())
       await act(async () => frames.runFrame())
+      expect(
+        [...host.querySelectorAll("article.workspace-pane")].map((pane) =>
+          pane.getAttribute("aria-label"),
+        ),
+      ).toEqual(["Session a", "Session b"])
+      expect(offered()).toEqual([true, true])
       await act(async () => frames.runFrame())
     } finally {
       frames.restore()

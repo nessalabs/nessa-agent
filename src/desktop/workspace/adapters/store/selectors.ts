@@ -274,6 +274,10 @@ export const selectPaneWidget = (state: Root, pane: PaneKey): WidgetRef | null =
 export const selectPaneClosable = (state: Root, pane: PaneKey): boolean =>
   canClosePane(state.workspace, pane)
 
+/** Whether the layout still has this pane. A closed pane's box can outlive the key. */
+export const selectPanePresent = (state: Root, pane: PaneKey): boolean =>
+  state.workspace.panes !== null && paneByKey(state.workspace.panes, pane) !== undefined
+
 /** The sessions the panes show, in reading order. */
 export const selectShownSessionIds = createSelector([selectPanes], paneIds)
 

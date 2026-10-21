@@ -138,7 +138,8 @@ starts the measured row.
    the boxes it is showing. The grain comes back the frame
    after that paint, and the composer's blur the frame after the grain.
    A draft the close lets go keeps its home and its unsent text in the box
-   until that box goes.    A session the source removes keeps the unsent reply
+   until that box goes. The pane's close control stays with that box too.
+   A session the source removes keeps the unsent reply
    its composer was showing, a message still on its way, a transcript
    read that failed, Stop while a turn was still running, a model
    change that had not settled, and an approval answer still on its way
@@ -315,6 +316,7 @@ box frame.
   it happens, a draw the source leaves before that commit does not land,
   a removed session staying in its box until that box goes,
   a closing draft keeping its home and unsent text in that box until it goes,
+  the pane's close control staying with that box,
   a removed session keeping its unsent reply, a message still on its way,
   a failed transcript read, Stop while a turn was still running, a model
   change that had not settled, and an approval answer still on its way or

@@ -915,6 +915,11 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   answer before the next paint and drops the approval from the
   conversation, so this is the layout test that shows the refusal and
   then removes the session.
+- [ ] **A pane's close control stays until that box goes.** Closing a
+  pane that is not the last drops its key at once and keeps the box.
+  The × stays offered until the box itself goes. A press while the key
+  is already gone does nothing. The layout test closes one of two
+  sessions and still reads both close controls through two frames.
 - [ ] **A pane preview stays until the dropped arrangement paints.** An
   accepted swap keeps the preview on the panes the grid has not replaced
   yet. The next two frames still show it. It lets go on the frame the new
