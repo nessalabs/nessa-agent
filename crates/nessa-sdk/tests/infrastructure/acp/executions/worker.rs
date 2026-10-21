@@ -1,5 +1,6 @@
 use super::*;
 use crate::application::agent_execution::agents::AgentFuture;
+use crate::application::agent_execution::permissions::ActionContext;
 use crate::application::agent_execution::traces::{
     ContentCapture, FinishReason, LocalTraceStore, TraceRecorder,
 };
@@ -70,16 +71,18 @@ fn decline_publication(
     crate::infrastructure::acp::executions::event_queue::EventReceiver,
 ) {
     let (events, receiver) = EventQueueBudget::new().channel(capacity);
-    let observation = ReviewDeclineObservation::selected(
+    let review = DeclinedReview::selected(
         ReviewDeclineId::new("1").unwrap(),
         ReviewDecline::new(
             Some("Read"),
             ReviewDeclineReason::ToolNotReviewable,
-            crate::domain::agent_execution::permissions::RefusalOutcome::Continue,
+            RefusalOutcome::Continue,
         ),
-    );
+        None,
+    )
+    .unwrap();
     (
-        DeclineNoticePublication::new(events, ExecutionId::new("execution").unwrap(), observation),
+        DeclineNoticePublication::new(events, ExecutionId::new("execution").unwrap(), review),
         receiver,
     )
 }
@@ -520,6 +523,55 @@ fn questions_are_advertised_in_the_shape_acp_reads_and_only_where_answerable() {
     );
     let silent = initialize_params(false);
     assert!(silent["clientCapabilities"].get("elicitation").is_none());
+}
+
+#[test]
+fn a_policy_stop_log_names_the_rule_and_the_tool() {
+    use std::io::{self, Write};
+    use std::sync::Mutex;
+    #[derive(Clone, Default)]
+    struct Log(Arc<Mutex<Vec<u8>>>);
+    impl Write for Log {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let captured = Log::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let rule = ApprovalRuleReference::new(
+        "refuse-shell",
+        "1",
+        ActionContext::new("host", "policy", "grant").unwrap(),
+    )
+    .unwrap();
+    tracing::subscriber::with_default(subscriber, || {
+        super::log_policy_stop(
+            "session",
+            "execution",
+            "Bash",
+            &rule,
+            StopKind::EndTurn,
+            ReviewDeclineReason::ToolNotReviewable,
+        );
+    });
+    let text = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    assert!(text.contains("refuse-shell"), "{text}");
+    assert!(text.contains("Bash"), "{text}");
+    assert!(
+        text.contains("tool review declined and the execution stopped"),
+        "{text}"
+    );
+    assert!(!text.contains("grant"), "{text}");
+    assert!(!text.contains("arguments"), "{text}");
 }
 
 #[path = "worker/timing.rs"]

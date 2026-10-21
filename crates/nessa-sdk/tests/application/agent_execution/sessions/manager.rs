@@ -151,6 +151,7 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
         })),
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
+        open_fresh_context: AtomicBool::new(false),
     });
     manager.begin_dispatch(&active_id);
     let waiting = manager.clone();
@@ -253,6 +254,7 @@ async fn measure_growing_history_message_commit_latency() {
         })),
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
+        open_fresh_context: AtomicBool::new(false),
     };
     manager.begin_dispatch(&active_id);
     let mut latencies = Vec::new();
@@ -408,6 +410,7 @@ async fn measure_save_cost_as_history_grows() {
             })),
             dispatched: RwLock::new(HashMap::new()),
             attachment: Arc::new(AttachmentLease::empty()),
+            open_fresh_context: AtomicBool::new(false),
         };
         manager.begin_dispatch(&active_id);
         let mut saves = Vec::new();
@@ -497,6 +500,7 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
         })),
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
+        open_fresh_context: AtomicBool::new(false),
     };
     manager.begin_dispatch(&active_id);
     for _ in 0..7 {
@@ -725,6 +729,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         })),
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
+        open_fresh_context: AtomicBool::new(false),
     };
     manager.begin_dispatch(&active_id);
     (manager, lease, active_id)

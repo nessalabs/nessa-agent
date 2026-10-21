@@ -122,6 +122,7 @@ async fn a_command_runs_in_the_workspace_with_its_arguments_as_given() {
                 10_000,
             ),
             stopped,
+            None,
         )
         .await;
     assert_eq!(ran.end, CommandEnd::Exited { code: 3 });
@@ -142,7 +143,7 @@ async fn a_command_does_not_inherit_what_the_serving_process_holds() {
     // being cleared: only COMMAND_VARIABLES reach it.
     let (_stop, stopped) = not_stopped();
     let ran = runner(workspace.path())
-        .run(command(&["env"], None, 10_000), stopped)
+        .run(command(&["env"], None, 10_000), stopped, None)
         .await;
     let names: Vec<String> = String::from_utf8(ran.stdout)
         .unwrap()
@@ -160,12 +161,47 @@ async fn a_command_does_not_inherit_what_the_serving_process_holds() {
     );
 }
 
+/// The command's own publish point is the one variable added to the cleared
+/// environment, and only when a point was opened.
+#[tokio::test]
+async fn a_command_is_told_its_publish_point_and_nothing_else() {
+    let workspace = tempfile::tempdir().unwrap();
+    let point = "/tmp/nessa-artifacts.sock";
+    let (_stop, stopped) = not_stopped();
+    let ran = runner(workspace.path())
+        .run(command(&["env"], None, 10_000), stopped, Some(point.into()))
+        .await;
+    let stdout = String::from_utf8(ran.stdout).unwrap();
+    assert!(
+        stdout.contains(&format!("NESSA_ARTIFACTS={point}")),
+        "{stdout}"
+    );
+    let names: Vec<&str> = stdout
+        .lines()
+        .filter_map(|line| line.split_once('=').map(|(name, _)| name))
+        .collect();
+    assert!(
+        names.iter().all(|name| {
+            COMMAND_VARIABLES.contains(name)
+                || *name == "NESSA_ARTIFACTS"
+                || *name == "PWD"
+                || *name == "SHLVL"
+                || *name == "_"
+        }),
+        "{names:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_program_that_cannot_start_ran_nothing_and_holds_nothing() {
     let workspace = tempfile::tempdir().unwrap();
     let (_stop, stopped) = not_stopped();
     let ran = runner(workspace.path())
-        .run(command(&["nessa-no-such-program"], None, 10_000), stopped)
+        .run(
+            command(&["nessa-no-such-program"], None, 10_000),
+            stopped,
+            None,
+        )
         .await;
     assert_eq!(ran, CommandRan::not_started());
 }
@@ -178,6 +214,7 @@ async fn a_command_past_its_timeout_is_stopped_and_its_output_kept() {
         .run(
             command(&["sh", "-c", "echo started; exec sleep 30"], None, 300),
             stopped,
+            None,
         )
         .await;
     assert_eq!(ran.end, CommandEnd::TimedOut);
@@ -197,7 +234,7 @@ async fn a_stop_ends_a_running_command_and_its_descendants() {
     let release = workspace.path().join("release");
     let script = "sleep 30 & child=$!; : > child.pid.tmp; : > writing; while [ ! -f release ]; do sleep 0.01; done; printf '%s\\n' \"$child\" > child.pid.tmp; mv child.pid.tmp child.pid; wait";
     let running =
-        runner(workspace.path()).run(command(&["sh", "-c", script], None, 60_000), stopped);
+        runner(workspace.path()).run(command(&["sh", "-c", script], None, 60_000), stopped, None);
     let task = tokio::spawn(running);
     while !writing.exists() {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -236,7 +273,7 @@ async fn a_stop_ends_a_running_command_and_its_descendants() {
     let (stop, stopped) = not_stopped();
     stop.send_replace(Some(CommandStop::Lost));
     let ran = runner(workspace.path())
-        .run(command(&["sh", "-c", "exit 0"], None, 1_000), stopped)
+        .run(command(&["sh", "-c", "exit 0"], None, 1_000), stopped, None)
         .await;
     assert_eq!(ran, CommandRan::not_started());
 }
@@ -481,7 +518,7 @@ async fn at_most_one_frame_of_output_is_kept_the_newest() {
     let total = 3 * MAX_DATA_BYTES;
     let script = format!("head -c {total} /dev/zero | tr '\\0' a; printf END");
     let ran = runner(workspace.path())
-        .run(command(&["sh", "-c", &script], None, 10_000), stopped)
+        .run(command(&["sh", "-c", &script], None, 10_000), stopped, None)
         .await;
     assert_eq!(ran.end, CommandEnd::Exited { code: 0 });
     assert!(ran.stdout.len() + ran.stderr.len() <= MAX_DATA_BYTES);
@@ -597,7 +634,9 @@ async fn a_file_written_in_the_workspace_is_never_run_under_a_bare_name() {
         vec![("PATH".into(), path)],
     );
     let (_stop, stopped) = not_stopped();
-    let ran = runner.run(command(&["true"], None, 10_000), stopped).await;
+    let ran = runner
+        .run(command(&["true"], None, 10_000), stopped, None)
+        .await;
     assert_eq!(ran.end, CommandEnd::Exited { code: 0 });
     assert!(
         ran.stdout.is_empty(),
@@ -610,6 +649,7 @@ async fn a_file_written_in_the_workspace_is_never_run_under_a_bare_name() {
         .run(
             command(&["no-such-program-anywhere"], None, 10_000),
             stopped,
+            None,
         )
         .await;
     assert_eq!(ran.end, CommandEnd::NotStarted);

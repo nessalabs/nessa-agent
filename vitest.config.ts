@@ -37,7 +37,13 @@ export default defineConfig({
     alias: viteAliases(resolve(linkedSourceRoot)),
   },
   test: {
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "packages/**/*.test.ts"],
+    include: [
+      "src/**/*.test.ts",
+      "src/**/*.test.tsx",
+      "packages/**/*.test.ts",
+      "verification/conversation/**/*.test.ts",
+      "verification/conversation/**/*.test.tsx",
+    ],
     environment: "node",
     setupFiles: ["src/test/match-media.ts"],
     deps: {

@@ -7,11 +7,12 @@ use crate::{
         application::{
             AgentWarmUp, WarmUpAudit, WarmUpLaunchOwnership, WarmUpRecords, WarmUpSessionPorts,
         },
-        domain::RuntimeFingerprint,
+        domain::{RuntimeFingerprint, RuntimeFingerprintError},
     },
     conversation::application::{ConversationAgent, ConversationError, RuntimeReadiness},
 };
 use nessa_auth::application::ports::Clock;
+use nessa_sdk::application::agent_execution::providers::AgentProvider;
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::{
     future::Future,
@@ -114,10 +115,8 @@ impl CurrentOpenCodeWarmUp {
         &self,
         agent: &ConversationAgent,
     ) -> Result<CurrentWarmUpAdmission, ConversationError> {
-        let identity = agent.provider.identity();
-        let runtime =
-            RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())
-                .map_err(|_| ConversationError::Unavailable)?;
+        let runtime = runtime_fingerprint_for(agent.provider.as_ref())
+            .map_err(|_| ConversationError::Unavailable)?;
         let (warm_up, id, created) = {
             let mut state = self.inner.state.lock().unwrap();
             if let Some(active) = state.as_ref() {
@@ -178,6 +177,21 @@ impl CurrentOpenCodeWarmUp {
             self.inner.changed.send_modify(|revision| *revision += 1);
         }
     }
+}
+
+/// The warm-up key for one provider: its restoration fingerprint, and, when
+/// the factory has a staged runtime, the launch fingerprint on the next line.
+pub(super) fn runtime_fingerprint_for(
+    provider: &dyn AgentProvider,
+) -> Result<RuntimeFingerprint, RuntimeFingerprintError> {
+    let identity = provider.identity();
+    let launch = provider.launch_fingerprint();
+    let configuration = if launch.is_empty() {
+        identity.context().to_owned()
+    } else {
+        format!("{}\n{launch}", identity.context())
+    };
+    RuntimeFingerprint::new(identity.name(), identity.model_id(), &configuration)
 }
 
 #[cfg(test)]

@@ -1530,7 +1530,11 @@ says why where the conversations would be.
   and different-remote replacements are measured at 360, 600 and 1440 pixels
   in both engines.
   _Check:_ `local-tab-lifetimes.mjs`; ordering rows LT1/LT6/LT7 in
-  [local tab lifetimes](../../docs/design/local-tab-identities.md).
+  [local tab lifetimes](../../docs/design/local-tab-identities.md). Follow,
+  stop and close counts are read from the fixture owner
+  (`__localTabLifetimes.snapshot` in
+  [live owner reads](../../docs/design/live-owner-reads.md)), not from
+  attributes the last render copied.
 
 ## Committed transcript controls
 
@@ -1585,6 +1589,20 @@ Both cases require zero page errors. The rule is owned by
 `src/onboarding/adapters/agents.ts`; ordering and unit regressions are in the
 [adapter tests](../../src/onboarding/adapters/agents.test.ts) and
 [setup recovery tests](../../src/onboarding/ui/onboarding-readiness-timeout.test.tsx).
+
+### Runtime copy progress during setup
+
+`node verification/desktop/scripts/runtime-copy.mjs` drives the real setup agent
+list in Chromium and WebKit. The fixture moves a `RuntimeCopy` value; it does
+not stage a runtime. The host retains the latest report and setup reads it
+after subscribing; this fixture supplies the value directly. While the value is `copying`, the progress bar is named
+"Preparing the private runtime" and its value follows the reported bytes. A
+ready Claude stays enabled, with no `aria-disabled`. Advancing the report
+moves the value, and `settled` removes the bar. Claude is still enabled.
+Both engines require zero page errors and a painted Claude control. The copy
+itself is
+[ADR 109](../../docs/adr/done/109-parallel-runtime-staging.md). Signed-Mac
+timing remains #562.
 
 ### Linux linger at setup
 
@@ -1915,6 +1933,9 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   naming 3 answers "Shared.".
 - [ ] **Tab stays in the dialog; Escape closes it and focus is back on the
   session's row.** _Check:_ `focus` (waits for that end state, 3 s).
+- [ ] **A pinned session under a folded sidebar gets that focus on the list's
+  row, not the inert sidebar copy.** _Check:_ `focus-pinned` (the sample
+  workspace, which can pin; the gateway keeps no pin).
 - [ ] **The panel fits the window.** _Check:_ `fit-1200`, `fit-420`; with
   `--shots <dir>`, screenshots of the grants, Drive form, budget, refusal,
   changed refusal and the narrow panel.

@@ -7,14 +7,14 @@ use super::{
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::{
-    permissions::{CancellationOrigin, PermissionCancellation},
+    permissions::{CancellationOrigin, DeclinedReview, PermissionCancellation},
     tools::ToolReviewInput,
 };
 use crate::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, MessageChunk},
     permissions::{
         PermissionEffect, PermissionId, PermissionOptions, PermissionRequest,
-        PermissionReviewDeadline, ReviewDeclineObservation,
+        PermissionReviewDeadline,
     },
     questions::{AgentQuestion, QuestionId},
     tools::{ToolCall, ToolCallId, ToolCallUpdate, ToolObservation},
@@ -154,11 +154,12 @@ impl ExecutionEvent {
                     .saturating_add(record.input().arguments_json.capacity())
                     .saturating_add(actor)
             }
-            ExecutionUpdate::ReviewDeclined(observation) => observation
+            ExecutionUpdate::ReviewDeclined(review) => review
                 .id()
                 .as_str()
                 .len()
-                .saturating_add(observation.decline().declared().map_or(0, str::len)),
+                .saturating_add(review.decline().declared().map_or(0, str::len))
+                .saturating_add(review.rule_bytes()),
             ExecutionUpdate::QuestionAsked { id, question } => id
                 .as_str()
                 .len()
@@ -231,7 +232,8 @@ pub enum ExecutionUpdate {
     /// Repeated observations with the same `id` advance one local fact from
     /// selection to its wire-write result. They do not describe provider
     /// acknowledgement, tool execution, or a terminal execution state.
-    ReviewDeclined(ReviewDeclineObservation),
+    /// A stop carries the rule that required it. A continue carries none.
+    ReviewDeclined(DeclinedReview),
     /// Pending review with the exact offered choices and captured tool input.
     PermissionRequested {
         /// Review identity, scoped to this execution.
