@@ -1833,6 +1833,31 @@ async fn no_acquisition_evidence_retires_prior_proof(
                 "a rejected retirement or lost ACK cannot dispatch mandatory audit"
             );
             assert!(
+                agent
+                    .session_manager()
+                    .snapshot()
+                    .await
+                    .unwrap()
+                    .lease
+                    .as_ref()
+                    .unwrap()
+                    .sdk_cleanup_acknowledged(&scope),
+                "the manager publishes only the last acknowledged state before writer retry"
+            );
+            assert_eq!(
+                storage
+                    .snapshot()
+                    .lease
+                    .as_ref()
+                    .unwrap()
+                    .sdk_cleanup_acknowledged(&scope),
+                write == RetirementWrite::Rejected,
+                "storage distinguishes rejection from committed retirement with a lost ACK"
+            );
+            bounded(agent.session_manager().save_retained_lease_records())
+                .await
+                .unwrap();
+            assert!(
                 !agent
                     .session_manager()
                     .snapshot()
@@ -1842,11 +1867,13 @@ async fn no_acquisition_evidence_retires_prior_proof(
                     .as_ref()
                     .unwrap()
                     .sdk_cleanup_acknowledged(&scope),
-                "the same owner retains unacknowledged retirement"
+                "the same writer retains and acknowledges retirement on its explicit retry"
             );
-            bounded(agent.session_manager().save_retained_lease_records())
-                .await
-                .unwrap();
+            assert_eq!(
+                backend.audit.records.lock().unwrap().len(),
+                before_audit,
+                "writer retry alone cannot manufacture mandatory audit delivery"
+            );
         }
         drop(authorization);
         assert!(report.cleanup().is_confirmed());
