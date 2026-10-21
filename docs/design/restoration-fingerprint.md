@@ -25,19 +25,22 @@ In the restoration identity:
   account directories (`HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, the
   OpenCode `XDG_*` roots) and endpoint or profile selectors
   (`ANTHROPIC_BASE_URL`, `AWS_PROFILE`, and the same kind of variable);
-- every semantic argument, in order. A semantic argument is not an absolute
-  path: a subcommand, a flag, or a profile or model selector such as
-  `--profile staging`;
+- every argument, in order. A subcommand, a flag, or a profile or model
+  selector, including an absolute path such as `--config /profiles/staging.toml`.
+  Nothing infers a staged runtime path from the argument's shape;
 - the workspace, whether tools are enabled, the token limits, the permission
   decisions, and the system prompt.
 
 Deliberately not in it. These are the warm-up launch fingerprint:
 
-- bundled runtime paths: the executable path, and every absolute-path
-  argument (the adapter entry and any other path the process is handed). A
-  release stages that tree under a new directory, and relocating it renames
-  the files. Which implementation a conversation belongs to is the provider
-  name, the model, the semantic arguments, and the identity environment;
+- bundled runtime paths with explicit staged-runtime provenance: the
+  executable path, and `AcpConfig::staged_runtime_arguments`, which
+  composition sets from the bundled runtime location Nessa itself placed
+  (the adapter entry beside that executable). A release stages that tree
+  under a new directory, and relocating it renames the files. A path in
+  `arguments` is not one of these. Which implementation a conversation
+  belongs to is the provider name, the model, the arguments, and the
+  identity environment;
 - `PATH`, `TMPDIR`, `USER`, `LOGNAME`, `CODEX_PATH`, and
   `CLAUDE_CODE_EXECUTABLE`, which composition keeps in
   `AcpConfig::runtime_environment`. On macOS, `PATH` is `NESSA_AGENT_PATH`
@@ -47,7 +50,8 @@ Deliberately not in it. These are the warm-up launch fingerprint:
 - credentials and MCP servers.
 
 Warm-up keeps a launch fingerprint of its own: the executable, the
-arguments, and the runtime environment. It is recorded beside the
+staged-runtime arguments, the arguments, and the runtime environment. It is
+recorded beside the
 restoration fingerprint, so a moved runtime re-runs warm-up and does not
 change the restoration identity. A saved conversation whose old fingerprint
 included the executable or the whole environment does not match. It takes
@@ -73,8 +77,9 @@ S6 is the row that used to refuse with `storage-identity` and strand the
 conversation. A moved staged runtime, and `PATH` or `TMPDIR` drift, no
 longer reach S6: they are not in the restoration fingerprint, so the row
 is S3 and the saved native session is resumed. An endpoint, profile
-selector, or semantic argument changing, with the same provider name and
-model, is S6: the saved native session id belongs to the previous context.
+selector, or argument changing — including an absolute `--config` value —
+with the same provider name and model, is S6: the saved native session id
+belongs to the previous context.
 
 ## Invariants
 
@@ -98,16 +103,18 @@ model, is S6: the saved native session id belongs to the previous context.
    as `conversation_configuration_changed`, says the chat cannot be reopened.
    An uncertain model change that is not that refusal still says the change
    is not confirmed.
-7. The executable path, absolute-path arguments, and the runtime environment
-   are the warm-up's launch fingerprint, not the restoration fingerprint.
-   Moving them leaves S3. Warm-up's key changes, so the next boot prepares
-   that runtime again. S1 and S2 are unchanged.
+7. The executable path, the staged-runtime arguments composition recorded,
+   and the runtime environment are the warm-up's launch fingerprint, not
+   the restoration fingerprint. Moving them leaves S3. Warm-up's key
+   changes, so the next boot prepares that runtime again. S1 and S2 are
+   unchanged.
 8. An endpoint or profile variable in the identity environment is part of
    the restoration fingerprint. Changing it is S6, not a resume of the
    saved native session id, and it does not change the launch fingerprint.
-9. A semantic argument is part of the restoration fingerprint. Changing
-   `--profile staging` is S6. It also changes the launch fingerprint, which
-   hashes every argument.
+9. Every argument is part of the restoration fingerprint, including an
+   absolute path. Changing `--profile staging` or `--config
+   /profiles/staging.toml` is S6. It also changes the launch fingerprint.
+   Only a path in `staged_runtime_arguments` is left out.
 
 ## Alternatives
 
@@ -141,7 +148,12 @@ model, is S6: the saved native session id belongs to the previous context.
 - **Treat every argument as plumbing, including `--profile staging`.** The
   binding passes the argument to the child. Leaving it out of the
   fingerprint resumes a native session that belongs to the previous profile.
-  Absolute paths stay out, because those are the bundled runtime.
+  Only a path composition recorded as staged runtime stays out.
+- **Treat every absolute argument as a staged runtime path.** `--config
+  /profiles/staging.toml` is absolute and selects a profile. Inferring
+  provenance from `Path::is_absolute` resumes the previous profile's native
+  session. The staged runtime is the location Nessa recorded, not a shape
+  an argument happens to have.
 - **Hash the executable path or its file name.** A release moves the staged
   directory, and relocating that tree renames the binary. Either hash
   changes the restoration identity on a move that should resume.

@@ -15,8 +15,6 @@ use crate::domain::agent_execution::{
 };
 use crate::domain::common::value_objects::TokenLimits;
 use sha2::{Digest, Sha256};
-use std::ffi::OsStr;
-use std::path::Path;
 
 // Length prefixes and explicit collection lengths keep ordered fields unambiguous.
 fn field(hash: &mut Sha256, bytes: &[u8]) {
@@ -33,10 +31,10 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
 ///   identity environment: vendor account directories and endpoint or
 ///   profile selectors (`ANTHROPIC_BASE_URL`, `AWS_PROFILE`, and the same
 ///   kind of variable);
-/// - every semantic argument, in order. A semantic argument is one that is
-///   not an absolute path: a subcommand, a flag, or a profile or model
-///   selector such as `--profile` `staging`. [`bundled_runtime_path`] is
-///   that distinction;
+/// - every [`AcpConfig::arguments`] entry, in order. That includes an
+///   absolute path: `--config` `/profiles/staging.toml` selects a profile
+///   the same way `--profile` `staging` does. Nothing here infers a staged
+///   runtime path from the shape of an argument;
 /// - the workspace, whether tools are enabled, the token limits, the
 ///   permission decisions, and the composed system prompt.
 ///
@@ -46,6 +44,7 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
 /// it is refused only when the provider name or the model differs. The rows
 /// are `docs/design/restoration-fingerprint.md`.
 /// (`a_semantic_argument_changes_the_restoration_identity`,
+/// `a_config_path_changes_the_restoration_identity_and_a_moved_staged_runtime_does_not`,
 /// `a_bundled_runtime_path_does_not_change_the_restoration_identity`,
 /// `a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_without_persistence`,
 /// `plumbing_environment_does_not_change_the_fingerprint`,
@@ -56,10 +55,12 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
 /// - the executable path. A release stages the bundled binary under a new
 ///   directory and the stress relocation renames the file, so the path does
 ///   not choose which native session to resume. Which implementation a
-///   conversation belongs to is the provider name, the model, the semantic
-///   arguments, and the identity environment;
-/// - absolute-path arguments, the bundled adapter entry and any other path
-///   the process is handed. The same release moves them with the executable;
+///   conversation belongs to is the provider name, the model, the arguments,
+///   and the identity environment;
+/// - [`AcpConfig::staged_runtime_arguments`]: the bundled adapter entry and
+///   any other path composition recorded as the staged runtime it placed.
+///   The same release moves them with the executable. A path in
+///   [`AcpConfig::arguments`] is not one of these, however absolute it is;
 /// - [`AcpConfig::runtime_environment`]: `PATH`, `TMPDIR`, `USER`,
 ///   `LOGNAME`, `CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`. On macOS `PATH` is
 ///   the login shell's path, rewritten into the launchd job on every app
@@ -97,10 +98,11 @@ pub(crate) fn model_change_context(config: &AcpConfig, prompt: Option<&SystemPro
 
 /// The launch fingerprint warm-up records beside the restoration fingerprint.
 ///
-/// Hashed: the executable path, every argument, and every entry of
-/// [`AcpConfig::runtime_environment`], in key order. A moved staged runtime
-/// changes this and leaves [`fingerprint`] unchanged, so a saved conversation
-/// resumes and the next warm-up prepares the new tree. A semantic argument
+/// Hashed: the executable path, every staged-runtime argument, every
+/// argument, and every entry of [`AcpConfig::runtime_environment`], in key
+/// order. A moved staged runtime changes this and leaves [`fingerprint`]
+/// unchanged, so a saved conversation resumes and the next warm-up prepares
+/// the new tree. An argument, including an absolute `--config` value,
 /// changes this and [`fingerprint`].
 pub(crate) fn launch_fingerprint(config: &AcpConfig) -> String {
     let mut hash = Sha256::new();
@@ -112,10 +114,8 @@ pub(crate) fn launch_fingerprint(config: &AcpConfig) -> String {
             .as_os_str()
             .as_encoded_bytes(),
     );
-    hash.update((config.arguments.len() as u64).to_be_bytes());
-    for argument in &config.arguments {
-        field(&mut hash, argument.as_encoded_bytes());
-    }
+    hash_arguments(&mut hash, &config.staged_runtime_arguments);
+    hash_arguments(&mut hash, &config.arguments);
     hash.update((config.runtime_environment.len() as u64).to_be_bytes());
     for (key, value) in &config.runtime_environment {
         field(&mut hash, key.as_encoded_bytes());
@@ -124,11 +124,11 @@ pub(crate) fn launch_fingerprint(config: &AcpConfig) -> String {
     format!("sha256:{:x}", hash.finalize())
 }
 
-/// An absolute argument is a bundled runtime path. Composition hands the
-/// adapter entry that way, and a release moves it with the executable.
-/// Anything else is the agent's own vocabulary and selects a saved context.
-fn bundled_runtime_path(argument: &OsStr) -> bool {
-    Path::new(argument).is_absolute()
+fn hash_arguments(hash: &mut Sha256, arguments: &[std::ffi::OsString]) {
+    hash.update((arguments.len() as u64).to_be_bytes());
+    for argument in arguments {
+        field(hash, argument.as_encoded_bytes());
+    }
 }
 
 fn fingerprint_fields(
@@ -142,15 +142,7 @@ fn fingerprint_fields(
         field(&mut hash, key.as_encoded_bytes());
         field(&mut hash, value.as_encoded_bytes());
     }
-    let semantic_arguments: Vec<_> = config
-        .arguments
-        .iter()
-        .filter(|argument| !bundled_runtime_path(argument))
-        .collect();
-    hash.update((semantic_arguments.len() as u64).to_be_bytes());
-    for argument in semantic_arguments {
-        field(&mut hash, argument.as_encoded_bytes());
-    }
+    hash_arguments(&mut hash, &config.arguments);
     field(&mut hash, config.workspace.as_os_str().as_encoded_bytes());
     hash.update([u8::from(config.tools_enabled)]);
     if let Some(limits) = limits {

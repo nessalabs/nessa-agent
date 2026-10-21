@@ -654,6 +654,7 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         arguments: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/infrastructure/acp/contracts/fixtures/test_acp_handler.py")
             .into_os_string()],
+        staged_runtime_arguments: Vec::new(),
         environment: BTreeMap::new(),
         runtime_environment: BTreeMap::new(),
         credential_environment: BTreeMap::new(),

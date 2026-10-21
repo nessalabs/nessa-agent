@@ -117,8 +117,16 @@ pub(super) struct AgentRuntime {
     /// The executable this server runs for this agent.
     #[serde(deserialize_with = "unmanaged_executable")]
     pub command: ExecutableUseSnapshot,
-    /// What that executable is handed. A Node harness takes its entry script; an
-    /// agent that speaks ACP itself takes its own subcommand.
+    /// Bundled runtime paths Nessa staged for this command, ahead of
+    /// [`Self::args`]. The adapter entry lives here. A release moves these
+    /// with `command`, and the restoration fingerprint does not hash them.
+    /// Empty when this executable is the ACP implementation itself. A path
+    /// in [`Self::args`] is not one of these, however absolute it is.
+    #[serde(default)]
+    pub staged_runtime: Vec<String>,
+    /// What that executable is handed after the staged runtime paths. Every
+    /// entry is a restoration-identity argument: a subcommand, a flag, or a
+    /// value such as `--config /profiles/staging.toml`.
     #[serde(default)]
     pub args: Vec<String>,
     /// Kept portable as configuration data even where no provider can consume it.
@@ -166,12 +174,15 @@ pub(super) struct AgentRuntime {
 }
 
 impl AgentRuntime {
-    /// Every absolute path this server would hand the command.
+    /// Every path this server would hand the command that has to be on this
+    /// machine for the launch to work.
     ///
-    /// Exact rather than a guess about arguments: a path this server would pass
-    /// has to be on this machine for the launch to work, and an argument that is
-    /// not a path is the agent's own vocabulary — a subcommand or a flag — which
-    /// is nothing for this machine to be asked about.
+    /// The staged runtime paths are those composition recorded. An absolute
+    /// entry of [`Self::args`] is a path too — `--config /profiles/staging.toml`
+    /// has to be there — and an argument that is not a path is the agent's
+    /// own vocabulary, which is nothing for this machine to be asked about.
+    /// Which of those the restoration fingerprint hashes is a different
+    /// question: every `args` entry, and none of `staged_runtime`.
     #[cfg_attr(
         all(not(unix), not(test)),
         expect(
@@ -180,10 +191,15 @@ impl AgentRuntime {
         )
     )]
     pub fn paths(&self) -> Vec<PathBuf> {
-        self.args
+        self.staged_runtime
             .iter()
             .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
+            .chain(
+                self.args
+                    .iter()
+                    .map(PathBuf::from)
+                    .filter(|path| path.is_absolute()),
+            )
             .collect()
     }
 }
@@ -1157,6 +1173,7 @@ pub(super) mod build {
         let (environment, runtime_environment) = split_runtime_environment(environment);
         AcpConfig {
             executable: runtime.command.clone(),
+            staged_runtime_arguments: runtime.staged_runtime.iter().map(Into::into).collect(),
             arguments: runtime.args.iter().map(Into::into).collect(),
             environment,
             runtime_environment,

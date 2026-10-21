@@ -16,7 +16,7 @@ use crate::infrastructure::workspace_paths::WorkspacePaths;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashSet},
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fmt,
     path::PathBuf,
     sync::Arc,
@@ -306,15 +306,21 @@ pub struct AcpConfig {
     /// Trusted provider executable and the authority required before each launch.
     /// The adapter admits a distinct use generation immediately before spawning it.
     pub executable: ExecutableUseSnapshot,
-    /// Noncredential arguments passed verbatim in order. An argument that is
-    /// not an absolute path is semantic and enters the restoration fingerprint:
-    /// a subcommand, a flag, or a profile or model selector. An absolute path
-    /// is a bundled runtime path and is only the launch fingerprint
-    /// (`launch_fingerprint` in `acp/sessions/identity.rs`), because a release
-    /// moves the adapter entry with the staged runtime. The fingerprint's
-    /// inputs are listed on `fingerprint` in that module. Never place secrets
-    /// in arguments. Only trusted composition may supply them.
+    /// Noncredential arguments passed verbatim in order, after
+    /// [`Self::staged_runtime_arguments`]. Every entry enters the restoration
+    /// fingerprint, including an absolute path: `--config /profiles/staging.toml`
+    /// selects a profile. Nothing infers a staged runtime path from the
+    /// argument's shape. The fingerprint's inputs are listed on `fingerprint`
+    /// in `acp/sessions/identity.rs`. Never place secrets in arguments. Only
+    /// trusted composition may supply them.
     pub arguments: Vec<OsString>,
+    /// Bundled runtime paths this host placed, forwarded ahead of
+    /// [`Self::arguments`]. Composition sets these from the staged runtime it
+    /// owns — the adapter entry beside the bundled executable — and a release
+    /// moves them with that executable. They are hashed only into the launch
+    /// fingerprint. Empty when the executable is the ACP implementation
+    /// itself. A path left in [`Self::arguments`] is not one of these.
+    pub staged_runtime_arguments: Vec<OsString>,
     /// Identity environment forwarded to the child. Every entry enters the
     /// restoration fingerprint, in key order: vendor account directories and
     /// endpoint or profile selectors (`ANTHROPIC_BASE_URL` and the same kind
@@ -492,11 +498,21 @@ pub struct AcpConfig {
     pub review_notices: Arc<dyn ReviewNotices>,
 }
 impl AcpConfig {
+    /// Arguments the child is given: the staged runtime paths, then
+    /// [`Self::arguments`].
+    pub(crate) fn command_arguments(&self) -> impl Iterator<Item = &OsStr> {
+        self.staged_runtime_arguments
+            .iter()
+            .chain(&self.arguments)
+            .map(OsString::as_os_str)
+    }
+
     /// This configuration for a harness a host starts, working in `workspace`
     /// there. What names this machine is left behind: its account's variables,
     /// its credentials and the MCP servers whose stand-ins reach this process.
     /// The host supplies its own executable, variables and credentials, so
-    /// `executable` and `arguments` are never launched from here. This
+    /// `executable`, `staged_runtime_arguments`, and `arguments` are never
+    /// launched from here. This
     /// machine's filesystem says nothing about the host's paths, so none
     /// resolves and every read review there is the deny class.
     pub(crate) fn on_host(&self, workspace: PathBuf) -> Self {

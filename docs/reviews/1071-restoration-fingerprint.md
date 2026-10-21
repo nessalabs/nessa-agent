@@ -203,3 +203,20 @@ makes it pass.
 the executable, appends an absolute adapter path, and changes `PATH` and
 `TMPDIR`, and the restoration identity stays equal. The identity-credentials
 session appends `--profile staging` and opens a new native session.
+
+Reviewed head `eff019e2b`. One P2 finding: `bundled_runtime_path` treated
+every absolute argument as a staged runtime path, so `--config
+/profiles/staging.toml` stayed out of the restoration fingerprint and
+attach could resume the previous profile's native session.
+
+The restoration fingerprint now hashes every `AcpConfig::arguments` entry.
+The only paths left out are `AcpConfig::staged_runtime_arguments`, which
+composition sets from the bundled runtime location it placed. Desktop
+configure writes the adapter entry there. The launch fingerprint still
+hashes the executable, those staged paths, the arguments, and the runtime
+environment.
+
+`a_config_path_changes_the_restoration_identity_and_a_moved_staged_runtime_does_not`
+changes `/profiles/staging.toml` to `/profiles/other.toml` and the
+restoration identity differs. Moving the executable and the staged adapter
+path, and changing `PATH` and `TMPDIR`, leaves it equal.

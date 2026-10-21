@@ -356,6 +356,7 @@ fn explicit_opencode(
         AgentId::Opencode.name().into(),
         AgentRuntime {
             command: nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot::unmanaged(command),
+            staged_runtime: Vec::new(),
             args,
             model: model.into(),
             tools_enabled,

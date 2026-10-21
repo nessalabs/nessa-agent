@@ -1030,9 +1030,8 @@ not hash the MCP servers. Its inputs are listed once, on `fingerprint` in
   ([`staging.rs`](../../src-tauri/src/gateway/infrastructure/macos/staging.rs), `tree_fingerprint`)
   and launches the agent runtime's executable and entry from it (`configure`
   in [`composition/desktop.rs`](../../crates/nessa-server/src/composition/desktop.rs)),
-  so the executable path and an absolute-path argument move with every
+  so the executable path and the staged adapter entry move with every
   release. That move is the warm-up's launch fingerprint, not the
-  restoration identity, so the saved native session is resumed. A
-  non-absolute argument is a semantic launch input; whether it is hashed
-  is listed on `fingerprint` in
+  restoration identity, so the saved native session is resumed. Every
+  other argument is hashed; the list is on `fingerprint` in
   `crates/nessa-sdk/src/infrastructure/acp/sessions/identity.rs`.

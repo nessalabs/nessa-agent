@@ -283,7 +283,7 @@ impl CodexAcpProvider {
     fn launch_command(&self, allowed: bool) -> Command {
         let mut command = Command::new(self.config.executable.executable());
         command
-            .args(&self.config.arguments)
+            .args(self.config.command_arguments())
             .current_dir(&self.config.workspace)
             .env_clear()
             .envs(&self.config.environment)

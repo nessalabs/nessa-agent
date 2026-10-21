@@ -90,30 +90,40 @@ export function agentCommand(agent) {
     return file
   }
   switch (agent) {
-    case "claude":
+    case "claude": {
+      const claudeAdapter = entry(
+        "claude-acp",
+        "@agentclientprotocol/claude-agent-acp/dist/index.js",
+      )
       return {
-        argv: [
-          process.execPath,
-          entry("claude-acp", "@agentclientprotocol/claude-agent-acp/dist/index.js"),
-        ],
+        argv: [process.execPath, claudeAdapter],
+        stagedRuntime: [claudeAdapter],
+        semanticArgs: [],
         model: MODELS.claude,
         path: null,
       }
-    case "codex":
+    }
+    case "codex": {
+      const codexAdapter = entry(
+        "codex-acp",
+        "@agentclientprotocol/codex-acp/dist/index.js",
+      )
       return {
-        argv: [
-          process.execPath,
-          entry("codex-acp", "@agentclientprotocol/codex-acp/dist/index.js"),
-        ],
+        argv: [process.execPath, codexAdapter],
+        stagedRuntime: [codexAdapter],
+        semanticArgs: [],
         model: MODELS.codex,
         path: join(harnesses, "codex-acp", "node_modules", ".bin"),
       }
+    }
     case "opencode": {
       const binary = process.env.MCP_LIVE_OPENCODE
       if (!binary || !existsSync(binary))
         throw new Error("set MCP_LIVE_OPENCODE to an Opencode 1.18.31 binary")
       return {
         argv: [binary, "acp"],
+        stagedRuntime: [],
+        semanticArgs: ["acp"],
         model: MODELS.opencode,
         path: null,
       }
@@ -165,7 +175,10 @@ export async function exited(child, ms) {
  * @param {number} o.port the gateway's port on 127.0.0.1
  * @param {string} o.instance the gateway instance's name
  * @param {string[]} o.agentArgv how the gateway starts the agent's harness
- *   (`agentCommand(agent).argv`, possibly wrapped)
+ *   (`agentCommand(agent).argv`, possibly wrapped). `stagedRuntime` and
+ *   `semanticArgs`, when set, are that argv split: the bundled runtime
+ *   location, then the arguments that select a saved context. Absent, the
+ *   tail of `agentArgv` is the arguments.
  * @param {string} o.model the agent's model
  * @param {string|null} [o.path] a directory to put first on the gateway's `PATH`
  * @param {{ command: string, args: string[] }} [o.mcpServer] how the gateway starts `mcptest`
@@ -256,7 +269,8 @@ export async function startLocalGateway(o) {
           runtimes: {
             [o.agent]: {
               command: o.agentArgv[0],
-              args: o.agentArgv.slice(1),
+              stagedRuntime: o.stagedRuntime ?? [],
+              args: o.semanticArgs ?? o.agentArgv.slice(1),
               model: o.model,
               toolsEnabled: true,
             },

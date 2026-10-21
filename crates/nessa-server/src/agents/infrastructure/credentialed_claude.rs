@@ -355,6 +355,7 @@ mod tests {
         let config = AcpConfig {
             executable: ExecutableUseSnapshot::unmanaged("/bin/true".into()),
             arguments: Vec::new(),
+            staged_runtime_arguments: Vec::new(),
             environment: BTreeMap::new(),
             runtime_environment: BTreeMap::new(),
             credential_environment: BTreeMap::new(),

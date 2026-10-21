@@ -240,6 +240,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         AcpConfig {
             executable: ExecutableUseSnapshot::unmanaged(PathBuf::from(&args[1])),
             arguments: vec![args[2].clone()],
+            staged_runtime_arguments: Vec::new(),
             environment,
             runtime_environment,
             credential_environment,

@@ -825,7 +825,9 @@ process.exit(result.status ?? 1)
     return dest
   }
   runtime.command = relocate(runtime.command)
-  runtime.args = runtime.args.map(relocate)
+  // Only the staged runtime moves. An absolute argument such as
+  // `--config /profiles/staging.toml` is the restoration identity.
+  runtime.stagedRuntime = (runtime.stagedRuntime ?? []).map(relocate)
   writeFileSync(configPath, JSON.stringify(config))
   chmodSync(configPath, 0o600)
 }

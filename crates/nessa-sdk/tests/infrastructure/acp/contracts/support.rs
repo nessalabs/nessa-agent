@@ -238,6 +238,7 @@ pub(super) fn test_acp_configuration(
                 .into_os_string(),
             mode.into(),
         ],
+        staged_runtime_arguments: Vec::new(),
         environment: BTreeMap::new(),
         runtime_environment: BTreeMap::new(),
         credential_environment: BTreeMap::new(),

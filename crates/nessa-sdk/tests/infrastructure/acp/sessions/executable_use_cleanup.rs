@@ -51,6 +51,7 @@ fn cleanup_config() -> (tempfile::TempDir, AcpConfig) {
     let config = AcpConfig {
         executable: ExecutableUseSnapshot::unmanaged(root.path().join("unused-test-runtime")),
         arguments: Vec::new(),
+        staged_runtime_arguments: Vec::new(),
         environment: BTreeMap::new(),
         runtime_environment: BTreeMap::new(),
         credential_environment: BTreeMap::new(),

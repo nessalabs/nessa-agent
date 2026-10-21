@@ -147,41 +147,17 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
     restored.close(close_action()).await.unwrap();
     drop(restored);
 
-    // An absolute adapter path is a bundled runtime path. The saved native
-    // session is resumed. The fixture's mode stays the first argument.
+    // A path composition recorded as the staged runtime is not an argument.
+    // The saved identity is unchanged. The fixture is not relaunched with it
+    // prepended: that path is not this handler's argv.
     let endpoint_config = config.clone();
     let mut bundled = config;
     bundled
-        .arguments
+        .staged_runtime_arguments
         .push("/opt/staged/runtime/adapter.js".into());
     let bundled = provider(bundled, &model);
     assert_eq!(bundled.identity(), identity);
     assert_ne!(bundled.launch_fingerprint(), launch);
-    let resumed_arguments = attached_agent(Arc::new(bundled), manager().await.unwrap())
-        .await
-        .unwrap();
-    assert_eq!(
-        resumed_arguments
-            .session_manager()
-            .snapshot()
-            .await
-            .unwrap()
-            .provider_context
-            .recorded()
-            .unwrap()
-            .as_str(),
-        saved_context
-    );
-    resumed_arguments.close(close_action()).await.unwrap();
-    drop(resumed_arguments);
-    assert_eq!(
-        std::fs::read_to_string(root.path().join("resume-observed")).unwrap(),
-        saved_context
-    );
-    assert_eq!(
-        std::fs::read_to_string(root.path().join("new-session-count")).unwrap(),
-        "1"
-    );
 
     // A changed endpoint selects another backend. The saved native session
     // is not resumed; a new one is opened.
@@ -459,10 +435,17 @@ fn plumbing_environment_does_not_change_the_fingerprint() {
     assert_eq!(moved.identity(), original);
     assert_ne!(moved.launch_fingerprint(), launch);
     let mut path = config.clone();
-    path.arguments.push("/opt/staged/runtime/adapter.js".into());
+    path.staged_runtime_arguments
+        .push("/opt/staged/runtime/adapter.js".into());
     let path = provider(path, &model);
     assert_eq!(path.identity(), original);
     assert_ne!(path.launch_fingerprint(), launch);
+    let mut config_path = config.clone();
+    config_path.arguments.push("--config".into());
+    config_path.arguments.push("/profiles/staging.toml".into());
+    let config_path = provider(config_path, &model);
+    assert_ne!(config_path.identity(), original);
+    assert_ne!(config_path.launch_fingerprint(), launch);
     let mut account = config.clone();
     account
         .environment
@@ -563,8 +546,39 @@ fn a_bundled_runtime_path_does_not_change_the_restoration_identity() {
     config.executable =
         ExecutableUseSnapshot::unmanaged(PathBuf::from("/nonexistent/moved-runtime"));
     config
-        .arguments
+        .staged_runtime_arguments
         .push("/opt/staged/runtime/adapter.js".into());
+    config
+        .runtime_environment
+        .insert("PATH".into(), "/opt/homebrew/bin:/usr/bin".into());
+    config
+        .runtime_environment
+        .insert("TMPDIR".into(), "/var/folders/drift".into());
+    let moved = provider(config, &model);
+    assert_eq!(moved.identity(), original.identity());
+    assert_ne!(moved.launch_fingerprint(), original.launch_fingerprint());
+}
+
+#[test]
+fn a_config_path_changes_the_restoration_identity_and_a_moved_staged_runtime_does_not() {
+    let (_root, mut config, model) = test_acp_configuration("echo", 16);
+    config
+        .staged_runtime_arguments
+        .push("/opt/staged/runtime/adapter.js".into());
+    config.arguments.push("--config".into());
+    config.arguments.push("/profiles/staging.toml".into());
+    let original = provider(config.clone(), &model);
+
+    let mut changed = config.clone();
+    changed.arguments.pop();
+    changed.arguments.push("/profiles/other.toml".into());
+    let changed = provider(changed, &model);
+    assert_ne!(changed.identity(), original.identity());
+    assert_ne!(changed.launch_fingerprint(), original.launch_fingerprint());
+
+    config.executable =
+        ExecutableUseSnapshot::unmanaged(PathBuf::from("/nonexistent/moved-runtime"));
+    config.staged_runtime_arguments = vec!["/tmp/relocated/0-adapter.js".into()];
     config
         .runtime_environment
         .insert("PATH".into(), "/opt/homebrew/bin:/usr/bin".into());
