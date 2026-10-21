@@ -10,7 +10,9 @@
 //! does not commit are one retry: [`next_attempt`]. The next pass does not
 //! enter that work before `retry_at_ms`. When the durable retry does not
 //! commit, this process keeps the same attempt. A lost lease writes nothing.
-//! An unread execution writes no `retry_at_ms` and is still that attempt.
+//! An unread execution, and a `begin_submit` whose transaction does not
+//! commit, write no `retry_at_ms` and are still that attempt. A committed
+//! outcome, or a missing row, drops the attempt this process kept.
 //! Cancel, defer, and a
 //! model change lose to that transition and win against a claim that has not
 //! made it. An applied model change is not complete until that plan commits.
@@ -1641,9 +1643,21 @@ impl ConversationService {
         // cancel, model change, or later reset that wins first leaves this
         // false, and one that arrives after cannot undo it.
         let now = self.inner.clock.unix_milliseconds();
-        let Ok(true) = store.begin_submit(&row.execution_id, now).await else {
-            return DeliveredStep::Quiet;
-        };
+        match store.begin_submit(&row.execution_id, now).await {
+            Ok(true) => {}
+            // A missed compare-and-set wrote nothing. `next_due` owns the wait.
+            Ok(false) => return DeliveredStep::Quiet,
+            Err(error) => {
+                let wait = self.note_uncommitted_submit(&row);
+                tracing::warn!(
+                    execution_id = %row.execution_id,
+                    %error,
+                    retry_ms = wait,
+                    "a scheduled submit could not be claimed; the row stays delivering"
+                );
+                return DeliveredStep::Held;
+            }
+        }
         let lease_until = now.saturating_add(FENCE_LEASE_MS);
         let held = self
             .finish_fenced_submit(store.clone(), id, &row, lease_until)
@@ -1801,13 +1815,19 @@ impl ConversationService {
         {
             Ok(()) => {
                 // The schedule is terminal even when the conversation itself
-                // did not change. Subscribers re-read auto-resuming.
+                // did not change. Subscribers re-read auto-resuming. The
+                // attempt this process kept for a retry that did not commit
+                // is finished.
+                self.forget_submit_retry(&row.execution_id);
                 if let Ok(id) = ConversationId::new(&row.conversation) {
                     self.inner.live_changes.publish(&id);
                 }
                 false
             }
-            Err(ConversationError::NotFound) => false,
+            Err(ConversationError::NotFound) => {
+                self.forget_submit_retry(&row.execution_id);
+                false
+            }
             Err(error) => {
                 tracing::warn!(
                     execution_id = %row.execution_id,
@@ -2393,8 +2413,12 @@ mod catalogue_pages {
         fail_revert: AtomicBool,
         /// The next this many outcome writes fail and leave the row due.
         fail_outcome: AtomicUsize,
+        /// The next outcome write reports the row gone and writes nothing.
+        outcome_missing: AtomicBool,
         /// The next submit hold returns false and writes no retry time.
         fail_defer: AtomicBool,
+        /// The next `begin_submit` returns an error and does not claim the row.
+        fail_begin: AtomicBool,
     }
 
     impl RecordingStore {
@@ -2425,7 +2449,9 @@ mod catalogue_pages {
                 lose_settle: AtomicBool::new(false),
                 fail_revert: AtomicBool::new(false),
                 fail_outcome: AtomicUsize::new(0),
+                outcome_missing: AtomicBool::new(false),
                 fail_defer: AtomicBool::new(false),
+                fail_begin: AtomicBool::new(false),
             }
         }
 
@@ -2583,6 +2609,9 @@ mod catalogue_pages {
                     return Box::pin(async { Ok(false) });
                 }
                 self.submits.fetch_add(1, Ordering::SeqCst);
+                if self.fail_begin.swap(false, Ordering::SeqCst) {
+                    return Box::pin(async { Err(ConversationError::Metadata) });
+                }
                 return Box::pin(async { Ok(true) });
             }
             self.submits.fetch_add(1, Ordering::SeqCst);
@@ -2814,6 +2843,9 @@ mod catalogue_pages {
             _: &str,
             at_ms: u64,
         ) -> ConversationFuture<'_, ()> {
+            if self.outcome_missing.swap(false, Ordering::SeqCst) {
+                return Box::pin(async { Err(ConversationError::NotFound) });
+            }
             if failing(&self.fail_outcome) {
                 return Box::pin(async { Err(ConversationError::Metadata) });
             }
@@ -3643,6 +3675,91 @@ mod catalogue_pages {
         assert_eq!(store.submits.load(Ordering::SeqCst), 2);
         assert!(store.outcomes.lock().unwrap().is_empty());
         assert!(store.defers.lock().unwrap().is_empty());
+    }
+
+    /// A `begin_submit` whose transaction does not commit is the same retry.
+    /// A missed compare-and-set is not: this error leaves the row `delivering`.
+    #[tokio::test]
+    async fn a_begin_submit_error_waits_out_its_backoff() {
+        let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+        let store = Arc::new(RecordingStore::new(true));
+        store.fail_begin.store(true, Ordering::SeqCst);
+        let service = delivering(&clock, &store, "grant");
+
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+        assert!(store.outcomes.lock().unwrap().is_empty());
+        assert!(store.defers.lock().unwrap().is_empty());
+        assert_eq!(store.retry_at_ms.load(Ordering::SeqCst), 0);
+        for _ in 0..30 {
+            assert_eq!(
+                service.deliver_due_scheduled().await,
+                Some(SCHEDULE_RETRY_MS)
+            );
+        }
+        assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+
+        clock.0.store(5_000 + SCHEDULE_RETRY_MS, Ordering::SeqCst);
+        store.fail_begin.store(true, Ordering::SeqCst);
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS * 2)
+        );
+        assert_eq!(store.submits.load(Ordering::SeqCst), 2);
+        assert!(store.outcomes.lock().unwrap().is_empty());
+        assert!(store.defers.lock().unwrap().is_empty());
+    }
+
+    /// A retry the database refused is dropped once the outcome commits.
+    /// Later passes do not keep walking that execution.
+    #[tokio::test]
+    async fn a_committed_outcome_drops_the_submit_attempt_this_process_kept() {
+        let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+        let store = Arc::new(RecordingStore::new(true));
+        store.fail_outcome.store(1, Ordering::SeqCst);
+        store.fail_defer.store(true, Ordering::SeqCst);
+        let service = delivering(&clock, &store, "grant");
+
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert!(store.outcomes.lock().unwrap().is_empty());
+        assert!(service
+            .submit_retries()
+            .iter()
+            .any(|(id, at)| { id == "exec-1" && *at == 5_000 + SCHEDULE_RETRY_MS }));
+
+        clock.0.store(5_000 + SCHEDULE_RETRY_MS, Ordering::SeqCst);
+        assert_eq!(service.deliver_due_scheduled().await, None);
+        assert_eq!(store.outcomes.lock().unwrap().len(), 1);
+        assert!(service.submit_retries().is_empty());
+    }
+
+    /// A missing row is terminal the same way. The attempt this process kept
+    /// for the uncommitted retry does not stay behind.
+    #[tokio::test]
+    async fn a_missing_row_drops_the_submit_attempt_this_process_kept() {
+        let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+        let store = Arc::new(RecordingStore::new(true));
+        store.fail_outcome.store(1, Ordering::SeqCst);
+        store.fail_defer.store(true, Ordering::SeqCst);
+        let service = delivering(&clock, &store, "grant");
+
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert!(!service.submit_retries().is_empty());
+
+        clock.0.store(5_000 + SCHEDULE_RETRY_MS, Ordering::SeqCst);
+        store.outcome_missing.store(true, Ordering::SeqCst);
+        let _ = service.deliver_due_scheduled().await;
+        assert!(store.outcomes.lock().unwrap().is_empty());
+        assert!(service.submit_retries().is_empty());
     }
 
     #[tokio::test]
