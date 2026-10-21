@@ -190,7 +190,7 @@ flowchart LR
 
 ### Invariants
 
-- A stamp names one lease instance, one generation, and one receiver. `accept` returns that receiver's saved rows only while that same lease still has that generation and receiver. Session composition mints the instance from the injected entropy. A source that refuses is an enrollment entropy failure and opens no session. A generation that starts again on a different instance does not accept the earlier stamp.
+- A stamp names one lease instance, one generation, and one receiver. `accept` also requires the identity the minting lease holds. That identity is not on the public stamp. Only `bind` and `stamp` mint a stamp. A published lease id, replayed through another lease, does not accept. Session composition mints the instance and the identity from one fill of the injected entropy. A source that refuses is an enrollment entropy failure and opens no session. A generation that starts again on a different instance does not accept the earlier stamp.
 - The same issued receiver keeps the generation. A different receiver, a successful terminal purge, or session close advances it. The previous stamp then fails and no bytes are read.
 - Close is permanent for that session. A successful purge only releases the receiver, so a later enrollment in the same session can bind the next one. That release happens when the purge succeeded, including when the status has no observation. No observation and no successful purge leaves the bound receiver in place.
 - Catalogue presence is one stored identity, read from one snapshot of the fence, the row, and the purge receipt. A live row is Live. A deletion fence or receiver purge receipt is Tombstone. No row, no fence, and no receipt is Absent. A page that does not mention a chat does not write a tombstone.
@@ -214,6 +214,7 @@ flowchart LR
 | Output already the file | session fetch | LocalMatch, source not asked, elapsed is the session clock | `a_local_match_reports_the_session_clock` |
 | Bound | session close | Closed; `bind` stays closed | `close_refuses_the_stamp_and_a_later_bind` |
 | Closed session's stamp for A | a new lease binds A | Replaced, though both generations are 1 | `a_new_lease_refuses_the_same_generation_from_an_earlier_lease` |
+| Bound B after A | another lease with the same published id binds A then B | Replaced; the identity does not match | `a_replayed_lease_id_does_not_mint_the_current_stamp` |
 | Live row | page that omits that row | Stays Live | `catalogue_presence_names_a_fence_and_not_an_absent_row` |
 | Live row | deletion commit aborts | Stays Live | `a_deletion_that_does_not_commit_is_not_a_tombstone` |
 | Live row | deletion fence commits | Tombstone | `catalogue_presence_names_a_fence_and_not_an_absent_row` |
@@ -232,6 +233,7 @@ flowchart LR
 - A second Swift checkpoint or fold. The shared cache already owns progress, tombstones and projection. A copy will disagree.
 - Treating a missing inbox row as deleted. Owner and granted catalogues omit rows for reasons other than deletion: a partial page, a grant filter, a withdraw. The deletion fence is the tombstone. Absence is not.
 - Treating an unreadable cache path as absence. Absence has no purge receipt to consult. A metadata failure has not established that, so bind must fail closed.
+- Minting a stamp from the published lease id and the next generation. That id is observable. The identity `accept` compares is not, and another lease that copies the id does not hold it.
 - Confirming a file because a part is already complete. The existing fetch asks the last range again so a part cannot stand in for the gateway. Reporting that part as fresh would undo that rule.
 - Blocking the UI thread on the fetch. The session methods stay synchronous and the existing Swift worker admits them off the UI queue. This slice does not add a second queue.
 - Rebuilding #783, #785 and #789. Those pulls are merged. This slice starts from current main.

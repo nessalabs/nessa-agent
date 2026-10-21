@@ -47,7 +47,8 @@ Current development surface:
 The explicit saved selector grants no connection, enrollment or command
 permission. The phone publication lease (`PhoneLease`) is what a later saved
 read or held-file fetch must present. Session composition mints that lease's
-instance from the injected entropy; a source that refuses opens no session.
+instance and its unexported identity from the injected entropy; a source that refuses opens no session.
+A published lease id is not itself a stamp.
 A stamp from an earlier receiver, or from an earlier session's lease, reads
 nothing and does not dial. A successful purge releases that receiver even when
 the status carries no observation. A later bind refuses that receiver while the purge receipt remains, including when the credential itself is still stored. A cache path whose metadata cannot be read is a cache failure and does not bind. Catalogue presence reads one stored identity;

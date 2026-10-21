@@ -36,24 +36,19 @@ pub enum PhoneFence {
 }
 
 /// The lease, receiver, and generation a publication was admitted under.
-/// Reconstructing one does not bind the lease. Two leases do not share an
-/// instance, so a generation that starts again still fails `accept`.
+/// Only `PhoneLease::bind` and `PhoneLease::stamp` mint one. The published
+/// lease id is not enough to mint another: `accept` also requires the identity
+/// the minting lease holds, and that identity has no getter.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PhoneStamp {
     lease: Uuid,
+    identity: Uuid,
     generation: u64,
     receiver: String,
 }
 impl PhoneStamp {
-    /// A stamp value. It publishes nothing until the lease that minted `lease` accepts it.
-    pub fn issue(lease: Uuid, generation: u64, receiver: impl Into<String>) -> Self {
-        Self {
-            lease,
-            generation,
-            receiver: receiver.into(),
-        }
-    }
-    /// Lease instance this stamp was minted for.
+    /// Published lease id. A different id does not accept this stamp. The
+    /// same id does not either, unless the minting lease holds this stamp's identity.
     pub fn lease(&self) -> Uuid {
         self.lease
     }
@@ -71,6 +66,7 @@ impl PhoneStamp {
 #[derive(Debug)]
 pub struct PhoneLease {
     lease: Uuid,
+    identity: Uuid,
     generation: u64,
     receiver: Option<String>,
     closed: bool,
@@ -78,12 +74,15 @@ pub struct PhoneLease {
 impl PhoneLease {
     /// Unbound and open. Nothing can publish yet.
     ///
-    /// `instance` is this lease's identity. The caller mints it; this
-    /// constructor does not read a random source. A different instance does
-    /// not accept this lease's stamp, even at the same generation and receiver.
-    pub fn new(instance: Uuid) -> Self {
+    /// `instance` is the published id. `identity` is what `accept` compares and
+    /// is not returned on a stamp. The caller mints both; this constructor
+    /// does not read a random source. A lease minted with a different identity
+    /// does not accept this lease's stamp, even at the same id, generation,
+    /// and receiver.
+    pub fn new(instance: Uuid, identity: Uuid) -> Self {
         Self {
             lease: instance,
+            identity,
             generation: 0,
             receiver: None,
             closed: false,
@@ -97,6 +96,7 @@ impl PhoneLease {
         match &self.receiver {
             Some(receiver) => Ok(PhoneStamp {
                 lease: self.lease,
+                identity: self.identity,
                 generation: self.generation,
                 receiver: receiver.clone(),
             }),
@@ -115,6 +115,7 @@ impl PhoneLease {
         }
         Ok(PhoneStamp {
             lease: self.lease,
+            identity: self.identity,
             generation: self.generation,
             receiver: receiver.to_owned(),
         })
@@ -145,6 +146,7 @@ impl PhoneLease {
         match &self.receiver {
             Some(receiver)
                 if self.lease == stamp.lease
+                    && self.identity == stamp.identity
                     && receiver == &stamp.receiver
                     && self.generation == stamp.generation =>
             {

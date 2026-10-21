@@ -14,17 +14,19 @@ use serde_json::json;
 use std::sync::Arc;
 
 fn lease(instance: u128) -> PhoneLease {
-    PhoneLease::new(uuid::Uuid::from_u128(instance))
+    PhoneLease::new(
+        uuid::Uuid::from_u128(instance),
+        uuid::Uuid::from_u128(instance.wrapping_add(1)),
+    )
 }
 
 #[test]
 fn binding_the_same_receiver_keeps_the_stamp_and_replacement_refuses_it() {
     let mut lease = lease(1);
     assert_eq!(lease.stamp(), Err(PhoneFence::Unbound));
-    assert_eq!(
-        lease.accept(&PhoneStamp::issue(uuid::Uuid::from_u128(0), 1, "a")),
-        Err(PhoneFence::Unbound)
-    );
+    let mut other = PhoneLease::new(uuid::Uuid::from_u128(0), uuid::Uuid::from_u128(1));
+    let foreign = other.bind("a").unwrap();
+    assert_eq!(lease.accept(&foreign), Err(PhoneFence::Unbound));
     let first = lease.bind("a").unwrap();
     assert_eq!(lease.bind("a").unwrap(), first);
     assert_eq!(lease.accept(&first), Ok(()));
@@ -73,6 +75,21 @@ fn the_injected_instance_is_what_accept_compares() {
     assert_eq!(same_b.accept(&stamp), Ok(()));
     assert_eq!(other.accept(&stamp), Err(PhoneFence::Replaced));
     assert_eq!(same_a.accept(&foreign), Err(PhoneFence::Replaced));
+}
+
+#[test]
+fn a_replayed_lease_id_does_not_mint_the_current_stamp() {
+    let mut lease = PhoneLease::new(uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));
+    let first = lease.bind("a").unwrap();
+    let current = lease.bind("b").unwrap();
+    let mut replay = PhoneLease::new(first.lease(), uuid::Uuid::from_u128(9));
+    let _ = replay.bind("a").unwrap();
+    let forged = replay.bind("b").unwrap();
+    assert_eq!(forged.lease(), current.lease());
+    assert_eq!(forged.generation(), current.generation());
+    assert_eq!(forged.receiver(), current.receiver());
+    assert_eq!(lease.accept(&forged), Err(PhoneFence::Replaced));
+    assert_eq!(lease.accept(&current), Ok(()));
 }
 
 #[test]

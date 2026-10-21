@@ -5,7 +5,7 @@ use nessa_auth::domain::{
     pairing::{AttemptId, ConsentIntentId, DisclosedConsent, InvitationId},
     AudienceId, CredentialId, OrganizationId, Resource, ResourceId,
 };
-use nessa_client_core::retained::ArtifactFault;
+use nessa_client_core::retained::{ArtifactFault, PhoneLease};
 use nessa_local_storage::create_directory_beneath;
 use nessa_sync::replication::domain::MAX_ID_BYTES;
 use std::{io::ErrorKind, net::TcpListener, path::Path, sync::Arc};
@@ -211,7 +211,9 @@ fn a_catalogue_presence_id_that_is_not_a_conversation_dials_nothing() {
     )
     .unwrap();
     let stamp = Arc::new(NativePhoneStamp {
-        value: PhoneStamp::issue(uuid::Uuid::nil(), 1, "receiver-a"),
+        value: PhoneLease::new(uuid::Uuid::nil(), uuid::Uuid::from_u128(1))
+            .bind("receiver-a")
+            .unwrap(),
     });
     assert!(matches!(
         session.catalogue_presence(stamp.clone(), "receiver".to_owned()),
@@ -252,7 +254,9 @@ fn a_malformed_artifact_name_is_an_invalid_argument_and_dials_nothing() {
     )
     .unwrap();
     let stamp = Arc::new(NativePhoneStamp {
-        value: PhoneStamp::issue(uuid::Uuid::nil(), 1, "receiver-a"),
+        value: PhoneLease::new(uuid::Uuid::nil(), uuid::Uuid::from_u128(1))
+            .bind("receiver-a")
+            .unwrap(),
     });
     let stop = Arc::new(NativeReadStop::new());
     let digest = "sha256:fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603";

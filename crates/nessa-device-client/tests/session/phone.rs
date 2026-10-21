@@ -266,7 +266,10 @@ impl RngCore for StampEntropy {
         self.try_fill_bytes(dest).unwrap();
     }
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
-        dest.copy_from_slice(&self.0);
+        for (index, byte) in dest.iter_mut().enumerate() {
+            let step = u8::try_from(index / self.0.len()).unwrap_or(u8::MAX);
+            *byte = self.0[index % self.0.len()].wrapping_add(step);
+        }
         Ok(())
     }
 }

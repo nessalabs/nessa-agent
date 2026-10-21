@@ -779,7 +779,8 @@ pub struct NativePhoneStamp {
 }
 #[uniffi::export]
 impl NativePhoneStamp {
-    /// Lease instance this stamp was minted for. A later session mints another.
+    /// Published lease id. Accept also requires the identity the minting session
+    /// holds, which this method does not return. A later session mints another id.
     pub fn lease(&self) -> String {
         self.value.lease().to_string()
     }

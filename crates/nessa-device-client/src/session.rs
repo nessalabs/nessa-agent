@@ -936,7 +936,8 @@ impl NativeSession {
             runtime,
             product,
         } = dependencies;
-        let lease = PhoneLease::new(Self::lease_instance(entropy.as_ref())?);
+        let (instance, identity) = Self::lease_identity(entropy.as_ref())?;
+        let lease = PhoneLease::new(instance, identity);
         let enrollment = Arc::new(
             RetainedEnrollmentClient::owner_phone(
                 state.clone(),
@@ -973,16 +974,23 @@ impl NativeSession {
             })),
         })
     }
-    /// This session's publication identity: sixteen bytes from the injected
-    /// entropy. A source that refuses is an enrollment entropy failure, and
-    /// compose returns before the session exists.
-    fn lease_instance(entropy: &dyn EnrollmentEntropyFactory) -> Result<Uuid, SessionFailure> {
+    /// The published lease id and the identity `accept` compares, from one
+    /// fill of the injected entropy. The identity is not returned on a stamp.
+    /// A source that refuses is an enrollment entropy failure, and compose
+    /// returns before the session exists.
+    fn lease_identity(
+        entropy: &dyn EnrollmentEntropyFactory,
+    ) -> Result<(Uuid, Uuid), SessionFailure> {
         let mut source = entropy.create();
-        let mut bytes = [0; 16];
+        let mut bytes = [0; 32];
         source
             .try_fill_bytes(&mut bytes)
             .map_err(|_| SessionFailure::Enrollment(NativeClientError::Entropy))?;
-        Ok(Uuid::from_bytes(bytes))
+        let mut instance = [0; 16];
+        let mut identity = [0; 16];
+        instance.copy_from_slice(&bytes[..16]);
+        identity.copy_from_slice(&bytes[16..]);
+        Ok((Uuid::from_bytes(instance), Uuid::from_bytes(identity)))
     }
     fn enter(&self, stop: Option<Arc<ReadStop>>) -> Result<Operation<'_>, SessionFailure> {
         let driver = match self.driver.try_lock() {
