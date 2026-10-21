@@ -1335,7 +1335,10 @@ async fn report_modes_keep_final_and_suspend_pending_work_semantics() {
     for suspend in [false, true] {
         let agent = prepared(
             Arc::new(InMemoryStorage::new()),
-            Arc::new(SettlementPanickingAudit::default()),
+            Arc::new(SettlementPanickingAudit {
+                panic_once: AtomicBool::new(true),
+                ..Default::default()
+            }),
         )
         .await;
         let invocation = agent.inner.invocation.lock().await;
@@ -1406,4 +1409,57 @@ async fn report_retains_failed_pending_cancellation_separately_from_cleanup() {
     assert_eq!(audit.attempts.lock().unwrap().len(), 2);
     assert!(first.wait().await.is_err());
     assert_eq!(second.wait().await, Err(AgentError::Closed));
+}
+
+#[tokio::test]
+async fn close_report_bounds_bulk_cancellation_debt_without_releasing_its_facts() {
+    struct FailedCancellations(AtomicUsize);
+    impl ExecutionAudit for FailedCancellations {
+        fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+            Box::pin(async move {
+                if matches!(record, ExecutionAuditRecord::QueueSettled(_)) {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                    Err(AgentError::AuditFailure)
+                } else {
+                    Ok(())
+                }
+            })
+        }
+    }
+    let count = super::super::error_limits::DiagnosticTreeLimits::DEPTH + 2;
+    let audit = Arc::new(FailedCancellations(AtomicUsize::new(0)));
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit.clone()).await;
+    let invocation = agent.inner.invocation.lock().await;
+    let mut receipts = Vec::new();
+    for n in 0..count {
+        receipts.push(
+            agent
+                .enqueue(
+                    request(&format!("bounded-cancellation-{n}")),
+                    Submitter::owner(actor()),
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close_report(actor()).await }
+    });
+    for receipt in receipts {
+        assert!(
+            matches!(receipt.wait().await, Err(AgentError::MultipleOperationFailures { first_error, subsequent_error }) if *first_error == AgentError::Closed && *subsequent_error == AgentError::AuditFailure)
+        );
+    }
+    drop(invocation);
+    let report = closing.await.unwrap().unwrap();
+    assert!(report.cleanup().is_confirmed());
+    assert_eq!(audit.0.load(Ordering::SeqCst), count);
+    assert!(report
+        .scheduling()
+        .as_ref()
+        .unwrap_err()
+        .validate_retained_size()
+        .is_ok());
+    assert!(report.into_result().is_err());
 }
