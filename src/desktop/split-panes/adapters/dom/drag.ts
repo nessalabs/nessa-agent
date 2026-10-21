@@ -201,6 +201,57 @@ export function letGoOfDragPreview(root: Element): void {
   previews.delete(root)
 }
 
+/**
+ * Where the grid will place each pane once it paints `columns`, in the same
+ * order the frame writes the custom properties. Empty when nothing is open.
+ */
+const placementStamp = (columns: PaneLayout["columns"] | null): string => {
+  if (!columns) return ""
+  return placements(columns)
+    .panes.map((pane) =>
+      [
+        pane.key,
+        pane.x,
+        pane.width,
+        pane.column,
+        pane.columns,
+        pane.y,
+        pane.height,
+        pane.row,
+        pane.rows,
+      ].join(","),
+    )
+    .sort()
+    .join("|")
+}
+
+/**
+ * Where the grid has actually placed each pane, or null when this host does
+ * not place panes with those properties. The copy is not a pane of the grid.
+ */
+const paintedStamp = (root: ParentNode): string | null => {
+  const panes = [...root.querySelectorAll<HTMLElement>("[data-pane-key]")].filter(
+    (pane) => !pane.closest(`.${classes.ghost}, .${classes.layer}`),
+  )
+  if (!panes.some((pane) => pane.style.getPropertyValue("--cx") !== "")) return null
+  return panes
+    .map((pane) =>
+      [
+        pane.getAttribute("data-pane-key"),
+        pane.style.getPropertyValue("--cx"),
+        pane.style.getPropertyValue("--cw"),
+        pane.style.getPropertyValue("--ci"),
+        pane.style.getPropertyValue("--cn"),
+        pane.style.getPropertyValue("--ry"),
+        pane.style.getPropertyValue("--rh"),
+        pane.style.getPropertyValue("--ri"),
+        pane.style.getPropertyValue("--rn"),
+      ].join(","),
+    )
+    .sort()
+    .join("|")
+}
+
 interface Box {
   readonly left: number
   readonly top: number
@@ -555,6 +606,11 @@ export function useSplitPanesDrag(
     let heldUnmark: (() => void) | null = null
     /** Resolves a drop's preview release if the commit never runs. */
     let endPreview: (() => void) | null = null
+    /**
+     * The copy has let go and the drag has landed, but the grid is still
+     * showing the old boxes. Pane preview transforms stay until that paint.
+     */
+    let keepPanePreview = false
 
     /** Releases the preview without hiding the conversations it moves. */
     const releaseReflow = () => reflectMark(scope, marks.reflow, false)
@@ -1219,8 +1275,13 @@ export function useSplitPanesDrag(
       made.drawing.glide?.cancel()
       made.drawing.shape.motion?.cancel()
       made.drawing.shape.counter?.cancel()
-      releasePreview()
-      scope.removeAttribute(marks.takesSpare)
+      // A drop's copy lets go a frame after the commit. The grid paints the
+      // new boxes later, and the preview that moved the other panes stays
+      // until then (`drag.test.tsx`).
+      if (!keepPanePreview) {
+        releasePreview()
+        scope.removeAttribute(marks.takesSpare)
+      }
       tidy(made)
       made.layer.remove()
     }
@@ -1301,19 +1362,30 @@ export function useSplitPanesDrag(
       })
       let outer = 0
       let inner = 0
-      // The preview lets go on the frame that paints the new boxes, after
-      // that paint is in the DOM and before the browser lays it out.
+      // The copy lets go on the frame after the commit. The pane preview
+      // lets go on the frame that paints the new boxes, after that paint is
+      // in the DOM and before the browser lays it out.
       let previewDone = false
+      let panesDone = false
       let finishPreview = () => {}
+      let resolvePreview = () => {}
+      const releasePanes = () => {
+        if (panesDone) return
+        panesDone = true
+        keepPanePreview = false
+        // Idle: this drop already landed and its copy is gone. A newer drag
+        // owns the page, and its preview is not this one's to clear.
+        if (!ownsDragResources(phase, made) && phase.kind !== "idle") return
+        scope.removeAttribute(marks.takesSpare)
+        releasePreview()
+      }
       const previewReleased = new Promise<void>((resolve) => {
+        resolvePreview = resolve
         finishPreview = () => {
           if (previewDone) return
           previewDone = true
           if (endPreview === finishPreview) endPreview = null
-          if (ownsDragResources(phase, made)) {
-            scope.removeAttribute(marks.takesSpare)
-            releasePreview()
-          }
+          releasePanes()
           resolve()
         }
         endPreview = finishPreview
@@ -1327,9 +1399,9 @@ export function useSplitPanesDrag(
           finishPreview()
           return
         }
-        // The grid paints a column change three frames after it commits, so
-        // this script does not share a frame with that layout. The preview
-        // lets go on the next frame, before that paint.
+        // The grid paints a new arrangement on the third frame after this
+        // commit. The preview stays until that paint, so the panes it moved
+        // do not snap back to the old boxes for the frames in between.
         if (accept && proposalHolds()) {
           source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
         } else {
@@ -1338,7 +1410,29 @@ export function useSplitPanesDrag(
           releasePreview()
         }
         finish?.()
-        requestAnimationFrame(() => finishPreview())
+        const wanted = placementStamp(source.layout()?.columns ?? null)
+        if (accept) keepPanePreview = true
+        // The copy lets go on this frame. A host that paints the commit has
+        // no grid placement, so its pane preview lets go too. The grid's old
+        // placement keeps that preview until the boxes match, and never past
+        // the frame that paints them.
+        requestAnimationFrame(() => {
+          if (!previewDone) {
+            previewDone = true
+            if (endPreview === finishPreview) endPreview = null
+            resolvePreview()
+          }
+          const holdPanes = (left: number) => {
+            if (panesDone) return
+            const painted = paintedStamp(scope)
+            if (!accept || painted === null || painted === wanted || left <= 1) {
+              releasePanes()
+              return
+            }
+            requestAnimationFrame(() => holdPanes(left - 1))
+          }
+          holdPanes(accept ? 3 : 1)
+        })
       }
       outer = requestAnimationFrame(() => {
         outer = 0
