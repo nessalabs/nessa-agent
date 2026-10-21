@@ -128,7 +128,7 @@ it("starts the glide where the title's row left the body", () => {
     const transform = frames[0]?.transform
     if (typeof transform === "string" && transform.startsWith("translateY"))
       starts.push(transform)
-    return { finished: Promise.resolve(), cancel() {} } as Animation
+    return { finished: Promise.resolve(), cancel() {} } as unknown as Animation
   }
   const hadAnimations = "getAnimations" in Element.prototype
   const getAnimations = Element.prototype.getAnimations
