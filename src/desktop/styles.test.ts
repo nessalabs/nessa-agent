@@ -100,6 +100,18 @@ it("starts titlebar-row content at the one safe area, never at a length of its o
   }
 })
 
+it("gives a below column title the block the bar holds", () => {
+  // A title set below the bar is its sibling, so the block set only on the
+  // bar never reaches it. Both hold the length: the script reads the bar,
+  // and the below title's height is that same length.
+  const sheet = readFileSync(new URL("./ui/column-header.css", import.meta.url), "utf8")
+  const selector = `.desktop-column-bar,
+.desktop-column-title[data-placement="below"]`
+  expect(sheet).toContain(selector)
+  const body = sheet.slice(sheet.indexOf(selector)).split("}")[0]
+  expect(body).toContain("--desktop-column-title-block:")
+})
+
 it("starts an inline column title after the window's controls wherever they stand over its column", () => {
   // With the sidebar away, the session list and Settings' page begin at the
   // window's edge, under the controls: an inline title (`ui/column-header.tsx`)

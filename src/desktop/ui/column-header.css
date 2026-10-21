@@ -22,6 +22,12 @@
   flex: none;
   align-items: center;
   padding: 0 var(--desktop-control-inset);
+}
+
+/* The bar and a title set below it are siblings, so each holds the block.
+   The script reads it from the bar; the below title's height is that length. */
+.desktop-column-bar,
+.desktop-column-title[data-placement="below"] {
   --desktop-column-title-block: calc(2px + 1.2 * var(--desktop-text-display) + 10px);
 }
 
