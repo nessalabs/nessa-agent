@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useLayoutEffect, useState } from "react"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
 import { HeaderSliver } from "../../../ui/header-art"
 import { focusedPaneAttribute } from "../../adapters/dom/focus"
@@ -22,11 +22,12 @@ function markPane(paneKey: PaneKey, multi: boolean, focused: boolean) {
  */
 export function PaneFocusMark({ paneKey, multi }: { paneKey: PaneKey; multi: boolean }) {
   const store = useWorkspaceStore()
-  useEffect(() => {
+  useLayoutEffect(() => {
     let frame = 0
     let focused = selectFocusedPaneKey(store.getState()) === paneKey
-    // The first paint writes in this effect. A later change waits for the
-    // next frame: writing it in the click restyles the pane on that frame.
+    // Before this pane's first paint, so the caret finds the mark on that
+    // frame. A later change waits for the next frame: writing it in the
+    // click restyles the pane it leaves.
     markPane(paneKey, multi, focused)
     const unsubscribe = store.subscribe(() => {
       const next = selectFocusedPaneKey(store.getState()) === paneKey

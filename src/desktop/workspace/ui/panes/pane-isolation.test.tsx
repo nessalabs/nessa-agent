@@ -5,7 +5,7 @@
  * a reply streaming into one, another's status changing, and typing in a
  * composer each render exactly the pane they concern.
  */
-import { act, StrictMode, Profiler, useRef, type ReactNode } from "react"
+import { act, StrictMode, Profiler, useLayoutEffect, useRef, type ReactNode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -58,8 +58,15 @@ let root: Root
 let host: HTMLDivElement
 const renders = new Map<string, number>()
 
+/** Set by the focus-mark test: whether the mark was on the article before paint. */
+let markBeforePaint: boolean | null = null
+
 function Frame({ children }: { children: ReactNode }) {
   const workspace = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    if (markBeforePaint === null) return
+    markBeforePaint = workspace.current?.querySelector("[data-pane-focused]") !== null
+  })
   return <div ref={workspace}>{children}</div>
 }
 
@@ -165,6 +172,13 @@ describe("a pane renders for its own session only", () => {
       )
     })
     expect(rendered()).toEqual(["d"])
+  })
+
+  it("marks the focused pane before its first paint", async () => {
+    markBeforePaint = false
+    await fourPanes()
+    expect(markBeforePaint).toBe(true)
+    markBeforePaint = null
   })
 
   it("moves focus on the next frame without rendering either conversation", async () => {
