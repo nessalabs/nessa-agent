@@ -221,8 +221,9 @@ pub enum ConversationStartupFailureCode {
 pub struct ConversationMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authentication_required: Option<bool>,
-    /// This failed authentication refusal also failed independent required work.
-    /// The person-facing diagnostic stays in `error`. Absent for a pure refusal.
+    /// This failed turn also failed independent required work, beside an
+    /// authentication refusal or a usage limit. The person-facing diagnostic
+    /// stays in `error`. Absent for a pure refusal or a pure usage limit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required_work_failed: Option<bool>,
     pub parts: Vec<ConversationPart>,

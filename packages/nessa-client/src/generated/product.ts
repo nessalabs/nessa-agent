@@ -509,7 +509,7 @@ export interface ConversationMessage {
   error?: string
   /** The provider adapter explicitly requires authentication for this failed turn. Generic provider codes and diagnostic text do not establish this fact. */
   authenticationRequired?: boolean
-  /** This failed authentication refusal also failed independent required work. The person-facing diagnostic stays in error. Absent for a pure refusal, and absent when the failure is not an authentication refusal. */
+  /** This failed turn also failed independent required work, beside an authentication refusal or a usage limit. The person-facing diagnostic stays in error. Absent for a pure refusal or a pure usage limit. */
   requiredWorkFailed?: boolean
   /** A provider usage limit on this failed turn. Absent when the turn did not end in one. autoResuming is present only after a continuation has been scheduled. */
   usageLimit?: ConversationUsageLimit

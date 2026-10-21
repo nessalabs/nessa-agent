@@ -97,7 +97,7 @@ so a later causal turn can still be accepted after a terminal row.
 
 | From | Event | Owner | To | Durable write |
 | --- | --- | --- | --- | --- |
-| none | Preference on, future reset, newest invocation is the limit | `plan_continuation`, then `accept` | `scheduled` | The row and its audit, one transaction |
+| none | Preference on, future reset, newest invocation is the limit | `plan_continuation`, then `accept` | `scheduled` | The row and its audit, one transaction, only while the preference revision that read is still enabled |
 | `scheduled` | Same causal turn, later future reset | `plan_continuation`, then `move_due` | `scheduled` | Due time and audit, one transaction |
 | `scheduled` or `delivering` | Preference off, a later invocation, agent or model change | `plan_continuation`, `set_preference`, `cancel_open`, `defer_claim` | `cancelled` or `scheduled` | Status and audit, one transaction |
 | `scheduled` | Due, and still the open row | `claim_due` | `delivering` | Status only. The claim is not an audit row |
@@ -150,6 +150,19 @@ reverts only while that same revision is still enabled and unsettled, as the
 system, in one compare-and-set. A later request that already settled it is
 left on. A direct preference write bumps the revision and settles it, so it
 supersedes an unsettled enable.
+
+### Preference change and acceptance
+
+The planner reads the preference and its revision, then accepts. A preference
+change can commit in that gap. The card can show the checkbox before the
+confirmed view catches up. Both follow this order.
+
+| What has happened | What is still in flight | What is true |
+| --- | --- | --- |
+| The planner read the preference on at revision R | `accept` has not committed | The insert runs only in a transaction that still sees revision R enabled. A disable, or a later enable, has another revision. The stale accept writes nothing, so a later enable does not deliver a row whose reset is already past |
+| An authorized disable committed | A planner that read the previous revision calls `accept` | Open rows from the disable are cancelled. The new insert matches nothing and the preference stays off |
+| The person turned the preference on and the command has not finished | The checkbox is pending. The confirmed preference is still off. No row is auto-resuming | The checkbox shows on. The line under the title follows the confirmed preference and says when the limit resets |
+| The confirmed preference is on, the reset is still ahead, and no row is auto-resuming | Nothing | The line says scheduling failed |
 
 ### Crash between durable writes
 
@@ -299,6 +312,16 @@ turn with no saved result clears it.
     retries after a bounded wait, including when nothing is due. A preference
     read that fails leaves catch-up pending; it does not treat the preference
     as off for the life of the process.
+19. `accept` writes only while the preference revision the planner read is
+    still enabled, in that same transaction. A preference change that commits
+    first leaves no new row. The card's line follows the confirmed preference.
+    The checkbox may show a pending choice. Scheduling failed is the line only
+    when that confirmed preference is on, the reset is still ahead, and no
+    row is auto-resuming.
+20. A failed turn may carry `requiredWorkFailed` beside a usage limit or an
+    authentication refusal. The turn is failed and the diagnostic is present.
+    The client accepts that view. A required-work flag with neither typed
+    refusal is rejected.
 
 ## Card
 
@@ -306,7 +329,9 @@ The transcript card is titled **Usage limit reached**. The checkbox label is
 **Auto-continue this project's threads when limits reset**. A schedule that
 has been accepted shows **Auto-resuming** plus the local date and time. The
 local zone is the environment zone, the same way other desktop labels format
-time. The checkbox is the gateway preference, not a per-turn flag.
+time. The checkbox is the gateway preference, not a per-turn flag. While a
+choice has not landed, the checkbox shows it and the line under the title
+keeps the confirmed preference.
 
 ## Review brief
 

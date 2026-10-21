@@ -10,7 +10,9 @@ import "./usage-limit-card.css"
 /**
  * The usage-limit card: the title, when the limit ends, and the gateway
  * preference. The checkbox shows the choice at once and keeps it until the
- * refreshed view agrees, or snaps back when the command fails.
+ * refreshed view agrees, or snaps back when the command fails. The line
+ * under the title follows the confirmed preference, so a choice that has
+ * not landed does not read as a scheduling failure.
  */
 export function UsageLimitCard({
   limit,
@@ -29,7 +31,7 @@ export function UsageLimitCard({
     if (pending !== null && pending === enabled) setPending(null)
   }, [pending, enabled])
   const shown = pending ?? enabled
-  const detail = usageLimitDetail(limit, shown, nowMs ?? Date.now())
+  const detail = usageLimitDetail(limit, enabled, nowMs ?? Date.now())
   return (
     <section
       className="usage-limit-card"

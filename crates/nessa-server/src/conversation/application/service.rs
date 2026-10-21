@@ -103,8 +103,8 @@ use nessa_sdk::domain::agent_execution::{
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 pub(crate) use scheduled_messages::FENCE_LEASE_MS;
 pub use scheduled_messages::{
-    PreferenceUpdate, RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement,
-    ScheduledMessage, ScheduledMessageStore,
+    PreferenceReading, PreferenceUpdate, RecordedPreference, ScheduleActor, ScheduleDraft,
+    ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
 };
 use std::{
     collections::{HashMap, HashSet},

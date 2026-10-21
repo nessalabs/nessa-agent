@@ -1143,7 +1143,7 @@
         },
         "requiredWorkFailed": {
           "type": "boolean",
-          "description": "This failed authentication refusal also failed independent required work. The person-facing diagnostic stays in error. Absent for a pure refusal, and absent when the failure is not an authentication refusal."
+          "description": "This failed turn also failed independent required work, beside an authentication refusal or a usage limit. The person-facing diagnostic stays in error. Absent for a pure refusal or a pure usage limit."
         },
         "usageLimit": {
           "$ref": "#/$defs/ConversationUsageLimit",

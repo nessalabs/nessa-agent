@@ -12,8 +12,9 @@
 //! each commit their own audit, with the policy ids, before the command result.
 
 use crate::conversation::application::{
-    ConversationError, ConversationFuture, PreferenceUpdate, RecordedPreference, ScheduleActor,
-    ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore, FENCE_LEASE_MS,
+    ConversationError, ConversationFuture, PreferenceReading, PreferenceUpdate, RecordedPreference,
+    ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
+    FENCE_LEASE_MS,
 };
 use crate::conversation::domain::ContinuationCause;
 use nessa_local_database::{
@@ -417,15 +418,13 @@ fn standing(connection: &Connection) -> Result<PreferenceStanding, ConversationE
 }
 
 impl ScheduledMessageStore for LocalScheduledMessages {
-    fn preference(&self) -> ConversationFuture<'_, bool> {
+    fn preference(&self) -> ConversationFuture<'_, PreferenceReading> {
         self.run(|connection| {
-            let enabled: Option<i64> = connection
-                .query_row("SELECT enabled FROM preference WHERE id = 1", [], |row| {
-                    row.get(0)
-                })
-                .optional()
-                .map_err(failed)?;
-            Ok(enabled == Some(1))
+            let current = standing(connection)?;
+            Ok(PreferenceReading {
+                enabled: current.enabled,
+                revision: current.revision,
+            })
         })
     }
 
@@ -660,6 +659,11 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             let at_ms = millis(at_ms)?;
             let due = millis(draft.due_at_ms)?;
             let transaction = connection.transaction().map_err(failed)?;
+            let current = standing(&transaction)?;
+            if !current.enabled || current.revision != draft.preference_revision {
+                transaction.commit().map_err(failed)?;
+                return Ok(None);
+            }
             let existing: Option<(String, String, i64)> = transaction
                 .query_row(
                     "SELECT execution_id, status, due_at_ms FROM message \
@@ -1356,7 +1360,24 @@ mod tests {
             grant_id: None,
             policy_revision: None,
             tools_checked: false,
+            preference_revision: 1,
         }
+    }
+
+    /// Preference on at revision 1, with no preference audit, so schedule
+    /// tests can accept a row the way a planner that just read revision 1 would.
+    async fn enabled_store() -> LocalScheduledMessages {
+        let store = store().await;
+        store
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO preference (id, enabled, revision, settled) VALUES (1, 1, 1, 1)",
+                [],
+            )
+            .unwrap();
+        store
     }
 
     fn person() -> ScheduleActor {
@@ -1405,7 +1426,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_schedule_keeps_one_execution_and_audits_with_the_change() {
-        let store = store().await;
+        let store = enabled_store().await;
         let accepted = store
             .accept(draft("conversation", "causal", "exec-1", 50), 10)
             .await
@@ -1441,7 +1462,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_claim_is_once_and_a_failed_audit_keeps_the_execution() {
-        let store = store().await;
+        let store = enabled_store().await;
         store
             .accept(draft("conversation", "causal", "exec-1", 10), 1)
             .await
@@ -1481,7 +1502,7 @@ mod tests {
     #[tokio::test]
     async fn turning_the_preference_off_cancels_open_rows_as_the_person() {
         let store = store().await;
-        assert!(!store.preference().await.unwrap());
+        assert!(!store.preference().await.unwrap().enabled);
         store.set_preference(true, person(), 1).await.unwrap();
         store
             .accept(draft("one", "causal", "exec-1", 50), 2)
@@ -1516,7 +1537,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_row_left_scheduled_after_the_claim_limit_is_due_now() {
-        let store = store().await;
+        let store = enabled_store().await;
         for index in 0..9 {
             store
                 .accept(
@@ -1553,7 +1574,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_delivering_row_with_a_failed_audit_is_due_now() {
-        let store = store().await;
+        let store = enabled_store().await;
         store
             .accept(draft("conversation", "causal", "exec-1", 10), 1)
             .await
@@ -1574,7 +1595,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_future_schedule_waits_until_it_is_due() {
-        let store = store().await;
+        let store = enabled_store().await;
         assert_eq!(store.next_due(10).await.unwrap(), None);
         store
             .accept(draft("conversation", "causal", "exec-1", 80), 1)
@@ -1646,7 +1667,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_defer_or_model_change_before_the_fence_refuses_the_submit() {
-        let store = store().await;
+        let store = enabled_store().await;
         store
             .accept(draft("conversation", "causal", "exec-1", 10), 1)
             .await
@@ -1662,7 +1683,7 @@ mod tests {
             Some("scheduled")
         );
 
-        let changed = open_messages().await;
+        let changed = enabled_store().await;
         changed
             .accept(draft("conversation", "causal", "exec-1", 10), 1)
             .await
@@ -1724,7 +1745,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_begin_commit_does_not_arm_the_submission() {
-        let store = store().await;
+        let store = enabled_store().await;
         store
             .accept(draft("conversation", "causal", "exec-1", 10), 1)
             .await
@@ -1746,7 +1767,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_interrupted_submission_is_unconfirmed_and_not_due() {
-        let store = store().await;
+        let store = enabled_store().await;
         store
             .accept(draft("conversation", "causal", "exec-1", 10), 1)
             .await
@@ -1881,7 +1902,7 @@ mod tests {
 
     #[tokio::test]
     async fn deleting_an_armed_submission_blanks_the_prompt_and_leaves_it_submitting() {
-        let store = store().await;
+        let store = enabled_store().await;
         store
             .accept(draft("conversation", "causal", "exec-1", 10), 1)
             .await
@@ -1912,7 +1933,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_outcome_records_the_instant_it_is_given() {
-        let store = store().await;
+        let store = enabled_store().await;
         store
             .accept(draft("conversation", "causal", "exec-1", 10), 1)
             .await
@@ -2000,7 +2021,7 @@ mod tests {
             .unwrap();
         assert!(matches!(denied.update, PreferenceUpdate::Refused { .. }));
         assert!(!denied.installed_enable);
-        assert!(!store.preference().await.unwrap());
+        assert!(!store.preference().await.unwrap().enabled);
         assert_eq!(
             decision_audits(&store),
             vec![(
@@ -2022,7 +2043,7 @@ mod tests {
             )
             .await;
         assert!(failed.is_err());
-        assert!(!store.preference().await.unwrap());
+        assert!(!store.preference().await.unwrap().enabled);
         assert_eq!(decision_audits(&store).len(), 1);
 
         store.fail_next_decision_audit();
@@ -2048,7 +2069,7 @@ mod tests {
         assert_eq!(allowed.update, PreferenceUpdate::Stored(true));
         assert!(allowed.installed_enable);
         assert_eq!(allowed.revision, 1);
-        assert!(store.preference().await.unwrap());
+        assert!(store.preference().await.unwrap().enabled);
         assert_eq!(
             decision_audits(&store).last().unwrap().3,
             "usage-limit-preference.admin-grant\nusage-limit-preference.member"
@@ -2066,7 +2087,7 @@ mod tests {
             .unwrap();
         assert!(!unchanged_allow.installed_enable);
         assert_eq!(unchanged_allow.revision, allowed.revision);
-        assert!(store.preference().await.unwrap());
+        assert!(store.preference().await.unwrap().enabled);
         let decisions = decision_audits(&store);
         assert_eq!(decisions.len(), 3);
         let unchanged = decisions.last().unwrap();
@@ -2112,7 +2133,7 @@ mod tests {
             .revert_installed_preference(installed.revision, ScheduleActor::system(), 7)
             .await
             .unwrap());
-        assert!(store.preference().await.unwrap());
+        assert!(store.preference().await.unwrap().enabled);
         assert!(store.open("one").await.unwrap().is_some());
 
         assert!(!store
@@ -2131,20 +2152,58 @@ mod tests {
             .unwrap();
         assert!(again.installed_enable);
         assert_ne!(again.revision, installed.revision);
-        store
-            .accept(draft("two", "causal-2", "exec-2", 50), 9)
-            .await
-            .unwrap();
+        let mut later = draft("two", "causal-2", "exec-2", 50);
+        later.preference_revision = again.revision;
+        store.accept(later, 9).await.unwrap();
         assert!(store.open("two").await.unwrap().is_some());
         let before = store.preference_audit_initiators().len();
         assert!(store
             .revert_installed_preference(again.revision, ScheduleActor::system(), 10)
             .await
             .unwrap());
-        assert!(!store.preference().await.unwrap());
+        assert!(!store.preference().await.unwrap().enabled);
         assert!(store.open("two").await.unwrap().is_none());
         let initiators = store.preference_audit_initiators();
         assert_eq!(initiators.len(), before + 1);
         assert_eq!(initiators.last().map(String::as_str), Some("system"));
+    }
+
+    #[tokio::test]
+    async fn a_stale_accept_does_not_insert_after_the_preference_revision_changes() {
+        let store = store().await;
+        store.set_preference(true, person(), 1).await.unwrap();
+        let reading = store.preference().await.unwrap();
+        assert!(reading.enabled);
+        assert_eq!(reading.revision, 1);
+        let accepted = store
+            .accept(draft("kept", "causal", "exec-1", 50), 2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(accepted.execution_id, "exec-1");
+
+        assert!(!store.set_preference(false, person(), 3).await.unwrap());
+        assert!(store.open("kept").await.unwrap().is_none());
+
+        let stale = store
+            .accept(draft("missed", "causal", "exec-2", 50), 4)
+            .await
+            .unwrap();
+        assert!(stale.is_none());
+        assert!(store.open("missed").await.unwrap().is_none());
+        assert!(!store.preference().await.unwrap().enabled);
+
+        store.set_preference(true, person(), 5).await.unwrap();
+        let again = store.preference().await.unwrap();
+        assert_ne!(again.revision, reading.revision);
+        let mut still_stale = draft("later", "causal", "exec-3", 10);
+        still_stale.preference_revision = reading.revision;
+        assert!(store.accept(still_stale, 6).await.unwrap().is_none());
+        assert!(store.open("later").await.unwrap().is_none());
+
+        let mut current = draft("later", "causal", "exec-4", 80);
+        current.preference_revision = again.revision;
+        let fresh = store.accept(current, 7).await.unwrap().unwrap();
+        assert_eq!(fresh.execution_id, "exec-4");
     }
 }

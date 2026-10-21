@@ -32,10 +32,11 @@ export function formatUsageLimitReset(resetsAtMs: number): string {
 }
 
 /**
- * The line under the card's title. Auto-resuming is copied only when a
- * schedule has been accepted. A preference that is on, with a future reset
- * and no schedule, is a scheduling failure. Anything else with no trustworthy
- * instant says the reset time is unknown.
+ * The line under the card's title. `preferenceOn` is the confirmed gateway
+ * preference. Auto-resuming is copied only when a schedule has been accepted.
+ * A confirmed preference that is on, with a future reset and no schedule, is
+ * a scheduling failure. Anything else with no trustworthy instant says the
+ * reset time is unknown.
  */
 export function usageLimitDetail(
   limit: UsageLimitNotice,

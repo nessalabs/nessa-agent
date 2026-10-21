@@ -670,9 +670,11 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Injected conversation state is incomplete")
     if (message.error !== undefined) text(message, "error", 2048, false)
     if (message.requiredWorkFailed === true) {
-      if (message.authenticationRequired !== true || status !== "failed")
+      const typedRefusal =
+        message.authenticationRequired === true || message.usageLimit !== undefined
+      if (!typedRefusal || status !== "failed")
         throw new Error(
-          "Conversation required-work failure belongs on an authentication refusal",
+          "Conversation required-work failure belongs on a failed authentication refusal or usage limit",
         )
       if (message.error === undefined)
         throw new Error("Conversation required-work failure has no diagnostic")

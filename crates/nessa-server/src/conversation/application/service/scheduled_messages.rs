@@ -124,6 +124,9 @@ pub struct ScheduleDraft {
     pub grant_id: Option<String>,
     pub policy_revision: Option<u64>,
     pub tools_checked: bool,
+    /// The preference revision the planner read. The insert matches only while
+    /// that revision is still enabled.
+    pub preference_revision: u64,
 }
 
 /// How a fenced submit ended.
@@ -145,6 +148,15 @@ impl ScheduleSettlement {
             Self::Unconfirmed => "unconfirmed",
         }
     }
+}
+
+/// One read of the gateway preference: the boolean and the revision that read saw.
+///
+/// `accept` inserts only while this revision is still enabled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreferenceReading {
+    pub enabled: bool,
+    pub revision: u64,
 }
 
 /// The preference write, or Cedar's refusal. A refusal leaves the store unchanged.
@@ -172,8 +184,9 @@ pub struct RecordedPreference {
 
 /// The private dataset of scheduled continuations.
 pub trait ScheduledMessageStore: Send + Sync {
-    /// The gateway preference. Absent means off.
-    fn preference(&self) -> ConversationFuture<'_, bool>;
+    /// The gateway preference and the revision of that read. Absent means off
+    /// at revision 0.
+    fn preference(&self) -> ConversationFuture<'_, PreferenceReading>;
     /// Record the preference. Turning it off cancels every open row in the
     /// same transaction. An unchanged value writes nothing.
     fn set_preference(
@@ -184,8 +197,9 @@ pub trait ScheduledMessageStore: Send + Sync {
     ) -> ConversationFuture<'_, bool>;
     /// The open row for one conversation, if it is scheduled or delivering.
     fn open(&self, conversation: &str) -> ConversationFuture<'_, Option<ScheduledMessage>>;
-    /// Insert the row, or move its due time when it is still open. A finished
-    /// causal turn is left finished and returns `None`.
+    /// Insert the row, or move its due time when it is still open, only while
+    /// `draft.preference_revision` is still the enabled preference. A finished
+    /// causal turn, or a revision a preference change has replaced, returns `None`.
     fn accept(
         &self,
         draft: ScheduleDraft,
@@ -317,7 +331,7 @@ impl ConversationService {
     /// The gateway preference. Unbound is off.
     pub async fn usage_limit_auto_continue(&self) -> Result<bool, ConversationError> {
         match self.scheduled_messages() {
-            Some(store) => store.preference().await,
+            Some(store) => Ok(store.preference().await?.enabled),
             None => Ok(false),
         }
     }
@@ -330,7 +344,7 @@ impl ConversationService {
         let Some(store) = self.scheduled_messages() else {
             return Ok(None);
         };
-        if !store.preference().await? {
+        if !store.preference().await?.enabled {
             return Ok(None);
         }
         store.open(&conversation.to_string()).await
@@ -462,7 +476,7 @@ impl ConversationService {
         let Some(facts) = self.usage_limit_facts(id).await? else {
             return Ok(());
         };
-        let preference = store.preference().await?;
+        let standing = store.preference().await?;
         let open = store.open(&id.to_string()).await?;
         let open_view = open
             .as_ref()
@@ -475,7 +489,7 @@ impl ConversationService {
             });
         let now_ms = self.inner.clock.unix_milliseconds();
         let decided = crate::conversation::domain::plan_continuation(
-            preference,
+            standing.enabled,
             now_ms,
             &facts.agent,
             &facts.model,
@@ -486,7 +500,7 @@ impl ConversationService {
         match decided {
             ContinuationPlan::Hold => {}
             ContinuationPlan::Accept { due_at_ms, cause } => {
-                self.accept_usage_limit(store, &facts, due_at_ms, cause, actor, now_ms)
+                self.accept_usage_limit(store, &facts, due_at_ms, cause, actor, standing)
                     .await?;
             }
             ContinuationPlan::MoveDue { due_at_ms } => {
@@ -512,7 +526,7 @@ impl ConversationService {
                 store
                     .cancel_open(&id.to_string(), cancel, actor.clone(), now_ms)
                     .await?;
-                self.accept_usage_limit(store, &facts, due_at_ms, cause, actor, now_ms)
+                self.accept_usage_limit(store, &facts, due_at_ms, cause, actor, standing)
                     .await?;
             }
         }
@@ -530,7 +544,7 @@ impl ConversationService {
         due_at_ms: u64,
         cause: ContinuationCause,
         actor: ScheduleActor,
-        at_ms: u64,
+        standing: PreferenceReading,
     ) -> Result<(), ConversationError> {
         let Some(observed) = facts.observed.as_ref() else {
             return Ok(());
@@ -538,6 +552,7 @@ impl ConversationService {
         let Some(prompt) = facts.prompt.clone() else {
             return Ok(());
         };
+        let at_ms = self.inner.clock.unix_milliseconds();
         let execution_id = ExecutionId::new(uuid::Uuid::new_v4().to_string())
             .map_err(|_| ConversationError::InvalidInput)?;
         store
@@ -560,6 +575,7 @@ impl ConversationService {
                     grant_id: facts.grant_id.clone(),
                     policy_revision: facts.policy_revision,
                     tools_checked: facts.tools_checked,
+                    preference_revision: standing.revision,
                 },
                 at_ms,
             )
@@ -720,7 +736,7 @@ impl ConversationService {
         let store = self.scheduled_messages()?;
         let now = self.inner.clock.unix_milliseconds();
         let preference = match store.preference().await {
-            Ok(preference) => preference,
+            Ok(preference) => preference.enabled,
             Err(_) => return Some(SCHEDULE_RETRY_MS),
         };
         if !preference {
@@ -769,8 +785,8 @@ impl ConversationService {
             if !caught_up {
                 if let Some(store) = self.scheduled_messages() {
                     match store.preference().await {
-                        Ok(enabled) => {
-                            if enabled {
+                        Ok(reading) => {
+                            if reading.enabled {
                                 let mut visited = Vec::new();
                                 match self
                                     .schedule_every_owner(
@@ -1244,9 +1260,9 @@ mod catalogue_pages {
     };
 
     use super::{
-        renew_while_held, PreferenceUpdate, RecordedPreference, ScheduleActor, ScheduleDraft,
-        ScheduleSettlement, ScheduledMessage, ScheduledMessageStore, FENCE_RENEW_EVERY_MS,
-        FENCE_RENEW_RETRY_MS, SCHEDULE_RETRY_MS,
+        renew_while_held, PreferenceReading, PreferenceUpdate, RecordedPreference, ScheduleActor,
+        ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
+        FENCE_RENEW_EVERY_MS, FENCE_RENEW_RETRY_MS, SCHEDULE_RETRY_MS,
     };
     use crate::conversation::application::{
         ConversationCaller, ConversationDependencies, ConversationFuture, ConversationLimits,
@@ -1415,13 +1431,14 @@ mod catalogue_pages {
     }
 
     impl ScheduledMessageStore for RecordingStore {
-        fn preference(&self) -> ConversationFuture<'_, bool> {
+        fn preference(&self) -> ConversationFuture<'_, PreferenceReading> {
             if self.preference_failures.load(Ordering::SeqCst) > 0 {
                 self.preference_failures.fetch_sub(1, Ordering::SeqCst);
                 return refused();
             }
             let enabled = self.enabled.load(Ordering::SeqCst);
-            Box::pin(async move { Ok(enabled) })
+            let revision = self.revision.load(Ordering::SeqCst);
+            Box::pin(async move { Ok(PreferenceReading { enabled, revision }) })
         }
         fn set_preference(
             &self,
@@ -1641,8 +1658,13 @@ mod catalogue_pages {
     }
 
     impl ScheduledMessageStore for NotifyOnDue {
-        fn preference(&self) -> ConversationFuture<'_, bool> {
-            Box::pin(async { Ok(true) })
+        fn preference(&self) -> ConversationFuture<'_, PreferenceReading> {
+            Box::pin(async {
+                Ok(PreferenceReading {
+                    enabled: true,
+                    revision: 0,
+                })
+            })
         }
         fn set_preference(
             &self,
@@ -1824,7 +1846,7 @@ mod catalogue_pages {
             .set_usage_limit_auto_continue(true, caller(), facts("admin"))
             .await;
         assert!(error.is_err());
-        assert!(!store.preference().await.unwrap());
+        assert!(!store.preference().await.unwrap().enabled);
         assert_eq!(
             store.changes.lock().unwrap().as_slice(),
             &[(true, true), (false, false)]
@@ -1848,7 +1870,7 @@ mod catalogue_pages {
             .set_usage_limit_auto_continue(true, caller(), facts("admin"))
             .await;
         assert!(error.is_err());
-        assert!(store.preference().await.unwrap());
+        assert!(store.preference().await.unwrap().enabled);
         assert_eq!(store.changes.lock().unwrap().as_slice(), &[(true, false)]);
     }
 
@@ -1866,7 +1888,7 @@ mod catalogue_pages {
             .await
             .unwrap();
         assert!(matches!(update, PreferenceUpdate::Refused { .. }));
-        assert!(!store.preference().await.unwrap());
+        assert!(!store.preference().await.unwrap().enabled);
         assert!(store.changes.lock().unwrap().is_empty());
         assert!(listing.seen.lock().unwrap().is_empty());
         assert_eq!(
@@ -2014,7 +2036,7 @@ mod catalogue_pages {
             .set_usage_limit_auto_continue(true, caller(), facts("admin"))
             .await;
         assert!(error.is_err());
-        assert!(!store.preference().await.unwrap());
+        assert!(!store.preference().await.unwrap().enabled);
         assert!(store.changes.lock().unwrap().is_empty());
         assert!(store.decisions.lock().unwrap().is_empty());
 
@@ -2023,7 +2045,7 @@ mod catalogue_pages {
             .set_usage_limit_auto_continue(true, caller(), facts("member"))
             .await;
         assert!(denied.is_err());
-        assert!(!store.preference().await.unwrap());
+        assert!(!store.preference().await.unwrap().enabled);
         assert!(store.decisions.lock().unwrap().is_empty());
     }
 
@@ -2233,7 +2255,7 @@ mod catalogue_pages {
             .set_usage_limit_auto_continue(true, caller(), facts("admin"))
             .await;
         assert!(error.is_err());
-        assert!(store.preference().await.unwrap());
+        assert!(store.preference().await.unwrap().enabled);
         assert_eq!(store.changes.lock().unwrap().as_slice(), &[(true, true)]);
     }
 
@@ -2284,12 +2306,17 @@ mod catalogue_pages {
     }
 
     impl ScheduledMessageStore for ScriptedSchedule {
-        fn preference(&self) -> ConversationFuture<'_, bool> {
+        fn preference(&self) -> ConversationFuture<'_, PreferenceReading> {
             if failing(&self.preference_failures) {
                 return Box::pin(async { Err(ConversationError::Metadata) });
             }
             let enabled = self.enabled.load(Ordering::SeqCst);
-            Box::pin(async move { Ok(enabled) })
+            Box::pin(async move {
+                Ok(PreferenceReading {
+                    enabled,
+                    revision: 0,
+                })
+            })
         }
         fn set_preference(
             &self,
