@@ -1419,7 +1419,9 @@ impl NativeSession {
     /// including its purge, and nothing is fetched. A gateway authority refusal
     /// asks status again, as a refused catalogue read does. That includes a product
     /// handshake that refuses, and a refusal that settled before a later stop.
-    /// A stop the fetch itself observed does not ask.
+    /// A stop the fetch itself observed does not ask. A stop during the
+    /// product handshake is [`SessionFailure::Stopped`], as a stop before
+    /// the fetch starts is.
     pub fn fetch_artifact(
         &self,
         stamp: &PhoneStamp,
@@ -1495,6 +1497,7 @@ impl NativeSession {
                     recheck: Some(recheck),
                 });
             }
+            Err(ReadFailure::Stopped) => return Err(SessionFailure::Stopped),
             Err(error) => return Err(SessionFailure::Cache(error)),
         };
         let outcome = fetched.outcome();

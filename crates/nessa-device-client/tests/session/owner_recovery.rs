@@ -31,7 +31,7 @@ use nessa_protocol::pairing::{
 use std::{
     fs,
     net::TcpListener,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     sync::mpsc,
     thread::{self, JoinHandle},
 };
@@ -332,6 +332,9 @@ impl Fixture {
         self.root.path().join("private/owner-phone-original")
     }
     fn peer(&self, replies: Vec<Reply>) -> JoinHandle<()> {
+        self.peer_signaled(replies, Arc::new(AtomicBool::new(false)))
+    }
+    fn peer_signaled(&self, replies: Vec<Reply>, handshake: Arc<AtomicBool>) -> JoinHandle<()> {
         let listener = self.listener.try_clone().unwrap();
         let proof = self.proof.clone();
         thread::spawn(move || {
@@ -349,6 +352,12 @@ impl Fixture {
                     proof.original().device_key()
                 );
                 let mut channel = EnrollmentChannel::new(transport);
+                if matches!(reply, Reply::HoldHandshake) {
+                    handshake.store(true, Ordering::SeqCst);
+                    let _ = channel.receive_envelope();
+                    let _ = channel.receive_envelope();
+                    continue;
+                }
                 if matches!(reply, Reply::ReadRefused) {
                     assert!(matches!(
                         wire::decode_request(&channel.receive_envelope().unwrap()).unwrap(),
@@ -448,7 +457,7 @@ impl Fixture {
                             &DevicePairingStatus::Claimed(Box::new(ended)),
                         )
                     }
-                    Reply::Product | Reply::ReadRefused => unreachable!(),
+                    Reply::Product | Reply::ReadRefused | Reply::HoldHandshake => unreachable!(),
                     Reply::WrongPublic => {
                         wire::encode_owner_phone_recovery(request_id, digest, public, &status)
                     }
@@ -477,6 +486,8 @@ enum Reply {
     Terminal,
     Product,
     ReadRefused,
+    /// Accept the product handshake and hold it until the client stops.
+    HoldHandshake,
     WrongDisclosure,
     WrongPublic,
     WrongId,
@@ -961,6 +972,46 @@ fn an_artifact_handshake_refusal_rechecks_and_releases_the_lease() {
         parent.publication(),
         Err(SessionFailure::Fenced(PhoneFence::Unbound))
     ));
+    peer.join().unwrap();
+}
+
+#[test]
+fn a_stop_during_the_artifact_handshake_is_stopped() {
+    let fixture = Fixture::new(Mode::Good);
+    let parent = fixture.parent();
+    let started = Arc::new(AtomicBool::new(false));
+    let peer = fixture.peer_signaled(
+        vec![Reply::Active, Reply::Active, Reply::HoldHandshake],
+        started.clone(),
+    );
+    captured(parent.status().unwrap());
+    let stamp = parent.publication().unwrap();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let output = fixture.root.path().join("private/missing-held.bin");
+    let published = output.clone();
+    let stop = ReadStop::new();
+    let stopping = stop.clone();
+    let fetch = thread::spawn(move || {
+        let request = ArtifactRequest::new(
+            &conversation,
+            "sha256:fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+            "application/octet-stream",
+            2,
+            &output,
+        );
+        parent.fetch_artifact(&stamp, &request, stop)
+    });
+    let began = std::time::Instant::now();
+    while !started.load(Ordering::SeqCst) {
+        assert!(
+            began.elapsed() < Duration::from_secs(2),
+            "the artifact handshake did not start"
+        );
+        thread::yield_now();
+    }
+    stopping.stop();
+    assert_eq!(fetch.join().unwrap().unwrap_err(), SessionFailure::Stopped);
+    assert!(!published.exists());
     peer.join().unwrap();
 }
 
