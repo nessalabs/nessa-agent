@@ -2,15 +2,16 @@ import {
   Fragment,
   memo,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
-  useSyncExternalStore,
+  useState,
   type CSSProperties,
   type ReactNode,
 } from "react"
 import type { SplitPanesSource } from "../application/ports"
 import { paneTabOrder } from "../adapters/dom/tab-order"
-import type { PaneKey } from "../model/pane-layout"
+import type { Column, PaneKey } from "../model/pane-layout"
 import {
   edgeSides,
   placements,
@@ -20,6 +21,14 @@ import {
 import { ResizeEdge } from "../../ui/resize-edge"
 import { classes, marks } from "../adapters/dom/marks"
 import "./split-panes.css"
+
+/** Which pane is where, ignoring the shares a resize changes. */
+function arrangementOf(columns: readonly Column[] | null): string {
+  if (!columns) return ""
+  return columns
+    .map((column) => `${column.key}:${column.panes.map((pane) => pane.key).join(",")}`)
+    .join("|")
+}
 
 /**
  * What a pane's root takes from the grid, spread onto the host's own element
@@ -93,14 +102,133 @@ export const SplitPanes = memo(function SplitPanes({
   renderPane: (pane: ShownPane) => ReactNode
   empty?: ReactNode
 }) {
-  const columns = useSyncExternalStore(
-    source.subscribe,
-    () => source.layout()?.columns ?? null,
-  )
+  const gridRef = useRef<HTMLDivElement>(null)
+  // What is on screen lags a new arrangement. The frame that commits a split
+  // or a drop runs its script only — the grid does not render for it. The
+  // next frame is when a drop's copy lets go and, in the workspace, when a
+  // side column folds for the new count. The frame after that is the column
+  // title's glide. The third frame paints the new boxes, so none of those
+  // share a paint. A resize of the same panes paints on the frame it happens,
+  // so a separator follows the pointer. A draw already handed to React is
+  // still open: a later callback in that frame can put the source back
+  // before the commit, and the grid replaces the draw. The first paint
+  // uses the layout the grid mounted with.
+  const [drawn, setDrawn] = useState(() => source.layout()?.columns ?? null)
+  const drawnRef = useRef(drawn)
+  drawnRef.current = drawn
   const { panes, edges } = useMemo(
-    () => (columns ? placements(columns) : noPlacements),
-    [columns],
+    () => (drawn ? placements(drawn) : noPlacements),
+    [drawn],
   )
+  useEffect(() => {
+    type Columns = NonNullable<ReturnType<SplitPanesSource["layout"]>>["columns"] | null
+    let frames: number[] = []
+    let armed = false
+    let waiting: Columns = null
+    // Columns passed to React that this commit has not rendered. The ref
+    // above updates in render, so a callback later in the same frame still
+    // sees the previous arrangement.
+    let pending: { columns: Columns } | null = null
+    const cancel = () => {
+      for (const id of frames) cancelAnimationFrame(id)
+      frames = []
+    }
+    const hold = (on: boolean) => {
+      gridRef.current
+        ?.closest<HTMLElement>("[data-workspace]")
+        ?.toggleAttribute("data-spare-held", on)
+    }
+    const draw = (columns: Columns) => {
+      pending = { columns }
+      setDrawn(columns)
+    }
+    const arm = (next: typeof waiting) => {
+      if (armed && waiting === next) return
+      cancel()
+      armed = true
+      waiting = next
+      // The queued draw is another arrangement. Replace it before React
+      // commits it, then count this arrangement's own frames.
+      if (pending && pending.columns !== next) draw(drawnRef.current)
+      const queue = (left: number) => {
+        const id = requestAnimationFrame(() => {
+          // The click paints nothing new. The hold starts on the next frame,
+          // before the window records the fold.
+          if (left === 3) hold(next !== drawnRef.current)
+          if (left > 1) {
+            queue(left - 1)
+            return
+          }
+          frames = []
+          armed = false
+          waiting = null
+          draw(next)
+        })
+        frames.push(id)
+      }
+      queue(3)
+    }
+    // Subscribing does not call back. A layout that landed before this
+    // effect, or a source this grid just took, is read now and still waits
+    // its frames.
+    const reconcile = () => {
+      const next = source.layout()?.columns ?? null
+      const shown = drawnRef.current
+      if (pending?.columns === shown) pending = null
+      // This arrangement is already the update React will commit.
+      if (pending?.columns === next) return
+      if (next === shown) {
+        // The source came back. A draw of the arrangement it left is still
+        // queued, and returning here would let that commit land.
+        const stale = pending !== null
+        if (stale) draw(shown)
+        if (!armed && !stale) return
+        cancel()
+        armed = false
+        waiting = null
+        hold(false)
+        return
+      }
+      // The same panes, resized. Waiting three frames would restart on every
+      // pointer frame, and the separator would not follow the pointer.
+      if (arrangementOf(next) === arrangementOf(shown)) {
+        cancel()
+        armed = false
+        waiting = null
+        hold(false)
+        draw(next)
+        return
+      }
+      arm(next)
+    }
+    const unsubscribe = source.subscribe(reconcile)
+    reconcile()
+    return () => {
+      cancel()
+      unsubscribe()
+    }
+  }, [source])
+  // The frame that first paints a new arrangement skips scene text. The text
+  // is already laid out at a fixed width; painting it again is the resize.
+  // A resize of the same panes does not, so a drag does not hide the scene.
+  const shape = arrangementOf(drawn)
+  useLayoutEffect(() => {
+    const grid = gridRef.current
+    if (!grid) return
+    grid.setAttribute(marks.painting, "")
+    const id = requestAnimationFrame(() => grid.removeAttribute(marks.painting))
+    return () => cancelAnimationFrame(id)
+  }, [shape])
+  // The workspace holds the sidebar in the row until these boxes paint.
+  // Folding it out of the row on the earlier frame widens the one pane and
+  // lays its text out, then the boxes lay it out again.
+  useLayoutEffect(() => {
+    const workspace = gridRef.current?.closest<HTMLElement>("[data-workspace]")
+    if (!workspace) return
+    const live = source.layout()?.columns ?? null
+    workspace.toggleAttribute("data-spare-held", drawn !== live)
+    return () => workspace.removeAttribute("data-spare-held")
+  }, [drawn, source])
   const multi = panes.length > 1
   // In the order the panes were opened, not where they sit: a pane is placed
   // by its fractions, so its node never moves in the document, and a moved
@@ -114,7 +242,6 @@ export const SplitPanes = memo(function SplitPanes({
       })),
     [panes, multi],
   )
-  const gridRef = useRef<HTMLDivElement>(null)
   // Tab follows the panes as they are seen, not as they were opened.
   const tabOrder = useMemo(() => paneTabOrder(() => source.layout()), [source])
   useEffect(() => {

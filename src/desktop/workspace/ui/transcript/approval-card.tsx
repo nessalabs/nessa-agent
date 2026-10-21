@@ -5,6 +5,7 @@ import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
 import { approve, deny, retryReview } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import { useRememberedValue } from "../../adapters/store/remembered-session"
 import { selectAnswer } from "../../adapters/store/selectors"
 import { answering } from "../../application/workspace-state"
 import { agentName, agentOf, type ModelRef } from "../../model/workspace-index"
@@ -51,9 +52,11 @@ export const ApprovalCard = memo(function ApprovalCard({
   model: ModelRef
 }) {
   const dispatch = useWorkspaceDispatch()
-  const answer = useWorkspaceSelector((state) =>
+  // The source drops the answer with the session. The card stays until the box goes.
+  const answerLive = useWorkspaceSelector((state) =>
     selectAnswer(state, sessionId, approval.id),
   )
+  const answer = useRememberedValue(sessionId, answerLive)
   const waiting = answering(answer, approval.id)
   const gist =
     approval.origin.kind === "agent" && approval.ask === "tool" && shownWhole(approval)

@@ -20,12 +20,11 @@ import { useSplitPanesDrag, type SplitPanesSource } from "../../../split-panes"
 import { useFocusFollowsPane } from "../../adapters/dom/focus"
 import { useWidgetEscape, type EscapeScopes } from "../../adapters/dom/widget-escape"
 import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortcuts"
-import { useFitOnResize } from "../../adapters/dom/window-width"
+import { drawn } from "../../../model/side-column"
 import {
   arrangementShown,
   canOpenBeside,
   closeInFront,
-  fitToWindow,
   focusPane,
   newSession,
   nudgePane,
@@ -45,23 +44,20 @@ import {
   useWorkspaceStore,
 } from "../../adapters/store/hooks"
 import { reviewToOpen, reviewWaitsIn } from "../../adapters/gateway/review-notices"
+import { paneBoxFrame, usePaintedWithPanes } from "../../adapters/store/paint-with-panes"
 import {
   selectChrome,
   selectColumnCount,
   selectDraft,
   selectFocusedPaneKey,
+  selectPaneShape,
   selectPanes,
   selectSession,
   selectSessionListOpen,
-  selectSidebarOpen,
   selectView,
 } from "../../adapters/store/selectors"
 import { workspaceSplitPanes } from "../../adapters/store/split-panes-source"
-import {
-  layoutShape,
-  panesOf,
-  type Direction,
-} from "../../../split-panes/model/pane-layout"
+import { panesOf, type Direction } from "../../../split-panes/model/pane-layout"
 import type { SwitcherRow } from "../../model/session-search"
 import { columnWidth, railFits, sessionListLimits } from "../../model/window-fit"
 import { railItems, railWidth, type RailItem } from "../chrome/side-rail"
@@ -181,10 +177,8 @@ function useWorkspaceKeys(
 
 /** The shape of what moves on screen: the panes' arrangement and which columns are open. */
 function useMotionShape(...columns: boolean[]): string {
-  const panes = useWorkspaceSelector((state) => {
-    const layout = selectPanes(state)
-    return layout ? layoutShape(layout) : ""
-  })
+  // Painted with the new boxes, so the click does not render the window for a shape it has not drawn.
+  const panes = usePaintedWithPanes(selectPaneShape, paneBoxFrame)
   return `${panes}|${columns.join(",")}`
 }
 
@@ -242,13 +236,15 @@ function useShownArrangement(region: SidebarRegion) {
 }
 
 function useWorkspaceChrome(region: SidebarRegion, hostKind: HostKind) {
-  const dispatch = useWorkspaceDispatch()
-  const chrome = useWorkspaceSelector(selectChrome)
-  const sidebarOpen = useWorkspaceSelector(selectSidebarOpen)
+  // Painted with the new boxes. The fold's attribute is set a frame earlier
+  // (`FoldMark`), while the spare hold is on. A person's toggle still paints
+  // in the turn: it does not change the column count.
+  const chrome = usePaintedWithPanes(selectChrome, paneBoxFrame)
+  const columns = usePaintedWithPanes(selectColumnCount, paneBoxFrame)
+  const sidebarOpen = drawn(chrome.sidebar)
   const listDrawn = useWorkspaceSelector(selectSessionListOpen)
   const listOpen = region.sessionList && listDrawn
   const view = useWorkspaceSelector(selectView)
-  const columns = useWorkspaceSelector(selectColumnCount)
   const [railOpen, setRailOpen] = useState(true)
   const [railItem, setRailItem] = useState("agents")
   // A preview, off until turned on in Settings › Advanced › Experimental.
@@ -289,12 +285,8 @@ function useWorkspaceChrome(region: SidebarRegion, hostKind: HostKind) {
     )
   const railDrawn = railOffered && railOpen && railRoom
   // The rail stands beside the workspace, not in it: the columns fit what is left.
+  // The fit itself is `ColumnFit`, so this count does not render the window.
   const windowWidth = fullWidth - (railDrawn ? rail : 0)
-  useFitOnResize(windowWidth, columns, (width) =>
-    dispatch(
-      fitToWindow({ windowWidth: width, sidebarWidth, sessionListWidth: listWidth }),
-    ),
-  )
   const toggleRail = useCallback(() => setRailOpen((open) => !open), [])
   return {
     sidebarOpen,
@@ -303,6 +295,7 @@ function useWorkspaceChrome(region: SidebarRegion, hostKind: HostKind) {
     sidebarChosenOpen: chrome.sidebar.open,
     sidebarWidth,
     listWidth,
+    windowWidth,
     railOffered,
     railDrawn,
     railRoom,
@@ -441,6 +434,8 @@ export interface WorkspaceWindowModel {
   listedChannel: string | null
   sidebarWidth: number
   listWidth: number
+  /** The width the side columns are fitted to: the window, less an open rail. */
+  windowWidth: number
   switcher: SwitcherMode | null
   compose: () => void
   composeShortcut: string | undefined
@@ -527,6 +522,7 @@ export function useWorkspaceWindow({
     listedChannel: chrome.listedChannel,
     sidebarWidth: chrome.sidebarWidth,
     listWidth: chrome.listWidth,
+    windowWidth: chrome.windowWidth,
     switcher: switching.switcher,
     compose,
     composeShortcut: switching.frame.shortcut("newSession"),
