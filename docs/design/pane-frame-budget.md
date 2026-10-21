@@ -102,7 +102,9 @@ starts the measured row.
    `data-spare-held`. The session list keeps the measure it had through
    the box paint and the frame that shows the scene text again
    (`data-list-held`): the gutter and the tab stop paint on the frame
-   after that. The spare mark clears in the commit that paints the boxes.
+   after that. A hold queued for a shape change is cancelled when that
+   change returns before the frame, so the attribute does not land after
+   the gate has stopped. The spare mark clears in the commit that paints the boxes.
    The frame after the click is the column title's glide, while the grid
    is still on its last boxes. The grid mounted with whatever layout it
    first read; that first paint does not wait.    The paint frame marks the
@@ -288,8 +290,9 @@ box frame.
   for that wait so a folded sidebar stays in the row, the side-column fit
   waiting one frame when the pane count changes,   the window painting the
   fold with the new boxes (`usePaintedWithPanes`, passed into the source
-  list as the open it draws), the session list keeping its measure until
-  the frame after those boxes, the focused mark set on the article before
+  list as the open it draws),   the session list keeping its measure until
+  the frame after those boxes, a queued list hold cancelled when the
+  shape returns before that frame, the focused mark set on the article before
   paint,   a selector skipping a dispatch that did not change the fields
   it reads and painting a new column count on the next frame, the edge
   peek's stable controls, the shell

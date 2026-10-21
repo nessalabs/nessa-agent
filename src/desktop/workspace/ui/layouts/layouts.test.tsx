@@ -15,6 +15,7 @@ import {
   closePane,
   focusPane,
   loadWorkspace,
+  movePane,
   newSession,
   openBeside,
   openWidget,
@@ -700,6 +701,63 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
       await act(async () => frames.runFrame())
       expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
       await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: width })
+    }
+  })
+
+  it("drops a list hold when the shape returns before the next frame", async () => {
+    const frames = controlledAnimationFrames()
+    const width = window.innerWidth
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 })
+    const store = testStore(undefined, () => narrow)
+    try {
+      await store.dispatch(loadWorkspace())
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      const drain = async () => {
+        for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
+          await act(async () => frames.runFrame())
+      }
+      await drain()
+      await act(async () => {
+        store.dispatch(openBeside({ sessionId: "c" }))
+      })
+      await drain()
+      const sidebar = () => host.querySelector<HTMLElement>(".workspace")
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      const panes = store.getState().workspace.panes
+      if (!panes) throw new Error("no panes")
+      const keys = panesOf(panes).map((pane) => pane.key)
+      const [first, second] = keys
+      if (first === undefined || second === undefined) throw new Error("one pane")
+      const shape = layoutShape(panes)
+      // The swap queues the hold. The swap back lands before that frame.
+      await act(async () => {
+        store.dispatch(movePane({ pane: first, target: second, zone: "center" }))
+      })
+      await act(async () => {
+        store.dispatch(movePane({ pane: first, target: second, zone: "center" }))
+      })
+      const restored = store.getState().workspace.panes
+      if (!restored) throw new Error("no panes")
+      expect(layoutShape(restored)).toBe(shape)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      await drain()
       expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
       await act(async () => root.unmount())
     } finally {

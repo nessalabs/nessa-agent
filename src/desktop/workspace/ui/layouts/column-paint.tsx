@@ -40,7 +40,9 @@ export function FoldMark({ root }: { root: RefObject<HTMLElement | null> }) {
  * frame after that (`listPaintFrame`), so that commit does not restyle
  * the rows on the scene's frame. A column change that puts the previous
  * count back before that frame keeps the hold until the new list frame:
- * the boxes on screen are still the ones just painted.
+ * the boxes on screen are still the ones just painted. A shape change
+ * that returns before the next frame cancels the hold that frame would
+ * have written.
  */
 export function ListMeasureHold({ root }: { root: RefObject<HTMLElement | null> }) {
   const store = useWorkspaceStore()
@@ -57,8 +59,13 @@ export function ListMeasureHold({ root }: { root: RefObject<HTMLElement | null> 
     apply(listMeasureHeld(store))
     const unsubscribe = store.subscribe(() => {
       const on = listMeasureHeld(store)
-      if (on === held.current) return
+      // The queued frame has not applied yet, so `held` still matches the
+      // screen. Cancel it before that comparison: a reversal in the same
+      // turn would otherwise leave the frame to write the hold after the
+      // gate has stopped.
       cancelAnimationFrame(frame)
+      frame = 0
+      if (on === held.current) return
       // The click does not write the attribute. The next frame does, which
       // is before the fold paints.
       frame = requestAnimationFrame(() => apply(on))
