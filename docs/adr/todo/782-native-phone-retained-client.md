@@ -234,11 +234,14 @@ flowchart LR
 | Local inspection already produced a typed fault, stop set afterwards | fetch | That fault remains | `a_settled_local_fault_survives_a_later_stop` |
 | Gateway refusal already settled, stop set afterwards | fetch | Refused remains, so status is asked again | `a_settled_refusal_survives_a_later_stop` |
 | Product handshake refuses the artifact fetch | fetch | The admission returns Refused with the recheck status; a terminal recheck releases the lease | `an_artifact_handshake_refusal_rechecks_and_releases_the_lease` |
+| Stop during the product handshake | fetch | Session stop, not a cache failure | `a_stop_during_the_artifact_handshake_is_stopped` |
 | Terminal status before the file is fetched | fetch | That status and its purge are returned; nothing is fetched; the lease is released | `a_terminal_artifact_status_keeps_its_purge` |
 | Stop during the part re-read | fetch | Stopped, output not linked | `a_stop_during_the_part_reread_does_not_keep_the_file` |
 | Waiting: stop during a busy pause | fetch | Stopped within one stop slice; no later range; output absent | `a_stop_during_a_busy_pause_returns_within_one_slice`, `a_busy_pause_that_has_ended_asks_no_further_range` |
 | Waiting: budget spent during a busy pause | fetch | Unreachable within one stop slice; no later range; output absent | `a_budget_that_ends_during_a_busy_pause_is_unreachable` |
 | Linking: stop during the part sync | fetch | Stopped; the hard link is not created | `a_stop_during_sync_does_not_link` |
+| Budget expires after the last range, or during the part sync | fetch | Unreachable; the output is not published | `a_budget_that_expires_after_the_range_does_not_publish`, `a_budget_that_expires_during_sync_does_not_link` |
+| Budget expires while the hard link holds the gate | fetch | The link finishes; the output stays published | `a_budget_that_expires_during_the_link_stays_published` |
 | Linking: stop while the hard link holds the gate | fetch | The link finishes; the output stays published | `a_stop_during_the_link_waits_until_the_link_is_published` |
 | Linked: part removal or directory sync fails | fetch | Linked, naming that step; the output bytes remain; a later stop leaves it | `a_linked_output_keeps_its_cleanup_failure`, `a_part_that_cannot_be_removed_after_the_link_leaves_the_output` |
 | Integrity already settled, stop set later | fetch | Integrity, including a part left in place | `a_settled_integrity_failure_survives_a_stop_keep_did_not_see` |

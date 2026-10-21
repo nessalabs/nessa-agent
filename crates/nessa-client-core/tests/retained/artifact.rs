@@ -823,7 +823,8 @@ fn a_stop_during_sync_does_not_link() {
         stop: stop.clone(),
         linked: false,
     };
-    let end = super::publish_part(&stop, &mut part);
+    let ending = running(stop.clone());
+    let end = super::publish_part(&ending, &mut part);
     assert!(!part.linked);
     assert_eq!(end.phase, super::Publication::Stopped);
     assert_eq!(end.result, Err(KeepRefusal::Stopped));
@@ -898,7 +899,8 @@ fn a_stop_during_the_link_waits_until_the_link_is_published() {
             "stop did not wait for the link"
         );
     });
-    let end = super::publish_part(&stop, &mut part);
+    let ending = running(stop.clone());
+    let end = super::publish_part(&ending, &mut part);
     stopper.join().unwrap();
     assert!(output.load(Ordering::SeqCst));
     assert_eq!(end.phase, super::Publication::Linked);
@@ -931,7 +933,8 @@ fn a_linked_output_keeps_its_cleanup_failure() {
             linked: false,
         };
         let stop = ReadStop::new();
-        let end = super::publish_part(&stop, &mut part);
+        let ending = running(stop.clone());
+        let end = super::publish_part(&ending, &mut part);
         assert!(part.linked);
         assert_eq!(end.phase, super::Publication::Linked);
         assert_eq!(end.result, Err(KeepRefusal::Published { step }));
@@ -960,4 +963,156 @@ fn a_linked_output_keeps_its_cleanup_failure() {
             linked
         );
     }
+}
+
+struct ToggleClock {
+    spent: AtomicBool,
+}
+impl nessa_protocol::clock::Clock for ToggleClock {
+    fn elapsed_ms(&self) -> u64 {
+        u64::from(self.spent.load(Ordering::SeqCst))
+    }
+}
+fn budget(clock: Arc<ToggleClock>, stop: Arc<ReadStop>) -> super::super::Stopping {
+    super::super::Stopping {
+        stop,
+        clock,
+        until: 1,
+    }
+}
+
+struct SpendAfterRange {
+    bytes: &'static [u8],
+    clock: Arc<ToggleClock>,
+}
+impl HeldFileSource for SpendAfterRange {
+    fn read(
+        &mut self,
+        _: &crate::read_only_sync::domain::HeldFile,
+        range: HeldRange,
+    ) -> Result<RangeAnswer, GatewayError> {
+        let start = usize::try_from(range.offset()).unwrap();
+        let end = start + usize::try_from(range.length()).unwrap();
+        self.clock.spent.store(true, Ordering::SeqCst);
+        Ok(RangeAnswer {
+            offset: range.offset(),
+            bytes: self.bytes[start..end].to_vec(),
+        })
+    }
+}
+
+#[test]
+fn a_budget_that_expires_after_the_range_does_not_publish() {
+    let bytes = b"ab";
+    let conversation = conversation();
+    let digest = digest_of(bytes);
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("file.bin");
+    let clock = Arc::new(ToggleClock {
+        spent: AtomicBool::new(false),
+    });
+    let stop = ReadStop::new();
+    let ending = budget(clock.clone(), stop.clone());
+    let mut source = SpendAfterRange { bytes, clock };
+    let fault = confirmed_held_file(
+        &mut source,
+        &Still,
+        &request(&conversation, &digest, &output),
+        &ending,
+    )
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(
+        fault.kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Stopped)
+    );
+    assert_eq!(
+        super::classify_artifact_fault(fault, &stop, &ending).kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
+    );
+    assert!(!output.exists());
+    assert!(!stop.is_stopped());
+}
+
+struct SyncSpends {
+    clock: Arc<ToggleClock>,
+    linked: bool,
+}
+impl super::HeldPart for SyncSpends {
+    fn sync_held(&mut self) -> Result<(), KeepRefusal> {
+        self.clock.spent.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    fn link_held(&mut self) -> Result<(), KeepRefusal> {
+        self.linked = true;
+        Ok(())
+    }
+    fn retire_held(&mut self) -> Result<(), KeepRefusal> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_budget_that_expires_during_sync_does_not_link() {
+    let clock = Arc::new(ToggleClock {
+        spent: AtomicBool::new(false),
+    });
+    let stop = ReadStop::new();
+    let ending = budget(clock.clone(), stop.clone());
+    let mut part = SyncSpends {
+        clock,
+        linked: false,
+    };
+    let end = super::publish_part(&ending, &mut part);
+    assert!(!part.linked);
+    assert_eq!(end.phase, super::Publication::Stopped);
+    assert_eq!(end.result, Err(KeepRefusal::Stopped));
+    let failure = FetchFailure {
+        cause: FetchCause::Gateway(GatewayError::Cancelled),
+        progress: FetchProgress {
+            reached: 2,
+            ..FetchProgress::default()
+        },
+    };
+    let fault = super::publish_fetch(failure, true);
+    assert_eq!(
+        super::classify_artifact_fault(fault, &stop, &ending).kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
+    );
+}
+
+struct LinkSpends {
+    clock: Arc<ToggleClock>,
+    linked: bool,
+}
+impl super::HeldPart for LinkSpends {
+    fn sync_held(&mut self) -> Result<(), KeepRefusal> {
+        Ok(())
+    }
+    fn link_held(&mut self) -> Result<(), KeepRefusal> {
+        self.clock.spent.store(true, Ordering::SeqCst);
+        self.linked = true;
+        Ok(())
+    }
+    fn retire_held(&mut self) -> Result<(), KeepRefusal> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_budget_that_expires_during_the_link_stays_published() {
+    let clock = Arc::new(ToggleClock {
+        spent: AtomicBool::new(false),
+    });
+    let stop = ReadStop::new();
+    let ending = budget(clock.clone(), stop);
+    let mut part = LinkSpends {
+        clock,
+        linked: false,
+    };
+    let end = super::publish_part(&ending, &mut part);
+    assert!(part.linked);
+    assert!(ending.spent());
+    assert_eq!(end.phase, super::Publication::Linked);
+    assert_eq!(end.result, Ok(()));
 }

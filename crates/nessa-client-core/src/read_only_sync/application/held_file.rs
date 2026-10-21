@@ -15,7 +15,9 @@
 //!   --> source.read --busy--> pause; a wait that has ended asks nothing more
 //!                   --answer is the range--> append, next range
 //!                   --anything else--> fail; the part stays for a resume
-//! all ranges --> re-read the part from disk: size and digest
+//! all ranges --> the wait has ended: fail; nothing is linked
+//!             --> re-read the part from disk: size and digest
+//!   --match, then the wait has ended--> fail; nothing is linked
 //!   --match--> keep (sync, then link at the output's name only if nothing
 //!              is there). The link is the publication. Removing the part's
 //!              name or syncing the directory can still fail after it, and
@@ -248,7 +250,9 @@ pub(crate) fn kept_output(
 /// from the part an earlier run left when it is shorter than the file; one
 /// longer cannot be it and is started again; one already complete still
 /// asks the gateway for its last range, so at least one range is always
-/// asked. `ended` cuts a busy wait short and asks no later range. Every
+/// asked. `ended` cuts a busy wait short and asks no later range. It also
+/// refuses the part's re-read and the keep that would link it. A match
+/// already proved is still not linked once `ended` is true. Every
 /// failure but `Integrity` leaves the part for a later run to resume.
 /// `Published` is past the link: the output is the file, and the part's
 /// name may already be gone.
@@ -315,6 +319,11 @@ pub(crate) fn fetch_held_file(
         progress.reached += range.length();
         progress.ranges += 1;
     }
+    // The last range can land as the budget expires. Verification has not
+    // started, and nothing is linked.
+    if ended() {
+        return fail(FetchCause::Gateway(GatewayError::Cancelled), progress);
+    }
     // What is kept is what is on disk, so that is what is checked.
     let mut hash = Sha256::new();
     let length = match files.read_part(&mut |bytes| hash.update(bytes)) {
@@ -331,6 +340,11 @@ pub(crate) fn fetch_held_file(
         };
         progress.reached = 0;
         return fail(FetchCause::Integrity { cleanup }, progress);
+    }
+    // The re-read and the hash can cross the deadline. A match is not
+    // publication; the link is. Do not start that link.
+    if ended() {
+        return fail(FetchCause::Gateway(GatewayError::Cancelled), progress);
     }
     match files.keep() {
         Ok(()) => Ok(progress),

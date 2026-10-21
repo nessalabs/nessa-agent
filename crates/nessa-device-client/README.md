@@ -66,8 +66,10 @@ handshake that refuses before a fetch exists, asks status again even when stop
 arrives after that refusal settled. The initial status and that recheck are
 returned with the fetch, including a terminal status that selected no reader.
 A local fault already produced stays that
-fault. A stop during the
-part sync does not link the output. Once the hard link exists, a failure to remove
+fault. A stop during the product handshake is a session stop. A stop during the
+part sync does not link the output. A budget that expires after the last range,
+or during that sync, is unreachable and does not link. A budget that expires
+while the hard link holds the gate leaves the output published. Once the hard link exists, a failure to remove
 the part or to sync the directory reports that the output exists. The native session and compound
 refresh API have run against paired records through generated Swift on macOS.
 `swift/NativeSessionWorker.swift` supplies pre-queue admission, cancellation latches

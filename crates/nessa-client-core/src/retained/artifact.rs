@@ -5,8 +5,8 @@
 //! answered and whose part, read back from disk, matched the named digest.
 //! Elapsed time is this fetch on the retained clock, not model generation.
 //! Busy retries wait on the injected pause. A stop or a spent budget during
-//! that wait, and a stop during the fetch, the link, and after the link,
-//! follows [`Publication`].
+//! that wait, during the part's re-read, and before the hard link, follows
+//! [`Publication`]. A link that takes the publication gate stays published.
 
 use super::{failure, ReadFailure, ReadStop, ReaderAccess, RetainedCache, Stopping};
 use crate::read_only_sync::application::held_file::{
@@ -120,19 +120,22 @@ enum Publication {
     /// stop clear, is [`ReadFailure::Unreachable`].
     Waiting,
     /// A range read or the part's re-read. The next source read is cancelled.
-    /// `keep` has not published the output.
+    /// A spent budget before that re-read, or after it and before `keep`,
+    /// does not publish. `keep` has not published the output.
     Fetching,
     /// The part is synced, then the hard link takes the publication gate
     /// together with `stop`. The call that takes the gate first wins. A stop
-    /// that wins does not create the link. A link that returns has published
-    /// the output.
+    /// or a spent budget before the link does not create it. A link that
+    /// returns has published the output, and a budget that expires during
+    /// that link does not remove it.
     Linking,
     /// The hard link exists. Removing the part or syncing the directory may
     /// still fail. `stop` does not unpublish, and it does not replace that
     /// failure.
     Linked,
     /// Cancellation won before the link. This keep created no output.
-    /// The result is [`ReadFailure::Stopped`].
+    /// A caller stop is [`ReadFailure::Stopped`]. A spent budget, with the
+    /// stop clear, is [`ReadFailure::Unreachable`].
     Stopped,
 }
 
@@ -414,9 +417,11 @@ struct PublishEnd {
     result: Result<(), KeepRefusal>,
 }
 
-/// Publish one kept part. The phase is the state `stop` is judged in.
-fn publish_part(stop: &ReadStop, part: &mut impl HeldPart) -> PublishEnd {
-    if stop.is_stopped() {
+/// Publish one kept part. The phase is the state the stop and the budget
+/// are judged in. Either one, before the link, publishes nothing.
+fn publish_part(ending: &Stopping, part: &mut impl HeldPart) -> PublishEnd {
+    let stop = &ending.stop;
+    if stop.is_stopped() || ending.spent() {
         return PublishEnd {
             phase: Publication::Stopped,
             result: Err(KeepRefusal::Stopped),
@@ -427,6 +432,13 @@ fn publish_part(stop: &ReadStop, part: &mut impl HeldPart) -> PublishEnd {
         return PublishEnd {
             phase: linking,
             result: Err(refusal),
+        };
+    }
+    // The sync can cross the deadline. The link has not started.
+    if ending.spent() {
+        return PublishEnd {
+            phase: Publication::Stopped,
+            result: Err(KeepRefusal::Stopped),
         };
     }
     match stop.admit(|| part.link_held()) {
@@ -449,9 +461,9 @@ fn publish_part(stop: &ReadStop, part: &mut impl HeldPart) -> PublishEnd {
 /// the part's re-read or during the sync does not link the output.
 struct StopGate<'a> {
     files: DiskFiles,
-    stop: &'a ReadStop,
-    /// `keep` saw the stop and did not link. A failure settled before that
-    /// stays the failure, even if `stop` is set afterwards.
+    ending: &'a Stopping,
+    /// `keep` saw the stop or a spent budget and did not link. A failure
+    /// settled before that stays the failure, even if `stop` is set afterwards.
     keep_saw_stop: bool,
 }
 impl FetchFiles for StopGate<'_> {
@@ -478,7 +490,7 @@ impl FetchFiles for StopGate<'_> {
         self.files.append(bytes)
     }
     fn keep(&mut self) -> Result<(), KeepRefusal> {
-        let end = publish_part(self.stop, &mut self.files);
+        let end = publish_part(self.ending, &mut self.files);
         // Only a gate that refused the link becomes `ReadFailure::Stopped`.
         // A failure already returned, including a cleanup failure after the
         // link, keeps its cause.
@@ -513,7 +525,8 @@ fn publish_fetch(failure: FetchFailure, keep_saw_stop: bool) -> ArtifactFault {
 /// has already applied [`local_held_file`]. A stop set while the part is
 /// re-read refuses `keep` and is `Stopped`, not a gateway confirmation.
 /// `ending` is the same end as a socket read: a caller stop, or a spent
-/// budget. Either cuts a busy pause short and asks no later range.
+/// budget. Either cuts a busy pause short, asks no later range, and does
+/// not link an output it reached only after the deadline.
 pub(crate) fn confirmed_held_file(
     source: &mut dyn HeldFileSource,
     pause: &dyn Pause,
@@ -530,7 +543,7 @@ pub(crate) fn confirmed_held_file(
     let mut files = match DiskFiles::new(request.output, &file) {
         Ok(files) => StopGate {
             files,
-            stop,
+            ending,
             keep_saw_stop: false,
         },
         Err(step) => {
@@ -566,9 +579,11 @@ impl RetainedCache {
     ///
     /// A socket registered on `stop` is released on every exit after the dial,
     /// including a handshake that fails. A budget that cancels a range, or
-    /// that runs out during a busy pause, is `Unreachable` within one stop
-    /// slice. `ReadStop::stop` stays `Stopped`, including a local
-    /// match that was cancelled while the output was read. A relay that says
+    /// that runs out during a busy pause, the part's re-read, or the sync
+    /// before the hard link, is `Unreachable`. A link that takes the
+    /// publication gate stays published. `ReadStop::stop` stays `Stopped`,
+    /// including a local match that was cancelled while the output was read.
+    /// A relay that says
     /// the gateway is offline, when the direct dial did not connect, is `Away`.
     pub fn fetch_artifact(
         &mut self,
