@@ -2588,11 +2588,18 @@ impl Agent {
     }
 
     /// Join only saved, original queued-cancellation delivery receipts.
-    /// This performs no new cancellation or provider action. Each unanswered
+    /// The existing scheduler serializes competing joins and close transactions.
+    /// This performs no new cancellation decision or provider action. Each unanswered
     /// receipt gets its own bounded idempotent audit attempt, then a writer ACK.
     /// Dropping this wait does not acknowledge either owner. Storage or audit
     /// failures remain visible and retain the same preparation for another join.
     pub async fn retry_cancelled_receipts(&self) -> Result<(), AgentError> {
+        let _scheduler = self.inner.scheduler.lock().await;
+        self.retry_cancelled_receipts_owned().await
+    }
+
+    // The caller holds the existing scheduler owner, including on first close.
+    async fn retry_cancelled_receipts_owned(&self) -> Result<(), AgentError> {
         self.inner
             .manager
             .flush_cancellation_receipts()
@@ -2689,7 +2696,7 @@ impl Agent {
                     _ => (SchedulingCause::RunnerStopped, None),
                 };
                 let mut scheduler = agent.inner.scheduler.lock().await;
-                let retried = agent.retry_cancelled_receipts().await;
+                let retried = agent.retry_cancelled_receipts_owned().await;
                 let saved = super::closing::join_acknowledgements(
                     retried,
                     agent.cancel_pending(&mut scheduler, cause, actor).await,

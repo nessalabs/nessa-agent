@@ -1212,7 +1212,25 @@ async fn prepared_cancellation_receipt_restarts_under_its_original_decision_and_
         Some(&decision)
     );
     fresh.audit.reject.store(false, Ordering::SeqCst);
-    bounded(restored.retry_cancelled_receipts()).await.unwrap();
+    let (first, second) = tokio::join!(
+        restored.retry_cancelled_receipts(),
+        restored.retry_cancelled_receipts()
+    );
+    first.unwrap();
+    second.unwrap();
+    assert_eq!(
+        fresh
+            .audit
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|record| matches!(record, ExecutionAuditRecord::QueueSettled(_)))
+            .count(),
+        1,
+        "competing joins use the same scheduler owner and actual ACK"
+    );
+
     let acknowledged = storage.snapshot();
     let record = acknowledged
         .invocations
