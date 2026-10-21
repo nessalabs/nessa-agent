@@ -4,8 +4,17 @@
 //! durable one-shot message. Delivery calls [`ConversationService::submit_command`]
 //! with the causal turn's initiation, so Cedar and a deleted conversation are
 //! decided there. The compare-and-set from `delivering` to `submitting` is the
-//! only permission to submit. Cancel, defer, and a model change lose to that
-//! transition and win against a claim that has not made it.
+//! only permission to submit, and it takes a lease the other processes on this
+//! file can see. Cancel, defer, and a model change lose to that transition and
+//! win against a claim that has not made it. An applied model change is not
+//! complete until that plan commits. Cedar's allow and deny of the preference
+//! are each one audit before the command result.
+
+/// How long a `submitting` lease lasts. The owner renews it while the submit runs.
+pub(crate) const FENCE_LEASE_MS: u64 = 30_000;
+
+/// How often the owner extends a lease it still holds.
+pub(crate) const FENCE_RENEW_EVERY_MS: u64 = 10_000;
 
 use super::{ConversationCaller, ConversationError, ConversationId, ConversationService};
 use crate::conversation::application::usage_limit_policy::{
@@ -192,17 +201,39 @@ pub trait ScheduledMessageStore: Send + Sync {
     /// the next pass. Otherwise the soonest scheduled due time strictly after
     /// `now_ms`.
     fn next_due(&self, now_ms: u64) -> ConversationFuture<'_, Option<u64>>;
-    /// Move `delivering` to `submitting`, or adopt a `submitting` row this
-    /// process is not already inside. True is the only permission to submit.
+    /// Move `delivering` to `submitting` under a lease that lasts
+    /// [`FENCE_LEASE_MS`] from `now_ms`, or adopt a `submitting` row whose
+    /// lease has expired or that this process already owns and is not inside.
+    /// True is the only permission to submit. The in-memory arm is taken only
+    /// after the update commits, and only so this process does not enter twice.
     /// Cancel, defer, and a model change match `scheduled` and `delivering`
     /// only, so exactly one of those and this transition can win.
-    fn begin_submit(&self, execution_id: &str) -> ConversationFuture<'_, bool>;
-    /// Drop this process's hold on a `submitting` row without changing its
-    /// status. The next pass can adopt it.
+    fn begin_submit(&self, execution_id: &str, now_ms: u64) -> ConversationFuture<'_, bool>;
+    /// Extend this process's lease on a `submitting` row. False when this
+    /// process is not the owner, or the row is no longer `submitting`.
+    fn renew_fence(&self, execution_id: &str, now_ms: u64) -> ConversationFuture<'_, bool>;
+    /// Drop this process's in-memory hold on a `submitting` row without
+    /// changing its status or its lease. This process can enter again. Another
+    /// process waits until the lease expires.
     fn release_submit(&self, execution_id: &str) -> ConversationFuture<'_, ()>;
-    /// When the preference is off, cancel `submitting` rows no process is
-    /// inside. A held fence is left to finish its submit.
+    /// When the preference is off, cancel `submitting` rows whose lease has
+    /// expired. A live lease is left to finish its submit.
     fn retire_unfenced_submissions(&self, at_ms: u64) -> ConversationFuture<'_, usize>;
+    /// The earliest still-live `submitting` lease, so the off path can wake
+    /// and cancel it when it expires.
+    fn next_live_fence(&self, now_ms: u64) -> ConversationFuture<'_, Option<u64>>;
+    /// Record Cedar's decision. Allow writes the preference, the audit, and
+    /// any cancellations in one transaction. Deny writes only the audit.
+    /// `Err` means the audit did not commit and the preference is unchanged.
+    /// An unchanged allow is still audited.
+    fn record_preference_decision(
+        &self,
+        allowed: bool,
+        enabled: bool,
+        policies: &[String],
+        actor: ScheduleActor,
+        at_ms: u64,
+    ) -> ConversationFuture<'_, PreferenceUpdate>;
     /// The row's status text, when it exists.
     fn status(&self, execution_id: &str) -> ConversationFuture<'_, Option<String>>;
     /// After the outcome has been observed. The status change and the audit
@@ -216,10 +247,10 @@ pub trait ScheduledMessageStore: Send + Sync {
         at_ms: u64,
     ) -> ConversationFuture<'_, ()>;
     /// Blank the prompt and identifying fields of every row for `conversation`.
-    /// `scheduled`, `delivering`, and an unarmed `submitting` row become
-    /// `cancelled`. An armed submit keeps its status. Terminal rows keep
-    /// theirs. One new audit per row that still held a payload. A second call
-    /// writes nothing. Older audit rows stay.
+    /// `scheduled`, `delivering`, and a `submitting` row whose lease has
+    /// expired become `cancelled`. A live lease keeps its status. Terminal
+    /// rows keep theirs. One new audit per row that still held a payload. A
+    /// second call writes nothing. Older audit rows stay.
     fn erase_conversation(&self, conversation: &str, at_ms: u64) -> ConversationFuture<'_, ()>;
 }
 
@@ -288,14 +319,24 @@ impl ConversationService {
         let decision = policy
             .evaluate(&facts)
             .map_err(|_| ConversationError::Unavailable)?;
-        if let UsageLimitPreferenceDecision::Deny { policies } = decision {
-            return Ok(PreferenceUpdate::Refused { policies });
-        }
+        let (allowed, policies) = match decision {
+            UsageLimitPreferenceDecision::Allow { policies } => (true, policies),
+            UsageLimitPreferenceDecision::Deny { policies } => (false, policies),
+        };
         let previous = store.preference().await?;
         let at_ms = self.inner.clock.unix_milliseconds();
-        let stored = store
-            .set_preference(enabled, ScheduleActor::person(&caller), at_ms)
-            .await?;
+        let PreferenceUpdate::Stored(stored) = store
+            .record_preference_decision(
+                allowed,
+                enabled,
+                &policies,
+                ScheduleActor::person(&caller),
+                at_ms,
+            )
+            .await?
+        else {
+            return Ok(PreferenceUpdate::Refused { policies });
+        };
         if stored {
             let mut visited = Vec::new();
             if let Err(error) = self
@@ -307,19 +348,38 @@ impl ConversationService {
                     store
                         .set_preference(false, ScheduleActor::system(), now)
                         .await?;
-                    for id in &visited {
-                        self.inner.live_changes.publish(id);
-                    }
-                    self.inner.schedule_wakeup.notify_waiters();
                 }
+                self.publish_preference(&visited);
                 return Err(error);
             }
-            for id in &visited {
-                self.inner.live_changes.publish(id);
-            }
+            self.publish_preference(&visited);
+        } else {
+            self.publish_preference(&[]);
+        }
+        Ok(PreferenceUpdate::Stored(stored))
+    }
+
+    /// An allow changed what a followed transcript shows. Every subscriber
+    /// re-reads the preference and whether a row is auto-resuming.
+    fn publish_preference(&self, visited: &[ConversationId]) {
+        self.inner.live_changes.publish_followed();
+        for id in visited {
+            self.inner.live_changes.publish(id);
         }
         self.inner.schedule_wakeup.notify_waiters();
-        Ok(PreferenceUpdate::Stored(stored))
+    }
+
+    /// Apply [`plan_continuation`] and return its error. An applied model
+    /// change and a delivery both wait on this. A background settle logs it.
+    pub(crate) async fn reconcile_usage_limit_schedule(
+        &self,
+        id: &ConversationId,
+    ) -> Result<(), ConversationError> {
+        let Some(store) = self.scheduled_messages() else {
+            return Ok(());
+        };
+        self.apply_usage_limit_plan(id, &store, false, ScheduleActor::system())
+            .await
     }
 
     /// Apply [`plan_continuation`] to one conversation's saved history.
@@ -608,7 +668,8 @@ impl ConversationService {
         let preference = store.preference().await.ok()?;
         if !preference {
             let _ = store.retire_unfenced_submissions(now).await;
-            return None;
+            let until = store.next_live_fence(now).await.ok().flatten()?;
+            return Some(until.saturating_sub(now).max(1));
         }
         let rows = store.claim_due(now, 8).await.ok()?;
         for row in rows {
@@ -671,13 +732,21 @@ impl ConversationService {
         let Ok(id) = ConversationId::new(&row.conversation) else {
             return;
         };
-        self.consider_usage_limit(&id, false, ScheduleActor::system())
-            .await;
+        // A plan that does not commit leaves the row where it is. Submitting
+        // it would deliver a continuation the model change had not cancelled.
+        if self
+            .apply_usage_limit_plan(&id, &store, false, ScheduleActor::system())
+            .await
+            .is_err()
+        {
+            return;
+        }
         // Reconciliation above may cancel or defer while the row is still
         // `delivering`. The transition below is the decision to submit: a
         // cancel, model change, or later reset that wins first leaves this
         // false, and one that arrives after cannot undo it.
-        let Ok(true) = store.begin_submit(&row.execution_id).await else {
+        let now = self.inner.clock.unix_milliseconds();
+        let Ok(true) = store.begin_submit(&row.execution_id, now).await else {
             return;
         };
         self.finish_fenced_submit(store.clone(), id, &row).await;
@@ -690,6 +759,22 @@ impl ConversationService {
         id: ConversationId,
         row: &ScheduledMessage,
     ) {
+        let renew = {
+            let store = store.clone();
+            let execution_id = row.execution_id.clone();
+            let clock = self.inner.clock.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(FENCE_RENEW_EVERY_MS))
+                        .await;
+                    let now = clock.unix_milliseconds();
+                    if !store.renew_fence(&execution_id, now).await.unwrap_or(false) {
+                        break;
+                    }
+                }
+            })
+        };
+        let _renew = StopRenew(renew);
         if self.execution_saved(&id, &row.execution_id).await {
             let now = self.inner.clock.unix_milliseconds();
             let _ = store
@@ -772,6 +857,15 @@ impl ConversationService {
                 .iter()
                 .any(|invocation| invocation.request.execution_id.as_str() == execution_id)
         })
+    }
+}
+
+/// Aborts the lease renewal when the submit returns, including on an early return.
+struct StopRenew(tokio::task::JoinHandle<()>);
+
+impl Drop for StopRenew {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -984,9 +1078,11 @@ mod catalogue_pages {
     };
     use crate::conversation::application::{
         ConversationCaller, ConversationDependencies, ConversationFuture, ConversationLimits,
-        ConversationListing, ConversationService, ListedConversations, ObservationCursor,
-        ObservedConversations, UsageLimitPreferenceDecision, UsageLimitPreferenceFacts,
-        UsageLimitPreferenceGrant, UsageLimitPreferencePolicyEvaluator,
+        ConversationListing, ConversationModelApplication, ConversationModelRequest,
+        ConversationModelRequestState, ConversationModelSelection, ConversationService,
+        ListedConversations, ObservationCursor, ObservedConversations,
+        UsageLimitPreferenceDecision, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
+        UsageLimitPreferencePolicyEvaluator,
     };
     use crate::conversation::domain::ContinuationCause;
     use crate::conversation_test_support::{
@@ -995,6 +1091,9 @@ mod catalogue_pages {
         DELETION_BUDGETS,
     };
     use nessa_protocol::conversation::domain::ConversationId;
+    use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
+    use nessa_protocol::conversation::view::ConversationModelChangeEffect;
+    use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 
     fn caller() -> ConversationCaller {
         ConversationCaller {
@@ -1025,13 +1124,21 @@ mod catalogue_pages {
         listing: Arc<dyn ConversationListing>,
         clock: Arc<dyn Clock>,
     ) -> ConversationService {
+        service_over(Arc::new(MemoryRepository::default()), listing, clock)
+    }
+
+    fn service_over(
+        metadata: Arc<MemoryRepository>,
+        listing: Arc<dyn ConversationListing>,
+        clock: Arc<dyn Clock>,
+    ) -> ConversationService {
         let provider = Arc::new(ProviderFactory::default());
         ConversationService::new(
             ConversationDependencies {
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents: only(Arc::new(Provider::new(provider))),
                 storage: Arc::new(InMemoryStorage::new()),
-                metadata: Arc::new(MemoryRepository::default()),
+                metadata,
                 mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
@@ -1079,6 +1186,13 @@ mod catalogue_pages {
         /// `(enabled, person)` for each change. An unchanged write is absent.
         changes: Mutex<Vec<(bool, bool)>>,
         outcomes: Mutex<Vec<(String, u64)>>,
+        /// `(allowed, policy ids)` for each Cedar decision that committed.
+        decisions: Mutex<Vec<(bool, Vec<String>)>>,
+        fail_decision: AtomicBool,
+        submits: AtomicUsize,
+        opens: AtomicUsize,
+        /// While set, `open` fails and a delivery or model reconciliation cannot commit.
+        fail_open: AtomicBool,
     }
 
     impl RecordingStore {
@@ -1087,6 +1201,11 @@ mod catalogue_pages {
                 enabled: AtomicBool::new(enabled),
                 changes: Mutex::new(Vec::new()),
                 outcomes: Mutex::new(Vec::new()),
+                decisions: Mutex::new(Vec::new()),
+                fail_decision: AtomicBool::new(false),
+                submits: AtomicUsize::new(0),
+                opens: AtomicUsize::new(0),
+                fail_open: AtomicBool::new(true),
             }
         }
     }
@@ -1113,7 +1232,12 @@ mod catalogue_pages {
             Box::pin(async move { Ok(enabled) })
         }
         fn open(&self, _: &str) -> ConversationFuture<'_, Option<ScheduledMessage>> {
-            refused()
+            self.opens.fetch_add(1, Ordering::SeqCst);
+            if self.fail_open.load(Ordering::SeqCst) {
+                refused()
+            } else {
+                Box::pin(async { Ok(None) })
+            }
         }
         fn accept(
             &self,
@@ -1143,14 +1267,46 @@ mod catalogue_pages {
         fn next_due(&self, _: u64) -> ConversationFuture<'_, Option<u64>> {
             refused()
         }
-        fn begin_submit(&self, _: &str) -> ConversationFuture<'_, bool> {
+        fn begin_submit(&self, _: &str, _: u64) -> ConversationFuture<'_, bool> {
+            self.submits.fetch_add(1, Ordering::SeqCst);
             refused()
+        }
+        fn renew_fence(&self, _: &str, _: u64) -> ConversationFuture<'_, bool> {
+            Box::pin(async { Ok(false) })
         }
         fn release_submit(&self, _: &str) -> ConversationFuture<'_, ()> {
             refused()
         }
         fn retire_unfenced_submissions(&self, _: u64) -> ConversationFuture<'_, usize> {
             refused()
+        }
+        fn next_live_fence(&self, _: u64) -> ConversationFuture<'_, Option<u64>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn record_preference_decision(
+            &self,
+            allowed: bool,
+            enabled: bool,
+            policies: &[String],
+            actor: ScheduleActor,
+            _: u64,
+        ) -> ConversationFuture<'_, PreferenceUpdate> {
+            if self.fail_decision.swap(false, Ordering::SeqCst) {
+                return Box::pin(async { Err(ConversationError::Metadata) });
+            }
+            self.decisions
+                .lock()
+                .unwrap()
+                .push((allowed, policies.to_vec()));
+            if !allowed {
+                let policies = policies.to_vec();
+                return Box::pin(async move { Ok(PreferenceUpdate::Refused { policies }) });
+            }
+            let was = self.enabled.swap(enabled, Ordering::SeqCst);
+            if was != enabled {
+                self.changes.lock().unwrap().push((enabled, actor.person));
+            }
+            Box::pin(async move { Ok(PreferenceUpdate::Stored(enabled)) })
         }
         fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
             refused()
@@ -1284,14 +1440,30 @@ mod catalogue_pages {
             }
             Box::pin(async { Ok(None) })
         }
-        fn begin_submit(&self, _: &str) -> ConversationFuture<'_, bool> {
+        fn begin_submit(&self, _: &str, _: u64) -> ConversationFuture<'_, bool> {
             Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+        fn renew_fence(&self, _: &str, _: u64) -> ConversationFuture<'_, bool> {
+            Box::pin(async { Ok(false) })
         }
         fn release_submit(&self, _: &str) -> ConversationFuture<'_, ()> {
             Box::pin(async { Err(ConversationError::Unavailable) })
         }
         fn retire_unfenced_submissions(&self, _: u64) -> ConversationFuture<'_, usize> {
             Box::pin(async { Ok(0) })
+        }
+        fn next_live_fence(&self, _: u64) -> ConversationFuture<'_, Option<u64>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn record_preference_decision(
+            &self,
+            _: bool,
+            _: bool,
+            _: &[String],
+            _: ScheduleActor,
+            _: u64,
+        ) -> ConversationFuture<'_, PreferenceUpdate> {
+            Box::pin(async { Err(ConversationError::Unavailable) })
         }
         fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
             Box::pin(async { Err(ConversationError::Unavailable) })
@@ -1359,7 +1531,7 @@ mod catalogue_pages {
         });
         let service = service(listing.clone(), Arc::new(TestClock));
         let store = Arc::new(RecordingStore::new(false));
-        bind(&service, store);
+        bind(&service, store.clone());
         let update = service
             .set_usage_limit_auto_continue(true, caller(), facts("admin"))
             .await
@@ -1368,6 +1540,10 @@ mod catalogue_pages {
         assert_eq!(
             listing.seen.lock().unwrap().as_slice(),
             ["person-a", "person-b"]
+        );
+        assert_eq!(
+            store.decisions.lock().unwrap().as_slice(),
+            [(true, vec!["admin".into()])]
         );
     }
 
@@ -1429,6 +1605,10 @@ mod catalogue_pages {
         assert!(!store.preference().await.unwrap());
         assert!(store.changes.lock().unwrap().is_empty());
         assert!(listing.seen.lock().unwrap().is_empty());
+        assert_eq!(
+            store.decisions.lock().unwrap().as_slice(),
+            [(false, vec!["member".into()])]
+        );
     }
 
     #[tokio::test]
@@ -1507,5 +1687,229 @@ mod catalogue_pages {
             store.outcomes.lock().unwrap().as_slice(),
             [("exec-1".into(), 9_000)]
         );
+    }
+
+    #[tokio::test]
+    async fn disabling_the_preference_publishes_every_followed_conversation() {
+        let service = service(
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            Arc::new(TestClock),
+        );
+        let store = Arc::new(RecordingStore::new(true));
+        bind(&service, store.clone());
+        let first = ConversationId::new("11111111-1111-4111-8111-111111111111").unwrap();
+        let second = ConversationId::new("22222222-2222-4222-8222-222222222222").unwrap();
+        let followed_first = service.inner.live_changes.subscribe(&first);
+        let followed_second = service.inner.live_changes.subscribe(&second);
+        let update = service
+            .set_usage_limit_auto_continue(false, caller(), facts("admin"))
+            .await
+            .unwrap();
+        assert_eq!(update, PreferenceUpdate::Stored(false));
+        assert!(followed_first.has_changed().unwrap());
+        assert!(followed_second.has_changed().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_denied_preference_does_not_publish() {
+        let service = service(
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            Arc::new(TestClock),
+        );
+        let store = Arc::new(RecordingStore::new(false));
+        bind(&service, store.clone());
+        let id = ConversationId::new("11111111-1111-4111-8111-111111111111").unwrap();
+        let followed = service.inner.live_changes.subscribe(&id);
+        let update = service
+            .set_usage_limit_auto_continue(true, caller(), facts("member"))
+            .await
+            .unwrap();
+        assert!(matches!(update, PreferenceUpdate::Refused { .. }));
+        assert!(!followed.has_changed().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_failed_preference_audit_leaves_the_preference_and_returns_an_error() {
+        let service = service(
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            Arc::new(TestClock),
+        );
+        let store = Arc::new(RecordingStore::new(false));
+        bind(&service, store.clone());
+        store.fail_decision.store(true, Ordering::SeqCst);
+        let error = service
+            .set_usage_limit_auto_continue(true, caller(), facts("admin"))
+            .await;
+        assert!(error.is_err());
+        assert!(!store.preference().await.unwrap());
+        assert!(store.changes.lock().unwrap().is_empty());
+        assert!(store.decisions.lock().unwrap().is_empty());
+
+        store.fail_decision.store(true, Ordering::SeqCst);
+        let denied = service
+            .set_usage_limit_auto_continue(true, caller(), facts("member"))
+            .await;
+        assert!(denied.is_err());
+        assert!(!store.preference().await.unwrap());
+        assert!(store.decisions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_schedule_plan_does_not_submit() {
+        let repository = Arc::new(MemoryRepository::default());
+        let id = ConversationId::new("11111111-1111-4111-8111-111111111111").unwrap();
+        repository.records.lock().unwrap().insert(
+            id.clone(),
+            crate::conversation::domain::Conversation::restore(
+                id.clone(),
+                OrganizationId::new("org").unwrap(),
+                PrincipalId::new("person").unwrap(),
+                "desktop".into(),
+                "create".into(),
+                1,
+                None,
+                ConversationModelId::new("opus").unwrap(),
+                ConversationApprovalMode::Ask,
+            )
+            .unwrap(),
+        );
+        let service = service_over(
+            repository,
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            Arc::new(TestClock),
+        );
+        let store = Arc::new(RecordingStore::new(true));
+        service.bind_scheduled_messages(store.clone());
+        let row = ScheduledMessage {
+            conversation: id.to_string(),
+            causal_execution: "causal".into(),
+            execution_id: "exec-1".into(),
+            due_at_ms: 10,
+            delivering: true,
+            agent: "claude".into(),
+            model: "opus".into(),
+            prompt: "continue".into(),
+            organization_id: "org".into(),
+            principal_id: "person".into(),
+            surface_id: "desktop".into(),
+            action_id: "action".into(),
+            initiation: "owner".into(),
+            grant_id: None,
+            policy_revision: None,
+            tools_checked: false,
+        };
+        service.deliver_scheduled(store.clone(), row).await;
+        assert_eq!(store.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(store.submits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn an_applied_model_change_is_not_complete_until_reconciliation_commits() {
+        let repository = Arc::new(MemoryRepository::default());
+        let id = ConversationId::new("11111111-1111-4111-8111-111111111111").unwrap();
+        let organization = OrganizationId::new("org").unwrap();
+        let principal = PrincipalId::new("person").unwrap();
+        let prior_model = ConversationModelId::new("opus").unwrap();
+        let requested = ConversationModelId::new("sonnet").unwrap();
+        repository.records.lock().unwrap().insert(
+            id.clone(),
+            crate::conversation::domain::Conversation::restore(
+                id.clone(),
+                organization.clone(),
+                principal.clone(),
+                "desktop".into(),
+                "create".into(),
+                1,
+                None,
+                prior_model.clone(),
+                ConversationApprovalMode::Ask,
+            )
+            .unwrap(),
+        );
+        let selection = ConversationModelSelection {
+            model: requested.clone(),
+            approval_mode: ConversationApprovalMode::Ask,
+            effect: ConversationModelChangeEffect::NextTurn,
+        };
+        repository.model_requests.lock().unwrap().insert(
+            (id.clone(), "toggle".into()),
+            ConversationModelRequest {
+                conversation_id: id.clone(),
+                organization_id: organization,
+                request_id: "toggle".into(),
+                initiator_principal_id: principal.clone(),
+                initiator_surface_id: "desktop".into(),
+                prior_identity: ProviderIdentity::new("fixture", "opus", "").unwrap(),
+                requested_identity: ProviderIdentity::new("fixture", "sonnet", "").unwrap(),
+                prior_model,
+                prior_approval_mode: ConversationApprovalMode::Ask,
+                requested_model: requested.clone(),
+                state: ConversationModelRequestState::Applied,
+                application: Some(ConversationModelApplication::Applied(selection.clone())),
+                requested_at_ms: 1,
+            },
+        );
+        let service = service_over(
+            repository.clone(),
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            Arc::new(TestClock),
+        );
+        let store = Arc::new(RecordingStore::new(false));
+        service.bind_scheduled_messages(store.clone());
+        let caller = caller();
+        let failed = service.change_model(&id, &caller, requested.clone()).await;
+        assert!(failed.is_err());
+        assert_eq!(store.opens.load(Ordering::SeqCst), 1);
+        store.fail_open.store(false, Ordering::SeqCst);
+        let applied = service.change_model(&id, &caller, requested).await.unwrap();
+        assert_eq!(applied, selection);
+        assert_eq!(store.opens.load(Ordering::SeqCst), 2);
+
+        let applied_request = repository
+            .model_requests
+            .lock()
+            .unwrap()
+            .get(&(id.clone(), "toggle".into()))
+            .unwrap()
+            .clone();
+        repository.model_requests.lock().unwrap().insert(
+            (id.clone(), "refused".into()),
+            ConversationModelRequest {
+                request_id: "refused".into(),
+                state: ConversationModelRequestState::NotApplied,
+                application: Some(ConversationModelApplication::Refused),
+                ..applied_request
+            },
+        );
+        let opens = store.opens.load(Ordering::SeqCst);
+        let mut refused_caller = caller;
+        refused_caller.action_id = "refused".into();
+        let refused = service
+            .change_model(
+                &id,
+                &refused_caller,
+                ConversationModelId::new("sonnet").unwrap(),
+            )
+            .await;
+        assert!(matches!(
+            refused,
+            Err(ConversationError::ModelChangeNotApplied)
+        ));
+        assert_eq!(store.opens.load(Ordering::SeqCst), opens);
     }
 }

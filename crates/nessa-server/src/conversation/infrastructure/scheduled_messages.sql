@@ -34,6 +34,8 @@ CREATE TABLE message (
     grant_id TEXT,
     policy_revision INTEGER,
     tools_checked INTEGER NOT NULL CHECK (tools_checked IN (0, 1)),
+    fence_owner TEXT NOT NULL DEFAULT '',
+    fence_until_ms INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (conversation, causal_execution)
 ) STRICT;
 
@@ -53,7 +55,8 @@ CREATE TABLE audit (
     organization_id TEXT,
     principal_id TEXT,
     surface_id TEXT,
-    action_id TEXT
+    action_id TEXT,
+    policies TEXT NOT NULL DEFAULT ''
 ) STRICT;
 
 PRAGMA user_version = 1;

@@ -3,15 +3,17 @@
 //!
 //! Schedule and cancellation audits commit with the status change. The
 //! delivery audit commits in the transaction that records the outcome, which
-//! runs only after `begin_submit` has moved the row to `submitting`. Cancel,
-//! defer, and a model change match `scheduled` and `delivering` only, so they
-//! cannot land once that transition has, and the transition fails once they
-//! have. If the outcome transaction fails, the row stays `submitting` and
-//! keeps its execution id.
+//! runs only after `begin_submit` has moved the row to `submitting` and taken
+//! a lease. Cancel, defer, and a model change match `scheduled` and
+//! `delivering` only, so they cannot land once that transition has, and the
+//! transition fails once they have. If the outcome transaction fails, the row
+//! stays `submitting` and keeps its execution id. Another process adopts that
+//! row only after the lease expires. A preference allow and a preference deny
+//! each commit their own audit, with the policy ids, before the command result.
 
 use crate::conversation::application::{
-    ConversationError, ConversationFuture, ScheduleActor, ScheduleDraft, ScheduleSettlement,
-    ScheduledMessage, ScheduledMessageStore,
+    ConversationError, ConversationFuture, PreferenceUpdate, ScheduleActor, ScheduleDraft,
+    ScheduleSettlement, ScheduledMessage, ScheduledMessageStore, FENCE_LEASE_MS,
 };
 use crate::conversation::domain::ContinuationCause;
 use nessa_local_database::{
@@ -31,11 +33,13 @@ const DEFINITION: &str = include_str!("scheduled_messages.sql");
 /// Scheduled continuations, one open row per conversation.
 pub struct LocalScheduledMessages {
     connection: Arc<Mutex<Connection>>,
+    /// This process's lease owner. Another open of the same file has another.
+    owner: String,
     /// Execution ids whose `submitting` row this process is inside.
     ///
-    /// The connection mutex is taken before this one. A restart drops the set,
-    /// so a `submitting` row left by a crash can be adopted. Preference off
-    /// cancels a `submitting` row only when it is not in this set.
+    /// The connection mutex is taken before this one. The set is only this
+    /// process's re-entry guard. The durable owner is `fence_owner` until
+    /// `fence_until_ms`. A restart drops the set and leaves the lease.
     armed: Arc<Mutex<HashSet<String>>>,
     /// The next delivery-outcome transaction fails before it commits.
     #[cfg(test)]
@@ -43,6 +47,9 @@ pub struct LocalScheduledMessages {
     /// The next `begin_submit` fails at commit, before the id is armed.
     #[cfg(test)]
     fail_begin_commit: AtomicBool,
+    /// The next preference decision fails before its audit commits.
+    #[cfg(test)]
+    fail_decision_audit: AtomicBool,
 }
 
 impl LocalScheduledMessages {
@@ -51,11 +58,14 @@ impl LocalScheduledMessages {
         let connection = nessa_local_database::open(path, &Schema::new(DEFINITION)?)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            owner: uuid::Uuid::new_v4().to_string(),
             armed: Arc::new(Mutex::new(HashSet::new())),
             #[cfg(test)]
             fail_outcome_audit: AtomicBool::new(false),
             #[cfg(test)]
             fail_begin_commit: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_decision_audit: AtomicBool::new(false),
         })
     }
 
@@ -70,6 +80,12 @@ impl LocalScheduledMessages {
     #[cfg(test)]
     pub fn fail_next_begin_commit(&self) {
         self.fail_begin_commit.store(true, Ordering::SeqCst);
+    }
+
+    /// The next preference decision rolls back, preference included.
+    #[cfg(test)]
+    pub fn fail_next_decision_audit(&self) {
+        self.fail_decision_audit.store(true, Ordering::SeqCst);
     }
 
     /// Initiator of each preference audit, oldest first.
@@ -144,12 +160,20 @@ struct AuditChange<'a> {
 }
 
 fn audit(transaction: &Transaction<'_>, change: &AuditChange<'_>) -> Result<(), ConversationError> {
+    audit_policies(transaction, change, "")
+}
+
+fn audit_policies(
+    transaction: &Transaction<'_>,
+    change: &AuditChange<'_>,
+    policies: &str,
+) -> Result<(), ConversationError> {
     transaction
         .execute(
             "INSERT INTO audit (at_ms, conversation, causal_execution, execution_id, \
              before_status, after_status, cause, initiator_kind, organization_id, \
-             principal_id, surface_id, action_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+             principal_id, surface_id, action_id, policies) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 change.at_ms,
                 change.conversation,
@@ -163,6 +187,7 @@ fn audit(transaction: &Transaction<'_>, change: &AuditChange<'_>) -> Result<(), 
                 change.actor.principal_id,
                 change.actor.surface_id,
                 change.actor.action_id,
+                policies,
             ],
         )
         .map_err(failed)?;
@@ -274,10 +299,10 @@ fn cancel_matching(
     Ok(cancelled)
 }
 
-/// Cancel `submitting` rows this process is not inside. A held fence stays.
-fn cancel_unarmed_submitting(
+/// Cancel `submitting` rows whose lease is at or before `now_ms`. A live lease stays.
+fn cancel_expired_submitting(
     transaction: &Transaction<'_>,
-    armed: &HashSet<String>,
+    now_ms: i64,
     actor: &ScheduleActor,
     at_ms: i64,
     cause: &str,
@@ -286,11 +311,11 @@ fn cancel_unarmed_submitting(
         let mut statement = transaction
             .prepare(
                 "SELECT conversation, causal_execution, execution_id FROM message \
-                 WHERE status = 'submitting'",
+                 WHERE status = 'submitting' AND fence_until_ms <= ?1",
             )
             .map_err(failed)?;
         let selected = statement
-            .query_map([], |row| {
+            .query_map(params![now_ms], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -304,14 +329,11 @@ fn cancel_unarmed_submitting(
     };
     let mut cancelled = 0;
     for (conversation, causal, execution) in rows {
-        if armed.contains(&execution) {
-            continue;
-        }
         let changed = transaction
             .execute(
-                "UPDATE message SET status = 'cancelled' \
-                 WHERE execution_id = ?1 AND status = 'submitting'",
-                params![execution],
+                "UPDATE message SET status = 'cancelled', fence_owner = '', fence_until_ms = 0 \
+                 WHERE execution_id = ?1 AND status = 'submitting' AND fence_until_ms <= ?2",
+                params![execution, now_ms],
             )
             .map_err(failed)?;
         if changed == 1 {
@@ -338,6 +360,33 @@ fn holds(armed: &Mutex<HashSet<String>>) -> std::sync::MutexGuard<'_, HashSet<St
     armed.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+fn cancel_open_preference(
+    transaction: &Transaction<'_>,
+    actor: &ScheduleActor,
+    at_ms: i64,
+) -> Result<(), ConversationError> {
+    cancel_matching(
+        transaction,
+        "WHERE status IN ('scheduled', 'delivering')",
+        &[],
+        ContinuationCause::PreferenceDisabled.as_str(),
+        actor,
+        at_ms,
+    )?;
+    cancel_expired_submitting(
+        transaction,
+        at_ms,
+        actor,
+        at_ms,
+        ContinuationCause::PreferenceDisabled.as_str(),
+    )?;
+    Ok(())
+}
+
+fn lease_until(now_ms: u64) -> Result<i64, ConversationError> {
+    millis(now_ms.saturating_add(FENCE_LEASE_MS))
+}
+
 impl ScheduledMessageStore for LocalScheduledMessages {
     fn preference(&self) -> ConversationFuture<'_, bool> {
         self.run(|connection| {
@@ -357,7 +406,6 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         actor: ScheduleActor,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool> {
-        let armed = self.armed.clone();
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
             let transaction = connection.transaction().map_err(failed)?;
@@ -393,24 +441,76 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 },
             )?;
             if !enabled {
-                cancel_matching(
-                    &transaction,
-                    "WHERE status IN ('scheduled', 'delivering')",
-                    &[],
-                    ContinuationCause::PreferenceDisabled.as_str(),
-                    &actor,
-                    at_ms,
-                )?;
-                cancel_unarmed_submitting(
-                    &transaction,
-                    &holds(&armed),
-                    &actor,
-                    at_ms,
-                    ContinuationCause::PreferenceDisabled.as_str(),
-                )?;
+                cancel_open_preference(&transaction, &actor, at_ms)?;
             }
             transaction.commit().map_err(failed)?;
             Ok(enabled)
+        })
+    }
+
+    fn record_preference_decision(
+        &self,
+        allowed: bool,
+        enabled: bool,
+        policies: &[String],
+        actor: ScheduleActor,
+        at_ms: u64,
+    ) -> ConversationFuture<'_, PreferenceUpdate> {
+        let policies_text = policies.join("\n");
+        let policies = policies.to_vec();
+        #[cfg(test)]
+        let fail = self.fail_decision_audit.swap(false, Ordering::SeqCst);
+        self.run(move |connection| {
+            let at_ms = millis(at_ms)?;
+            let transaction = connection.transaction().map_err(failed)?;
+            let previous: Option<i64> = transaction
+                .query_row("SELECT enabled FROM preference WHERE id = 1", [], |row| {
+                    row.get(0)
+                })
+                .optional()
+                .map_err(failed)?;
+            let was = previous == Some(1);
+            let stored = if allowed { enabled } else { was };
+            if allowed && was != enabled {
+                transaction
+                    .execute(
+                        "INSERT INTO preference (id, enabled) VALUES (1, ?1) \
+                         ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled",
+                        params![i64::from(enabled)],
+                    )
+                    .map_err(failed)?;
+            }
+            audit_policies(
+                &transaction,
+                &AuditChange {
+                    at_ms,
+                    conversation: "gateway",
+                    causal_execution: "preference",
+                    execution_id: actor.action_id.as_deref().unwrap_or("preference"),
+                    before_status: Some(if was { "on" } else { "off" }),
+                    after_status: if stored { "on" } else { "off" },
+                    cause: if allowed {
+                        "preference_allowed"
+                    } else {
+                        "preference_denied"
+                    },
+                    actor: &actor,
+                },
+                &policies_text,
+            )?;
+            if allowed && !enabled {
+                cancel_open_preference(&transaction, &actor, at_ms)?;
+            }
+            #[cfg(test)]
+            if fail {
+                return Err(ConversationError::Metadata);
+            }
+            transaction.commit().map_err(failed)?;
+            if allowed {
+                Ok(PreferenceUpdate::Stored(enabled))
+            } else {
+                Ok(PreferenceUpdate::Refused { policies })
+            }
         })
     }
 
@@ -803,39 +903,41 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         })
     }
 
-    fn begin_submit(&self, execution_id: &str) -> ConversationFuture<'_, bool> {
+    fn begin_submit(&self, execution_id: &str, now_ms: u64) -> ConversationFuture<'_, bool> {
         let execution_id = execution_id.to_owned();
+        let owner = self.owner.clone();
         let armed = self.armed.clone();
         #[cfg(test)]
         let fail_commit = self.fail_begin_commit.swap(false, Ordering::SeqCst);
         self.run(move |connection| {
+            // Same process, still inside the submit. The connection mutex is
+            // held for this whole closure, and it is taken before `armed`.
+            if holds(&armed).contains(&execution_id) {
+                return Ok(false);
+            }
+            let now = millis(now_ms)?;
+            let until = lease_until(now_ms)?;
             let transaction = connection.transaction().map_err(failed)?;
-            let status: Option<String> = transaction
-                .query_row(
-                    "SELECT status FROM message WHERE execution_id = ?1",
-                    params![execution_id],
-                    |row| row.get(0),
+            // One update, so two processes cannot both become the owner.
+            let claimed = transaction
+                .execute(
+                    "UPDATE message SET status = 'submitting', fence_owner = ?2, \
+                     fence_until_ms = ?3 \
+                     WHERE execution_id = ?1 AND status = 'delivering'",
+                    params![execution_id, owner, until],
                 )
-                .optional()
-                .map_err(failed)?;
-            // The connection mutex is held for this whole closure. The arm is
-            // taken only after the status commit, so a failed commit cannot
-            // leave the id armed.
-            let claim = match status.as_deref() {
-                Some("delivering") => {
-                    transaction
-                        .execute(
-                            "UPDATE message SET status = 'submitting' \
-                             WHERE execution_id = ?1 AND status = 'delivering'",
-                            params![execution_id],
-                        )
-                        .map_err(failed)?
-                        == 1
-                }
-                Some("submitting") => !holds(&armed).contains(&execution_id),
-                _ => false,
-            };
-            if !claim {
+                .map_err(failed)?
+                == 1
+                || transaction
+                    .execute(
+                        "UPDATE message SET fence_owner = ?2, fence_until_ms = ?3 \
+                         WHERE execution_id = ?1 AND status = 'submitting' \
+                           AND (fence_until_ms <= ?4 OR fence_owner = ?2)",
+                        params![execution_id, owner, until, now],
+                    )
+                    .map_err(failed)?
+                    == 1;
+            if !claimed {
                 transaction.commit().map_err(failed)?;
                 return Ok(false);
             }
@@ -845,6 +947,22 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             }
             transaction.commit().map_err(failed)?;
             Ok(holds(&armed).insert(execution_id))
+        })
+    }
+
+    fn renew_fence(&self, execution_id: &str, now_ms: u64) -> ConversationFuture<'_, bool> {
+        let execution_id = execution_id.to_owned();
+        let owner = self.owner.clone();
+        self.run(move |connection| {
+            let until = lease_until(now_ms)?;
+            let changed = connection
+                .execute(
+                    "UPDATE message SET fence_until_ms = ?1 \
+                     WHERE execution_id = ?2 AND status = 'submitting' AND fence_owner = ?3",
+                    params![until, execution_id, owner],
+                )
+                .map_err(failed)?;
+            Ok(changed == 1)
         })
     }
 
@@ -858,7 +976,6 @@ impl ScheduledMessageStore for LocalScheduledMessages {
     }
 
     fn retire_unfenced_submissions(&self, at_ms: u64) -> ConversationFuture<'_, usize> {
-        let armed = self.armed.clone();
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
             let transaction = connection.transaction().map_err(failed)?;
@@ -872,15 +989,30 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 transaction.commit().map_err(failed)?;
                 return Ok(0);
             }
-            let cancelled = cancel_unarmed_submitting(
+            let cancelled = cancel_expired_submitting(
                 &transaction,
-                &holds(&armed),
+                at_ms,
                 &ScheduleActor::system(),
                 at_ms,
                 ContinuationCause::PreferenceDisabled.as_str(),
             )?;
             transaction.commit().map_err(failed)?;
             Ok(cancelled)
+        })
+    }
+
+    fn next_live_fence(&self, now_ms: u64) -> ConversationFuture<'_, Option<u64>> {
+        self.run(move |connection| {
+            let now = millis(now_ms)?;
+            let until: Option<i64> = connection
+                .query_row(
+                    "SELECT MIN(fence_until_ms) FROM message \
+                     WHERE status = 'submitting' AND fence_until_ms > ?1",
+                    params![now],
+                    |row| row.get(0),
+                )
+                .map_err(failed)?;
+            Ok(until.and_then(|until| u64::try_from(until).ok()))
         })
     }
 
@@ -965,7 +1097,6 @@ impl ScheduledMessageStore for LocalScheduledMessages {
 
     fn erase_conversation(&self, conversation: &str, at_ms: u64) -> ConversationFuture<'_, ()> {
         let conversation = conversation.to_owned();
-        let armed = self.armed.clone();
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
             let transaction = connection.transaction().map_err(failed)?;
@@ -973,7 +1104,8 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 let mut statement = transaction
                     .prepare(
                         "SELECT execution_id, causal_execution, status, prompt, agent, model, \
-                         organization_id, principal_id, surface_id, action_id, grant_id \
+                         organization_id, principal_id, surface_id, action_id, grant_id, \
+                         fence_until_ms \
                          FROM message WHERE conversation = ?1",
                     )
                     .map_err(failed)?;
@@ -991,6 +1123,7 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                             surface_id: row.get(8)?,
                             action_id: row.get(9)?,
                             grant_id: row.get(10)?,
+                            fence_until_ms: row.get(11)?,
                         })
                     })
                     .map_err(failed)?
@@ -998,13 +1131,12 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                     .map_err(failed)?;
                 selected
             };
-            let armed = holds(&armed);
             for row in rows {
                 if row.blank() {
                     continue;
                 }
                 let cancel = matches!(row.status.as_str(), "scheduled" | "delivering")
-                    || (row.status == "submitting" && !armed.contains(&row.execution_id));
+                    || (row.status == "submitting" && row.fence_until_ms <= at_ms);
                 let after = if cancel {
                     "cancelled"
                 } else {
@@ -1053,6 +1185,7 @@ struct ScrubRow {
     surface_id: String,
     action_id: String,
     grant_id: Option<String>,
+    fence_until_ms: i64,
 }
 
 impl ScrubRow {
@@ -1329,7 +1462,7 @@ mod tests {
             .unwrap();
         store.claim_due(10, 4).await.unwrap();
         assert!(!store.set_preference(false, person(), 2).await.unwrap());
-        assert!(!store.begin_submit("exec-1").await.unwrap());
+        assert!(!store.begin_submit("exec-1", 10).await.unwrap());
         assert_eq!(
             store.status("exec-1").await.unwrap().as_deref(),
             Some("cancelled")
@@ -1341,8 +1474,8 @@ mod tests {
             .await
             .unwrap();
         held.claim_due(10, 4).await.unwrap();
-        assert!(held.begin_submit("exec-1").await.unwrap());
-        assert!(!held.begin_submit("exec-1").await.unwrap());
+        assert!(held.begin_submit("exec-1", 10).await.unwrap());
+        assert!(!held.begin_submit("exec-1", 10).await.unwrap());
         assert!(!held.set_preference(false, person(), 3).await.unwrap());
         assert_eq!(
             held.status("exec-1").await.unwrap().as_deref(),
@@ -1391,7 +1524,7 @@ mod tests {
             .defer_claim("conversation", "causal", 80, 2)
             .await
             .unwrap());
-        assert!(!store.begin_submit("exec-1").await.unwrap());
+        assert!(!store.begin_submit("exec-1", 10).await.unwrap());
         assert_eq!(
             store.status("exec-1").await.unwrap().as_deref(),
             Some("scheduled")
@@ -1412,7 +1545,7 @@ mod tests {
             )
             .await
             .unwrap());
-        assert!(!changed.begin_submit("exec-1").await.unwrap());
+        assert!(!changed.begin_submit("exec-1", 10).await.unwrap());
         assert_eq!(
             changed.status("exec-1").await.unwrap().as_deref(),
             Some("cancelled")
@@ -1428,26 +1561,33 @@ mod tests {
             .await
             .unwrap();
         store.claim_due(10, 4).await.unwrap();
-        assert!(store.begin_submit("exec-1").await.unwrap());
+        assert!(store.begin_submit("exec-1", 10).await.unwrap());
         store.release_submit("exec-1").await.unwrap();
         let again = store.claim_due(11, 4).await.unwrap();
         assert_eq!(again.len(), 1);
         assert_eq!(again[0].execution_id, "exec-1");
-        assert!(store.begin_submit("exec-1").await.unwrap());
-        // Off while the fence is held leaves the row. Releasing it, with the
-        // preference still off, lets the next pass cancel rather than submit.
+        assert!(store.begin_submit("exec-1", 10).await.unwrap());
+        // Off while the lease is live leaves the row. Releasing the in-memory
+        // hold does not expire the lease. The next pass cancels it only once
+        // `fence_until_ms` has passed.
         assert!(!store.set_preference(false, person(), 3).await.unwrap());
         assert_eq!(
             store.status("exec-1").await.unwrap().as_deref(),
             Some("submitting")
         );
         store.release_submit("exec-1").await.unwrap();
-        assert_eq!(store.retire_unfenced_submissions(4).await.unwrap(), 1);
+        assert_eq!(store.retire_unfenced_submissions(4).await.unwrap(), 0);
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("submitting")
+        );
+        let expired = 10 + super::FENCE_LEASE_MS;
+        assert_eq!(store.retire_unfenced_submissions(expired).await.unwrap(), 1);
         assert_eq!(
             store.status("exec-1").await.unwrap().as_deref(),
             Some("cancelled")
         );
-        assert!(!store.begin_submit("exec-1").await.unwrap());
+        assert!(!store.begin_submit("exec-1", expired).await.unwrap());
     }
 
     #[tokio::test]
@@ -1459,17 +1599,17 @@ mod tests {
             .unwrap();
         store.claim_due(10, 4).await.unwrap();
         store.fail_next_begin_commit();
-        assert!(store.begin_submit("exec-1").await.is_err());
+        assert!(store.begin_submit("exec-1", 10).await.is_err());
         assert_eq!(
             store.status("exec-1").await.unwrap().as_deref(),
             Some("delivering")
         );
-        assert!(store.begin_submit("exec-1").await.unwrap());
+        assert!(store.begin_submit("exec-1", 10).await.unwrap());
         assert_eq!(
             store.status("exec-1").await.unwrap().as_deref(),
             Some("submitting")
         );
-        assert!(!store.begin_submit("exec-1").await.unwrap());
+        assert!(!store.begin_submit("exec-1", 10).await.unwrap());
     }
 
     #[tokio::test]
@@ -1480,7 +1620,7 @@ mod tests {
             .await
             .unwrap();
         store.claim_due(10, 4).await.unwrap();
-        assert!(store.begin_submit("exec-1").await.unwrap());
+        assert!(store.begin_submit("exec-1", 10).await.unwrap());
         store
             .record_outcome(
                 "exec-1",
@@ -1496,7 +1636,7 @@ mod tests {
         );
         assert_eq!(store.next_due(12).await.unwrap(), None);
         assert!(store.open("conversation").await.unwrap().is_none());
-        assert!(!store.begin_submit("exec-1").await.unwrap());
+        assert!(!store.begin_submit("exec-1", 10).await.unwrap());
         let interrupted = audits(&store)
             .into_iter()
             .filter(|row| row.1 == "submission_interrupted")
@@ -1537,7 +1677,7 @@ mod tests {
             .await
             .unwrap();
         store.claim_due(10, 4).await.unwrap();
-        assert!(store.begin_submit("exec-1").await.unwrap());
+        assert!(store.begin_submit("exec-1", 10).await.unwrap());
         store
             .record_outcome("exec-1", ScheduleSettlement::Delivered, "delivered", 3)
             .await
@@ -1615,7 +1755,7 @@ mod tests {
             .await
             .unwrap();
         store.claim_due(10, 4).await.unwrap();
-        assert!(store.begin_submit("exec-1").await.unwrap());
+        assert!(store.begin_submit("exec-1", 10).await.unwrap());
         store.erase_conversation("conversation", 2).await.unwrap();
         assert_eq!(
             store.status("exec-1").await.unwrap().as_deref(),
@@ -1651,5 +1791,149 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(store.audit_instant("exec-1", "delivered"), Some(4242));
+    }
+
+    fn decision_audits(store: &LocalScheduledMessages) -> Vec<(String, String, String, String)> {
+        let connection = store.connection.lock().unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT cause, ifnull(before_status, ''), after_status, policies \
+                 FROM audit WHERE cause IN ('preference_allowed', 'preference_denied') ORDER BY id",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_second_process_cannot_submit_a_live_lease() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("scheduled");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("scheduled-chat-messages.sqlite3");
+        let first = LocalScheduledMessages::open(&path).unwrap();
+        let second = LocalScheduledMessages::open(&path).unwrap();
+        let now = 1_000;
+        first.set_preference(true, person(), 1).await.unwrap();
+        first
+            .accept(draft("conversation", "causal", "exec-1", now), 2)
+            .await
+            .unwrap();
+        first.claim_due(now, 4).await.unwrap();
+        assert!(first.begin_submit("exec-1", now).await.unwrap());
+        assert!(!second.begin_submit("exec-1", now).await.unwrap());
+        let renewed_at = now + super::FENCE_LEASE_MS;
+        assert!(first.renew_fence("exec-1", renewed_at).await.unwrap());
+        assert!(!second.begin_submit("exec-1", renewed_at).await.unwrap());
+        let expired = renewed_at + super::FENCE_LEASE_MS;
+        assert!(second.begin_submit("exec-1", expired).await.unwrap());
+        assert!(!first.renew_fence("exec-1", expired).await.unwrap());
+        assert!(!first
+            .set_preference(false, person(), expired)
+            .await
+            .unwrap());
+        assert_eq!(
+            second.status("exec-1").await.unwrap().as_deref(),
+            Some("submitting")
+        );
+        assert_eq!(
+            second.retire_unfenced_submissions(expired).await.unwrap(),
+            0
+        );
+        assert_eq!(
+            second.next_live_fence(expired).await.unwrap(),
+            Some(expired + super::FENCE_LEASE_MS)
+        );
+        let later = expired + super::FENCE_LEASE_MS;
+        assert_eq!(second.retire_unfenced_submissions(later).await.unwrap(), 1);
+        assert_eq!(
+            second.status("exec-1").await.unwrap().as_deref(),
+            Some("cancelled")
+        );
+        drop(directory);
+    }
+
+    #[tokio::test]
+    async fn a_preference_decision_records_the_policies_and_a_failed_audit_changes_nothing() {
+        let store = store().await;
+        let policies = vec!["usage-limit-preference.member".to_owned()];
+        let denied = store
+            .record_preference_decision(false, true, &policies, person(), 5)
+            .await
+            .unwrap();
+        assert!(matches!(denied, PreferenceUpdate::Refused { .. }));
+        assert!(!store.preference().await.unwrap());
+        assert_eq!(
+            decision_audits(&store),
+            vec![(
+                "preference_denied".into(),
+                "off".into(),
+                "off".into(),
+                "usage-limit-preference.member".into()
+            )]
+        );
+
+        store.fail_next_decision_audit();
+        let failed = store
+            .record_preference_decision(
+                true,
+                true,
+                &["usage-limit-preference.admin-grant".into()],
+                person(),
+                6,
+            )
+            .await;
+        assert!(failed.is_err());
+        assert!(!store.preference().await.unwrap());
+        assert_eq!(decision_audits(&store).len(), 1);
+
+        store.fail_next_decision_audit();
+        let failed_deny = store
+            .record_preference_decision(false, true, &policies, person(), 6)
+            .await;
+        assert!(failed_deny.is_err());
+        assert_eq!(decision_audits(&store).len(), 1);
+
+        let allowed = store
+            .record_preference_decision(
+                true,
+                true,
+                &[
+                    "usage-limit-preference.admin-grant".into(),
+                    "usage-limit-preference.member".into(),
+                ],
+                person(),
+                7,
+            )
+            .await
+            .unwrap();
+        assert_eq!(allowed, PreferenceUpdate::Stored(true));
+        assert!(store.preference().await.unwrap());
+        assert_eq!(
+            decision_audits(&store).last().unwrap().3,
+            "usage-limit-preference.admin-grant\nusage-limit-preference.member"
+        );
+
+        store
+            .record_preference_decision(
+                true,
+                true,
+                &["usage-limit-preference.admin-grant".into()],
+                person(),
+                8,
+            )
+            .await
+            .unwrap();
+        assert!(store.preference().await.unwrap());
+        let decisions = decision_audits(&store);
+        assert_eq!(decisions.len(), 3);
+        let unchanged = decisions.last().unwrap();
+        assert_eq!(unchanged.1, unchanged.2);
+        assert_eq!(unchanged.1, "on");
     }
 }

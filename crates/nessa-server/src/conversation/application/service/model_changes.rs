@@ -42,7 +42,7 @@ impl ConversationService {
         .await
     }
 
-    async fn change_model(
+    pub(crate) async fn change_model(
         &self,
         id: &ConversationId,
         caller: &ConversationCaller,
@@ -92,9 +92,13 @@ impl ConversationService {
                 {
                     return Err(ConversationError::ModelChangeUncertain);
                 }
-                return saved_selection(&terminal);
+                return self
+                    .complete_applied_model(id, saved_selection(&terminal))
+                    .await;
             }
-            return saved_selection(&saved);
+            return self
+                .complete_applied_model(id, saved_selection(&saved))
+                .await;
         }
         self.recover_model_change(id, caller).await?;
         let record = load_conversation(self.inner.metadata.as_ref(), id)
@@ -267,11 +271,22 @@ impl ConversationService {
             selection.approval_mode,
             selection.effect,
         );
-        // Metadata already holds this model. Reconcile an open continuation
-        // now: changing away and back before the due time would otherwise
-        // hide the mismatch until delivery, when the model matches again.
-        self.consider_usage_limit(id, false, super::ScheduleActor::system())
-            .await;
+        // Metadata already holds this model. The selection is not complete
+        // until the open continuation is reconciled: changing away and back
+        // before the due time would otherwise hide the mismatch until
+        // delivery, when the model matches again.
+        self.complete_applied_model(id, Ok(selection)).await
+    }
+
+    /// An applied selection, including one read back on retry, is returned
+    /// only after schedule reconciliation commits. A refusal is not reconciled.
+    async fn complete_applied_model(
+        &self,
+        id: &ConversationId,
+        selection: Result<ConversationModelSelection, ConversationError>,
+    ) -> Result<ConversationModelSelection, ConversationError> {
+        let selection = selection?;
+        self.reconcile_usage_limit_schedule(id).await?;
         Ok(selection)
     }
 
