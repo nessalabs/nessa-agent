@@ -47,6 +47,8 @@ interface Gate {
   painted: number
   /** The column count the wait is already counting down, so a later dispatch of that same count does not start the wait over. */
   waiting: number | null
+  /** How far that wait has run. A listener at or before this has already painted it. */
+  at: number
   frames: number[]
   listeners: Set<Listener>
   unsubscribe: () => void
@@ -58,6 +60,7 @@ function cancel(gate: Gate) {
   for (const id of gate.frames) cancelAnimationFrame(id)
   gate.frames = []
   gate.waiting = null
+  gate.at = 0
 }
 
 /** Notifies each painted read on its frame. The last frame ends the wait. */
@@ -71,6 +74,7 @@ function arm(gate: Gate, store: DesktopStore) {
   const queue = (left: number) => {
     const id = requestAnimationFrame(() => {
       const at = span - left + 1
+      gate.at = at
       if (left > 1) queue(left - 1)
       for (const listener of gate.listeners) {
         if (listener.frames === at) listener.notify()
@@ -91,6 +95,7 @@ function gateFor(store: DesktopStore): Gate {
   const gate: Gate = {
     painted: selectColumnCount(store.getState()),
     waiting: null,
+    at: 0,
     frames: [],
     listeners: new Set<Listener>(),
     unsubscribe: () => {},
@@ -100,6 +105,15 @@ function gateFor(store: DesktopStore): Gate {
     if (columns === gate.painted) {
       cancel(gate)
       for (const listener of gate.listeners) listener.notify()
+      return
+    }
+    // The same column change is still waiting. Listeners that already
+    // painted it take a later toggle now; the ones still waiting read the
+    // store on their own frame.
+    if (gate.waiting === columns) {
+      for (const listener of gate.listeners) {
+        if (listener.frames <= gate.at) listener.notify()
+      }
       return
     }
     arm(gate, store)
