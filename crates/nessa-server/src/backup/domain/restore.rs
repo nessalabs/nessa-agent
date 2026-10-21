@@ -1082,20 +1082,44 @@ mod tests {
 
     #[test]
     fn a_folding_volume_orders_spellings_together() {
+        let (earlier_path, later_path, again_path, again_later_path) = folding_spellings();
         let volume = VolumeCase::Unicode;
-        let earlier = path_identity(Path::new("/restore/a"), volume).unwrap();
-        let later = path_identity(Path::new("/restore/B"), volume).unwrap();
-        let again_earlier = path_identity(Path::new("/restore/A"), volume).unwrap();
-        let again_later = path_identity(Path::new("/restore/b"), volume).unwrap();
+        let earlier = path_identity(&earlier_path, volume).unwrap();
+        let later = path_identity(&later_path, volume).unwrap();
+        let again_earlier = path_identity(&again_path, volume).unwrap();
+        let again_later = path_identity(&again_later_path, volume).unwrap();
         assert!(earlier < later);
         assert_eq!(earlier.cmp(&later), again_earlier.cmp(&again_later));
         assert_eq!(earlier, again_earlier);
         assert_eq!(later, again_later);
         let bytes = VolumeCase::Bytes;
         assert_ne!(
-            path_identity(Path::new("/restore/a"), bytes).unwrap(),
-            path_identity(Path::new("/restore/A"), bytes).unwrap()
+            path_identity(&earlier_path, bytes).unwrap(),
+            path_identity(&again_path, bytes).unwrap()
         );
+    }
+
+    /// Absolute spellings of one pair. `/restore/a` is not absolute on Windows,
+    /// and a relative path is not an identity.
+    fn folding_spellings() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        #[cfg(windows)]
+        {
+            (
+                PathBuf::from(r"C:\restore\a"),
+                PathBuf::from(r"C:\restore\B"),
+                PathBuf::from(r"C:\restore\A"),
+                PathBuf::from(r"C:\restore\b"),
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            (
+                PathBuf::from("/restore/a"),
+                PathBuf::from("/restore/B"),
+                PathBuf::from("/restore/A"),
+                PathBuf::from("/restore/b"),
+            )
+        }
     }
 
     #[test]

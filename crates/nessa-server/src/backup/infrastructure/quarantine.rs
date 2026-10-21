@@ -492,7 +492,7 @@ impl QuarantineLayout for DirectoryQuarantine {
         live: &Path,
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
-        let opened = File::open(quarantine).map_err(|_| RestoreFault::Unreadable)?;
+        let opened = open_directory(quarantine, false).map_err(|_| RestoreFault::Unreadable)?;
         if tree_id_of(&opened)? != loaded.identity || tree_id(quarantine)? != loaded.identity {
             return Err(RestoreFault::Tamper);
         }
@@ -1090,8 +1090,35 @@ fn partial_path(quarantine: &Path) -> Result<PathBuf, RestoreFault> {
 fn tree_id(path: &Path) -> Result<TreeId, RestoreFault> {
     #[cfg(windows)]
     refuse_reparse(path)?;
-    let file = File::open(path).map_err(|_| RestoreFault::Unreadable)?;
+    let file = open_directory(path, false).map_err(|_| RestoreFault::Unreadable)?;
     tree_id_of(&file)
+}
+
+/// Open `path` as a directory.
+///
+/// `follow` is the Windows reparse choice. Unix `open` already follows, and a
+/// directory open needs no extra flag. Windows `CreateFileW` refuses a
+/// directory unless `FILE_FLAG_BACKUP_SEMANTICS` is set. `follow` false also
+/// sets `FILE_FLAG_OPEN_REPARSE_POINT`, so the handle is the link itself.
+fn open_directory(path: &Path, follow: bool) -> std::io::Result<File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        let mut flags = FILE_FLAG_BACKUP_SEMANTICS;
+        if !follow {
+            flags |= FILE_FLAG_OPEN_REPARSE_POINT;
+        }
+        options.custom_flags(flags);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = follow;
+    }
+    options.open(path)
 }
 
 fn tree_id_of(file: &File) -> Result<TreeId, RestoreFault> {
@@ -1163,7 +1190,7 @@ fn device_of(dir: &Path) -> Result<u64, RestoreFault> {
     }
     #[cfg(windows)]
     {
-        let file = File::open(dir).map_err(|_| RestoreFault::Unreadable)?;
+        let file = open_directory(dir, true).map_err(|_| RestoreFault::Unreadable)?;
         Ok(windows_file_id(&file)?.0)
     }
     #[cfg(not(any(unix, windows)))]

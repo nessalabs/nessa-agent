@@ -984,24 +984,36 @@ fn a_changed_quarantine_file_is_not_promoted() {
 #[test]
 fn a_folding_volume_locks_spellings_in_one_order() {
     use crate::backup::domain::VolumeCase;
-    let (earlier, later) = ordered_roots(
-        Path::new("/restore/a"),
-        VolumeCase::Unicode,
-        Path::new("/restore/B"),
-        VolumeCase::Unicode,
-    )
-    .unwrap();
-    let (again, again_later) = ordered_roots(
-        Path::new("/restore/A"),
-        VolumeCase::Unicode,
-        Path::new("/restore/b"),
-        VolumeCase::Unicode,
-    )
-    .unwrap();
-    assert_eq!(earlier, Path::new("/restore/a"));
-    assert_eq!(later, Path::new("/restore/B"));
-    assert_eq!(again, Path::new("/restore/A"));
-    assert_eq!(again_later, Path::new("/restore/b"));
+    let (first, second, third, fourth) = folding_lock_spellings();
+    let (earlier, later) =
+        ordered_roots(&first, VolumeCase::Unicode, &second, VolumeCase::Unicode).unwrap();
+    let (again, again_later) =
+        ordered_roots(&third, VolumeCase::Unicode, &fourth, VolumeCase::Unicode).unwrap();
+    assert_eq!(earlier, first);
+    assert_eq!(later, second);
+    assert_eq!(again, third);
+    assert_eq!(again_later, fourth);
+}
+
+fn folding_lock_spellings() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    #[cfg(windows)]
+    {
+        (
+            PathBuf::from(r"C:\restore\a"),
+            PathBuf::from(r"C:\restore\B"),
+            PathBuf::from(r"C:\restore\A"),
+            PathBuf::from(r"C:\restore\b"),
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        (
+            PathBuf::from("/restore/a"),
+            PathBuf::from("/restore/B"),
+            PathBuf::from("/restore/A"),
+            PathBuf::from("/restore/b"),
+        )
+    }
 }
 
 #[test]

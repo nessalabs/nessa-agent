@@ -133,6 +133,10 @@ supplies the id.
   happened and the live path is a different directory, it is moved back; when
   it remains, the result is retained and no unchanged line is written.
   `a_swapped_quarantine_directory_is_not_promoted`
+- That directory is opened as a directory. On Windows the open sets backup
+  semantics, so the handle names the directory. A reparse point is not that
+  directory. The volume of the temporary directory is read the same way.
+  `case_for_a_reported_filesystem_follows_the_volume`
 - A byte changed in the quarantine after that read is not promoted.
   `a_changed_quarantine_file_is_not_promoted`
 - A staging id that cannot be minted removes the published tree when it can.
