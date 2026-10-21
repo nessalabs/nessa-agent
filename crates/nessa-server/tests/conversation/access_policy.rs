@@ -949,8 +949,7 @@ fn paired_access_answers_its_truth_table() {
                         )),
                         grantors && held.is_some(),
                     );
-                    // `admit_list` and the share commands refuse a paired
-                    // device by what it is.
+                    // The share commands refuse a paired device by what it is.
                     for action in [
                         AccessAction::Share,
                         AccessAction::Unshare,
@@ -1347,7 +1346,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
     }
 }
 
-/// A paired party lists nothing of the owner's, sends no other owner
+/// A paired party lists its granted scope, sends no other owner
 /// command and shares nothing, and an
 /// evaluator that cannot decide makes every paired question unavailable.
 #[test]
