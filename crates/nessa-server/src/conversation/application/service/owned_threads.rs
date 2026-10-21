@@ -981,7 +981,9 @@ impl Resources {
                 {
                     return failed;
                 }
-                let report = self.close_cold(service, Some(&slot.acquisition)).await;
+                let report = self
+                    .close_cold(service, Some(&slot.acquisition), &actor)
+                    .await;
                 if report.physical == PhysicalFact::Released
                     && report.evidence == EvidenceFact::Acknowledged
                 {
