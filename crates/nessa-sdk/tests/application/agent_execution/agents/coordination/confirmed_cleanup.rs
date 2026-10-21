@@ -494,3 +494,83 @@ async fn cycle9_cleanup_proof_writer_precedes_replacement_retirement() {
     );
     assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
 }
+
+#[tokio::test]
+async fn cycle10_old_cleanup_ticket_cannot_publish_after_no_acquisition_evidence() {
+    for abandon in [false, true] {
+        let backend = Arc::new(Backend::default());
+        let manager = SessionManager::open(
+            None,
+            Arc::new(InMemoryStorage::new()),
+            Arc::new(RuntimeMessageCommitClock::new()),
+        )
+        .await
+        .unwrap();
+        let agent = attached_agent(Arc::new(Provider(backend)), manager)
+            .await
+            .unwrap();
+        let old = agent.start_shutdown(SessionCloseRequest::Explicit(actor()));
+        assert!(timeout(
+            Duration::from_secs(2),
+            agent.inner.lifecycle.complete_stop(&old)
+        )
+        .await
+        .unwrap()
+        .is_confirmed());
+        let mut authorization = Some(
+            agent
+                .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+                .unwrap(),
+        );
+        if abandon {
+            drop(authorization.take());
+            timeout(Duration::from_secs(2), async {
+                while agent.attachment_status().phase() == AttachmentPhase::Waiting {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        let current = agent.start_shutdown(SessionCloseRequest::Explicit(actor()));
+        assert_eq!(
+            old.provider_generation, current.provider_generation,
+            "neither authorization path acquires another provider generation"
+        );
+        assert!(timeout(
+            Duration::from_secs(2),
+            agent.inner.lifecycle.complete_stop(&current)
+        )
+        .await
+        .unwrap()
+        .is_confirmed());
+        let called = std::sync::atomic::AtomicBool::new(false);
+        let stale = agent
+            .inner
+            .lifecycle
+            .record_cleanup_proof(&old, async {
+                called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .await;
+        assert!(matches!(
+            stale,
+            Err(AgentError::AttachmentAuthorizationStale)
+        ));
+        assert!(
+            !called.load(std::sync::atomic::Ordering::SeqCst),
+            "old proof writer cannot bypass a newer mandatory evidence obligation"
+        );
+        agent
+            .inner
+            .lifecycle
+            .record_cleanup_proof(&current, async {
+                called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+        drop(authorization);
+    }
+}

@@ -22,8 +22,7 @@ use crate::application::agent_execution::{
         ProviderOpenControl, ProviderOperationFailure, ProviderSessionState, SessionCloseRequest,
     },
     sessions::{
-        attachment::AttachmentLease, AttachedProvider, InvocationCancellationEvent,
-        SessionStorageLease,
+        attachment::AttachmentLease, AttachedProvider, InvocationCancellationEvent, SessionManager,
     },
 };
 use crate::domain::agent_execution::{
@@ -253,7 +252,7 @@ pub(super) struct SessionLifecycle {
     stop: watch::Sender<()>,
     changed: watch::Sender<()>,
     attachment: Arc<AttachmentLease>,
-    _lease: Arc<dyn SessionStorageLease>,
+    manager: Arc<SessionManager>,
     session_id: SessionId,
     audit: Arc<AuditObserver>,
     owned: OnceLock<OwnedSlot>,
@@ -381,7 +380,7 @@ impl Drop for WorkPermit {
 impl SessionLifecycle {
     pub(super) fn new(
         attachment: Arc<AttachmentLease>,
-        lease: Arc<dyn SessionStorageLease>,
+        manager: Arc<SessionManager>,
         recorded_context: bool,
         session_id: SessionId,
         audit: Arc<AuditObserver>,
@@ -423,7 +422,7 @@ impl SessionLifecycle {
             stop: watch::channel(()).0,
             changed: watch::channel(()).0,
             attachment,
-            _lease: lease,
+            manager,
             session_id,
             audit,
             owned: OnceLock::new(),
@@ -778,7 +777,7 @@ impl SessionLifecycle {
         };
         runtime.spawn(async move {
             let outcome = owner
-                .record_attachment_audit(ExecutionAuditRecord::Attachment(record))
+                .record_new_attachment_evidence(ExecutionAuditRecord::Attachment(record))
                 .await;
             let mut state = owner.state.lock().expect("session lifecycle");
             if state.attachment_generation == generation
@@ -868,6 +867,33 @@ impl SessionLifecycle {
         }
         operation.await
     }
+    async fn retire_cleanup_proof(&self) -> Result<(), AgentError> {
+        if let Some(scope) = self.owned_gate().and_then(|gate| gate.cleanup_scope()) {
+            self.manager
+                .retire_sdk_cleanup(&scope)
+                .await
+                .map_err(AgentError::Storage)?;
+        }
+        Ok(())
+    }
+    pub(super) async fn begin_attachment_transition(
+        &self,
+        generation: u64,
+    ) -> Result<(), AgentError> {
+        self.run_attachment_transition(generation, self.retire_cleanup_proof())
+            .await
+    }
+    async fn record_new_attachment_evidence(
+        &self,
+        record: ExecutionAuditRecord,
+    ) -> Result<(), AgentError> {
+        {
+            let _transition = self.resource_transition.lock().await;
+            self.retire_cleanup_proof().await?;
+        }
+        // The actual audit receipt is independent of physical resource release.
+        self.record_attachment_audit(record).await
+    }
     pub(super) async fn run_attachment<T, E>(
         &self,
         generation: u64,
@@ -895,13 +921,11 @@ impl SessionLifecycle {
         operation: impl Future<Output = Result<(), AgentError>>,
     ) -> Result<(), AgentError> {
         let _transition = self.resource_transition.lock().await;
-        let current = self
-            .state
-            .lock()
-            .expect("session lifecycle")
-            .provider_generation
-            .0;
-        if current != ticket.provider_generation {
+        let current = {
+            let state = self.state.lock().expect("session lifecycle");
+            (state.provider_generation.0, state.attachment_generation)
+        };
+        if current != (ticket.provider_generation, ticket.attachment_generation) {
             return Err(AgentError::AttachmentAuthorizationStale);
         }
         operation.await
@@ -1461,6 +1485,7 @@ impl SessionLifecycle {
                         report.clone(),
                         prior.evidence.clone(),
                         state.provider_generation.0,
+                        state.attachment_generation,
                     );
                     ticket.folded_evidence = prior.folded_evidence;
                     let recovery = match &state.work_status {
@@ -1511,6 +1536,7 @@ impl SessionLifecycle {
                         report.clone(),
                         state.attachment_evidence.clone(),
                         state.provider_generation.0,
+                        state.attachment_generation,
                     );
                     state.work_status = WorkStatus::Blocked(Stop {
                         ticket,
@@ -1547,6 +1573,7 @@ impl SessionLifecycle {
                 report,
                 state.attachment_evidence.clone(),
                 state.provider_generation.0,
+                state.attachment_generation,
             );
             state.work_generation.0 += 1;
             state.work_status = WorkStatus::Blocked(Stop {
@@ -1782,7 +1809,7 @@ impl SessionLifecycle {
                 let owner = self.clone();
                 tokio::spawn(async move {
                     let outcome = owner
-                        .record_attachment_audit(ExecutionAuditRecord::Attachment(record))
+                        .record_new_attachment_evidence(ExecutionAuditRecord::Attachment(record))
                         .await;
                     if let Err(error) = &outcome {
                         owner.retain_attachment_evidence_failure(
@@ -1836,6 +1863,7 @@ impl SessionLifecycle {
             id: stop_id,
             attempt_id,
             provider_generation: state.provider_generation.0,
+            attachment_generation: state.attachment_generation,
             request: first_request,
             physical: physical.clone(),
             result,

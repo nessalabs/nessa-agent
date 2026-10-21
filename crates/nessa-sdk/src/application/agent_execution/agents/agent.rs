@@ -427,7 +427,7 @@ pub(super) struct Inner {
     pub(super) provider: RwLock<Arc<dyn AgentProvider>>,
     pub(super) traces: Option<Arc<LocalTraceStore>>,
     pub(super) audit: Arc<AuditObserver>,
-    pub(super) manager: SessionManager,
+    pub(super) manager: Arc<SessionManager>,
     pub(super) invocation: Arc<Mutex<()>>,
     hooks: RwLock<Vec<Arc<dyn InvocationHook>>>,
     /// True while a permission-review hook thread has not returned. A later
@@ -1194,9 +1194,10 @@ impl Agent {
             audit,
             session_manager.message_commit_clock(),
         ));
+        let session_manager = Arc::new(session_manager);
         let lifecycle = SessionLifecycle::new(
             session_manager.attachment(),
-            session_manager.protective_storage_lease(),
+            session_manager.clone(),
             matches!(context, ProviderContext::Recorded(_)),
             session_manager.id().clone(),
             audit.clone(),
@@ -1314,22 +1315,7 @@ impl Agent {
             let retired = agent
                 .inner
                 .lifecycle
-                .run_attachment_transition(start.generation, async {
-                    if let Some(scope) = agent
-                        .inner
-                        .lifecycle
-                        .owned_gate()
-                        .and_then(|gate| gate.cleanup_scope())
-                    {
-                        agent
-                            .inner
-                            .manager
-                            .retire_sdk_cleanup(&scope)
-                            .await
-                            .map_err(AgentError::Storage)?;
-                    }
-                    Ok::<_, AgentError>(())
-                })
+                .begin_attachment_transition(start.generation)
                 .await;
             let started = match retired {
                 Ok(()) => {

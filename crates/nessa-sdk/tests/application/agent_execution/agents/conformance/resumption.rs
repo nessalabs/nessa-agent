@@ -1634,3 +1634,145 @@ async fn cycle9_decline_joiners_share_failure_deadline_then_explicit_retry() {
         .acknowledged());
     let _ = bounded(agent.close(actor())).await;
 }
+
+#[tokio::test]
+async fn cycle9_abandoned_authorization_audit_cannot_reuse_prior_sdk_proof() {
+    no_acquisition_evidence_retires_prior_proof(false).await;
+}
+
+#[tokio::test]
+async fn cycle10_authorized_close_audit_cannot_reuse_prior_sdk_proof() {
+    no_acquisition_evidence_retires_prior_proof(true).await;
+}
+
+async fn no_acquisition_evidence_retires_prior_proof(close_authorized: bool) {
+    for reject in [false, true] {
+        use nessa_sdk::application::agent_execution::{sessions::LeaseRecord, subagents::*};
+        use nessa_sdk::domain::agent_execution::{leases::*, subagents::*};
+        struct NoFactory;
+        #[async_trait::async_trait]
+        impl ChildFactory for NoFactory {
+            async fn prepare(&self, _: PrepareRequest) -> Result<PreparedChild, PrepareFailure> {
+                panic!("no child factory is reached by this root-only test")
+            }
+        }
+        struct Accept;
+        #[async_trait::async_trait]
+        impl OwnershipAudit for Accept {
+            async fn record(&self, _: &OwnershipEvidence) -> Result<(), PortFailure> {
+                Ok(())
+            }
+        }
+        let storage = MemoryStorage::default();
+        let backend = workflow_backend();
+        let agent = Agent::prepare(
+            Arc::new(WorkflowProvider(backend.clone())),
+            storage.manager().await,
+            backend.audit.clone(),
+        )
+        .await
+        .unwrap();
+        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+            store: Arc::new(MemoryOwnershipStore::new()),
+            audit: Arc::new(Accept),
+            factory: Arc::new(NoFactory),
+            room: Arc::new(LiveCapacity::new(1)),
+        });
+        let root = coordinator
+            .open_root(agent.session_manager().id().clone(), Initiator::Runtime)
+            .await
+            .unwrap();
+        let gate = coordinator.participation(&root).unwrap();
+        let scope = gate.cleanup_scope().unwrap();
+        agent.install_owned_lifetime(gate).unwrap();
+        agent
+            .session_manager()
+            .record_lease(|_| {
+                (
+                    vec![LeaseRecord::Issued {
+                        lease: LeaseId::new("cycle8-same-lease").unwrap(),
+                        revision: LeaseRevision::FIRST,
+                        terms: LeaseTerms {
+                            environment: EnvironmentRef::Here,
+                            work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+                            sandbox: SandboxProfile::HarnessDefault,
+                            grants: LeaseGrants::Opening,
+                            deadline: LeaseDeadline::UntilEnded,
+                        },
+                        actor: actor(),
+                    }],
+                    (),
+                )
+            })
+            .await
+            .unwrap()
+            .saved
+            .unwrap();
+        let auth = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        bounded(agent.start_attachment(auth).unwrap().wait())
+            .await
+            .unwrap();
+        bounded(agent.close_report(actor()))
+            .await
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert!(storage
+            .snapshot()
+            .lease
+            .as_ref()
+            .unwrap()
+            .sdk_cleanup_acknowledged(&scope));
+
+        backend.audit.reject.store(reject, Ordering::SeqCst);
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        let report = if close_authorized {
+            let report = bounded(agent.close_report(actor())).await.unwrap();
+            drop(authorization);
+            report
+        } else {
+            drop(authorization);
+            bounded(async {
+                while agent.attachment_status().phase() == AttachmentPhase::Waiting {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await;
+            assert_eq!(
+                agent.attachment_status().phase(),
+                if reject {
+                    AttachmentPhase::Failed(AttachmentFailureCode::Audit)
+                } else {
+                    AttachmentPhase::Absent
+                }
+            );
+            bounded(agent.close_report(actor())).await.unwrap()
+        };
+        assert!(
+            !agent.may_hold_provider_resources(),
+            "authorization alone acquired no provider resources"
+        );
+        assert!(report.cleanup().is_confirmed());
+        assert_eq!(report.cleanup().audit().is_err(), reject);
+        let result = report.into_result();
+        assert_eq!(
+            result.is_err(),
+            reject,
+            "live close keeps the actual abandonment audit outcome"
+        );
+        let committed = storage.snapshot();
+        let certified = committed
+            .lease
+            .as_ref()
+            .unwrap()
+            .sdk_cleanup_acknowledged(&scope);
+        assert_eq!(
+            certified, !reject,
+            "a failed later SDK attachment audit cannot reuse an earlier cleanup acknowledgement"
+        );
+    }
+}

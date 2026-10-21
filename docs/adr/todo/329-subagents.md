@@ -1960,3 +1960,35 @@ mutation credit and is not a clean qualification. The SDK same-lease control now
 also observes the actual durable SDK fact directly after a real confirmed
 provider cleanup with a failed audit ACK. The original gateway assertions remain
 unchanged; no stock gateway false-Closed execution is inferred from the survivor.
+
+
+### Cycle10: mandatory attachment evidence retires earlier SDK proof
+
+Explicit owner direction authorizes this bounded correction after cycle9's fresh
+review reproduced the authorization-abandonment P2. It does not reset prior caps.
+The original cec42484 failing probe, two-versus-one provider-close full-suite
+receipt and isolated pass remain retained. No stock gateway false-close is proven.
+
+Lifecycle keeps the same SessionManager behind a shared reference: it retains the
+existing writer, not a second cleanup owner. Its resource-transition fence orders
+proof retirement and old proof publication. Every new mandatory pre-acquisition
+attachment audit (Started, AuthorizationAbandoned, Authorized-close) joins the
+same writer's retirement before audit/provider effects. The fence is released
+before waiting for audit acknowledgement, so physical cleanup can progress while
+its independent audit is unanswered. Close tickets capture attachment as well as
+provider generation; a no-acquisition obligation advances attachment generation
+and fences an older ticket even though provider generation is unchanged.
+
+| Ordering | Required existing-owner result | Regression |
+| --- | --- | --- |
+| Prior SDK ACK, authorization abandoned, audit succeeds | Join retirement before audit; actual later close can certify the new acknowledged evidence | abandonment positive counterpart |
+| Prior SDK ACK, abandonment audit rejects | Live report retains audit failure and committed SDK predicate remains false | unchanged review probe |
+| Prior SDK ACK, close consumes Authorized token | Same retirement-before-audit rule, original actor, no provider acquisition | Authorized-close positive/rejection controls |
+| Old proof already writing when no-acquisition evidence begins | Same fence lets original writer finish, then retirement wins before new audit | held writer/evidence boundary |
+| Old ticket publishes after abandonment or Authorized-close began | Attachment generation mismatch refuses before writer callback | late old-ticket control |
+| Retirement write rejects or ACK is lost | No audit/provider effect before retirement ACK; retain the original writer result for actual close/retry | storage-fault controls |
+| Abandonment/Authorized-close audit waits | Physical cleanup remains independent; whole proof waits for the real audit receipt | paused audit control |
+| Full suite observes extra provider close after late End ACK and new public close | Trace original/new provider and lease identity; preserve one-close guarantee for original owner; no classification from isolated pass | concurrent identity/order reproduction |
+
+The provider-close failure is a separate unresolved causal result. No assertion,
+deadline, concurrency, policy, physical-release fact or audit error is waived.

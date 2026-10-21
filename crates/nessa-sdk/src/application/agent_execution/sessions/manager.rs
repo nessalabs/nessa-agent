@@ -994,9 +994,6 @@ impl SessionManager {
     pub(crate) fn attachment(&self) -> Arc<AttachmentLease> {
         self.attachment.clone()
     }
-    pub(crate) fn protective_storage_lease(&self) -> Arc<dyn SessionStorageLease> {
-        self.storage_lease.clone()
-    }
     pub(crate) async fn begin(
         &self,
         request: ExecutionRequest,
