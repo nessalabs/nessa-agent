@@ -125,9 +125,10 @@ enum Publication {
     Fetching,
     /// The part is synced, then the hard link takes the publication gate
     /// together with `stop`. The call that takes the gate first wins. A stop
-    /// or a spent budget before the link does not create it. A link that
-    /// returns has published the output, and a budget that expires during
-    /// that link does not remove it.
+    /// or a spent budget before the link does not create it. The budget is
+    /// read again inside the gate, immediately before the link starts. A
+    /// link that returns has published the output, and a budget that expires
+    /// during that link does not remove it.
     Linking,
     /// The hard link exists. Removing the part or syncing the directory may
     /// still fail. `stop` does not unpublish, and it does not replace that
@@ -441,16 +442,24 @@ fn publish_part(ending: &Stopping, part: &mut impl HeldPart) -> PublishEnd {
             result: Err(KeepRefusal::Stopped),
         };
     }
-    match stop.admit(|| part.link_held()) {
-        Err(()) => PublishEnd {
+    // Read the deadline again inside the gate, immediately before the link.
+    // An expiry in the gap after the check above has not started publication.
+    match stop.admit(|| {
+        if ending.spent() {
+            None
+        } else {
+            Some(part.link_held())
+        }
+    }) {
+        Err(()) | Ok(None) => PublishEnd {
             phase: Publication::Stopped,
             result: Err(KeepRefusal::Stopped),
         },
-        Ok(Err(refusal)) => PublishEnd {
+        Ok(Some(Err(refusal))) => PublishEnd {
             phase: linking,
             result: Err(refusal),
         },
-        Ok(Ok(())) => PublishEnd {
+        Ok(Some(Ok(()))) => PublishEnd {
             phase: Publication::Linked,
             result: part.retire_held(),
         },
@@ -579,8 +588,9 @@ impl RetainedCache {
     ///
     /// A socket registered on `stop` is released on every exit after the dial,
     /// including a handshake that fails. A budget that cancels a range, or
-    /// that runs out during a busy pause, the part's re-read, or the sync
-    /// before the hard link, is `Unreachable`. A link that takes the
+    /// that runs out during a busy pause, the part's re-read, the sync
+    /// before the hard link, or inside the publication gate before that
+    /// link starts, is `Unreachable`. A link that takes the
     /// publication gate stays published. `ReadStop::stop` stays `Stopped`,
     /// including a local match that was cancelled while the output was read.
     /// A relay that says

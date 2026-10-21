@@ -1116,3 +1116,64 @@ fn a_budget_that_expires_during_the_link_stays_published() {
     assert_eq!(end.phase, super::Publication::Linked);
     assert_eq!(end.result, Ok(()));
 }
+
+/// Spends on the `after`th `elapsed_ms` call. The first two checks in
+/// `publish_part` stay clear; the check inside the publication gate spends.
+struct SpendAfter {
+    calls: AtomicUsize,
+    after: usize,
+}
+impl nessa_protocol::clock::Clock for SpendAfter {
+    fn elapsed_ms(&self) -> u64 {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        u64::from(call >= self.after)
+    }
+}
+
+struct NeverLinks {
+    linked: bool,
+}
+impl super::HeldPart for NeverLinks {
+    fn sync_held(&mut self) -> Result<(), KeepRefusal> {
+        Ok(())
+    }
+    fn link_held(&mut self) -> Result<(), KeepRefusal> {
+        self.linked = true;
+        Ok(())
+    }
+    fn retire_held(&mut self) -> Result<(), KeepRefusal> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_budget_that_expires_before_the_link_starts_does_not_publish() {
+    let clock = Arc::new(SpendAfter {
+        calls: AtomicUsize::new(0),
+        after: 2,
+    });
+    let stop = ReadStop::new();
+    let ending = super::super::Stopping {
+        stop: stop.clone(),
+        clock: clock.clone(),
+        until: 1,
+    };
+    let mut part = NeverLinks { linked: false };
+    let end = super::publish_part(&ending, &mut part);
+    assert!(!part.linked);
+    assert_eq!(clock.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(end.phase, super::Publication::Stopped);
+    assert_eq!(end.result, Err(KeepRefusal::Stopped));
+    let failure = FetchFailure {
+        cause: FetchCause::Gateway(GatewayError::Cancelled),
+        progress: FetchProgress {
+            reached: 2,
+            ..FetchProgress::default()
+        },
+    };
+    let fault = super::publish_fetch(failure, true);
+    assert_eq!(
+        super::classify_artifact_fault(fault, &stop, &ending).kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
+    );
+}

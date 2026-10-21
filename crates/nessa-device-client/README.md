@@ -69,6 +69,7 @@ A local fault already produced stays that
 fault. A stop during the product handshake is a session stop. A stop during the
 part sync does not link the output. A budget that expires after the last range,
 or during that sync, is unreachable and does not link. A budget that expires
+after that sync check and before the link starts does not link either. A budget that expires
 while the hard link holds the gate leaves the output published. Once the hard link exists, a failure to remove
 the part or to sync the directory reports that the output exists. The native session and compound
 refresh API have run against paired records through generated Swift on macOS.

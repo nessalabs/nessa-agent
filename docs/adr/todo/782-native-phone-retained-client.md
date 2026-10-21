@@ -241,6 +241,7 @@ flowchart LR
 | Waiting: budget spent during a busy pause | fetch | Unreachable within one stop slice; no later range; output absent | `a_budget_that_ends_during_a_busy_pause_is_unreachable` |
 | Linking: stop during the part sync | fetch | Stopped; the hard link is not created | `a_stop_during_sync_does_not_link` |
 | Budget expires after the last range, or during the part sync | fetch | Unreachable; the output is not published | `a_budget_that_expires_after_the_range_does_not_publish`, `a_budget_that_expires_during_sync_does_not_link` |
+| Budget expires after the sync check and before the link starts | fetch | Unreachable; the link is not called | `a_budget_that_expires_before_the_link_starts_does_not_publish` |
 | Budget expires while the hard link holds the gate | fetch | The link finishes; the output stays published | `a_budget_that_expires_during_the_link_stays_published` |
 | Linking: stop while the hard link holds the gate | fetch | The link finishes; the output stays published | `a_stop_during_the_link_waits_until_the_link_is_published` |
 | Linked: part removal or directory sync fails | fetch | Linked, naming that step; the output bytes remain; a later stop leaves it | `a_linked_output_keeps_its_cleanup_failure`, `a_part_that_cannot_be_removed_after_the_link_leaves_the_output` |
