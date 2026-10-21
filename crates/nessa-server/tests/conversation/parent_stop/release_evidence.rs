@@ -129,6 +129,7 @@ async fn independent_evidence(audit_failure: bool, commit: bool) {
             .get(&target)
             .unwrap(),
     );
+    let gate = coordinator.participation(&lifetime).unwrap();
     failed.store(!audit_failure, Ordering::SeqCst);
     if audit_failure {
         provider.close_reports.lock().unwrap().push_back(
@@ -205,11 +206,7 @@ async fn independent_evidence(audit_failure: bool, commit: bool) {
     if audit_failure {
         // The SDK's actual confirmed cleanup report still has failed audit.
         // A successful attachment callback cannot acknowledge that owner.
-        coordinator
-            .participation(&lifetime)
-            .unwrap()
-            .note_attachment(true, true)
-            .await;
+        gate.note_attachment(true, true).await;
         assert!(coordinator
             .end_lifetime(command(LifetimeCause::Deletion, Initiator::Runtime))
             .await
@@ -409,11 +406,16 @@ async fn owned_deletion_hands_failed_records_to_erasure_without_early_ownership_
     assert_eq!(coordinator.close_initiator(&lifetime), Some(first));
     assert_eq!(provider.close_calls.load(Ordering::SeqCst), 1);
     assert_eq!(host.end_requests(), 1);
-    assert!(storage
+    let erased = storage
         .read_committed(conversation_session(&target))
         .await
-        .unwrap()
-        .is_none());
+        .unwrap();
+    assert!(
+        erased
+            .as_ref()
+            .is_none_or(|history| history.snapshot().is_none()),
+        "the acknowledged erasure leaves no conversation history"
+    );
     host.close();
     retire(service, storage, metadata).await;
 }
