@@ -234,12 +234,15 @@ under the denial.
 ### Who may reach owner authority
 
 The application child is denied every owner-level capability this table
-does not grant it. The spawn denial is the rows stopped by denying the
-auth directory: the surface bearers, the credential registry, and
-offline `init`, `recover-owner`, and `provision-surface`. T2 applies
-that denial before the child is released, and T2b is the row when the
-spawn cannot apply it. Product `credential.issue` is denied by A14,
-not by the spawn. The child does not
+does not grant it. The spawn denial is the auth directory and the
+package-trust root in [What a path may do](#what-a-path-may-do). The
+auth directory stops the surface bearers, the credential registry, and
+offline `init`, `recover-owner`, and `provision-surface`. The
+package-trust root stops a write to every installation's image and
+mutable directory, and a read of any image or mutable directory other
+than this child's own. T2 applies that denial before the child is
+released, and T2b is the row when the spawn cannot apply it. Product
+`credential.issue` is denied by A14, not by the spawn. The child does not
 inherit an open file descriptor, an environment value, or a pipe byte
 of a denied path. The desktop and the gateway keep the cells this table
 grants them. A platform that cannot apply the denial does not release
@@ -269,17 +272,143 @@ committed.
 | `nessa auth token`, and presenting any owner or surface bearer to `/session` | yes. No registration, so the no-binding fallback admits the grants that credential holds | admits the session. It does not mint that bearer for the child | denied. `nessa auth token` presents a credential file and does not open the registry. The child is not granted a file in the auth directory. A token the owner already stored outside that directory is the documents row, not this grant | denied. The frame does not dial |
 | Product `credential.issue` | when Cedar permits that caller | the start path issues only the application process credential (A2, A3). A14 forbids a product issue for this registration | denied by A14, not by the spawn | denied |
 | The process secret on the start pipe | no | writes it once | granted. This is the only bearer the pipe carries | denied (H1) |
-| The package directory, including attempt files under this installation's principal id | yes. The owner installed the directory | reads the manifest at install. After S3 a leftover file is not an attempt | granted, under that principal id | the document the gateway fetched. Not the directory |
+| The source directory the owner installed | yes | read at I3, to copy the image. Not exec'd | not a grant. A write is possible because owner paths are not sandboxed. It is not the image, not an attempt, and not the endpoint | not the directory |
+| This installation's image in the package-trust root | no. The owner does not exec it | writes it at I3 and execs it at T2 when the digest matches | read and exec. Not write | denied |
+| This installation's mutable directory, and every other installation's image and mutable directory | no | this installation's mutable directory, to read the attempt and to dial. Another installation's image, for that installation's start | read and write of this mutable directory only. Every other path in the root is denied | denied |
 | The application local IPC socket | no | the only dialer, with the endpoint capability | granted to accept the enrolled gateway peer | denied (E5) |
 | A Nessa call on the application principal | through the owner's own credential, not this principal | dials, and Cedar admits the caller first | granted only where Cedar permits this principal | denied |
-| The owner's documents, the network, and other local programs | the owner's | the gateway's | not owner authority. Not a grant and not part of the spawn denial. This plan does not sandbox them and does not use a separate OS user | the frame's sandbox is not this process |
+| The owner's documents, the network, and other local programs | the owner's | the gateway's | not owner authority. Not a grant and not part of the spawn denial. An owner-chosen install directory is one of these paths. This plan does not sandbox them and does not use a separate OS user | the frame's sandbox is not this process |
 
-A cell names one reach. The four granted rows are the child's whole
-grant. A stored stdio server is not this process and is not under the
-denial.
+A cell names one reach. The child is granted the process secret, read
+and exec of its own image, read and write of its own mutable directory,
+accept on its socket, and the Nessa calls Cedar permits. The source
+directory is not one of those grants. A stored stdio server is not this
+process and is not under the denial.
+
+### What a path may do
+
+Every installed-package path and every credential path is a row in the
+two tables below. A path with no row is a defect. The
+[authority table](#who-may-reach-owner-authority) names owner-level
+capabilities. These tables name what a byte is trusted for, and which
+Cedar policy admits a caller. The marker proves which installation a
+directory is. It does not prove the bytes a start execs.
+
+The package-trust root is a directory the gateway creates beside the
+auth directory and includes in every spawn denial. Each installation
+has an image and a mutable directory under that root. The image is the
+file set the manifest names: the process entry, the UI document, and
+the files those two read. I3 copies that set from the source directory
+and commits a digest of those bytes on the install record, in the same
+commit that marks the record installed. Bytes in the source before that
+commit are the bytes the owner installed. A write after the commit does
+not change the digest and is not exec'd. The copy holds the
+[package-trust lock](#what-serializes-a-transition) and runs only while
+no application process is up: no record has an unconfirmed start
+identity, and no endpoint is live. The check is repeated under the
+lock. T2 takes the same lock before it execs, so a child is not
+released during the copy. If a process is up, I3 does not copy and does
+not commit. The pass retries. I7 may return the caller. The record
+stays preparing.
+
+T2 execs the image only when a read under that lock matches the digest.
+The source directory is not exec'd. A mismatch is T2m. T2m does not
+issue, does not replace the digest from the source, and returns the
+record to installed. I8 updates the locator and does not copy the
+source into the image. V1 does not replace the image. S3 removes the
+image and the mutable directory. A file that remains in the source
+directory is not the image, not an attempt, and not the endpoint.
+
+A child may read and exec only its own image, and may read and write
+only its own mutable directory. Every other path in the root is denied.
+The denial is the root, and the exception is only this child's own
+directories, so a child spawned before a later installation exists
+cannot write that installation's image. The source directory stays an
+owner path. This plan does not sandbox it. A sibling may write it.
+That write is not what the next start runs.
+
+Cedar admits an attach before the gateway dials. The action is
+`application.attach`. The resource is the target installation. The
+facts are the principal's kind, whether it has an application
+registration, the resource's application registration, and
+`context.path`. `context.path` is the gateway's fact for which command
+is running, the same kind of fact as `IssuePath`: `owner-session`,
+`tool`, `product`, or `application-start`. It is not a comparison of
+principal ids. Rust gathers those facts and acts on Cedar's answer.
+
+`application.attach.owner` permits when the action is
+`application.attach`, the principal is active, its kind is `human` or
+`integration`, it has no application registration, `context.path` is
+`owner-session`, and the resource has an application registration.
+`application.attach.tool` permits when the action is
+`application.attach`, the principal is active, its kind is `human` or
+`agent`, it has no application registration, `context.path` is `tool`,
+and the resource has an application registration.
+`application.attach.application` forbids when the action is
+`application.attach` and the principal has an application registration.
+The forbid does not read the resource's principal id. It matches this
+package and any other package. A forbid overrides a permit.
+`server.read` is a different action, so a grant of it does not match.
+`hold.person` does not list `application.attach`, so the process
+credential cannot carry it.
+
+An integration with no application registration on `owner-session` is
+the owner fallback, including the panel token and `nessa auth token`.
+It is not an application principal. A peer's kind is `gateway`, and no
+attach policy permits it. A product path matches no attach policy.
+Slice 1 tests these three policies. Slice 2 asks that evaluator on the
+attach route and does not dial on a forbid (E6).
+
+| Path | Writer | Reader | Trusted as | A sibling application child |
+| --- | --- | --- | --- | --- |
+| Source marker | the owner. A sibling can write it, because the source directory is not sandboxed | the gateway, to decide which installation the directory is | the installation id of this locator. Not the bytes T2 execs | a changed marker is D1, I8, V1, or V2 for that id. It does not change the image or the digest |
+| Source manifest, process entry, UI document, and the files that set names | the owner. A sibling can write them | the gateway, at I3 only, to copy the image | nothing, after I3 commits. Not an exec, not a tool list, not the UI the frame is given | the write is not copied. T2 does not exec it. I8 and V1 do not refresh the digest |
+| Any other file left in the source directory | the owner. A sibling can write it | the owner | nothing. Not an attempt, not a receipt, not an endpoint | ignored. S3 does not need to delete it |
+| This installation's image, under the package-trust root | the gateway, at I3, under the package-trust lock, and only while no application process is up | the gateway at T2. This installation's child, read and exec | the bytes T2 execs, and only when they match the digest committed with the image | denied by the spawn denial. A child started earlier is denied because the denial is the root |
+| Another installation's image | the gateway, for that installation | that installation's child, read and exec. The gateway at that installation's T2 | that installation's exec | denied. Not readable and not writable |
+| This installation's mutable directory: attempt store, dashboard document, and endpoint file | this installation's child. The gateway removes it at S3 | this child. The gateway reads the attempt as this principal and the endpoint file to dial | this principal's attempts, its dashboard document, and its socket name. A file in the source directory is not any of these | denied |
+| Another installation's mutable directory | that installation's child | that child and the gateway, for that principal | that principal's attempts, document, and socket name | denied |
+| Auth directory, including the credential registry and `auth/surfaces` | the owner OS session and the gateway | the gateway | owner authority. The authority table is the reach | denied. The spawn denial includes it. Not this table's source-directory exception |
+| Install record, tool-descriptor copy, and the image digest | the gateway | the gateway. K2 reads the descriptor copy, not the source manifest | the record, the live tool list, and the digest T2 compares | denied. Not a file in the source directory |
+| Endpoint capability secret | the gateway, in memory | the gateway, on a dial | the dial. Not a registry credential | the child never receives it |
+| Process secret | the gateway, once, on the start pipe | the process that was released | `session.authenticate` for this principal. Not attach | the pipe is this child's. A sibling does not read it |
+| The owner's documents, the network, and other local programs | the owner | whoever that path allows | not a package and not a credential | not sandboxed. A write here is not the image |
+| A stored stdio server's files and command | the owner, through `mcpServers.save` | the harness session's stdio child | not this process and not this image | not under this spawn denial |
+
+| Path | Caller | Policy | Result | A miss |
+| --- | --- | --- | --- | --- |
+| `session.challenge` and `session.authenticate` with the process secret | this installation's process | authentication. Not a Cedar action | one session slot for this principal (A6, A12, A6x, A6d) | the secret does not authorize `application.attach` |
+| `server.read` | a principal whose credential holds that grant | `server.read` | that read, when the grant names the resource | not `application.attach`. The process credential's hold does not make it one |
+| `conversation.read` | the process credential, when a principal-subject grant names that conversation | `conversation.read` | that conversation (A7) | another conversation is A8. Not attach |
+| `conversation.write` | the owner session. Not the process credential | `conversation.write` | the owner's write | the start does not put this grant on the process credential |
+| `credential.manage` | the owner session. The panel token holds it | `credential.manage` | the owner's management | not on the process credential. Not attach |
+| Product `credential.issue` for an application registration | any caller, new request id | Cedar forbids. A14. The registration fact is set and the path is not `application-start` | no credential and no secret | `issue.member` does not decide this. `server.read` does not decide this |
+| `credential.issue` on `application-start` | the gateway start, after T2 has stored the identity | Cedar permits that path for this registration. No product command selects it | A2 or A3 | a caller of the product route is the product row |
+| `credential.issue` with no application registration | today's issuer | `issue.member` or `issue.admin`, by kind, role, and path | today's issue | an application registration does not take this row |
+| `application.attach` from the owner session | the panel token or the owner, no application registration, `context.path` `owner-session` | `application.attach.owner` | the gateway may R2 or dial (E1) | a registration on the caller is the forbid, not this permit |
+| `application.attach` from the tool path | a human or agent with no application registration, `context.path` `tool` | `application.attach.tool` | the gateway may R2 or dial (E1) | an application principal on this path still matches the forbid, and the forbid wins |
+| `application.attach` from an application principal | this package's process, or any other application principal, whether or not the credential holds `server.read` | `application.attach.application` | Cedar forbids. E6. No dial and no attempt | the resource id is not compared. This package and another package are the same forbid. Rust does not compare the principal ids |
+| `application.attach` from a peer, or from a product path with no registration | a gateway principal, or an integration that is not on `owner-session` or `tool` | no policy | no policy matched. No dial | not the owner fallback. The owner fallback is `owner-session` only |
+| `conversation.share`, `conversation.unshare`, and `conversation.shares` | the owner, naming `principalId` | the share command's existing admission, then the grant row | A4 or A9. The list returns `principalId` and no `credentialId` | the application principal is not the caller. A `credentialId` is not the target |
+| `credential.revoke` | the owner | the owner's revoke | A10, then S0 | the process does not call `credential.revoke` |
+| `grant.read`, `grant.comment`, and `grant.drive` | a principal-subject grant on an application registration | the principal-subject permits slice 1 adds. Not the binding-owner policies | that grant's action on that resource | an integration with no registration does not take the new permits. The binding-owner policies still do not match an application principal |
+| `mcp.*` | the application socket | no grant | M4 refuses | a tool call with that id does not grant the method |
+| `credential.hold` for the process credential | the start's issue | `hold.person` | `server.read` and `conversation.read` only | `application.attach`, `conversation.write`, `credential.manage`, and `environment.serve` are not in that list. `hold.peer` is a gateway principal, not this process |
+| `credential.list` | the owner, listing paired credentials | the existing list | not an application target and not an attach | an application principal has no permit for it in this plan |
+| `environment.serve` | a holder the existing policy permits | `environment.serve` | not this process | `hold.person` does not list it, and the start does not put it on the process credential |
+| Directory `write` and `exec` | the directory slice of #888 | that slice | not the spawn denial and not attach | an application child is not given those grants by this plan |
+| The endpoint capability, on a dial | the gateway | authentication at the process. Not Cedar and not a registry credential | E1 when the caller was already permitted | a caller does not receive the secret. A direct dial is E2 or E3 |
+| A surface bearer, including the panel token | the owner OS session | no application registration, so the owner fallback | the grants that credential holds | the child is denied the file. Presenting it is not a grant of `application.attach` unless the attach row above permits |
+| Another installation's process secret | nobody on this side of the pipe | that installation's `session.authenticate` | that principal's slot, if the secret were presented | this child does not have the secret. It is not a way to attach |
+
+A cell names one path. The image is the only exec. `server.read` is not
+attach. `application.attach.application` is the cross-application
+refusal and the same-package refusal.
 
 The row names the package, the one version, the UI document, the process
-entry, and the endpoint. The endpoint file is a private rendezvous of
+entry, and the endpoint. The process entry and the UI document that T2
+runs are the image, not the source files. The endpoint file lives in
+the mutable directory. It is a private rendezvous of
 the same kind as the gateway's `gateway-endpoint.json`
 (`packages/nessa-client/src/transport/local-gateway-endpoint.ts`): a
 private file, an endpoint instance, and the process id. The application
@@ -316,7 +445,7 @@ follows the record.
 - The endpoint is not live, the record is installed, the stored
   directory presents this installation's marker, the credential is not
   current, and any start identity is confirmed ended. The
-  gateway starts the process entry from the row, once. That start stores
+  gateway starts that installation's image, once, and only when the digest matches. That start stores
   the pid and creation time before it issues, and it writes the secret
   once on the pipe. The process reads it before it publishes the
   endpoint, then authenticates. The caller then attaches. A record that
@@ -378,7 +507,9 @@ Four invariants hold on every row of that table.
 The package identity is an installation id the gateway mints into the
 marker before any install row exists. The row's creating write copies
 that id and reserves the server name. It does not write the marker.
-The marker is the proof that a directory is that installation. The path is the
+The marker is the proof that a directory is that installation. It is
+not the proof of the bytes the start execs. Those bytes are the image,
+and the digest on the record is that proof. The path is the
 locator, not the key. The filesystem directory id is a hint stored
 beside the row: the device and inode on macOS and Linux, and the volume
 serial and file index on Windows. A rename on the same volume often
@@ -507,8 +638,8 @@ Expiry is not one of these commits: the issuance already holds
 `expires_at`. After the close deadline, the signal proceeds without
 that claim (S0b). Every later pass attempts the same close again. S2
 waits for it. Diagnostic logs are not this record. The lifecycle audit is an
-append-only log the gateway owns, outside the package directory and
-outside the row. S3 appends the transition to absent and the row is
+append-only log the gateway owns, outside the source directory, the
+package-trust root, and the row. S3 appends the transition to absent and the row is
 then gone. A restart reads the rows that still exist. It does not
 rebuild a row, a tool list, or an attempt from the log.
 
@@ -594,7 +725,10 @@ The process presents the secret the start injected. It does not call
 `credential.issue` or `credential.revoke`. `hold.person` already
 permits an integration to hold `server.read` and `conversation.read`.
 The start's issue does not put `conversation.write` or
-`credential.manage` on it.
+`credential.manage` on it. It does not put `application.attach` on it.
+`hold.person` does not list that action, so the credential cannot carry
+it. Attach is [What a path may do](#what-a-path-may-do), and
+`server.read` does not match it.
 
 The issue uses a new request id. The registry stores the verifier only
 (`crates/nessa-auth/src/adapters/local/registry.rs`). The secret is in
@@ -718,7 +852,10 @@ sequenceDiagram
 ## Endpoint admission
 
 The endpoint file is a rendezvous. It holds the local socket's name,
-the endpoint instance, and the process id. Reading it, or connecting to
+the endpoint instance, and the process id. It lives in this
+installation's mutable directory. A file in the source directory is not
+the endpoint, and another installation's child cannot write this one.
+Reading it, or connecting to
 the socket it names, admits nobody. A private file does not stop another
 process of the same user, including another installed package.
 
@@ -796,12 +933,12 @@ socket until the peer is the gateway, and a scanner is not given one.
 
 | Row | Caller | What it presents | Record | Result |
 | --- | --- | --- | --- | --- |
-| E1 | owner session or the gateway tool path, Cedar already permitted | the gateway dials: the kernel peer matches, the capability matches the enrolled verifier, and the gateway holds that secret | the process is accepting | the request enters the process. The host renders bytes the gateway fetched. The tool path is one dial on the turn's existing policy |
+| E1 | owner session permitted by `application.attach.owner`, or the tool path permitted by `application.attach.tool` | the gateway dials: the kernel peer matches, the capability matches the enrolled verifier, and the gateway holds that secret | the process is accepting | the request enters the process. The host renders bytes the gateway fetched. This dial follows `application.attach.owner` or `application.attach.tool`. `server.read` is not this permit |
 | E2 | any process that is not the enrolled gateway, including another package, a scan, the desktop, the harness, or the frame | a connection to the socket, with the file's contents or a copied capability | the process is accepting | refused at accept. No attempt record. The kernel's peer identity is the check |
 | E3 | the enrolled gateway peer | a capability that is absent, from another start, or a generation the process has retired | accepting | refused. No attempt record. If the gateway still holds the secret for the generation the process enrolled, the next dial is E1. If it holds no secret for that generation, E9 mints a new one |
-| E4 | owner session or the tool path, Cedar already permitted | the gateway holds no capability secret | process up, a generation is committed | the gateway does not dial and does not read the file as a fallback. The ask waits until E9 commits |
+| E4 | a caller `application.attach.owner` or `application.attach.tool` permits | the gateway holds no capability secret | process up, a generation is committed | the gateway does not dial and does not read the file as a fallback. The ask waits until E9 commits |
 | E5 | the frame | nothing. It is not a caller | any | the document and the bridge do not carry the socket name or the capability (H1). A dial the sandbox failed to stop is the dialed row for that phase: E2 while the process is accepting, E7 while the record is stopping or uninstalling, E8 while nothing is accepting |
-| E6 | another application principal | an ask to the gateway to reach this package | any | no policy permits one application principal to attach to another package. Cedar's refusal says that no policy matched. Rust does not compare the two principal ids. The gateway does not dial. No attempt on this process |
+| E6 | an application principal | an ask to the gateway to attach, to this package or to any other | any | Cedar forbid `application.attach.application`. The principal has an application registration. `server.read` does not match this action. Rust does not compare the principal ids. The gateway does not dial. No attempt on this process |
 | E7 | any | a dial, or an ask | stopping, uninstalling, or the verifier has been dropped | the process refuses. The gateway has dropped the secret and does not dial |
 | E8 | any | a dial | preparing, starting before enroll, or the start identity confirmed ended | nothing accepts. That is not admission and not a start |
 | E9 | the gateway, after the process has authenticated again, and only when the gateway holds no secret for the generation the process enrolled | a new verifier and the new gateway pid and creation time, on the process's gateway socket | installed, endpoint live, credential current | the process swaps and drops the old verifier. The record then commits the new generation and the audit, cause reconciliation, initiator system, with no secret. Until that commit, a dial is E4. A gateway that still holds the secret for the enrolled generation does not run this row; its next dial is E1 |
@@ -813,7 +950,7 @@ Caller and proof, when a second row would otherwise be easy to miss:
 | --- | --- | --- | --- | --- |
 | asked by the owner session or the tool path, or dialed | either | any | record stopping or uninstalling, or the verifier is dropped | E7 |
 | asked by the owner session or the tool path, or dialed | either | any | process not accepting, record not stopping or uninstalling | E8. The gateway does not dial |
-| asked, another application principal | — | any | any phase | E6 |
+| asked, an application principal, including this package's own | — | any | any phase | E6 |
 | asked, the frame | — | any | any phase | E5. A connection the frame opens anyway is the dialed row for that phase |
 | asked, owner session or tool path | enrolled | the generation the process holds | yes, process accepting, not stopping or uninstalling | E1 |
 | asked, owner session or tool path | no dial yet. The restart's pid is not enrolled, and this row does not dial | the gateway holds no secret | process accepting, not stopping or uninstalling | E4, until E9 commits a verifier for the new gateway pid |
@@ -823,7 +960,10 @@ Caller and proof, when a second row would otherwise be easy to miss:
 | dialed | the enrolled gateway | none, stale, or another start | process accepting, not stopping or uninstalling | E3 |
 
 E5 holds in every phase: the frame is not given a route. E6 holds in
-every phase: another application principal is not admitted. E7 is an
+every phase: an application principal is not admitted, including to its
+own package. The owner and tool rows are callers
+`application.attach.owner` or `application.attach.tool` permits. An
+application principal is not one of them, so E7 and E1 do not also match. E7 is an
 owner ask or a dial while the record is stopping or uninstalling, or
 the verifier is dropped. E8 is an owner ask or a dial while nothing is
 accepting and the record is not stopping. The remaining rows are a
@@ -858,7 +998,7 @@ principal, are the same attempt. A second body under that request id is
 refused, and the first attempt is left as it was. A phase stored under
 any other principal is not this attempt (O12).
 
-The attempt is a record in the process's own store: the principal id,
+The attempt is a record in this installation's mutable directory, the process's own store: the principal id,
 the request id, the body, and the phase. The phase is the outbox. It is
 not the dashboard document. [The attempt](#the-attempt) is every phase.
 For app-owned data the write and its receipt are one commit in that
@@ -893,7 +1033,8 @@ installation's marker, the credential is not current, and any start
 identity is confirmed ended. Any other
 phase waits for the pass and does not exec. Its UI, when the tool
 declares one, is the MCP App mount already built, on the caller's
-session. The turn's tool policy is unchanged. The dial is E1.
+session. The tool method's own policy is unchanged. The attach
+that reaches the dial is `application.attach.tool`, and the dial is E1.
 
 The reference package is a dashboard at `examples/dashboard`. It is not
 imported by `src/desktop`. Selecting a chart is the UI action. Saving the
@@ -995,7 +1136,7 @@ one line of it.
 | I1 | this same command's I1w has returned, this command still holds the directory lock taken before that write, the marker generation in this commit is read under that hold and is the id that write stored, that marker names no install record, no registration names an installation id in that marker, and the manifest's tool server name is not in the gateway's name set | the install continues, one request id | record preparing, the installation id from that marker, the path as locator, the filesystem id stored as a hint, one version, no principal, that server name reserved, install deadline stored. This commit does not write the marker | stored here; not extended by a restart | this commit is the creating write for the install row and for that server name; the installation id was minted at I1w; nothing is a row until this write commits; a restart without this hold does not match this row; a re-read taken before the lock was released, and a commit after another command wrote, is not this row; the name-set lock is held for this commit's compare-and-set; a filesystem id that equals some row's hint does not select that row; the name set is the install records, the stored MCP servers, and the built-in server names; the name is checked again here; when it is already in the set this row does not commit, the marker still names no row, and the request id is consumed as K5; the audit is in this commit; a second command resumes this record only after this commit; two installs of different directories can both pass I1w, and the loser of the name check does not commit a row |
 | I2 | record preparing, endpoint file absent, credential not current, directory is a package, registry has no receipt for the id | reconciliation or the install command continues | registry receipt and one principal (A1), record still preparing | the caller's wait is I7; this row still runs after that | the registry commit that mints the principal includes its audit, and a failed registry commit leaves preparing and no principal; I4 is not this row |
 | I2a | record preparing, endpoint file absent, credential not current, directory is a package, registry receipt exists, principal not yet on the record | reconciliation or the install command continues | that principal on the record, record still preparing | the caller's wait is I7; this row still runs after that | it does not mint another; I4 is not this row; a repeat does not append a second audit |
-| I3 | record preparing, endpoint file absent, credential not current, directory is a package, principal present, server name already reserved by this record | reconciliation or the install command continues | record installed, endpoint not live, process down, credential not current, tool descriptors copied, and the server published when the gateway is already running | the caller's wait is I7; this row still runs after that | the command returns success; the descriptors are the manifest's explicit tools, copied in this commit; the process is not executed to discover them; a gateway that is already running publishes the server in this same commit; K2 is that publish when the gateway itself is starting; K5 is not this row; I4 is not this row; the audit is in this commit |
+| I3 | record preparing, endpoint file absent, credential not current, directory is a package, principal present, server name already reserved by this record, and no application process is up | reconciliation or the install command continues | record installed, endpoint not live, process down, credential not current, tool descriptors copied, and the server published when the gateway is already running | the caller's wait is I7; this row still runs after that | the command returns success; the descriptors are the manifest's explicit tools, copied in this commit; the image is copied in this same commit under the package-trust lock, and only while no application process is up; the digest of those bytes is stored in this commit; a source re-read that does not match the image discards the image and does not commit; the source directory is not exec'd; the process is not executed to discover the tools; a gateway that is already running publishes the server in this same commit; K2 is that publish when the gateway itself is starting; K5 is not this row; I4 is not this row; the audit is in this commit |
 | I4 | record preparing, endpoint file absent, credential not current, directory is not a package | the install command or reconciliation | record refusing. The registry is unchanged in this commit | none; this is the refusal | checked before I2, on the command as well as the pass; this commit is the install record only; the command returns refused; the request id stays consumed; the same id does not mint again; I3 does not run after this commit; the audit is in this commit |
 | I4a | record refusing, no gateway session open, and the principal or its registration is still present | reconciliation continues | registry principal, registration, grants, credentials, and that principal's command receipts removed. The install request id's receipt stays. The record stays refusing | none | an open session is S0s; the registry commit runs before the row is removed; a crash after it resumes at I4b; a crash before it resumes here; I3 does not read the directory; I5 does not adopt, because the record exists; the audit is in this commit |
 | I4b | record refusing, no gateway session open, principal absent, registration absent | reconciliation continues | record absent, server name released | none | an open session is S0s; the row is removed only after I4a's commit has returned; a directory that is a package again is not I3; the refused id does not install; I6 is a later retry of that id; the audit stays in the gateway log |
@@ -1003,18 +1144,19 @@ one line of it.
 | X1 | record preparing, and an endpoint file is present or a process credential is current | reconciliation or the install command continues | record still preparing; the endpoint file is absent; a current process credential is closed | none | no stored start identity, so no signal and no adopt; the close is `Revoked` / `ProcessExit`, initiator system; then the preparing line, which is I4, I2, I2a, or I3; a pid in the file is not signalled |
 | I6 | no record, that request id's receipt exists, no registration | the same id is presented | unchanged | none | the id stays consumed; no audit of a new install |
 | I7 | record preparing, install deadline passed, a caller is still waiting | the deadline | record unchanged | this is the caller's timeout | the command returns not-success; one audit, cause deadline, initiator system; the pass still runs X1, I2, I2a, I3, or I4; this record already reserved its server name at I1, so K5 is not this row; a retry of the same id resumes those rows and does not mint |
-| V1 | the marker names this row's installation id, this open is not a copy, and either the manifest version differs or the version matches and the stored path and filesystem hint already match this open | owner installs again | the record stays. The locator and the hint stay when the version differs | none | a different version is refused and does not create a row at the new path; a same version whose path or hint differs, and whose stored directory no longer presents this marker, is I8; the same version at the same path and hint does not mint and does not start a second process; a copy is V2; a filesystem id match without this marker is not this row and does not rewrite a marker |
-| I8 | the marker names this row's installation id, the manifest version matches, the stored path or the stored filesystem hint differs from this open, and this open is not a copy | owner installs that path | the same record. The stored path and the filesystem hint are updated. The marker already names this installation | none | no new principal, no new process, no new installation id; the socket name on the record is unchanged; a missing marker or a marker that names someone else is not this row and is not rewritten; V2 is the copy; a different version is V1 and does not update the locator or the hint; the same path and the same hint are V1 |
+| V1 | the marker names this row's installation id, this open is not a copy, and either the manifest version differs or the version matches and the stored path and filesystem hint already match this open | owner installs again | the record stays. The locator and the hint stay when the version differs | none | a different version is refused and does not create a row at the new path and does not replace the image; a same version whose path or hint differs, and whose stored directory no longer presents this marker, is I8; the same version at the same path and hint does not mint and does not start a second process; a copy is V2; a filesystem id match without this marker is not this row and does not rewrite a marker |
+| I8 | the marker names this row's installation id, the manifest version matches, the stored path or the stored filesystem hint differs from this open, and this open is not a copy | owner installs that path | the same record. The stored path and the filesystem hint are updated. The marker already names this installation | none | no new principal, no new process, no new installation id, and no new image or digest; the socket name on the record is unchanged; a missing marker or a marker that names someone else is not this row and is not rewritten; V2 is the copy; a different version is V1 and does not update the locator or the hint; the same path and the same hint are V1 |
 | V2 | the marker names a row, the filesystem id differs from that row's hint, and that row's stored filesystem id still opens a directory whose marker names that same installation id | owner installs the new path | the new path is not a record. The old row is unchanged | none | a copy is refused; the marker is not rewritten onto a row whose hint matches this filesystem id; deleting the original so that it no longer presents the marker, while the row remains, is I8 on the next open when the version matches and V1 when it differs; uninstalling the row and then installing a directory whose marker names no row is I1w then I1; a marker that names no row is not an installation |
 | D1 | record present, and the open of its stored path does not present a marker naming this installation id | start or reconciliation | no second record; the phase row still runs. The marker is not rewritten. The stored hint is not replaced | the release deadline from T1, or the publication deadline from T2, and the death deadline if stopping | the stored path may be missing, or it may open a different directory, including one whose filesystem id was reused; R2 and T1 are refused; R6, R8, R9, and a stop still run; uninstall still runs; a filesystem id match is not this installation; an owner install of a directory whose marker does not name this row is K5, I5, or I1w then I1, and I1w does not write this row's id into that directory; uninstall still runs, including while the row is preparing; S3 removes the row even when no principal remains, the registry commit returns without a delete, and the server name is released, so the row is not a permanent K5; a preparing row is committed only after I1 re-read the marker, so this row is not a crash that reserved the name before the marker existed; an open whose marker names this installation is I8 or V1, and a copy whose original still presents the marker is V2 |
 | T1 | record installed, the stored path presents this installation's marker, endpoint not live, credential not current, and either no start identity is stored or the ended confirmation names the stored identity | a start begins | record starting, no start identity yet, release deadline stored. One in-flight start attempt | stored here; not extended by a restart | this write commits before exec; the attempt is the only in-flight start; an ended confirmation for an earlier pair does not end this attempt; R2 does not begin again; a directory that opens without that marker is D1, not this row; a current credential is R9 or R6, not this row; a leftover file is not a live process; the audit is in this commit |
-| T2 | record starting, no start identity, credential not current, this start is in flight, release deadline not passed, and the spawn can deny the child the authority table's spawn denial | the start continues | pid and creation time stored, publication deadline stored, secret not written, child not released, the denial already on the spawn | publication deadline stored here | both commit before the child runs; the child is created only with that denial, and it is not released before this commit; it does not inherit a descriptor, an environment value, or a pipe byte of the auth directory; that directory is the one `Environment::auth_directory_from_system` resolves, and the denial is the authority table's spawn denial, including the credential registry and `auth/surfaces`; the creation time is at the operating system's resolution for telling processes apart; a restart does not extend the deadline; a platform with no re-readable creation time does not release the child; a spawn that cannot apply the denial is T2b |
+| T2 | record starting, no start identity, credential not current, this start is in flight, release deadline not passed, and the spawn can deny the child the authority table's spawn denial, and a read of the image under the package-trust lock matches the committed digest | the start continues | pid and creation time stored, publication deadline stored, secret not written, child not released, the denial already on the spawn | publication deadline stored here | both commit before the child runs; the child is created only with that denial, and it is not released before this commit; it does not inherit a descriptor, an environment value, or a pipe byte of the auth directory; that directory is the one `Environment::auth_directory_from_system` resolves, and the denial is the authority table's spawn denial, including the credential registry, `auth/surfaces`, and the package-trust root; the exec is this installation's image and not the source process entry; the package-trust lock is held from the digest read until the child is released; the creation time is at the operating system's resolution for telling processes apart; a restart does not extend the deadline; a platform with no re-readable creation time does not release the child; a spawn that cannot apply the denial is T2b |
 | T2b | record starting, no start identity, credential not current, this start is in flight, release deadline not passed, and the spawn cannot deny the child the authority table's spawn denial | the start would release the child | record installed, process down, credential not current, no secret, no start identity | none; the child is not created | not T2 and not T3; no pipe; the credential registry and the surface bearer files stay outside the process; a later attach is R2 and meets this row again until the platform can apply the denial; one audit, cause reconciliation, initiator system |
+| T2m | record starting, no start identity, credential not current, this start is in flight, release deadline not passed, the spawn can deny the authority table's spawn denial, and the image bytes do not match the committed digest | the start would exec | record installed, process down, credential not current, no secret, no start identity, digest unchanged | none; the child is not created | not T2 and not T2b and not T3; the digest is not replaced from the source directory; a sibling write to that directory is not copied; the package-trust lock is held for the read; one audit, cause reconciliation, initiator system |
 | T3 | record starting, start identity stored, endpoint not live, the re-read finds that process, creation time matches, the process does not answer, publication deadline not passed, this start has not issued, secret not delivered, and this is the in-flight issuer | the start continues | secret held by that process only after the pipe write returns (A2, or A3 when an earlier credential is still current), record still starting, secret delivered, capability generation stored | T8 | the issue request id is stored before the call; an earlier current credential is closed here as `ProcessExit`, initiator system, before the issue; the pipe write re-reads in this same step and writes the process secret, the endpoint verifier, and the gateway pid and creation time only while that re-read still finds the child; the capability secret stays in the gateway; after the issue returns, the generation is committed on the record before the pipe write, and the secret is not in that commit; a generation is not committed when the issue does not return; secret-delivered is stored only after the write returns; a generation commit that does not return discards the capability secret and does not write the pipe; a miss, or a write that does not return, discards the secret and does not retry the request id. The endpoint is not live at the start of this row. If it is live by the time the failure is observed, the pass takes T4 when a generation is committed and T4s when it is not. Otherwise the cell is T3d when the re-read still finds the child, and T6 when it does not; a pass that is not this issuer is not this row; a child that already answers with no credential for this start is T9; a re-read that finds no process is T6 |
 | T3d | record starting, endpoint not live, credential current for this start, secret not delivered, and the re-read still finds that process | the issue committed and the pipe write did not, or this pass finds that pair | record stopping, close, death, and kill deadlines stored, stored stop cause reconciliation | those deadlines | the secret is discarded and not stored; the request id is not retried (`ExistingSecretUnavailable`); the registry close is S0p, `Revoked` / `ProcessExit`, initiator system; the install audit's cause is reconciliation, initiator system; not T7 and not a second issue; a re-read that finds no process is T6; an endpoint that is already live is T4 when a generation is committed and T4s when it is not; the audit is in this commit |
 | T4 | record starting, start identity matches a live process, endpoint live, credential current, capability generation committed | reconciliation or the start continues | record installed, process up, secret delivered, that generation kept | the deadline no longer applies | adopts this process; a missing secret-delivered bit is stored in this commit, because a live endpoint means the pipe write was read; the generation was committed before that write, so a gateway crash after the write still names it; the capability secret, if the crash dropped it, is recovered by E9 and not by minting here; no exec; no second issue; no second capability; T4s is not this row; the audit is in this commit |
 | T4s | record starting, start identity matches a live process, endpoint live, credential current, no capability generation committed | reconciliation | record stopping, close, death, and kill deadlines stored | those deadlines | does not adopt; does not commit a generation the process reports; the gateway cannot name a generation it never stored, so E9 cannot rotate; S0p closes the credential; cause reconciliation, initiator system; the audit is in this commit |
-| T5 | record starting, no start identity, credential not current, and either no in-flight start remains or the release deadline T1 stored has passed | reconciliation | record installed, process down, credential not current | the release deadline | no secret was issued for this start; an earlier revoked or expired credential stays that way; a child whose pipe closed exits without an endpoint; a file with no stored start identity is removed and not adopted; this pass does not exec; before that deadline an in-flight start is T2 when the spawn can deny the authority table's spawn denial, and T2b when it cannot, whether or not the gateway process is still up; a current credential with no start identity is T9; the audit is in this commit |
+| T5 | record starting, no start identity, credential not current, and either no in-flight start remains or the release deadline T1 stored has passed | reconciliation | record installed, process down, credential not current | the release deadline | no secret was issued for this start; an earlier revoked or expired credential stays that way; a child whose pipe closed exits without an endpoint; a file with no stored start identity is removed and not adopted; this pass does not exec; before that deadline an in-flight start is T2 when the spawn can deny the authority table's spawn denial and the image matches the digest, T2m when the denial can be applied and the image does not match, and T2b when the denial cannot be applied, whether or not the gateway process is still up; a current credential with no start identity is T9; the audit is in this commit |
 | T9 | record starting, and when a start identity is stored the re-read still finds that process, and one of these holds: a credential is current and no start identity is stored; the current credential belongs to an earlier start, this pass is not the issuer, and the process does not answer; this pass is not the issuer, the credential is none, a start identity is stored, the process does not answer, and the publication deadline has not passed; the credential is none and the recorded process answers, or the endpoint is not live, an earlier credential is still current, and the recorded process answers | reconciliation | record stopping, deadlines stored, no new credential | those deadlines | a process that answers with no credential for this start is this row, including after the publication deadline; a child that does not answer yet, on the in-flight issuer, before that deadline, is T3; a re-read that finds no process, or a creation-time mismatch, is T6 and not this row; a live endpoint whose credential is revoked or expired is R8; a live endpoint whose credential is none stays this row; no adopt and no second issue; S0p when a credential is current, otherwise S1; cause reconciliation, initiator system; the audit is in this commit |
 | T6 | record starting, and the re-read finds no process with the stored pid and creation time, or the creation time mismatches | reconciliation | record stopping, that start identity, close, death, and kill deadlines stored | those deadlines stored here | the pass matches this row before T3, T3d, T8, and T9; an exit event that carries this identity is R5, and this row does not also commit for that exit; this pass does not exec, does not issue, and does not signal the mismatched process; S0p when the credential is current, otherwise S1; not S0; cause process exit, initiator system; a current credential is not left on an installed record; a secret that was not written is discarded and its request id is not retried; the audit is in this commit |
 | T7 | record starting, start identity stored, endpoint not live, publication deadline not passed, the re-read still finds that process, creation time matches, the credential current was issued for this start identity, and the secret was delivered on the pipe | reconciliation | record still starting | T8 | no exec, no second issue, and no signal; the process may answer or not; this wait is the issuer after the pipe write; a mismatched creation time is T6; a revoked or expired credential is R8; a current credential that was not issued for this start is T9; the in-flight issuer that has not issued yet is T3; a current credential whose secret was not delivered is T3d |
@@ -1028,9 +1170,9 @@ one line of it.
 | S1b | that start identity still matches after the death deadline | reconciliation | that process is killed; if it still matches after the kill deadline, the phase stays | the kill deadline stored with the stop, not extended by a restart | R2 does not run; the next pass retries the kill; the original stop cause stays |
 | S1c | record stopping or uninstalling, the ended confirmation does not yet name the stored pid and creation time, and the re-read finds no process with that pair, or the creation time mismatches, or no start identity was stored | reconciliation | ended confirmation stored for that pid and creation time, endpoint file absent | none | the confirmation names that pair and no other; a later start identity is not this confirmation; this re-read is the confirmation later rows require; a missing endpoint file while the re-read still finds the process is S1; not a `preparing` or in-flight `starting` record; the audit is in this commit; a failed confirmation write retries and does not undo the signal |
 | S2 | record stopping, credential not current, and the ended confirmation names the start identity stored on this stop | reconciliation continues | record installed, process down, credential closed or none | none | S1c stores that confirmation, and this row matches after that commit; a later attach may R2; grants stay; the audit is in this commit |
-| S3 | record uninstalling, ended confirmation stored, credential not current | reconciliation continues | record absent, principal absent, grants removed, credentials closed, that principal's command receipts removed | none | S1c stores that confirmation, and this row matches after that commit; the registry commit runs first and removes the principal, its grants, its credentials, and the command receipts keyed by that principal; the install row is removed only after that commit returns, and that removal releases the server name; a row that never minted a principal still takes this commit, the registry call returns without a delete, and the name is released; a crash after the registry commit resumes here, the principal is already absent, and I5 does not adopt it; a crash before the registry commit is still this installation; the principal id is not reused; files left in the package directory are not attempts, tools, or an endpoint once that commit has returned; the same uninstall id resumes here; a retry does not install; the audit stays in the gateway log; the audit is in this commit |
+| S3 | record uninstalling, ended confirmation stored, credential not current | reconciliation continues | record absent, principal absent, grants removed, credentials closed, that principal's command receipts removed | none | S1c stores that confirmation, and this row matches after that commit; the registry commit runs first and removes the principal, its grants, its credentials, and the command receipts keyed by that principal; the install row is removed only after that commit returns, and that removal releases the server name; a row that never minted a principal still takes this commit, the registry call returns without a delete, and the name is released; a crash after the registry commit resumes here, the principal is already absent, and I5 does not adopt it; a crash before the registry commit is still this installation; the principal id is not reused; the image and the mutable directory are removed in this commit; files left in the source directory are not attempts, tools, an image, or an endpoint once that commit has returned; the same uninstall id resumes here; a retry does not install; the audit stays in the gateway log; the audit is in this commit |
 | R1 | the marker names no install record | owner installs a directory | I0, then K5 or I6 or I5 or I1w then I1, then I4 or I2 or I2a, then I3 | I7 ends the caller's wait; the pass continues | an open whose marker names a row is I8, V1, or V2 in step 1, not this row; a filesystem id that equals a row's hint is not a row; a server name already in the name set is K5, and I1w, I1, and I5 do not commit; a crash after the row commits resumes the same request id; a crash after the marker and before the row is the crash table's marker row; I6 does not install |
-| R2 | record installed, the stored path presents this installation's marker, endpoint not live, credential not current, and either no start identity is stored or the ended confirmation names the stored identity | plugin, window, or a tool call asks to attach | T1, then T2 or T2b, then T3, then T4 | T8 bounds the publication | the caller does not exec and does not dial; preparing, starting, stopping, and uninstalling are not this row; a directory that opens without that marker is D1, not this row; a current credential is R9 or R6, not a start; a crash resumes T3, T3d, T4 when a generation is committed, T4s when the endpoint is live and no generation is committed, T5, T6, T7, T8, T9, or R8 instead of a second exec; R6 is the row when a start identity is stored and the ended confirmation does not name it; T2b is the row when the spawn cannot deny the authority table's spawn denial |
+| R2 | record installed, the stored path presents this installation's marker, endpoint not live, credential not current, and either no start identity is stored or the ended confirmation names the stored identity | plugin, window, or a tool call asks to attach | T1, then T2, T2b, or T2m. Only T2 continues to T3 and then T4 | T8 bounds the publication | the caller does not exec and does not dial; T2 execs the image only when the digest matches, and T2m does not exec when it does not; preparing, starting, stopping, and uninstalling are not this row; a directory that opens without that marker is D1, not this row; a current credential is R9 or R6, not a start; a crash resumes T2m, T3, T3d, T4 when a generation is committed, T4s when the endpoint is live and no generation is committed, T5, T6, T7, T8, T9, or R8 instead of a second exec; R6 is the row when a start identity is stored and the ended confirmation does not name it; T2b is the row when the spawn cannot deny the authority table's spawn denial |
 | R3 | record installed, endpoint live, credential current, start identity matches | another of those asks, including the plugin while the window is up | unchanged | none | the gateway dials with the current endpoint capability (E1) and the host renders the document the gateway fetched; the caller does not receive the socket name or the capability; a closed socket under that current credential is A13. A13 rotates the capability only when the gateway no longer holds it; a gateway that still holds the secret dials with that secret; starting, stopping, and uninstalling are not this row; a mismatched creation time is not this join |
 | R4 | record starting, or the one start attempt is already in flight | a second start | unchanged | the in-flight deadline | the second is not a second attempt. It exits before it execs, before it issues, and before `session.authenticate` |
 | R5 | record installed or starting, the exit event carries a pid and creation time, that pair is the record's current start identity, and the ended confirmation does not name that pair | the process exits while the gateway is up | record stopping, that start identity, close, death, and kill deadlines stored | those deadlines stored here | an exit whose pair is not the current start identity, or an exit that does not carry both, writes nothing and signals nothing; cause process exit, initiator system; S0p when the credential is current, otherwise S1; an owner revoke is A10, and expiry is R8; an exit the gateway did not observe leaves the record where it was and the pass takes R9, R6, or T6; the attempt record remains (O9); the next attach is not R2 until S2; the audit is in this commit |
@@ -1072,7 +1214,7 @@ same line.
 
 | Phase | Endpoint | Credential | Start identity | Gateway | The one transition |
 | --- | --- | --- | --- | --- | --- |
-| preparing | file absent | not current | none | either | I4 when the directory is not a package, and that commit is refusing; otherwise I2, then I2a, then I3. The server name was reserved at I1. I7 returns the caller and is not this line |
+| preparing | file absent | not current | none | either | I4 when the directory is not a package, and that commit is refusing; otherwise I2, then I2a, then I3 when no application process is up. While one is up, I3 does not match and the record stays preparing. The server name was reserved at I1. I7 returns the caller and is not this line |
 | preparing | file present, or the credential is current | any | none | either | X1, then the install chain. No signal |
 | refusing | either | any | none | either | S0s when a gateway session is open; otherwise I4a when the principal or its registration is still present; otherwise I4b. The directory is not read. I3 and I5 do not run |
 | installed | not live | not current | confirmed ended, or none | either | an attach asks: R2 when the stored path presents this installation's marker. When it does not, including when a directory opens under a reused filesystem id, D1 refuses the start. The pass does not exec |
@@ -1081,7 +1223,7 @@ same line.
 | installed | not live | current | confirmed ended, or none | either | R9, then S0p on the same pass after that commit |
 | installed | live | current | matches | either | R3. A closed socket is A13 and is not a second phase change |
 | installed | live | not current | matches | either | R8, then S1. The socket arm at `expires_at` and a restart that finds that instant already passed are this line |
-| starting | not live | not current | none | this start in flight, release deadline not passed, gateway up or restarted | T2 when the spawn can deny the authority table's spawn denial, then T3. T2b when it cannot, and T3 does not run. An earlier revoked or expired credential stays not current |
+| starting | not live | not current | none | this start in flight, release deadline not passed, gateway up or restarted | T2 when the spawn can deny the authority table's spawn denial and the image matches the digest, then T3. T2b when the denial cannot be applied, and T3 does not run. T2m when the denial can be applied and the image does not match, and T3 does not run. An earlier revoked or expired credential stays not current |
 | starting | not live | not current | none | no in-flight start remains, or the release deadline has passed, gateway up or restarted | T5 |
 | starting | not live | current | none | either | T9, then S0p. No stored identity means the endpoint is not live |
 | starting | not live | either | re-read finds no such process, or the creation time mismatches | either | T6, then S0p when the credential is current, otherwise the stopping line. This is the only starting line for a missing child |
@@ -1143,10 +1285,10 @@ continues with the close and the signal. A crash after that commit
 resumes at the close. The order inside one pass:
 
 1. Absent: an open whose marker names a row is V2 when the filesystem id differs and the stored directory still presents that marker, and otherwise I8 or V1 for that installation. A filesystem id that matches a different row is not a second match and does not rewrite the marker. An owner install whose marker names no row is R1: K5 when the server name is already in the name set, else I6 when that request id's receipt exists and no registration names the marker, else I5 when a registration names the installation id in the marker, else I1w then I1, both under the directory lock, and I1 reads the marker under that hold. K5 is before I1w, so a taken name writes no marker. The lock is not released between the marker write and the row commit. A reconciliation that is not an owner install is K5 when a registration exists and the server name is already in the name set, else I5, else I6, else idle. A stored path that does not present its row's marker is D1 on that row, not I8.
-2. Preparing: X1 when an endpoint file is present or a credential is current, then I4 if the directory is not a package, else I2, else I2a, else I3. I4 writes refusing and this pass continues at S0s when a session is open, then I4a, then I4b. I3 does not run after that write. I7 may return the caller without replacing the line. I3 copies the tool descriptors and publishes the server when the gateway is already running. The marker was written at I1w and re-read before I1 reserved the server name. Refusing: S0s when a session is open, then I4a while the principal or registration remains, then I4b. The directory is not read.
+2. Preparing: X1 when an endpoint file is present or a credential is current, then I4 if the directory is not a package, else I2, else I2a, else I3. I4 writes refusing and this pass continues at S0s when a session is open, then I4a, then I4b. I3 does not run after that write. I7 may return the caller without replacing the line. I3 copies the tool descriptors and the image, commits the digest, and publishes the server when the gateway is already running. While an application process is up, I3 does not match and does not copy. The marker was written at I1w and re-read before I1 reserved the server name. Refusing: S0s when a session is open, then I4a while the principal or registration remains, then I4b. The directory is not read.
 3. Installed or starting, matching R8: R8. R8's starting arm is a revoked or expired credential whose re-read still finds the process, or a live endpoint with that credential. Credential none, and a missing child, are not this step.
 4. Starting, identity stored, and the re-read finds no process with that pid and creation time, or the creation time mismatches: T6. This step is before T3, T3d, T8, and T9.
-5. Starting, no start identity, credential not current: T5, unless this start is in flight and the release deadline has not passed. That in-flight start is T2 when the spawn can deny the authority table's spawn denial, and T2b when it cannot, whether or not the gateway process is still up.
+5. Starting, no start identity, credential not current: T5, unless this start is in flight and the release deadline has not passed. That in-flight start is T2 when the spawn can deny the authority table's spawn denial and the image matches the digest, T2m when the denial can be applied and the image does not match, and T2b when the denial cannot be applied, whether or not the gateway process is still up. T3 does not run from T2m or T2b.
 6. Starting, endpoint not live, credential current for this start, secret not delivered, re-read still finds the process: T3d. An endpoint that is already live is T4 when a generation is committed and T4s when it is not.
 7. Starting, matching T9, and, when an identity is stored, the re-read still finds that process: T9.
 8. Starting, credential none or an earlier current credential, identity stored, re-read finds the process and it does not answer, this pass is the issuer, publication deadline not passed: T3. The pipe write re-reads again in that step.
@@ -1203,7 +1345,8 @@ a different transition from its line, is a defect.
 
 | Re-read | Credential | Pass | Deadline | Transition |
 | --- | --- | --- | --- | --- |
-| no start identity | not current | this start in flight, and the spawn can deny the authority table's spawn denial | release not passed | T2 |
+| no start identity | not current | this start in flight, the spawn can deny the authority table's spawn denial, and the image matches the digest | release not passed | T2 |
+| no start identity | not current | this start in flight, the spawn can deny the authority table's spawn denial, and the image does not match the digest | release not passed | T2m. No child and no secret. The digest is not replaced from the source |
 | no start identity | not current | this start in flight, and the spawn cannot deny the authority table's spawn denial | release not passed | T2b. No child and no secret |
 | no start identity | not current | no in-flight start, or the release deadline has passed | — | T5 |
 | no start identity | current | either | either | T9, then S0p |
@@ -1235,7 +1378,7 @@ tests the matrix.
 
 ### Records across a restart and a reinstall
 
-The process being down, and the package directory still being on disk,
+The process being down, and the source directory still being on disk,
 are two different facts. A restart has to list tools and finish a phase
 without the process. A new principal is minted only when the marker names no remaining row.
 A filesystem id match is not a remaining row. While the marker names a
@@ -1262,11 +1405,12 @@ pair the registry already uses for an issue, issuer principal and
 request id. A previous installation's files are not an ack and are not
 a Cedar decision.
 
-The package directory is the package. After S3, a file that remains
-there is not an endpoint, not a tool list, not an attempt, and not a
-credential. The dashboard document may remain as the package's own data.
-It is not a receipt. The receipt is the attempt row in the current
-namespace.
+The source directory is the owner's copy. The image in the
+package-trust root is what T2 execs. After S3, the image and the mutable
+directory are removed. A file that remains in the source directory is
+not an endpoint, not a tool list, not an attempt, and not a credential.
+The dashboard document lives in the mutable directory. It is not a
+receipt. The receipt is the attempt row in the current namespace.
 
 | Record | Where it lives | Gateway restart, process down | Gateway restart, process up | S3 | Install after the row is gone |
 | --- | --- | --- | --- | --- | --- |
@@ -1275,10 +1419,10 @@ namespace.
 | Tool descriptors | the copy on the install row, taken at I3 | K2 lists the phase the pass left. When S0p's close returns in that pass, S2 leaves the record installed and K2 lists it; a call then R2s. When the close does not return, the record stays stopping, K2 omits it, and K4 lists it when a later pass reaches S2. A record left starting is listed and the call waits. A call does not R2 while stopping | K2 lists a record left installed or starting. A call dials when the endpoint is live. A call on starting with the endpoint not live waits for that pass and does not dial | K3 withdraws the server | I3 copies the descriptors and publishes the server in that commit, because the gateway is already running |
 | Endpoint capability secret | gateway memory | absent. The process is not up, so the next start is T3, not E4 | E9 when the record is installed, the endpoint is live, the credential is current, and the gateway holds no secret. R8 drops it and does not rotate. R6 and R9 do not dial | dropped | minted at the next T3 |
 | Process secret and endpoint verifier | that process's memory | absent | A13 when the credential is current and the endpoint is live. R8, R6, and R9 stop that process and do not reuse the secret as a new start | gone with the process | minted at the next T3 |
-| Endpoint file | package directory. The socket name, not a TCP URL | not authority. The process is down, so the endpoint is not live | live only while that process answers on the local socket | removed. A file that remains meets X1 on the next prepare and is not adopted | not adopted |
+| Endpoint file | this installation's mutable directory. The socket name, not a TCP URL. A file in the source directory is not this endpoint | not authority. The process is down, so the endpoint is not live | live only while that process answers on the local socket | removed. A file that remains meets X1 on the next prepare and is not adopted | not adopted |
 | Gateway session | gateway memory | absent. `session.authenticate` is refused while stopping, uninstalling, or refusing | S0s closes it when the phase is stopping, uninstalling, or refusing. A13 runs only when the record is installed, the endpoint is live, and the credential is current | closed by S0s before the registry commit | absent. The new principal has no session |
-| Attempt phase | package directory, namespace is the principal id | the same namespace. O9–O11 | the same namespace | after the registry commit the old namespace is not current, even if the row is still uninstalling. Before that commit this is still the same installation. The files may remain either way | the new principal's namespace is empty. The old phase is not O10 |
-| Dashboard document | package directory | the package's data | the package's data | remains the package's data | not a receipt. A new attempt writes its receipt under the new principal |
+| Attempt phase | this installation's mutable directory in the package-trust root, namespace is the principal id | the same namespace. O9–O11 | the same namespace | after the registry commit the old namespace is not current, even if the row is still uninstalling. Before that commit this is still the same installation. The files may remain either way | the new principal's namespace is empty. The old phase is not O10 |
+| Dashboard document | this installation's mutable directory in the package-trust root | the package's data | the package's data | remains the package's data | not a receipt. A new attempt writes its receipt under the new principal |
 | Lifecycle audit | gateway log | evidence. It is not a row | evidence | the absent transition stays in the log. The row is not rebuilt from it | not an installation |
 
 A cell names one treatment. The live set lists a server only for
@@ -1306,10 +1450,11 @@ The crash table uses the same token names.
 | Token | What it is | Transitions | A miss |
 | --- | --- | --- | --- |
 | Directory lock | Exclusive on the open directory. Taken when I0's open returns. Held until I1's commit returns or the command ends. A crash releases it. Not the registry lock, and the child does not inherit it | I0, I1w, I1, I5, R1 | A second owner install of that directory writes nothing until it holds the lock. I1 does not commit an id read outside the hold |
+| Package-trust lock | Exclusive across the image copy and the process release. One lock for every installation | I3, T2, T2m, T2b | A start does not release a child while a copy holds it. A copy does not read the source while a child is up. T2 does not exec without the lock |
 | Name-set lock | The gateway server-name set. Held for the compare-and-set at the row commit, together with the directory lock when both apply | K5, I1, I5, K6 | The loser does not commit a row. K5 before I1w writes no marker |
 | Marker generation | The installation id in the marker. A filesystem id is not this token | I8, V1, V2, D1, I5, R1 | A hint match does not select a row and does not rewrite a marker |
 | Install request id | The command's request id, consumed when I1, K5, or I4 commits | I2, I2a, I3, I4, I4a, I4b, I6, I7, X1, A1 | A retry of a consumed id does not mint. I2 takes the registry lock for A1 |
-| Start attempt | One in-flight start on the record, stored at T1 and closed when T2 stores an identity or T5 returns the record to installed | T1, T2, T2b, T5, R4 | A second start does not exec, does not issue, and does not authenticate |
+| Start attempt | One in-flight start on the record, stored at T1 and closed when T2 stores an identity or T2m, T2b, or T5 returns the record to installed | T1, T2, T2b, T2m, T5, R4 | A second start does not exec, does not issue, and does not authenticate |
 | Start identity | The pid and creation time stored at T2. An exit, a signal, a re-read, and a publish carry that pair. Confirmed ended stores that same pair | T3, T3d, T4, T4s, T6, T7, T8, T9, S1, S1b, S1c, S2, R2, R3, R5, R6, R8, R9, A2, A3, A10, A13 | An exit for any other pair writes nothing and signals nothing. A confirmation for another pair does not end the current identity |
 | Capability generation | Committed on the record after issue returns and before the pipe write | T4, T4s, E1, E2, E3, E4, E5, E6, E7, E8, E9, E10, A13 | No committed generation does not adopt. E9 rotates only a generation the record stored |
 | Issue request id | One id stored before `application-start`. A14 does not take it | A2, A3, T3, T3d, A14 | A pipe write that does not return does not present the id again |
@@ -1343,12 +1488,13 @@ unrecovered. Serializes on is the token from
 | Marker names a row, this open is not a copy, and the version differs or the path and the hint already match | V1 | that installation. The locator and the hint stay when the version differs. No second row | marker generation |
 | Marker names a row, the filesystem id differs, and the stored directory still presents that marker | V2 | the copy is refused. The named row is unchanged | marker generation |
 | Reconciliation opens the stored path, the filesystem id matches the row, and the marker does not name that installation | D1 | the hinted principal is not used. The marker is not rewritten. Not I8 | the installation id on the row. Not the filesystem id |
-| T1 committed, T2 not committed | T2 when this start is in flight, the release deadline has not passed, and the spawn can deny the authority table's spawn denial. T2b when that denial cannot be applied. T5 when the deadline has passed or no in-flight start remains | no child and no secret. Exactly one of those three rows matches | start attempt |
+| T1 committed, T2 not committed | T2 when this start is in flight, the release deadline has not passed, the spawn can deny the authority table's spawn denial, and the image matches the digest. T2m when that denial can be applied and the image does not match. T2b when that denial cannot be applied. T5 when the deadline has passed or no in-flight start remains | no child and no secret. Exactly one of those four rows matches | start attempt, and the package-trust lock for T2, T2m, and T2b |
 | An exit whose pid and creation time are not the record's current start identity | no row. The event is discarded. Not R5 and not a signal | the current process stays | start identity. An event that does not carry both is the same miss |
 | Two handshakes present one application bearer | A6 takes the empty slot when a grant is present. A12 takes it when no grant is present. The other handshake is A6x | one session. The owner's sessions are not this slot | session slot |
+| Record installed, the image bytes differ from the committed digest | the next start is T1 then T2m. This pass does not exec and does not replace the digest. An in-flight start is the T1 row, not this one | the source may have been written. It is not executed | the digest. The package-trust lock is taken at that start |
 | I1 committed, I2 not committed | I4 when the directory is not a package. I2 when it is | the server name is reserved. No principal and no session. I4 does not mint | install request id. The name-set lock already reserved the name |
 | I2 committed, the principal is not on the record yet | I2a | the principal exists in the registry. The record exists, so I5 does not adopt | install request id, after the registry lock returned |
-| I2a committed, I3 not committed | I3 when the directory is still a package. I4 when it is not | this installation when I3 matches. Refusing when I4 matches. The record is not installed yet | install request id |
+| I2a committed, I3 not committed | I3 when the directory is still a package and no application process is up. While one is up, no row commits. I4 when the directory is not a package | this installation when I3 matches. Refusing when I4 matches. The record is not installed yet. A partial image is not current | install request id, and the package-trust lock when I3 copies |
 | I4 committed, no principal and no registration | I4b | refusing. No registry delete was owed. I3 does not revalidate. I5 does not adopt | install request id |
 | I4 committed, the principal or registration remains, and no session is open | I4a | refusing. I3 does not revalidate. I5 does not adopt | registry lock, then install request id |
 | I4a committed, the row is still refusing | I4b | no principal. The install receipt stays, so the id stays consumed. The row blocks I5 | install request id |
@@ -1410,8 +1556,8 @@ identity.
 
 ### The attempt
 
-One operation is one request id, one body, and one phase, stored in the
-process's own store. The phase record is the outbox. It is not the
+One operation is one request id, one body, and one phase, stored in
+this installation's mutable directory, the process's own store. The phase record is the outbox. It is not the
 dashboard document. A mixed body names Nessa effects first and app
 effects after that. A body that names an app effect before a Nessa
 effect is refused before any effect, and that refusal consumes the
@@ -1500,11 +1646,11 @@ Each rule names the rows that hold it.
    marker, the endpoint is not live, the credential is not current, and
    any start identity is confirmed ended. That start writes
    `starting` before it execs, and the pid and creation time before it
-   issues. The spawn denies the child the authority table's spawn denial before release. A
-   platform that cannot apply the denial does not release the child. A
+   issues. The spawn denies the child the authority table's spawn denial, including the package-trust root, before release. A
+   platform that cannot apply the denial does not release the child. T2 execs the image only when the digest matches, and T2m does not exec a mismatch. A
    second start exits before it execs and before it opens a
    socket. The attempt record survives the process exiting, and the next
-   start does not apply the effect twice. Rows R2–R9, T1–T9, S0–S2, S0p,
+   start does not apply the effect twice. Rows R2–R9, T1–T9, T2b, T2m, S0–S2, S0p,
    S0u, O1–O3, O9–O11.
 6. A view's context does not outlive that view. Rows U6, U7, M6.
 7. An MCP App mount stays the tool call it is, on the caller's session.
@@ -1567,7 +1713,9 @@ Each rule names the rows that hold it.
     I0–I8, I1w, I2a, I4a, I4b, V2, X1, D1, T1–T9, T2b, T3d, T4s, S0–S3, S0p, S0u, S0b, S0s, R1, R2, R6–R9, A1,
     A10, A11.
 15. The package key is the installation id. The marker holds that id
-    and is the proof a directory is that installation. The marker is
+    and is the proof a directory is that installation. It is not the
+    proof of the bytes the start execs. The digest on the image is that
+    proof. The marker is
     written before the install row. The row commit does not write it.
     The path is the locator. The filesystem directory id is a staleness hint. A match of
     the hint does not prove the directory is the row, and it does not
@@ -1608,8 +1756,8 @@ Each rule names the rows that hold it.
     phase table.
 18. The current installation is the principal id on the install record.
     Tool descriptors and command receipts live in the gateway's store.
-    Attempt files live in the package directory and are an attempt only
-    under that id. A restart rebuilds the live set before any agent. An
+    Attempt files live in this installation's mutable directory and are an attempt only
+    under that id. A file in the source directory is not an attempt. A restart rebuilds the live set before any agent. An
     install after the row is gone is a new principal, and the previous
     principal's files and receipts are not that installation. While the
     row remains, I8 or V1 keeps the principal. Rows I3, K2–K6, S3, O10, O12,
@@ -1624,19 +1772,29 @@ Each rule names the rows that hold it.
     the authority table's spawn denial. A marker with no row is not an
     installation. I1w and I1 share the directory lock, and I1 reads the
     marker under that hold. An exit is R5 only when it carries the
-    current start identity.
+    current start identity. The image is exec'd only when the digest
+    matches, and a sibling write to the source directory does not refresh
+    that digest.
     Rows I4, I4a,
     I4b, I1w, I8, V2, D1, T2b, T3, T4, T4s, S0s, S0b, S3, A6d, A6x, and the crash table.
 20. The application process runs as the owner's OS user. Before it is
     released, the spawn denies it the authority table's spawn denial. That
     set is enforced on the auth directory
     `Environment::auth_directory_from_system` resolves, which holds the
-    credential registry and `auth/surfaces`. It does not inherit those
-    files. A platform that cannot apply the denial does not release the
+    credential registry and `auth/surfaces`, and on the package-trust
+    root. It does not inherit those
+    files, and it does not write another installation's image. A platform that cannot apply the denial does not release the
     child. Cedar on the application principal is not that denial. The
     plan does not sandbox the owner's documents, the network, or other
     programs, and the frame's sandbox does not confine this process.
-    Rows T2, T2b, and the authority table.
+    Rows T2, T2b, T2m, and the authority table.
+
+21. Every installed-package path and every credential path has one row
+    in [What a path may do](#what-a-path-may-do). The image is the only
+    exec. `server.read` is not `application.attach`. An application
+    principal is forbidden to attach to every installation, including
+    its own, by `application.attach.application`. Rust does not compare
+    the principal ids. Rows T2, T2m, I3, E1, E6, and both path tables.
 
 ## Packaging
 
@@ -1645,8 +1803,9 @@ stored command (`mcpServers.save`), and the Tauri updater replaces the
 desktop binary (`src-tauri/src/updater.rs`). None of those is a package
 a third party installs.
 
-The package is a directory: a manifest (display name, process entry, UI
-entry), the public actions, and the UI document the sandbox loads. The
+The package source is a directory: a manifest (display name, process entry, UI
+entry), the public actions, and the UI document the sandbox loads. I3
+copies that file set into the image, and T2 execs the image. The
 owner installs it on this gateway. The install list is the owner's,
 beside the stored MCP servers, not a channel of the updater. The first
 install is a local path. That install is one command and one request id,
@@ -1735,8 +1894,8 @@ Each slice depends only on slices above it.
 
 | Slice | Delivers | Rows |
 | --- | --- | --- |
-| 1. Principal, grant, and admission ([#1052](https://github.com/nessalabs/nessa-agent/issues/1052)) | The active member and the application registration, with no process secret returned. The mint is idempotent on the install request id and on the installation id, both stored on the registration. The path is not the key. Share, unshare, the share list, the cursor, and the command receipt name `principalId`. The grant key is that principal and one conversation. Cedar forbids product `credential.issue` for this registration and permits only the start path. No-binding admission asks Cedar with the registration fact: no registration keeps today's owner fallback; an application registration matches a principal-subject grant or is refused. `mcp.*` stays off this principal. | A1, A4, A5, A7–A9, A11, A12, A14, M4, rule 13 |
-| 2. Install row and the one process ([#1067](https://github.com/nessalabs/nessa-agent/issues/1067)) | One record per installation id, in `preparing`, `installed`, `starting`, `stopping`, and `uninstalling`. The identity is the installation id minted into the marker before the preparing row commits. That row commit reserves the server name and does not write the marker. The marker is the proof. The path is the locator. The filesystem id is a hint and cannot by itself select a row. A rename is the same record because the marker moves with the directory. A copy whose original still presents the marker is refused. A reused filesystem id, with the marker missing or naming another installation, is not the old row. Startup and every attach run one reconciliation pass. A `starting` record stays on T2 while this start is in flight and the release deadline has not passed, including when no child has been stored yet. It stays on T3 or T7 while the publication deadline has not passed and the re-read still finds the child. T2b leaves `starting` when the spawn cannot deny the authority table's spawn denial. T6, T3d, T9, and R8 stop it earlier. A passed publication deadline is T8, except the T9 break. T3 issues only when that re-read finds the child, and the pipe write re-reads again. A secret that cannot be delivered is discarded, the request id is not retried, and the credential closes as `ProcessExit` (T3d). The gateway is the only starter. It stores a release deadline before exec, then the pid and the OS creation time before it releases the child and before `application-start`. The spawn denies the child the authority table's spawn denial before that release, and a platform that cannot apply the denial does not release the child (T2b). I1w and I1 hold the directory lock, and the row commit reads the marker under that hold. An exit is R5 only when it carries the current start identity. It injects the secret once on the pipe, and does not store it. It writes `stopping`, that start identity, and the close, death, and kill deadlines before it closes the credential. It signals only a process whose pid and creation time still match, and only after the close or the close deadline. A later pass still attempts a close the deadline did not finish. A restart does not move a stored deadline. A passed install deadline returns the command and the pass still finishes the phase. Another version is refused. Each phase change commits its audit record in that same write. Expiry does not add a registry cause. A process exit closes through S0p (`ProcessExit`, initiator system), not as an owner revoke. An owner uninstall closes through S0u. The matrix is the one match for every phase, endpoint, credential, start identity, and gateway combination, including an `installed` live endpoint whose credential expired while the gateway was down (R8). A current credential on an installed live endpoint re-authenticates in the same process. A start whose earlier credential is already closed still issues (A2). Uninstall writes `uninstalling` and resumes until the record and the principal are gone. The gateway is the only dialer of that process, over the local IPC socket. It dials with an endpoint capability whose secret stays in the gateway. The generation is committed before that secret's verifier is written on the pipe. A live child with no committed generation is stopped. Entering refusing, stopping, or uninstalling closes the gateway session before the signal, and the registry close keeps retrying. The desktop, the harness, the frame, and other packages do not receive it. E9 rotates it, and only when a restart has dropped the secret, before the gateway dials again. A socket drop that leaves the secret in the gateway does not rotate. Tool descriptors are copied from the manifest onto the record at I3. Composition publishes that copy into the live set before any agent, for a record that is installed or starting, including while the process is down. The process does not register that set. A stdio child of a harness session is not this process. | A2, A3, A6, A6d, A6x, A10, A11, A13, I0–I8, I1w, I2a, I4a, I4b, V2, X1, V1, D1, K2–K6, T1–T9, T2b, T3d, T4s, E1–E10, S0–S3, S0p, S0u, S0b, S0s, S1b, S1c, R1–R9, rule 11, rule 12, rule 14, rule 15, rule 16, rule 18, rule 19, O7 |
+| 1. Principal, grant, and admission ([#1052](https://github.com/nessalabs/nessa-agent/issues/1052)) | The active member and the application registration, with no process secret returned. The mint is idempotent on the install request id and on the installation id, both stored on the registration. The path is not the key. Share, unshare, the share list, the cursor, and the command receipt name `principalId`. The grant key is that principal and one conversation. Cedar forbids product `credential.issue` for this registration and permits only the start path. `application.attach` is its own action: `application.attach.owner` and `application.attach.tool` permit, and `application.attach.application` forbids an application principal for every installation, including its own. `server.read` does not match that action. Rust does not compare principal ids. No-binding admission asks Cedar with the registration fact: no registration keeps today's owner fallback; an application registration matches a principal-subject grant or is refused. `mcp.*` stays off this principal. | A1, A4, A5, A7–A9, A11, A12, A14, M4, E6, rule 13, rule 21 |
+| 2. Install row and the one process ([#1067](https://github.com/nessalabs/nessa-agent/issues/1067)) | One record per installation id, in `preparing`, `installed`, `starting`, `stopping`, and `uninstalling`. The identity is the installation id minted into the marker before the preparing row commits. That row commit reserves the server name and does not write the marker. The marker is the proof of which installation the directory is. The digest on the image is the proof of the bytes T2 execs. The path is the locator. The filesystem id is a hint and cannot by itself select a row. A rename is the same record because the marker moves with the directory. A copy whose original still presents the marker is refused. A reused filesystem id, with the marker missing or naming another installation, is not the old row. Startup and every attach run one reconciliation pass. A `starting` record stays on T2 while this start is in flight, the release deadline has not passed, and the image matches the digest, including when no child has been stored yet. It stays on T3 or T7 while the publication deadline has not passed and the re-read still finds the child. T2b leaves `starting` when the spawn cannot deny the authority table's spawn denial. T2m leaves `starting` when the image does not match the digest, and it does not refresh that digest from the source. I3 copies the image only while no application process is up. T6, T3d, T9, and R8 stop it earlier. A passed publication deadline is T8, except the T9 break. T3 issues only when that re-read finds the child, and the pipe write re-reads again. A secret that cannot be delivered is discarded, the request id is not retried, and the credential closes as `ProcessExit` (T3d). The gateway is the only starter. It stores a release deadline before exec, then the pid and the OS creation time before it releases the child and before `application-start`. The spawn denies the child the authority table's spawn denial before that release, and a platform that cannot apply the denial does not release the child (T2b). I1w and I1 hold the directory lock, and the row commit reads the marker under that hold. An exit is R5 only when it carries the current start identity. It injects the secret once on the pipe, and does not store it. It writes `stopping`, that start identity, and the close, death, and kill deadlines before it closes the credential. It signals only a process whose pid and creation time still match, and only after the close or the close deadline. A later pass still attempts a close the deadline did not finish. A restart does not move a stored deadline. A passed install deadline returns the command and the pass still finishes the phase. Another version is refused. Each phase change commits its audit record in that same write. Expiry does not add a registry cause. A process exit closes through S0p (`ProcessExit`, initiator system), not as an owner revoke. An owner uninstall closes through S0u. The matrix is the one match for every phase, endpoint, credential, start identity, and gateway combination, including an `installed` live endpoint whose credential expired while the gateway was down (R8). A current credential on an installed live endpoint re-authenticates in the same process. A start whose earlier credential is already closed still issues (A2). Uninstall writes `uninstalling` and resumes until the record and the principal are gone. The gateway is the only dialer of that process, over the local IPC socket. It dials with an endpoint capability whose secret stays in the gateway. The generation is committed before that secret's verifier is written on the pipe. A live child with no committed generation is stopped. Entering refusing, stopping, or uninstalling closes the gateway session before the signal, and the registry close keeps retrying. The desktop, the harness, the frame, and other packages do not receive it. E9 rotates it, and only when a restart has dropped the secret, before the gateway dials again. A socket drop that leaves the secret in the gateway does not rotate. Tool descriptors are copied from the manifest onto the record at I3. Composition publishes that copy into the live set before any agent, for a record that is installed or starting, including while the process is down. The process does not register that set. A stdio child of a harness session is not this process. | A2, A3, A6, A6d, A6x, A10, A11, A13, I0–I8, I1w, I2a, I4a, I4b, V2, X1, V1, D1, K2–K6, T1–T9, T2b, T2m, T3d, T4s, E1–E10, S0–S3, S0p, S0u, S0b, S0s, S1b, S1c, R1–R9, rule 11, rule 12, rule 14, rule 15, rule 16, rule 18, rule 19, O7 |
 | 3. Connected web view ([#1053](https://github.com/nessalabs/nessa-agent/issues/1053)) | `examples/dashboard` is a page the process serves. The page does not open a gateway socket. It renders the granted conversation. No desktop import. | A6–A8, A12, R3 |
 | 4. Action contract and the dashboard save ([#1054](https://github.com/nessalabs/nessa-agent/issues/1054)) | `packages/nessa-app`. UI action, operation, the attempt outbox, explicit MCP registration, the import test. One request id, one body, one phase, namespaced by the installation's principal id. A mixed operation lists Nessa effects before app effects. Replay performs only an effect with no receipt and does not ack a partial phase. A previous installation's phase is not an ack. UI actions run on the page slice 3 serves. The process from slice 2 runs the operations. | U1–U7, O1–O12, rule 17, rule 18, the attempt phase table |
 | 5. Plugin entry ([#1055](https://github.com/nessalabs/nessa-agent/issues/1055)) | The window place asks the row to attach and does not exec, whether or not the endpoint is already live. H1. M6 against a tool-call widget already in the window place. Mounts stay M1–M3. | H1, M5, M6, R2, R3, U6, U7 |
@@ -1918,7 +2077,7 @@ original still presents the marker, is refused.
 a device and inode after the directory is deleted, and Windows can
 reuse a file id. A new directory at the stored path would then be the
 old row, and the gateway would rewrite its marker and run its files
-under the old principal. The marker is the proof. The filesystem id is
+under the old principal. The marker is the proof of identity. The digest is the proof of the bytes. The filesystem id is
 a hint. A hint match without the marker is D1, not I8.
 
 **Treat the application principal's Cedar checks as confinement.** Those
@@ -1953,6 +2112,18 @@ Another owner install of that directory can replace the marker in the
 gap, and the first commit then stores the id it no longer sees. The
 directory lock is held from I1w until I1 returns. I1 reads the marker
 generation under that hold.
+
+**Exec the source directory when the marker matches.** A sibling
+running as the owner can replace the process entry and leave the marker
+and the version alone. The next start would inject the victim's
+credential into that code. The start execs the image, and only when the
+digest matches. A mismatch is T2m and does not refresh the digest.
+
+**Treat `server.read` as attach.** The process credential holds
+`server.read`. That policy does not name `application.attach`. An
+application principal is forbidden by `application.attach.application`
+for every installation, including its own. Rust does not compare the
+principal ids.
 
 **Treat any child exit as the current start.** A late exit from the
 previous pid would move the replacement to `stopping` and signal it.
