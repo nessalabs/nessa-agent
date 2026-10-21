@@ -1103,10 +1103,13 @@ registry lock. Cloud selection fails explicitly until its implementation exists.
 See the [CLI module map](../crates/nessa-server/src/cli/mod.rs) and
 [local auth guide](guides/local-auth.md).
 
-Owned cold-close recovery consumes SDK cleanup proof from the existing session
-lease stream (`SdkCleanupAcknowledged`), independently of decline audit and physical
-End. The actual acquired SDK close owner publishes proof under the current gate's
-first close-operation/target/lease scope. The gateway's two cold paths share one
-join; an unattached restored Agent can replay a prepared decline but cannot certify
-that old SDK cleanup. See the cycle7 ordering table in
-[Parent Stop ownership](adr/todo/329-subagents.md#explicit-cycle7-independent-cold-evidence).
+Owned cold-close recovery consumes SDK resource proof from the existing session
+lease stream (`SdkCleanupAcknowledged`), independently of prepared cancellation
+and decline audit receipts and physical End. The actual installed SDK lifetime
+gate supplies the minted target/session; the writer binds proof to its current
+lease. Resource cleanup can precede graph close, and a later lease cannot use
+an earlier proof. An unattached history-restoration Agent has no installed gate
+and cannot certify that old cleanup. An exact completed opening can instead
+establish SDK non-acquisition only if attachment never started, its current lease
+correlates, and its actual environment owner acknowledged release. Both cold paths
+share this evidence join. See [Parent Stop ownership](adr/todo/329-subagents.md#cycle8-qualification-orderings).

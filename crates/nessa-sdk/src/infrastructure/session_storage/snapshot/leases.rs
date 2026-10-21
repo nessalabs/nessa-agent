@@ -12,7 +12,6 @@
 //! kind instead.
 use super::{permissions::Actor, tools::corrupt};
 use crate::domain::agent_execution::subagents::AgentLifetimeId;
-use crate::domain::agent_execution::subagents::CloseOperationId;
 use crate::{
     application::agent_execution::sessions::{
         CurrentLease, EnvironmentFetchRefusal, EnvironmentPath, FetchOutcome, FetchRefusalReason,
@@ -130,7 +129,6 @@ struct Issuance {
 struct SdkCleanupAcknowledged {
     lease: String,
     lifetime: String,
-    operation: String,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -783,16 +781,11 @@ impl From<&LeaseRecord> for WireLease {
                     actor: actor.as_ref().map(Actor::from),
                 },
             ),
-            LeaseRecord::SdkCleanupAcknowledged {
-                lease,
-                lifetime,
-                operation,
-            } => text(
+            LeaseRecord::SdkCleanupAcknowledged { lease, lifetime } => text(
                 "sdk_cleanup_acknowledged",
                 &SdkCleanupAcknowledged {
                     lease: lease.as_str().into(),
                     lifetime: lifetime.as_str().into(),
-                    operation: operation.as_str().into(),
                 },
             ),
             LeaseRecord::Ended { lease, cleanup } => text(
@@ -956,7 +949,6 @@ impl WireLease {
                 LeaseRecord::SdkCleanupAcknowledged {
                     lease: lease(saved.lease)?,
                     lifetime: AgentLifetimeId::new(saved.lifetime).map_err(corrupt)?,
-                    operation: CloseOperationId::new(saved.operation).map_err(corrupt)?,
                 }
             }
             ENDING => {

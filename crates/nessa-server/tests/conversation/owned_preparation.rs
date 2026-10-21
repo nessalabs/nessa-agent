@@ -140,3 +140,35 @@ async fn concurrent_cleanup_joiners_keep_each_original_wait_budget() {
     assert!(!second);
     assert!(!lease.release_answered());
 }
+
+#[tokio::test]
+async fn sdk_nonacquisition_requires_completed_exact_opening_and_never_survives_start() {
+    let opening = OpeningResources::default();
+    assert!(!opening.sdk_never_started_for(None));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let lease = test_lease(Arc::new(ReleaseFault {
+        poll: true,
+        calls: calls.clone(),
+    }))
+    .await;
+    let id = lease.id().clone();
+    opening.acquired(lease);
+    opening.complete(false, DELETION_BUDGETS.stop).await;
+    assert!(opening.sdk_never_started_for(Some(&id)));
+    assert!(
+        !opening.can_retire(),
+        "non-acquisition does not acknowledge unanswered environment release"
+    );
+    assert!(!opening.sdk_never_started_for(Some(&LeaseId::new("different-lease").unwrap())));
+    assert!(opening.released(DELETION_BUDGETS.stop).await);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    opening.start_sdk_attachment();
+    assert!(!opening.sdk_never_started_for(Some(&id)));
+    assert!(!opening.sdk_never_started_for(None));
+    assert!(opening.released(DELETION_BUDGETS.stop).await);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "SDK evidence is independent of the already joined environment owner"
+    );
+}

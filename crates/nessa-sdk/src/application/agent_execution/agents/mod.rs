@@ -66,7 +66,7 @@ pub use error::{
     ProviderDiagnostic,
 };
 pub use initialization::AgentInitializationError;
-pub use lifetime::{lifetime_disposition, LifetimeDisposition, OwnedCloseScope, OwnedLifetime};
+pub use lifetime::{lifetime_disposition, LifetimeDisposition, OwnedCleanupScope, OwnedLifetime};
 pub(crate) use resumption::{decline_stop_is_owed, validate_saved_resumption};
 pub use resumption::{owed_turn_ids, resumed_turn_id, OwedTurn, Resumed};
 pub use scheduling::{

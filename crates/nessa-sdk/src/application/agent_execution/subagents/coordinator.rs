@@ -5,7 +5,7 @@
 //! written. The store still replaces one body; this fence is the coordinator's.
 #![deny(missing_docs)]
 
-use crate::application::agent_execution::agents::OwnedCloseScope;
+use crate::application::agent_execution::agents::OwnedCleanupScope;
 use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
@@ -510,10 +510,12 @@ impl OwnershipCoordinator {
         }
     }
 
-    /// Exact Closing target and first operation, for reading scope-correlated evidence.
-    pub fn closing_scope(&self, lifetime: &AgentLifetimeId) -> Option<OwnedCloseScope> {
+    /// Current minted target and session for lease-scoped SDK resource evidence.
+    /// Returns no scope for an unknown or Closed lifetime, or refused graph.
+    /// `lifetime` names the exact cleanup target, independently of close timing.
+    pub fn cleanup_scope(&self, lifetime: &AgentLifetimeId) -> Option<OwnedCleanupScope> {
         self.inner
-            .with_graph(|graph| closing_scope(graph, lifetime))
+            .with_graph(|graph| cleanup_scope(graph, lifetime))
     }
 
     /// Transfer a cleanup owner for an admitted lifetime, such as the root.
@@ -2473,14 +2475,17 @@ struct Admitted {
     policy: ApprovalPolicy,
 }
 
-fn closing_scope(graph: &OwnershipGraph, target: &AgentLifetimeId) -> Option<OwnedCloseScope> {
-    if graph.refusal().is_some() || graph.lifetime_state(target) != Some(LifetimeState::Closing) {
+fn cleanup_scope(graph: &OwnershipGraph, target: &AgentLifetimeId) -> Option<OwnedCleanupScope> {
+    if graph.refusal().is_some()
+        || !matches!(
+            graph.lifetime_state(target),
+            Some(LifetimeState::Open | LifetimeState::Closing)
+        )
+    {
         return None;
     }
-    let root = graph.close_owner(target)?;
-    Some(OwnedCloseScope::new(
+    Some(OwnedCleanupScope::new(
         target.clone(),
-        graph.close_operation(&root)?.clone(),
         graph.session_id(target)?.clone(),
     ))
 }
@@ -2586,7 +2591,7 @@ fn host_actor(actor: &ActionContext) -> Result<HostActor, AgentError> {
 
 #[async_trait]
 impl OwnedLifetime for LifetimeGate {
-    fn closing_scope(&self) -> Option<OwnedCloseScope> {
+    fn cleanup_scope(&self) -> Option<OwnedCleanupScope> {
         let shared = self.inner.upgrade()?;
         shared.with_graph(|graph| {
             if !shared
@@ -2598,7 +2603,7 @@ impl OwnedLifetime for LifetimeGate {
             {
                 return None;
             }
-            closing_scope(graph, &self.lifetime)
+            cleanup_scope(graph, &self.lifetime)
         })
     }
     fn admission_scope(&self) -> Arc<Mutex<()>> {

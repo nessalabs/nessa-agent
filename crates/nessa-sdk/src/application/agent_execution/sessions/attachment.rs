@@ -29,7 +29,6 @@ pub(crate) struct AttachmentLease {
     // This synchronous evidence also governs final handle drop.
     cleanup_report: StateMutex<Option<CleanupReport>>,
     pending: AtomicBool,
-    acquired: AtomicBool,
     // Provider opens still running. Whatever an open launched is armed above
     // before its count is released, so the two facts leave no gap.
     opening: AtomicUsize,
@@ -122,7 +121,6 @@ impl AttachmentLease {
             state: Mutex::new(AttachmentState::Empty),
             cleanup_report: StateMutex::new(None),
             pending: AtomicBool::new(false),
-            acquired: AtomicBool::new(false),
             opening: AtomicUsize::new(0),
             drop_reason: StateMutex::new(CleanupReason::new(SessionCloseRequest::SessionFailed)),
             runtime: Handle::current(),
@@ -150,7 +148,6 @@ impl AttachmentLease {
             });
             *self.drop_reason.lock().expect("attachment drop reason") =
                 CleanupReason::new(SessionCloseRequest::SessionHandlesDropped);
-            self.acquired.store(true, Ordering::Release);
             self.pending.store(true, Ordering::SeqCst);
         }
     }
@@ -167,7 +164,6 @@ impl AttachmentLease {
     pub(crate) async fn arm_unknown_open(&self, lease: Arc<dyn SessionStorageLease>) {
         let mut state = self.state.lock().await;
         *state = AttachmentState::UnknownOpen(lease);
-        self.acquired.store(true, Ordering::Release);
         self.pending.store(true, Ordering::SeqCst);
     }
     async fn arm_target(&self, lease: Arc<dyn SessionStorageLease>, target: CleanupTarget) {
@@ -181,7 +177,6 @@ impl AttachmentLease {
             _lease: lease,
             _events: None,
         });
-        self.acquired.store(true, Ordering::Release);
         self.pending.store(true, Ordering::SeqCst);
     }
     /// Capture the first shutdown request before provider I/O. Later attempts
@@ -328,9 +323,6 @@ impl AttachmentLease {
                 subsequent_error: Box::new(next),
             })
             .bounded()
-    }
-    pub(crate) fn acquired_resources(&self) -> bool {
-        self.acquired.load(Ordering::Acquire)
     }
     pub(crate) fn needs_cleanup(&self) -> bool {
         self.pending.load(Ordering::SeqCst)

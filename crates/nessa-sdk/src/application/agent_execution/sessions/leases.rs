@@ -14,10 +14,9 @@
 //! [`CurrentLeaseState::Unreadable`] until the next lease is issued: a reader
 //! says it cannot show that lease rather than refusing the whole history.
 use super::{EnvironmentPath, FetchOutcome, PublishedFile, StorageError};
-use crate::application::agent_execution::agents::OwnedCloseScope;
+use crate::application::agent_execution::agents::OwnedCleanupScope;
 use crate::application::agent_execution::permissions::ActionContext;
 use crate::domain::agent_execution::subagents::AgentLifetimeId;
-use crate::domain::agent_execution::subagents::CloseOperationId;
 use crate::domain::agent_execution::{
     executions::ExecutionId,
     leases::{
@@ -67,14 +66,12 @@ pub enum LeaseRecord {
         actor: Option<ActionContext>,
     },
     /// The actual SDK resource owner acknowledged its cleanup evidence for
-    /// this exact ownership operation. Physical End and decline audit stay separate.
+    /// this exact lifetime and lease. Physical End and decline audit stay separate.
     SdkCleanupAcknowledged {
         /// The exact current lease whose SDK resources were owned.
         lease: LeaseId,
         /// Target lifetime publishing this acknowledgement.
         lifetime: AgentLifetimeId,
-        /// Durable first-close identity; process-local generations are not identities.
-        operation: CloseOperationId,
     },
     /// The environment reported its cleanup within the deadline (row L7).
     Ended {
@@ -249,11 +246,15 @@ impl CurrentLease {
             _ => None,
         }
     }
-    /// Whether the actual SDK owner acknowledged this exact lease/close scope.
-    pub fn sdk_cleanup_acknowledged(&self, scope: &OwnedCloseScope) -> bool {
-        self.held().is_some_and(|held| self.records.iter().any(|record| matches!(record,
-            LeaseRecord::SdkCleanupAcknowledged { lease, lifetime, operation }
-                if lease == held.id() && lifetime == scope.lifetime() && operation == scope.operation())))
+    /// Whether the actual SDK owner acknowledged this exact lease/target scope.
+    pub fn sdk_cleanup_acknowledged(&self, scope: &OwnedCleanupScope) -> bool {
+        self.held().is_some_and(|held| {
+            self.records.iter().any(|record| {
+                matches!(record,
+            LeaseRecord::SdkCleanupAcknowledged { lease, lifetime }
+                if lease == held.id() && lifetime == scope.lifetime())
+            })
+        })
     }
     /// The newest revision known to have been issued or refused.
     pub fn revision(&self) -> Option<LeaseRevision> {

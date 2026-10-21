@@ -140,15 +140,9 @@ fn lease_record(record: &LeaseRecord) -> usize {
             .as_str()
             .len()
             .saturating_add(who.as_ref().map_or(0, actor)),
-        LeaseRecord::SdkCleanupAcknowledged {
-            lease,
-            lifetime,
-            operation,
-        } => lease
-            .as_str()
-            .len()
-            .saturating_add(lifetime.as_str().len())
-            .saturating_add(operation.as_str().len()),
+        LeaseRecord::SdkCleanupAcknowledged { lease, lifetime } => {
+            lease.as_str().len().saturating_add(lifetime.as_str().len())
+        }
         LeaseRecord::Ended { lease, .. }
         | LeaseRecord::Interrupted { lease }
         | LeaseRecord::CleanupReported { lease, .. } => lease.as_str().len(),

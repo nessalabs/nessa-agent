@@ -2595,11 +2595,14 @@ impl Agent {
     /// failures remain visible and retain the same preparation for another join.
     pub async fn retry_cancelled_receipts(&self) -> Result<(), AgentError> {
         let _scheduler = self.inner.scheduler.lock().await;
-        self.retry_cancelled_receipts_owned().await
+        self.retry_cancelled_receipts_owned(None).await
     }
 
     // The caller holds the existing scheduler owner, including on first close.
-    async fn retry_cancelled_receipts_owned(&self) -> Result<(), AgentError> {
+    async fn retry_cancelled_receipts_owned(
+        &self,
+        selected: Option<&HashSet<ExecutionId>>,
+    ) -> Result<(), AgentError> {
         self.inner
             .manager
             .flush_cancellation_receipts()
@@ -2630,6 +2633,9 @@ impl Agent {
             .await;
         let mut failure = None;
         for (index, id, decision, applied) in receipts {
+            if selected.is_some_and(|selected| !selected.contains(&id)) {
+                continue;
+            }
             let attempt = async {
                 if !decision.acknowledged() {
                     self.inner
@@ -2695,12 +2701,62 @@ impl Agent {
                     ),
                     _ => (SchedulingCause::RunnerStopped, None),
                 };
+                // Capture a retry only while this scheduler has no in-flight
+                // transaction. A close waiting behind first cancellation joins
+                // its receipt, rather than spending a second audit deadline.
+                let retry_before = match agent.inner.scheduler.try_lock() {
+                    Ok(_owner) => {
+                        agent
+                            .inner
+                            .manager
+                            .read_invocations(|records| {
+                                records
+                                    .iter()
+                                    .filter(|record| {
+                                        record
+                                            .cancellation_delivery
+                                            .as_ref()
+                                            .is_some_and(|receipt| !receipt.acknowledged())
+                                    })
+                                    .map(|record| record.request.execution_id.clone())
+                                    .collect::<HashSet<_>>()
+                            })
+                            .await
+                    }
+                    Err(_) => HashSet::new(),
+                };
                 let mut scheduler = agent.inner.scheduler.lock().await;
-                let retried = agent.retry_cancelled_receipts_owned().await;
-                let saved = super::closing::join_acknowledgements(
+                let cancelling = scheduler.pending.keys().cloned().collect::<HashSet<_>>();
+                let retried = agent
+                    .retry_cancelled_receipts_owned(Some(&retry_before))
+                    .await;
+                let mut saved = super::closing::join_acknowledgements(
                     retried,
                     agent.cancel_pending(&mut scheduler, cause, actor).await,
                 );
+                let unjoined = agent
+                    .inner
+                    .manager
+                    .read_invocations(|records| {
+                        records
+                            .iter()
+                            .filter(|record| {
+                                record
+                                    .cancellation_delivery
+                                    .as_ref()
+                                    .is_some_and(|receipt| !receipt.acknowledged())
+                                    && !retry_before.contains(&record.request.execution_id)
+                                    && !cancelling.contains(&record.request.execution_id)
+                            })
+                            .count()
+                    })
+                    .await;
+                for _ in 0..unjoined {
+                    saved = match saved {
+                        Ok(()) => Err(AgentError::AuditFailure),
+                        Err(first) => Err(first.with_independent_failure(AgentError::AuditFailure)),
+                    };
+                }
                 drop(scheduler);
                 let _invocation = agent.inner.invocation.lock().await;
                 agent.inner.manager.await_admission_writes().await;
@@ -2711,13 +2767,12 @@ impl Agent {
                 if cleanup.is_confirmed()
                     && cleanup.audit().is_ok()
                     && cleanup.completion_failure().is_none()
-                    && agent.inner.lifecycle.acquired_provider_resources()
                 {
                     if let Some(scope) = agent
                         .inner
                         .lifecycle
                         .owned_gate()
-                        .and_then(|gate| gate.closing_scope())
+                        .and_then(|gate| gate.cleanup_scope())
                     {
                         // The same atomic writer publishes cancellation writes and
                         // this actual owner's proof together; failed ACK stays retained.

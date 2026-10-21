@@ -1784,6 +1784,10 @@ checks that boundary and acknowledged close, alongside the native crash matrix.
 
 ## Explicit cycle7: independent cold evidence
 
+Historical design: cycle8 qualification below replaces the close-operation scope
+and acquired-only guard after the unchanged native tests falsified those rules.
+Cycle7 source and failure receipts remain preserved with their original meaning.
+
 The owner approved the correction after f70aaa80's unchanged native regression
 restored an independent SDK audit failure as Closed. Prior caps and source-specific
 failures remain recorded. Physical End and a successful decline are insufficient
@@ -1837,3 +1841,18 @@ Existing SDK session/history writer owns prepared cancellation delivery and its 
 | Physical unknown, all evidence ACKs | Whole close remains Closing | native lost-End-ACK matrix |
 
 Retain real provider cleanup proof independently of cancellation proof so a cold receipt join cannot fabricate SDK resource release or permanently lose a genuine resource ACK. Whole-close consumers require both. Preparation/application/ACK validation and exact roundtrip/atomic rollback belong to session records; orchestration consumes those facts and the audit port, never recreates a policy.
+
+### Cycle8 qualification orderings
+
+The 38584f0c run preserved fourteen cycle7 proof-gating regressions and found
+three first-close audit-deadline regressions. The four earlier external/disposal
+pre-End ordering regressions passed. The same approved bounded scope continues;
+no assertion, deadline, concurrency or review cap is relaxed.
+
+| Ordering | Existing owner and required result |
+| --- | --- |
+| Close overlaps the first cancellation audit | Capture retries only at an idle scheduler boundary. Join the original unanswered receipt, reporting its failure without another audit attempt in that close. A later explicit command can retry the exact prepared input. |
+| SDK cleanup completes before graph close begins | Resource proof names the minted lifetime and current lease; it is independent of a later graph close operation. It cannot acknowledge another lease or lifetime. |
+| SDK was prepared but no provider was opened | The actual installed lifetime gate may publish confirmed no-resource cleanup. A newly prepared cold history writer has no installed gate and cannot fabricate this proof. |
+| Opening completes without ever starting SDK attachment | Exact opening owner plus its actual environment release and correlated current lease establish non-acquisition. Failed history reads or a later different lease cannot use that receipt. |
+| SDK cleanup audit fails | No SDK resource proof, including after successful environment End or cancellation/decline audit repair. |

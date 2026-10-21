@@ -808,12 +808,13 @@ impl Resources {
     async fn sdk_cleanup_acknowledged(
         &self,
         service: &ConversationService,
+        acquisition: Option<&super::OpeningResources>,
     ) -> Result<bool, ConversationError> {
         let Some(scope) = service
             .inner
             .ownership
             .get()
-            .and_then(|ownership| ownership.coordinator.closing_scope(&self.lifetime))
+            .and_then(|ownership| ownership.coordinator.cleanup_scope(&self.lifetime))
         else {
             return Ok(false);
         };
@@ -825,6 +826,28 @@ impl Resources {
             .storage
             .read_committed(conversation_session(&self.id))
             .await?;
+        let certified = committed.as_ref().is_none_or(|session| {
+            matches!(
+                session.state(),
+                CommittedViewState::Complete | CommittedViewState::CompleteEmpty
+            )
+        });
+        if !certified {
+            return Ok(false);
+        }
+        let current = committed
+            .as_ref()
+            .and_then(|session| session.snapshot())
+            .and_then(|snapshot| snapshot.lease.as_ref())
+            .and_then(|lease| lease.held())
+            .map(|lease| lease.id());
+        if let Some(owner) = acquisition {
+            if owner.sdk_never_started_for(current)
+                && owner.released(service.inner.deletion_budgets.stop).await
+            {
+                return Ok(true);
+            }
+        }
         Ok(committed.as_ref().is_some_and(|session| {
             matches!(
                 session.state(),
@@ -850,7 +873,7 @@ impl Resources {
         actor: &ActionContext,
     ) -> ResourceReport {
         let mut report = service.cold_owned_resources(&self.id, acquisition).await;
-        match self.join_cold_evidence(service, actor).await {
+        match self.join_cold_evidence(service, actor, acquisition).await {
             Ok(true) => {}
             Ok(false) => report.evidence = EvidenceFact::Pending,
             Err(error) => {
@@ -865,6 +888,7 @@ impl Resources {
         &self,
         service: &ConversationService,
         actor: &ActionContext,
+        acquisition: Option<&super::OpeningResources>,
     ) -> Result<bool, ConversationError> {
         let mut history = self.history.lock().await;
         if history.is_none() {
@@ -889,7 +913,7 @@ impl Resources {
                     }) || !owed_turn_ids(&snapshot.invocations).is_empty()
                 });
             if !has_decline {
-                let acknowledged = self.sdk_cleanup_acknowledged(service).await?;
+                let acknowledged = self.sdk_cleanup_acknowledged(service, acquisition).await?;
                 if acknowledged {
                     service.clear_mark(&self.id).await?;
                 }
@@ -942,7 +966,7 @@ impl Resources {
         // This writer has acknowledged its own history. The existing Resources
         // adapter, not a redundant storage lease, retains the other obligations.
         *history = None;
-        if !self.sdk_cleanup_acknowledged(service).await? {
+        if !self.sdk_cleanup_acknowledged(service, acquisition).await? {
             return Ok(false);
         }
         service.clear_mark(&self.id).await?;

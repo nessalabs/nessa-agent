@@ -13,7 +13,6 @@
 
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::subagents::AgentLifetimeId;
-use crate::domain::agent_execution::subagents::CloseOperationId;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -26,34 +25,23 @@ use crate::application::agent_execution::{
     permissions::ActionContext, providers::SessionCloseRequest,
 };
 
-/// Exact durable ownership close that may receive SDK cleanup evidence.
+/// Exact ownership target whose current lease may receive SDK cleanup evidence.
+/// Resource cleanup may precede a graph close; the lease is checked by the
+/// session owner. SDK-issued gates refuse stale installation identities.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OwnedCloseScope {
+pub struct OwnedCleanupScope {
     lifetime: AgentLifetimeId,
-    operation: CloseOperationId,
     session: SessionId,
 }
-impl OwnedCloseScope {
-    pub(crate) fn new(
-        lifetime: AgentLifetimeId,
-        operation: CloseOperationId,
-        session: SessionId,
-    ) -> Self {
-        Self {
-            lifetime,
-            operation,
-            session,
-        }
+impl OwnedCleanupScope {
+    pub(crate) fn new(lifetime: AgentLifetimeId, session: SessionId) -> Self {
+        Self { lifetime, session }
     }
-    /// Exact target lifetime, including a cascaded child's own identity.
+    /// Minted target lifetime, including a cascaded child's own identity.
     pub fn lifetime(&self) -> &AgentLifetimeId {
         &self.lifetime
     }
-    /// First close operation that sealed this target.
-    pub fn operation(&self) -> &CloseOperationId {
-        &self.operation
-    }
-    /// Session owned by that target.
+    /// Session owned by that target; the writer must match it before publication.
     pub fn session(&self) -> &SessionId {
         &self.session
     }
@@ -99,9 +87,9 @@ pub trait OwnedLifetime: Send + Sync {
     fn admission_scope(&self) -> Arc<Mutex<()>>;
     /// Published seal. The lifecycle loads it without taking the tree scope.
     fn seal(&self) -> Arc<AtomicBool>;
-    /// Published current close identity. A custom gate without durable evidence
-    /// support grants no authority to certify a restored SDK close.
-    fn closing_scope(&self) -> Option<OwnedCloseScope> {
+    /// Published current cleanup owner. A custom gate without durable evidence
+    /// support grants no authority to certify SDK resource cleanup.
+    fn cleanup_scope(&self) -> Option<OwnedCleanupScope> {
         None
     }
     /// Whether descendants may still be admitted. `Acquire` pairs with the seal store.

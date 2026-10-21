@@ -91,8 +91,8 @@ fn decline_receipt_checkpoint_semantic_and_atomic_rollback_preserve_original_own
 }
 
 #[test]
-fn sdk_close_acknowledgement_requires_exact_lease_operation_target_and_atomic_history() {
-    use crate::application::agent_execution::agents::OwnedCloseScope;
+fn sdk_cleanup_acknowledgement_requires_exact_lease_target_and_atomic_history() {
+    use crate::application::agent_execution::agents::OwnedCleanupScope;
     use crate::application::agent_execution::sessions::{CurrentLease, LeaseRecord};
     use crate::domain::agent_execution::leases::{
         AgentWork, EnvironmentRef, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
@@ -127,25 +127,16 @@ fn sdk_close_acknowledgement_requires_exact_lease_operation_target_and_atomic_hi
     use crate::application::agent_execution::sessions::{
         records::continuation::Continuation, SessionChange,
     };
-    use crate::domain::agent_execution::{
-        sessions::SessionId,
-        subagents::{AgentLifetimeId, CloseOperationId},
-    };
+    use crate::domain::agent_execution::{sessions::SessionId, subagents::AgentLifetimeId};
     use crate::infrastructure::session_storage::snapshot::{
         checkpoint::{history_fixture, Snapshot, SnapshotRef},
         decode_semantic_batch, encode_semantic_batch,
     };
     let lifetime = AgentLifetimeId::new("target").unwrap();
-    let operation = CloseOperationId::new("first-close").unwrap();
-    let scope = OwnedCloseScope::new(
-        lifetime.clone(),
-        operation.clone(),
-        SessionId::new("conversation").unwrap(),
-    );
+    let scope = OwnedCleanupScope::new(lifetime.clone(), SessionId::new("conversation").unwrap());
     let proof = LeaseRecord::SdkCleanupAcknowledged {
         lease: id("lease-1"),
         lifetime,
-        operation,
     };
     assert!(
         fold(&[issued("lease-1", 1), proof.clone()])
@@ -165,7 +156,6 @@ fn sdk_close_acknowledgement_requires_exact_lease_operation_target_and_atomic_hi
     let bad = LeaseRecord::SdkCleanupAcknowledged {
         lease: id("another-lease"),
         lifetime: scope.lifetime().clone(),
-        operation: scope.operation().clone(),
     };
     assert!(continuation
         .apply_unit(&[
@@ -183,20 +173,35 @@ fn sdk_close_acknowledgement_requires_exact_lease_operation_target_and_atomic_hi
     let acknowledged = continuation.snapshot.as_ref().unwrap();
     let current = acknowledged.lease.as_ref().unwrap();
     assert!(current.sdk_cleanup_acknowledged(&scope));
-    for wrong in [
-        OwnedCloseScope::new(
-            scope.lifetime().clone(),
-            CloseOperationId::new("later-close").unwrap(),
-            scope.session().clone(),
-        ),
-        OwnedCloseScope::new(
-            AgentLifetimeId::new("other-target").unwrap(),
-            scope.operation().clone(),
-            scope.session().clone(),
-        ),
-    ] {
-        assert!(!current.sdk_cleanup_acknowledged(&wrong));
-    }
+    let wrong = OwnedCleanupScope::new(
+        AgentLifetimeId::new("other-target").unwrap(),
+        scope.session().clone(),
+    );
+    assert!(!current.sdk_cleanup_acknowledged(&wrong));
+    let renewed = fold(&[
+        issued("lease-1", 1),
+        ending("lease-1", LeaseEndCause::Closed),
+        acknowledged
+            .lease
+            .as_ref()
+            .unwrap()
+            .records()
+            .last()
+            .unwrap()
+            .clone(),
+        LeaseRecord::Ended {
+            lease: id("lease-1"),
+            cleanup: crate::domain::agent_execution::leases::LeaseCleanup::Confirmed {
+                forced: false,
+            },
+        },
+        issued("lease-2", 2),
+    ])
+    .unwrap();
+    assert!(
+        !renewed.sdk_cleanup_acknowledged(&scope),
+        "a previous lease's real cleanup cannot release a new acquisition"
+    );
     let encoded = serde_json::to_vec(&SnapshotRef(acknowledged)).unwrap();
     let decoded: Snapshot = serde_json::from_slice(&encoded).unwrap();
     assert_eq!(&decoded.decode().unwrap(), acknowledged);
