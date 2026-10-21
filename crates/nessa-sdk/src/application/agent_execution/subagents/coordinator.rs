@@ -3006,6 +3006,76 @@ mod lifetime_races {
         }
     }
 
+    #[tokio::test]
+    async fn cleanup_scope_requires_current_gate_and_rejects_closed_targets() {
+        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+            store: Arc::new(MemoryOwnershipStore::new()),
+            audit: Arc::new(AcceptAudit),
+            factory: Arc::new(OnceFactory {
+                resources: Arc::new(Holding {
+                    closes: AtomicUsize::new(0),
+                    hold: Arc::new(Notify::new()),
+                }),
+            }),
+            room: Arc::new(LiveCapacity::new(4)),
+        });
+        let root = AgentLifetimeId::new("cleanup-scope-root").unwrap();
+        let session = SessionId::new("cleanup-scope-session").unwrap();
+        coordinator.inner.with_graph(|graph| {
+            let _ = graph
+                .open_root(session.clone(), root.clone(), Initiator::Runtime)
+                .unwrap();
+            coordinator.inner.remember(
+                Arc::downgrade(&coordinator.inner),
+                root.clone(),
+                false,
+                CleanupOwner::Attachment,
+            );
+        });
+        let original = coordinator.participation(&root).unwrap();
+        let scope = original
+            .cleanup_scope()
+            .expect("actual SDK cleanup may precede graph close");
+        assert_eq!(scope.lifetime(), &root);
+        assert_eq!(scope.session(), &session);
+        let retained = coordinator
+            .inner
+            .gates
+            .lock()
+            .unwrap()
+            .remove(&root)
+            .unwrap();
+        assert!(
+            original.cleanup_scope().is_none(),
+            "revoked installation cannot publish cleanup proof"
+        );
+        let replacement = coordinator.participation(&root).unwrap();
+        assert!(replacement.cleanup_scope().is_some());
+        assert!(
+            original.cleanup_scope().is_none(),
+            "matching target attributes cannot replace gate identity"
+        );
+        coordinator
+            .bind_resources(&root, Arc::new(Released))
+            .await
+            .unwrap();
+        coordinator
+            .end_lifetime(CloseCommand {
+                lifetime: root.clone(),
+                cause: LifetimeCause::HostClose,
+                initiator: Initiator::Host(
+                    HostActor::new("person", "desktop", "close-scope").unwrap(),
+                ),
+                external_attachment: false,
+                timeout: None,
+            })
+            .await
+            .unwrap();
+        assert!(replacement.cleanup_scope().is_none());
+        assert!(coordinator.cleanup_scope(&root).is_none());
+        drop(retained);
+    }
+
     fn command(parent: AgentLifetimeId) -> SpawnCommand {
         SpawnCommand {
             parent,

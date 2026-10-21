@@ -1188,6 +1188,7 @@ async fn prepared_cancellation_receipt_restarts_under_its_original_decision_and_
         .find(|record| record.cancellation_delivery.is_some())
         .unwrap();
     let id = cancellation.request.execution_id.clone();
+    let submitted_by = cancellation.actor.clone();
     let decision = cancellation.cancellation_delivery.clone().unwrap();
     assert!(!decision.acknowledged());
     let restart = MemoryStorage::default();
@@ -1224,12 +1225,30 @@ async fn prepared_cancellation_receipt_restarts_under_its_original_decision_and_
         "the prior failed join attempted its original audit exactly once"
     );
     fresh.audit.reject.store(false, Ordering::SeqCst);
-    let (first, second) = tokio::join!(
-        restored.retry_cancelled_receipts(),
-        restored.retry_cancelled_receipts()
+    let (entered, waiting) = oneshot::channel();
+    let (release, held) = oneshot::channel();
+    *fresh.audit.pause.lock().unwrap() = Some((entered, held));
+    let first = tokio::spawn({
+        let restored = restored.clone();
+        async move { restored.retry_cancelled_receipts().await }
+    });
+    bounded(waiting).await.unwrap();
+    let (started, starting) = oneshot::channel();
+    let second = tokio::spawn({
+        let restored = restored.clone();
+        async move {
+            started.send(()).unwrap();
+            restored.retry_cancelled_receipts().await
+        }
+    });
+    bounded(starting).await.unwrap();
+    assert!(
+        !second.is_finished(),
+        "the second join cannot acknowledge while the first owner awaits audit ACK"
     );
-    first.unwrap();
-    second.unwrap();
+    release.send(()).unwrap();
+    bounded(first).await.unwrap().unwrap();
+    bounded(second).await.unwrap().unwrap();
     assert_eq!(
         fresh
             .audit
@@ -1258,6 +1277,9 @@ async fn prepared_cancellation_receipt_restarts_under_its_original_decision_and_
         delivered[0], delivered[1],
         "rejection and ACK retain exact identity, submitter, initiator and cause"
     );
+    assert_eq!(delivered[0].submitted_by(), &submitted_by);
+    assert_eq!(delivered[0].initiated_by(), decision.event().actor.as_ref());
+    assert_eq!(delivered[0].cause(), decision.event().cause);
     let acknowledged = storage.snapshot();
     let record = acknowledged
         .invocations
