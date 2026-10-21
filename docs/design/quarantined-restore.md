@@ -153,8 +153,10 @@ supplies the id.
   `a_different_published_directory_is_not_removed`
 - The sealed copy is the directory this attempt created, in the live
   directory's parent, so the rename stays on the live volume. Its identity is
-  that open. The copied bytes stay on the handles that wrote them and have no
-  directory entry until the link that publication uses. Immediately before
+  that open. The copied bytes stay on the handles that wrote them. On Unix
+  they have no directory entry until the link that publication uses. On
+  Windows the names exist without write share, and those handles close after
+  the check so the directory can be renamed. Immediately before
   that link, those handles still hold the seal, and the directory is still
   the one this attempt created. A replacement directory is not adopted and is
   not deleted. A changed file in the copy is not promoted. A file created at

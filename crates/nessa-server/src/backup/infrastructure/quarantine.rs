@@ -594,8 +594,7 @@ impl QuarantineLayout for DirectoryQuarantine {
         }
         // The link is the publication of each inode. The directory rename
         // then makes those names live. A descriptor opened on a predictable
-        // copy name is not one of these inodes. The handles stay open across
-        // that rename so the bytes cannot be replaced first.
+        // copy name is not one of these inodes.
         if let Err(error) = publish_held(&mut held, &mut journal) {
             drop(held);
             drop(journal);
@@ -603,6 +602,15 @@ impl QuarantineLayout for DirectoryQuarantine {
             return Err(error);
         }
         let published = created_id;
+        // Windows will not rename a directory while a file inside it is open.
+        // The seal was re-read on these handles, and they did not share write,
+        // so a writer could not already hold them. Unix keeps the descriptors
+        // open across the rename; those inodes were unnamed until the link.
+        #[cfg(windows)]
+        {
+            drop(held);
+            drop(journal);
+        }
         // The rename itself refuses an existing destination, including an
         // empty directory created where a separate existence check would miss it.
         if let Err(error) = rename_exclusive_at(
@@ -612,8 +620,11 @@ impl QuarantineLayout for DirectoryQuarantine {
             &live_name,
             RestoreFault::LiveOccupied,
         ) {
-            drop(held);
-            drop(journal);
+            #[cfg(not(windows))]
+            {
+                drop(held);
+                drop(journal);
+            }
             let _ = remove_opened(&created, &published);
             return Err(error);
         }
@@ -2496,12 +2507,15 @@ fn open_dir_at(parent: &File, name: &OsStr) -> Result<File, RestoreFault> {
         use std::os::windows::fs::OpenOptionsExt;
         const FILE_SHARE_READ: u32 = 0x0000_0001;
         const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+        const FILE_SHARE_DELETE: u32 = 0x0000_0004;
         const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         let path = path_of_handle(parent)?.join(name);
+        // Delete share lets this attempt rename or remove the directory while
+        // the handle is open. The ancestor handle does not share delete.
         let file = fs::OpenOptions::new()
             .read(true)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
             .open(path)
             .map_err(|_| RestoreFault::Unreadable)?;
@@ -2596,8 +2610,7 @@ fn mkdir_exclusive_at(parent: &File, name: &OsStr) -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
-        let path = path_of_handle(parent)
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "directory handle"))?;
+        let path = path_of_handle(parent).map_err(|_| std::io::Error::other("directory handle"))?;
         create_directory_exclusive(&path.join(name))
     }
     #[cfg(not(any(unix, windows)))]

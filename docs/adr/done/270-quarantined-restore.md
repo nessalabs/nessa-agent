@@ -125,8 +125,10 @@ session file is the regular file this attempt still holds when SQLite opens
 it. That file is created beneath its parent directory, and that open does
 not follow a symlink. The published session is a new file of the bytes that
 matched the fingerprint. That file has no name until the check has passed.
-Promotion links the sealed bytes, which were not directory entries, and then
-renames the directory. It retires the quarantine directory the
+Promotion links the sealed bytes and then renames the directory. On Unix
+those bytes are not directory entries until the link. On Windows the names
+exist without write share, and the handles close after the check so the
+directory can be renamed. It retires the quarantine directory the
 open handle still names when the original path is gone. A readiness failure
 whose spend record is not stored removes the marker, and a marker that still
 names the id is retained. A mount point is
