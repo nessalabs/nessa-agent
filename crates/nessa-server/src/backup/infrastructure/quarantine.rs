@@ -247,7 +247,7 @@ fn omit_record(
     }
     if let Some(kind) = credential_store(store) {
         let credential = read_credential(body).map_err(|_| RestoreFault::Unreadable)?;
-        if credential.kind != kind {
+        if credential.kind != kind || credential.id != identity {
             return Err(RestoreFault::Unreadable);
         }
         return Ok(credential_is_fenced(kind, &credential.id, fences));
@@ -505,11 +505,13 @@ impl QuarantineLayout for DirectoryQuarantine {
         // those sealed bytes. The identity is that directory's open, not a
         // later lookup of the path. An open descriptor on the quarantine file
         // keeps the old inode.
+        // The copy is created in the live directory's parent, so the rename
+        // stays on the volume that will hold the live tree.
         let SealedDir {
             path: dest,
             file: created,
             identity: created_id,
-        } = sealed_dest(quarantine)?;
+        } = sealed_dest(live)?;
         if tree_id(&dest).ok().as_ref() != Some(&created_id) {
             return Err(RestoreFault::Tamper);
         }
@@ -564,9 +566,10 @@ impl QuarantineLayout for DirectoryQuarantine {
                 Err(RestoreFault::Tamper)
             };
         }
-        // The copy is live. The quarantine directory is removed only when it
-        // is still the object that was read.
-        let _ = remove_same(quarantine, &loaded.identity);
+        // The copy is live. Retire the source we read. A directory that is
+        // still that object and still carries its readiness marker is not a
+        // successful promotion: the marker would accept it again.
+        retire_source(quarantine, &loaded.identity)?;
         // The rename already made the tree live. A parent that cannot be
         // synced does not put it back, and does not make the promotion a
         // refusal.
@@ -912,16 +915,122 @@ fn rename_new(from: &Path, to: &Path, occupied: RestoreFault) -> Result<(), Rest
 }
 
 /// Remove `path` when it is still `identity`. A different directory stays.
+///
+/// Children are removed through the open that matched `identity`. A rename
+/// of that directory does not make `path` the object that is deleted.
 fn remove_same(path: &Path, identity: &TreeId) -> Result<(), RestoreFault> {
     match symlink_metadata_dir(path) {
         Ok(false) => Ok(()),
         Ok(true) => {
-            if tree_id(path)? != *identity {
+            let file = open_directory(path, false).map_err(|_| RestoreFault::Unreadable)?;
+            if tree_id_of(&file)? != *identity {
                 return Err(RestoreFault::Tamper);
             }
-            fs::remove_dir_all(path).map_err(|_| RestoreFault::Unreadable)
+            remove_opened(&file, identity)
         }
         Err(error) => Err(error),
+    }
+}
+
+/// Delete the directory `file` names. The path is the handle's path, not a
+/// later lookup of the caller's path.
+fn remove_opened(file: &File, identity: &TreeId) -> Result<(), RestoreFault> {
+    if tree_id_of(file)? != *identity {
+        return Err(RestoreFault::Tamper);
+    }
+    let current = path_of_handle(file)?;
+    if tree_id(&current)? != *identity {
+        return Err(RestoreFault::Tamper);
+    }
+    fs::remove_dir_all(&current).map_err(|_| RestoreFault::Unreadable)
+}
+
+/// Where the open directory is now. A replacement at the caller's path is a
+/// different object and is not this path.
+fn path_of_handle(file: &File) -> Result<PathBuf, RestoreFault> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::io::AsRawFd;
+        let link = format!("/proc/self/fd/{}", file.as_raw_fd());
+        let path = fs::read_link(link).map_err(|_| RestoreFault::Unreadable)?;
+        if path.to_string_lossy().ends_with(" (deleted)") {
+            return Err(RestoreFault::Unreadable);
+        }
+        Ok(path)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::io::AsRawFd;
+        let mut buf = vec![0u8; 1024];
+        let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) };
+        if rc == -1 {
+            return Err(RestoreFault::Unreadable);
+        }
+        let end = buf.iter().position(|byte| *byte == 0).unwrap_or(buf.len());
+        Ok(PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..end])))
+    }
+    #[cfg(windows)]
+    {
+        path_of_handle_windows(file)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        let _ = file;
+        Err(RestoreFault::Unreadable)
+    }
+}
+
+#[cfg(windows)]
+fn path_of_handle_windows(file: &File) -> Result<PathBuf, RestoreFault> {
+    use std::os::windows::io::AsRawHandle;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetFinalPathNameByHandleW(
+            file: *mut std::ffi::c_void,
+            buffer: *mut u16,
+            size: u32,
+            flags: u32,
+        ) -> u32;
+    }
+    let mut buffer = vec![0u16; 1024];
+    // The handle is the directory. The call writes its current path.
+    let written = unsafe {
+        GetFinalPathNameByHandleW(
+            file.as_raw_handle(),
+            buffer.as_mut_ptr(),
+            buffer.len() as u32,
+            0,
+        )
+    };
+    if written == 0 || written as usize >= buffer.len() {
+        return Err(RestoreFault::Unreadable);
+    }
+    let text =
+        String::from_utf16(&buffer[..written as usize]).map_err(|_| RestoreFault::Unreadable)?;
+    Ok(plain_absolute(PathBuf::from(text)))
+}
+
+/// Remove the source tree when it is still `identity`. When that tree remains
+/// and still names a readiness id, the promotion is retained.
+fn retire_source(path: &Path, identity: &TreeId) -> Result<(), RestoreFault> {
+    retire_source_after(path, identity, remove_same)
+}
+
+fn retire_source_after(
+    path: &Path,
+    identity: &TreeId,
+    remove: impl FnOnce(&Path, &TreeId) -> Result<(), RestoreFault>,
+) -> Result<(), RestoreFault> {
+    match remove(path, identity) {
+        Ok(()) => Ok(()),
+        Err(RestoreFault::Tamper) => Ok(()),
+        Err(_) => {
+            if tree_id(path).ok().as_ref() != Some(identity) {
+                return Ok(());
+            }
+            retire_marker(&ready_path(path))
+        }
     }
 }
 
@@ -941,12 +1050,12 @@ struct SealedDir {
     identity: TreeId,
 }
 
-fn sealed_dest(quarantine: &Path) -> Result<SealedDir, RestoreFault> {
-    let parent = quarantine.parent().ok_or(RestoreFault::Paths)?;
-    let name = quarantine
-        .file_name()
-        .ok_or(RestoreFault::Paths)?
-        .to_os_string();
+fn sealed_dest(live: &Path) -> Result<SealedDir, RestoreFault> {
+    let parent = live
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or(RestoreFault::Paths)?;
+    let name = live.file_name().ok_or(RestoreFault::Paths)?.to_os_string();
     for attempt in 0..32 {
         let mut staged = name.clone();
         staged.push(format!(".sealed-{}-{attempt}", std::process::id()));
@@ -1956,6 +2065,96 @@ fn a_replaced_sealed_directory_is_not_published() {
     }
     assert_eq!(fs::read(dest.join("sentinel")).unwrap(), b"keep");
     assert_eq!(fs::read(aside.join("note")).unwrap(), b"one");
+}
+
+#[test]
+fn a_renamed_directory_is_removed_by_its_handle() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("tree");
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("note"), b"one").unwrap();
+    let opened = open_directory(&dir, false).unwrap();
+    let identity = tree_id_of(&opened).unwrap();
+    let aside = root.path().join("aside");
+    fs::rename(&dir, &aside).unwrap();
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("sentinel"), b"keep").unwrap();
+    remove_opened(&opened, &identity).unwrap();
+    assert_eq!(fs::read(dir.join("sentinel")).unwrap(), b"keep");
+    assert!(!aside.exists());
+}
+
+#[test]
+fn a_source_that_remains_loses_its_readiness_marker() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("quarantine");
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("note"), b"one").unwrap();
+    fs::write(dir.join("accept-ready"), b"stage-1\n").unwrap();
+    let identity = tree_id(&dir).unwrap();
+    let saved = dir.with_extension("saved");
+    fs::rename(&dir, &saved).unwrap();
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("sentinel"), b"keep").unwrap();
+    fs::write(dir.join("accept-ready"), b"stage-1\n").unwrap();
+    retire_source(&dir, &identity).unwrap();
+    assert_eq!(fs::read(dir.join("sentinel")).unwrap(), b"keep");
+    assert_eq!(fs::read(dir.join("accept-ready")).unwrap(), b"stage-1\n");
+    retire_source(&saved, &identity).unwrap();
+    assert!(!saved.exists());
+}
+
+#[test]
+fn a_remaining_source_is_not_left_acceptable() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("quarantine");
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("note"), b"one").unwrap();
+    fs::write(dir.join("accept-ready"), b"stage-1\n").unwrap();
+    let identity = tree_id(&dir).unwrap();
+    retire_source_after(&dir, &identity, |_, _| Err(RestoreFault::Unreadable)).unwrap();
+    assert_eq!(fs::read(dir.join("note")).unwrap(), b"one");
+    assert!(read_marker_id(&ready_path(&dir)).unwrap().is_none());
+}
+
+#[test]
+fn the_sealed_copy_is_created_beside_live() {
+    let root = tempfile::tempdir().unwrap();
+    let live = root.path().join("live");
+    let sealed = sealed_dest(&live).unwrap();
+    assert_eq!(sealed.path.parent(), Some(root.path()));
+    let name = sealed.path.file_name().unwrap().to_string_lossy();
+    assert!(name.starts_with("live.sealed-"));
+    assert!(directory_is_empty(&sealed.path).unwrap());
+}
+
+#[test]
+fn a_credential_body_must_name_the_manifest_identity() {
+    let fence = DeletionFence::credential(
+        CredentialKind::Device,
+        "credential-a",
+        Fingerprint::of(b"revoked"),
+    )
+    .unwrap();
+    let mismatched = br#"{"id":"credential-b","kind":"device"}"#;
+    assert_eq!(
+        omit_record(
+            StoreKind::DeviceCredentials,
+            "credential-a",
+            mismatched,
+            std::slice::from_ref(&fence)
+        )
+        .unwrap_err(),
+        RestoreFault::Unreadable
+    );
+    let matched = br#"{"id":"credential-a","kind":"device"}"#;
+    assert!(omit_record(
+        StoreKind::DeviceCredentials,
+        "credential-a",
+        matched,
+        std::slice::from_ref(&fence)
+    )
+    .unwrap());
 }
 
 #[test]

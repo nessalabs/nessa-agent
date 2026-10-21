@@ -109,9 +109,14 @@ is not deleted; the attempt creates another name. A staging id that cannot
 be minted records a tree it cannot remove as unready. Accept publishes a new directory written from the sealed bytes, so an open
 descriptor on the quarantined file does not change the live file. On Windows
 that directory is opened with backup semantics, so the handle names the
-directory. The sealed copy's identity is the directory this attempt created.
+directory. The sealed copy's identity is the directory this attempt created, and that
+directory is created beside the live path so the rename stays on one volume.
 Immediately before the rename, that directory is still at the path and its
 bytes still match the seal. A replacement is not adopted and is not deleted.
+Cleanup deletes the directory the open handle names. A source that remains
+after that removal fails loses its readiness marker before promotion
+succeeds, and a marker that still names an id is retained. A credential
+body whose id is not the manifest identity is not restored.
 The session file is the regular file this attempt still holds when SQLite
 opens it, and that open does not follow a symlink. A folding volume compares
 names by uppercase then lowercase, so final sigma and sigma are one path.

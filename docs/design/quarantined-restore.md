@@ -139,12 +139,25 @@ supplies the id.
 - Cleanup removes the directory object this stage published. A different
   directory at that path is left in place, including its files.
   `a_different_published_directory_is_not_removed`
-- The sealed copy is the directory this attempt created. Its identity is
+- The sealed copy is the directory this attempt created, in the live
+  directory's parent, so the rename stays on the live volume. Its identity is
   that open. Immediately before the rename, that directory is still at the
   path and its bytes still match the seal. A replacement directory is not
   adopted and is not deleted. A changed file in the copy is not promoted.
   `a_changed_sealed_copy_is_not_promoted`,
-  `a_replaced_sealed_directory_is_not_published`
+  `a_replaced_sealed_directory_is_not_published`,
+  `the_sealed_copy_is_created_beside_live`
+- Cleanup deletes the directory the open handle names. A directory renamed
+  aside is the one removed. A replacement at the old path stays.
+  `a_renamed_directory_is_removed_by_its_handle`
+- A source that is still the directory we read, and whose removal failed,
+  loses its readiness marker before promotion succeeds. A different directory
+  at that path keeps its marker. A marker that still names an id is retained.
+  `a_source_that_remains_loses_its_readiness_marker`,
+  `a_remaining_source_is_not_left_acceptable`
+- A credential record is restored only when its JSON id is the manifest
+  identity. The fence is applied to that id.
+  `a_credential_body_must_name_the_manifest_identity`
 - The session file is the regular file this attempt still holds when SQLite
   opens it. The open does not follow a symlink, and the name must still be
   that file. Drop unlinks a planted symlink and does not write its target.
