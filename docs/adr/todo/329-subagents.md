@@ -1704,3 +1704,23 @@ limits are selected and published by the runtime slice.
 
 A sample panel is a valid UI slice; it does not complete runtime subagents. This
 proposed design and named regression cases are not implementation evidence.
+
+
+### Cycle 5: the close transaction retains its report
+
+Explicit owner direction continues the bounded cleanup correction after the
+cycle4 review; it does not reset prior review history. The supervised Agent
+close transaction owns both its actual CleanupReport and pending-scheduling
+save/audit result. AgentCloseReport publishes those immutable facts from the
+same transaction for Final and Suspend; existing close/suspend project its
+result. No second cleanup or last-generation lookup is introduced.
+
+| Ordering/fact | Required behavior and owning regression |
+| --- | --- |
+| ByAgentClose confirms physical release but audit fails | LiveLease consumes actual typed resources, records release and retains audit failure; unchanged `data_missing_needs_released_resources_as_well_as_missing_data`. |
+| ByAgentClose returns Deadline or CleanupUncertain | Preserve that one original failure; there is no independent environment uncertainty. Existing deletion/desktop-close regressions retain exact error assertions. |
+| SDK reports ReleasePending | Preserve the complete report, executable-use retry owner and independent fields. Physical outcome alone does not establish whole release; close-report matrix exercises both modes. |
+| Remote End goes unanswered | Retain actual owner and Interrupted cause/order under the original bound; observe committed history without taking its writer. Revocation/expiry/lost controls then supply real ACK and verify once-only retirement. |
+| Actual remote End confirms cleanup | Its physical answer can resolve the provider's physical uncertainty, while ReleasePending and audit/scheduling/completion failures remain independent obligations. No diagnostic-based physical exemption. |
+| Concurrent callers, cancellation or replacement attachment | Each report comes from its supervised transaction and lifecycle attempt; never read a previous generation's report or start another cleanup owner. |
+| A direct root lifetime close meets earlier owed history | Probe before choosing a fix; preserve unfinished/cause/reopen/restart evidence. This is not yet established by the app-cleanup path. |

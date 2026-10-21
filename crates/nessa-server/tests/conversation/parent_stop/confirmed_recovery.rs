@@ -94,10 +94,22 @@ fn confirmed_stop_crash_child() {
             // Native cancel acknowledges, but this separate execution gate keeps
             // settlement unfinished. Killing now leaves real Running SDK history.
             let _parent = hold_turn(&service, &provider, &target, "parent").await;
-            let child_id = child(&service, &target, "parent", "create-child").await;
-            let _child = hold_turn(&service, &provider, &child_id, "child").await;
+            let root_only = stage == "owed-root-close";
+            let child_id = if root_only {
+                target.clone()
+            } else {
+                child(&service, &target, "parent", "create-child").await
+            };
+            let _child = if root_only {
+                None
+            } else {
+                Some(hold_turn(&service, &provider, &child_id, "child").await)
+            };
             let _held_cancel;
             match stage.as_str() {
+                "owed-root-close" => {
+                    _held_cancel = None;
+                }
                 "accepted" => {
                     _held_cancel = None;
                     let faulty = Arc::new(FaultyCommands {
@@ -442,4 +454,91 @@ async fn confirmed_stop_keeps_its_mark_until_retained_history_is_acknowledged() 
             retire(service, storage, metadata).await;
         }
     }
+}
+
+#[tokio::test]
+async fn direct_root_close_declines_preexisting_owed_history_and_its_unfinished_mark() {
+    use nessa_sdk::application::agent_execution::subagents::CloseCommand;
+    use nessa_sdk::domain::agent_execution::subagents::{HostActor, Initiator, LifetimeCause};
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let target = id();
+    // This stage records Running history only: no Stop was sent or confirmed.
+    crash_after_stop(&root, &target, false, "owed-root-close").await;
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let coordinator = bind(&service, &storage, &root, true).await;
+    service.bind_unfinished_turns(metadata.clone(), FailureBackoff::default());
+    service.mark_unfinished(&target).await.unwrap();
+    let live = service
+        .resolve(&target, &caller("read-before-close"))
+        .await
+        .unwrap();
+    assert_eq!(live.agent.owed_turns().await.len(), 1);
+    let lifetime = coordinator
+        .active_lifetime_for_session(&conversation_session(&target))
+        .unwrap();
+    tokio::time::timeout(
+        TURN_HOLD_HANG,
+        coordinator.end_lifetime(CloseCommand {
+            lifetime,
+            cause: LifetimeCause::HostClose,
+            initiator: Initiator::Host(
+                HostActor::new("person", "panel", "direct-root-close").unwrap(),
+            ),
+            external_attachment: false,
+            timeout: None,
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        live.agent.owed_turns().await.is_empty(),
+        "a closed root cannot leave historical work owed"
+    );
+    let history = live.agent.session_manager().snapshot().await.unwrap();
+    let turn = history
+        .invocations
+        .iter()
+        .find(|r| r.request.execution_id.as_str() == "parent")
+        .unwrap();
+    assert_eq!(
+        turn.scheduling.last().unwrap().cause,
+        SchedulingCause::NotResumed
+    );
+    assert_eq!(
+        turn.scheduling
+            .last()
+            .unwrap()
+            .actor
+            .as_ref()
+            .unwrap()
+            .request_id(),
+        "direct-root-close"
+    );
+    assert!(resumed_turn_id(&history.invocations, &turn.request.execution_id).is_none());
+    assert!(UnfinishedTurns::marked(metadata.as_ref())
+        .await
+        .unwrap()
+        .is_empty());
+    drop(live);
+    retire(service, storage, metadata).await;
+    drop(coordinator);
+    let (service, storage, metadata) = fixture(&root, provider);
+    bind(&service, &storage, &root, true).await;
+    service.bind_unfinished_turns(metadata.clone(), FailureBackoff::default());
+    service.mark_unfinished(&target).await.unwrap();
+    service.resume_unfinished().await.unwrap();
+    let history = storage
+        .read_committed(conversation_session(&target))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(resumed_turn_id(
+        &history.snapshot().unwrap().invocations,
+        &ExecutionId::new("parent").unwrap()
+    )
+    .is_none());
+    retire(service, storage, metadata).await;
 }

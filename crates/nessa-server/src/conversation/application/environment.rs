@@ -45,9 +45,9 @@ use nessa_sdk::application::agent_execution::{
     agents::{Agent, AgentError},
     permissions::ActionContext,
     providers::{
-        AgentProvider, ApprovalMode, CloseOutcome, ExecutionEventStream, HarnessHostIdentity,
-        OpenedProviderSession, ProviderIdentity, ProviderObservationFuture, ProviderOpenError,
-        ProviderOpenFuture, ProviderOpenRequest,
+        AgentProvider, ApprovalMode, CleanupReport, CloseOutcome, ExecutionEventStream,
+        HarnessHostIdentity, OpenedProviderSession, ProviderIdentity, ProviderObservationFuture,
+        ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest, ResourceCleanup,
     },
     sessions::{
         CurrentLease, CurrentLeaseState, LeaseCommit, LeaseRecord, LeaseRecordError, PublishedFile,
@@ -898,13 +898,12 @@ fn next_revision(current: Option<&CurrentLease>, accounting: &[LeaseRecord]) -> 
     Lease::next_revision(phase, known).unwrap_or_else(|_| known.unwrap_or(LeaseRevision::FIRST))
 }
 
-/// What a close confirmed releasing, if it did: its outcome, or the outcome
-/// it observed when only saving the history's evidence of it failed — the
-/// cleanup happened, so the lease ends rather than being interrupted.
-fn confirmed_cleanup(result: &Result<CloseOutcome, AgentError>) -> Option<CloseOutcome> {
-    match result {
-        Ok(outcome) => Some(*outcome),
-        Err(error) => confirmed_despite(error),
+/// Whole SDK resource release from the actual close transaction, independent
+/// of audit diagnostics. ReleasePending still owns executable-use release.
+fn confirmed_cleanup(report: &CleanupReport) -> Option<CloseOutcome> {
+    match report.resources() {
+        ResourceCleanup::Confirmed(outcome) => Some(*outcome),
+        ResourceCleanup::ReleasePending { .. } | ResourceCleanup::Unconfirmed(_) => None,
     }
 }
 
@@ -917,37 +916,6 @@ pub(crate) fn confirmed_despite(error: &AgentError) -> Option<CloseOutcome> {
             cleanup_result.as_ref().as_ref().ok().copied()
         }
         _ => None,
-    }
-}
-
-/// What is left of a close's `error` once its environment confirmed the
-/// cleanup as `confirmed`: every failure except the doubt about what the
-/// agent still held, or `None` when that doubt was the whole error.
-fn beyond_cleanup(error: AgentError, confirmed: CloseOutcome) -> Option<AgentError> {
-    match error {
-        AgentError::CleanupUncertain => None,
-        AgentError::AuditAndCleanupFailure => Some(AgentError::AuditFailure),
-        AgentError::OperationAndCleanupFailure {
-            operation_error,
-            cleanup_error,
-        } => Some(match beyond_cleanup(*cleanup_error, confirmed) {
-            None => *operation_error,
-            Some(cleanup_error) => AgentError::OperationAndCleanupFailure {
-                operation_error,
-                cleanup_error: Box::new(cleanup_error),
-            },
-        }),
-        AgentError::StorageDuringClose {
-            error,
-            cleanup_result,
-        } => Some(AgentError::StorageDuringClose {
-            error,
-            cleanup_result: Box::new(match *cleanup_result {
-                Ok(outcome) => Ok(outcome),
-                Err(failure) => beyond_cleanup(failure, confirmed).map_or(Ok(confirmed), Err),
-            }),
-        }),
-        error => Some(error),
     }
 }
 
@@ -1192,8 +1160,8 @@ impl LiveLease {
             .await;
         self.fence.ending();
         let close = match end {
-            AgentEnd::Close => agent.close(actor),
-            AgentEnd::Suspend => agent.suspend(actor),
+            AgentEnd::Close => agent.close_report(actor),
+            AgentEnd::Suspend => agent.suspend_report(actor),
         };
         tokio::pin!(close);
         let within = tokio::select! {
@@ -1208,7 +1176,10 @@ impl LiveLease {
             }
         };
         let release = self.release(cause, cleanup_deadline).await;
-        let confirmed = confirmed_cleanup(&result);
+        let confirmed = result
+            .as_ref()
+            .ok()
+            .and_then(|report| confirmed_cleanup(report.cleanup()));
         let evidence = match release {
             LeaseRelease::ByAgentClose => confirmed.map(|outcome| LeaseCleanup::Confirmed {
                 forced: outcome.forced,
@@ -1235,22 +1206,44 @@ impl LiveLease {
         // close's doubt about what it still holds, and nothing else. A failed
         // audit, a failed save or any other failure of the close is its own
         // fact and stays in the answer.
-        let result = match (result, evidence, release) {
-            (Ok(_), None, _) => Err(AgentError::CleanupUncertain),
-            (Err(error), None, _) => Err(AgentError::MultipleOperationFailures {
+        let result = result
+            .map(|report| {
+                // An encompassing environment ACK resolves physical uncertainty,
+                // not executable-use release or any independent evidence failure.
+                match release {
+                    LeaseRelease::Released(LeaseCleanup::Confirmed { forced }) => {
+                        let resources = match report.cleanup().resources() {
+                            ResourceCleanup::Confirmed(outcome) => {
+                                ResourceCleanup::Confirmed(CloseOutcome {
+                                    forced: forced || outcome.forced,
+                                })
+                            }
+                            ResourceCleanup::ReleasePending { physical, failure } => {
+                                ResourceCleanup::ReleasePending {
+                                    physical: CloseOutcome {
+                                        forced: forced || physical.forced,
+                                    },
+                                    failure: failure.clone(),
+                                }
+                            }
+                            ResourceCleanup::Unconfirmed(_) => {
+                                ResourceCleanup::Confirmed(CloseOutcome { forced })
+                            }
+                        };
+                        let cleanup = report.cleanup().clone().with_resources(resources);
+                        report.with_cleanup(cleanup)
+                    }
+                    _ => report,
+                }
+            })
+            .and_then(|report| report.into_result());
+        let result = match (result, release) {
+            (Ok(_), LeaseRelease::Unanswered) => Err(AgentError::CleanupUncertain),
+            (Err(error), LeaseRelease::Unanswered) => Err(AgentError::MultipleOperationFailures {
                 first_error: Box::new(error),
                 subsequent_error: Box::new(AgentError::CleanupUncertain),
             }),
-            (Err(error), Some(LeaseCleanup::Confirmed { forced }), LeaseRelease::Released(_))
-                if confirmed_despite(&error).is_none() =>
-            {
-                tracing::warn!(lease = self.lease.as_str(), %error, "the agent's close failed; its environment confirmed the lease released");
-                match beyond_cleanup(error, CloseOutcome { forced }) {
-                    Some(error) => Err(error),
-                    None => Ok(CloseOutcome { forced }),
-                }
-            }
-            (result, _, _) => result,
+            (result, _) => result,
         };
         // Only now: until its close returns, the Agent is still stopping the
         // turn and is its one authority, and it settles that turn from these

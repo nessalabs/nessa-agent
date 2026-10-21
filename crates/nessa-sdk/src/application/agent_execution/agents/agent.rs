@@ -13,7 +13,7 @@ use super::{
     scheduling::{ActiveInvocation, CloseMode, Scheduler},
 };
 use crate::application::agent_execution::agents::{
-    AgentError, AgentFuture, AgentInitializationError, OwnedLifetime,
+    AgentCloseReport, AgentError, AgentFuture, AgentInitializationError, OwnedLifetime,
 };
 use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
 use crate::application::agent_execution::executions::{
@@ -2959,6 +2959,39 @@ impl Agent {
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn suspend(&self, actor: ActionContext) -> AgentFuture<'_, CloseOutcome> {
         Box::pin(async move { self.close_scheduled(actor, CloseMode::Suspend).await })
+    }
+
+    /// Close with this supervised transaction's complete cleanup and scheduling report.
+    ///
+    /// `actor` supplies host-verified cancellation attribution. This shares the
+    /// lifecycle shutdown owner and first cause with [`Self::close`]; dropping
+    /// the caller stops waiting, not cleanup. The Tokio runtime must stay alive.
+    /// The outer error means the supervised transaction did not return a report.
+    /// Inspect the complete resources value, not just its physical outcome:
+    /// executable-use release can remain pending after the process is gone.
+    /// Independent audit, completion and cancellation-save failures remain in
+    /// the report. [`super::AgentCloseReport::into_result`] gives the ordinary
+    /// close result without changing any resource observation.
+    ///
+    /// ```no_run
+    /// # async fn close(agent: &nessa_sdk::Agent) -> Result<(), nessa_sdk::application::agent_execution::agents::AgentError> {
+    /// use nessa_sdk::application::agent_execution::permissions::ActionContext;
+    /// let report = agent.close_report(ActionContext::new("owner", "host", "close")?).await?;
+    /// let resources = report.cleanup().resources();
+    /// let _ = resources;
+    /// report.into_result()?;
+    /// # Ok(()) }
+    /// ```
+    pub fn close_report(&self, actor: ActionContext) -> AgentFuture<'_, AgentCloseReport> {
+        Box::pin(async move { self.close_scheduled_report(actor, CloseMode::Final).await })
+    }
+
+    /// Suspend with this supervised transaction's complete cleanup and scheduling report.
+    /// Attribution, runtime lifetime, caller cancellation and report failures
+    /// follow [`Self::close_report`]. Pending work retains the original suspend
+    /// semantics of [`Self::suspend`]; this adds no shutdown owner or retry.
+    pub fn suspend_report(&self, actor: ActionContext) -> AgentFuture<'_, AgentCloseReport> {
+        Box::pin(async move { self.close_scheduled_report(actor, CloseMode::Suspend).await })
     }
 
     /// Install ownership participation once, before attachment authorization.

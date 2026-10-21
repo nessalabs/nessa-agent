@@ -7,7 +7,7 @@
 use super::audit_observation::{AuditObservationFailure, AUDIT_OBSERVATION_TIMEOUT};
 use super::lifecycle::{SessionLifecycle, WorkGeneration, WorkPermit};
 use super::submissions::{self, Settlement, SubmissionReceipt};
-use super::{Agent, AgentError, AttachmentPhase, AttachmentRequest};
+use super::{Agent, AgentCloseReport, AgentError, AttachmentPhase, AttachmentRequest};
 use crate::application::agent_execution::{
     caller_wake::{contain_caller_wake, CallerWaiter},
     executions::{
@@ -2528,6 +2528,16 @@ impl Agent {
         actor: ActionContext,
         mode: CloseMode,
     ) -> Result<CloseOutcome, AgentError> {
+        self.close_scheduled_report(actor, mode)
+            .await?
+            .into_result()
+    }
+
+    pub(super) async fn close_scheduled_report(
+        &self,
+        actor: ActionContext,
+        mode: CloseMode,
+    ) -> Result<AgentCloseReport, AgentError> {
         let agent = self.clone();
         let waiter = CallerWaiter::Close(self.inner.manager.id().clone());
         contain_caller_wake(
@@ -2551,15 +2561,7 @@ impl Agent {
                 agent.inner.manager.await_admission_writes().await;
                 agent.inner.lifecycle.wait_for_work().await;
                 let cleanup = agent.inner.lifecycle.complete_stop(&attempt).await;
-                let cleanup = cleanup.into_result();
-                match saved {
-                    Ok(()) => cleanup,
-                    Err(AgentError::Storage(error)) => Err(AgentError::StorageDuringClose {
-                        error,
-                        cleanup_result: Box::new(cleanup),
-                    }),
-                    Err(error) => Err(error),
-                }
+                Ok::<_, AgentError>(AgentCloseReport::new(cleanup, saved))
             }),
         )
         .await

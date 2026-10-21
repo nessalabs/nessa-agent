@@ -635,3 +635,6 @@ mod queue_order;
 mod permission_authority;
 
 mod resumption;
+
+#[path = "conformance/close_reports.rs"]
+mod close_reports;

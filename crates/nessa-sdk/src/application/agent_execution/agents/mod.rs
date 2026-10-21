@@ -17,6 +17,7 @@
 //!                              |                   |-> shared bounded AuditObserver
 //!                              |-> cleanup joins physical result + bounded evidence slots
 //!                              |-> shared stop -> cleanup attempts / retained lease
+//!       |-> AgentCloseReport -> same close transaction cleanup + scheduling evidence
 //!                              |-> optional owned-lifetime seal read before admission
 //!       |-> event subscribers
 //! ```
@@ -40,6 +41,7 @@ mod agent;
 mod attachment;
 mod attachment_evidence;
 mod audit_observation;
+mod closing;
 mod coordination;
 mod error;
 mod error_limits;
@@ -56,6 +58,7 @@ pub use attachment::{
     AttachmentAuthorization, AttachmentCancellation, AttachmentFailure, AttachmentFailureCode,
     AttachmentPhase, AttachmentRequest, AttachmentStatus, AttachmentWait,
 };
+pub use closing::AgentCloseReport;
 pub use error::{
     AgentError, AgentFuture, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
     ProviderDiagnostic,

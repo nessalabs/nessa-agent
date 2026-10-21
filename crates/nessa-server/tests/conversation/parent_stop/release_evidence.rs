@@ -1,12 +1,107 @@
 //! Independent cleanup evidence writers and the explicit erasure handoff.
 use super::*;
 use crate::conversation::infrastructure::ssh_environment::preparation_environment;
+use nessa_sdk::application::agent_execution::providers::ResourceCleanup;
 use nessa_sdk::application::agent_execution::sessions::{
     CommittedSession, LeaseRecord, SessionChange, SessionLoad, SessionSaveGeneration,
     SessionSaveReceipt, SessionSaveUnit, SessionStorage, SessionStorageLease, StorageFuture,
 };
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use std::sync::atomic::AtomicUsize;
+
+#[tokio::test]
+async fn remote_ack_cannot_release_the_sdk_executable_use_owner() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (environment, host) = preparation_environment();
+    let (service, storage, metadata) = fixture_with_sessions(
+        &root,
+        provider.clone(),
+        environment.into(),
+        crate::conversation_test_support::access_policy(),
+        crate::conversation_test_support::claude_erasers(),
+    );
+    let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
+    let target = id();
+    opened(&service, &provider, &target).await;
+    let lifetime = coordinator
+        .active_lifetime_for_session(&conversation_session(&target))
+        .unwrap();
+    let opening = Arc::downgrade(
+        service
+            .inner
+            .conversations
+            .lock()
+            .await
+            .get(&target)
+            .unwrap(),
+    );
+    for _ in 0..8 {
+        provider
+            .close_reports
+            .lock()
+            .unwrap()
+            .push_back(CleanupReport::new(
+                ResourceCleanup::ReleasePending {
+                    physical: CloseOutcome { forced: false },
+                    failure: AgentError::AuditFailure,
+                },
+                Ok(()),
+            ));
+    }
+    let command = || CloseCommand {
+        lifetime: lifetime.clone(),
+        cause: LifetimeCause::HostClose,
+        initiator: Initiator::Host(HostActor::new("person", "panel", "pending-sdk-use").unwrap()),
+        external_attachment: false,
+        timeout: None,
+    };
+    let closing = tokio::spawn({
+        let coordinator = coordinator.clone();
+        let command = command();
+        async move { coordinator.end_lifetime(command).await }
+    });
+    host.wait_end().await;
+    assert!(tokio::time::timeout(TURN_HOLD_HANG, closing)
+        .await
+        .unwrap()
+        .unwrap()
+        .is_err());
+    host.release();
+    assert!(
+        tokio::time::timeout(TURN_HOLD_HANG, coordinator.end_lifetime(command()))
+            .await
+            .unwrap()
+            .is_err()
+    );
+    assert!(service.owns_unreleased_resources().await);
+    assert!(opening.upgrade().is_some());
+    let snapshot = SqliteOwnershipStore::open(&root.join("ownership.sqlite3"))
+        .unwrap()
+        .read()
+        .await
+        .unwrap();
+    let graph = nessa_sdk::domain::agent_execution::subagents::OwnershipGraph::restore(snapshot);
+    assert_eq!(
+        graph.physical(&lifetime, &lifetime),
+        Some(nessa_sdk::domain::agent_execution::subagents::PhysicalFact::Failed),
+        "remote physical release cannot acknowledge the retained SDK executable-use owner"
+    );
+    provider.close_reports.lock().unwrap().clear();
+    tokio::time::timeout(TURN_HOLD_HANG, coordinator.end_lifetime(command()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        coordinator.lifetime_state(&lifetime),
+        Some(LifetimeState::Closed)
+    );
+    assert!(!service.owns_unreleased_resources().await);
+    assert!(opening.upgrade().is_none());
+    assert_eq!(host.end_requests(), 1);
+    retire(service, storage, metadata).await;
+}
 
 struct CloseWrites {
     inner: Arc<RecordStorage>,

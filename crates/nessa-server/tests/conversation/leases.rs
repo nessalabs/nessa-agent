@@ -55,7 +55,7 @@ use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     executions::ExecutionUpdate,
     permissions::ActionContext,
-    providers::AgentProvider,
+    providers::{AgentProvider, CleanupReport},
     sessions::{
         CommittedSession, CurrentLease, LeaseRecord, SessionChange, SessionLoad,
         SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionSnapshot,
@@ -580,6 +580,81 @@ impl Harness {
         .await
         .expect("the agent lets the stream go")
         .expect("the stream holds a snapshot")
+    }
+
+    /// Read durable publication without taking the retained cleanup writer.
+    async fn committed_lease(&self) -> CurrentLease {
+        self.storage
+            .read_committed(SessionId::new(self.id.to_string()).unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .lease
+            .clone()
+            .expect("the published lease exists")
+    }
+
+    async fn late_environment_ack_releases_the_retained_owner(
+        &self,
+        host: &Host,
+        before: &CurrentLease,
+    ) {
+        assert!(self.service.owns_unreleased_resources().await);
+        assert!(
+            self.storage
+                .open_existing(SessionId::new(self.id.to_string()).unwrap())
+                .await
+                .is_err(),
+            "unanswered End retains the original writer"
+        );
+        assert_eq!(host.opened.load(Ordering::SeqCst), 1);
+        assert_eq!(host.end_calls.load(Ordering::SeqCst), 1);
+        *host.release.lock().unwrap() = Some(LeaseCleanup::Confirmed { forced: true });
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            self.service
+                .close(self.id.clone(), caller("late-ack-retry")),
+        )
+        .await
+        .expect("the same cleanup owner acknowledges within the original bound")
+        .unwrap();
+        let after = self.lease().await;
+        assert_eq!(ending_cause(&after), ending_cause(before));
+        assert_eq!(&after.records()[..before.records().len()], before.records());
+        assert_eq!(
+            kinds(&after),
+            ["issued", "ending", "interrupted", "cleanup_reported"]
+        );
+        assert_eq!(host.end_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(self.provider.close_calls.load(Ordering::SeqCst), 1);
+        assert!(!self.service.owns_unreleased_resources().await);
+        let original = host.end_ids.lock().unwrap()[0].clone();
+        assert_eq!(
+            host.end_ids.lock().unwrap().as_slice(),
+            &[original.clone(), original.clone()]
+        );
+        self.service
+            .close(self.id.clone(), caller("repeat-after-ack"))
+            .await
+            .unwrap();
+        {
+            let ends = host.end_ids.lock().unwrap();
+            assert_eq!(
+                ends.iter().filter(|id| **id == original).count(),
+                2,
+                "the original lease has one unanswered attempt and one acknowledged End"
+            );
+            assert_eq!(ends.len(), 3);
+            assert_ne!(
+                ends[2], original,
+                "a later public close opens its own lease, not the retired owner"
+            );
+            assert_eq!(host.opened.load(Ordering::SeqCst), 2);
+            assert_eq!(self.provider.close_calls.load(Ordering::SeqCst), 2);
+        }
+        assert!(!self.service.owns_unreleased_resources().await);
     }
 
     async fn lease(&self) -> CurrentLease {
@@ -1547,7 +1622,9 @@ struct Host {
     lose: tokio::sync::watch::Sender<Option<LeaseEndCause>>,
     /// The duration it grants each lease, if any.
     lease_ms: Mutex<Option<u64>>,
-    release: Mutex<Option<LeaseCleanup>>,
+    release: Arc<Mutex<Option<LeaseCleanup>>>,
+    end_calls: Arc<AtomicUsize>,
+    end_ids: Arc<Mutex<Vec<LeaseId>>>,
     /// What the first lease opened here publishes.
     offers: Mutex<Option<tokio::sync::mpsc::Receiver<ArtifactOffer>>>,
     /// Told once a lease's end is asked here, which is after it is on record.
@@ -1676,7 +1753,9 @@ impl Host {
             opened: AtomicUsize::new(0),
             lose: tokio::sync::watch::channel(None).0,
             lease_ms: Mutex::new(None),
-            release: Mutex::new(Some(LeaseCleanup::Confirmed { forced: false })),
+            release: Arc::new(Mutex::new(Some(LeaseCleanup::Confirmed { forced: false }))),
+            end_calls: Arc::new(AtomicUsize::new(0)),
+            end_ids: Arc::default(),
             offers: Mutex::new(None),
             ending: Arc::default(),
             asked: Arc::default(),
@@ -1711,7 +1790,10 @@ impl Environment for Host {
         let lease_ms = *self.lease_ms.lock().unwrap();
         let hold = Arc::new(HostHold {
             lost: self.lose.subscribe(),
-            release: *self.release.lock().unwrap(),
+            release: self.release.clone(),
+            end_calls: self.end_calls.clone(),
+            end_ids: self.end_ids.clone(),
+            lease: _lease.clone(),
             offers: Mutex::new(self.offers.lock().unwrap().take()),
             ending: self.ending.clone(),
             asked: self.asked.clone(),
@@ -1735,8 +1817,11 @@ impl Environment for Host {
     }
 }
 struct HostHold {
+    lease: LeaseId,
     lost: tokio::sync::watch::Receiver<Option<LeaseEndCause>>,
-    release: Option<LeaseCleanup>,
+    release: Arc<Mutex<Option<LeaseCleanup>>>,
+    end_calls: Arc<AtomicUsize>,
+    end_ids: Arc<Mutex<Vec<LeaseId>>>,
     offers: Mutex<Option<tokio::sync::mpsc::Receiver<ArtifactOffer>>>,
     ending: Arc<tokio::sync::Notify>,
     asked: Arc<Asked>,
@@ -1935,7 +2020,9 @@ impl LeaseHold for HostHold {
         self.asked.ending.notify_waiters();
         self.fetching.ended.store(true, Ordering::SeqCst);
         self.fetching.ending.notify_waiters();
-        let release = self.release;
+        self.end_calls.fetch_add(1, Ordering::SeqCst);
+        self.end_ids.lock().unwrap().push(self.lease.clone());
+        let release = *self.release.lock().unwrap();
         Box::pin(async move {
             match release {
                 Some(cleanup) => LeaseRelease::Released(cleanup),
@@ -2437,12 +2524,28 @@ async fn b_a_file_linked_by_path_is_refused_for_a_conversation_on_a_host() {
 #[tokio::test]
 async fn b_a_hosts_confirmed_release_answers_only_cleanup_uncertainty() {
     let settlement = || AgentError::Transport("settlement".into());
-    for (failure, kept) in [
-        (AgentError::CleanupUncertain, None),
-        (AgentError::AuditFailure, Some(AgentError::AuditFailure)),
-        (settlement(), Some(settlement())),
+    for (failure, report, kept) in [
+        (
+            AgentError::CleanupUncertain,
+            CleanupReport::unconfirmed(AgentError::CleanupUncertain),
+            None,
+        ),
+        (
+            AgentError::AuditFailure,
+            CleanupReport::confirmed(CloseOutcome { forced: false })
+                .with_audit(Err(AgentError::AuditFailure)),
+            Some(AgentError::AuditFailure),
+        ),
+        (
+            settlement(),
+            CleanupReport::confirmed(CloseOutcome { forced: false })
+                .with_completion_failure(Some(settlement())),
+            Some(settlement()),
+        ),
         (
             AgentError::AuditAndCleanupFailure,
+            CleanupReport::unconfirmed(AgentError::CleanupUncertain)
+                .with_audit(Err(AgentError::AuditFailure)),
             Some(AgentError::AuditFailure),
         ),
         (
@@ -2450,6 +2553,8 @@ async fn b_a_hosts_confirmed_release_answers_only_cleanup_uncertainty() {
                 operation_error: Box::new(settlement()),
                 cleanup_error: Box::new(AgentError::CleanupUncertain),
             },
+            CleanupReport::unconfirmed(AgentError::CleanupUncertain)
+                .with_completion_failure(Some(settlement())),
             Some(settlement()),
         ),
     ] {
@@ -2459,7 +2564,12 @@ async fn b_a_hosts_confirmed_release_answers_only_cleanup_uncertainty() {
         let harness = with_host(root.path(), here, Some(host.clone()));
         harness.create_on("devbox").await.unwrap();
         harness.turn("turn-1").await;
-        *harness.provider.close_failure.lock().unwrap() = Some(failure.clone());
+        harness
+            .provider
+            .close_reports
+            .lock()
+            .unwrap()
+            .push_back(report);
         let closed = harness
             .service
             .close(harness.id.clone(), caller("close"))
@@ -2562,7 +2672,7 @@ async fn b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_
         host.lose.send_replace(Some(LeaseEndCause::Lost));
         let lease = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                let lease = harness.lease().await;
+                let lease = harness.committed_lease().await;
                 if kinds(&lease).len() == 3 {
                     break lease;
                 }
@@ -2576,6 +2686,11 @@ async fn b_gate2_a_lost_connection_stops_the_conversation_and_ends_its_lease_as_
         assert_eq!(cause, LeaseEndCause::Lost);
         assert!(actor.is_some_and(|actor| actor.starts_with("lost-")));
         assert_eq!(harness.provider.close_calls.load(Ordering::SeqCst), 1);
+        if release.is_none() {
+            harness
+                .late_environment_ack_releases_the_retained_owner(&host, &lease)
+                .await;
+        }
     }
 }
 
@@ -2644,7 +2759,7 @@ async fn an_environment_ends_the_lease(
     host.lose.send_replace(Some(cause));
     let lease = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let lease = harness.lease().await;
+            let lease = harness.committed_lease().await;
             if kinds(&lease).len() == 3 {
                 break lease;
             }
@@ -2666,6 +2781,11 @@ async fn an_environment_ends_the_lease(
         ("gateway", surface)
     );
     assert_eq!(harness.provider.close_calls.load(Ordering::SeqCst), 1);
+    if release.is_none() {
+        harness
+            .late_environment_ack_releases_the_retained_owner(&host, &lease)
+            .await;
+    }
     let kinds = kinds(&lease);
     (lease, kinds)
 }

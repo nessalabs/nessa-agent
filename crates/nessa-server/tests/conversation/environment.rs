@@ -275,22 +275,25 @@ async fn l9_drops_past_the_kept_bound_are_counted_and_not_kept_over_the_whole_le
 #[test]
 fn l7_l8_a_close_that_confirmed_cleanup_but_could_not_save_it_still_ends_the_lease() {
     let confirmed = CloseOutcome { forced: true };
-    assert_eq!(confirmed_cleanup(&Ok(confirmed)), Some(confirmed));
     assert_eq!(
-        confirmed_cleanup(&Err(AgentError::StorageDuringClose {
-            error: StorageError::Io("the disk went away".into()),
-            cleanup_result: Box::new(Ok(confirmed)),
-        })),
+        confirmed_cleanup(&CleanupReport::confirmed(confirmed)),
         Some(confirmed)
     );
     assert_eq!(
-        confirmed_cleanup(&Err(AgentError::StorageDuringClose {
+        confirmed_despite(&AgentError::StorageDuringClose {
+            error: StorageError::Io("the disk went away".into()),
+            cleanup_result: Box::new(Ok(confirmed)),
+        }),
+        Some(confirmed)
+    );
+    assert_eq!(
+        confirmed_despite(&AgentError::StorageDuringClose {
             error: StorageError::Io("the disk went away".into()),
             cleanup_result: Box::new(Err(AgentError::CleanupUncertain)),
-        })),
+        }),
         None
     );
-    assert_eq!(confirmed_cleanup(&Err(AgentError::CleanupUncertain)), None);
+    assert_eq!(confirmed_despite(&AgentError::CleanupUncertain), None);
 }
 
 fn held(records: &[LeaseRecord]) -> CurrentLease {
@@ -768,4 +771,32 @@ async fn an_opening_while_the_lease_ends_waits_for_the_agents_close() {
         .await
         .expect("the close ends the opening")
         .is_err());
+}
+
+#[test]
+fn actual_cleanup_fact_is_independent_of_diagnostics_and_retained_release() {
+    for forced in [false, true] {
+        let outcome = CloseOutcome { forced };
+        assert_eq!(
+            confirmed_cleanup(&CleanupReport::new(
+                ResourceCleanup::Confirmed(outcome),
+                Err(AgentError::AuditFailure)
+            )),
+            Some(outcome)
+        );
+        assert_eq!(
+            confirmed_cleanup(&CleanupReport::unconfirmed(AgentError::AuditFailure)),
+            None
+        );
+        assert_eq!(
+            confirmed_cleanup(&CleanupReport::new(
+                ResourceCleanup::ReleasePending {
+                    physical: outcome,
+                    failure: AgentError::AuditFailure
+                },
+                Ok(())
+            )),
+            None
+        );
+    }
 }
