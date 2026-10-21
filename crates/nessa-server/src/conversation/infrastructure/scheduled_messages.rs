@@ -236,6 +236,15 @@ const MESSAGE_COLUMNS: &str = "conversation, causal_execution, execution_id, due
      agent, model, prompt, organization_id, principal_id, surface_id, action_id, \
      initiation, grant_id, policy_revision, tools_checked, retry_failures";
 
+/// A `delivering` row is due unless that conversation owes a reconcile retry
+/// still ahead of `?1`, the clock passed to the statement.
+const DELIVERING_DUE: &str = "status = 'delivering' \
+    AND NOT EXISTS ( \
+        SELECT 1 FROM reconcile_retry \
+        WHERE reconcile_retry.conversation = message.conversation \
+          AND reconcile_retry.retry_at_ms > ?1 \
+    )";
+
 fn load_open(
     connection: &Connection,
     conversation: &str,
@@ -1528,7 +1537,7 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             let mut statement = connection
                 .prepare(&format!(
                     "SELECT {MESSAGE_COLUMNS} FROM message \
-                     WHERE status = 'delivering' \
+                     WHERE ({DELIVERING_DUE}) \
                         OR (status = 'submitting' AND retry_at_ms <= ?1 \
                             AND (fence_until_ms <= ?1 OR fence_owner = ?2)) \
                      ORDER BY due_at_ms LIMIT ?3"
@@ -1560,20 +1569,23 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         self.run(move |connection| {
             let now = millis(now_ms)?;
             // A claim stops at its limit, and a row still `delivering` is
-            // already due. A failed outcome audit leaves the row `submitting`
-            // until its retry time. A submitting row this process owns, or
-            // whose lease has expired, is due once its retry time has arrived.
-            // A live lease owned by someone else waits until that deadline,
-            // or until a later retry time.
+            // already due, unless its conversation owes a reconcile retry
+            // that has not arrived. A failed outcome audit leaves the row
+            // `submitting` until its retry time. A submitting row this
+            // process owns, or whose lease has expired, is due once its
+            // retry time has arrived. A live lease owned by someone else
+            // waits until that deadline, or until a later retry time.
             let pending: bool = connection
                 .query_row(
-                    "SELECT EXISTS( \
+                    &format!(
+                        "SELECT EXISTS( \
                          SELECT 1 FROM message \
-                         WHERE status = 'delivering' \
+                         WHERE ({DELIVERING_DUE}) \
                             OR (status = 'scheduled' AND due_at_ms <= ?1) \
                             OR (status = 'submitting' AND retry_at_ms <= ?1 \
                                 AND (fence_until_ms <= ?1 OR fence_owner = ?2)) \
-                     )",
+                     )"
+                    ),
                     params![now, owner],
                     |row| row.get(0),
                 )
@@ -2335,6 +2347,31 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(store.next_due(13).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_delivering_row_with_a_reconcile_debt_waits_until_that_retry() {
+        let store = enabled_store().await;
+        store
+            .accept(draft("conversation", "causal", "exec-1", 10), 1)
+            .await
+            .unwrap();
+        assert_eq!(store.claim_due(10, 4).await.unwrap().len(), 1);
+        store
+            .accept(draft("other", "causal", "exec-other", 5_000), 1)
+            .await
+            .unwrap();
+        store
+            .note_reconcile_retry("conversation", 1, 2_000)
+            .await
+            .unwrap();
+        assert!(store.claim_due(10, 4).await.unwrap().is_empty());
+        // The debt's retry is the loop's reconcile wait, not a schedule row.
+        // The later conversation stays the next due row. The held one is not
+        // due now.
+        assert_eq!(store.next_due(10).await.unwrap(), Some(5_000));
+        assert_eq!(store.claim_due(2_000, 4).await.unwrap().len(), 1);
+        assert_eq!(store.next_due(2_000).await.unwrap(), Some(2_000));
     }
 
     #[tokio::test]
