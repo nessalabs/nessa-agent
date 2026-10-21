@@ -40,7 +40,7 @@ pub trait ExecutionAuditFileWriter: Send + Sync {
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct DeclineAuditReceipt {
+struct PreparedDecisionReceipt {
     record_id: String,
     writer_id: String,
     #[serde(rename = "sequence")]
@@ -55,7 +55,7 @@ struct PrivateExecutionAuditFileWriter;
 impl ExecutionAuditFileWriter for PrivateExecutionAuditFileWriter {
     fn write_once(&self, path: &Path, bytes: &[u8]) -> Result<(), AgentError> {
         let directory = path.parent().ok_or(AgentError::AuditFailure)?;
-        let expected: DeclineAuditReceipt =
+        let expected: PreparedDecisionReceipt =
             serde_json::from_slice(bytes).map_err(|_| AgentError::AuditFailure)?;
         let acknowledge = || -> Result<(), AgentError> {
             let mut file = open(path, OpenMode::ReadWrite).map_err(|_| AgentError::AuditFailure)?;
@@ -68,7 +68,7 @@ impl ExecutionAuditFileWriter for PrivateExecutionAuditFileWriter {
                 .take(bound as u64 + 1)
                 .read_to_end(&mut stored)
                 .map_err(|_| AgentError::AuditFailure)?;
-            let value: DeclineAuditReceipt =
+            let value: PreparedDecisionReceipt =
                 serde_json::from_slice(&stored).map_err(|_| AgentError::AuditFailure)?;
             // Our writer uses one canonical encoding for semantic payloads.
             // Comparing its raw payload also rejects duplicate nested keys.
