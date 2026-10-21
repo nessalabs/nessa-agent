@@ -1463,3 +1463,98 @@ async fn close_report_bounds_bulk_cancellation_debt_without_releasing_its_facts(
         .is_ok());
     assert!(report.into_result().is_err());
 }
+
+#[test]
+fn close_report_retry_keeps_each_independent_field_and_new_resources() {
+    use crate::application::agent_execution::providers::{CleanupReport, ResourceCleanup};
+    let first = AgentCloseReport::new(
+        CleanupReport::new(
+            ResourceCleanup::Unconfirmed(AgentError::CleanupUncertain),
+            Err(AgentError::AuditFailure),
+        )
+        .with_operation_failure(Some(AgentError::Transport("original operation".into())))
+        .with_completion_failure(Some(AgentError::Deadline)),
+        Err(AgentError::Storage(StorageError::Busy)),
+    );
+    let retry = AgentCloseReport::new(
+        CleanupReport::new(
+            ResourceCleanup::ReleasePending {
+                physical: CloseOutcome { forced: true },
+                failure: AgentError::Configuration("guard release".into()),
+            },
+            Err(AgentError::Closed),
+        )
+        .with_operation_failure(Some(AgentError::Protocol("later operation".into())))
+        .with_completion_failure(Some(AgentError::Backpressure)),
+        Err(AgentError::InvalidInput("later scheduling".into())),
+    );
+    let joined = first.clone().after_retry(retry.clone());
+    assert_eq!(joined.cleanup().resources(), retry.cleanup().resources());
+    assert_eq!(
+        joined.cleanup().audit(),
+        &Err(AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::AuditFailure),
+            subsequent_error: Box::new(AgentError::Closed)
+        })
+    );
+    assert_eq!(
+        joined.cleanup().completion_failure(),
+        Some(&AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::Deadline),
+            subsequent_error: Box::new(AgentError::Backpressure)
+        })
+    );
+    assert_eq!(
+        joined.cleanup().operation_failure(),
+        Some(&AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::Transport("original operation".into())),
+            subsequent_error: Box::new(AgentError::Protocol("later operation".into()))
+        })
+    );
+    assert_eq!(
+        joined.scheduling(),
+        &Err(AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::Storage(StorageError::Busy)),
+            subsequent_error: Box::new(AgentError::InvalidInput("later scheduling".into()))
+        })
+    );
+    assert!(
+        matches!(first.cleanup().resources(), ResourceCleanup::Unconfirmed(_)),
+        "joining evidence did not mutate the original owner observation"
+    );
+    assert!(joined.into_result().is_err());
+}
+
+#[test]
+fn close_report_retry_keeps_cached_failures_once_and_independent_equal_failures_apart() {
+    use crate::application::agent_execution::providers::CleanupReport;
+    let first = AgentCloseReport::new(
+        CleanupReport::new(
+            crate::application::agent_execution::providers::ResourceCleanup::Confirmed(
+                CloseOutcome { forced: false },
+            ),
+            Err(AgentError::AuditFailure),
+        ),
+        Err(AgentError::AuditFailure),
+    );
+    let joined = first.clone().after_retry(first.clone());
+    assert_eq!(joined, first, "the same cached field is one obligation");
+    assert_eq!(
+        joined.into_result(),
+        Err(AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::AuditFailure),
+            subsequent_error: Box::new(AgentError::AuditFailure)
+        }),
+        "scheduling and cleanup audit are independent even with equal diagnostics"
+    );
+    assert_eq!(
+        AgentError::AuditFailure.with_independent_failure(AgentError::AuditFailure),
+        AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::AuditFailure),
+            subsequent_error: Box::new(AgentError::AuditFailure)
+        }
+    );
+    let bounded = AgentError::Configuration("x".repeat(1024 * 1024 + 16))
+        .with_independent_failure(AgentError::AuditFailure);
+    assert!(bounded.validate_retained_size().is_ok());
+}

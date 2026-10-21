@@ -55,12 +55,14 @@ struct WorkflowProvider(Arc<WorkflowBackend>);
 struct WorkflowAudit {
     records: Mutex<Vec<ExecutionAuditRecord>>,
     reject: AtomicBool,
+    reject_decline: AtomicBool,
     panic: AtomicBool,
     pause: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
 }
 impl ExecutionAudit for WorkflowAudit {
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         Box::pin(async move {
+            let declined = matches!(&record, ExecutionAuditRecord::TurnResumed(record) if record.resumption() == &nessa_sdk::application::agent_execution::executions::TurnResumption::Declined);
             self.records.lock().unwrap().push(record);
             if self.panic.load(Ordering::SeqCst) {
                 panic!("audit acknowledgement panicked");
@@ -70,7 +72,9 @@ impl ExecutionAudit for WorkflowAudit {
                 let _ = entered.send(());
                 let _ = release.await;
             }
-            if self.reject.load(Ordering::SeqCst) {
+            if self.reject.load(Ordering::SeqCst)
+                || (declined && self.reject_decline.load(Ordering::SeqCst))
+            {
                 Err(AgentError::AuditFailure)
             } else {
                 Ok(())

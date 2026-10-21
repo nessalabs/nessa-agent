@@ -1135,3 +1135,34 @@ async fn a_decline_audit_ack_save_failure_is_independent_and_retry_does_not_rede
         .acknowledged());
     bounded(agent.close(actor())).await.unwrap();
 }
+
+#[tokio::test]
+async fn close_joins_prepared_decline_evidence_even_when_no_work_is_owed() {
+    let saved = cut_off_while_running("close-decline-receipt").await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    backend.audit.reject_decline.store(true, Ordering::SeqCst);
+    assert_eq!(
+        bounded(agent.decline_turn(&turn, resumer())).await,
+        Err(AgentError::AuditFailure)
+    );
+    assert!(agent.owed_turns().await.is_empty());
+    assert_eq!(
+        bounded(agent.close(actor())).await,
+        Err(AgentError::AuditFailure),
+        "other close audits succeed; the retained decline receipt alone prevents acknowledgement"
+    );
+    assert!(!storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    backend.audit.reject_decline.store(false, Ordering::SeqCst);
+    bounded(agent.close(actor())).await.unwrap();
+    assert!(storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    assert!(backend.executions.lock().unwrap().is_empty());
+}

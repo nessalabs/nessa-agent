@@ -332,6 +332,22 @@ async fn remote_end_cannot_acknowledge_an_unattempted_hosted_executable_guard() 
     );
     assert!(live.agent.may_hold_provider_resources());
     assert!(
+        attempts.load(Ordering::SeqCst) > 0,
+        "the SDK owner attempted its own guard release after actual End"
+    );
+    let graph = nessa_sdk::domain::agent_execution::subagents::OwnershipGraph::restore(
+        SqliteOwnershipStore::open(&root.join("ownership.sqlite3"))
+            .unwrap()
+            .read()
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        graph.physical(&lifetime, &lifetime),
+        Some(nessa_sdk::domain::agent_execution::subagents::PhysicalFact::Failed),
+        "physical End cannot release the SDK guard's graph accounting"
+    );
+    assert!(
         result.is_err(),
         "remote End cannot acknowledge the independent SDK guard: {result:?}"
     );

@@ -1688,6 +1688,28 @@ impl SessionManager {
     }
     /// Return the locally applied decision even if its save is not acknowledged.
     /// Validation failure returns no commit and grants no decision authority.
+    /// Flush only when a decline receipt itself still awaits storage ACK.
+    /// Other pending facts keep their existing close/lease persistence owner.
+    pub(crate) async fn flush_decline_receipts(&self) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let pending = evidence
+            .pending
+            .iter()
+            .flat_map(SessionSaveUnit::changes)
+            .any(|change| {
+                matches!(
+                    change,
+                    SessionChange::DeclinePrepared { .. }
+                        | SessionChange::DeclineAcknowledged { .. }
+                )
+            });
+        if pending {
+            self.save_observed(&mut evidence).await
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) async fn prepare_decline(
         &self,
         index: usize,

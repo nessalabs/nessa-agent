@@ -667,6 +667,12 @@ async fn historical_decline_audit_failure_cannot_acknowledge_root_release() {
     retire(service, storage, metadata).await;
 }
 
+fn publish_decline_ready(root: &Path) {
+    let pending = root.join("decline-ready.pending");
+    std::fs::write(&pending, b"1").unwrap();
+    std::fs::rename(pending, root.join("decline-ready")).unwrap();
+}
+
 /// Pause only the final terminal save. The preceding preparation is real
 /// committed SQLite evidence; a killed process cannot orphan its audit actor.
 struct PreparedDeclineStorage {
@@ -704,7 +710,7 @@ impl SessionStorageLease for PreparedDeclineLease {
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
             if units.iter().flat_map(SessionSaveUnit::changes).any(|change| matches!(change,SessionChange::SchedulingTransition { event,.. } if event.cause==SchedulingCause::NotResumed)) {
-                std::fs::write(self.root.join("decline-ready"),b"1").unwrap();
+                publish_decline_ready(&self.root);
                 return std::future::pending().await;
             }
             self.lease.save_changes(binding, units).await
@@ -782,7 +788,7 @@ fn historical_decline_crash_child() {
                 .as_ref()
                 .unwrap()
                 .acknowledged());
-            std::fs::write(root.join("decline-ready"), b"1").unwrap();
+            publish_decline_ready(&root);
             std::future::pending::<()>().await;
         });
 }

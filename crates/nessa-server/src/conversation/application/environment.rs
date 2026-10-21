@@ -1199,11 +1199,7 @@ impl LiveLease {
                     (Ok(first), Ok(retry)) => Ok(first.after_retry(retry)),
                     (Ok(first), Err(error)) => Err(match first.into_result() {
                         Ok(_) => error,
-                        Err(first) if first == error => first,
-                        Err(first) => AgentError::MultipleOperationFailures {
-                            first_error: Box::new(first),
-                            subsequent_error: Box::new(error),
-                        },
+                        Err(first) => first.with_independent_failure(error),
                     }),
                     (Err(first), _) => Err(first),
                 };

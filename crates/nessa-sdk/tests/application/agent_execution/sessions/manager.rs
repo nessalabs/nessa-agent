@@ -2496,3 +2496,38 @@ fn decline_receipts_validate_original_decision_and_acknowledgement_order() {
         );
     }
 }
+
+#[tokio::test]
+async fn decline_receipt_flush_does_not_take_unrelated_pending_write_ownership() {
+    let (manager, lease, _) = manager(0).await;
+    let before = lease
+        .load()
+        .await
+        .unwrap()
+        .snapshot()
+        .unwrap()
+        .provider_context
+        .clone();
+    manager
+        .evidence
+        .lock()
+        .await
+        .record(vec![SessionChange::ProviderContext {
+            before: before.clone(),
+            after: ProviderContext::Absent,
+        }])
+        .unwrap();
+    lease.fail_save.store(true, Ordering::SeqCst);
+    manager.flush_decline_receipts().await.unwrap();
+    assert_eq!(manager.evidence.lock().await.pending.len(), 1);
+    assert_eq!(
+        lease
+            .load()
+            .await
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .provider_context,
+        before
+    );
+}

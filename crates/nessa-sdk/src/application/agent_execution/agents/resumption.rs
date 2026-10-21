@@ -840,7 +840,7 @@ impl Agent {
                 });
             }
         }
-        if let Err(error) = self.inner.manager.flush_observed().await {
+        if let Err(error) = self.inner.manager.flush_decline_receipts().await {
             let error = AgentError::Storage(error);
             failure = Some(match failure {
                 None => error,
