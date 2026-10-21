@@ -625,9 +625,27 @@ impl ScheduledMessageStore for LocalScheduledMessages {
     fn next_due(&self, now_ms: u64) -> ConversationFuture<'_, Option<u64>> {
         self.run(move |connection| {
             let now = millis(now_ms)?;
+            // A claim stops at its limit, and a failed outcome audit leaves the
+            // row delivering. Either one is already due: wait until the clock
+            // so the loop passes again. Only a later scheduled row waits.
+            let pending: bool = connection
+                .query_row(
+                    "SELECT EXISTS( \
+                         SELECT 1 FROM message \
+                         WHERE status = 'delivering' \
+                            OR (status = 'scheduled' AND due_at_ms <= ?1) \
+                     )",
+                    params![now],
+                    |row| row.get(0),
+                )
+                .map_err(failed)?;
+            if pending {
+                return Ok(Some(now_ms));
+            }
             let due: Option<i64> = connection
                 .query_row(
-                    "SELECT MIN(due_at_ms) FROM message WHERE status = 'scheduled' AND due_at_ms > ?1",
+                    "SELECT MIN(due_at_ms) FROM message \
+                     WHERE status = 'scheduled' AND due_at_ms > ?1",
                     params![now],
                     |row| row.get(0),
                 )
@@ -890,5 +908,70 @@ mod tests {
             .filter(|row| row.1 == "preference")
             .count();
         assert_eq!(preference_rows, 2);
+    }
+
+    #[tokio::test]
+    async fn a_row_left_scheduled_after_the_claim_limit_is_due_now() {
+        let store = store().await;
+        for index in 0..9 {
+            store
+                .accept(
+                    draft(
+                        &format!("conversation-{index}"),
+                        "causal",
+                        &format!("exec-{index}"),
+                        10,
+                    ),
+                    1,
+                )
+                .await
+                .unwrap();
+        }
+        store
+            .accept(draft("later", "causal", "exec-later", 100), 1)
+            .await
+            .unwrap();
+        let claimed = store.claim_due(10, 8).await.unwrap();
+        assert_eq!(claimed.len(), 8);
+        for row in &claimed {
+            store
+                .record_outcome(&row.execution_id, true, "delivered", 11)
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.next_due(11).await.unwrap(), Some(11));
+    }
+
+    #[tokio::test]
+    async fn a_delivering_row_with_a_failed_audit_is_due_now() {
+        let store = store().await;
+        store
+            .accept(draft("conversation", "causal", "exec-1", 10), 1)
+            .await
+            .unwrap();
+        assert_eq!(store.claim_due(10, 4).await.unwrap().len(), 1);
+        store.fail_next_outcome_audit();
+        assert!(store
+            .record_outcome("exec-1", true, "delivered", 12)
+            .await
+            .is_err());
+        assert_eq!(store.next_due(12).await.unwrap(), Some(12));
+        store
+            .record_outcome("exec-1", true, "delivered", 13)
+            .await
+            .unwrap();
+        assert_eq!(store.next_due(13).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_future_schedule_waits_until_it_is_due() {
+        let store = store().await;
+        assert_eq!(store.next_due(10).await.unwrap(), None);
+        store
+            .accept(draft("conversation", "causal", "exec-1", 80), 1)
+            .await
+            .unwrap();
+        assert_eq!(store.next_due(10).await.unwrap(), Some(80));
+        assert_eq!(store.next_due(80).await.unwrap(), Some(80));
     }
 }

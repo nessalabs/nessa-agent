@@ -23,7 +23,8 @@ pub use receiver::{
     ReceiverTransitionError,
 };
 pub use scheduled_message::{
-    plan_continuation, ContinuationCause, ContinuationPlan, ObservedUsageLimit, OpenContinuation,
+    observed_limit_index, plan_continuation, ContinuationCause, ContinuationPlan, InvocationLimit,
+    ObservedUsageLimit, OpenContinuation,
 };
 pub use value_objects::{
     Capabilities, Capability, CommandHosts, ConversationDeletion, DeletionContradiction,

@@ -81,7 +81,7 @@ there, not as the owner.
 | Blocked | Preference off, reset not in the future, or user action | Blocked | No schedule row |
 | Blocked | Preference on and `resets_at_ms` is after the gateway clock | Scheduled | One row. Audit `scheduled`, initiator system or the person who enabled the preference. Card may say auto-resuming |
 | Scheduled | Same causal turn reports a later future reset | Scheduled | Same row, due time replaced. No second row |
-| Scheduled | Preference off, a later invocation exists, or agent/model changed | Cancelled | Audit `cancelled`. No submit |
+| Scheduled | Preference off, a later invocation exists (settled or not), or agent/model changed | Cancelled | Audit `cancelled`. No submit. A committed model change reconciles immediately |
 | Scheduled | Due, preference on, causal turn still the latest usage-limit failure, agent and model match | Delivering | One compare-and-set wins. Only that claim may submit |
 | Delivering | `submit_command` admits the stored execution id | Delivered | Audit `delivered` in a following transaction. One admission |
 | Delivering | `submit_command` returns deleted, not found, revoked, or the causal turn is no longer the usage limit | Refused | Audit `refused`. The command's own refusal is the deletion fact |
@@ -96,6 +96,13 @@ reset was still in the future is delivered after the process starts. Nothing
 promises that minute while the process is down. Two overlapping loops in one
 process, or two processes on the file, take the compare-and-set; the loser
 does not submit.
+
+A pass claims at most eight due rows. A scheduled row still due at that
+clock, or a row left delivering, is due on the next pass. The loop waits
+until the clock for that pass. It does not wait for a separate notification.
+A row due later waits until that time. The usage limit on the schedule is the
+newest invocation, and only when that invocation is itself the limit. A later
+turn with no saved result clears it.
 
 ## Invariants
 
@@ -128,6 +135,13 @@ does not submit.
     twice. A different error, a successful execution beside the limit, storage
     after the turn, or hook failures after it keep the sentence and
     `requiredWorkFailed`.
+12. The schedule observes a usage limit only when the newest invocation is
+    that limit. [`observed_limit_index`](../../crates/nessa-server/src/conversation/domain/scheduled_message.rs)
+    is the owner of that choice. A later invocation clears it, and the plan
+    cancels an open row.
+13. `next_due` is the owner of the loop's next wait. A scheduled row at or
+    before the clock, or any delivering row, is due now. Only a later
+    scheduled time waits.
 
 ## Card
 

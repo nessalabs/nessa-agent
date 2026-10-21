@@ -152,7 +152,10 @@ pub trait ScheduledMessageStore: Send + Sync {
     /// released claim is audited as `reset_moved`.
     fn claim_due(&self, now_ms: u64, limit: usize)
         -> ConversationFuture<'_, Vec<ScheduledMessage>>;
-    /// The soonest scheduled due time strictly after `now_ms`.
+    /// When the next pass should run. `Some(now_ms)` when a scheduled row is
+    /// already due or a row is still delivering, so a claim that stopped at
+    /// its limit, or a delivery audit that failed, is retried on the next
+    /// pass. Otherwise the soonest scheduled due time strictly after `now_ms`.
     fn next_due(&self, now_ms: u64) -> ConversationFuture<'_, Option<u64>>;
     /// The row's status text, when it exists.
     fn status(&self, execution_id: &str) -> ConversationFuture<'_, Option<String>>;
@@ -386,19 +389,13 @@ impl ConversationService {
         let Some(snapshot) = committed.snapshot() else {
             return Ok(None);
         };
-        let newest = snapshot
+        let classified = snapshot
             .invocations
             .iter()
-            .rev()
-            .find(|invocation| invocation.result.is_some());
-        let observed_invocation = newest.filter(|invocation| {
-            invocation
-                .result
-                .as_ref()
-                .and_then(|result| result.as_ref().err())
-                .and_then(nessa_sdk::application::agent_execution::agents::AgentError::usage_limit)
-                .is_some()
-        });
+            .map(invocation_limit)
+            .collect::<Vec<_>>();
+        let observed_invocation = crate::conversation::domain::observed_limit_index(&classified)
+            .map(|index| &snapshot.invocations[index]);
         let observed = observed_invocation.map(|invocation| {
             let limit = invocation
                 .result
@@ -682,6 +679,23 @@ fn floor_bytes(text: &str, max: usize) -> usize {
         end -= 1;
     }
     end
+}
+
+fn invocation_limit(
+    invocation: &nessa_sdk::application::agent_execution::sessions::storage::InvocationRecord,
+) -> crate::conversation::domain::InvocationLimit {
+    use crate::conversation::domain::InvocationLimit;
+    match invocation.result.as_ref() {
+        None => InvocationLimit::Unsettled,
+        Some(result) => match result
+            .as_ref()
+            .err()
+            .and_then(nessa_sdk::application::agent_execution::agents::AgentError::usage_limit)
+        {
+            Some(_) => InvocationLimit::UsageLimit,
+            None => InvocationLimit::Settled,
+        },
+    }
 }
 
 /// Rebuild the initiation a delivery submits under. A grant is checked again

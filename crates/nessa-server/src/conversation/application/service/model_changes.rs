@@ -267,6 +267,11 @@ impl ConversationService {
             selection.approval_mode,
             selection.effect,
         );
+        // Metadata already holds this model. Reconcile an open continuation
+        // now: changing away and back before the due time would otherwise
+        // hide the mismatch until delivery, when the model matches again.
+        self.consider_usage_limit(id, false, super::ScheduleActor::system())
+            .await;
         Ok(selection)
     }
 

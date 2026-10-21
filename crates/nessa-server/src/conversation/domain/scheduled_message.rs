@@ -89,10 +89,31 @@ pub enum ContinuationPlan {
     },
 }
 
+/// How one invocation bears on the usage-limit schedule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InvocationLimit {
+    /// No saved result. A queued, running, or stopped turn.
+    Unsettled,
+    /// The saved error is a usage limit.
+    UsageLimit,
+    /// A saved result that is not a usage limit.
+    Settled,
+}
+
+/// The index of the usage limit that may schedule, when the newest invocation
+/// is that limit. A later unsettled turn, or a later result that is not the
+/// limit, clears it. An open row is then cancelled as no longer blocked.
+pub fn observed_limit_index(invocations: &[InvocationLimit]) -> Option<usize> {
+    match invocations.last() {
+        Some(InvocationLimit::UsageLimit) => Some(invocations.len() - 1),
+        _ => None,
+    }
+}
+
 /// `preference_on` is the gateway preference. `now_ms` is the gateway clock.
-/// `observed` is the newest settled usage limit when that limit is still the
-/// newest settled result. `enabled_by_person` selects the accept cause when
-/// the preference change is what made the row eligible.
+/// `observed` is set only when [`observed_limit_index`] names a usage limit.
+/// `enabled_by_person` selects the accept cause when the preference change is
+/// what made the row eligible.
 pub fn plan_continuation(
     preference_on: bool,
     now_ms: u64,
@@ -329,6 +350,29 @@ mod tests {
                 cancel: ContinuationCause::Superseded,
                 due_at_ms: 90,
                 cause: ContinuationCause::PreferenceEnabled,
+            }
+        );
+    }
+
+    #[test]
+    fn a_later_turn_clears_the_limit_even_when_it_has_no_result() {
+        use InvocationLimit::{Settled, Unsettled, UsageLimit};
+        assert_eq!(observed_limit_index(&[UsageLimit, Unsettled]), None);
+        assert_eq!(observed_limit_index(&[UsageLimit, Settled]), None);
+        assert_eq!(observed_limit_index(&[Settled, UsageLimit]), Some(1));
+        assert_eq!(observed_limit_index(&[]), None);
+        assert_eq!(
+            plan_continuation(
+                true,
+                10,
+                "claude",
+                "opus",
+                None,
+                Some(&open(50, false)),
+                false
+            ),
+            ContinuationPlan::Cancel {
+                cause: ContinuationCause::NoLongerBlocked,
             }
         );
     }
