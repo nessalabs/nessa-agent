@@ -805,8 +805,12 @@ impl ConversationService {
                             }
                         }
                         Err(error) => {
+                            catch_up_failures = catch_up_failures.saturating_add(1);
+                            let retry = catch_up_backoff(catch_up_failures);
+                            catch_up_wait = Some(retry);
                             tracing::warn!(
                                 %error,
+                                retry_ms = retry,
                                 "the usage-limit preference could not be read; the catch-up scan waits"
                             );
                         }
@@ -1370,6 +1374,8 @@ mod catalogue_pages {
         fail_open: AtomicBool,
         /// While set, a delivery pass finds nothing due instead of failing the read.
         idle_delivery: AtomicBool,
+        /// `preference` fails this many times, then returns the stored boolean.
+        preference_failures: AtomicUsize,
     }
 
     impl RecordingStore {
@@ -1387,6 +1393,7 @@ mod catalogue_pages {
                 opened: Mutex::new(Vec::new()),
                 fail_open: AtomicBool::new(true),
                 idle_delivery: AtomicBool::new(false),
+                preference_failures: AtomicUsize::new(0),
             }
         }
 
@@ -1409,6 +1416,10 @@ mod catalogue_pages {
 
     impl ScheduledMessageStore for RecordingStore {
         fn preference(&self) -> ConversationFuture<'_, bool> {
+            if self.preference_failures.load(Ordering::SeqCst) > 0 {
+                self.preference_failures.fetch_sub(1, Ordering::SeqCst);
+                return refused();
+            }
             let enabled = self.enabled.load(Ordering::SeqCst);
             Box::pin(async move { Ok(enabled) })
         }
@@ -2640,6 +2651,86 @@ mod catalogue_pages {
                 .filter(|owner| owner.as_str() == "person-a")
                 .count()
                 >= 2
+        );
+
+        retired.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("the schedule loop did not stop")
+            .unwrap();
+    }
+
+    /// A preference read that fails must not park the loop when delivery has
+    /// nothing due. The next pass, after the backoff, traverses the owners.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_preference_read_retries_catch_up_when_nothing_is_due() {
+        let id = ConversationId::new("33333333-3333-4333-8333-333333333333").unwrap();
+        let conversation = crate::conversation::domain::Conversation::restore(
+            id.clone(),
+            OrganizationId::new("org-b").unwrap(),
+            PrincipalId::new("person-b").unwrap(),
+            "desktop".into(),
+            "create".into(),
+            1,
+            None,
+            ConversationModelId::new("opus").unwrap(),
+            ConversationApprovalMode::Ask,
+        )
+        .unwrap();
+        let repository = Arc::new(MemoryRepository::default());
+        repository
+            .records
+            .lock()
+            .unwrap()
+            .insert(id.clone(), conversation.clone());
+        let listing = Arc::new(FailThenPlan {
+            conversation,
+            summary: ConversationSummary::new(None, None, 1, false).unwrap(),
+            seen: Mutex::new(Vec::new()),
+            failed_pages: AtomicUsize::new(1),
+        });
+        let service = service_over(repository, listing.clone(), Arc::new(TestClock));
+        let store = Arc::new(RecordingStore::new(true));
+        store.fail_open.store(false, Ordering::SeqCst);
+        store.idle_delivery.store(true, Ordering::SeqCst);
+        store.preference_failures.store(1, Ordering::SeqCst);
+        service.bind_scheduled_messages(store.clone());
+        let retired = service.inner.retired.clone();
+        let task = tokio::spawn(async move {
+            service.run_scheduled_messages().await;
+        });
+
+        let saw_failure = tokio::time::timeout(Duration::from_secs(5), async {
+            while store.preference_failures.load(Ordering::SeqCst) > 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(saw_failure.is_ok(), "the preference read did not fail");
+        assert!(store.opened.lock().unwrap().is_empty());
+        assert!(listing.seen.lock().unwrap().is_empty());
+
+        tokio::time::sleep(Duration::from_millis(SCHEDULE_RETRY_MS - 1)).await;
+        tokio::task::yield_now().await;
+        assert!(store.opened.lock().unwrap().is_empty());
+        assert!(listing.seen.lock().unwrap().is_empty());
+
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        let planned = tokio::time::timeout(Duration::from_secs(5), async {
+            while !store
+                .opened
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|opened| opened == &id.to_string())
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            planned.is_ok(),
+            "catch-up did not run after the preference read failed"
         );
 
         retired.send_replace(true);
