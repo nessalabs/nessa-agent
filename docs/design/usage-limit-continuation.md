@@ -86,9 +86,10 @@ rewrite the audit rows already stored.
 `next_due` ignores them, `open` does not return them, and `accept` does not
 move them. `cancelled` is not open either, so a later causal turn can still
 be accepted beside it. The same causal turn can leave `cancelled` and become
-`scheduled` again when `accept` still sees the preference revision enabled
-and the history generation it observed. The partial unique index covers only
-`scheduled`, `delivering`, and `submitting`.
+`scheduled` again when `accept` still sees the stale-work token it observed:
+the preference revision enabled, the history generation, and the agent and
+model. The partial unique index covers only `scheduled`, `delivering`, and
+`submitting`.
 
 | Status | What is true |
 | --- | --- |
@@ -122,7 +123,7 @@ and the history generation it observed. The partial unique index covers only
 | none | Settlement's plan returns an error, and catch-up is already complete | `consider_usage_limit` | reconcile debt | One `reconcile_retry` row: the conversation, how many attempts have failed, and `retry_at_ms`. The loop retries that plan at that time. A debt the database refuses stays in this process until a later pass writes it or the plan commits. A plan that commits deletes the debt |
 | `submitting` | Preference off, and `fence_until_ms` is at or before the clock | `record_preference_decision`, `set_preference`, or `retire_unfenced_submissions` | `cancelled` | Status and audit. A later pass waits until a still-live lease and then cancels it |
 | `submitting` | Preference off, and the lease is still live | the owning process | `submitting` | The submit finishes into `delivered`, `refused`, or `unconfirmed` |
-| `scheduled` or `delivering` | An applied model change | `commit_applied_model_plan`, from `change_model` or from `recover_model_change` | `cancelled` or `scheduled` | An applied transition returns only after the plan commits, including one recovery finishes from a stopped request. A failed plan stays owed. The next open read or submit runs it again. A refusal is not reconciled. Delivery does not submit while the plan returns an error |
+| `scheduled` or `delivering` | An applied model change | `commit_applied_model_plan`, from `change_model` or from `recover_model_change` | `cancelled` or `scheduled` | The plan seals the new agent and model as the next history generation even when the session position does not move, in the same transaction as the row change. A plan that read the previous generation writes nothing. An applied transition returns only after the plan commits, including one recovery finishes from a stopped request. A failed plan stays owed. The next open read or submit runs it again. A refusal is not reconciled. Delivery does not submit while the plan returns an error |
 | preference | Cedar allow or deny | `record_preference_decision` | the stored boolean, unchanged on a deny | One audit with the policy ids, and the request's receipt, in the same transaction as any preference write. An enable's receipt is `pending` until the scan settles or the rollback commits. A disable and a deny finish in that transaction. A failed audit leaves the preference and writes no receipt. A retry of a finished request returns the receipt and does not apply again. A retry of `pending` resumes the scan or the rollback. A different input for the same request is a conflict and writes nothing. An allow publishes every followed conversation. A deny does not |
 | any row that still holds a prompt | Conversation deletion | `erase_conversation` | `cancelled` for `scheduled`, `delivering`, and a `submitting` row whose lease has expired; the same status otherwise | Payload blanked and one new audit, one transaction |
 
@@ -180,11 +181,35 @@ confirmed view catches up. Both follow this order.
 | An authorized disable committed | A planner that read the previous revision calls `accept` | Open rows from the disable are cancelled. The new insert matches nothing and the preference stays off |
 | The person turned the preference on and the command has not finished | The checkbox is pending. The confirmed preference is still off. No row is auto-resuming | The checkbox shows on. The line under the title follows the confirmed preference and says when the limit resets |
 | The command has settled | The confirmed preference is not the pending choice, including when another client left it unchanged | The checkbox releases and shows the confirmed value. A later click is accepted. The line still follows the confirmed preference |
+| A toggle completion resolves or rejects | A newer click, or a confirmed view, already superseded that request | The completion applies only while its request is still the pending one. An older resolution does not settle the newer choice, and an older rejection does not clear it. Another click stays blocked |
 | A conversation view is assembled | The schedule store's preference or open read fails | The view is an error. It does not say the preference is off, and it does not drop auto-resuming. No schedule database stays off and has no row |
 | A conversation view is assembled | The preference could change between two reads | The view reads the boolean and the open row from one snapshot. Off has no auto-resuming row in that snapshot |
 | An enable with request A has committed | A later disable with request B has committed, and A is retried | A is one command. The retry returns A's result and does not turn the preference back on. The same request with a different enabled value, or a different person, is a conflict and writes nothing |
 | The person turns the preference off, then on, before the reset | The causal row is `cancelled`. The enable scan plans `Accept` | `accept` schedules that row again, so the card does not say scheduling failed. A `delivered`, `refused`, or `unconfirmed` row for that turn stays as it is |
 | The confirmed preference is on, the reset is still ahead, and no row is auto-resuming | Nothing | The line says scheduling failed |
+
+### Stale work
+
+A completion applies only when the token it observed is still current. The
+token is everything that can make that work stale. For a plan it is the
+history generation, the preference revision, and the agent and model, read
+before the session and compared in the same transaction as the row change.
+The same session incarnation and position are not current by themselves. A
+different agent or model, observed at the stored generation, seals the next
+generation without a new session position. An older generation writes
+nothing, including when the model string matches again. For a toggle the
+token is the request that created the pending choice. A miss writes no
+status and no audit.
+
+| Work | Token it observed | What makes that work stale | Completion while the token is current | A miss, a replay, or a superseded completion |
+| --- | --- | --- | --- | --- |
+| Enable | Revision R, generation G, the agent, and the model, plus this request's receipt | A later revision, a later generation, or a different agent or model sealed by a plan this scan did not read | The scan accepts, moves, defers, or cancels against that token. The receipt stays `pending` until the scan settles R or the rollback of this install commits | No row and no audit. A retry of `pending` resumes the scan or the rollback. It does not report success and does not apply a second change. A request that did not install this revision does not turn it off |
+| Catch-up | The token this pass reads for each owner | A preference change, a newer history, or a model change that commits during the walk | Every owner is planned against the token read for that conversation. Pages already planned stay planned. The wakeup is registered before the read | A failed page leaves catch-up pending. The next pass traverses every owner again. The preference is not treated as off. A plan that still holds an older generation writes nothing |
+| Model change | Generation G and the agent and model now on the conversation. The session incarnation and position may be unchanged | A plan that read an older generation, including the plan that read the previous model, and including that plan after the model changes back | The plan that observed G and a different agent or model stores that config, advances the generation by one, and cancels or replaces the open row in that transaction | The stale plan does not recreate the cancelled row and does not submit it. A later plan that reads the new generation may schedule the config stored then |
+| Submit | `fence_owner` and `fence_until_ms` for the lease. The plan token for cancel, defer, move, and accept | A live lease owned by another process, a `submitting` row, or a plan token that is no longer current | `begin_submit` moves `delivering` to `submitting` and is the only permission to call `submit_command`. A current plan cancels or defers `scheduled` and `delivering` only | A stale plan does not change a row a newer token kept. `begin_submit` does not enter a live foreign lease. A `submitting` row blocks a reopen of that conversation |
+| Outcome-write failure | The execution id, status `submitting`, and this process's `fence_owner` | The lease was lost, or the row is gone | `record_outcome` writes the outcome and its audit. A write that does not commit defers that same outcome: `retry_at_ms` and audit `submission_retry`, and no new execution id | A missed compare-and-set writes no status and no audit. A missing row is not a debt. A defer that does not commit leaves the previous retry time and the loop waits one second. The later pass records the same outcome |
+| Toggle completion | The request that created the pending choice | The confirmed view caught up to that choice, or a newer click issued another request | The completion settles that request. The checkbox shows the pending choice until then. The line under the title follows the confirmed preference | An older resolution does not settle the newer choice. An older rejection does not clear it. Another click stays blocked while the newer request is pending |
+| Replay | The receipt's request id. A plan replay reads the token again | The receipt is already `stored`, `refused`, or `failed`. A plan that still holds a generation, revision, or config it did not just read | A `pending` receipt resumes the scan or the rollback. A plan completes only against the token this pass read | A finished receipt is returned and is not applied again. An older generation writes nothing, including when the agent and model strings match the ones now stored |
 
 ### Crash between durable writes
 
@@ -207,7 +232,7 @@ confirmed view catches up. Both follow this order.
 | preference turns off | a live lease expires | preference off; `scheduled`, `delivering`, and expired `submitting` cancelled | A live lease finishes its submit. The off path waits until that lease and then cancels it, so a later enable does not deliver it |
 | `erase_conversation` commits | the tombstone is marked erased | prompt and identifying fields blank, one new audit per row that still held them | A crash before the commit leaves the payload. Deletion stays unfinished and the next attempt scrubs again. A second scrub writes no audit. Older audit rows stay |
 | the outcome is observed | the audit timestamp is chosen | the clock is read when the saved execution or the `submit_command` result is in hand | The audit names that observation. A reading taken before the submit is not reused |
-| an applied model change finishes | the continuation plan commits | the new model is durable; an open row may still name the previous model | This process keeps the conversation owed. The next open read or submit runs the plan. A crash drops that memory. Catch-up, while the preference is on, traverses every owner and runs the same plan against the model at that later pass |
+| an applied model change finishes | the continuation plan commits | the new model is durable; the fence generation has advanced when that plan committed; an open row may still name the previous model until it does | This process keeps the conversation owed. The next open read or submit runs the plan against the token it reads then. A plan that observed the previous generation does not recreate the row, including after the model changes back. A crash drops the owed set. Catch-up, while the preference is on, traverses every owner and runs the same plan |
 
 The wakeup is not a durable write. The loop creates the notification future
 before it reads the preference for the catch-up scan and before
@@ -255,12 +280,12 @@ renews it, and what releases it.
 | --- | --- | --- | --- | --- | --- |
 | Submit lease `fence_owner` / `fence_until_ms` | The process whose `begin_submit` committed | `fence_until_ms`. Thirty seconds, from the clock of that write | `renew_fence` extends it only while `fence_until_ms` is still ahead and `fence_owner` is this process. An error retries after one second until that deadline. At the deadline, `lost` is set and renewal stops. An expired lease is not extended | `record_outcome` only while `fence_owner` is still this process. A missed compare-and-set writes no status and no audit. Adoption is `begin_submit` after expiry. `release_submit` drops only this process's in-memory arm | Wait until `fence_until_ms`. Then adopt and submit, or record a saved execution without submitting again. It does not submit while the lease is live, and it does not record the former owner's outcome |
 | Preference revision | The decision transaction that changed the boolean | When a later decision commits a higher revision | An enable that finds the preference already on does not bump it. A finished scan settles the revision it observed | A disable, a direct write, or the revert of an unsettled enable | Accept, cancel, move, defer, and a dismissing hold match only while the revision the planner read is still current, in the same transaction as the row change. Accept also requires that revision to be enabled |
-| History generation `history_fence` | The plan that observed `(incarnation, position, generation)` | When a later plan that observed the stored `generation` seals a higher position, or a different incarnation. The stored generation then advances by one | Every plan reads `generation` before the session. Accept, cancel, move, defer, and a hold that dismisses a row compare that generation and the preference revision in the same transaction as the row change. The revision is compared first, so a miss does not advance the fence. The same incarnation and position are already sealed | A seal that observed the generation now stored replaces it and advances the number. A hold that found no row also cancels an open `scheduled` or `delivering` row in that transaction, when the revision still matches | A stale plan writes no status and no audit. An older generation writes nothing, including a different incarnation from before a reset. A switch does not cancel in one transaction and accept in another |
+| History generation `history_fence` | The plan that observed `(incarnation, position, generation, agent, model)` | When a later plan that observed the stored `generation` seals a higher position, a different incarnation, or a different agent or model. The stored generation then advances by one | Every plan reads `generation` before the session. Accept, cancel, move, defer, and a hold that dismisses a row compare that generation, the preference revision, and the agent and model in the same transaction as the row change. The revision is compared first, so a miss does not advance the fence. The same incarnation and position stay current only while the generation and the agent and model still match | A seal that observed the generation now stored replaces it and advances the number. A hold that found no row also cancels an open `scheduled` or `delivering` row in that transaction, when the token still matches | A stale plan writes no status and no audit. An older generation writes nothing, including the same incarnation and position and including a model that changed back. A switch does not cancel in one transaction and accept in another |
 | Preference request receipt | The request id, in the same transaction as its decision audit | When that receipt is marked `failed`, or when an enable's scan has settled and the receipt is `stored` | A retry of a finished receipt returns it and does not apply again. A retry of `pending` resumes the scan or the rollback | A failed audit writes no receipt. An enable stays `pending` until the scan settles or the rollback commits. A revert or a failure write that does not commit leaves `pending`. Success is not recorded before then | A different enabled value, or a different person, for the same request writes nothing |
 
 The submit lease is the only one with a clock. The other three expire when a newer writer commits, not when time passes. A submit whose lease expires while `submit_command` is still inside it does not record the outcome and does not write a retry time. The adopter owns that row.
 
-The history fence is what acceptance adds to the preference revision. `generation` is a number this store advances, not a clock and not the session incarnation. A plan reads it before the session. A later turn advances `position` inside one incarnation. A reset replaces the incarnation. Either replaces the fence only when the plan observed the generation stored at that write, and the number then advances. An accept, cancel, move, or defer that observed an older generation writes nothing, including when its incarnation is not the one now sealed. The row a newer plan already accepted stays scheduled. The row does not stay visible as auto-resuming until its due time.
+The history fence is what acceptance adds to the preference revision and the agent and model. `generation` is a number this store advances, not a clock and not the session incarnation. A plan reads it before the session. A later turn advances `position` inside one incarnation. A reset replaces the incarnation. A model or agent change does neither, and still advances the generation when the plan observed the generation stored then. Any of those replaces the fence only when the plan observed that generation, and the number then advances. An accept, cancel, move, or defer that observed an older generation writes nothing, including when its incarnation and position still match. The row a newer plan already accepted stays scheduled. The row does not stay visible as auto-resuming until its due time. The transitions are the stale-work table.
 
 A pass claims at most eight due rows. A scheduled row still due at that
 clock, a delivering row, or a submitting row whose retry time has arrived,
@@ -389,28 +414,36 @@ turn with no saved result clears it.
     retries after a bounded wait, including when nothing is due. A preference
     read that fails leaves catch-up pending; it does not treat the preference
     as off for the life of the process.
-19. Every schedule-row change is one compare-and-set against the history
-    generation and the preference revision that plan read. `accept` writes
-    only while that revision is still enabled and the history it observed is
-    still sealed, in that same transaction. Cancel, move, defer, and a hold
-    that dismisses an open row compare the revision first and then the
-    history, and write the row in that same transaction. A different revision
+19. Every completion in the stale-work table applies only while the token
+    it observed is still current, in the same transaction as the write it
+    finishes. For a plan that token is the history generation, the preference
+    revision, and the agent and model. `accept` writes only while that
+    revision is still enabled and the generation, agent, and model it
+    observed are still stored. Cancel, move, defer, and a hold that dismisses
+    an open row compare the revision first and then the generation and the
+    config, and write the row in that same transaction. A different revision
     does not advance the fence. The preference does not have to be on for a
-    cancel: the revision the plan read is the fence. The same incarnation and
-    position are that seal. A later position, or a different incarnation, is
-    sealed only when the plan observed the generation stored then. An older
-    generation writes nothing. A miss writes no status and no audit. A
-    preference change, or a newer history, that commits first leaves the
-    newer row as it is. A switch is one `accept`: that transaction cancels
-    the open row and inserts the replacement. A plan does not seal the
-    history in one transaction and change the row in another. A hold that
-    found no row cancels an open row the newer history does not keep, when
-    the revision still matches.
-    The card's line follows the confirmed preference.
-    The checkbox may show a pending choice until the command settles. Once it
-    has settled, a confirmed value that is not that choice releases the
-    checkbox. Scheduling failed is the line only when that confirmed
-    preference is on, the reset is still ahead, and no row is auto-resuming.
+    cancel: the revision the plan read is part of the token. The same
+    incarnation and position are current only while the generation and the
+    agent and model still match. A later position, a different incarnation,
+    or a different agent or model is sealed only when the plan observed the
+    generation stored then, and the number then advances. An older generation
+    writes nothing, including when the model string matches again. A miss
+    writes no status and no audit. A preference change, a newer history, or a
+    newer config that commits first leaves the newer row as it is. A switch
+    is one `accept`: that transaction cancels the open row and inserts the
+    replacement. A plan does not seal the token in one transaction and change
+    the row in another. A hold that found no row cancels an open row the
+    newer token does not keep.
+    The card's line follows the confirmed preference. The checkbox may show
+    a pending choice until that request's completion is still current. A
+    completion applies only for the request that created the pending choice.
+    A confirmed view, or a newer click, supersedes it. An older resolution
+    does not settle the newer choice, and an older rejection does not clear
+    it. Once the current request has settled, a confirmed value that is not
+    that choice releases the checkbox. Scheduling failed is the line only
+    when that confirmed preference is on, the reset is still ahead, and no
+    row is auto-resuming.
 20. A failed turn may carry `requiredWorkFailed` beside a usage limit or an
     authentication refusal. The turn is failed and the diagnostic is present.
     The client accepts that view. A required-work flag with neither typed
@@ -466,7 +499,10 @@ disagrees with the gateway does not move that decision. The checkbox is the gate
 choice has not landed, the checkbox shows it and the line under the title
 keeps the confirmed preference. After the command has settled, a confirmed
 value that is not the pending choice releases the checkbox, so another
-client's preference is what the next click changes.
+client's preference is what the next click changes. A completion is the
+request that created the pending choice. A confirmed view or a newer click
+supersedes that request. An older resolution or rejection does not change
+the choice that replaced it.
 
 ## Review brief
 

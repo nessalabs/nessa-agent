@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   USAGE_LIMIT_TITLE,
   USAGE_LIMIT_TOGGLE,
@@ -11,7 +11,10 @@ import "./usage-limit-card.css"
  * The usage-limit card: the title, when the limit ends, and the gateway
  * preference. The checkbox shows the choice at once and keeps it until the
  * refreshed view agrees, the command fails, or the command has settled and
- * the confirmed preference is a different value. The line under the title
+ * the confirmed preference is a different value. A completion applies only
+ * for the request that created the pending choice. A confirmed view or a
+ * newer click supersedes that request, and an older resolution or rejection
+ * does not change the choice that replaced it. The line under the title
  * follows the confirmed preference, so a choice that has not landed does
  * not read as a scheduling failure. `nowMs` is this client's clock. A reset
  * that arrived on a view is compared through `resetsAtClientMs`, which the
@@ -32,9 +35,11 @@ export function UsageLimitCard({
 }) {
   const [pending, setPending] = useState<boolean | null>(null)
   const [settled, setSettled] = useState(false)
+  const request = useRef(0)
   useEffect(() => {
     if (pending === null) return
     if (pending === enabled || settled) {
+      request.current += 1
       setPending(null)
       setSettled(false)
     }
@@ -65,11 +70,17 @@ export function UsageLimitCard({
               return
             }
             const next = event.target.checked
+            const token = request.current + 1
+            request.current = token
             setPending(next)
             setSettled(false)
             void Promise.resolve(onChange(next)).then(
-              () => setSettled(true),
-              () => setPending(null),
+              () => {
+                setSettled((current) => (request.current === token ? true : current))
+              },
+              () => {
+                setPending((current) => (request.current === token ? null : current))
+              },
             )
           }}
         />

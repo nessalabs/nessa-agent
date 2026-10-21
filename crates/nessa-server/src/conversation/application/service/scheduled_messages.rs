@@ -132,13 +132,34 @@ pub struct ReconcileRetry {
 /// fence had no row. `position` is ordered only inside one `incarnation`. A
 /// different incarnation, or a later position, replaces the fence only when
 /// `generation` is still the one stored. The same incarnation and position
-/// are that sealed history. An older generation writes nothing.
+/// are current only when that generation is still stored. An older generation
+/// writes nothing, including when the incarnation and position still match.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryGeneration {
     pub incarnation: String,
     pub position: u64,
     /// The fence generation this plan observed. 0 is an empty fence.
     pub generation: u64,
+}
+
+/// Everything a plan read that a later write can make stale.
+///
+/// A schedule-row change compares this token in one transaction: the history
+/// generation, the preference revision, and the agent and model. The same
+/// session history is not current by itself. A different agent or model,
+/// observed at the stored generation, seals the next generation without a new
+/// session position. An older generation writes nothing, even when the model
+/// has changed back to the one this plan read. A preference revision that no
+/// longer matches writes nothing and does not advance the fence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanToken {
+    pub history: HistoryGeneration,
+    pub preference_revision: u64,
+    /// The agent the plan read. Fixed for a conversation until it changes.
+    pub agent: String,
+    /// The model the plan read. A change lives in conversation metadata and
+    /// does not advance the session incarnation or position.
+    pub model: String,
 }
 
 /// What accepting a row needs. `execution_id` is used only when no row exists
@@ -166,8 +187,20 @@ pub struct ScheduleDraft {
     /// that revision is still enabled.
     pub preference_revision: u64,
     /// The history generation the planner read. The insert matches only while
-    /// a newer generation has not been sealed.
+    /// that generation, and the agent and model, are still the ones stored.
     pub history: HistoryGeneration,
+}
+
+impl ScheduleDraft {
+    /// The compare-and-set token this draft observed.
+    pub(crate) fn token(&self) -> PlanToken {
+        PlanToken {
+            history: self.history.clone(),
+            preference_revision: self.preference_revision,
+            agent: self.agent.clone(),
+            model: self.model.clone(),
+        }
+    }
 }
 
 /// How a fenced submit ended.
@@ -289,51 +322,47 @@ pub trait ScheduledMessageStore: Send + Sync {
     /// The open row for one conversation, if it is scheduled or delivering.
     fn open(&self, conversation: &str) -> ConversationFuture<'_, Option<ScheduledMessage>>;
     /// Insert the row, or move its due time when it is still open, only while
-    /// `draft.preference_revision` is still the enabled preference and
-    /// `draft.history` is still the sealed generation. A finished causal turn,
-    /// a revision a preference change has replaced, or a newer history returns
-    /// `None`.
+    /// the draft's token is current: the preference revision is still enabled,
+    /// and the history generation, agent, and model are still the ones stored.
+    /// A finished causal turn, a revision a preference change has replaced, or
+    /// an older generation returns `None`.
     fn accept(
         &self,
         draft: ScheduleDraft,
         at_ms: u64,
     ) -> ConversationFuture<'_, Option<ScheduledMessage>>;
     /// Move a scheduled row's due time and audit that move with the status change.
-    /// The history generation and the preference revision are compared in that
-    /// same transaction. A miss writes nothing and does not advance the fence.
+    /// `token` is compared in that same transaction. A miss writes nothing and
+    /// does not advance the fence.
     fn move_due(
         &self,
         conversation: &str,
         causal_execution: &str,
         due_at_ms: u64,
-        history: &HistoryGeneration,
-        preference_revision: u64,
+        token: &PlanToken,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool>;
     /// Release a delivering claim back to scheduled at a later due time.
-    /// The history generation and the preference revision are compared in that
-    /// same transaction. A miss writes nothing and does not advance the fence.
+    /// `token` is compared in that same transaction. A miss writes nothing and
+    /// does not advance the fence.
     fn defer_claim(
         &self,
         conversation: &str,
         causal_execution: &str,
         due_at_ms: u64,
-        history: &HistoryGeneration,
-        preference_revision: u64,
+        token: &PlanToken,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool>;
-    /// Cancel the open row for one conversation. The history generation and
-    /// the preference revision are compared in that same transaction. A miss
-    /// writes nothing and does not advance the fence. The preference does not
-    /// have to be on: a plan that read this revision while it was off is the
-    /// backstop that cancels the row.
+    /// Cancel the open row for one conversation. `token` is compared in that
+    /// same transaction. A miss writes nothing and does not advance the fence.
+    /// The preference does not have to be on: a plan that read this revision
+    /// while it was off is the backstop that cancels the row.
     fn cancel_open(
         &self,
         conversation: &str,
         cause: ContinuationCause,
         actor: ScheduleActor,
-        history: &HistoryGeneration,
-        preference_revision: u64,
+        token: &PlanToken,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool>;
     /// Claim due scheduled rows, then return those claims, rows already
@@ -399,32 +428,25 @@ pub trait ScheduledMessageStore: Send + Sync {
         let _ = conversation;
         Box::pin(async { Ok(0) })
     }
-    /// Seal `history` as the generation this plan observed, when
-    /// `preference_revision` is still the preference. A different revision
-    /// writes nothing, including the fence. A later position, or a different
-    /// incarnation, replaces the fence only when `history` observed the
-    /// generation now stored. An older generation writes nothing and returns
-    /// false. The same incarnation and position are already sealed and return
-    /// true. When `dismiss_open` is true and both fences match, an open
+    /// Seal `token` when it is still current. A different revision writes
+    /// nothing, including the fence. A later position, a different
+    /// incarnation, or a different agent or model replaces the fence only
+    /// when `token` observed the generation now stored, and that number then
+    /// advances. An older generation writes nothing and returns false,
+    /// including when the incarnation and position still match. The same
+    /// history and the same agent and model are already sealed and return
+    /// true. When `dismiss_open` is true and the token matches, an open
     /// `scheduled` or `delivering` row is cancelled in that same transaction.
     /// The default seals nothing.
     fn note_history(
         &self,
         conversation: &str,
-        history: &HistoryGeneration,
-        preference_revision: u64,
+        token: &PlanToken,
         dismiss_open: bool,
         actor: ScheduleActor,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool> {
-        let _ = (
-            conversation,
-            history,
-            preference_revision,
-            dismiss_open,
-            actor,
-            at_ms,
-        );
+        let _ = (conversation, token, dismiss_open, actor, at_ms);
         Box::pin(async { Ok(true) })
     }
     /// Mark this request's pending receipt failed. A stored or refused
@@ -1039,7 +1061,12 @@ impl ConversationService {
                 model: row.model.clone(),
             });
         let now_ms = self.inner.clock.unix_milliseconds();
-        let history = facts.history.clone();
+        let token = PlanToken {
+            history: facts.history.clone(),
+            preference_revision: standing.revision,
+            agent: facts.agent.clone(),
+            model: facts.model.clone(),
+        };
         let decided = crate::conversation::domain::plan_continuation(
             standing.enabled,
             now_ms,
@@ -1051,17 +1078,15 @@ impl ConversationService {
         );
         match decided {
             ContinuationPlan::Hold => {
-                // No row was kept. Seal this generation and dismiss a row a
-                // stale accept may have inserted after the plan was read.
-                // The revision is part of that same transaction. An empty
+                // No row was kept. Seal this token and dismiss a row a stale
+                // accept may have inserted after the plan was read. An empty
                 // incarnation was not a committed history and does not move
                 // the fence.
-                if !history.incarnation.is_empty() {
+                if !token.history.incarnation.is_empty() {
                     store
                         .note_history(
                             &facts.conversation,
-                            &history,
-                            standing.revision,
+                            &token,
                             open.is_none(),
                             actor.clone(),
                             now_ms,
@@ -1079,8 +1104,7 @@ impl ConversationService {
                         &id.to_string(),
                         &facts_causal(&facts),
                         due_at_ms,
-                        &history,
-                        standing.revision,
+                        &token,
                         now_ms,
                     )
                     .await?;
@@ -1091,29 +1115,21 @@ impl ConversationService {
                         &id.to_string(),
                         &facts_causal(&facts),
                         due_at_ms,
-                        &history,
-                        standing.revision,
+                        &token,
                         now_ms,
                     )
                     .await?;
             }
             ContinuationPlan::Cancel { cause } => {
                 store
-                    .cancel_open(
-                        &id.to_string(),
-                        cause,
-                        actor,
-                        &history,
-                        standing.revision,
-                        now_ms,
-                    )
+                    .cancel_open(&id.to_string(), cause, actor, &token, now_ms)
                     .await?;
             }
             ContinuationPlan::Switch {
                 due_at_ms, cause, ..
             } => {
                 // Accept cancels the open row and inserts the replacement in
-                // one transaction, against the history and revision it read.
+                // one transaction, against the token it read.
                 self.accept_usage_limit(store, &facts, due_at_ms, cause, actor, standing)
                     .await?;
             }
@@ -2016,7 +2032,7 @@ mod catalogue_pages {
     use nessa_sdk::domain::agent_execution::sessions::SessionId;
 
     use super::{
-        renew_while_held, HistoryGeneration, PreferenceCommandOutcome, PreferenceCommandReceipt,
+        renew_while_held, PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt,
         PreferenceReading, PreferenceUpdate, RecordedPreference, ScheduleActor, ScheduleDraft,
         ScheduleSettlement, ScheduledMessage, ScheduledMessageStore, FENCE_LEASE_MS,
         FENCE_RENEW_EVERY_MS, FENCE_RENEW_RETRY_MS, SCHEDULE_RETRY_MS,
@@ -2283,8 +2299,7 @@ mod catalogue_pages {
             _: &str,
             _: &str,
             _: u64,
-            _: &HistoryGeneration,
-            _: u64,
+            _: &PlanToken,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
             refused()
@@ -2294,8 +2309,7 @@ mod catalogue_pages {
             _: &str,
             _: &str,
             _: u64,
-            _: &HistoryGeneration,
-            _: u64,
+            _: &PlanToken,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
             refused()
@@ -2305,8 +2319,7 @@ mod catalogue_pages {
             _: &str,
             _: ContinuationCause,
             _: ScheduleActor,
-            _: &HistoryGeneration,
-            _: u64,
+            _: &PlanToken,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
             refused()
@@ -2746,8 +2759,7 @@ mod catalogue_pages {
             _: &str,
             _: &str,
             _: u64,
-            _: &HistoryGeneration,
-            _: u64,
+            _: &PlanToken,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
             Box::pin(async { Err(ConversationError::Unavailable) })
@@ -2757,8 +2769,7 @@ mod catalogue_pages {
             _: &str,
             _: &str,
             _: u64,
-            _: &HistoryGeneration,
-            _: u64,
+            _: &PlanToken,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
             Box::pin(async { Err(ConversationError::Unavailable) })
@@ -2768,8 +2779,7 @@ mod catalogue_pages {
             _: &str,
             _: ContinuationCause,
             _: ScheduleActor,
-            _: &HistoryGeneration,
-            _: u64,
+            _: &PlanToken,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
             Box::pin(async { Err(ConversationError::Unavailable) })
@@ -3937,8 +3947,7 @@ mod catalogue_pages {
             _: &str,
             _: &str,
             _: u64,
-            _: &HistoryGeneration,
-            _: u64,
+            _: &PlanToken,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
             store_error()
@@ -3948,8 +3957,7 @@ mod catalogue_pages {
             _: &str,
             _: &str,
             _: u64,
-            _: &HistoryGeneration,
-            _: u64,
+            _: &PlanToken,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
             store_error()
@@ -3959,8 +3967,7 @@ mod catalogue_pages {
             _: &str,
             _: ContinuationCause,
             _: ScheduleActor,
-            _: &HistoryGeneration,
-            _: u64,
+            _: &PlanToken,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
             store_error()

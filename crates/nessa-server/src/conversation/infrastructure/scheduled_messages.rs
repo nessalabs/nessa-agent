@@ -12,7 +12,7 @@
 //! each commit their own audit, with the policy ids, before the command result.
 
 use crate::conversation::application::{
-    ConversationError, ConversationFuture, HistoryGeneration, PreferenceCommandOutcome,
+    ConversationError, ConversationFuture, PlanToken, PreferenceCommandOutcome,
     PreferenceCommandReceipt, PreferenceReading, PreferenceUpdate, ReconcileRetry,
     RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage,
     ScheduledMessageStore, UnsettledEnable, UsageLimitSnapshot, FENCE_LEASE_MS,
@@ -401,68 +401,94 @@ fn lease_until(now_ms: u64) -> Result<i64, ConversationError> {
     millis(now_ms.saturating_add(FENCE_LEASE_MS))
 }
 
-/// Record `history` when it is still current.
+/// Record `token` when it is still current.
 ///
-/// The same incarnation and position are the history already sealed. A later
-/// position, or a different incarnation, replaces that row only when
-/// `history.generation` is the generation stored now, and the stored
+/// The generation is compared before the session history. The same
+/// incarnation and position are current only when that generation and the
+/// agent and model still match. A later position, a different incarnation,
+/// or a different agent or model replaces the row only when
+/// `token.history.generation` is the generation stored now, and the stored
 /// generation then advances by one. An older generation writes nothing,
-/// including when its incarnation is not the one sealed. An empty incarnation
-/// is not a generation and leaves the fence where it is.
+/// including when the incarnation and position still match and when the
+/// model has changed back. An empty incarnation is not a generation and
+/// leaves the fence where it is.
 fn claim_history(
     transaction: &Transaction<'_>,
     conversation: &str,
-    history: &HistoryGeneration,
+    token: &PlanToken,
 ) -> Result<bool, ConversationError> {
+    let history = &token.history;
     if history.incarnation.is_empty() {
         return Ok(true);
     }
     let observed = i64::try_from(history.position).map_err(|_| ConversationError::InvalidInput)?;
     let observed_generation =
         i64::try_from(history.generation).map_err(|_| ConversationError::InvalidInput)?;
-    let stored: Option<(String, i64, i64)> = transaction
+    let stored: Option<(String, i64, i64, String, String)> = transaction
         .query_row(
-            "SELECT incarnation, position, generation FROM history_fence \
+            "SELECT incarnation, position, generation, agent, model FROM history_fence \
              WHERE conversation = ?1",
             params![conversation],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .optional()
         .map_err(failed)?;
-    let Some((incarnation, position, generation)) = stored else {
+    let Some((incarnation, position, generation, agent, model)) = stored else {
         if observed_generation != 0 {
             return Ok(false);
         }
         transaction
             .execute(
-                "INSERT INTO history_fence (conversation, incarnation, position, generation) \
-                 VALUES (?1, ?2, ?3, 1)",
-                params![conversation, history.incarnation, observed],
+                "INSERT INTO history_fence \
+                 (conversation, incarnation, position, generation, agent, model) \
+                 VALUES (?1, ?2, ?3, 1, ?4, ?5)",
+                params![
+                    conversation,
+                    history.incarnation,
+                    observed,
+                    token.agent,
+                    token.model
+                ],
             )
             .map_err(failed)?;
         return Ok(true);
     };
-    if incarnation == history.incarnation && position == observed {
-        return Ok(true);
-    }
     if observed_generation != generation {
         return Ok(false);
     }
     if incarnation == history.incarnation && observed < position {
         return Ok(false);
     }
+    if incarnation == history.incarnation
+        && position == observed
+        && agent == token.agent
+        && model == token.model
+    {
+        return Ok(true);
+    }
     let next = generation
         .checked_add(1)
         .ok_or(ConversationError::InvalidInput)?;
     let changed = transaction
         .execute(
-            "UPDATE history_fence SET incarnation = ?2, position = ?3, generation = ?4 \
-             WHERE conversation = ?1 AND generation = ?5",
+            "UPDATE history_fence \
+             SET incarnation = ?2, position = ?3, generation = ?4, agent = ?5, model = ?6 \
+             WHERE conversation = ?1 AND generation = ?7",
             params![
                 conversation,
                 history.incarnation,
                 observed,
                 next,
+                token.agent,
+                token.model,
                 generation
             ],
         )
@@ -470,18 +496,17 @@ fn claim_history(
     Ok(changed == 1)
 }
 
-/// The preference revision and the history this plan read, checked before
-/// the row changes. A different revision does not advance the history fence.
+/// The token this plan read, checked before the row changes. A different
+/// preference revision does not advance the history fence.
 fn claim_plan(
     transaction: &Transaction<'_>,
     conversation: &str,
-    history: &HistoryGeneration,
-    preference_revision: u64,
+    token: &PlanToken,
 ) -> Result<bool, ConversationError> {
-    if standing(transaction)?.revision != preference_revision {
+    if standing(transaction)?.revision != token.preference_revision {
         return Ok(false);
     }
-    claim_history(transaction, conversation, history)
+    claim_history(transaction, conversation, token)
 }
 
 struct PreferenceStanding {
@@ -998,24 +1023,19 @@ impl ScheduledMessageStore for LocalScheduledMessages {
     fn note_history(
         &self,
         conversation: &str,
-        history: &HistoryGeneration,
-        preference_revision: u64,
+        token: &PlanToken,
         dismiss_open: bool,
         actor: ScheduleActor,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool> {
         let conversation = conversation.to_owned();
-        let history = history.clone();
+        let token = token.clone();
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
-            if standing(&transaction)?.revision != preference_revision {
-                transaction.commit().map_err(failed)?;
-                return Ok(false);
-            }
-            let current = claim_history(&transaction, &conversation, &history)?;
+            let current = claim_plan(&transaction, &conversation, &token)?;
             if current && dismiss_open {
                 cancel_matching(
                     &transaction,
@@ -1080,15 +1100,16 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
             let due = millis(draft.due_at_ms)?;
+            let token = draft.token();
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
             let current = standing(&transaction)?;
-            if !current.enabled || current.revision != draft.preference_revision {
+            if !current.enabled || current.revision != token.preference_revision {
                 transaction.commit().map_err(failed)?;
                 return Ok(None);
             }
-            if !claim_history(&transaction, &draft.conversation, &draft.history)? {
+            if !claim_history(&transaction, &draft.conversation, &token)? {
                 transaction.commit().map_err(failed)?;
                 return Ok(None);
             }
@@ -1303,20 +1324,19 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         conversation: &str,
         causal_execution: &str,
         due_at_ms: u64,
-        history: &HistoryGeneration,
-        preference_revision: u64,
+        token: &PlanToken,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool> {
         let conversation = conversation.to_owned();
         let causal_execution = causal_execution.to_owned();
-        let history = history.clone();
+        let token = token.clone();
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
             let due = millis(due_at_ms)?;
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
-            if !claim_plan(&transaction, &conversation, &history, preference_revision)? {
+            if !claim_plan(&transaction, &conversation, &token)? {
                 transaction.commit().map_err(failed)?;
                 return Ok(false);
             }
@@ -1367,20 +1387,19 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         conversation: &str,
         causal_execution: &str,
         due_at_ms: u64,
-        history: &HistoryGeneration,
-        preference_revision: u64,
+        token: &PlanToken,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool> {
         let conversation = conversation.to_owned();
         let causal_execution = causal_execution.to_owned();
-        let history = history.clone();
+        let token = token.clone();
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
             let due = millis(due_at_ms)?;
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
-            if !claim_plan(&transaction, &conversation, &history, preference_revision)? {
+            if !claim_plan(&transaction, &conversation, &token)? {
                 transaction.commit().map_err(failed)?;
                 return Ok(false);
             }
@@ -1429,18 +1448,17 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         conversation: &str,
         cause: ContinuationCause,
         actor: ScheduleActor,
-        history: &HistoryGeneration,
-        preference_revision: u64,
+        token: &PlanToken,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool> {
         let conversation = conversation.to_owned();
-        let history = history.clone();
+        let token = token.clone();
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
-            if !claim_plan(&transaction, &conversation, &history, preference_revision)? {
+            if !claim_plan(&transaction, &conversation, &token)? {
                 transaction.commit().map_err(failed)?;
                 return Ok(false);
             }
@@ -2029,6 +2047,7 @@ impl ScrubRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conversation::application::HistoryGeneration;
 
     fn draft(conversation: &str, causal: &str, execution: &str, due: u64) -> ScheduleDraft {
         ScheduleDraft {
@@ -2088,14 +2107,33 @@ mod tests {
         person_as("toggle")
     }
 
-    /// The history `draft` seals on its first accept: incarnation `history`,
-    /// position 1. An exact match does not require the generation number.
+    /// The history a first accept seals: incarnation `history`, position 1,
+    /// generation 0. A later plan passes the generation the fence stored.
     fn observed_history() -> HistoryGeneration {
         HistoryGeneration {
             incarnation: "history".into(),
             position: 1,
             generation: 0,
         }
+    }
+
+    fn token(history: HistoryGeneration, preference_revision: u64) -> PlanToken {
+        PlanToken {
+            history,
+            preference_revision,
+            agent: "claude".into(),
+            model: "opus".into(),
+        }
+    }
+
+    async fn sealed_token(
+        store: &LocalScheduledMessages,
+        conversation: &str,
+        mut history: HistoryGeneration,
+        preference_revision: u64,
+    ) -> PlanToken {
+        history.generation = store.history_generation(conversation).await.unwrap();
+        token(history, preference_revision)
     }
 
     async fn open_messages() -> LocalScheduledMessages {
@@ -2142,11 +2180,9 @@ mod tests {
             .unwrap();
         assert_eq!(accepted.execution_id, "exec-1");
         assert!(!accepted.delivering);
-        let again = store
-            .accept(draft("conversation", "causal", "exec-2", 80), 11)
-            .await
-            .unwrap()
-            .unwrap();
+        let mut moved = draft("conversation", "causal", "exec-2", 80);
+        moved.history.generation = store.history_generation("conversation").await.unwrap();
+        let again = store.accept(moved, 11).await.unwrap().unwrap();
         assert_eq!(again.execution_id, "exec-1");
         assert_eq!(again.due_at_ms, 80);
         assert_eq!(
@@ -2343,26 +2379,19 @@ mod tests {
             Some("submitting")
         );
         let revision = held.preference().await.unwrap().revision;
+        let current = sealed_token(&held, "conversation", observed_history(), revision).await;
         assert!(!held
             .cancel_open(
                 "conversation",
                 ContinuationCause::ModelChanged,
                 ScheduleActor::system(),
-                &observed_history(),
-                revision,
+                &current,
                 4
             )
             .await
             .unwrap());
         assert!(!held
-            .defer_claim(
-                "conversation",
-                "causal",
-                80,
-                &observed_history(),
-                revision,
-                5
-            )
+            .defer_claim("conversation", "causal", 80, &current, 5)
             .await
             .unwrap());
         assert!(held
@@ -2391,8 +2420,9 @@ mod tests {
             .await
             .unwrap();
         store.claim_due(10, 4).await.unwrap();
+        let current = sealed_token(&store, "conversation", observed_history(), 1).await;
         assert!(store
-            .defer_claim("conversation", "causal", 80, &observed_history(), 1, 2)
+            .defer_claim("conversation", "causal", 80, &current, 2)
             .await
             .unwrap());
         assert!(!store.begin_submit("exec-1", 10).await.unwrap());
@@ -2407,13 +2437,13 @@ mod tests {
             .await
             .unwrap();
         changed.claim_due(10, 4).await.unwrap();
+        let current = sealed_token(&changed, "conversation", observed_history(), 1).await;
         assert!(changed
             .cancel_open(
                 "conversation",
                 ContinuationCause::ModelChanged,
                 ScheduleActor::system(),
-                &observed_history(),
-                1,
+                &current,
                 2
             )
             .await
@@ -2659,10 +2689,9 @@ mod tests {
             .record_outcome("exec-1", ScheduleSettlement::Delivered, "delivered", 3)
             .await
             .unwrap();
-        store
-            .accept(draft("conversation", "later", "exec-2", 40), 4)
-            .await
-            .unwrap();
+        let mut later = draft("conversation", "later", "exec-2", 40);
+        later.history.generation = store.history_generation("conversation").await.unwrap();
+        store.accept(later, 4).await.unwrap();
         store.erase_conversation("conversation", 5).await.unwrap();
         let rows = {
             let connection = store.connection.lock().unwrap();
@@ -2803,6 +2832,7 @@ mod tests {
         let revision = store.preference().await.unwrap().revision;
         let mut again = draft("conversation", "causal", "exec-new", 90);
         again.preference_revision = revision;
+        again.history.generation = store.history_generation("conversation").await.unwrap();
         again.cause = ContinuationCause::PreferenceEnabled;
         again.actor = person();
         again.prompt = "again".into();
@@ -2854,6 +2884,7 @@ mod tests {
                 .unwrap();
             let mut retry = draft(conversation, causal, "exec-other", 90);
             retry.preference_revision = revision;
+            retry.history.generation = store.history_generation(conversation).await.unwrap();
             retry.cause = ContinuationCause::PreferenceEnabled;
             assert!(store.accept(retry, 7).await.unwrap().is_none());
             assert_eq!(
@@ -3044,7 +3075,13 @@ mod tests {
         stale.history = older.clone();
         assert!(store.accept(stale, 3).await.unwrap().is_some());
         assert!(store
-            .note_history("conversation", &newer, 1, true, ScheduleActor::system(), 4,)
+            .note_history(
+                "conversation",
+                &token(newer.clone(), 1),
+                true,
+                ScheduleActor::system(),
+                4,
+            )
             .await
             .unwrap());
         assert!(store.open("conversation").await.unwrap().is_none());
@@ -3054,6 +3091,7 @@ mod tests {
         assert!(store.open("conversation").await.unwrap().is_none());
         let mut current = draft("conversation", "later", "exec-new", 50);
         current.history = newer;
+        current.history.generation = store.history_generation("conversation").await.unwrap();
         assert!(store.accept(current, 6).await.unwrap().is_some());
         assert_eq!(
             store.status("exec-new").await.unwrap().as_deref(),
@@ -3079,8 +3117,7 @@ mod tests {
         assert!(store
             .note_history(
                 "conversation",
-                &restored,
-                1,
+                &token(restored.clone(), 1),
                 true,
                 ScheduleActor::system(),
                 4,
@@ -3105,6 +3142,7 @@ mod tests {
         assert!(store.open("conversation").await.unwrap().is_none());
         let mut current = draft("conversation", "later", "exec-new", 50);
         current.history = restored;
+        current.history.generation = store.history_generation("conversation").await.unwrap();
         assert!(store.accept(current, 7).await.unwrap().is_some());
         assert_eq!(
             store.status("exec-new").await.unwrap().as_deref(),
@@ -3130,26 +3168,33 @@ mod tests {
             generation: 1,
         };
         assert!(store
-            .note_history("conversation", &newer, 1, false, ScheduleActor::system(), 4)
+            .note_history(
+                "conversation",
+                &token(newer.clone(), 1),
+                false,
+                ScheduleActor::system(),
+                4,
+            )
             .await
             .unwrap());
         let mut current = draft("conversation", "later", "exec-new", 80);
-        current.history = newer.clone();
+        current.history = newer;
+        current.history.generation = store.history_generation("conversation").await.unwrap();
         assert!(store.accept(current, 5).await.unwrap().is_some());
         let revision = store.preference().await.unwrap().revision;
+        let stale = token(older.clone(), revision);
         assert!(!store
             .cancel_open(
                 "conversation",
                 ContinuationCause::NoLongerBlocked,
                 ScheduleActor::system(),
-                &older,
-                revision,
+                &stale,
                 6,
             )
             .await
             .unwrap());
         assert!(!store
-            .move_due("conversation", "later", 90, &older, revision, 7)
+            .move_due("conversation", "later", 90, &stale, 7)
             .await
             .unwrap());
         let mut stale_switch = draft("conversation", "stale-turn", "exec-stale", 90);
@@ -3165,24 +3210,85 @@ mod tests {
             .all(|row| row.1 != ContinuationCause::NoLongerBlocked.as_str()));
         store.claim_due(80, 4).await.unwrap();
         assert!(!store
-            .defer_claim("conversation", "later", 120, &older, revision, 9)
+            .defer_claim("conversation", "later", 120, &stale, 9)
             .await
             .unwrap());
         assert_eq!(
             store.status("exec-new").await.unwrap().as_deref(),
             Some("delivering")
         );
-        let sealed = HistoryGeneration {
-            incarnation: "inc".into(),
-            position: 2,
-            generation: store.history_generation("conversation").await.unwrap(),
-        };
+        let sealed = sealed_token(
+            &store,
+            "conversation",
+            HistoryGeneration {
+                incarnation: "inc".into(),
+                position: 2,
+                generation: 0,
+            },
+            revision,
+        )
+        .await;
         assert!(store
-            .defer_claim("conversation", "later", 120, &sealed, revision, 10)
+            .defer_claim("conversation", "later", 120, &sealed, 10)
             .await
             .unwrap());
         assert_eq!(
             store.status("exec-new").await.unwrap().as_deref(),
+            Some("scheduled")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_equal_history_after_a_model_change_does_not_restore_the_cancelled_row() {
+        let store = enabled_store().await;
+        let scheduled = draft("conversation", "causal", "exec-1", 50);
+        assert!(store.accept(scheduled.clone(), 1).await.unwrap().is_some());
+        let observed = store.history_generation("conversation").await.unwrap();
+        let mut paused = scheduled.clone();
+        paused.history.generation = observed;
+        let mut changed = token(paused.history.clone(), 1);
+        changed.model = "sonnet".into();
+        assert!(store
+            .cancel_open(
+                "conversation",
+                ContinuationCause::ModelChanged,
+                ScheduleActor::system(),
+                &changed,
+                2,
+            )
+            .await
+            .unwrap());
+        assert_eq!(
+            store.history_generation("conversation").await.unwrap(),
+            observed + 1
+        );
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("cancelled")
+        );
+        let written = audits(&store).len();
+        assert!(store.accept(paused.clone(), 3).await.unwrap().is_none());
+        let mut back = token(paused.history.clone(), 1);
+        back.history.generation = store.history_generation("conversation").await.unwrap();
+        assert!(store
+            .note_history("conversation", &back, false, ScheduleActor::system(), 4)
+            .await
+            .unwrap());
+        assert_eq!(
+            store.history_generation("conversation").await.unwrap(),
+            observed + 2
+        );
+        assert!(store.accept(paused, 5).await.unwrap().is_none());
+        assert_eq!(audits(&store).len(), written);
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("cancelled")
+        );
+        let mut current = scheduled;
+        current.history.generation = store.history_generation("conversation").await.unwrap();
+        assert!(store.accept(current, 6).await.unwrap().is_some());
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
             Some("scheduled")
         );
     }
@@ -3202,30 +3308,24 @@ mod tests {
         let again = store.preference().await.unwrap().revision;
         assert_ne!(again, first);
         let mut restored = draft("conversation", "causal", "exec-1", 50);
-        restored.history = history.clone();
+        let sealed = sealed_token(&store, "conversation", history.clone(), again).await;
+        restored.history = sealed.history.clone();
         restored.preference_revision = again;
         assert!(store.accept(restored, 5).await.unwrap().is_some());
         let generation = store.history_generation("conversation").await.unwrap();
+        let stale = token(history.clone(), first);
         assert!(!store
             .cancel_open(
                 "conversation",
                 ContinuationCause::PreferenceDisabled,
                 ScheduleActor::system(),
-                &history,
-                first,
+                &stale,
                 6,
             )
             .await
             .unwrap());
         assert!(!store
-            .note_history(
-                "conversation",
-                &history,
-                first,
-                true,
-                ScheduleActor::system(),
-                7,
-            )
+            .note_history("conversation", &stale, true, ScheduleActor::system(), 7,)
             .await
             .unwrap());
         assert_eq!(
@@ -3236,13 +3336,13 @@ mod tests {
             store.status("exec-1").await.unwrap().as_deref(),
             Some("scheduled")
         );
+        let current = sealed_token(&store, "conversation", history, again).await;
         assert!(store
             .cancel_open(
                 "conversation",
                 ContinuationCause::PreferenceDisabled,
                 ScheduleActor::system(),
-                &history,
-                again,
+                &current,
                 8,
             )
             .await

@@ -139,6 +139,128 @@ it("releases the checkbox when the confirmed preference is not the pending choic
   })
 })
 
+it("a superseded toggle completion does not settle the next choice", async () => {
+  let settleFirst: () => void = () => {}
+  const first = new Promise<void>((resolve) => {
+    settleFirst = resolve
+  })
+  let settleSecond: () => void = () => {}
+  const second = new Promise<void>((resolve) => {
+    settleSecond = resolve
+  })
+  const calls: boolean[] = []
+  function change(next: boolean) {
+    calls.push(next)
+    return calls.length === 1 ? first : second
+  }
+  await act(async () => {
+    root.render(
+      <UsageLimitCard
+        limit={limit}
+        enabled={false}
+        nowMs={reset - 1}
+        onChange={change}
+      />,
+    )
+  })
+  const box = () => {
+    const node = host.querySelector("input")
+    if (!(node instanceof HTMLInputElement)) throw new Error("missing checkbox")
+    return node
+  }
+  const pending = () =>
+    host.querySelector("[data-usage-limit]")?.hasAttribute("data-usage-limit-pending") ===
+    true
+  await act(async () => {
+    box().click()
+  })
+  expect(calls).toEqual([true])
+  expect(pending()).toBe(true)
+  await act(async () => {
+    root.render(
+      <UsageLimitCard limit={limit} enabled nowMs={reset - 1} onChange={change} />,
+    )
+  })
+  expect(pending()).toBe(false)
+  await act(async () => {
+    box().click()
+  })
+  expect(calls).toEqual([true, false])
+  expect(box().checked).toBe(false)
+  expect(pending()).toBe(true)
+  await act(async () => {
+    settleFirst()
+  })
+  expect(box().checked).toBe(false)
+  expect(pending()).toBe(true)
+  await act(async () => {
+    box().click()
+  })
+  expect(calls).toEqual([true, false])
+  await act(async () => {
+    settleSecond()
+  })
+})
+
+it("a superseded toggle rejection does not clear the next choice", async () => {
+  let rejectFirst: (reason?: unknown) => void = () => {}
+  const first = new Promise<void>((_, reject) => {
+    rejectFirst = reject
+  })
+  let settleSecond: () => void = () => {}
+  const second = new Promise<void>((resolve) => {
+    settleSecond = resolve
+  })
+  const calls: boolean[] = []
+  function change(next: boolean) {
+    calls.push(next)
+    return calls.length === 1 ? first : second
+  }
+  await act(async () => {
+    root.render(
+      <UsageLimitCard
+        limit={limit}
+        enabled={false}
+        nowMs={reset - 1}
+        onChange={change}
+      />,
+    )
+  })
+  const box = () => {
+    const node = host.querySelector("input")
+    if (!(node instanceof HTMLInputElement)) throw new Error("missing checkbox")
+    return node
+  }
+  const pending = () =>
+    host.querySelector("[data-usage-limit]")?.hasAttribute("data-usage-limit-pending") ===
+    true
+  await act(async () => {
+    box().click()
+  })
+  await act(async () => {
+    root.render(
+      <UsageLimitCard limit={limit} enabled nowMs={reset - 1} onChange={change} />,
+    )
+  })
+  await act(async () => {
+    box().click()
+  })
+  expect(calls).toEqual([true, false])
+  expect(pending()).toBe(true)
+  await act(async () => {
+    rejectFirst(new Error("the first toggle failed"))
+  })
+  expect(box().checked).toBe(false)
+  expect(pending()).toBe(true)
+  await act(async () => {
+    box().click()
+  })
+  expect(calls).toEqual([true, false])
+  await act(async () => {
+    settleSecond()
+  })
+})
+
 it("says scheduling failed once the confirmed preference is on and nothing is auto-resuming", async () => {
   await act(async () => {
     root.render(

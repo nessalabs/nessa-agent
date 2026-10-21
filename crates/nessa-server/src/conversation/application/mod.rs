@@ -325,12 +325,12 @@ pub use service::{
     ConversationAgents, ConversationCaller, ConversationDeletionBudgets, ConversationDependencies,
     ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, HistoryGeneration,
     McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, PendingReport,
-    PreferenceCommandOutcome, PreferenceCommandReceipt, PreferenceReading, PreferenceUpdate,
-    QuestionChoiceInput, ReadOpening, ReconcileRetry, RecordedPreference, ReportRegistration,
-    RequestedAgent, RequestedConversation, ScheduleActor, ScheduleDraft, ScheduleSettlement,
-    ScheduledMessage, ScheduledMessageStore, SubmissionMode, ThreadReport, ThreadReportStore,
-    ThreadTurn, UnsettledEnable, UsageLimitSnapshot, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS,
-    MAX_RESOURCE_META_BYTES,
+    PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt, PreferenceReading,
+    PreferenceUpdate, QuestionChoiceInput, ReadOpening, ReconcileRetry, RecordedPreference,
+    ReportRegistration, RequestedAgent, RequestedConversation, ScheduleActor, ScheduleDraft,
+    ScheduleSettlement, ScheduledMessage, ScheduledMessageStore, SubmissionMode, ThreadReport,
+    ThreadReportStore, ThreadTurn, UnsettledEnable, UsageLimitSnapshot, MAX_APP_CALLS,
+    MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
 pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
 pub(crate) use service::{ExportAdmission, ExportHoldFailure, FENCE_LEASE_MS};

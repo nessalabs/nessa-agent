@@ -14,15 +14,17 @@
 -- failed even when it installed nothing. A settle that loses to a newer
 -- preference revision marks that request failed and leaves the newer
 -- revision. A revert that does not commit leaves the receipt pending.
--- history_fence
--- is the ordered generation a plan observed: incarnation and position, plus
--- the generation number of the fence at that read. A different incarnation
--- or a later position replaces the fence only when it observed the
--- generation now stored. An older generation writes nothing. Cancel,
--- move, defer, and a hold that dismisses an open row compare that
--- generation and the preference revision in the same transaction as the
--- row change. A miss writes nothing. Accept and settle of a submitting
--- row also match the owner of that write. A cancelled
+-- history_fence is the compare-and-set token a plan observed: incarnation
+-- and position, the generation number of the fence at that read, and the
+-- agent and model. A different incarnation, a later position, or a different
+-- agent or model replaces the fence only when it observed the generation now
+-- stored, and that number then advances. The same incarnation and position
+-- are current only while the generation and the agent and model still match.
+-- An older generation writes nothing, including when the model has changed
+-- back. Cancel, move, defer, accept, and a hold that dismisses an open row
+-- compare that token in the same transaction as the row change. A miss
+-- writes nothing. Accept and settle of a submitting row also match the owner
+-- of that write. A cancelled
 -- row for the same causal turn can be scheduled again. delivered, refused,
 -- and unconfirmed cannot. A submitting row another process still leases is
 -- not due until that lease's deadline.
@@ -93,7 +95,9 @@ CREATE TABLE history_fence (
     conversation TEXT PRIMARY KEY,
     incarnation TEXT NOT NULL,
     position INTEGER NOT NULL,
-    generation INTEGER NOT NULL
+    generation INTEGER NOT NULL,
+    agent TEXT NOT NULL,
+    model TEXT NOT NULL
 ) STRICT;
 
 CREATE TABLE audit (

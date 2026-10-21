@@ -33,8 +33,11 @@ does not keep a second copy of that decision.
 
 One scheduled-chat-message store owns a one-shot continuation: due time,
 stable execution identity, causal turn, caller, initiation, and cancellation.
-Every schedule-row change is one compare-and-set against the history
-generation and the preference revision that plan read. A preference receipt
+Every schedule-row change is one compare-and-set against the token that
+plan read: the history generation, the preference revision, and the agent
+and model. The same session history is current only while that generation
+and that config still match. A toggle completion applies only for the
+request that created it. A preference receipt
 is not success until its scan settles or its rollback commits; a retry of
 an unfinished enable resumes that work. An observed outcome whose audit
 does not commit leaves the row `submitting` until a bounded retry; the next
