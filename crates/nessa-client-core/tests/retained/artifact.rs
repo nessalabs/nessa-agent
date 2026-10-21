@@ -1091,6 +1091,56 @@ impl HeldFileSource for SpendAfterRange {
 }
 
 #[test]
+fn a_budget_that_expires_during_a_mismatched_reread_is_unreachable() {
+    let bytes = b"ab";
+    let conversation = conversation();
+    let digest = digest_of(bytes);
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("file.bin");
+    let clock = Arc::new(SpendAfter {
+        calls: AtomicUsize::new(0),
+        after: 2,
+    });
+    let stop = ReadStop::new();
+    let ending = super::super::Stopping {
+        stop: stop.clone(),
+        clock: clock.clone(),
+        until: 1,
+    };
+    let mut source = Counting {
+        bytes,
+        reads: Arc::new(AtomicUsize::new(0)),
+        wrong_length: false,
+        corrupt: true,
+    };
+    let fault = confirmed_held_file(
+        &mut source,
+        &Still,
+        &request(&conversation, &digest, &output),
+        &ending,
+    )
+    .unwrap()
+    .unwrap_err();
+    // One check before the range, one before the re-read, one after it.
+    assert_eq!(clock.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        fault.kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Stopped)
+    );
+    assert_eq!(
+        super::classify_artifact_fault(fault, &stop, &ending).kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
+    );
+    assert!(!output.exists());
+    let left: Vec<_> = fs::read_dir(root.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(left.len(), 1);
+    assert!(left[0].to_string_lossy().ends_with(".part"));
+}
+
+#[test]
 fn a_budget_that_expires_after_the_range_does_not_publish() {
     let bytes = b"ab";
     let conversation = conversation();

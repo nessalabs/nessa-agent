@@ -251,8 +251,10 @@ pub(crate) fn kept_output(
 /// longer cannot be it and is started again; one already complete still
 /// asks the gateway for its last range, so at least one range is always
 /// asked. `ended` cuts a busy wait short and asks no later range. It also
-/// refuses the part's re-read and the keep that would link it. A match
-/// already proved is still not linked once `ended` is true. Every
+/// refuses the part's re-read: a deadline that arrives while that re-read
+/// hashes is a cancellation, not an integrity failure, and the part is not
+/// discarded for it. A match already proved is still not linked once
+/// `ended` is true. Every
 /// failure but `Integrity` leaves the part for a later run to resume.
 /// `Published` is past the link: the output is the file, and the part's
 /// name may already be gone.
@@ -330,6 +332,11 @@ pub(crate) fn fetch_held_file(
         Ok(length) => length,
         Err(step) => return fail(FetchCause::File(step), progress),
     };
+    // The re-read can cross the deadline while it hashes a part that will
+    // not match. That is a cancellation. Integrity cleanup has not started.
+    if ended() {
+        return fail(FetchCause::Gateway(GatewayError::Cancelled), progress);
+    }
     if !is_file(file, length, hash) {
         let cleanup = match files.discard() {
             Ok(()) => PartCleanup::Removed,
@@ -341,7 +348,7 @@ pub(crate) fn fetch_held_file(
         progress.reached = 0;
         return fail(FetchCause::Integrity { cleanup }, progress);
     }
-    // The re-read and the hash can cross the deadline. A match is not
+    // The digest compare can cross the deadline. A match is not
     // publication; the link is. Do not start that link.
     if ended() {
         return fail(FetchCause::Gateway(GatewayError::Cancelled), progress);

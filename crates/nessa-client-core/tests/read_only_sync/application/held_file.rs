@@ -6,7 +6,8 @@ use crate::read_only_sync::domain::HELD_FILE_RANGE_BYTES;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 const RANGE: usize = HELD_FILE_RANGE_BYTES as usize;
 
@@ -97,6 +98,8 @@ struct Part {
     /// Bytes another writer adds to the part after each of ours.
     foreign: Vec<u8>,
     output_appears: bool,
+    /// Set when the part is re-read, so a deadline can arrive during the hash.
+    end_during_read: Option<Arc<AtomicBool>>,
 }
 impl Part {
     fn holding(bytes: &[u8]) -> Self {
@@ -143,6 +146,9 @@ impl FetchFiles for Part {
     }
     fn read_part(&mut self, visit: &mut dyn FnMut(&[u8])) -> Result<u64, FileStep> {
         self.step(FileStep::Read)?;
+        if let Some(end) = &self.end_during_read {
+            end.store(true, Ordering::SeqCst);
+        }
         Ok(pieces(&self.bytes, visit))
     }
     fn restart(&mut self) -> Result<(), FileStep> {
@@ -407,6 +413,30 @@ fn a_part_that_cannot_be_removed_is_emptied_and_both_outcomes_are_typed() {
             }
         }
     );
+    assert_eq!(part.kept, None);
+}
+
+#[test]
+fn a_deadline_during_a_mismatched_reread_is_not_an_integrity_failure() {
+    let bytes = content(8);
+    let end = Arc::new(AtomicBool::new(false));
+    let mut part = Part {
+        foreign: vec![0xee],
+        end_during_read: Some(Arc::clone(&end)),
+        ..Part::default()
+    };
+    let failure = fetch_held_file(
+        &mut Source::serving(&bytes),
+        &Pauses::default(),
+        &mut part,
+        &named(&bytes),
+        &|| end.load(Ordering::SeqCst),
+    )
+    .unwrap_err();
+    assert_eq!(failure.cause, FetchCause::Gateway(GatewayError::Cancelled));
+    assert!(!part.discarded);
+    assert!(!part.restarted);
+    assert!(!part.bytes.is_empty());
     assert_eq!(part.kept, None);
 }
 
