@@ -8,6 +8,8 @@
 //! service.close / stop ─▶ LiveLease::close ─▶ Ending ─▶ Agent::close ─▶ Ended | Interrupted
 //! ```
 //! `fetch_clock` owns test-only logical time for fetch orderings across real I/O.
+#[path = "leases/cleanup_counts.rs"]
+mod cleanup_counts;
 #[cfg(unix)]
 #[path = "leases/draining.rs"]
 mod draining;
@@ -629,6 +631,11 @@ impl Harness {
         );
         assert_eq!(host.end_calls.load(Ordering::SeqCst), 2);
         assert_eq!(self.provider.close_calls.load(Ordering::SeqCst), 1);
+        let original_backend = {
+            let opened = self.provider.opened_backend_ids.lock().unwrap();
+            assert_eq!(opened.len(), 1, "late ACK has not opened another backend");
+            opened[0]
+        };
         assert!(!self.service.owns_unreleased_resources().await);
         let original = host.end_ids.lock().unwrap()[0].clone();
         assert_eq!(
@@ -652,15 +659,17 @@ impl Harness {
                 "a later public close opens its own lease, not the retired owner"
             );
             assert_eq!(host.opened.load(Ordering::SeqCst), 2);
+            let opened = self.provider.opened_backend_ids.lock().unwrap();
+            let closed = self.provider.closed_backend_ids.lock().unwrap();
+            assert!(
+                opened.len() <= 2,
+                "one original and at most one replacement backend"
+            );
+            cleanup_counts::assert_each_backend_closed_once(original_backend, &opened, &closed);
             assert_eq!(
                 self.provider.close_calls.load(Ordering::SeqCst),
-                1,
-                "provider opens {:?}; backend opens {:?}; backend closes {:?}; close requests {:?}; lease Ends {:?}",
-                self.provider.provider_opens.lock().unwrap(),
-                self.provider.opened_backend_ids.lock().unwrap(),
-                self.provider.closed_backend_ids.lock().unwrap(),
-                self.provider.close_requests.lock().unwrap(),
-                ends.as_slice(),
+                closed.len(),
+                "every actual close appears in the backend identity trace"
             );
         }
         assert!(!self.service.owns_unreleased_resources().await);

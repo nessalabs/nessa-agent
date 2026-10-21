@@ -2543,7 +2543,10 @@ SQLite, then checks retry, settlement and reopening. `resumption.rs` flushes the
 existing session owner's retained evidence before recovery completes or its durable
 unfinished mark clears. `conformance/resumption/cleanup_proof_panics.rs` exercises
 retirement save construction, poll and drop faults for start, abandonment and
-Authorized-close through that same writer. The SDK session manager distinguishes an applied scheduling
+Authorized-close through that same writer.
+`conversation/leases/cleanup_counts.rs` checks each actual backend cleanup identity
+across late End acknowledgement and a later opening, including duplicate/missing
+cleanup counterexamples. The SDK session manager distinguishes an applied scheduling
 decision from its persistence acknowledgement; the decline owner audits that actual
 decision and retains independent persistence and audit failures.
 `verification/desktop/scripts/parent-stop.mjs` exercises the ordinary Stop button.

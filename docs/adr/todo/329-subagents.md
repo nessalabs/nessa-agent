@@ -2009,3 +2009,25 @@ The same bounded correction continues; previous caps and failed receipts remain.
 
 Contain only the retirement transaction through the already shared storage
 operation helper; do not rewrite every save or introduce a second supervisor.
+
+
+The bounded two-binary/two-thread diagnostic reproduced the shared expiry
+helper's aggregate two-versus-one failure in its first round on ed7acd56. The
+actual backend UUIDs prove two distinct instances, each closed once: the original
+by environment_expired, the replacement by repeat-after-ack. The provider session
+ID was restored and equal, so it cannot identify the resource instance. Original
+lease Ends remain unanswered then ACK; the replacement lease has its own End.
+The original historical revocation receipt lacked backend IDs; this does not
+establish historical equivalence. Both raw failures and isolated/full passes stay.
+
+| Fixture ordering | Required assertion and enforcer |
+| --- | --- |
+| Late End ACK before replacement opening | Keep the original aggregate close_calls == 1 assertion and original lease/actor/End identity checks |
+| Later public close cancels before provider acquisition | The original backend is present and closed exactly once; no replacement backend is invented |
+| Later public close acquires a replacement backend | Original and replacement backend UUIDs are distinct and each has exactly one cleanup acknowledgement |
+| Duplicate original close, missing replacement close, or unrelated close | The same per-instance oracle rejects it even when the aggregate total is two |
+
+Only the test oracle changes: use the UUID minted at each actual backend open,
+verify the original remains represented, IDs are unique, every acquired backend
+is closed exactly once, and the global call trace agrees. No production close,
+errors, capacity, concurrency or deadlines change.
