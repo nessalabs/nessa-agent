@@ -1043,15 +1043,17 @@ fn partial_path(quarantine: &Path) -> Result<PathBuf, RestoreFault> {
 }
 
 fn tree_id(path: &Path) -> Result<TreeId, RestoreFault> {
+    #[cfg(windows)]
+    refuse_reparse(path)?;
     let file = File::open(path).map_err(|_| RestoreFault::Unreadable)?;
     tree_id_of(&file)
 }
 
 fn tree_id_of(file: &File) -> Result<TreeId, RestoreFault> {
-    let meta = file.metadata().map_err(|_| RestoreFault::Unreadable)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        let meta = file.metadata().map_err(|_| RestoreFault::Unreadable)?;
         let mut bytes = [0u8; 16];
         bytes[..8].copy_from_slice(&meta.ino().to_ne_bytes());
         Ok(TreeId {
@@ -1061,21 +1063,17 @@ fn tree_id_of(file: &File) -> Result<TreeId, RestoreFault> {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        let index = meta.file_index().ok_or(RestoreFault::Unreadable)?;
-        let volume = meta
-            .volume_serial_number()
-            .ok_or(RestoreFault::Unreadable)?;
+        let (volume, index) = windows_file_id(file)?;
         let mut bytes = [0u8; 16];
         bytes[..8].copy_from_slice(&index.to_ne_bytes());
         Ok(TreeId {
-            volume: u64::from(volume),
+            volume,
             file: bytes,
         })
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = meta;
+        let _ = file;
         Ok(TreeId {
             volume: 0,
             file: [0; 16],
@@ -1112,24 +1110,77 @@ fn existing_ancestor(path: &Path) -> Result<PathBuf, RestoreFault> {
 }
 
 fn device_of(dir: &Path) -> Result<u64, RestoreFault> {
-    let meta = fs::metadata(dir).map_err(|_| RestoreFault::Unreadable)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        let meta = fs::metadata(dir).map_err(|_| RestoreFault::Unreadable)?;
         Ok(meta.dev())
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        let serial = meta
-            .volume_serial_number()
-            .ok_or(RestoreFault::Unreadable)?;
-        Ok(u64::from(serial))
+        let file = File::open(dir).map_err(|_| RestoreFault::Unreadable)?;
+        Ok(windows_file_id(&file)?.0)
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = meta;
+        let _ = dir;
         Ok(0)
+    }
+}
+
+/// Volume serial and file index from the open handle.
+///
+/// `MetadataExt::file_index` is the unstable `windows_by_handle` feature, so
+/// this reads `BY_HANDLE_FILE_INFORMATION` directly.
+#[cfg(windows)]
+fn windows_file_id(file: &File) -> Result<(u64, u64), RestoreFault> {
+    use std::os::windows::io::AsRawHandle;
+    #[repr(C)]
+    struct ByHandleFileInformation {
+        attributes: u32,
+        creation_low: u32,
+        creation_high: u32,
+        access_low: u32,
+        access_high: u32,
+        write_low: u32,
+        write_high: u32,
+        volume_serial: u32,
+        size_high: u32,
+        size_low: u32,
+        links: u32,
+        index_high: u32,
+        index_low: u32,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetFileInformationByHandle(
+            file: *mut std::ffi::c_void,
+            information: *mut ByHandleFileInformation,
+        ) -> i32;
+    }
+    let mut info = unsafe { std::mem::zeroed::<ByHandleFileInformation>() };
+    // The handle is the still-open file. The call writes one information struct.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) };
+    if ok == 0 {
+        return Err(RestoreFault::Unreadable);
+    }
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    if info.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(RestoreFault::Tamper);
+    }
+    let index = (u64::from(info.index_high) << 32) | u64::from(info.index_low);
+    Ok((u64::from(info.volume_serial), index))
+}
+
+#[cfg(windows)]
+fn refuse_reparse(path: &Path) -> Result<(), RestoreFault> {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    let meta = fs::symlink_metadata(path).map_err(|_| RestoreFault::Unreadable)?;
+    if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        Err(RestoreFault::Tamper)
+    } else {
+        Ok(())
     }
 }
 
