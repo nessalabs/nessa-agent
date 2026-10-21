@@ -2022,6 +2022,7 @@ async fn stopped_source_reply_claim(resume_source: bool) {
                     cause: LeaseEndCause::Stopped,
                     end: AgentEnd::Suspend,
                 },
+                crate::conversation::application::service::ConfirmedClose::ReleaseSlot,
             )
             .await
             .unwrap();

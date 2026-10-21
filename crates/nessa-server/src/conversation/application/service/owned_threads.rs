@@ -759,21 +759,44 @@ impl ChildResources for Resources {
             return failed;
         };
         let service = ConversationService { inner };
-        // Successful deletion already confirmed physical cleanup and persisted
-        // its erasure tombstone before asking ownership to release capacity.
-        if super::load_conversation(service.inner.metadata.as_ref(), &self.id)
-            .await
-            .is_ok_and(|record| {
-                record.is_some_and(|record| {
-                    record.deletion().is_some_and(|deletion| deletion.erased())
-                })
-            })
-        {
-            return ResourceReport {
-                physical: PhysicalFact::Released,
-                evidence: EvidenceFact::Acknowledged,
+        // Erasure is an independent acknowledged owner. Its intent can hand
+        // the writer over, but only its completed tombstone acknowledges that
+        // obligation; ordinary SDK/lease cleanup must still run meanwhile.
+        let awaiting_erasure =
+            match super::load_conversation(service.inner.metadata.as_ref(), &self.id).await {
+                Ok(Some(record)) => match record.deletion() {
+                    Some(deletion) if deletion.erased() => {
+                        return ResourceReport {
+                            physical: PhysicalFact::Released,
+                            evidence: EvidenceFact::Acknowledged,
+                        }
+                    }
+                    Some(_) => true,
+                    None => false,
+                },
+                _ => false,
             };
+        let report = self.close_acquired(&service, initiator).await;
+        if awaiting_erasure {
+            ResourceReport {
+                physical: report.physical,
+                evidence: EvidenceFact::Pending,
+            }
+        } else {
+            report
         }
+    }
+}
+impl Resources {
+    async fn close_acquired(
+        &self,
+        service: &ConversationService,
+        initiator: &Initiator,
+    ) -> ResourceReport {
+        let failed = ResourceReport {
+            physical: PhysicalFact::Failed,
+            evidence: EvidenceFact::Pending,
+        };
         let actor = match initiator {
             Initiator::Host(actor) => {
                 ActionContext::new(actor.principal_id(), actor.surface_id(), actor.request_id())
@@ -839,10 +862,13 @@ impl ChildResources for Resources {
             )
             .await;
         match (live.lease.cleanup(), close) {
-            (Some(_), Ok(_)) => ResourceReport {
-                physical: PhysicalFact::Released,
-                evidence: EvidenceFact::Acknowledged,
-            },
+            (Some(_), Ok(_)) => {
+                service.release_slot(&self.id, &slot).await;
+                ResourceReport {
+                    physical: PhysicalFact::Released,
+                    evidence: EvidenceFact::Acknowledged,
+                }
+            }
             (Some(_), Err(_)) => ResourceReport {
                 physical: PhysicalFact::Released,
                 evidence: EvidenceFact::Failed,

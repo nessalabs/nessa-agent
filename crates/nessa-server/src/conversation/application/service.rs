@@ -5462,6 +5462,7 @@ impl ConversationService {
                         cause: LeaseEndCause::Closed,
                         end: AgentEnd::Close,
                     },
+                    ConfirmedClose::EraseHistory,
                 ) => stopped,
                 () = self.retired() => Err(StopFailure::Failed(AgentError::Closed)),
             };
@@ -6039,9 +6040,9 @@ impl ConversationService {
     /// deletion whose process is still being stopped. A successful stop
     /// releases its slot, so it is not counted.
     ///
-    /// It reads the SDK's own fact, `Agent::may_hold_provider_resources`,
-    /// never the variant of the error a stop returned: that variant is a
-    /// diagnostic and does not say whether resources remain (ADR 221).
+    /// It joins the SDK's `Agent::may_hold_provider_resources` fact with the
+    /// actual environment cleanup owner, including failed preparation. A stop
+    /// error variant alone cannot establish resource release (ADR 221).
     #[cfg(any(target_os = "macos", target_os = "linux", test))]
     pub(crate) async fn owns_unreleased_resources(&self) -> bool {
         let slots: Vec<_> = self
@@ -6129,6 +6130,7 @@ impl ConversationService {
                                     // the next start (`resume_unfinished`).
                                     end: AgentEnd::Suspend,
                                 },
+                                ConfirmedClose::ReleaseSlot,
                             )
                             .await
                         }
@@ -6183,10 +6185,11 @@ impl ConversationService {
         id: &ConversationId,
         slot: Arc<Slot>,
         by: StopBy<'_>,
+        on_confirm: ConfirmedClose,
     ) -> Result<(), StopFailure> {
         match tokio::time::timeout(
             self.inner.deletion_budgets.stop,
-            self.stopping(id, slot, None, by, ConfirmedClose::ReleaseSlot),
+            self.stopping(id, slot, None, by, on_confirm),
         )
         .await
         {
@@ -6334,7 +6337,8 @@ impl ConversationService {
                     ConfirmedClose::HoldSlot,
                 )
                 .await;
-            let confirmed = let_go(&stopped);
+            let confirmed =
+                stopping_service.close_releases_owner(&stop_id, &stopped, ConfirmedClose::HoldSlot);
             let _ = confirmed_tx.send(stopped);
             if !confirmed {
                 return;
@@ -6407,6 +6411,26 @@ impl ConversationService {
         }
     }
 
+    // The registered lifetime owner must retain the same Agent/SessionManager
+    // across failed evidence writes. Only deletion's explicit erasure handoff
+    // consumes unsaved history; ordinary unowned release keeps its contract.
+    fn close_releases_owner(
+        &self,
+        id: &ConversationId,
+        closed: &Result<(), AgentError>,
+        on_confirm: ConfirmedClose,
+    ) -> bool {
+        closed.is_ok()
+            || (let_go(closed)
+                && (on_confirm == ConfirmedClose::EraseHistory
+                    || !self.inner.ownership.get().is_some_and(|ownership| {
+                        ownership
+                            .coordinator
+                            .active_lifetime_for_session(&conversation_session(id))
+                            .is_some()
+                    })))
+    }
+
     /// Stop the agent of `slot`, however long that takes: mark it as
     /// stopping, so it takes no more work, wait for it to finish opening if
     /// it has not, end its apps by `ended_by`, and close it. Once the close
@@ -6469,19 +6493,18 @@ impl ConversationService {
                             .close_leased(live, cause, actor.clone(), end)
                             .await
                             .map(|_| ());
-                        // Its cleanup confirmed, the agent holds nothing, and
-                        // the slot goes even when the record of that was not
-                        // saved: the stop answers that failure, and the next
-                        // opening accounts for the lease
-                        // (`l5_a_desktop_stop_whose_cleanup_record_cannot_be_saved_says_so_and_the_conversation_opens_again`).
-                        if let_go(&closed) {
+                        // Owned cleanup keeps its actual evidence writer until
+                        // acknowledgement. Unowned reopening, or the durable
+                        // deletion's explicit erasure handoff, can relinquish
+                        // an attachment after physical confirmation alone.
+                        if self.close_releases_owner(id, &closed, on_confirm) {
                             // Closed for good: whatever it was doing ended
                             // with it, so a restart has nothing to resume.
                             if end == AgentEnd::Close && owes_nothing {
                                 self.forget_unfinished(id).await;
                             }
                             let _ = live.join_attachment_owner().await;
-                            if on_confirm == ConfirmedClose::ReleaseSlot {
+                            if on_confirm != ConfirmedClose::HoldSlot {
                                 self.release_slot(id, &slot).await;
                             }
                         }
@@ -6498,7 +6521,7 @@ impl ConversationService {
                         {
                             return Err(AgentError::CleanupUncertain);
                         }
-                        if on_confirm == ConfirmedClose::ReleaseSlot {
+                        if on_confirm != ConfirmedClose::HoldSlot {
                             self.release_slot(id, &slot).await;
                         }
                         Ok(())
@@ -6625,6 +6648,9 @@ enum ConfirmedClose {
     ReleaseSlot,
     /// The slot stays. The caller lets the uploads go, then releases it.
     HoldSlot,
+    /// Acknowledged deletion intent hands the history writer into erasure.
+    /// Ownership itself waits for the actual erased tombstone acknowledgement.
+    EraseHistory,
 }
 
 /// Whether a pass of stops can meet a submission still being admitted.

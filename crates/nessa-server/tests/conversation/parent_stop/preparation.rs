@@ -65,7 +65,7 @@ impl SessionStorageLease for PreparationWriteLease {
         self.inner.erase()
     }
 }
-async fn granted_preparation_failure(commit: bool, earlier: bool) {
+async fn granted_preparation_failure(commit: bool, earlier: bool, public_stop: bool) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -160,6 +160,17 @@ async fn granted_preparation_failure(commit: bool, earlier: bool) {
     if let Some(snapshot) = committed.as_ref().and_then(CommittedSession::snapshot) {
         assert!(snapshot.lease.is_none());
     }
+    if public_stop {
+        let Err(ConversationError::Retirement(failures)) = service.stop_active_agents().await
+        else {
+            panic!("public stop must retain unanswered preparation cleanup");
+        };
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].0, target.to_string());
+        assert!(matches!(failures[0].1, AgentError::CleanupUncertain));
+        assert!(service.owns_unreleased_resources().await);
+        assert!(opening.upgrade().is_some());
+    }
     let lifetime = coordinator
         .active_lifetime_for_session(&conversation_session(&target))
         .unwrap();
@@ -215,6 +226,11 @@ async fn granted_preparation_failure(commit: bool, earlier: bool) {
     })
     .await
     .unwrap();
+    if public_stop {
+        service.stop_active_agents().await.unwrap();
+        assert!(opening.upgrade().is_none());
+        assert!(!service.owns_unreleased_resources().await);
+    }
     coordinator
         .end_lifetime(command(LifetimeCause::Deletion, Initiator::Runtime))
         .await
@@ -267,11 +283,11 @@ async fn granted_preparation_failure(commit: bool, earlier: bool) {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_granted_root_rejected_preparation_write_waits_for_real_release() {
-    granted_preparation_failure(false, false).await;
+    granted_preparation_failure(false, false, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_granted_root_lost_preparation_ack_waits_for_real_release() {
-    granted_preparation_failure(true, false).await;
+    granted_preparation_failure(true, false, false).await;
 }
 
 async fn granted_child_preparation_failure(commit: bool) {
@@ -495,9 +511,18 @@ async fn a_live_root_waits_for_its_environment_release() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_earlier_root_absence_cannot_hide_a_later_rejected_preparation_grant() {
-    granted_preparation_failure(false, true).await;
+    granted_preparation_failure(false, true, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_earlier_root_absence_cannot_hide_a_later_lost_ack_grant() {
-    granted_preparation_failure(true, true).await;
+    granted_preparation_failure(true, true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn public_stop_retains_a_rejected_preparation_grant_until_real_ack() {
+    granted_preparation_failure(false, false, true).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn public_stop_retains_a_lost_preparation_ack_grant_until_real_ack() {
+    granted_preparation_failure(true, false, true).await;
 }
