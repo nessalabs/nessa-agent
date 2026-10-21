@@ -32,10 +32,10 @@ use super::verification::{
 use super::verification_format::VerificationFormat;
 use crate::backup::domain::{
     attested_pair, audit_path, decode_deferred, deferred_for_open, deferred_session_name,
-    encode_journal, extra_session_allowed, host_volume, paths_conflict_on, posture, read_journal,
-    receipt_is_usable, relative_path_is_safe, restore_lock_path, seal_attestation, session_sidecar,
-    staging_id_is_usable, DeferredLine, DeletionLog, Fingerprint, Freshness, Journal,
-    ManifestListing, Posture, RestoreFault, SealedFile, VolumeProbe,
+    encode_journal, extra_session_allowed, host_volume, path_identity, paths_conflict_on, posture,
+    read_journal, receipt_is_usable, relative_path_is_safe, restore_lock_path, seal_attestation,
+    session_sidecar, staging_id_is_usable, DeferredLine, DeletionLog, Fingerprint, Freshness,
+    Journal, ManifestListing, Posture, RestoreFault, SealedFile, VolumeCase, VolumeProbe,
 };
 
 /// Drop releases the restore-root lock.
@@ -60,7 +60,7 @@ pub trait QuarantineLayout {
         &self,
         quarantine: &Path,
         live: &Path,
-        identity: &TreeId,
+        loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault>;
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault>;
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault>;
@@ -127,6 +127,8 @@ pub struct LoadedTree {
     /// Sidecars of a session file. Anything else with a helper suffix is in `files`.
     pub helpers: Vec<String>,
     pub identity: TreeId,
+    /// Hash of every sealed file, so a later byte change is not this tree.
+    pub content: Fingerprint,
 }
 
 /// Turns a verified bundle into the files quarantine will seal.
@@ -432,7 +434,7 @@ pub fn accept_quarantine(
         Ok(false) => {}
         Err(error) => return Err(recorded.stop(error)),
     }
-    let promoted = match layout.promote(&quarantine, &live, &loaded.identity) {
+    let promoted = match layout.promote(&quarantine, &live, &loaded) {
         Ok(promoted) => promoted,
         Err(RestoreFault::Retained) => return Err(RestoreFault::Retained),
         Err(error) => return Err(recorded.stop(error)),
@@ -832,15 +834,36 @@ fn hold_roots(
     first: &Path,
     second: &Path,
 ) -> Result<HeldRoots, RestoreFault> {
-    let (left, right) = if first.as_os_str() <= second.as_os_str() {
-        (first, second)
-    } else {
-        (second, first)
-    };
+    let (left, right) = ordered_roots(
+        first,
+        layout.volume(first)?.case,
+        second,
+        layout.volume(second)?.case,
+    )?;
     Ok(HeldRoots {
-        _earlier: layout.hold(left)?,
-        _later: layout.hold(right)?,
+        _earlier: layout.hold(&left)?,
+        _later: layout.hold(&right)?,
     })
+}
+
+/// One order for every spelling of the same directories. Raw byte order
+/// deadlocks when `a`/`B` and `A`/`b` are one pair on a folding volume.
+pub(crate) fn ordered_roots(
+    first: &Path,
+    first_case: VolumeCase,
+    second: &Path,
+    second_case: VolumeCase,
+) -> Result<(PathBuf, PathBuf), RestoreFault> {
+    let left = path_identity(first, first_case)?;
+    let right = path_identity(second, second_case)?;
+    if left == right {
+        return Err(RestoreFault::Paths);
+    }
+    if left < right {
+        Ok((first.to_path_buf(), second.to_path_buf()))
+    } else {
+        Ok((second.to_path_buf(), first.to_path_buf()))
+    }
 }
 
 fn resolve_root(

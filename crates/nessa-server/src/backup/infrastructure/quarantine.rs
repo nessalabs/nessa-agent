@@ -482,6 +482,7 @@ impl QuarantineLayout for DirectoryQuarantine {
             extras,
             helpers,
             identity: tree_id(root)?,
+            content: content_token(root)?,
         })
     }
 
@@ -489,10 +490,15 @@ impl QuarantineLayout for DirectoryQuarantine {
         &self,
         quarantine: &Path,
         live: &Path,
-        identity: &TreeId,
+        loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
         let opened = File::open(quarantine).map_err(|_| RestoreFault::Unreadable)?;
-        if tree_id_of(&opened)? != *identity || tree_id(quarantine)? != *identity {
+        if tree_id_of(&opened)? != loaded.identity || tree_id(quarantine)? != loaded.identity {
+            return Err(RestoreFault::Tamper);
+        }
+        let on_disk = fs::read_to_string(quarantine.join("journal.txt"))
+            .map_err(|_| RestoreFault::Unreadable)?;
+        if on_disk != loaded.journal || content_token(quarantine)? != loaded.content {
             return Err(RestoreFault::Tamper);
         }
         let from_parent = quarantine.parent().map(Path::to_path_buf);
@@ -504,8 +510,10 @@ impl QuarantineLayout for DirectoryQuarantine {
         // promotion unread while a different directory still sits at live.
         let live_id = tree_id(live).ok();
         let opened_id = tree_id_of(&opened).ok();
-        if live_id.as_ref() != Some(identity) || opened_id.as_ref() != Some(identity) {
-            if !quarantine.exists() && live_id.as_ref() != Some(identity) {
+        if live_id.as_ref() != Some(&loaded.identity)
+            || opened_id.as_ref() != Some(&loaded.identity)
+        {
+            if !quarantine.exists() && live_id.as_ref() != Some(&loaded.identity) {
                 let _ = rename_new(live, quarantine, RestoreFault::Tamper);
             }
             return if live.exists() {
@@ -605,10 +613,11 @@ impl QuarantineLayout for DirectoryQuarantine {
     }
 
     fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
-        if path.exists() {
-            fs::remove_file(path).map_err(|_| RestoreFault::Unreadable)?;
+        match fs::symlink_metadata(path) {
+            Ok(_) => fs::remove_file(path).map_err(|_| RestoreFault::Unreadable),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(RestoreFault::Unreadable),
         }
-        Ok(())
     }
 
     fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
@@ -957,6 +966,42 @@ fn hash_file(path: &Path) -> Result<Fingerprint, RestoreFault> {
         Digest::update(&mut hasher, &buffer[..count]);
     }
     Ok(Fingerprint::from_digest(hasher.finalize().into()))
+}
+
+/// Every file except the journal and the readiness marker. Promotion refuses
+/// when this changes after the tree was read.
+fn content_token(root: &Path) -> Result<Fingerprint, RestoreFault> {
+    let mut lines = Vec::new();
+    collect_content(root, root, &mut lines)?;
+    lines.sort();
+    Ok(Fingerprint::of(lines.join("\n").as_bytes()))
+}
+
+fn collect_content(
+    root: &Path,
+    directory: &Path,
+    lines: &mut Vec<String>,
+) -> Result<(), RestoreFault> {
+    for entry in fs::read_dir(directory).map_err(|_| RestoreFault::Unreadable)? {
+        let path = entry.map_err(|_| RestoreFault::Unreadable)?.path();
+        let meta = fs::symlink_metadata(&path).map_err(|_| RestoreFault::Unreadable)?;
+        if meta.file_type().is_symlink() {
+            return Err(RestoreFault::Tamper);
+        }
+        if meta.is_dir() {
+            collect_content(root, &path, lines)?;
+            continue;
+        }
+        if !meta.is_file() {
+            return Err(RestoreFault::Tamper);
+        }
+        let relative = relative_to(root, &path)?;
+        if relative == "journal.txt" || relative == "accept-ready" {
+            continue;
+        }
+        lines.push(format!("{} {}", relative, hash_file(&path)?.hex()));
+    }
+    Ok(())
 }
 
 fn relative_to(root: &Path, path: &Path) -> Result<String, RestoreFault> {
@@ -1571,6 +1616,18 @@ fn materialize_error(error: MaterializeError) -> SessionSourceError {
         MaterializeError::Interrupted => SessionSourceError::Interrupted,
         MaterializeError::Unreadable => SessionSourceError::Unreadable,
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_symlink_is_removed_without_creating_its_target() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = root.path().join("outside");
+    let link = root.path().join("session.partial");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    DirectoryQuarantine.remove_file(&link).unwrap();
+    assert!(!outside.exists());
+    assert!(fs::symlink_metadata(&link).is_err());
 }
 
 #[test]

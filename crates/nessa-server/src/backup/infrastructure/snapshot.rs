@@ -6,6 +6,7 @@ use std::path::Path;
 use nessa_local_database::rusqlite::backup::{Backup, StepResult};
 use nessa_local_database::rusqlite::ffi::{self, sqlite3_int64};
 use nessa_local_database::rusqlite::{Connection, OpenFlags};
+use nessa_local_storage::{open, OpenMode};
 use sha2::{Digest, Sha256};
 
 /// A session file larger than this is named and left out of the cut.
@@ -309,9 +310,9 @@ struct CreatedDestination<'a> {
 
 impl<'a> CreatedDestination<'a> {
     fn new(path: &'a Path) -> Result<Self, MaterializeError> {
-        if path.exists() {
-            return Err(MaterializeError::Unreadable);
-        }
+        // Exclusive and no-follow. SQLite then opens this regular file, not a
+        // symlink planted at the same name.
+        open(path, OpenMode::CreateNew).map_err(|_| MaterializeError::Unreadable)?;
         Ok(Self { path, keep: false })
     }
 }
@@ -630,6 +631,18 @@ impl Drop for SqliteMalloc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_is_not_the_session_file() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = root.path().join("outside");
+        let link = root.path().join("session.sqlite3.partial");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        assert!(CreatedDestination::new(&link).is_err());
+        assert!(!outside.exists());
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+    }
 
     #[test]
     fn a_deferred_digest_hashes_each_payload_in_chunks() {

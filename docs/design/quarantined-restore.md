@@ -94,6 +94,7 @@ supplies the id.
 | Staging id fails and the published tree is removed | No quarantine | `unchanged → unchanged` | The id error |
 | Staging id fails and the published tree remains | The quarantine, unready | `absent → unready`, cause `retained` | Retained. Not an unchanged refusal |
 | The quarantine directory is replaced after it was read | The substitute stays at the quarantine path. The verified directory is not renamed | `unchanged → unchanged` | Tamper |
+| A sealed file changes after it was read and before the rename | The quarantine. The live path is not created | `unchanged → unchanged` | Tamper |
 | Rename finished, then the live path is not that directory, and moving it back clears live | The substitute is not live | `unchanged → unchanged` | Tamper |
 | Rename finished, then the live path is not that directory, and it remains | The substitute at the live path | No unchanged line | Retained |
 | Journal replaced and recomputed so its own seal matches | The quarantine. Accept does not rename | `unchanged → unchanged` | Tamper. The audit still names the journal stage wrote |
@@ -103,6 +104,8 @@ supplies the id.
 | Readiness bytes synced, then renamed to `accept-ready`, then the quarantine directory synced | The marker, whose bytes are the staging id. A file sync failure retires the temporary file. A directory sync failure retires the marker | The sealed line stays when retirement succeeds. A marker that still names an id is retained, and the id is spent | The error. A partial file is not readiness. Retained when the id remains |
 | Empty directory at the live path when the rename runs | The quarantine. The empty directory is unchanged | `unchanged → unchanged` | LiveOccupied |
 | A root that is not Unicode | Neither path is audited under a lossy spelling | No line | Paths |
+| Fetch wrote a partial session and that name is a symlink | The symlink. Its target is not created | `unchanged → unchanged`, or retained when the name remains | The error. SQLite opens only a file this attempt created |
+| Two restores whose roots differ only by case on a folding volume | One lock order, from the folded identity | Each waits for the same first lock | Neither deadlocks on the other spelling |
 | Fetch wrote a partial session and that name is gone | No partial file | `unchanged → unchanged` with the source cause | The source error |
 | Fetch wrote a partial session and that name remains | The partial file. Not a helper | No unchanged line | Retained. A later open treats the file as an extra |
 | Staging write failed and the partial directory is gone | No partial directory | `unchanged → unchanged` | The write error |
@@ -130,6 +133,8 @@ supplies the id.
   happened and the live path is a different directory, it is moved back; when
   it remains, the result is retained and no unchanged line is written.
   `a_swapped_quarantine_directory_is_not_promoted`
+- A byte changed in the quarantine after that read is not promoted.
+  `a_changed_quarantine_file_is_not_promoted`
 - A staging id that cannot be minted removes the published tree when it can.
   When the tree remains, the audit says `absent → unready` and the result is
   retained. `a_failed_staging_id_keeps_an_unremoved_tree`

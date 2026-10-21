@@ -349,6 +349,12 @@ fn starts_with_longer(parent: &[String], child: &[String]) -> bool {
     child.starts_with(parent) && child.len() > parent.len()
 }
 
+/// Folded components of `path` on `volume`. Lock order uses this, so two
+/// spellings of one directory are one key.
+pub fn path_identity(path: &Path, volume: VolumeCase) -> Result<Vec<String>, RestoreFault> {
+    identity_parts(path, volume)
+}
+
 fn identity_parts(path: &Path, volume: VolumeCase) -> Result<Vec<String>, RestoreFault> {
     let path = normalized_root(path)?;
     Ok(path
@@ -1072,6 +1078,24 @@ mod tests {
         assert!(!receipt_is_usable("has\nline"));
         assert_eq!(posture(false), Posture::Quarantined);
         assert_eq!(posture(true), Posture::Live);
+    }
+
+    #[test]
+    fn a_folding_volume_orders_spellings_together() {
+        let volume = VolumeCase::Unicode;
+        let earlier = path_identity(Path::new("/restore/a"), volume).unwrap();
+        let later = path_identity(Path::new("/restore/B"), volume).unwrap();
+        let again_earlier = path_identity(Path::new("/restore/A"), volume).unwrap();
+        let again_later = path_identity(Path::new("/restore/b"), volume).unwrap();
+        assert!(earlier < later);
+        assert_eq!(earlier.cmp(&later), again_earlier.cmp(&again_later));
+        assert_eq!(earlier, again_earlier);
+        assert_eq!(later, again_later);
+        let bytes = VolumeCase::Bytes;
+        assert_ne!(
+            path_identity(Path::new("/restore/a"), bytes).unwrap(),
+            path_identity(Path::new("/restore/A"), bytes).unwrap()
+        );
     }
 
     #[test]

@@ -33,6 +33,8 @@ pub use ports::{
     PublishedRecord, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
     RestorePolicyEvaluator, SealFields, SessionCut, SessionSourceError, StagingIds,
 };
+#[cfg(test)]
+pub(crate) use restore::ordered_roots;
 pub use restore::{
     accept_quarantine, open_deferred_conversation, root_posture, stage_quarantine, AcceptReport,
     AcceptRequest, CutMaterializer, LoadedTree, OpenReport, OpenRequest, PreparedCut, Promoted,
