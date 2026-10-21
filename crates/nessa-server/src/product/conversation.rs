@@ -261,6 +261,7 @@ async fn answer(
                         },
                     )),
                     PreferenceUpdate::Refused { .. } => Ok(failure(&frame.id, "forbidden")),
+                    PreferenceUpdate::Pending => Ok(failure(&frame.id, "unavailable")),
                 }
             }
             "conversation.setApprovalMode" => {

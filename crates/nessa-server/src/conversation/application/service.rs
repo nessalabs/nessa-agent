@@ -105,7 +105,8 @@ pub(crate) use scheduled_messages::FENCE_LEASE_MS;
 pub use scheduled_messages::{
     HistoryGeneration, PreferenceCommandOutcome, PreferenceCommandReceipt, PreferenceReading,
     PreferenceUpdate, ReconcileRetry, RecordedPreference, ScheduleActor, ScheduleDraft,
-    ScheduleSettlement, ScheduledMessage, ScheduledMessageStore, UsageLimitSnapshot,
+    ScheduleSettlement, ScheduledMessage, ScheduledMessageStore, UnsettledEnable,
+    UsageLimitSnapshot,
 };
 use std::{
     collections::{HashMap, HashSet},

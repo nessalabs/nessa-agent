@@ -12,7 +12,9 @@
 //! made it. An applied model change is not complete until that plan commits.
 //! Cedar's allow and deny of the preference are each one audit before the
 //! command result. That audit and the request's receipt commit together.
-//! A retry returns the receipt and does not apply the change again.
+//! An enable stays pending until its scan settles or its rollback commits.
+//! A retry of that receipt resumes the unfinished work. A finished receipt
+//! is returned and is not applied again.
 
 /// How long a `submitting` lease lasts. The owner renews it while the submit runs.
 pub(crate) const FENCE_LEASE_MS: u64 = 30_000;
@@ -196,6 +198,13 @@ pub struct PreferenceReading {
     pub revision: u64,
 }
 
+/// An enable that is on and not yet settled, and the request that installed it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnsettledEnable {
+    pub revision: u64,
+    pub installed_request: String,
+}
+
 /// The preference and the open continuation from one store read.
 ///
 /// `open` is absent when `enabled` is false, including when a row is still
@@ -213,6 +222,9 @@ pub enum PreferenceUpdate {
     Stored(bool),
     /// Cedar refused. `policies` are the ones that decided.
     Refused { policies: Vec<String> },
+    /// This request's enable has not finished its scan or its rollback.
+    /// The command does not return this. A retry resumes that work.
+    Pending,
 }
 
 /// Cedar's decision as it committed, and which enable this request installed.
@@ -254,6 +266,9 @@ pub enum PreferenceCommandOutcome {
     /// This request's enable was reverted, in the same transaction as that
     /// rollback's audit. A retry is the same error and does not enable again.
     Failed,
+    /// The decision committed and the scan or rollback has not. A retry
+    /// resumes that work. This is not success.
+    Pending,
 }
 
 /// The private dataset of scheduled continuations.
@@ -282,27 +297,41 @@ pub trait ScheduledMessageStore: Send + Sync {
         at_ms: u64,
     ) -> ConversationFuture<'_, Option<ScheduledMessage>>;
     /// Move a scheduled row's due time and audit that move with the status change.
+    /// The history generation and the preference revision are compared in that
+    /// same transaction. A miss writes nothing and does not advance the fence.
     fn move_due(
         &self,
         conversation: &str,
         causal_execution: &str,
         due_at_ms: u64,
+        history: &HistoryGeneration,
+        preference_revision: u64,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool>;
     /// Release a delivering claim back to scheduled at a later due time.
+    /// The history generation and the preference revision are compared in that
+    /// same transaction. A miss writes nothing and does not advance the fence.
     fn defer_claim(
         &self,
         conversation: &str,
         causal_execution: &str,
         due_at_ms: u64,
+        history: &HistoryGeneration,
+        preference_revision: u64,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool>;
-    /// Cancel the open row for one conversation.
+    /// Cancel the open row for one conversation. The history generation and
+    /// the preference revision are compared in that same transaction. A miss
+    /// writes nothing and does not advance the fence. The preference does not
+    /// have to be on: a plan that read this revision while it was off is the
+    /// backstop that cancels the row.
     fn cancel_open(
         &self,
         conversation: &str,
         cause: ContinuationCause,
         actor: ScheduleActor,
+        history: &HistoryGeneration,
+        preference_revision: u64,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool>;
     /// Claim due scheduled rows, then return those claims, rows already
@@ -368,29 +397,51 @@ pub trait ScheduledMessageStore: Send + Sync {
         let _ = conversation;
         Box::pin(async { Ok(0) })
     }
-    /// Seal `history` as the generation this plan observed. A later position,
-    /// or a different incarnation, replaces the fence only when `history`
-    /// observed the generation now stored. An older generation writes nothing
-    /// and returns false. The same incarnation and position are already
-    /// sealed and return true. When `dismiss_open` is true and this
-    /// generation is current, an open `scheduled` or `delivering` row is
-    /// cancelled in that same transaction. The default seals nothing.
+    /// Seal `history` as the generation this plan observed, when
+    /// `preference_revision` is still the preference. A different revision
+    /// writes nothing, including the fence. A later position, or a different
+    /// incarnation, replaces the fence only when `history` observed the
+    /// generation now stored. An older generation writes nothing and returns
+    /// false. The same incarnation and position are already sealed and return
+    /// true. When `dismiss_open` is true and both fences match, an open
+    /// `scheduled` or `delivering` row is cancelled in that same transaction.
+    /// The default seals nothing.
     fn note_history(
         &self,
         conversation: &str,
         history: &HistoryGeneration,
+        preference_revision: u64,
         dismiss_open: bool,
         actor: ScheduleActor,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool> {
-        let _ = (conversation, history, dismiss_open, actor, at_ms);
+        let _ = (
+            conversation,
+            history,
+            preference_revision,
+            dismiss_open,
+            actor,
+            at_ms,
+        );
         Box::pin(async { Ok(true) })
     }
-    /// Mark this request's receipt failed. The preference and any other
-    /// request stay as they are. The default records nothing.
+    /// Mark this request's pending receipt failed. A stored or refused
+    /// receipt is left as it is. The preference and any other request stay
+    /// as they are. The default records nothing.
     fn fail_preference_command(&self, request_id: &str) -> ConversationFuture<'_, ()> {
         let _ = request_id;
         Box::pin(async { Ok(()) })
+    }
+    /// Mark this request's pending receipt stored. False when it was not
+    /// pending. The default reports that the receipt is already finished.
+    fn complete_preference_command(&self, request_id: &str) -> ConversationFuture<'_, bool> {
+        let _ = request_id;
+        Box::pin(async { Ok(true) })
+    }
+    /// The enable that is still unsettled, when one is installed. The default
+    /// is none, for a double that does not record an install.
+    fn unsettled_enable(&self) -> ConversationFuture<'_, Option<UnsettledEnable>> {
+        Box::pin(async { Ok(None) })
     }
     /// The receipt for `request_id`, when this store has committed one.
     /// The default is none, for a double that does not record commands.
@@ -506,7 +557,9 @@ fn replay_preference_command(
         PreferenceCommandOutcome::Refused { policies } => Ok(PreferenceUpdate::Refused {
             policies: policies.clone(),
         }),
-        PreferenceCommandOutcome::Failed => Err(ConversationError::Unavailable),
+        PreferenceCommandOutcome::Failed | PreferenceCommandOutcome::Pending => {
+            Err(ConversationError::Unavailable)
+        }
     }
 }
 
@@ -561,13 +614,14 @@ impl ConversationService {
     }
 
     /// Turn the preference on or off. The caller's action is checked before
-    /// Cedar or any write. A request that already committed returns that
-    /// result and does not apply again. Otherwise Cedar decides. Off cancels
-    /// open rows as this person. On scans every catalogue owner and schedules
-    /// each currently blocked eligible turn. A failed scan reverts only the
-    /// unsettled revision this call installed, and that revert marks this
-    /// request failed in the same transaction. A finished scan settles the
-    /// revision it observed.
+    /// Cedar or any write. A request that already finished returns that
+    /// result and does not apply again. A request whose scan or rollback has
+    /// not finished resumes that work and does not report success. Otherwise
+    /// Cedar decides. Off cancels open rows as this person. On scans every
+    /// catalogue owner and schedules each currently blocked eligible turn.
+    /// The receipt stays pending until that scan settles the revision, or
+    /// until the rollback of the unsettled revision this call installed
+    /// commits. A revert that does not commit leaves the receipt pending.
     pub async fn set_usage_limit_auto_continue(
         &self,
         enabled: bool,
@@ -587,6 +641,11 @@ impl ConversationService {
             return Err(ConversationError::Unavailable);
         };
         if let Some(saved) = store.preference_command(&caller.action_id).await? {
+            if matches!(saved.outcome, PreferenceCommandOutcome::Pending) {
+                return self
+                    .resume_pending_preference(&store, enabled, &caller, &saved)
+                    .await;
+            }
             return replay_preference_command(&saved, enabled, &caller);
         }
         let decision = policy
@@ -606,57 +665,122 @@ impl ConversationService {
                 at_ms,
             )
             .await?;
-        let PreferenceUpdate::Stored(stored) = recorded.update else {
-            return Ok(recorded.update);
-        };
-        if recorded.replayed {
-            return Ok(PreferenceUpdate::Stored(stored));
-        }
-        if stored {
-            let mut visited = Vec::new();
-            if let Err(error) = self
-                .schedule_every_owner(&store, true, ScheduleActor::person(&caller), &mut visited)
+        match recorded.update {
+            PreferenceUpdate::Refused { .. } => Ok(recorded.update),
+            PreferenceUpdate::Pending => {
+                let Some(saved) = store.preference_command(&caller.action_id).await? else {
+                    return Err(ConversationError::Unavailable);
+                };
+                self.resume_pending_preference(&store, enabled, &caller, &saved)
+                    .await
+            }
+            PreferenceUpdate::Stored(false) => {
+                if !recorded.replayed {
+                    self.publish_preference(&[]);
+                }
+                Ok(PreferenceUpdate::Stored(false))
+            }
+            PreferenceUpdate::Stored(true) => {
+                if recorded.replayed {
+                    return Ok(PreferenceUpdate::Stored(true));
+                }
+                self.finish_enable_scan(
+                    &store,
+                    &caller,
+                    recorded.revision,
+                    recorded.installed_enable,
+                )
                 .await
-            {
-                if recorded.installed_enable {
-                    let now = self.inner.clock.unix_milliseconds();
-                    let reverted = store
-                        .revert_installed_preference(
-                            recorded.revision,
-                            ScheduleActor::system(),
-                            now,
-                        )
-                        .await?;
-                    // The revert marks the request that installed this
-                    // revision. A revert that no longer matches leaves that
-                    // receipt stored, so this request is marked failed here.
-                    if !reverted {
+            }
+        }
+    }
+
+    /// Continue an enable whose receipt is still pending.
+    async fn resume_pending_preference(
+        &self,
+        store: &Arc<dyn ScheduledMessageStore>,
+        enabled: bool,
+        caller: &ConversationCaller,
+        saved: &PreferenceCommandReceipt,
+    ) -> Result<PreferenceUpdate, ConversationError> {
+        if saved.organization_id != caller.organization_id.as_str()
+            || saved.principal_id != caller.principal_id.as_str()
+            || saved.surface_id != caller.surface_id
+            || saved.enabled != enabled
+        {
+            return Err(ConversationError::RequestConflict);
+        }
+        let reading = store.preference().await?;
+        if !reading.enabled {
+            store.fail_preference_command(&caller.action_id).await?;
+            return Err(ConversationError::Unavailable);
+        }
+        let unsettled = store.unsettled_enable().await?;
+        let installed = unsettled
+            .as_ref()
+            .is_some_and(|row| row.installed_request == caller.action_id);
+        let revision = match &unsettled {
+            Some(row) if installed => row.revision,
+            _ => reading.revision,
+        };
+        self.finish_enable_scan(store, caller, revision, installed)
+            .await
+    }
+
+    /// Scan every owner for an enable, then settle it or roll it back.
+    ///
+    /// The receipt stays pending when the revert or the failure write does
+    /// not commit. It becomes stored only after the scan settles.
+    async fn finish_enable_scan(
+        &self,
+        store: &Arc<dyn ScheduledMessageStore>,
+        caller: &ConversationCaller,
+        revision: u64,
+        installed_enable: bool,
+    ) -> Result<PreferenceUpdate, ConversationError> {
+        let mut visited = Vec::new();
+        if let Err(error) = self
+            .schedule_every_owner(store, true, ScheduleActor::person(caller), &mut visited)
+            .await
+        {
+            if installed_enable {
+                let now = self.inner.clock.unix_milliseconds();
+                match store
+                    .revert_installed_preference(revision, ScheduleActor::system(), now)
+                    .await
+                {
+                    Err(revert_error) => {
+                        self.publish_preference(&visited);
+                        return Err(revert_error);
+                    }
+                    Ok(true) => {
+                        self.publish_preference(&visited);
+                        return Err(error);
+                    }
+                    Ok(false) => {
                         store.fail_preference_command(&caller.action_id).await?;
                     }
-                } else {
-                    // This request did not install the preference. The scan
-                    // still failed, so its receipt is failed and a retry does
-                    // not report success. Another request's revision stays.
-                    store.fail_preference_command(&caller.action_id).await?;
                 }
-                self.publish_preference(&visited);
-                return Err(error);
-            }
-            // A scan that finished settles the revision it saw, including one
-            // a concurrent request installed. That request's later revert then
-            // matches nothing.
-            if !store.settle_installed_preference(recorded.revision).await? {
-                // A newer revision won. This receipt must not stay stored,
-                // or a retry reports the enable that revision replaced.
+            } else {
                 store.fail_preference_command(&caller.action_id).await?;
-                self.publish_preference(&visited);
-                return Err(ConversationError::Unavailable);
             }
             self.publish_preference(&visited);
-        } else {
-            self.publish_preference(&[]);
+            return Err(error);
         }
-        Ok(PreferenceUpdate::Stored(stored))
+        // A scan that finished settles the revision it saw, including one
+        // a concurrent request installed. That request's later revert then
+        // matches nothing.
+        if !store.settle_installed_preference(revision).await? {
+            store.fail_preference_command(&caller.action_id).await?;
+            self.publish_preference(&visited);
+            return Err(ConversationError::Unavailable);
+        }
+        if !store.complete_preference_command(&caller.action_id).await? {
+            self.publish_preference(&visited);
+            return Err(ConversationError::Unavailable);
+        }
+        self.publish_preference(&visited);
+        Ok(PreferenceUpdate::Stored(true))
     }
 
     /// An allow changed what a followed transcript shows. Every subscriber
@@ -927,79 +1051,67 @@ impl ConversationService {
             ContinuationPlan::Hold => {
                 // No row was kept. Seal this generation and dismiss a row a
                 // stale accept may have inserted after the plan was read.
-                self.seal_history(
-                    store,
-                    &facts.conversation,
-                    &history,
-                    open.is_none(),
-                    actor.clone(),
-                    now_ms,
-                )
-                .await?;
+                // The revision is part of that same transaction. An empty
+                // incarnation was not a committed history and does not move
+                // the fence.
+                if !history.incarnation.is_empty() {
+                    store
+                        .note_history(
+                            &facts.conversation,
+                            &history,
+                            standing.revision,
+                            open.is_none(),
+                            actor.clone(),
+                            now_ms,
+                        )
+                        .await?;
+                }
             }
             ContinuationPlan::Accept { due_at_ms, cause } => {
                 self.accept_usage_limit(store, &facts, due_at_ms, cause, actor, standing)
                     .await?;
             }
             ContinuationPlan::MoveDue { due_at_ms } => {
-                self.seal_history(
-                    store,
-                    &facts.conversation,
-                    &history,
-                    false,
-                    actor.clone(),
-                    now_ms,
-                )
-                .await?;
                 store
-                    .move_due(&id.to_string(), &facts_causal(&facts), due_at_ms, now_ms)
+                    .move_due(
+                        &id.to_string(),
+                        &facts_causal(&facts),
+                        due_at_ms,
+                        &history,
+                        standing.revision,
+                        now_ms,
+                    )
                     .await?;
             }
             ContinuationPlan::Defer { due_at_ms } => {
-                self.seal_history(
-                    store,
-                    &facts.conversation,
-                    &history,
-                    false,
-                    actor.clone(),
-                    now_ms,
-                )
-                .await?;
                 store
-                    .defer_claim(&id.to_string(), &facts_causal(&facts), due_at_ms, now_ms)
+                    .defer_claim(
+                        &id.to_string(),
+                        &facts_causal(&facts),
+                        due_at_ms,
+                        &history,
+                        standing.revision,
+                        now_ms,
+                    )
                     .await?;
             }
             ContinuationPlan::Cancel { cause } => {
-                self.seal_history(
-                    store,
-                    &facts.conversation,
-                    &history,
-                    false,
-                    actor.clone(),
-                    now_ms,
-                )
-                .await?;
                 store
-                    .cancel_open(&id.to_string(), cause, actor, now_ms)
+                    .cancel_open(
+                        &id.to_string(),
+                        cause,
+                        actor,
+                        &history,
+                        standing.revision,
+                        now_ms,
+                    )
                     .await?;
             }
             ContinuationPlan::Switch {
-                cancel,
-                due_at_ms,
-                cause,
+                due_at_ms, cause, ..
             } => {
-                self.seal_history(
-                    store,
-                    &facts.conversation,
-                    &history,
-                    false,
-                    actor.clone(),
-                    now_ms,
-                )
-                .await?;
-                store
-                    .cancel_open(&id.to_string(), cancel, actor.clone(), now_ms)
-                    .await?;
+                // Accept cancels the open row and inserts the replacement in
+                // one transaction, against the history and revision it read.
                 self.accept_usage_limit(store, &facts, due_at_ms, cause, actor, standing)
                     .await?;
             }
@@ -1054,26 +1166,6 @@ impl ConversationService {
                 },
                 at_ms,
             )
-            .await?;
-        Ok(())
-    }
-
-    /// Record the history this plan observed, when that read had a generation.
-    /// An empty incarnation was not a committed history and does not move the fence.
-    async fn seal_history(
-        &self,
-        store: &Arc<dyn ScheduledMessageStore>,
-        conversation: &str,
-        history: &HistoryGeneration,
-        dismiss_open: bool,
-        actor: ScheduleActor,
-        at_ms: u64,
-    ) -> Result<(), ConversationError> {
-        if history.incarnation.is_empty() {
-            return Ok(());
-        }
-        store
-            .note_history(conversation, history, dismiss_open, actor, at_ms)
             .await?;
         Ok(())
     }
@@ -1900,10 +1992,10 @@ mod catalogue_pages {
     use nessa_sdk::domain::agent_execution::sessions::SessionId;
 
     use super::{
-        renew_while_held, PreferenceCommandOutcome, PreferenceCommandReceipt, PreferenceReading,
-        PreferenceUpdate, RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement,
-        ScheduledMessage, ScheduledMessageStore, FENCE_LEASE_MS, FENCE_RENEW_EVERY_MS,
-        FENCE_RENEW_RETRY_MS, SCHEDULE_RETRY_MS,
+        renew_while_held, HistoryGeneration, PreferenceCommandOutcome, PreferenceCommandReceipt,
+        PreferenceReading, PreferenceUpdate, RecordedPreference, ScheduleActor, ScheduleDraft,
+        ScheduleSettlement, ScheduledMessage, ScheduledMessageStore, FENCE_LEASE_MS,
+        FENCE_RENEW_EVERY_MS, FENCE_RENEW_RETRY_MS, SCHEDULE_RETRY_MS,
     };
     use crate::conversation::application::{
         ConversationCaller, ConversationDependencies, ConversationFuture, ConversationLimits,
@@ -2062,6 +2154,8 @@ mod catalogue_pages {
         installed_request: Mutex<String>,
         /// The next settlement loses, as a concurrent disable would.
         lose_settle: AtomicBool,
+        /// The next revert returns an error and writes nothing.
+        fail_revert: AtomicBool,
     }
 
     impl RecordingStore {
@@ -2090,6 +2184,7 @@ mod catalogue_pages {
                 commands: Mutex::new(HashMap::new()),
                 installed_request: Mutex::new(String::new()),
                 lose_settle: AtomicBool::new(false),
+                fail_revert: AtomicBool::new(false),
             }
         }
 
@@ -2153,10 +2248,26 @@ mod catalogue_pages {
         ) -> ConversationFuture<'_, Option<ScheduledMessage>> {
             refused()
         }
-        fn move_due(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+        fn move_due(
+            &self,
+            _: &str,
+            _: &str,
+            _: u64,
+            _: &HistoryGeneration,
+            _: u64,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
             refused()
         }
-        fn defer_claim(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+        fn defer_claim(
+            &self,
+            _: &str,
+            _: &str,
+            _: u64,
+            _: &HistoryGeneration,
+            _: u64,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
             refused()
         }
         fn cancel_open(
@@ -2164,6 +2275,8 @@ mod catalogue_pages {
             _: &str,
             _: ContinuationCause,
             _: ScheduleActor,
+            _: &HistoryGeneration,
+            _: u64,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
             refused()
@@ -2271,6 +2384,7 @@ mod catalogue_pages {
                     PreferenceCommandOutcome::Refused { policies } => {
                         PreferenceUpdate::Refused { policies }
                     }
+                    PreferenceCommandOutcome::Pending => PreferenceUpdate::Pending,
                     PreferenceCommandOutcome::Failed => {
                         return Box::pin(async { Err(ConversationError::Unavailable) });
                     }
@@ -2329,7 +2443,11 @@ mod catalogue_pages {
                         principal_id,
                         surface_id,
                         enabled,
-                        outcome: PreferenceCommandOutcome::Stored(enabled),
+                        outcome: if enabled {
+                            PreferenceCommandOutcome::Pending
+                        } else {
+                            PreferenceCommandOutcome::Stored(false)
+                        },
                     },
                 );
                 (PreferenceUpdate::Stored(enabled), installed_enable)
@@ -2354,6 +2472,9 @@ mod catalogue_pages {
             actor: ScheduleActor,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
+            if self.fail_revert.swap(false, Ordering::SeqCst) {
+                return Box::pin(async { Err(ConversationError::Metadata) });
+            }
             let matches = self.revision.load(Ordering::SeqCst) == revision
                 && self.enabled.load(Ordering::SeqCst)
                 && !self.settled.load(Ordering::SeqCst);
@@ -2380,7 +2501,7 @@ mod catalogue_pages {
             let request_id = request_id.to_owned();
             let saved = self.commands.lock().unwrap().get(&request_id).cloned();
             if let Some(saved) = saved {
-                if matches!(saved.outcome, PreferenceCommandOutcome::Stored(_)) {
+                if matches!(saved.outcome, PreferenceCommandOutcome::Pending) {
                     self.commands.lock().unwrap().insert(
                         request_id,
                         PreferenceCommandReceipt {
@@ -2391,6 +2512,40 @@ mod catalogue_pages {
                 }
             }
             Box::pin(async { Ok(()) })
+        }
+        fn complete_preference_command(&self, request_id: &str) -> ConversationFuture<'_, bool> {
+            let request_id = request_id.to_owned();
+            let saved = self.commands.lock().unwrap().get(&request_id).cloned();
+            let Some(saved) = saved else {
+                return Box::pin(async { Ok(false) });
+            };
+            if !matches!(saved.outcome, PreferenceCommandOutcome::Pending) {
+                return Box::pin(async { Ok(false) });
+            }
+            self.commands.lock().unwrap().insert(
+                request_id,
+                PreferenceCommandReceipt {
+                    outcome: PreferenceCommandOutcome::Stored(true),
+                    ..saved
+                },
+            );
+            Box::pin(async { Ok(true) })
+        }
+        fn unsettled_enable(&self) -> ConversationFuture<'_, Option<super::UnsettledEnable>> {
+            let enabled = self.enabled.load(Ordering::SeqCst);
+            let settled = self.settled.load(Ordering::SeqCst);
+            let revision = self.revision.load(Ordering::SeqCst);
+            let installed_request = self.installed_request.lock().unwrap().clone();
+            Box::pin(async move {
+                if enabled && !settled {
+                    Ok(Some(super::UnsettledEnable {
+                        revision,
+                        installed_request,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            })
         }
         fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
             refused()
@@ -2548,10 +2703,26 @@ mod catalogue_pages {
         ) -> ConversationFuture<'_, Option<super::ScheduledMessage>> {
             Box::pin(async { Err(ConversationError::Unavailable) })
         }
-        fn move_due(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+        fn move_due(
+            &self,
+            _: &str,
+            _: &str,
+            _: u64,
+            _: &HistoryGeneration,
+            _: u64,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
             Box::pin(async { Err(ConversationError::Unavailable) })
         }
-        fn defer_claim(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+        fn defer_claim(
+            &self,
+            _: &str,
+            _: &str,
+            _: u64,
+            _: &HistoryGeneration,
+            _: u64,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
             Box::pin(async { Err(ConversationError::Unavailable) })
         }
         fn cancel_open(
@@ -2559,6 +2730,8 @@ mod catalogue_pages {
             _: &str,
             _: ContinuationCause,
             _: ScheduleActor,
+            _: &HistoryGeneration,
+            _: u64,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
             Box::pin(async { Err(ConversationError::Unavailable) })
@@ -2727,6 +2900,47 @@ mod catalogue_pages {
             store.changes.lock().unwrap().as_slice(),
             &[(true, true), (false, false)]
         );
+    }
+
+    #[tokio::test]
+    async fn a_failed_revert_stays_pending_until_a_replay_finishes_it() {
+        let listing = Arc::new(TwoOwners {
+            seen: Mutex::new(Vec::new()),
+            fail: true,
+        });
+        let service = service(listing, Arc::new(TestClock));
+        let store = Arc::new(RecordingStore::new(false));
+        store.fail_revert.store(true, Ordering::SeqCst);
+        bind(&service, store.clone());
+        let error = service
+            .set_usage_limit_auto_continue(true, caller(), facts("admin"))
+            .await;
+        assert!(matches!(error, Err(ConversationError::Metadata)));
+        assert!(store.preference().await.unwrap().enabled);
+        let receipt = store.preference_command("toggle").await.unwrap().unwrap();
+        assert!(matches!(receipt.outcome, PreferenceCommandOutcome::Pending));
+        assert_eq!(store.changes.lock().unwrap().as_slice(), &[(true, true)]);
+        let retry = service
+            .set_usage_limit_auto_continue(true, caller(), facts("admin"))
+            .await;
+        assert!(matches!(retry, Err(ConversationError::Unavailable)));
+        assert!(!store.preference().await.unwrap().enabled);
+        let failed = store.preference_command("toggle").await.unwrap().unwrap();
+        assert!(matches!(failed.outcome, PreferenceCommandOutcome::Failed));
+        assert_eq!(
+            store.changes.lock().unwrap().as_slice(),
+            &[(true, true), (false, false)]
+        );
+        let again = service
+            .set_usage_limit_auto_continue(true, caller(), facts("admin"))
+            .await;
+        assert!(matches!(again, Err(ConversationError::Unavailable)));
+        assert!(!store.preference().await.unwrap().enabled);
+        assert_eq!(
+            store.changes.lock().unwrap().as_slice(),
+            &[(true, true), (false, false)]
+        );
+        assert_eq!(store.decisions.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -3536,10 +3750,26 @@ mod catalogue_pages {
         ) -> ConversationFuture<'_, Option<ScheduledMessage>> {
             Box::pin(async { Err(ConversationError::Metadata) })
         }
-        fn move_due(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+        fn move_due(
+            &self,
+            _: &str,
+            _: &str,
+            _: u64,
+            _: &HistoryGeneration,
+            _: u64,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
             store_error()
         }
-        fn defer_claim(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+        fn defer_claim(
+            &self,
+            _: &str,
+            _: &str,
+            _: u64,
+            _: &HistoryGeneration,
+            _: u64,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
             store_error()
         }
         fn cancel_open(
@@ -3547,6 +3777,8 @@ mod catalogue_pages {
             _: &str,
             _: ContinuationCause,
             _: ScheduleActor,
+            _: &HistoryGeneration,
+            _: u64,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
             store_error()

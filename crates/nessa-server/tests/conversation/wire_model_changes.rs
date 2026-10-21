@@ -2,8 +2,9 @@
 use super::{wire_view, ConversationModelChangeEffect, ProductRouteState};
 use crate::agents_test_support::StubAgentProbe;
 use crate::conversation::application::{
-    ConversationError, ConversationFuture, PreferenceReading, RecordedPreference, ScheduleActor,
-    ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
+    ConversationError, ConversationFuture, HistoryGeneration, PreferenceReading,
+    RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage,
+    ScheduledMessageStore,
 };
 use crate::conversation::domain::ContinuationCause;
 use crate::conversation_test_support::mode_fixture;
@@ -560,10 +561,26 @@ impl ScheduledMessageStore for ScheduleReads {
     fn accept(&self, _: ScheduleDraft, _: u64) -> ConversationFuture<'_, Option<ScheduledMessage>> {
         schedule_unavailable()
     }
-    fn move_due(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+    fn move_due(
+        &self,
+        _: &str,
+        _: &str,
+        _: u64,
+        _: &HistoryGeneration,
+        _: u64,
+        _: u64,
+    ) -> ConversationFuture<'_, bool> {
         schedule_unavailable()
     }
-    fn defer_claim(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+    fn defer_claim(
+        &self,
+        _: &str,
+        _: &str,
+        _: u64,
+        _: &HistoryGeneration,
+        _: u64,
+        _: u64,
+    ) -> ConversationFuture<'_, bool> {
         schedule_unavailable()
     }
     fn cancel_open(
@@ -571,6 +588,8 @@ impl ScheduledMessageStore for ScheduleReads {
         _: &str,
         _: ContinuationCause,
         _: ScheduleActor,
+        _: &HistoryGeneration,
+        _: u64,
         _: u64,
     ) -> ConversationFuture<'_, bool> {
         schedule_unavailable()

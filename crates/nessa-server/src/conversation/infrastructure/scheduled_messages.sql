@@ -6,15 +6,23 @@
 -- instant is the next attempt. retry_failures counts attempts already
 -- deferred. reconcile_retry is a settlement whose plan did not commit.
 -- preference_command is one request's receipt. It commits with that
--- request's decision audit. installed_request names the enable a revert
--- marks failed. A scan that fails marks that request failed even when it
--- installed nothing. A settle that loses to a newer preference revision
--- marks that request failed and leaves the newer revision. history_fence
+-- request's decision audit. An enable is pending until its scan settles
+-- or its rollback commits. A retry of pending resumes that work. stored
+-- is written only when that work has finished, or when a disable or a
+-- deny finished in the decision transaction. installed_request names the
+-- enable a revert marks failed. A scan that fails marks that request
+-- failed even when it installed nothing. A settle that loses to a newer
+-- preference revision marks that request failed and leaves the newer
+-- revision. A revert that does not commit leaves the receipt pending.
+-- history_fence
 -- is the ordered generation a plan observed: incarnation and position, plus
 -- the generation number of the fence at that read. A different incarnation
 -- or a later position replaces the fence only when it observed the
--- generation now stored. An older generation writes nothing. Accept and
--- settle of a submitting row also match the owner of that write. A cancelled
+-- generation now stored. An older generation writes nothing. Cancel,
+-- move, defer, and a hold that dismisses an open row compare that
+-- generation and the preference revision in the same transaction as the
+-- row change. A miss writes nothing. Accept and settle of a submitting
+-- row also match the owner of that write. A cancelled
 -- row for the same causal turn can be scheduled again. delivered, refused,
 -- and unconfirmed cannot. A submitting row another process still leases is
 -- not due until that lease's deadline.
@@ -33,7 +41,7 @@ CREATE TABLE preference_command (
     principal_id TEXT NOT NULL,
     surface_id TEXT NOT NULL,
     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
-    outcome TEXT NOT NULL CHECK (outcome IN ('stored', 'refused', 'failed')),
+    outcome TEXT NOT NULL CHECK (outcome IN ('stored', 'refused', 'failed', 'pending')),
     result_enabled INTEGER NOT NULL CHECK (result_enabled IN (0, 1)),
     policies TEXT NOT NULL DEFAULT ''
 ) STRICT;

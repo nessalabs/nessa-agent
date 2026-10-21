@@ -33,8 +33,11 @@ does not keep a second copy of that decision.
 
 One scheduled-chat-message store owns a one-shot continuation: due time,
 stable execution identity, causal turn, caller, initiation, and cancellation.
-A compare-and-set to `delivering` is the only thing that may call
-`submit_command`. Cedar and the deleted-target refusal stay inside that
+Every schedule-row change is one compare-and-set against the history
+generation and the preference revision that plan read. A preference receipt
+is not success until its scan settles or its rollback commits; a retry of
+an unfinished enable resumes that work. A compare-and-set to `delivering`
+is the only thing that may call `submit_command`. Cedar and the deleted-target refusal stay inside that
 command. Schedule and cancellation audits commit with the status change. The
 delivery audit follows admission and, if it fails, leaves the row delivering
 so the same execution id is not minted again. The project preference is one

@@ -15,7 +15,7 @@ use crate::conversation::application::{
     ConversationError, ConversationFuture, HistoryGeneration, PreferenceCommandOutcome,
     PreferenceCommandReceipt, PreferenceReading, PreferenceUpdate, ReconcileRetry,
     RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage,
-    ScheduledMessageStore, UsageLimitSnapshot, FENCE_LEASE_MS,
+    ScheduledMessageStore, UnsettledEnable, UsageLimitSnapshot, FENCE_LEASE_MS,
 };
 use crate::conversation::domain::ContinuationCause;
 use nessa_local_database::{
@@ -470,6 +470,20 @@ fn claim_history(
     Ok(changed == 1)
 }
 
+/// The preference revision and the history this plan read, checked before
+/// the row changes. A different revision does not advance the history fence.
+fn claim_plan(
+    transaction: &Transaction<'_>,
+    conversation: &str,
+    history: &HistoryGeneration,
+    preference_revision: u64,
+) -> Result<bool, ConversationError> {
+    if standing(transaction)?.revision != preference_revision {
+        return Ok(false);
+    }
+    claim_history(transaction, conversation, history)
+}
+
 struct PreferenceStanding {
     enabled: bool,
     revision: u64,
@@ -564,6 +578,7 @@ fn preference_receipt(
             policies: split_policies(&row.policies),
         },
         "failed" => PreferenceCommandOutcome::Failed,
+        "pending" => PreferenceCommandOutcome::Pending,
         _ => return Err(ConversationError::Metadata),
     };
     Ok(PreferenceCommandReceipt {
@@ -596,6 +611,14 @@ fn recorded_replay(
             policies: policies.clone(),
         },
         PreferenceCommandOutcome::Failed => return Err(ConversationError::Unavailable),
+        PreferenceCommandOutcome::Pending => {
+            return Ok(RecordedPreference {
+                update: PreferenceUpdate::Pending,
+                revision,
+                installed_enable: false,
+                replayed: true,
+            });
+        }
     };
     Ok(RecordedPreference {
         update,
@@ -808,12 +831,21 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 &policies_text,
             )?;
             if let Some(id) = request_id.as_deref() {
+                // An enable is pending until its scan settles or its rollback
+                // commits. A disable and a deny finish in this transaction.
+                let outcome = if !allowed {
+                    "refused"
+                } else if stored {
+                    "pending"
+                } else {
+                    "stored"
+                };
                 save_preference_command(
                     &transaction,
                     id,
                     &actor,
                     enabled,
-                    if allowed { "stored" } else { "refused" },
+                    outcome,
                     stored,
                     if allowed { "" } else { &policies_text },
                 )?;
@@ -903,7 +935,7 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 transaction
                     .execute(
                         "UPDATE preference_command SET outcome = 'failed' \
-                         WHERE request_id = ?1 AND outcome = 'stored'",
+                         WHERE request_id = ?1 AND outcome = 'pending'",
                         params![request],
                     )
                     .map_err(failed)?;
@@ -967,6 +999,7 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         &self,
         conversation: &str,
         history: &HistoryGeneration,
+        preference_revision: u64,
         dismiss_open: bool,
         actor: ScheduleActor,
         at_ms: u64,
@@ -978,6 +1011,10 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
+            if standing(&transaction)?.revision != preference_revision {
+                transaction.commit().map_err(failed)?;
+                return Ok(false);
+            }
             let current = claim_history(&transaction, &conversation, &history)?;
             if current && dismiss_open {
                 cancel_matching(
@@ -1000,11 +1037,38 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             connection
                 .execute(
                     "UPDATE preference_command SET outcome = 'failed' \
-                     WHERE request_id = ?1 AND outcome = 'stored'",
+                     WHERE request_id = ?1 AND outcome = 'pending'",
                     params![request_id],
                 )
                 .map_err(failed)?;
             Ok(())
+        })
+    }
+
+    fn complete_preference_command(&self, request_id: &str) -> ConversationFuture<'_, bool> {
+        let request_id = request_id.to_owned();
+        self.run(move |connection| {
+            let changed = connection
+                .execute(
+                    "UPDATE preference_command SET outcome = 'stored' \
+                     WHERE request_id = ?1 AND outcome = 'pending'",
+                    params![request_id],
+                )
+                .map_err(failed)?;
+            Ok(changed == 1)
+        })
+    }
+
+    fn unsettled_enable(&self) -> ConversationFuture<'_, Option<UnsettledEnable>> {
+        self.run(|connection| {
+            let current = standing(connection)?;
+            if !current.enabled || current.settled {
+                return Ok(None);
+            }
+            Ok(Some(UnsettledEnable {
+                revision: current.revision,
+                installed_request: installed_request(connection)?,
+            }))
         })
     }
 
@@ -1016,13 +1080,15 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
             let due = millis(draft.due_at_ms)?;
-            let transaction = connection.transaction().map_err(failed)?;
-            if !claim_history(&transaction, &draft.conversation, &draft.history)? {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            let current = standing(&transaction)?;
+            if !current.enabled || current.revision != draft.preference_revision {
                 transaction.commit().map_err(failed)?;
                 return Ok(None);
             }
-            let current = standing(&transaction)?;
-            if !current.enabled || current.revision != draft.preference_revision {
+            if !claim_history(&transaction, &draft.conversation, &draft.history)? {
                 transaction.commit().map_err(failed)?;
                 return Ok(None);
             }
@@ -1237,14 +1303,23 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         conversation: &str,
         causal_execution: &str,
         due_at_ms: u64,
+        history: &HistoryGeneration,
+        preference_revision: u64,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool> {
         let conversation = conversation.to_owned();
         let causal_execution = causal_execution.to_owned();
+        let history = history.clone();
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
             let due = millis(due_at_ms)?;
-            let transaction = connection.transaction().map_err(failed)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            if !claim_plan(&transaction, &conversation, &history, preference_revision)? {
+                transaction.commit().map_err(failed)?;
+                return Ok(false);
+            }
             let existing: Option<(String, i64)> = transaction
                 .query_row(
                     "SELECT execution_id, due_at_ms FROM message \
@@ -1292,14 +1367,23 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         conversation: &str,
         causal_execution: &str,
         due_at_ms: u64,
+        history: &HistoryGeneration,
+        preference_revision: u64,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool> {
         let conversation = conversation.to_owned();
         let causal_execution = causal_execution.to_owned();
+        let history = history.clone();
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
             let due = millis(due_at_ms)?;
-            let transaction = connection.transaction().map_err(failed)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            if !claim_plan(&transaction, &conversation, &history, preference_revision)? {
+                transaction.commit().map_err(failed)?;
+                return Ok(false);
+            }
             let execution_id: Option<String> = transaction
                 .query_row(
                     "SELECT execution_id FROM message \
@@ -1345,12 +1429,21 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         conversation: &str,
         cause: ContinuationCause,
         actor: ScheduleActor,
+        history: &HistoryGeneration,
+        preference_revision: u64,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool> {
         let conversation = conversation.to_owned();
+        let history = history.clone();
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
-            let transaction = connection.transaction().map_err(failed)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            if !claim_plan(&transaction, &conversation, &history, preference_revision)? {
+                transaction.commit().map_err(failed)?;
+                return Ok(false);
+            }
             let cancelled = cancel_matching(
                 &transaction,
                 "WHERE conversation = ?1 AND status IN ('scheduled', 'delivering')",
@@ -1994,6 +2087,16 @@ mod tests {
         person_as("toggle")
     }
 
+    /// The history `draft` seals on its first accept: incarnation `history`,
+    /// position 1. An exact match does not require the generation number.
+    fn observed_history() -> HistoryGeneration {
+        HistoryGeneration {
+            incarnation: "history".into(),
+            position: 1,
+            generation: 0,
+        }
+    }
+
     async fn open_messages() -> LocalScheduledMessages {
         store().await
     }
@@ -2238,17 +2341,27 @@ mod tests {
             held.status("exec-1").await.unwrap().as_deref(),
             Some("submitting")
         );
+        let revision = held.preference().await.unwrap().revision;
         assert!(!held
             .cancel_open(
                 "conversation",
                 ContinuationCause::ModelChanged,
                 ScheduleActor::system(),
+                &observed_history(),
+                revision,
                 4
             )
             .await
             .unwrap());
         assert!(!held
-            .defer_claim("conversation", "causal", 80, 5)
+            .defer_claim(
+                "conversation",
+                "causal",
+                80,
+                &observed_history(),
+                revision,
+                5
+            )
             .await
             .unwrap());
         assert!(held
@@ -2278,7 +2391,7 @@ mod tests {
             .unwrap();
         store.claim_due(10, 4).await.unwrap();
         assert!(store
-            .defer_claim("conversation", "causal", 80, 2)
+            .defer_claim("conversation", "causal", 80, &observed_history(), 1, 2)
             .await
             .unwrap());
         assert!(!store.begin_submit("exec-1", 10).await.unwrap());
@@ -2298,6 +2411,8 @@ mod tests {
                 "conversation",
                 ContinuationCause::ModelChanged,
                 ScheduleActor::system(),
+                &observed_history(),
+                1,
                 2
             )
             .await
@@ -2928,7 +3043,7 @@ mod tests {
         stale.history = older.clone();
         assert!(store.accept(stale, 3).await.unwrap().is_some());
         assert!(store
-            .note_history("conversation", &newer, true, ScheduleActor::system(), 4,)
+            .note_history("conversation", &newer, 1, true, ScheduleActor::system(), 4,)
             .await
             .unwrap());
         assert!(store.open("conversation").await.unwrap().is_none());
@@ -2961,7 +3076,14 @@ mod tests {
             generation: 1,
         };
         assert!(store
-            .note_history("conversation", &restored, true, ScheduleActor::system(), 4,)
+            .note_history(
+                "conversation",
+                &restored,
+                1,
+                true,
+                ScheduleActor::system(),
+                4,
+            )
             .await
             .unwrap());
         assert!(store.open("conversation").await.unwrap().is_none());
@@ -2991,6 +3113,146 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_stale_plan_does_not_change_a_newer_continuation() {
+        let store = enabled_store().await;
+        let older = HistoryGeneration {
+            incarnation: "inc".into(),
+            position: 1,
+            generation: 0,
+        };
+        let mut first = draft("conversation", "causal", "exec-old", 50);
+        first.history = older.clone();
+        assert!(store.accept(first, 3).await.unwrap().is_some());
+        let newer = HistoryGeneration {
+            incarnation: "inc".into(),
+            position: 2,
+            generation: 1,
+        };
+        assert!(store
+            .note_history("conversation", &newer, 1, false, ScheduleActor::system(), 4)
+            .await
+            .unwrap());
+        let mut current = draft("conversation", "later", "exec-new", 80);
+        current.history = newer.clone();
+        assert!(store.accept(current, 5).await.unwrap().is_some());
+        let revision = store.preference().await.unwrap().revision;
+        assert!(!store
+            .cancel_open(
+                "conversation",
+                ContinuationCause::NoLongerBlocked,
+                ScheduleActor::system(),
+                &older,
+                revision,
+                6,
+            )
+            .await
+            .unwrap());
+        assert!(!store
+            .move_due("conversation", "later", 90, &older, revision, 7)
+            .await
+            .unwrap());
+        let mut stale_switch = draft("conversation", "stale-turn", "exec-stale", 90);
+        stale_switch.history = older.clone();
+        stale_switch.preference_revision = revision;
+        assert!(store.accept(stale_switch, 8).await.unwrap().is_none());
+        assert_eq!(
+            store.open("conversation").await.unwrap().unwrap().due_at_ms,
+            80
+        );
+        assert!(audits(&store)
+            .iter()
+            .all(|row| row.1 != ContinuationCause::NoLongerBlocked.as_str()));
+        store.claim_due(80, 4).await.unwrap();
+        assert!(!store
+            .defer_claim("conversation", "later", 120, &older, revision, 9)
+            .await
+            .unwrap());
+        assert_eq!(
+            store.status("exec-new").await.unwrap().as_deref(),
+            Some("delivering")
+        );
+        let sealed = HistoryGeneration {
+            incarnation: "inc".into(),
+            position: 2,
+            generation: store.history_generation("conversation").await.unwrap(),
+        };
+        assert!(store
+            .defer_claim("conversation", "later", 120, &sealed, revision, 10)
+            .await
+            .unwrap());
+        assert_eq!(
+            store.status("exec-new").await.unwrap().as_deref(),
+            Some("scheduled")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stale_preference_revision_does_not_dismiss_a_rescheduled_row() {
+        let store = store().await;
+        store.set_preference(true, person(), 1).await.unwrap();
+        let first = store.preference().await.unwrap().revision;
+        let history = observed_history();
+        let mut row = draft("conversation", "causal", "exec-1", 50);
+        row.history = history.clone();
+        row.preference_revision = first;
+        assert!(store.accept(row, 2).await.unwrap().is_some());
+        assert!(!store.set_preference(false, person(), 3).await.unwrap());
+        store.set_preference(true, person(), 4).await.unwrap();
+        let again = store.preference().await.unwrap().revision;
+        assert_ne!(again, first);
+        let mut restored = draft("conversation", "causal", "exec-1", 50);
+        restored.history = history.clone();
+        restored.preference_revision = again;
+        assert!(store.accept(restored, 5).await.unwrap().is_some());
+        let generation = store.history_generation("conversation").await.unwrap();
+        assert!(!store
+            .cancel_open(
+                "conversation",
+                ContinuationCause::PreferenceDisabled,
+                ScheduleActor::system(),
+                &history,
+                first,
+                6,
+            )
+            .await
+            .unwrap());
+        assert!(!store
+            .note_history(
+                "conversation",
+                &history,
+                first,
+                true,
+                ScheduleActor::system(),
+                7,
+            )
+            .await
+            .unwrap());
+        assert_eq!(
+            store.history_generation("conversation").await.unwrap(),
+            generation
+        );
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("scheduled")
+        );
+        assert!(store
+            .cancel_open(
+                "conversation",
+                ContinuationCause::PreferenceDisabled,
+                ScheduleActor::system(),
+                &history,
+                again,
+                8,
+            )
+            .await
+            .unwrap());
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("cancelled")
+        );
+    }
+
+    #[tokio::test]
     async fn a_failed_scan_marks_the_request_that_did_not_install() {
         let store = store().await;
         let first = store
@@ -3008,6 +3270,16 @@ mod tests {
             .await
             .unwrap();
         assert!(!second.installed_enable);
+        assert!(matches!(
+            store
+                .preference_command("install")
+                .await
+                .unwrap()
+                .unwrap()
+                .outcome,
+            PreferenceCommandOutcome::Pending
+        ));
+        assert!(store.complete_preference_command("install").await.unwrap());
         store.fail_preference_command("again").await.unwrap();
         assert_eq!(store.preference().await.unwrap().revision, revision);
         assert!(store.preference().await.unwrap().enabled);
@@ -3235,6 +3507,7 @@ mod tests {
             .unwrap();
         assert_eq!(first.update, PreferenceUpdate::Stored(true));
         assert!(!first.replayed);
+        assert!(store.complete_preference_command("enable").await.unwrap());
         let disabled = store
             .record_preference_decision(true, false, &["admin".into()], person_as("disable"), 2)
             .await
