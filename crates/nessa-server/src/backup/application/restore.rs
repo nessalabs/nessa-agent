@@ -18,7 +18,6 @@
 //! accept's rename. This module has no harness, command, or lease issuer.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::ports::{
     DeferredSessionSource, FetchProgress, InventoryDecision, InventoryDenial, LeaseReceipts,
@@ -246,8 +245,17 @@ pub fn stage_quarantine(
         }
     }
     if let Err(error) = staging.finish(&journal) {
-        // `finish` deletes only a tree this attempt renamed into place.
-        // A quarantine that appeared underneath it belongs to someone else.
+        // A rename whose cleanup could not delete the tree left it unready.
+        // Any other finish error means this attempt did not leave a tree.
+        if error == RestoreFault::Retained {
+            if recorded
+                .write("absent", "unready", error.cause(), "effect")
+                .is_err()
+            {
+                return Err(RestoreFault::Audit);
+            }
+            return Err(error);
+        }
         return Err(recorded.stop(error));
     }
     if recorded
@@ -528,17 +536,23 @@ pub fn open_deferred_conversation(
         return Err(retire_or_audit(layout, &temp));
     }
     if let Err(error) = layout.publish_file(&temp, &final_path) {
-        let leftover = if layout.exists(&final_path).unwrap_or(false) {
-            &final_path
-        } else {
-            &temp
-        };
-        if !retire_session(layout, leftover) {
+        // The rename may have happened before the error. Retire both names.
+        // An exists() error must not be read as "the final path is absent".
+        let retired = retire_session(layout, &temp) && retire_session(layout, &final_path);
+        if !retired {
             return Err(RestoreFault::Retained);
         }
         return Err(recorded.stop(error));
     }
-    let publication = publication_name();
+    let publication = match publication_name() {
+        Ok(publication) => publication,
+        Err(error) => {
+            if !retire_session(layout, &final_path) {
+                return Err(RestoreFault::Retained);
+            }
+            return Err(recorded.stop(error));
+        }
+    };
     if let Err(error) = layout.note_publication(&final_path, &publication) {
         if !retire_session(layout, &final_path) {
             return Err(RestoreFault::Retained);
@@ -742,13 +756,14 @@ fn resolve_root(
     }
 }
 
-fn publication_name() -> String {
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    format!(
-        "pub-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    )
+fn publication_name() -> Result<String, RestoreFault> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|_| RestoreFault::Unreadable)?;
+    let mut name = String::from("pub-");
+    for byte in bytes {
+        name.push_str(&format!("{byte:02x}"));
+    }
+    Ok(name)
 }
 
 fn entry_facts<'a>(facts: &RestoreFacts<'a>, action: RestoreAction) -> RestoreFacts<'a> {

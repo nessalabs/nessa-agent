@@ -1935,6 +1935,10 @@ async fn an_opened_deferred_conversation_matches_the_recorded_fingerprint() {
     assert_eq!(fetched.target, target);
     assert_eq!(matched.target, target);
     assert!(fetched.attestations.starts_with("pub-"));
+    assert_eq!(fetched.attestations.len(), 4 + 32);
+    assert!(fetched.attestations[4..]
+        .bytes()
+        .all(|byte| byte.is_ascii_hexdigit()));
     assert_eq!(
         DirectoryQuarantine
             .publication(&place.live.join("sessions/conv-bulk.sqlite3"))
@@ -3154,6 +3158,229 @@ async fn an_unaudited_session_is_not_promoted() {
         .quarantine
         .join("sessions/conv-bulk.sqlite3")
         .is_file());
+}
+
+/// The rename onto the session name succeeded. A later exists() call fails.
+struct ExistsFailsAfterPublish {
+    seen: AtomicUsize,
+}
+
+impl QuarantineLayout for ExistsFailsAfterPublish {
+    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+        DirectoryQuarantine.begin(quarantine, live)
+    }
+    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+        DirectoryQuarantine.load(root)
+    }
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live)
+    }
+    fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_tree(path)
+    }
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
+        DirectoryQuarantine.read_bytes(path)
+    }
+    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.session_temp(root, relative)
+    }
+    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.publish_file(temp, final_path)?;
+        Err(RestoreFault::Unreadable)
+    }
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_publication(session)
+    }
+    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_file(path)
+    }
+    fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if name.ends_with(".sqlite3") && self.seen.fetch_add(1, Ordering::Relaxed) > 0 {
+            return Err(RestoreFault::Unreadable);
+        }
+        DirectoryQuarantine.exists(path)
+    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.canonicalize(path)
+    }
+    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.anchor(path)
+    }
+    fn hold(
+        &self,
+        root: &Path,
+    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root)
+    }
+    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.spoil(path)
+    }
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        DirectoryQuarantine.session_cut(path, conversation_id)
+    }
+}
+
+#[tokio::test]
+async fn a_failed_publish_retires_the_final_path_when_exists_fails() {
+    let session = sealed_session(b"session-v1");
+    let (_bundle, place) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+    let source = FakeSource::matching(&session);
+    let layout = ExistsFailsAfterPublish {
+        seen: AtomicUsize::new(0),
+    };
+    let error = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.live,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &MemoryAudit::open(),
+        &layout,
+        &source,
+        &mut Quiet,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Unreadable);
+    assert!(!place.live.join("sessions/conv-bulk.sqlite3").exists());
+    assert!(partial_names(&place.live).is_empty());
+}
+
+struct RetainedStaging {
+    quarantine: PathBuf,
+}
+
+impl Staging for RetainedStaging {
+    fn write(&mut self, _relative: &str, _bytes: &[u8]) -> Result<(), RestoreFault> {
+        Ok(())
+    }
+
+    fn finish(self: Box<Self>, _journal: &str) -> Result<(), RestoreFault> {
+        fs::create_dir_all(&self.quarantine).unwrap();
+        fs::write(self.quarantine.join("journal.txt"), b"kept\n").unwrap();
+        Err(RestoreFault::Retained)
+    }
+}
+
+struct RetainsFinish;
+
+impl QuarantineLayout for RetainsFinish {
+    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+        let _ = live;
+        Ok(Box::new(RetainedStaging {
+            quarantine: quarantine.to_path_buf(),
+        }))
+    }
+    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+        DirectoryQuarantine.load(root)
+    }
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live)
+    }
+    fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_tree(path)
+    }
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
+        DirectoryQuarantine.read_bytes(path)
+    }
+    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.session_temp(root, relative)
+    }
+    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_publication(session)
+    }
+    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_file(path)
+    }
+    fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.exists(path)
+    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.canonicalize(path)
+    }
+    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.anchor(path)
+    }
+    fn hold(
+        &self,
+        root: &Path,
+    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root)
+    }
+    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.spoil(path)
+    }
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        DirectoryQuarantine.session_cut(path, conversation_id)
+    }
+}
+
+#[tokio::test]
+async fn a_retained_quarantine_is_recorded_unready() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let audit = MemoryAudit::open();
+    let source = DirectoryVerificationSource::open(bundle.root.clone()).unwrap();
+    let error = stage_quarantine(
+        &StageRequest {
+            facts: person(RestoreAction::Stage),
+            bundle: &source,
+            format: &ExportFormat,
+            verifier: &bundle.key,
+            limits: VerificationLimits::default(),
+            later_inventory: None,
+            quarantine: &place.quarantine,
+            live: &place.live,
+        },
+        &policy(),
+        &audit,
+        &RetainsFinish,
+        &DirectoryMaterializer,
+        &KeyedInventory::new(bundle.key),
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Retained);
+    assert!(place.quarantine.join("journal.txt").is_file());
+    assert!(!place.live.exists());
+    let lines = audit.lines();
+    let unready = lines.iter().find(|line| line.after == "unready").unwrap();
+    assert_eq!(unready.before, "absent");
+    assert_eq!(unready.cause, "retained");
+    assert!(lines
+        .iter()
+        .all(|line| !(line.before == "unchanged" && line.after == "unchanged")));
 }
 
 #[tokio::test]

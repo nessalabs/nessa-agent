@@ -743,13 +743,15 @@ impl Staging for PartialTree {
             return Err(RestoreFault::QuarantineOccupied);
         }
         fs::rename(&self.partial, &self.quarantine).map_err(|_| RestoreFault::Rename)?;
+        self.armed = false;
         if let Some(parent) = self.quarantine.parent() {
             if sync_directory(parent).is_err() {
-                let _ = fs::remove_dir_all(&self.quarantine);
+                if fs::remove_dir_all(&self.quarantine).is_err() {
+                    return Err(RestoreFault::Retained);
+                }
                 return Err(RestoreFault::Unreadable);
             }
         }
-        self.armed = false;
         Ok(())
     }
 }

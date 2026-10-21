@@ -65,7 +65,11 @@ its target.
 | Open through another spelling of the same root | The publication already stored for that anchored root | The same target as the first open | Already present |
 | Fetched in quarantine, then the folder is renamed to live | The same publication, now at the live path | The available line still names that publication and conversation. The root on the line is where the fetch ran | Already present. The file is not fetched again |
 | A session extra whose publication has no available line | The quarantine. Accept does not rename | `unchanged → unchanged` | The error. The live path is not created |
-| Two roots that differ only by ASCII case on Windows | One filesystem object | Refused before either lock is taken | Paths |
+| Two roots that differ only by ASCII case on Windows or macOS | One filesystem object | Refused before either lock is taken | Paths |
+| Publish fails after the bytes may already have the final name | Neither the temp name nor the final name, when both can be retired | The publish error | The error. A file that remains is retained |
+| Publication id | 16 random bytes, not the process id | Attestations are that id | |
+| Quarantine rename whose parent sync fails, and the tree is removed | No quarantine | `unchanged → unchanged` | Unreadable |
+| Quarantine rename whose parent sync fails, and the tree remains | The quarantine, unready | `absent → unready`, cause `retained` | Retained. Not an unchanged refusal |
 
 ## Invariants
 

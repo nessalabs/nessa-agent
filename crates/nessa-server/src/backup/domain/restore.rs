@@ -259,32 +259,29 @@ pub fn paths_are_distinct(quarantine: &Path, live: &Path) -> Result<(), RestoreF
 }
 
 fn same_root(left: &Path, right: &Path) -> bool {
-    #[cfg(windows)]
-    {
+    if folds_ascii_case() {
         fold_root(left) == fold_root(right)
-    }
-    #[cfg(not(windows))]
-    {
+    } else {
         left == right
     }
 }
 
 fn root_contains(parent: &Path, child: &Path) -> bool {
-    #[cfg(windows)]
-    {
+    if folds_ascii_case() {
         let parent = fold_root(parent);
         let child = fold_root(child);
         child.starts_with(&parent) && child.len() > parent.len()
-    }
-    #[cfg(not(windows))]
-    {
+    } else {
         child.starts_with(parent)
     }
 }
 
-/// Windows volumes compare paths without regard to ASCII case, including a
-/// final component that does not exist yet and so cannot be canonicalized.
-#[cfg(windows)]
+/// Default Windows and macOS volumes compare paths without regard to ASCII
+/// case, including a final component that does not exist yet.
+fn folds_ascii_case() -> bool {
+    cfg!(any(windows, target_os = "macos"))
+}
+
 fn fold_root(path: &Path) -> Vec<String> {
     path.components()
         .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
@@ -746,8 +743,7 @@ mod tests {
             paths_are_distinct(&root.join("parent").join("..").join("live"), &live).unwrap_err(),
             RestoreFault::Paths
         );
-        #[cfg(windows)]
-        {
+        if cfg!(any(windows, target_os = "macos")) {
             assert_eq!(
                 paths_are_distinct(&root.join("Restore"), &root.join("restore")).unwrap_err(),
                 RestoreFault::Paths
@@ -757,9 +753,9 @@ mod tests {
                     .unwrap_err(),
                 RestoreFault::Paths
             );
+        } else {
+            assert!(paths_are_distinct(&root.join("Restore"), &root.join("restore")).is_ok());
         }
-        #[cfg(not(windows))]
-        assert!(paths_are_distinct(&root.join("Restore"), &root.join("restore")).is_ok());
         assert!(receipt_is_usable("stopped-host-1"));
         assert!(!receipt_is_usable(""));
         assert!(!receipt_is_usable("has\nline"));
