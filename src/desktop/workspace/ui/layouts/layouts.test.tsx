@@ -447,23 +447,25 @@ describe("a pane's close is offered where closing it does something", () => {
       return enabled
     }
     expect(offered()).toEqual([true, true])
-    await act(async () => void store.dispatch(closePane()))
-    // The closed pane's box stays through the frames a drop's copy and a
-    // column title take, and it keeps the session it showed. The grid
-    // paints the one pane after that.
-    expect(
-      [...host.querySelectorAll("article.workspace-pane")].map((pane) =>
-        pane.getAttribute("aria-label"),
-      ),
-    ).toEqual(["Session a", "Session b"])
-    await act(
-      async () =>
-        new Promise<void>((resolve) =>
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-          ),
+    // jsdom runs animation frames on a timer. Stepping them keeps a busy
+    // event loop from painting the closed box away before the assertion.
+    const frames = controlledAnimationFrames()
+    try {
+      await act(async () => void store.dispatch(closePane()))
+      // The closed pane's box stays through the frames a drop's copy and a
+      // column title take, and it keeps the session it showed. The grid
+      // paints the one pane after that.
+      expect(
+        [...host.querySelectorAll("article.workspace-pane")].map((pane) =>
+          pane.getAttribute("aria-label"),
         ),
-    )
+      ).toEqual(["Session a", "Session b"])
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+    } finally {
+      frames.restore()
+    }
     expect(offered()).toEqual([true])
     expect(await menuOffers()).toBe(true)
     await act(async () => void store.dispatch(newSession()))
