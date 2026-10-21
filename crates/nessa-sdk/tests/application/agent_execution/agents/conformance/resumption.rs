@@ -1211,6 +1211,18 @@ async fn prepared_cancellation_receipt_restarts_under_its_original_decision_and_
             .as_ref(),
         Some(&decision)
     );
+    let rejected_attempts = fresh
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|record| matches!(record, ExecutionAuditRecord::QueueSettled(_)))
+        .count();
+    assert_eq!(
+        rejected_attempts, 1,
+        "the prior failed join attempted its original audit exactly once"
+    );
     fresh.audit.reject.store(false, Ordering::SeqCst);
     let (first, second) = tokio::join!(
         restored.retry_cancelled_receipts(),
@@ -1227,10 +1239,25 @@ async fn prepared_cancellation_receipt_restarts_under_its_original_decision_and_
             .iter()
             .filter(|record| matches!(record, ExecutionAuditRecord::QueueSettled(_)))
             .count(),
-        1,
-        "competing joins use the same scheduler owner and actual ACK"
+        rejected_attempts + 1,
+        "competing joins add one successful delivery to the preserved rejected attempt"
     );
 
+    let delivered = fresh
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|record| match record {
+            ExecutionAuditRecord::QueueSettled(record) => Some(record.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        delivered[0], delivered[1],
+        "rejection and ACK retain exact identity, submitter, initiator and cause"
+    );
     let acknowledged = storage.snapshot();
     let record = acknowledged
         .invocations
