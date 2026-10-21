@@ -5,7 +5,7 @@
  * a reply streaming into one, another's status changing, and typing in a
  * composer each render exactly the pane they concern.
  */
-import { act, StrictMode, Profiler, useRef, type ReactNode } from "react"
+import { act, StrictMode, Profiler, useLayoutEffect, useRef, type ReactNode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -13,14 +13,14 @@ import { focusPane, loadWorkspace, openBeside } from "../../adapters/store/comma
 import { paneFrame } from "../../../split-panes/testing"
 import { placements as placementsOf } from "../../../split-panes/model/pane-sizing"
 import {
-  selectFocusedSessionId,
+  selectFocusedPaneKey,
   selectPanes,
   selectPaneSession,
 } from "../../adapters/store/selectors"
 import { workspaceActions } from "../../adapters/store/slice"
 import { ClockProvider } from "../../../../clock"
 import { emptyTranscript } from "../../model/transcript"
-import { fakeSource, settle, shownBy, summary, testStore } from "../../testing"
+import { fakeSource, settle, summary, testStore } from "../../testing"
 import { Pane } from "./pane"
 
 /**
@@ -58,8 +58,15 @@ let root: Root
 let host: HTMLDivElement
 const renders = new Map<string, number>()
 
+/** Set by the focus-mark test: whether the mark was on the article before paint. */
+let markBeforePaint: boolean | null = null
+
 function Frame({ children }: { children: ReactNode }) {
   const workspace = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    if (markBeforePaint === null) return
+    markBeforePaint = workspace.current?.querySelector("[data-pane-focused]") !== null
+  })
   return <div ref={workspace}>{children}</div>
 }
 
@@ -167,17 +174,39 @@ describe("a pane renders for its own session only", () => {
     expect(rendered()).toEqual(["d"])
   })
 
-  it("renders the two panes focus moves between, and no other", async () => {
+  it("marks the focused pane before its first paint", async () => {
+    markBeforePaint = false
+    await fourPanes()
+    expect(markBeforePaint).toBe(true)
+    markBeforePaint = null
+  })
+
+  it("moves focus on the next frame without rendering either conversation", async () => {
     const { store } = await fourPanes()
     const panes = store.getState().workspace.panes
     const target = panes?.columns[0].panes[0]
-    const was = selectFocusedSessionId(store.getState())
+    const before = selectFocusedPaneKey(store.getState())
     await act(async () => {
       if (target) store.dispatch(focusPane({ pane: target.key }))
     })
-    expect(rendered()).toEqual([target && shownBy(target), was].sort())
-    // The two panes render their headers; what they show is handed nothing new.
+    // The click writes nothing on screen. The mark and the picture wait a frame.
+    expect(rendered()).toEqual([])
     expect([...contentRenders.keys()]).toEqual([])
+    await act(
+      async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    )
+    if (!target) throw new Error("no target pane")
+    const sessionOf = (key: number) => selectPaneSession(store.getState(), key) ?? ""
+    const picture = [sessionOf(target.key)]
+    if (before !== null && before !== target.key) picture.push(sessionOf(before))
+    // The picture of the two panes follows on that frame. Their conversations do not.
+    expect(rendered()).toEqual(picture.sort())
+    expect([...contentRenders.keys()]).toEqual([])
+    const marked = (key: number) =>
+      host.querySelector(`[data-pane-key="${key}"]`)?.hasAttribute("data-focused") ??
+      false
+    expect(marked(target.key)).toBe(true)
+    if (before !== null && before !== target.key) expect(marked(before)).toBe(false)
   })
 
   it("keeps the columns, which the grid renders from, when content changes", async () => {

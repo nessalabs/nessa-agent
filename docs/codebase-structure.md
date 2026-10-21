@@ -269,7 +269,8 @@ against a private scripted gateway.
   implemented for the index, the panes, and the session in
   `store/index-commands.ts`, `store/pane-commands.ts`, and
   `store/session-commands.ts`, [the split](design/workspace-shell-split.md) —
-  effects, typed hooks, selectors and
+  effects, typed hooks, selectors, the session a pane still shows after
+  the source removes it (`store/remembered-session.ts`), and
   the split panes' source in `store/`; the gateway's source and its mapping
   of conversation views in `gateway/` (its `fake-gateway.ts` keeps SDK-typed
   answer records and captured callbacks for tests and the

@@ -51,6 +51,11 @@ export const marks = {
    * (`styles.test.ts`).
    */
   pressing: "data-drag-pressing",
+  /**
+   * On the drag's root for the frame after `pressing` lets go. The composer's
+   * blur stays off while the grain comes back (`styles.css`).
+   */
+  blur: "data-drag-blur",
   /** On the drag's root while carrying (`pane` or `item`), and on what was pressed. */
   carrying: "data-drag-carrying",
   /** On the root while a compact card is carried and live panes remain visible. */
@@ -61,6 +66,8 @@ export const marks = {
   waiting: "data-drag-waiting",
   /** On the drag's root while a drop shown would take the host's spare room (`takesSpare`). */
   takesSpare: "data-drag-takes-spare",
+  /** On the grid while it is painting a column change. Scene text waits one frame (`styles.css`). */
+  painting: "data-split-painting",
 } as const
 
 /** The module's own elements a host may style or find. */

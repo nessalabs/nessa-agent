@@ -20,7 +20,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react"
 import { flushSync } from "react-dom"
 import { holdStill } from "../adapters/hold-still"
-import { durationToken, motionToken } from "../adapters/motion"
+import { durationOf } from "../adapters/motion"
 import { titlePlacement, type TitlePlacement } from "../model/column-title"
 import "./column-header.css"
 
@@ -90,6 +90,12 @@ export function ColumnHeader({
   )
 }
 
+/** A computed length token in pixels; zero when it is not a px length. */
+const pixels = (value: string) => {
+  const token = value.trim()
+  return token.endsWith("px") ? Number.parseFloat(token) : 0
+}
+
 /** What follows the titlebar row in its column, whose place a change of rows moves. */
 const following = (bar: HTMLElement) => {
   const after: HTMLElement[] = []
@@ -131,14 +137,19 @@ function useTitlePlacement(
       })
       if (next === now.current) return
       const first = now.current === null
-      now.current = next
       const below = following(row)
-      const before = below.map((element) => element.offsetTop)
+      // The clock and the block, read before the move. A read after it lays
+      // out the document the move just dirtied: one open measured that walk
+      // at 50 ms. The block is the below title's own height token.
+      const style = first ? null : getComputedStyle(row)
+      const duration = style ? durationOf(style.getPropertyValue("--desktop-base")) : 0
+      const easing = style?.getPropertyValue("--desktop-ease").trim() || "ease"
+      const shift = style
+        ? pixels(style.getPropertyValue("--desktop-column-title-block"))
+        : 0
+      now.current = next
       flushSync(() => setPlacement(next))
-      if (first) return
-      const duration = durationToken(row, "--desktop-base")
-      if (duration === 0) return
-      const easing = motionToken(row, "--desktop-ease") ?? "ease"
+      if (first || duration === 0) return
       const moved = row.parentElement?.querySelector<HTMLElement>(
         ":scope > .desktop-column-title, :scope > .desktop-column-bar > .desktop-column-title[data-placement]:not(.desktop-column-sizer)",
       )
@@ -148,14 +159,16 @@ function useTitlePlacement(
         if (next === "inline") holdStill(moved)
         moved.animate([{ opacity: 0 }, { opacity: 1 }], { duration, easing })
       }
-      below.forEach((element, index) => {
-        const shift = before[index] - element.offsetTop
-        if (Math.abs(shift) < 0.5) return
+      // The body has already moved by the below title's block. The first
+      // frame puts it back where it was: down when that row has gone, up
+      // when it has arrived.
+      const delta = next === "inline" ? shift : -shift
+      if (Math.abs(delta) < 0.5) return
+      for (const element of below)
         element.animate(
-          [{ transform: `translateY(${shift}px)` }, { transform: "none" }],
+          [{ transform: `translateY(${delta}px)` }, { transform: "none" }],
           { duration, easing, composite: "add" },
         )
-      })
     }
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) widths.set(entry.target, entry.contentRect.width)

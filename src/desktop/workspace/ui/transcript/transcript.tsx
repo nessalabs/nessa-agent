@@ -1,4 +1,4 @@
-import { historyNotices } from "../../../../conversation"
+import { historyNotices, UsageLimitCard } from "../../../../conversation"
 import {
   offersAuthenticationRecovery,
   signInProvider,
@@ -17,13 +17,12 @@ import { curveToken, durationToken } from "../../../adapters/motion"
 import { IconButton } from "../../../ui/icon-button"
 import { retryTranscript, setUsageLimitAutoContinue } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import { selectOutbox, selectTranscriptFailure } from "../../adapters/store/selectors"
 import {
-  selectOutbox,
-  selectSession,
-  selectTranscript,
-  selectTranscriptFailure,
-} from "../../adapters/store/selectors"
-import { UsageLimitCard } from "../../../../conversation"
+  useRememberedSession,
+  useRememberedTranscript,
+  useRememberedValue,
+} from "../../adapters/store/remembered-session"
 import { ProviderSignIn } from "./provider-sign-in"
 import { ApprovalCard } from "./approval-card"
 import { LiveRow } from "./live-row"
@@ -104,12 +103,14 @@ export const Transcript = memo(function Transcript({
   onHeadingVisible: (visible: boolean) => void
 }) {
   const dispatch = useWorkspaceDispatch()
-  const transcript = useWorkspaceSelector((state) => selectTranscript(state, sessionId))
-  const outbox = useWorkspaceSelector((state) => selectOutbox(state, sessionId))
-  const failure = useWorkspaceSelector((state) =>
+  const transcript = useRememberedTranscript(sessionId)
+  const liveOutbox = useWorkspaceSelector((state) => selectOutbox(state, sessionId))
+  const outbox = useRememberedValue(sessionId, liveOutbox)
+  const liveFailure = useWorkspaceSelector((state) =>
     selectTranscriptFailure(state, sessionId),
   )
-  const model = useWorkspaceSelector((state) => selectSession(state, sessionId)?.model)
+  const failure = useRememberedValue(sessionId, liveFailure)
+  const model = useRememberedSession(sessionId)?.model
   const provider = signInProvider(transcript?.agent)
   const recoveryShown =
     provider !== undefined &&

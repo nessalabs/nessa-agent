@@ -298,6 +298,12 @@ Experimental turns it on; the rail stands beside the workspace in
   in both engines and layouts. Its split action opens a filled conversation and
   samples the new pane's body and header from their first mounted frame: full
   cumulative ancestor opacity, visible content and unit root/header transform.
+  Once that split has settled, each shown night scene has laid out its text
+  (`data-scene-ready` and `data-scene-complete`, content-visibility not hidden,
+  layers wider than nothing). The wait returns when every shown scene is
+  complete, not when the first one is: the pane already open is finished
+  while the one just mounted is still taking its frames. The dim layer lays
+  out first; rain, the lit layer, and steam lay out on the frame after.
   Drag previews must also retain content; verify
   these with the drag and focus checks when changing their motion.
 - [ ] **No two columns overlap**, and nothing sits under the rail, in any
@@ -871,6 +877,54 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   position. _ADR 238 › A new session's home takes its pane's shape_.
   _Check:_ `responsive.mjs --only home-shape --shots <dir>`, then look at the
   shots beside the conversation pane.
+- [ ] **A closing draft keeps its home until the box goes.** Closing a new
+  session that is not the last pane drops the draft and its composer text
+  at once and keeps the box. On the next frame that box still shows the
+  home, labelled New session, with the unsent text. After the box goes,
+  the pane count is what it was before the split.
+  _Check:_ `columns.mjs --only draft-held`.
+- [ ] **A removed session keeps its unsent reply until the box goes.** The
+  source taking an established session out of two panes drops its composer
+  text at once and keeps the box. On the next frame that box still shows
+  the reply. After the box goes, the pane count is what it was before the
+  split. _Check:_ `columns.mjs --only reply-held`.
+- [ ] **A message still on its way stays until that box goes.** The source
+  removing the session drops the outbox at once, including a send it
+  refused. The box still shows that message and the send failure until
+  the box itself goes. The sample source takes a send before the next
+  paint, so this is the layout test that puts the message on screen and
+  then removes the session.
+- [ ] **A failed read stays until that box goes.** The source removing the
+  session drops the failure at once. The box still shows the read error
+  and Try Again until the box itself goes. A transcript that never arrived
+  is what the layout test removes.
+- [ ] **Stop stays until that box goes while a turn was running.** The
+  source removing the session drops the transcript at once. The box still
+  shows the turn and Stop, rather than Send, until the box itself goes.
+  _Check:_ `columns.mjs --only stop-held`. The layout test removes a
+  session whose conversation was showing a running turn.
+- [ ] **A model change stays until that box goes.** The source removing
+  the session drops the choice and the transcript's model control at
+  once. The box still shows that notice until the box itself goes. The
+  sample source refuses a model change before the next paint, so this is
+  the layout test that puts an acknowledged change on screen and then
+  removes the session.
+- [ ] **An approval answer stays until that box goes.** The source
+  removing the session drops the answer at once. The box still shows
+  the refusal until the box itself goes. The sample source takes an
+  answer before the next paint and drops the approval from the
+  conversation, so this is the layout test that shows the refusal and
+  then removes the session.
+- [ ] **A pane's close control stays until that box goes.** Closing a
+  pane that is not the last drops its key at once and keeps the box.
+  The × stays offered until the box itself goes. A press while the key
+  is already gone does nothing. The layout test closes one of two
+  sessions and still reads both close controls through two frames.
+- [ ] **A pane preview stays until the dropped arrangement paints.** An
+  accepted swap keeps the preview on the panes the grid has not replaced
+  yet. The next two frames still show it. It lets go on the frame the new
+  boxes paint. The workspace leaves chats still, so this is the drag test
+  that mounts the grid with previews on.
 - [ ] **First-message handoff has one composer.** Sending from a new-session
   home replaces it without overlapping composer instances; the reply receives
   the caret and keeps the next draft. The composer glides into its dock and

@@ -17,6 +17,7 @@ import {
 } from "../../model/workspace-index"
 import {
   focusedPane,
+  layoutShape,
   paneByKey,
   paneCount,
   type PaneKey,
@@ -82,6 +83,11 @@ export const selectSessionListChosen = (state: Root) =>
 /** How many columns of panes there are; the side columns are fitted around them. */
 export const selectColumnCount = (state: Root) =>
   state.workspace.panes?.columns.length ?? 1
+/** Which pane is where, ignoring sizes: motion's shape, painted with the boxes. */
+export const selectPaneShape = (state: Root): string => {
+  const layout = state.workspace.panes
+  return layout ? layoutShape(layout) : ""
+}
 export const selectView = (state: Root): SessionView => state.workspace.view
 /** Whether the Agents overview fills the content region. */
 export const selectOverviewOpen = (state: Root) =>
@@ -267,6 +273,10 @@ export const selectPaneWidget = (state: Root, pane: PaneKey): WidgetRef | null =
 /** Whether a pane closes (`canClosePane`): what its close button and menu item offer. */
 export const selectPaneClosable = (state: Root, pane: PaneKey): boolean =>
   canClosePane(state.workspace, pane)
+
+/** Whether the layout still has this pane. A closed pane's box can outlive the key. */
+export const selectPanePresent = (state: Root, pane: PaneKey): boolean =>
+  state.workspace.panes !== null && paneByKey(state.workspace.panes, pane) !== undefined
 
 /** The sessions the panes show, in reading order. */
 export const selectShownSessionIds = createSelector([selectPanes], paneIds)
