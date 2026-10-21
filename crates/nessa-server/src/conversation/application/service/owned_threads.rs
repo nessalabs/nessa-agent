@@ -15,7 +15,7 @@ use super::{
 use async_trait::async_trait;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
-use nessa_sdk::application::agent_execution::agents::{Agent, OwnedLifetime};
+use nessa_sdk::application::agent_execution::agents::{owed_turn_ids, Agent, OwnedLifetime};
 use nessa_sdk::application::agent_execution::commands::{
     CreationFailure, CreationReceipt, CreationStorage, CreationTaskFault, MutationFailure,
 };
@@ -840,9 +840,10 @@ impl Resources {
         &self,
         service: &ConversationService,
         acquisition: Option<&super::OpeningResources>,
+        actor: &ActionContext,
     ) -> ResourceReport {
         let mut report = service.cold_owned_resources(&self.id, acquisition).await;
-        match self.join_cold_evidence(service).await {
+        match self.join_cold_evidence(service, actor).await {
             Ok(true) => {}
             Ok(false) => report.evidence = EvidenceFact::Pending,
             Err(error) => {
@@ -856,6 +857,7 @@ impl Resources {
     async fn join_cold_evidence(
         &self,
         service: &ConversationService,
+        actor: &ActionContext,
     ) -> Result<bool, ConversationError> {
         let mut history = self.history.lock().await;
         if history.is_none() {
@@ -868,10 +870,12 @@ impl Resources {
                 .as_ref()
                 .and_then(|session| session.snapshot())
                 .is_some_and(|snapshot| {
-                    snapshot
-                        .invocations
-                        .iter()
-                        .any(|record| record.decline.is_some())
+                    snapshot.invocations.iter().any(|record| {
+                        record
+                            .decline
+                            .as_ref()
+                            .is_some_and(|decision| !decision.acknowledged())
+                    }) || !owed_turn_ids(&snapshot.invocations).is_empty()
                 });
             if !has_decline {
                 let acknowledged = self.sdk_close_acknowledged(service).await?;
@@ -905,6 +909,12 @@ impl Resources {
             *history = Some(agent);
         }
         let agent = history.as_ref().expect("restored decline owner");
+        for turn in agent.owed_turns().await {
+            agent
+                .decline_turn(&turn, actor.clone())
+                .await
+                .map_err(ConversationError::Agent)?;
+        }
         agent
             .retry_declined_turns()
             .await
@@ -914,12 +924,13 @@ impl Resources {
             .save_retained_lease_records()
             .await?;
         // Startup may not have loaded the live retry index yet. Join the durable mark owner.
+        // This writer has acknowledged its own history. The existing Resources
+        // adapter, not a redundant storage lease, retains the other obligations.
+        *history = None;
         if !self.sdk_close_acknowledged(service).await? {
             return Ok(false);
         }
         service.clear_mark(&self.id).await?;
-        // The actual writer has acknowledged both persisted history and its recovery mark.
-        *history = None;
         Ok(true)
     }
 
@@ -951,7 +962,9 @@ impl Resources {
             .get(&self.id)
             .cloned();
         let Some(slot) = slot else {
-            return self.close_cold(service, self.acquisition.as_deref()).await;
+            return self
+                .close_cold(service, self.acquisition.as_deref(), &actor)
+                .await;
         };
         // A pending or failed opening may retain a newer physical hold before
         // its lease is published. Historical cleanup cannot release that owner.
