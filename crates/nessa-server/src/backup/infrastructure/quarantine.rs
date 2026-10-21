@@ -16,7 +16,7 @@ use sha2::Digest;
 
 use crate::backup::application::{
     CutMaterializer, DecisionAuditError, ExportClock, FetchProgress, LoadedTree, MacKey,
-    PreparedCut, QuarantineLayout, RestoreAudit, RestoreEvidence, RestoreHold,
+    PreparedCut, Promoted, QuarantineLayout, RestoreAudit, RestoreEvidence, RestoreHold,
     SealedInventoryReader, SessionCut, SessionSourceError, Staging, VerificationFormat,
     VerificationLimits, VerificationSource,
 };
@@ -481,29 +481,32 @@ impl QuarantineLayout for DirectoryQuarantine {
         })
     }
 
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
         if symlink_exists(live)? {
             return Err(RestoreFault::LiveOccupied);
         }
         let from_parent = quarantine.parent().map(Path::to_path_buf);
         let to_parent = live.parent().map(Path::to_path_buf);
         fs::rename(quarantine, live).map_err(|_| RestoreFault::Rename)?;
-        // Both directories must commit the rename. Ignoring either sync would
-        // let a later audit call the tree live while a parent still has the
-        // old name.
+        // The rename already made the tree live. A parent that cannot be
+        // synced does not put it back, and does not make the promotion a
+        // refusal.
+        let mut durable = true;
         if let Some(parent) = to_parent.as_deref() {
-            sync_directory(parent).map_err(|_| RestoreFault::Unreadable)?;
+            if sync_directory(parent).is_err() {
+                durable = false;
+            }
         }
         if let Some(parent) = from_parent.as_deref() {
-            if to_parent.as_deref() != Some(parent) {
-                sync_directory(parent).map_err(|_| RestoreFault::Unreadable)?;
+            if to_parent.as_deref() != Some(parent) && sync_directory(parent).is_err() {
+                durable = false;
             }
         }
         let marker = live.join("accept-ready");
         if marker.exists() {
             let _ = fs::remove_file(marker);
         }
-        Ok(())
+        Ok(Promoted { durable })
     }
 
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -537,6 +540,43 @@ impl QuarantineLayout for DirectoryQuarantine {
             sync_directory(parent).map_err(|_| RestoreFault::Unreadable)?;
         }
         Ok(())
+    }
+
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        if publication.is_empty() || publication.bytes().any(|byte| byte <= b' ') {
+            return Err(RestoreFault::Unreadable);
+        }
+        let path = publication_file(session);
+        if path.exists() {
+            fs::remove_file(&path).map_err(|_| RestoreFault::Unreadable)?;
+        }
+        let mut file = open(&path, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)?;
+        file.write_all(publication.as_bytes())
+            .map_err(|_| RestoreFault::Unreadable)?;
+        file.write_all(b"\n")
+            .map_err(|_| RestoreFault::Unreadable)?;
+        file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
+        if let Some(parent) = path.parent() {
+            sync_directory(parent).map_err(|_| RestoreFault::Unreadable)?;
+        }
+        Ok(())
+    }
+
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        let path = publication_file(session);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let text = fs::read_to_string(&path).map_err(|_| RestoreFault::Unreadable)?;
+        let id = text.trim_end_matches(['\n', '\r']);
+        if id.is_empty() || id.bytes().any(|byte| byte <= b' ') {
+            return Err(RestoreFault::Tamper);
+        }
+        Ok(Some(id.to_owned()))
+    }
+
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        self.remove_file(&publication_file(session))
     }
 
     fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -649,6 +689,14 @@ fn ready_path(root: &Path) -> PathBuf {
     root.join("accept-ready")
 }
 
+/// Beside the session file, so the publication names this copy and not an
+/// earlier fetch of the same conversation.
+fn publication_file(session: &Path) -> PathBuf {
+    let mut name = session.as_os_str().to_owned();
+    name.push(".publication");
+    PathBuf::from(name)
+}
+
 /// `canonicalize` on Windows returns `\\?\C:\...`. The storage opener accepts
 /// only a drive prefix, so the verbatim prefix is removed after the ancestor
 /// is resolved.
@@ -738,6 +786,7 @@ fn walk(
             || relative == "accept-ready"
             || relative.ends_with(".partial")
             || relative.ends_with(".rejected")
+            || relative.ends_with(".publication")
         {
             continue;
         }
@@ -893,7 +942,7 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
         persist(&self.directory, &self.path, &text).map_err(|_| DecisionAuditError::NotStored)
     }
 
-    fn available(&self, target: &str) -> Result<bool, DecisionAuditError> {
+    fn available(&self, target: &str, publication: &str) -> Result<bool, DecisionAuditError> {
         let _gate = self
             .gate
             .lock()
@@ -909,6 +958,7 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
             if value.get("target").and_then(Value::as_str) == Some(target)
                 && value.get("after").and_then(Value::as_str) == Some("available")
                 && value.get("decision").and_then(Value::as_str) == Some("effect")
+                && value.get("attestations").and_then(Value::as_str) == Some(publication)
             {
                 return Ok(true);
             }

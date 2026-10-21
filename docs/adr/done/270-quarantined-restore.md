@@ -90,6 +90,8 @@ grant is omitted only through the fenced epoch; a newer policy revision
 is the reissued grant and is kept. A stage that finds the quarantine
 already occupied does not delete that tree. A failed readiness mark
 records whether the tree was removed or left unready. Each restore
-entry point evaluates its own Cedar action. Accept syncs both parents of
-the rename before reporting success. A canonical session image that cannot be read is not
+entry point evaluates its own Cedar action. A rename whose parent sync
+fails is live, recorded as `unsynced`, and is not rolled back. A fetch is
+available only for the publication stored beside that file, and the audit
+names the anchored root rather than the caller's spelling. A canonical session image that cannot be read is not
 sealed while a conversation fence applies.

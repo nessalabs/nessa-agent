@@ -16,14 +16,14 @@ stage ──▶ verify the bundle and keep that authenticated listing
             └── seal the quarantine directory
 accept ──▶ hold the restore-root lock, seal still matches, live path absent
             └── rename quarantine → live, then store the audit, then release
-open ──▶ hold that same lock, stream one deferred conversation into a temp file
-            └── store the match, then publish, then store that the session is available
+open ──▶ anchor the root, hold that same lock, stream one deferred conversation
+            └── store the match, then publish, then name that publication, then store available
 ```
 
 Arrows are the order one call runs. The live path is not created, opened for
 write, or renamed until accept. A failed stage deletes its partial directory.
-Fetch writes only `sessions/<id>.sqlite3` under the root it was given, and
-only by renaming a temp file after the check.
+Fetch writes `sessions/<id>.sqlite3` and the publication beside it, under the
+anchored root, and only by renaming a temp file after the check.
 
 ## States
 
@@ -38,6 +38,31 @@ only by renaming a temp file after the check.
 Live is the path, not a second flag written after the rename. A crash after
 the rename and before a following audit leaves the tree at the live path;
 the result is a visible audit failure, not a second rename back.
+
+## Who owns the name
+
+The audit identity of a path is the anchored path. A caller spelling,
+including an alias such as `other/../live`, is not an identity. Stage,
+accept, and fetch anchor before the decision line. A path that cannot be
+anchored is refused under the caller spelling.
+
+A fetched session has a second identity: the publication written beside the
+session file in that same publish. An `available` effect names that
+publication. An earlier line does not make a different file available. Every
+fetch line for one open uses the anchored root and the conversation id as
+its target.
+
+| What happened | Who owns the bytes | Audit | Caller is told |
+| --- | --- | --- | --- |
+| Rename not done | The quarantine, when it still exists. The live path is unchanged | `unchanged → unchanged` | The error |
+| Rename done, a parent sync failed | The live path | `verified → live`, cause `unsynced` | Live |
+| Rename done, sync succeeded, live audit stored | The live path | `verified → live`, cause `accepted` | Live |
+| Rename done, live audit not stored | The live path | The live line is missing | Audit failure. The tree stays live |
+| Fetch publish not done | No session file | The refusal, or the match line only | The error |
+| File and publication stored, and the available line names that publication | That publication | `held → available`. Attestations are the publication. Target is the anchored root and the conversation | The session |
+| Available line not stored, and the file was removed or emptied | No readable publication | The available line is absent | Audit |
+| Available line not stored, and the file is still readable | The file. Not a publication the audit named | No available line for this publication | Retained. A later open does not serve it |
+| Open through another spelling of the same root | The publication already stored for that anchored root | The same target as the first open | Already present |
 
 ## Invariants
 
@@ -113,11 +138,12 @@ the result is a visible audit failure, not a second rename back.
   `a_quarantine_owned_by_someone_else_is_not_deleted`
 - A fetched session is checked by the layout, not by the source that wrote
   it. The match is stored before the session name exists. The session is
-  available only after the following effect line is stored. If that line is
-  not stored, the file is removed, moved aside, or emptied. Emptying
-  truncates the file directly: the storage opener refuses a copy it did not
-  create. If none of those three leaves the file unreadable, the result is
-  retained and a later open does not serve it.
+  available only when the effect line names the publication stored beside
+  that file. An earlier publication's line does not count. If the line for
+  this publication is not stored, the file is removed, moved aside, or
+  emptied. Emptying truncates the file directly: the storage opener refuses
+  a copy it did not create. If none of those three leaves the file
+  unreadable, the result is retained and a later open does not serve it.
   `a_failed_fetch_fallback_empties_the_session`,
   `a_failed_fetch_that_cannot_be_retired_is_not_served`
 - A session body that cannot be inspected is not sealed while a conversation
@@ -126,8 +152,10 @@ the result is a visible audit failure, not a second rename back.
   `a_lost_refusal_audit_is_not_a_plain_refusal`
 - Each entry point evaluates its own Cedar action. A caller-supplied action
   does not choose the policy. `a_caller_supplied_action_does_not_choose_the_policy`
-- Accept syncs the live parent and, when it differs, the quarantine parent,
-  and does not report success when either sync fails.
+- Accept syncs the live parent and, when it differs, the quarantine parent.
+  A sync that fails after the rename leaves the tree live and records
+  `unsynced`. The rename is not undone.
+  `a_promoted_tree_stays_live_when_the_parent_sync_fails`
 - A lease line `granted` or `command_granted` without a later `ended` gains
   one `ended` line with uncertain cleanup. Accept then requires an operator
   receipt for each such lease. No receipt leaves the tree quarantined.
@@ -135,8 +163,9 @@ the result is a visible audit failure, not a second rename back.
   `an_unfenced_executor_blocks_acceptance`
 - Deferred lines are not payload. Opening one publishes a session file only
   when the written stream's size and fingerprint equal the sealed line.
-  The fetched audit is stored after that rename. If that audit is not stored,
-  the session file is removed and the open does not succeed.
+  The fetch audit names the anchored root. The available line is stored
+  after the publication is written beside that file. If that line is not
+  stored, the session file is retired and the open does not succeed.
   `an_opened_deferred_conversation_matches_the_recorded_fingerprint`,
   `a_failed_fetch_audit_removes_the_session`
 - Source missing, source changed, and an interrupted read delete the temp
@@ -146,9 +175,13 @@ the result is a visible audit failure, not a second rename back.
   `an_interrupted_fetch_leaves_no_partial_session`
 - A conversation that is not deferred does not read the source.
   `an_unknown_conversation_is_not_fetched`
-- A session file that already matches is not fetched again. One that exists
-  and does not match is left in place. `a_matching_session_is_not_fetched_again`,
-  `a_different_session_file_is_not_replaced`
+- A session file whose publication is the one the audit recorded, and whose
+  fingerprint matches, is not fetched again. Another spelling of that same
+  anchored root is the same identity, including when the source is later
+  missing. One that exists and does not match is left in place.
+  `a_matching_session_is_not_fetched_again`,
+  `a_different_session_file_is_not_replaced`,
+  `an_alias_of_the_live_root_reuses_the_fetched_session`
 - A realistic session whose database is over 64 MiB is deferred by the
   export, then recovered by this open. `a_session_over_64_mib_is_restored_when_opened`
 

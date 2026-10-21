@@ -17,8 +17,8 @@ use crate::backup::application::{
     accept_quarantine, open_deferred_conversation, root_posture, stage_quarantine, AcceptRequest,
     DecisionAuditError, DeferredSessionSource, ExportClock, FetchProgress, InventoryCause,
     InventoryDecision, LeaseReceipts, LoadedTree, MacKey, ManifestPublisher, MutationAdmission,
-    OpenRequest, QuarantineLayout, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
-    RestorePolicyEvaluator, SessionCut, SessionSourceError, StageRequest, Staging,
+    OpenRequest, Promoted, QuarantineLayout, RestoreAction, RestoreAudit, RestoreEvidence,
+    RestoreFacts, RestorePolicyEvaluator, SessionCut, SessionSourceError, StageRequest, Staging,
     VerificationFailure, VerificationLimits, VerificationSource,
 };
 use crate::backup::domain::{
@@ -144,13 +144,16 @@ impl RestoreAudit for MemoryAudit {
         Ok(())
     }
 
-    fn available(&self, target: &str) -> Result<bool, DecisionAuditError> {
+    fn available(&self, target: &str, publication: &str) -> Result<bool, DecisionAuditError> {
         let lines = self
             .lines
             .lock()
             .map_err(|_| DecisionAuditError::NotStored)?;
         Ok(lines.iter().any(|line| {
-            line.target == target && line.after == "available" && line.decision == "effect"
+            line.target == target
+                && line.after == "available"
+                && line.decision == "effect"
+                && line.attestations == publication
         }))
     }
 }
@@ -501,7 +504,7 @@ impl QuarantineLayout for StickyQuarantine {
         DirectoryQuarantine.load(root)
     }
 
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live)
     }
 
@@ -519,6 +522,15 @@ impl QuarantineLayout for StickyQuarantine {
 
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_publication(session)
     }
 
     fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -576,7 +588,7 @@ impl QuarantineLayout for KeepsSession {
         DirectoryQuarantine.load(root)
     }
 
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live)
     }
 
@@ -594,6 +606,15 @@ impl QuarantineLayout for KeepsSession {
 
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_publication(session)
     }
 
     fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -1248,7 +1269,7 @@ impl QuarantineLayout for ReportsOccupied {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live)
     }
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -1262,6 +1283,15 @@ impl QuarantineLayout for ReportsOccupied {
     }
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_publication(session)
     }
     fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.remove_file(path)
@@ -1339,7 +1369,7 @@ impl QuarantineLayout for ReadyFails {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live)
     }
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -1356,6 +1386,15 @@ impl QuarantineLayout for ReadyFails {
     }
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_publication(session)
     }
     fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.remove_file(path)
@@ -1821,7 +1860,13 @@ async fn deferred_bundle(lines: Vec<DeferredEntry>) -> (Bundle, Roots) {
 }
 
 fn mark_available(audit: &MemoryAudit, root: &Path, conversation_id: &str) {
-    let target = format!("{} {conversation_id}", root.display());
+    let anchored = DirectoryQuarantine.anchor(root).unwrap();
+    let target = format!("{} {conversation_id}", anchored.display());
+    let publication = "pub-current";
+    let session = anchored.join(format!("sessions/{conversation_id}.sqlite3"));
+    DirectoryQuarantine
+        .note_publication(&session, publication)
+        .unwrap();
     audit
         .append(&RestoreEvidence {
             target: &target,
@@ -1831,7 +1876,7 @@ fn mark_available(audit: &MemoryAudit, root: &Path, conversation_id: &str) {
             initiator: "person",
             decision: "effect",
             policies: &[],
-            attestations: "",
+            attestations: publication,
         })
         .unwrap();
 }
@@ -1878,7 +1923,18 @@ async fn an_opened_deferred_conversation_matches_the_recorded_fingerprint() {
     assert_eq!(fetched.after, "available");
     assert_eq!(fetched.initiator, "person");
     assert_eq!(fetched.decision, "effect");
-    assert!(fetched.target.contains("conv-bulk"));
+    let anchored = DirectoryQuarantine.anchor(&place.live).unwrap();
+    let target = format!("{} conv-bulk", anchored.display());
+    assert_eq!(fetched.target, target);
+    assert_eq!(matched.target, target);
+    assert!(fetched.attestations.starts_with("pub-"));
+    assert_eq!(
+        DirectoryQuarantine
+            .publication(&place.live.join("sessions/conv-bulk.sqlite3"))
+            .unwrap()
+            .as_deref(),
+        Some(fetched.attestations.as_str())
+    );
 }
 
 #[tokio::test]
@@ -2557,7 +2613,7 @@ impl QuarantineLayout for KeepsTree {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live)
     }
     fn remove_tree(&self, _path: &Path) -> Result<(), RestoreFault> {
@@ -2571,6 +2627,15 @@ impl QuarantineLayout for KeepsTree {
     }
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_publication(session)
     }
     fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
         let name = path
@@ -2677,7 +2742,7 @@ impl QuarantineLayout for KeepsBytes {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live)
     }
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -2698,6 +2763,15 @@ impl QuarantineLayout for KeepsBytes {
             return Err(RestoreFault::Unreadable);
         }
         DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn remove_publication(&self, _session: &Path) -> Result<(), RestoreFault> {
+        Err(RestoreFault::Unreadable)
     }
     fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
         if path.exists() {
@@ -2772,6 +2846,202 @@ async fn a_failed_fetch_that_cannot_be_retired_is_not_served() {
     assert_eq!(again, RestoreFault::Retained);
     assert!(fs::metadata(&path).unwrap().len() > 0);
     assert_eq!(*source.writes.lock().unwrap(), 1);
+    let anchored = DirectoryQuarantine.anchor(&place.live).unwrap();
+    let target = format!("{} conv-bulk", anchored.display());
+    let publication = DirectoryQuarantine
+        .publication(&path)
+        .unwrap()
+        .expect("the failed fetch still wrote its publication");
+    assert_ne!(publication, "pub-earlier");
+    let earlier = MemoryAudit::open();
+    earlier
+        .append(&RestoreEvidence {
+            target: &target,
+            before: "held",
+            after: "available",
+            cause: "fetched",
+            initiator: "person",
+            decision: "effect",
+            policies: &[],
+            attestations: "pub-earlier",
+        })
+        .unwrap();
+    let later = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.live,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &earlier,
+        &KeepsBytes,
+        &source,
+        &mut Quiet,
+    )
+    .unwrap_err();
+    assert_eq!(later, RestoreFault::Retained);
+    assert!(fs::metadata(&path).unwrap().len() > 0);
+    assert!(!earlier.available(&target, &publication).unwrap());
+    assert!(earlier.available(&target, "pub-earlier").unwrap());
+    assert_eq!(*source.writes.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn a_promoted_tree_stays_live_when_the_parent_sync_fails() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &MemoryAudit::open(),
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap();
+    let audit = MemoryAudit::open();
+    accept_quarantine(
+        &AcceptRequest {
+            facts: person(RestoreAction::Accept),
+            quarantine: &place.quarantine,
+            live: &place.live,
+            receipts: &NoReceipts,
+        },
+        &policy(),
+        &audit,
+        &ReportsUnsynced,
+    )
+    .unwrap();
+    assert!(place.live.join("journal.txt").is_file());
+    assert!(!place.quarantine.exists());
+    let lines = audit.lines();
+    let live = lines.iter().find(|line| line.after == "live").unwrap();
+    assert_eq!(live.before, "verified");
+    assert_eq!(live.cause, "unsynced");
+    assert_eq!(live.decision, "effect");
+    let anchored = DirectoryQuarantine.anchor(&place.live).unwrap();
+    assert_eq!(live.target, anchored.display().to_string());
+    assert!(lines
+        .iter()
+        .all(|line| !(line.before == "unchanged" && line.after == "unchanged")));
+}
+
+/// The rename has happened. The parent sync is reported as not durable.
+struct ReportsUnsynced;
+
+impl QuarantineLayout for ReportsUnsynced {
+    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+        DirectoryQuarantine.begin(quarantine, live)
+    }
+    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+        DirectoryQuarantine.load(root)
+    }
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live)?;
+        Ok(Promoted { durable: false })
+    }
+    fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_tree(path)
+    }
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
+        DirectoryQuarantine.read_bytes(path)
+    }
+    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.session_temp(root, relative)
+    }
+    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_publication(session)
+    }
+    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_file(path)
+    }
+    fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.exists(path)
+    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.canonicalize(path)
+    }
+    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.anchor(path)
+    }
+    fn hold(
+        &self,
+        root: &Path,
+    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root)
+    }
+    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.spoil(path)
+    }
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        DirectoryQuarantine.session_cut(path, conversation_id)
+    }
+}
+
+#[tokio::test]
+async fn an_alias_of_the_live_root_reuses_the_fetched_session() {
+    let session = sealed_session(b"session-v1");
+    let (_bundle, place) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+    let mut source = FakeSource::matching(&session);
+    let audit = MemoryAudit::open();
+    let first = open_one(&place, "conv-bulk", &source, &audit).unwrap();
+    assert!(!first.already_present);
+    let sibling = place.live.parent().unwrap().join("other");
+    fs::create_dir(&sibling).unwrap();
+    let alias = sibling.join("..").join("live");
+    let again = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &alias,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &audit,
+        &DirectoryQuarantine,
+        &source,
+        &mut Quiet,
+    )
+    .unwrap();
+    assert!(again.already_present);
+    assert_eq!(*source.writes.lock().unwrap(), 1);
+    let path = place.live.join("sessions/conv-bulk.sqlite3");
+    assert_eq!(fs::read(&path).unwrap(), session.bytes);
+    source.mode = "missing";
+    let third = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &alias,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &audit,
+        &DirectoryQuarantine,
+        &source,
+        &mut Quiet,
+    )
+    .unwrap();
+    assert!(third.already_present);
+    assert!(path.is_file());
+    assert_eq!(*source.writes.lock().unwrap(), 1);
+    let anchored = DirectoryQuarantine.anchor(&place.live).unwrap();
+    let target = format!("{} conv-bulk", anchored.display());
+    assert!(audit.lines().iter().all(|line| line.target == target));
 }
 
 #[tokio::test]

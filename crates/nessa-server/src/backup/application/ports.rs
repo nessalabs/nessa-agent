@@ -277,7 +277,8 @@ pub struct RestoreEvidence<'a> {
     pub initiator: &'a str,
     pub decision: &'a str,
     pub policies: &'a [String],
-    /// `lease receipt` lines for an acceptance. Empty for every other transition.
+    /// Acceptance stores `lease receipt` lines. A fetch stores the publication
+    /// id of the session file. Empty for every other transition.
     pub attestations: &'a str,
 }
 
@@ -286,8 +287,10 @@ pub struct RestoreEvidence<'a> {
 pub trait RestoreAudit: Send + Sync {
     fn append(&self, evidence: &RestoreEvidence<'_>) -> Result<(), DecisionAuditError>;
 
-    /// Whether an effect line already records `target` as available.
-    fn available(&self, target: &str) -> Result<bool, DecisionAuditError>;
+    /// Whether an effect line records this publication of `target` as available.
+    ///
+    /// An earlier publication's line does not count.
+    fn available(&self, target: &str, publication: &str) -> Result<bool, DecisionAuditError>;
 }
 
 /// Bytes copied while a deferred conversation is fetched.

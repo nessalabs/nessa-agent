@@ -7,15 +7,18 @@
 //!             ──▶ outcome audit (failure deletes the quarantine)
 //! accept ──▶ policy ──▶ decision audit ──▶ seal and receipts
 //!             ──▶ rename quarantine to live ──▶ outcome audit
-//! open ──▶ policy ──▶ decision audit ──▶ write temp session
+//!             (a parent sync that fails after the rename is still live)
+//! open ──▶ anchor the root ──▶ decision audit on that path
 //!             ──▶ fingerprint ──▶ match audit ──▶ rename into sessions/
-//!             ──▶ available audit (failure retires the session file)
+//!             ──▶ publication beside the file ──▶ available audit
+//!             (failure retires the session; a retained file is not served)
 //! ```
 //!
 //! Arrows are the order one call runs. The live path is not written before
 //! accept's rename. This module has no harness, command, or lease issuer.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::ports::{
     DeferredSessionSource, FetchProgress, InventoryDecision, InventoryDenial, LeaseReceipts,
@@ -37,15 +40,32 @@ use crate::backup::domain::{
 /// Drop releases the restore-root lock.
 pub trait RestoreHold: Send {}
 
+/// The rename onto the live path has happened.
+///
+/// `durable` is false when a parent directory could not be synced. The live
+/// path owns the tree either way; the rename is not undone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Promoted {
+    pub durable: bool,
+}
+
 /// Filesystem effects of a quarantine. Tests substitute a layout that fails.
 pub trait QuarantineLayout {
     fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault>;
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault>;
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<(), RestoreFault>;
+    /// `Err` means the rename did not happen. [`Promoted`] means the live path
+    /// owns the tree.
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault>;
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault>;
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault>;
     fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault>;
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault>;
+    /// Record `publication` beside the session file this publish just created.
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault>;
+    /// The publication stored beside `session`. `None` means this file has none.
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault>;
+    /// Remove the publication stored beside `session`, if one is there.
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault>;
     fn remove_file(&self, path: &Path) -> Result<(), RestoreFault>;
     fn exists(&self, path: &Path) -> Result<bool, RestoreFault>;
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault>;
@@ -142,8 +162,26 @@ pub fn stage_quarantine(
     materializer: &dyn CutMaterializer,
     later_reader: &dyn SealedInventoryReader,
 ) -> Result<StageReport, RestoreFault> {
-    let label = request.quarantine.display().to_string();
     let facts = entry_facts(&request.facts, RestoreAction::Stage);
+    let quarantine = resolve_root(
+        layout,
+        request.quarantine,
+        policy,
+        &facts,
+        audit,
+        "absent",
+        "absent",
+    )?;
+    let live = resolve_root(
+        layout,
+        request.live,
+        policy,
+        &facts,
+        audit,
+        "absent",
+        "absent",
+    )?;
+    let label = quarantine.display().to_string();
     let kind = facts.kind;
     let policies = decide(policy, &facts, audit, &label, "absent", "absent")?;
     let recorded = Recorded {
@@ -151,14 +189,6 @@ pub fn stage_quarantine(
         target: &label,
         initiator: kind,
         policies: &policies,
-    };
-    let quarantine = match layout.anchor(request.quarantine) {
-        Ok(path) => path,
-        Err(error) => return Err(recorded.stop(error)),
-    };
-    let live = match layout.anchor(request.live) {
-        Ok(path) => path,
-        Err(error) => return Err(recorded.stop(error)),
     };
     if let Err(error) = paths_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
@@ -269,8 +299,26 @@ pub fn accept_quarantine(
     audit: &dyn RestoreAudit,
     layout: &dyn QuarantineLayout,
 ) -> Result<AcceptReport, RestoreFault> {
-    let label = request.quarantine.display().to_string();
     let facts = entry_facts(&request.facts, RestoreAction::Accept);
+    let quarantine = resolve_root(
+        layout,
+        request.quarantine,
+        policy,
+        &facts,
+        audit,
+        "verified",
+        "verified",
+    )?;
+    let live = resolve_root(
+        layout,
+        request.live,
+        policy,
+        &facts,
+        audit,
+        "verified",
+        "verified",
+    )?;
+    let label = quarantine.display().to_string();
     let kind = facts.kind;
     let policies = decide(policy, &facts, audit, &label, "verified", "verified")?;
     let recorded = Recorded {
@@ -278,14 +326,6 @@ pub fn accept_quarantine(
         target: &label,
         initiator: kind,
         policies: &policies,
-    };
-    let quarantine = match layout.anchor(request.quarantine) {
-        Ok(path) => path,
-        Err(error) => return Err(recorded.stop(error)),
-    };
-    let live = match layout.anchor(request.live) {
-        Ok(path) => path,
-        Err(error) => return Err(recorded.stop(error)),
     };
     if let Err(error) = paths_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
@@ -328,13 +368,19 @@ pub fn accept_quarantine(
         Ok(false) => {}
         Err(error) => return Err(recorded.stop(error)),
     }
-    if let Err(error) = layout.promote(&quarantine, &live) {
-        return Err(recorded.stop(error));
-    }
+    let promoted = match layout.promote(&quarantine, &live) {
+        Ok(promoted) => promoted,
+        Err(error) => return Err(recorded.stop(error)),
+    };
     let live_label = live.display().to_string();
+    let cause = if promoted.durable {
+        "accepted"
+    } else {
+        "unsynced"
+    };
     if recorded
         .at(&live_label)
-        .record("verified", "live", "accepted", "effect", &attestations)
+        .record("verified", "live", cause, "effect", &attestations)
         .is_err()
     {
         return Err(RestoreFault::Audit);
@@ -364,8 +410,17 @@ pub fn open_deferred_conversation(
     source: &dyn DeferredSessionSource,
     progress: &mut dyn FetchProgress,
 ) -> Result<OpenReport, RestoreFault> {
-    let label = format!("{} {}", request.root.display(), request.conversation_id);
     let facts = entry_facts(&request.facts, RestoreAction::Fetch);
+    let root = resolve_root(
+        layout,
+        request.root,
+        policy,
+        &facts,
+        audit,
+        "deferred",
+        "deferred",
+    )?;
+    let label = format!("{} {}", root.display(), request.conversation_id);
     let kind = facts.kind;
     let policies = decide(policy, &facts, audit, &label, "deferred", "deferred")?;
     let recorded = Recorded {
@@ -373,10 +428,6 @@ pub fn open_deferred_conversation(
         target: &label,
         initiator: kind,
         policies: &policies,
-    };
-    let root = match layout.anchor(request.root) {
-        Ok(path) => path,
-        Err(error) => return Err(recorded.stop(error)),
     };
     let _hold = match layout.hold(&root) {
         Ok(hold) => hold,
@@ -414,27 +465,33 @@ pub fn open_deferred_conversation(
         Err(error) => return Err(recorded.stop(error)),
     };
     if present {
-        match audit.available(&label) {
-            Ok(true) => {
-                return match layout.session_cut(&final_path, request.conversation_id) {
-                    Ok(cut) if cut.size == expected.size && cut.digest == expected.digest => {
-                        recorded.write("available", "available", "already", "effect")?;
-                        Ok(OpenReport {
-                            size: cut.size,
-                            digest: cut.digest,
-                            already_present: true,
-                        })
-                    }
-                    Ok(_) => Err(recorded.stop(RestoreFault::SessionDiffers)),
-                    Err(error) => Err(recorded.stop(error)),
-                };
-            }
-            Ok(false) => {
-                if !retire_session(layout, &final_path) {
-                    return Err(RestoreFault::Retained);
+        let current = match layout.publication(&final_path) {
+            Ok(current) => current,
+            Err(error) => return Err(recorded.stop(error)),
+        };
+        let audited = match current.as_deref() {
+            Some(publication) => match audit.available(&label, publication) {
+                Ok(audited) => audited,
+                Err(_) => return Err(RestoreFault::Audit),
+            },
+            None => false,
+        };
+        if let Some(publication) = current.filter(|_| audited) {
+            return match layout.session_cut(&final_path, request.conversation_id) {
+                Ok(cut) if cut.size == expected.size && cut.digest == expected.digest => {
+                    recorded.record("available", "available", "already", "effect", &publication)?;
+                    Ok(OpenReport {
+                        size: cut.size,
+                        digest: cut.digest,
+                        already_present: true,
+                    })
                 }
-            }
-            Err(_) => return Err(RestoreFault::Audit),
+                Ok(_) => Err(recorded.stop(RestoreFault::SessionDiffers)),
+                Err(error) => Err(recorded.stop(error)),
+            };
+        }
+        if !retire_session(layout, &final_path) {
+            return Err(RestoreFault::Retained);
         }
     }
     let temp = match layout.session_temp(&root, &relative) {
@@ -459,8 +516,6 @@ pub fn open_deferred_conversation(
         let _ = layout.remove_file(&temp);
         return Err(recorded.stop(RestoreFault::SourceChanged));
     }
-    // The session name does not exist until this line is stored. A failed
-    // audit therefore cannot leave the conversation at its normal path.
     if recorded
         .write("deferred", "held", "matched", "effect")
         .is_err()
@@ -478,8 +533,15 @@ pub fn open_deferred_conversation(
         }
         return Err(recorded.stop(error));
     }
+    let publication = publication_name();
+    if let Err(error) = layout.note_publication(&final_path, &publication) {
+        if !retire_session(layout, &final_path) {
+            return Err(RestoreFault::Retained);
+        }
+        return Err(recorded.stop(error));
+    }
     if recorded
-        .write("held", "available", "fetched", "effect")
+        .record("held", "available", "fetched", "effect", &publication)
         .is_err()
     {
         return Err(retire_or_audit(layout, &final_path));
@@ -618,6 +680,40 @@ fn hold_roots(
     })
 }
 
+fn resolve_root(
+    layout: &dyn QuarantineLayout,
+    path: &Path,
+    policy: &dyn RestorePolicyEvaluator,
+    facts: &RestoreFacts<'_>,
+    audit: &dyn RestoreAudit,
+    before: &str,
+    after: &str,
+) -> Result<PathBuf, RestoreFault> {
+    match layout.anchor(path) {
+        Ok(path) => Ok(path),
+        Err(error) => {
+            let label = path.display().to_string();
+            let policies = decide(policy, facts, audit, &label, before, after)?;
+            Err(Recorded {
+                audit,
+                target: &label,
+                initiator: facts.kind,
+                policies: &policies,
+            }
+            .stop(error))
+        }
+    }
+}
+
+fn publication_name() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    format!(
+        "pub-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 fn entry_facts<'a>(facts: &RestoreFacts<'a>, action: RestoreAction) -> RestoreFacts<'a> {
     RestoreFacts {
         kind: facts.kind,
@@ -636,7 +732,14 @@ fn retire_or_audit(layout: &dyn QuarantineLayout, path: &Path) -> RestoreFault {
 }
 
 /// Remove the published session, or move it aside, or empty it.
+/// The publication beside it is cleared in every case. The layout owns that file.
 fn retire_session(layout: &dyn QuarantineLayout, path: &Path) -> bool {
+    let retired = retire_bytes(layout, path);
+    let _ = layout.remove_publication(path);
+    retired
+}
+
+fn retire_bytes(layout: &dyn QuarantineLayout, path: &Path) -> bool {
     if layout.remove_file(path).is_ok() {
         return true;
     }
