@@ -2219,3 +2219,7 @@ impl SessionLifecycle {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/application/agent_execution/agents/lifecycle_cleanup_proof.rs"]
+mod cleanup_proof_tests;

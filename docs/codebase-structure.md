@@ -2543,7 +2543,8 @@ SQLite, then checks retry, settlement and reopening. `resumption.rs` flushes the
 existing session owner's retained evidence before recovery completes or its durable
 unfinished mark clears. `conformance/resumption/cleanup_proof_panics.rs` exercises
 retirement save construction, poll and drop faults for start, abandonment and
-Authorized-close through that same writer.
+Authorized-close through that same writer. `lifecycle_cleanup_proof.rs` polls the
+new evidence boundary behind an admitted proof writer before any audit effect.
 `conversation/leases/cleanup_counts.rs` checks each actual backend cleanup identity
 across late End acknowledgement and a later opening, including duplicate/missing
 cleanup counterexamples. The SDK session manager distinguishes an applied scheduling
