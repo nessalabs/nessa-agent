@@ -533,9 +533,10 @@ impl QuarantineLayout for DirectoryQuarantine {
         if symlink_exists(final_path)? {
             return Err(RestoreFault::SessionDiffers);
         }
+        // Durable bytes, then the name. A read-only open cannot flush on
+        // Windows, so the writable handle is taken before the rename.
+        sync_writable(temp)?;
         fs::rename(temp, final_path).map_err(|_| RestoreFault::Rename)?;
-        let published = File::open(final_path).map_err(|_| RestoreFault::Unreadable)?;
-        published.sync_all().map_err(|_| RestoreFault::Unreadable)?;
         if let Some(parent) = final_path.parent() {
             sync_directory(parent).map_err(|_| RestoreFault::Unreadable)?;
         }
@@ -865,6 +866,16 @@ fn partial_path(quarantine: &Path) -> Result<PathBuf, RestoreFault> {
         return Err(RestoreFault::Unreadable);
     }
     Ok(parent.join(staged))
+}
+
+fn sync_writable(path: &Path) -> Result<(), RestoreFault> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|_| RestoreFault::Unreadable)?;
+    file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
+    Ok(())
 }
 
 fn symlink_exists(path: &Path) -> Result<bool, RestoreFault> {
