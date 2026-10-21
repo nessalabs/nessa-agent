@@ -8,8 +8,13 @@
 -- preference_command is one request's receipt. It commits with that
 -- request's decision audit. installed_request names the enable a revert
 -- marks failed. A scan that fails marks that request failed even when it
--- installed nothing. history_fence is the conversation generation a plan
--- observed. Accept inserts only while that generation is still current.
+-- installed nothing. A settle that loses to a newer preference revision
+-- marks that request failed and leaves the newer revision. history_fence
+-- is the ordered generation a plan observed: incarnation and position, plus
+-- the generation number of the fence at that read. A different incarnation
+-- or a later position replaces the fence only when it observed the
+-- generation now stored. An older generation writes nothing. Accept and
+-- settle of a submitting row also match the owner of that write.
 -- user_version stays 1. An earlier copy of this file is recreated.
 CREATE TABLE preference (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -76,7 +81,8 @@ CREATE TABLE reconcile_retry (
 CREATE TABLE history_fence (
     conversation TEXT PRIMARY KEY,
     incarnation TEXT NOT NULL,
-    position INTEGER NOT NULL
+    position INTEGER NOT NULL,
+    generation INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE audit (

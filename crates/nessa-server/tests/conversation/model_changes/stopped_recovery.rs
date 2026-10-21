@@ -79,6 +79,7 @@ async fn a_recovered_model_change_cancels_the_open_continuation() {
                 history: HistoryGeneration {
                     incarnation: "history".into(),
                     position: 1,
+                    generation: 0,
                 },
             },
             2,

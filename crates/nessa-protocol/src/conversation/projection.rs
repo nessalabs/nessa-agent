@@ -510,56 +510,17 @@ fn authentication_independent_failure(record: &InvocationRecord) -> bool {
         .and_then(|report| report.clone().into_result().err());
     report_error.as_ref().is_some_and(|error| error != refusal) || refusal != final_error
 }
-/// The saved usage limit, unwrapping the same operation wrappers as
-/// [`AgentError::usage_limit`]. A provider report owns the settlement when
-/// one was saved. Without one, every position of an aggregate is searched, so
+/// The saved usage limit. [`AgentError::usage_limit`] is the only walk of
+/// nested operation failures. A provider report owns the settlement when one
+/// was saved. Without one, that walk reads every position of an aggregate, so
 /// a limit carried only as `subsequent_error` is still the card. A diagnostic
 /// that merely mentions a limit is not one.
-fn usage_limit_refusal(record: &InvocationRecord) -> Option<&AgentError> {
+fn usage_limit_refusal(record: &InvocationRecord) -> Option<&UsageLimit> {
     let error = match record.provider_report.as_ref() {
         Some(report) => report.provider_result()?.as_ref().err()?,
         None => record.result.as_ref()?.as_ref().err()?,
     };
-    find_usage_limit(error)
-}
-
-/// The usage-limit error inside `error`, including a later aggregate position.
-fn find_usage_limit(error: &AgentError) -> Option<&AgentError> {
-    match error {
-        AgentError::UsageLimitReached(_) => Some(error),
-        AgentError::MultipleOperationFailures {
-            first_error,
-            subsequent_error,
-        } => find_usage_limit(first_error).or_else(|| find_usage_limit(subsequent_error)),
-        AgentError::OperationAndCleanupFailure {
-            operation_error,
-            cleanup_error,
-        } => find_usage_limit(operation_error).or_else(|| find_usage_limit(cleanup_error)),
-        AgentError::StorageAfterExecution {
-            execution_result, ..
-        } => execution_result
-            .as_ref()
-            .as_ref()
-            .err()
-            .and_then(find_usage_limit),
-        AgentError::ExecutionObservation {
-            error: observed,
-            execution_result,
-        } => find_usage_limit(observed).or_else(|| {
-            execution_result
-                .as_deref()
-                .and_then(|result| result.as_ref().err())
-                .and_then(find_usage_limit)
-        }),
-        AgentError::AfterInvocationHooks {
-            execution_result, ..
-        } => execution_result
-            .as_ref()
-            .as_ref()
-            .err()
-            .and_then(find_usage_limit),
-        _ => None,
-    }
+    error.usage_limit()
 }
 
 /// A typed usage limit kept a separate failure beside it.
@@ -613,10 +574,7 @@ fn distinct_from_usage_limit(error: &AgentError) -> bool {
 }
 
 fn published_usage_limit(record: &InvocationRecord) -> Option<ConversationUsageLimit> {
-    let AgentError::UsageLimitReached(limit) = usage_limit_refusal(record)? else {
-        return None;
-    };
-    Some(conversation_usage_limit(limit))
+    Some(conversation_usage_limit(usage_limit_refusal(record)?))
 }
 
 fn conversation_usage_limit(limit: &UsageLimit) -> ConversationUsageLimit {

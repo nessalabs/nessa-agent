@@ -122,13 +122,19 @@ pub struct ReconcileRetry {
     pub retry_at_ms: u64,
 }
 
-/// The committed history a plan read. `position` moves forward inside one
-/// `incarnation`. Accept inserts only while this generation is still the one
-/// sealed for the conversation.
+/// The committed history a plan read, and the fence generation it observed.
+///
+/// `generation` is the `history_fence.generation` at that read, or 0 when the
+/// fence had no row. `position` is ordered only inside one `incarnation`. A
+/// different incarnation, or a later position, replaces the fence only when
+/// `generation` is still the one stored. The same incarnation and position
+/// are that sealed history. An older generation writes nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryGeneration {
     pub incarnation: String,
     pub position: u64,
+    /// The fence generation this plan observed. 0 is an empty fence.
+    pub generation: u64,
 }
 
 /// What accepting a row needs. `execution_id` is used only when no row exists
@@ -350,9 +356,18 @@ pub trait ScheduledMessageStore: Send + Sync {
     /// The earliest still-live `submitting` lease, so the off path can wake
     /// and cancel it when it expires.
     fn next_live_fence(&self, now_ms: u64) -> ConversationFuture<'_, Option<u64>>;
-    /// Seal `history` as the generation this plan observed. A newer position
-    /// in the same incarnation replaces an older one. An older position writes
-    /// nothing and returns false. When `dismiss_open` is true and this
+    /// The fence generation stored for `conversation`, or 0 when none is sealed.
+    /// Read this before the session, then put it on [`HistoryGeneration`].
+    /// The default is an empty fence.
+    fn history_generation(&self, conversation: &str) -> ConversationFuture<'_, u64> {
+        let _ = conversation;
+        Box::pin(async { Ok(0) })
+    }
+    /// Seal `history` as the generation this plan observed. A later position,
+    /// or a different incarnation, replaces the fence only when `history`
+    /// observed the generation now stored. An older generation writes nothing
+    /// and returns false. The same incarnation and position are already
+    /// sealed and return true. When `dismiss_open` is true and this
     /// generation is current, an open `scheduled` or `delivering` row is
     /// cancelled in that same transaction. The default seals nothing.
     fn note_history(
@@ -434,8 +449,11 @@ pub trait ScheduledMessageStore: Send + Sync {
     /// The row's status text, when it exists.
     fn status(&self, execution_id: &str) -> ConversationFuture<'_, Option<String>>;
     /// After the outcome has been observed. The status change and the audit
-    /// commit together. `Err` leaves the previous status. `at_ms` is the
-    /// clock at the observation, not a reading taken before the submit.
+    /// commit together. A `submitting` row changes only when `fence_owner` is
+    /// this process; a former owner writes no status and no audit. A
+    /// `delivering` row has no owner yet. `Err` leaves the previous status.
+    /// `at_ms` is the clock at the observation, not a reading taken before
+    /// the submit.
     fn record_outcome(
         &self,
         execution_id: &str,
@@ -623,6 +641,9 @@ impl ConversationService {
             // a concurrent request installed. That request's later revert then
             // matches nothing.
             if !store.settle_installed_preference(recorded.revision).await? {
+                // A newer revision won. This receipt must not stay stored,
+                // or a retry reports the enable that revision replaced.
+                store.fail_preference_command(&caller.action_id).await?;
                 self.publish_preference(&visited);
                 return Err(ConversationError::Unavailable);
             }
@@ -865,9 +886,16 @@ impl ConversationService {
         enabled_by_person: bool,
         actor: ScheduleActor,
     ) -> Result<(), ConversationError> {
-        let Some(facts) = self.usage_limit_facts(id).await? else {
+        // The fence generation is read before the session. A generation
+        // attached after the session read could name a newer fence than the
+        // history that read returned.
+        let generation = store.history_generation(&id.to_string()).await?;
+        let Some(mut facts) = self.usage_limit_facts(id).await? else {
             return Ok(());
         };
+        if !facts.history.incarnation.is_empty() {
+            facts.history.generation = generation;
+        }
         let standing = store.preference().await?;
         let open = store.open(&id.to_string()).await?;
         let open_view = open
@@ -1070,6 +1098,7 @@ impl ConversationService {
                 history: HistoryGeneration {
                     incarnation: String::new(),
                     position: 0,
+                    generation: 0,
                 },
             }));
         };
@@ -1159,6 +1188,7 @@ impl ConversationService {
             history: HistoryGeneration {
                 incarnation: committed.incarnation().to_owned(),
                 position: committed.position(),
+                generation: 0,
             },
         }))
     }
@@ -1995,6 +2025,8 @@ mod catalogue_pages {
         commands: Mutex<HashMap<String, PreferenceCommandReceipt>>,
         /// The request that installed the current unsettled enable.
         installed_request: Mutex<String>,
+        /// The next settlement loses, as a concurrent disable would.
+        lose_settle: AtomicBool,
     }
 
     impl RecordingStore {
@@ -2022,11 +2054,15 @@ mod catalogue_pages {
                 fail_reconcile_note: AtomicBool::new(false),
                 commands: Mutex::new(HashMap::new()),
                 installed_request: Mutex::new(String::new()),
+                lose_settle: AtomicBool::new(false),
             }
         }
 
         /// Settle `revision` when it is still the enabled preference.
         fn settle_revision(&self, revision: u64) -> bool {
+            if self.lose_settle.swap(false, Ordering::SeqCst) {
+                return false;
+            }
             if self.revision.load(Ordering::SeqCst) == revision
                 && self.enabled.load(Ordering::SeqCst)
             {
@@ -2685,6 +2721,30 @@ mod catalogue_pages {
         assert!(matches!(retry, Err(ConversationError::Unavailable)));
         assert!(store.preference().await.unwrap().enabled);
         assert_eq!(store.changes.lock().unwrap().as_slice(), &[(true, false)]);
+    }
+
+    #[tokio::test]
+    async fn a_lost_revision_settlement_fails_the_request_receipt() {
+        let listing = Arc::new(TwoOwners {
+            seen: Mutex::new(Vec::new()),
+            fail: false,
+        });
+        let service = service(listing, Arc::new(TestClock));
+        let store = Arc::new(RecordingStore::new(false));
+        store.lose_settle.store(true, Ordering::SeqCst);
+        bind(&service, store.clone());
+        let error = service
+            .set_usage_limit_auto_continue(true, caller(), facts("admin"))
+            .await;
+        assert!(matches!(error, Err(ConversationError::Unavailable)));
+        assert!(store.preference().await.unwrap().enabled);
+        let receipt = store.preference_command("toggle").await.unwrap().unwrap();
+        assert!(matches!(receipt.outcome, PreferenceCommandOutcome::Failed));
+        let retry = service
+            .set_usage_limit_auto_continue(true, caller(), facts("admin"))
+            .await;
+        assert!(matches!(retry, Err(ConversationError::Unavailable)));
+        assert_eq!(store.changes.lock().unwrap().as_slice(), &[(true, true)]);
     }
 
     #[tokio::test]
