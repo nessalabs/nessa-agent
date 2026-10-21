@@ -27,11 +27,7 @@ impl Pause for Still {
 
 /// A fetch whose budget is not spent on the zero clock.
 fn running(stop: Arc<ReadStop>) -> super::super::Stopping {
-    super::super::Stopping {
-        stop,
-        clock: Arc::new(Held),
-        until: u64::MAX,
-    }
+    super::super::Stopping::new(stop, Arc::new(Held), u64::MAX)
 }
 
 const CONVERSATION: &str = "00000000-0000-4000-8000-000000000001";
@@ -307,6 +303,7 @@ fn a_stopped_source_is_not_a_fresh_file_and_asks_nothing() {
     let reads = Arc::new(AtomicUsize::new(0));
     let stop = ReadStop::new();
     stop.stop();
+    let ending = running(stop);
     let mut source = StoppedSource {
         source: Counting {
             bytes,
@@ -314,7 +311,7 @@ fn a_stopped_source_is_not_a_fresh_file_and_asks_nothing() {
             wrong_length: false,
             corrupt: false,
         },
-        stop,
+        ending: &ending,
     };
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("file.bin");
@@ -324,7 +321,7 @@ fn a_stopped_source_is_not_a_fresh_file_and_asks_nothing() {
         &mut source,
         &Still,
         &request(&conversation, &digest, &output),
-        &running(ReadStop::new()),
+        &ending,
     )
     .unwrap()
     .unwrap_err();
@@ -389,21 +386,33 @@ fn missing_request<'a>(
 #[test]
 fn a_budget_that_cancels_a_range_is_unreachable_and_a_stop_stays_stopped() {
     let stop = ReadStop::new();
-    let ending = super::super::Stopping {
-        stop: stop.clone(),
-        clock: Arc::new(Held),
-        until: 0,
-    };
+    let deadline = super::super::Stopping::new(stop.clone(), Arc::new(Held), 0);
+    assert!(deadline.note_end());
     let fault = ArtifactFault::progress(ArtifactFaultKind::Gateway(ReadFailure::Stopped), 4, 1);
-    let spent = super::classify_artifact_fault(fault, &stop, &ending);
+    let spent = super::classify_artifact_fault(fault, &deadline);
     assert_eq!(
         spent.kind(),
         ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
     );
     assert_eq!(spent.reached(), 4);
     assert_eq!(spent.resumed_from(), 1);
+    // The budget was the condition that ended the fetch. A stop set after
+    // that note does not replace it.
     stop.stop();
-    let stopped = super::classify_artifact_fault(fault, &stop, &ending);
+    let kept = super::classify_artifact_fault(fault, &deadline);
+    assert_eq!(
+        kept.kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
+    );
+    assert_eq!(
+        super::dial_failure(ReadFailure::Stopped, &deadline, false),
+        ReadFailure::Unreachable
+    );
+    let caller = ReadStop::new();
+    caller.stop();
+    let observed = super::super::Stopping::new(caller, Arc::new(Held), 0);
+    assert!(observed.note_end());
+    let stopped = super::classify_artifact_fault(fault, &observed);
     assert_eq!(
         stopped.kind(),
         ArtifactFaultKind::Gateway(ReadFailure::Stopped)
@@ -416,7 +425,7 @@ fn a_settled_refusal_survives_a_later_stop() {
     let ending = running(stop.clone());
     let fault = ArtifactFault::progress(ArtifactFaultKind::Gateway(ReadFailure::Refused), 4, 1);
     stop.stop();
-    let kept = super::classify_artifact_fault(fault, &stop, &ending);
+    let kept = super::classify_artifact_fault(fault, &ending);
     assert_eq!(
         kept.kind(),
         ArtifactFaultKind::Gateway(ReadFailure::Refused)
@@ -424,7 +433,7 @@ fn a_settled_refusal_survives_a_later_stop() {
     assert_eq!(kept.reached(), 4);
     assert_eq!(kept.resumed_from(), 1);
     assert_eq!(
-        super::dial_failure(ReadFailure::Refused, &stop, &ending, false),
+        super::dial_failure(ReadFailure::Refused, &ending, false),
         ReadFailure::Refused
     );
 }
@@ -436,7 +445,7 @@ fn a_settled_gateway_fault_survives_a_later_stop() {
     stop.stop();
     for failure in [ReadFailure::Protocol, ReadFailure::Unreachable] {
         let fault = ArtifactFault::progress(ArtifactFaultKind::Gateway(failure), 4, 1);
-        let kept = super::classify_artifact_fault(fault, &stop, &ending);
+        let kept = super::classify_artifact_fault(fault, &ending);
         assert_eq!(
             kept.kind(),
             ArtifactFaultKind::Gateway(failure),
@@ -445,13 +454,13 @@ fn a_settled_gateway_fault_survives_a_later_stop() {
         assert_eq!(kept.reached(), 4);
         assert_eq!(kept.resumed_from(), 1);
         assert_eq!(
-            super::dial_failure(failure, &stop, &ending, false),
+            super::dial_failure(failure, &ending, false),
             failure,
             "{failure:?}"
         );
     }
     assert_eq!(
-        super::dial_failure(ReadFailure::Unreachable, &stop, &ending, true),
+        super::dial_failure(ReadFailure::Unreachable, &ending, true),
         ReadFailure::Away
     );
 }
@@ -843,11 +852,8 @@ fn a_budget_that_ends_during_a_busy_pause_is_unreachable() {
         asked_ms: AtomicU64::new(0),
         spent_at: Mutex::new(None),
     });
-    let ending = super::super::Stopping {
-        stop: ReadStop::new(),
-        clock: clock.clone(),
-        until: 1,
-    };
+    let stop = ReadStop::new();
+    let ending = super::super::Stopping::new(stop.clone(), clock.clone(), 1);
     let mut source = BusyBeforeBudget {
         reads: reads.clone(),
         clock: Arc::clone(&clock),
@@ -864,8 +870,10 @@ fn a_budget_that_ends_during_a_busy_pause_is_unreachable() {
         fault.kind(),
         ArtifactFaultKind::Gateway(ReadFailure::Stopped)
     );
+    assert!(!stop.is_stopped());
+    stop.stop();
     assert_eq!(
-        super::classify_artifact_fault(fault, &ending.stop, &ending).kind(),
+        super::classify_artifact_fault(fault, &ending).kind(),
         ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
     );
     // The first busy delay is 250ms. The budget becomes spent 30ms into that
@@ -884,7 +892,6 @@ fn a_budget_that_ends_during_a_busy_pause_is_unreachable() {
     );
     assert_eq!(reads.load(Ordering::SeqCst), 1);
     assert!(!output.exists());
-    assert!(!ending.stop.is_stopped());
 }
 
 struct SyncStops {
@@ -1042,13 +1049,9 @@ fn a_linked_output_keeps_its_cleanup_failure() {
         assert_eq!(fault.reached(), 2);
         assert_eq!(super::publish_fetch(failure, false).kind(), linked);
         stop.stop();
-        let ending = super::super::Stopping {
-            stop: stop.clone(),
-            clock: Arc::new(Held),
-            until: 0,
-        };
+        let ending = super::super::Stopping::new(stop.clone(), Arc::new(Held), 0);
         assert_eq!(
-            super::classify_artifact_fault(fault, &stop, &ending).kind(),
+            super::classify_artifact_fault(fault, &ending).kind(),
             linked
         );
     }
@@ -1063,11 +1066,7 @@ impl nessa_protocol::clock::Clock for ToggleClock {
     }
 }
 fn budget(clock: Arc<ToggleClock>, stop: Arc<ReadStop>) -> super::super::Stopping {
-    super::super::Stopping {
-        stop,
-        clock,
-        until: 1,
-    }
+    super::super::Stopping::new(stop, clock, 1)
 }
 
 struct SpendAfterRange {
@@ -1102,11 +1101,7 @@ fn a_budget_that_expires_during_a_mismatched_reread_is_unreachable() {
         after: 2,
     });
     let stop = ReadStop::new();
-    let ending = super::super::Stopping {
-        stop: stop.clone(),
-        clock: clock.clone(),
-        until: 1,
-    };
+    let ending = super::super::Stopping::new(stop.clone(), clock.clone(), 1);
     let mut source = Counting {
         bytes,
         reads: Arc::new(AtomicUsize::new(0)),
@@ -1128,7 +1123,7 @@ fn a_budget_that_expires_during_a_mismatched_reread_is_unreachable() {
         ArtifactFaultKind::Gateway(ReadFailure::Stopped)
     );
     assert_eq!(
-        super::classify_artifact_fault(fault, &stop, &ending).kind(),
+        super::classify_artifact_fault(fault, &ending).kind(),
         ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
     );
     assert!(!output.exists());
@@ -1166,7 +1161,7 @@ fn a_budget_that_expires_after_the_range_does_not_publish() {
         ArtifactFaultKind::Gateway(ReadFailure::Stopped)
     );
     assert_eq!(
-        super::classify_artifact_fault(fault, &stop, &ending).kind(),
+        super::classify_artifact_fault(fault, &ending).kind(),
         ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
     );
     assert!(!output.exists());
@@ -1215,7 +1210,7 @@ fn a_budget_that_expires_during_sync_does_not_link() {
     };
     let fault = super::publish_fetch(failure, true);
     assert_eq!(
-        super::classify_artifact_fault(fault, &stop, &ending).kind(),
+        super::classify_artifact_fault(fault, &ending).kind(),
         ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
     );
 }
@@ -1292,11 +1287,7 @@ fn a_budget_that_expires_before_the_link_starts_does_not_publish() {
         after: 2,
     });
     let stop = ReadStop::new();
-    let ending = super::super::Stopping {
-        stop: stop.clone(),
-        clock: clock.clone(),
-        until: 1,
-    };
+    let ending = super::super::Stopping::new(stop.clone(), clock.clone(), 1);
     let mut part = NeverLinks { linked: false };
     let end = super::publish_part(&ending, &mut part);
     assert!(!part.linked);
@@ -1312,7 +1303,7 @@ fn a_budget_that_expires_before_the_link_starts_does_not_publish() {
     };
     let fault = super::publish_fetch(failure, true);
     assert_eq!(
-        super::classify_artifact_fault(fault, &stop, &ending).kind(),
+        super::classify_artifact_fault(fault, &ending).kind(),
         ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
     );
 }

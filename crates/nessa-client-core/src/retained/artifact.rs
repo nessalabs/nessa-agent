@@ -119,7 +119,8 @@ enum Publication {
     /// Between busy retries. The caller stop or a spent fetch budget ends
     /// the wait within one stop slice. The range is not asked again. A
     /// caller stop is [`ReadFailure::Stopped`]. A spent budget, with the
-    /// stop clear, is [`ReadFailure::Unreachable`].
+    /// stop clear when it is observed, is [`ReadFailure::Unreachable`],
+    /// including when `stop` is set after that.
     Waiting,
     /// A range read or the part's re-read. The next source read is cancelled.
     /// A spent budget before that re-read, or after it and before `keep`,
@@ -137,8 +138,9 @@ enum Publication {
     /// failure.
     Linked,
     /// Cancellation won before the link. This keep created no output.
-    /// A caller stop is [`ReadFailure::Stopped`]. A spent budget, with the
-    /// stop clear, is [`ReadFailure::Unreachable`].
+    /// A caller stop observed then is [`ReadFailure::Stopped`]. A spent
+    /// budget observed while the stop is clear is [`ReadFailure::Unreachable`],
+    /// including when `stop` is set after that.
     Stopped,
 }
 
@@ -229,11 +231,11 @@ impl ArtifactFetch {
     }
 }
 
-struct StoppedSource<S> {
+struct StoppedSource<'a, S> {
     source: S,
-    stop: Arc<ReadStop>,
+    ending: &'a Stopping,
 }
-impl<S: HeldFileSource> HeldFileSource for StoppedSource<S> {
+impl<S: HeldFileSource> HeldFileSource for StoppedSource<'_, S> {
     fn read(
         &mut self,
         file: &HeldFile,
@@ -242,7 +244,8 @@ impl<S: HeldFileSource> HeldFileSource for StoppedSource<S> {
         crate::read_only_sync::application::held_file::RangeAnswer,
         crate::read_only_sync::application::GatewayError,
     > {
-        if self.stop.is_stopped() {
+        if self.ending.stop.is_stopped() {
+            let _ = self.ending.note_end();
             return Err(crate::read_only_sync::application::GatewayError::Cancelled);
         }
         self.source.read(file, range)
@@ -436,7 +439,7 @@ struct PublishEnd {
 /// are judged in. Either one, before the link, publishes nothing.
 fn publish_part(ending: &Stopping, part: &mut impl HeldPart) -> PublishEnd {
     let stop = &ending.stop;
-    if stop.is_stopped() || ending.spent() {
+    if ending.note_end() {
         return PublishEnd {
             phase: Publication::Stopped,
             result: Err(KeepRefusal::Stopped),
@@ -450,7 +453,8 @@ fn publish_part(ending: &Stopping, part: &mut impl HeldPart) -> PublishEnd {
         };
     }
     // The sync can cross the deadline. The link has not started.
-    if ending.spent() {
+    // Note that end before returning, so a later stop does not replace it.
+    if ending.note_end() {
         return PublishEnd {
             phase: Publication::Stopped,
             result: Err(KeepRefusal::Stopped),
@@ -459,16 +463,19 @@ fn publish_part(ending: &Stopping, part: &mut impl HeldPart) -> PublishEnd {
     // Read the deadline again inside the gate, immediately before the link.
     // An expiry in the gap after the check above has not started publication.
     match stop.admit(|| {
-        if ending.spent() {
+        if ending.note_end() {
             None
         } else {
             Some(part.link_held())
         }
     }) {
-        Err(()) | Ok(None) => PublishEnd {
-            phase: Publication::Stopped,
-            result: Err(KeepRefusal::Stopped),
-        },
+        Err(()) | Ok(None) => {
+            let _ = ending.note_end();
+            PublishEnd {
+                phase: Publication::Stopped,
+                result: Err(KeepRefusal::Stopped),
+            }
+        }
         Ok(Some(Err(refusal))) => PublishEnd {
             phase: linking,
             result: Err(refusal),
@@ -556,7 +563,6 @@ pub(crate) fn confirmed_held_file(
     request: &ArtifactRequest<'_>,
     ending: &Stopping,
 ) -> Result<Result<ArtifactFreshness, ArtifactFault>, ReadFailure> {
-    let stop = &ending.stop;
     let file = named(
         request.conversation,
         request.digest,
@@ -577,16 +583,14 @@ pub(crate) fn confirmed_held_file(
             }))
         }
     };
-    if stop.is_stopped() {
+    if ending.note_end() && ending.ended_by_caller() {
         return Ok(Err(stopped_fault(ArtifactFault::progress(
             ArtifactFaultKind::Gateway(ReadFailure::Stopped),
             0,
             0,
         ))));
     }
-    match fetch_held_file(source, pause, &mut files, &file, &|| {
-        stop.is_stopped() || ending.spent()
-    }) {
+    match fetch_held_file(source, pause, &mut files, &file, &|| ending.note_end()) {
         Ok(progress) => Ok(Ok(ArtifactFreshness::GatewayConfirmed {
             ranges: progress.ranges,
             resumed_from: progress.resumed_from,
@@ -607,10 +611,11 @@ impl RetainedCache {
     /// link starts, is `Unreachable`. A link that takes the
     /// publication gate stays published. A stop the operation observed stays
     /// `Stopped`, including a local match cancelled while the output was
-    /// read. A `Protocol` or `Unreachable` result that already settled stays
-    /// that result when `stop` is set afterwards. A relay that says the
-    /// gateway is offline, when the direct dial did not connect, is `Away`,
-    /// including after that later stop.
+    /// read. A budget the operation already observed stays `Unreachable`
+    /// when `stop` is set afterwards. A `Protocol` or `Unreachable` result
+    /// that already settled stays that result when `stop` is set afterwards.
+    /// A relay that says the gateway is offline, when the direct dial did
+    /// not connect, is `Away`, including after that later stop.
     pub fn fetch_artifact(
         &mut self,
         access: ReaderAccess<'_>,
@@ -627,11 +632,11 @@ impl RetainedCache {
                 elapsed_ms: elapsed(self),
             });
         }
-        let ending = Arc::new(Stopping {
-            stop: stop.clone(),
-            clock: self.clock.clone(),
-            until: started.saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
-        });
+        let ending = Arc::new(Stopping::new(
+            stop.clone(),
+            self.clock.clone(),
+            started.saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
+        ));
         let offline = Arc::new(AtomicBool::new(false));
         let session = match self.open_session(&access, &ending, &offline) {
             Ok(session) => session,
@@ -639,7 +644,6 @@ impl RetainedCache {
                 stop.release();
                 return Err(dial_failure(
                     failure,
-                    stop,
                     &ending,
                     offline.load(Ordering::SeqCst),
                 ));
@@ -648,14 +652,14 @@ impl RetainedCache {
         let fetched = {
             let mut source = StoppedSource {
                 source: GatewayConnection::new(session),
-                stop: stop.clone(),
+                ending: &ending,
             };
             confirmed_held_file(&mut source, pause, request, &ending)
         };
         stop.release();
         let outcome = match fetched? {
             Ok(fresh) => Ok(fresh),
-            Err(fault) => Err(classify_artifact_fault(fault, stop, &ending)),
+            Err(fault) => Err(classify_artifact_fault(fault, &ending)),
         };
         Ok(ArtifactFetch {
             outcome,
@@ -664,21 +668,17 @@ impl RetainedCache {
     }
 }
 
-/// A failure the operation already returned. `Stopped` is that failure when
-/// the operation observed cancellation, and a later `stop` keeps it, ahead of
-/// a spent budget. `Protocol`, `Unreachable`, and `Refused` stay when `stop`
-/// is set afterwards. A relay `Offline` on an unreachable dial is `Away`,
-/// including after that later stop. A spent budget, with the stop clear,
-/// reports the cancellation it caused as `Unreachable`.
-fn dial_failure(
-    failure: ReadFailure,
-    stop: &ReadStop,
-    ending: &Stopping,
-    offline: bool,
-) -> ReadFailure {
+/// A failure the operation already returned. `Stopped` stays only when the
+/// operation observed the caller stop, which [`Stopping::note_end`] recorded
+/// then; that still wins over a spent budget. A budget observed while the
+/// stop was clear stays `Unreachable` when `stop` is set afterwards.
+/// `Protocol`, `Unreachable`, and `Refused` stay when `stop` is set
+/// afterwards. A relay `Offline` on an unreachable dial is `Away`, including
+/// after that later stop.
+fn dial_failure(failure: ReadFailure, ending: &Stopping, offline: bool) -> ReadFailure {
     if offline && matches!(failure, ReadFailure::Unreachable) {
         ReadFailure::Away
-    } else if matches!(failure, ReadFailure::Stopped) && stop.is_stopped() {
+    } else if matches!(failure, ReadFailure::Stopped) && ending.ended_by_caller() {
         ReadFailure::Stopped
     } else if ending.spent() && matches!(failure, ReadFailure::Stopped | ReadFailure::Unreachable) {
         ReadFailure::Unreachable
@@ -688,18 +688,15 @@ fn dial_failure(
 }
 
 /// A range the budget cancelled is not a caller stop. `failure` maps that
-/// cancellation to `Stopped` before this sees it. A gateway `Refused`,
-/// `Protocol`, or `Unreachable` that already settled stays that cause when
-/// `stop` is set afterwards.
-fn classify_artifact_fault(
-    fault: ArtifactFault,
-    stop: &ReadStop,
-    ending: &Stopping,
-) -> ArtifactFault {
+/// cancellation to `Stopped` before this sees it. The cause is the one
+/// [`Stopping::note_end`] recorded, so a later `stop` does not replace a
+/// budget. A gateway `Refused`, `Protocol`, or `Unreachable` that already
+/// settled stays that cause when `stop` is set afterwards.
+fn classify_artifact_fault(fault: ArtifactFault, ending: &Stopping) -> ArtifactFault {
     let ArtifactFaultKind::Gateway(failure) = fault.kind() else {
         return fault;
     };
-    let failure = dial_failure(failure, stop, ending, false);
+    let failure = dial_failure(failure, ending, false);
     ArtifactFault::progress(
         ArtifactFaultKind::Gateway(failure),
         fault.reached(),

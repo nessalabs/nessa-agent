@@ -77,7 +77,7 @@ use std::cell::Cell;
 use std::io::{Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -319,21 +319,62 @@ impl ReadStop {
 /// stop again. The wait as a whole is still the one the caller set.
 const STOP_SLICE: Duration = Duration::from_millis(50);
 
+/// Nothing has ended this fetch yet.
+const END_OPEN: u8 = 0;
+/// The caller stop was set when the fetch first ended.
+const END_CALLER: u8 = 1;
+/// The budget was spent, and the stop was clear, when the fetch first ended.
+const END_BUDGET: u8 = 2;
+
 /// A read's end: its stop, or its budget on the injected clock.
+/// `cause` is the condition that ended it, recorded once, at that moment.
 struct Stopping {
     stop: Arc<ReadStop>,
     clock: Arc<dyn MonotonicClock>,
     /// When the budget is spent, by `clock`.
     until: u64,
+    /// [`END_OPEN`] until the first end, then [`END_CALLER`] or [`END_BUDGET`].
+    cause: AtomicU8,
 }
 impl Stopping {
+    fn new(stop: Arc<ReadStop>, clock: Arc<dyn MonotonicClock>, until: u64) -> Self {
+        Self {
+            stop,
+            clock,
+            until,
+            cause: AtomicU8::new(END_OPEN),
+        }
+    }
     fn spent(&self) -> bool {
         self.clock.elapsed_ms() >= self.until
+    }
+    /// Whether this fetch has ended, and the first condition that ended it.
+    /// A caller stop observed now is kept ahead of a spent budget. A budget
+    /// observed while the stop is clear stays that budget after a later stop.
+    fn note_end(&self) -> bool {
+        if self.cause.load(Ordering::SeqCst) != END_OPEN {
+            return true;
+        }
+        let cause = if self.stop.is_stopped() {
+            END_CALLER
+        } else if self.spent() {
+            END_BUDGET
+        } else {
+            return false;
+        };
+        let _ = self
+            .cause
+            .compare_exchange(END_OPEN, cause, Ordering::SeqCst, Ordering::SeqCst);
+        true
+    }
+    /// The fetch observed the caller stop when it ended.
+    fn ended_by_caller(&self) -> bool {
+        self.cause.load(Ordering::SeqCst) == END_CALLER
     }
 }
 impl Cancellation for Stopping {
     fn cancelled(&self) -> bool {
-        self.stop.is_stopped() || self.spent()
+        self.note_end()
     }
     fn until_ms(&self) -> Option<u64> {
         Some(self.until)
@@ -599,14 +640,13 @@ impl RetainedCache {
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
         let receiver = access.receiver.to_owned();
-        let ending = Arc::new(Stopping {
-            stop: stop.clone(),
-            clock: self.clock.clone(),
-            until: self
-                .clock
+        let ending = Arc::new(Stopping::new(
+            stop.clone(),
+            self.clock.clone(),
+            self.clock
                 .elapsed_ms()
                 .saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
-        });
+        ));
         let before = withdrawn.len();
         self.progressed = false;
         let offline = Arc::new(AtomicBool::new(false));
