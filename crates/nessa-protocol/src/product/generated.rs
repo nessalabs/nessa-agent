@@ -763,6 +763,7 @@ pub struct ConversationView {
     pub usage_limit_auto_continue: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_change_effect: Option<ModelChangeEffect>,
+    pub model: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1280,6 +1281,24 @@ pub struct ConversationRuntime {
     pub context_window_tokens: u64,
     pub reasoning: bool,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ConversationNoticeKind {
+    #[serde(rename = "review")]
+    Review,
+    #[serde(rename = "hook")]
+    Hook,
+    #[serde(rename = "deadline")]
+    Deadline,
+}
+impl ConversationNoticeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Review => "review",
+            Self::Hook => "hook",
+            Self::Deadline => "deadline",
+        }
+    }
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationPart {
@@ -1288,6 +1307,8 @@ pub struct ConversationPart {
     pub text: String,
     pub tool_id: String,
     pub notice_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice_kind: Option<ConversationNoticeKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
 }

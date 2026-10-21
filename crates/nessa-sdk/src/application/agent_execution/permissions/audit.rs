@@ -5,7 +5,9 @@ use super::{ActionContext, ApprovalRuleReference, PermissionResolution};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::AdmittedQuestion;
 use crate::domain::agent_execution::executions::ExecutionId;
-use crate::domain::agent_execution::permissions::{RefusalOutcome, ReviewDecline, ReviewDeclineId};
+use crate::domain::agent_execution::permissions::{
+    RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineStage,
+};
 use crate::domain::agent_execution::questions::{
     AcceptedAnswer, AgentQuestion, OpenQuestionAccounting, QuestionCancellation, QuestionChoice,
     QuestionId, QuestionRefusalReason, QuestionResponse,
@@ -53,6 +55,111 @@ impl PermissionAnswerRecord {
     /// Local selection or observed wire-delivery result; never proof of tool execution.
     pub fn delivery(&self) -> &PermissionAnswerDelivery {
         &self.delivery
+    }
+}
+
+/// A stop names a rule. A continue names none. Both the audit record and the
+/// event the panel reads call this, so the two cannot disagree.
+pub(crate) fn stopping_rule_matches(
+    outcome: RefusalOutcome,
+    rule: Option<&ApprovalRuleReference>,
+) -> Result<(), ExecutionError> {
+    let stops = outcome != RefusalOutcome::Continue;
+    if rule.is_some() != stops {
+        return Err(ExecutionError::InvalidReviewDecline);
+    }
+    Ok(())
+}
+
+/// The declined review the panel and the snapshot read.
+///
+/// The observation is the local refusal. `rule` is present exactly when that
+/// refusal stops the turn or closes the session, and it is the same reference
+/// the audit record stores. Construction does not audit, publish, or talk to
+/// a provider.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeclinedReview {
+    observation: ReviewDeclineObservation,
+    rule: Option<ApprovalRuleReference>,
+}
+
+impl DeclinedReview {
+    /// The first observation for one local refusal.
+    ///
+    /// `rule` is required when `decline` stops work and forbidden when it does
+    /// not. Returns [`ExecutionError::InvalidReviewDecline`] when that pairing
+    /// is wrong. This performs no I/O.
+    pub fn selected(
+        id: ReviewDeclineId,
+        decline: ReviewDecline,
+        rule: Option<ApprovalRuleReference>,
+    ) -> Result<Self, ExecutionError> {
+        stopping_rule_matches(decline.outcome(), rule.as_ref())?;
+        Ok(Self {
+            observation: ReviewDeclineObservation::selected(id, decline),
+            rule,
+        })
+    }
+
+    /// Restore one saved observation and its rule.
+    ///
+    /// The pairing rule is the same as [`selected`](Self::selected). A final
+    /// delivery stage does not have to name its predecessor here; the history
+    /// check does that by comparing [`advance`](Self::advance).
+    pub fn restore(
+        id: ReviewDeclineId,
+        decline: ReviewDecline,
+        stage: ReviewDeclineStage,
+        rule: Option<ApprovalRuleReference>,
+    ) -> Result<Self, ExecutionError> {
+        stopping_rule_matches(decline.outcome(), rule.as_ref())?;
+        Ok(Self {
+            observation: ReviewDeclineObservation::restore(id, decline, stage),
+            rule,
+        })
+    }
+
+    /// The same refusal at a later local write stage. The rule is unchanged.
+    pub fn advance(&self, stage: ReviewDeclineStage) -> Result<Self, ExecutionError> {
+        Ok(Self {
+            observation: self.observation.advance(stage)?,
+            rule: self.rule.clone(),
+        })
+    }
+
+    /// Stable identity pairing selection with its later write fact.
+    pub fn id(&self) -> &ReviewDeclineId {
+        self.observation.id()
+    }
+
+    /// Which tool was refused, where it could be named, and why.
+    pub fn decline(&self) -> &ReviewDecline {
+        self.observation.decline()
+    }
+
+    /// Current local selection or response-write evidence.
+    pub fn stage(&self) -> ReviewDeclineStage {
+        self.observation.stage()
+    }
+
+    /// The rule that required this refusal to stop work, when one did.
+    pub fn rule(&self) -> Option<&ApprovalRuleReference> {
+        self.rule.as_ref()
+    }
+
+    /// Bytes of the rule identity, so a retained event counts the rule it shows.
+    pub(crate) fn rule_bytes(&self) -> usize {
+        self.rule
+            .as_ref()
+            .map(|rule| {
+                rule.rule_id()
+                    .len()
+                    .saturating_add(rule.revision().len())
+                    .saturating_add(rule.granted_by().principal_id().len())
+                    .saturating_add(rule.granted_by().surface_id().len())
+                    .saturating_add(rule.granted_by().request_id().len())
+            })
+            .unwrap_or(0)
     }
 }
 
@@ -108,10 +215,7 @@ impl ReviewDeclineRecord {
         delivery: PermissionAnswerDelivery,
         rule: Option<ApprovalRuleReference>,
     ) -> Result<Self, ExecutionError> {
-        let stops = decline.outcome() != RefusalOutcome::Continue;
-        if rule.is_some() != stops {
-            return Err(ExecutionError::InvalidReviewDecline);
-        }
+        stopping_rule_matches(decline.outcome(), rule.as_ref())?;
         Ok(Self {
             session_id,
             execution_id,

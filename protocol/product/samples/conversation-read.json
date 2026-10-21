@@ -62,5 +62,6 @@
       "description": "The provider requests approval where required."
     }
   ],
-  "usageLimitAutoContinue": false
+  "usageLimitAutoContinue": false,
+  "model": "test"
 }

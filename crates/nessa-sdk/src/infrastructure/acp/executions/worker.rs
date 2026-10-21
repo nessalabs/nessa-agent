@@ -36,7 +36,7 @@ use crate::application::agent_execution::executions::{
 
 use crate::application::agent_execution::permissions::{
     admit_configured_outcome, remember_effect, ApprovalAttribution, ApprovalBasis,
-    ApprovalRuleReference, CancellationOrigin, ConfiguredRefusal, PermissionAnswer,
+    ApprovalRuleReference, CancellationOrigin, ConfiguredRefusal, DeclinedReview, PermissionAnswer,
     PermissionAnswerDelivery, PermissionAnswerRecord, PermissionCaller, PermissionCancellation,
     PermissionCancellationRequest, PermissionResolution, PermissionSelectionState, QuestionAnswer,
     QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk, RememberError, RememberRequest,
@@ -59,8 +59,8 @@ use crate::domain::agent_execution::permissions::{
     PermissionCancellationReason, PermissionCancellationReasonView, PermissionDeadlineSettlement,
     PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOptionId,
     PermissionScope, PermissionStateView, QuestionListing, RefusalOutcome, ReviewDecline,
-    ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage,
-    MAX_OPEN_REVIEWS, MAX_REVIEW_TOOL_NAME_BYTES,
+    ReviewDeclineId, ReviewDeclineReason, ReviewDeclineStage, MAX_OPEN_REVIEWS,
+    MAX_REVIEW_TOOL_NAME_BYTES,
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
@@ -254,22 +254,18 @@ struct ActiveExecution {
 struct DeclineNoticePublication {
     events: EventSender,
     execution_id: ExecutionId,
-    observation: ReviewDeclineObservation,
+    review: DeclinedReview,
     selected: bool,
     write_attempted: bool,
     final_stage: Option<ReviewDeclineStage>,
     settled: bool,
 }
 impl DeclineNoticePublication {
-    fn new(
-        events: EventSender,
-        execution_id: ExecutionId,
-        observation: ReviewDeclineObservation,
-    ) -> Self {
+    fn new(events: EventSender, execution_id: ExecutionId, review: DeclinedReview) -> Self {
         Self {
             events,
             execution_id,
-            observation,
+            review,
             selected: false,
             write_attempted: false,
             final_stage: None,
@@ -277,16 +273,16 @@ impl DeclineNoticePublication {
         }
     }
     fn event(&self, stage: ReviewDeclineStage) -> ExecutionEvent {
-        let observation = if stage == ReviewDeclineStage::Selected {
-            self.observation.clone()
+        let review = if stage == ReviewDeclineStage::Selected {
+            self.review.clone()
         } else {
-            self.observation
+            self.review
                 .advance(stage)
                 .expect("decline publication advances selection to a final stage")
         };
         ExecutionEvent::new(
             self.execution_id.clone(),
-            ExecutionUpdate::ReviewDeclined(observation),
+            ExecutionUpdate::ReviewDeclined(review),
         )
     }
     fn publish_selected(&mut self) -> Result<(), QueueError> {
@@ -334,7 +330,7 @@ impl Drop for DeclineNoticePublication {
         if let Err(error) = result {
             tracing::error!(
                 execution_id = %self.execution_id.as_str(),
-                decline_id = %self.observation.id().as_str(),
+                decline_id = %self.review.id().as_str(),
                 ?error,
                 "declined-review notice could not be finalized during operation drop"
             );
@@ -3308,8 +3304,7 @@ impl<P: AcpProfile> Worker<P> {
         let decline_id = self.allocate_decline_id()?;
         let selected =
             execution.decline_review(&execution_id, decline_id.clone(), decline.clone(), None)?;
-        let mut publication =
-            self.begin_selected_notice(execution_id.clone(), decline_id.clone(), decline.clone());
+        let mut publication = self.begin_selected_notice(execution_id.clone(), &selected);
         tracing::warn!(
             session_id = %session_id.as_str(),
             execution_id = %execution_id.as_str(),
@@ -3442,10 +3437,9 @@ impl<P: AcpProfile> Worker<P> {
             &execution_id,
             decline_id.clone(),
             decline.clone(),
-            Some(rule),
+            Some(rule.clone()),
         )?;
-        let mut publication =
-            self.begin_selected_notice(execution_id.clone(), decline_id.clone(), decline.clone());
+        let mut publication = self.begin_selected_notice(execution_id.clone(), &selected);
         publication.keep_selected_notice();
         let event = execution.finished_event(&execution_id, ExecutionOutcome::Cancelled)?;
         let records = execution.finish_execution(&execution_id, Ok(ExecutionOutcome::Cancelled))?;
@@ -3463,13 +3457,13 @@ impl<P: AcpProfile> Worker<P> {
         }
         self.declined = Some(wire_id.clone());
         self.discard_unclaimed_arguments();
-        tracing::warn!(
-            session_id = %session_id.as_str(),
-            execution_id = %execution_id.as_str(),
-            tool = decline.declared().unwrap_or("<unnamed>"),
-            reason = ?decline.reason(),
-            ?kind,
-            "tool review declined and the execution stopped"
+        log_policy_stop(
+            session_id.as_str(),
+            execution_id.as_str(),
+            decline.declared().unwrap_or("<unnamed>"),
+            &rule,
+            kind,
+            decline.reason(),
         );
         let cleaned = self.finish_turn_wire().await;
         if let Ok(deadline) = cleaned {
@@ -3531,14 +3525,16 @@ impl<P: AcpProfile> Worker<P> {
     fn begin_selected_notice(
         &self,
         execution_id: ExecutionId,
-        decline_id: ReviewDeclineId,
-        decline: ReviewDecline,
+        selected: &ReviewDeclineRecord,
     ) -> DeclineNoticePublication {
-        let mut publication = DeclineNoticePublication::new(
-            self.events.clone(),
-            execution_id,
-            ReviewDeclineObservation::selected(decline_id, decline),
-        );
+        let review = DeclinedReview::selected(
+            selected.id().clone(),
+            selected.decline().clone(),
+            selected.rule().cloned(),
+        )
+        .expect("the notice carries the same rule as the decline record");
+        let mut publication =
+            DeclineNoticePublication::new(self.events.clone(), execution_id, review);
         if let Err(error) = publication.publish_selected() {
             tracing::error!(?error, "declined-review selection notice was not published");
         }
@@ -4857,6 +4853,29 @@ fn wait_for_deadline(clock: &dyn Clock, deadline: Option<ClockInstant>) -> Clock
         Some(deadline) => clock.sleep_until(deadline),
         None => Box::pin(std::future::pending()),
     }
+}
+
+/// The gateway log for a configured stop: the rule, its revision, and the tool.
+///
+/// The grantor stays on the audit record. Tool arguments are not logged.
+fn log_policy_stop(
+    session_id: &str,
+    execution_id: &str,
+    tool: &str,
+    rule: &ApprovalRuleReference,
+    kind: StopKind,
+    reason: ReviewDeclineReason,
+) {
+    tracing::warn!(
+        session_id,
+        execution_id,
+        tool,
+        rule_id = %rule.rule_id(),
+        revision = %rule.revision(),
+        ?reason,
+        ?kind,
+        "tool review declined and the execution stopped"
+    );
 }
 
 /// The first `admitted` commands in `queue`: what it held when the deadline

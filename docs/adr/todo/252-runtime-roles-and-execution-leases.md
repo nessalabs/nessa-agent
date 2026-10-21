@@ -176,7 +176,8 @@ Environments lane, in order:
     - [x] **D3a.** `artifacts_publish` beside `run`: a gateway-initiated
       publish under the agent's Live lease, for the turn's person
       ([The agent publishes a file](../../design/runtime-architecture.md#the-agent-publishes-a-file-slice-d3a)).
-      Command leases publish from [#766](https://github.com/nessalabs/nessa-agent/issues/766).
+      Command leases publish through their own point, the command lease as
+      the cause ([#766](https://github.com/nessalabs/nessa-agent/issues/766)).
     - [x] **D3b.** `artifacts_fetch`: a held file into the workspace where
       the agent runs, by digest, written over sftp into a part on the host,
       verified there and linked, never over anything, on a host that opted
@@ -215,8 +216,11 @@ Environments lane, in order:
   local discovery** ([#706](https://github.com/nessalabs/nessa-agent/issues/706)). *Gate:* the peer admits and may
   narrow under its policy; narrowed grants recorded; lease ends on revoke;
   relay fallback converges to the same checkpoint. The relay half landed
-  with [#266](https://github.com/nessalabs/nessa-agent/issues/266). Local
-  discovery is still unresolved and has no issue of its own yet.
+  with [#266](https://github.com/nessalabs/nessa-agent/issues/266), and a
+  command served only through the relay leaves the same command-ledger
+  checkpoint as one served directly (RL14). Local
+  discovery is still unresolved and has no issue of its own yet, so this
+  slice stays open.
 - [ ] **J. Drive role and tool policy per person** ([#707](https://github.com/nessalabs/nessa-agent/issues/707);
   depends on the 0014 hook runtime under
   [#130](https://github.com/nessalabs/nessa-agent/issues/130) and 0011

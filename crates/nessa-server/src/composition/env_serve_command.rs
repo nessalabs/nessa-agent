@@ -270,7 +270,12 @@ fn launcher(config: &RuntimeConfig) -> Result<ConfiguredLauncher, RunError> {
             agent,
             LaunchSpec {
                 executable: executable.to_path_buf(),
-                args: runtime.args.clone(),
+                args: runtime
+                    .staged_runtime
+                    .iter()
+                    .cloned()
+                    .chain(runtime.args.iter().cloned())
+                    .collect(),
                 environment: launch_environment(agent),
             },
         );

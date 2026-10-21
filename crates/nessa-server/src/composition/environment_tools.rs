@@ -18,9 +18,9 @@
 //! `structuredContent`. The service is attached once composed, after the
 //! relay that needs this server; a call before then is answered as an error.
 use crate::conversation::application::{
-    CommandAnswer, CommandCall, CommandCallError, CommandResult, ConversationService,
-    EnvironmentListing, FetchAnswer, FetchCall, FetchCallRefusal, PublishAnswer, PublishCall,
-    PublishCallRefusal,
+    CommandAnswer, CommandCall, CommandCallError, CommandPublication, CommandResult,
+    ConversationService, EnvironmentListing, FetchAnswer, FetchCall, FetchCallRefusal,
+    PublicationOutcome, PublishAnswer, PublishCall, PublishCallRefusal,
 };
 use crate::conversation::domain::CommandPolicy;
 use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
@@ -39,7 +39,7 @@ use tokio::sync::watch;
 /// The server's name, as the harness sees it.
 pub(super) const SERVER_NAME: &str = "nessa-environments";
 /// What changes when the tools' names, arguments or meaning do.
-const TOOLS_REVISION: &str = "environment-tools/4";
+const TOOLS_REVISION: &str = "environment-tools/5";
 
 /// `environments_list`, `run`, `artifacts_publish` and `artifacts_fetch`,
 /// served over a conversation service.
@@ -88,7 +88,7 @@ impl BuiltInServer for EnvironmentTools {
                 "name": "run",
                 "title": "Run a command on an SSH host",
                 "description": format!(
-                    "Run one program once on an SSH host that environments_list says takes commands, in that host's workspace, as the account it serves as, with nothing enclosing it. `argv` is the program and its arguments exactly; no shell reads them. The command is stopped when its timeout passes or this call is cancelled. Answers its exit and the last {} bytes of each of its output streams. At most {} commands run at once in a conversation.",
+                    "Run one program once on an SSH host that environments_list says takes commands, in that host's workspace, as the account it serves as, with nothing enclosing it. `argv` is the program and its arguments exactly; no shell reads them. The command is stopped when its timeout passes or this call is cancelled. Answers its exit, the last {} bytes of each of its output streams, and each file it published. At most {} commands run at once in a conversation.",
                     nessa_sdk::domain::agent_execution::leases::CommandOutput::MAX_TAIL_BYTES,
                     nessa_sdk::domain::agent_execution::leases::Lease::MAX_LIVE_COMMANDS,
                 ),
@@ -584,11 +584,31 @@ fn answered(answer: &CommandAnswer) -> Value {
                     "droppedBytes": ran.dropped_bytes,
                     "cleanup": cleanup(ran),
                     "recorded": recorded,
+                    "published": publications(&ran.published),
                 }),
                 !succeeded,
             )
         }
     }
+}
+
+fn publications(published: &[CommandPublication]) -> Vec<Value> {
+    published
+        .iter()
+        .map(|published| {
+            let outcome = match published.outcome {
+                PublicationOutcome::Held => json!("held"),
+                PublicationOutcome::AlreadyHeld => json!("alreadyHeld"),
+                PublicationOutcome::Refused(reason) => json!({ "refused": reason }),
+            };
+            json!({
+                "name": published.name,
+                "digest": published.digest,
+                "size": published.size,
+                "outcome": outcome,
+            })
+        })
+        .collect()
 }
 
 fn exit(exit: CommandExit) -> Value {

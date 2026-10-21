@@ -552,9 +552,11 @@ fn payload_bytes(event: &ExecutionEvent) -> usize {
             .len()
             .saturating_add(record.input().arguments_json.len())
             .saturating_add(record.request().payload_bytes_up_to(limit)),
-        ExecutionUpdate::ReviewDeclined(observation) => {
-            observation.decline().declared().map_or(0, str::len)
-        }
+        ExecutionUpdate::ReviewDeclined(review) => review
+            .decline()
+            .declared()
+            .map_or(0, str::len)
+            .saturating_add(review.rule_bytes()),
         ExecutionUpdate::DeadlineAnswered { reason, .. } => reason.as_str().len(),
         ExecutionUpdate::QuestionAsked { question, .. } => question.payload_bytes(),
     }

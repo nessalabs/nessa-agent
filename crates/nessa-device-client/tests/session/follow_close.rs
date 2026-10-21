@@ -96,6 +96,7 @@ fn settled_view(conversation: &str) -> ConversationView {
         model_change: None,
         model_change_effect: None,
         usage_limit_auto_continue: None,
+        model: "model".into(),
         conversation_id: conversation.into(),
         revision: "rev".into(),
         server_now_ms: 1,

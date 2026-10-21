@@ -972,8 +972,9 @@ describe("the model a session runs on", () => {
     const listed = composerModels[composerModels.length - 1]
     const runs = (model: string) =>
       view("c", {
+        model,
         runtime: {
-          model,
+          model: "runtime-model-not-the-selection",
           provider: "codex",
           workspace: "/",
           agent: "codex",
@@ -988,6 +989,12 @@ describe("the model a session runs on", () => {
     })
     expect(runningModel(runs("a-model-no-catalogue-lists"))).toBeUndefined()
     expect(runningModel(view("c", { runtime: undefined }))).toBeUndefined()
+    expect(
+      runningModel(view("c", { model: listed.modelId, runtime: undefined })),
+    ).toEqual({
+      provider: listed.provider,
+      modelId: listed.modelId,
+    })
   })
 
   it("is said as the known one, else the composer's default", () => {

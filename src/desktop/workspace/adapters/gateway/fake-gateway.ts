@@ -324,6 +324,7 @@ export function view(
     title: null,
     approvalMode: "ask",
     approvalModes: [{ id: "ask", name: "Ask", description: "Ask before tools." }],
+    model: "unselected",
     ...change,
   }
 }

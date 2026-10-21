@@ -373,20 +373,22 @@ async fn decline_final_notice_backpressure_is_an_exact_operation_fact() {
             reply,
             deadline: None,
         });
-        let observation = ReviewDeclineObservation::selected(
+        let review = DeclinedReview::selected(
             ReviewDeclineId::new("1").unwrap(),
             ReviewDecline::new(
                 Some("Read"),
                 ReviewDeclineReason::ToolNotReviewable,
-                crate::domain::agent_execution::permissions::RefusalOutcome::Continue,
+                RefusalOutcome::Continue,
             ),
-        );
+            None,
+        )
+        .unwrap();
         for _ in 0..15 {
             worker
                 .events
                 .try_send(ExecutionEvent::new(
                     execution_id.clone(),
-                    ExecutionUpdate::ReviewDeclined(observation.clone()),
+                    ExecutionUpdate::ReviewDeclined(review.clone()),
                 ))
                 .unwrap();
         }

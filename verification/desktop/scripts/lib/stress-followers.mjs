@@ -6,7 +6,8 @@
  * its list subscription. As it goes it stops one at random and follows it
  * again from the last cursor it applied, asks for one more than it may hold
  * (and must be refused), and follows again after a restart drops its
- * connection or the gateway ends a stream it fell behind on.
+ * connection, a change source closes, or the gateway ends a stream it fell
+ * behind on.
  *
  * What it must show at the end: every conversation's events, as it applied
  * them, are exactly the conversation's events from the start (none missed,
@@ -14,8 +15,15 @@
  * the one a read gives.
  */
 
-/** How a subscription may end without anything being wrong. */
-const RESUMED = new Set(["disconnected", "lagging"])
+/**
+ * How a subscription may end without anything being wrong.
+ * `source_closed` is the change source closing while the socket is still
+ * up: a restart drains the watches and can deliver this before the socket
+ * dies. The product protocol says subscribe again, as for `disconnected`
+ * and `lagging`. Leaving it fatal freezes the view and, because the server
+ * has already released the slot, the next probe is accepted past the limit.
+ */
+const RESUMED = new Set(["disconnected", "lagging", "source_closed"])
 /** Refusals that say this follower asked for something it should not have. */
 const REFUSED = new Set(["subscription_capacity", "subscription_duplicate"])
 
@@ -137,7 +145,8 @@ export class Follower {
   ended(what, end, lost) {
     if (this.stopping && end.reason === "disconnected") return
     if (end.reason === "lagging") this.counts.lagging += 1
-    if (end.reason === "disconnected") this.counts.resumed += 1
+    if (end.reason === "disconnected" || end.reason === "source_closed")
+      this.counts.resumed += 1
     if (!RESUMED.has(end.reason)) {
       this.fail(`${what} ended ${end.reason}${end.code ? ` (${end.code})` : ""}`)
       return

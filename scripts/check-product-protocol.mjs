@@ -165,6 +165,10 @@ for (const invalid of [
 }
 if (!validateView({ ...view, title: null }))
   throw new Error("Product conversation view rejects a null title")
+if (validateView(JSON.parse(JSON.stringify({ ...view, model: undefined }))))
+  throw new Error("Product conversation view accepts a missing model")
+if (validateView({ ...view, model: "" }))
+  throw new Error("Product conversation view accepts an empty model")
 // The artifacts a view lists: required, at most 64, each closed and bounded.
 const artifact = view.artifacts[0]
 const artifactName = "😀".repeat(63) + "abc"
