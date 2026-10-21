@@ -213,11 +213,11 @@ export function openWidget({
   place: "pane" | "window"
   origin?: string
 }): WorkspaceCommand {
-  return (dispatch, _getState, { measure }) => {
+  return (dispatch, _getState, { measure, paintedRoom }) => {
     dispatch(
       place === "window"
         ? showContent({ content: { widget } })
-        : widgetOpened({ widget, origin, room: measure() }),
+        : widgetOpened({ widget, origin, room: paintedRoom?.() ?? measure() }),
     )
   }
 }

@@ -374,6 +374,12 @@ export interface WorkspaceDependencies {
    */
   readonly measure: () => PaneRoom | undefined
   /**
+   * The room last laid out, without reading the page (`paintedRoom`). A
+   * click that opens a pane uses it so the click does not force layout.
+   * Absent, or nothing painted yet, and the command measures.
+   */
+  readonly paintedRoom?: () => PaneRoom | undefined
+  /**
    * Where the Agents overview's filter is remembered between launches: read
    * once, into the store's first state, and written on each change
    * (`effects.ts`). The store owns the filter; this only keeps it.

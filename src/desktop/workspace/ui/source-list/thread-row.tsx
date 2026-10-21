@@ -1,6 +1,9 @@
 import { memo } from "react"
-import { shallowEqual } from "react-redux"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
+import {
+  listPaintFrame,
+  usePaintedWithPanes,
+} from "../../adapters/store/paint-with-panes"
 import {
   selectFocusedSessionId,
   selectSession,
@@ -37,15 +40,17 @@ export const ThreadRow = memo(function ThreadRow({
   kind: "pinned" | "branch"
 }) {
   const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
-  // After the open paint, so the key does not render the row (`layouts.test.tsx`).
   const quiet = useOverviewQuiet()
-  const { open, focused } = useWorkspaceSelector(
-    (state) => ({
-      open: selectShownSessionIds(state).includes(sessionId),
-      // The focused pane's, beside the panes or a widget over them.
-      focused: selectFocusedSessionId(state) === sessionId,
-    }),
-    shallowEqual,
+  // With the list's measure, the frame after the boxes, so opening a pane
+  // does not render the row on the click or on the box paint.
+  const open = usePaintedWithPanes(
+    (state) => selectShownSessionIds(state).includes(sessionId),
+    listPaintFrame,
+  )
+  // The focused mark waits with it, so opening a pane does not render the row.
+  const focused = usePaintedWithPanes(
+    (state) => selectFocusedSessionId(state) === sessionId,
+    listPaintFrame,
   )
   const actions = useOpenFromRow()
   // Delete only: the row is a button, which holds no field to rename in.

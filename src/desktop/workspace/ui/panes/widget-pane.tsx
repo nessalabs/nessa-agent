@@ -12,10 +12,9 @@ import {
   type WidgetRef,
 } from "../../../widgets"
 import { paneScope, useEscapeScope } from "../../adapters/dom/widget-escape"
-import { focusedPaneAttribute } from "../../adapters/dom/focus"
 import { openBeside } from "../../adapters/store/commands"
-import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
-import { selectFocusedPaneKey } from "../../adapters/store/selectors"
+import { useWorkspaceDispatch } from "../../adapters/store/hooks"
+import { PaneFocusMark } from "./pane-focus-mark"
 import { usePaneWidgetHost } from "../../adapters/store/widget-hosts"
 import type { PaneFrame } from "../../../split-panes"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
@@ -87,7 +86,6 @@ function WidgetPaneParts({
 }) {
   const dispatch = useWorkspaceDispatch()
   const focusHandlers = usePaneFocus(pane)
-  const focused = useWorkspaceSelector((state) => selectFocusedPaneKey(state) === pane)
   const origin = widgetOrigin(answer)
   const title = widgetTitle(answer)
   const host = usePaneWidgetHost(pane, widget, origin, steps)
@@ -103,11 +101,10 @@ function WidgetPaneParts({
       className="workspace-pane"
       data-widget-pane
       {...frame}
-      data-focused={(focused && multi) || undefined}
-      {...{ [focusedPaneAttribute]: focused || undefined }}
       aria-label={title}
       {...focusHandlers}
     >
+      <PaneFocusMark paneKey={pane} multi={multi} />
       <PaneHeaderFrame
         pane={pane}
         multi={multi}
