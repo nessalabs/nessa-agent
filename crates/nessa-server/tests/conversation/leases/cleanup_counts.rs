@@ -59,3 +59,27 @@ fn an_unrelated_close_cannot_substitute_for_the_replacement() {
     let unrelated = Uuid::from_u128(3);
     assert_each_backend_closed_once(original, &[original, replacement], &[original, unrelated]);
 }
+
+#[test]
+#[should_panic(expected = "the original backend remains represented")]
+fn a_replacement_cannot_erase_the_original_backend_identity() {
+    let original = Uuid::from_u128(1);
+    let replacement = Uuid::from_u128(2);
+    assert_each_backend_closed_once(original, &[replacement], &[replacement]);
+}
+
+#[test]
+#[should_panic(expected = "backend instances have unique identities")]
+fn duplicate_acquired_ids_cannot_merge_distinct_cleanup_owners() {
+    let original = Uuid::from_u128(1);
+    let unrelated = Uuid::from_u128(2);
+    assert_each_backend_closed_once(original, &[original, original], &[original, unrelated]);
+}
+
+#[test]
+#[should_panic(expected = "every acquired backend has a cleanup acknowledgement")]
+fn an_extra_unowned_cleanup_is_not_an_acquired_backend_acknowledgement() {
+    let original = Uuid::from_u128(1);
+    let unrelated = Uuid::from_u128(2);
+    assert_each_backend_closed_once(original, &[original], &[original, unrelated]);
+}
