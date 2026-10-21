@@ -22,9 +22,19 @@
 //! and keeps the bundle path for
 //! the rest of this process while the installed definition still names it. A
 //! failure after the early ready publish carries a strictly newer startup
-//! revision. File durability
-//! and the tree digest overlap on a pool sized to the machine; both finish
-//! before the exclusive rename. Existing versions remain available across app
+//! revision. The copy clones the source tree with one `clonefile`, checks that
+//! clone against the survey, then one thread seals each directory and each
+//! file. A directory is set to `0700` and its extended attributes are removed
+//! with the same normalization a file gets, before `sync_all`. A substituted
+//! symlink refuses the attempt before that seal. A
+//! filesystem that cannot clone copies one file at a time on that same single
+//! thread. Progress counts a
+//! file only after that sync returns, and the zero report is sent once the
+//! file count is known, before `clonefile`. The host retains the latest
+//! report and answers it to a bundled window that subscribes afterwards. The
+//! report is a separate host event, not gateway startup. The digest runs
+//! after each file has been sealed and synced; both finish before the
+//! exclusive rename. Existing versions remain available across app
 //! replacement.
 //! Its `pruning` module then collects, under the same lock and only once a
 //! gateway is up, the versions neither the new service, the loaded service, nor
@@ -66,11 +76,11 @@ mod selection;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod unsupported;
 pub use commands::{
-    __cmd__gateway_startup, __cmd__retry_gateway_startup,
+    __cmd__gateway_startup, __cmd__retry_gateway_startup, __cmd__runtime_copy,
     __cmd__set_claude_configuration_directory, __tauri_command_name_gateway_startup,
-    __tauri_command_name_retry_gateway_startup,
+    __tauri_command_name_retry_gateway_startup, __tauri_command_name_runtime_copy,
     __tauri_command_name_set_claude_configuration_directory, gateway_startup,
-    retry_gateway_startup, set_claude_configuration_directory, startup_events,
+    retry_gateway_startup, runtime_copy, set_claude_configuration_directory, startup_events,
 };
 pub(crate) use commands::{GatewayReader, GatewayUnread};
 pub use selection::{

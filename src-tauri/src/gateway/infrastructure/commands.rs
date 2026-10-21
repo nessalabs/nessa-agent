@@ -4,7 +4,11 @@ use super::super::application::{
     ClaudeConfigurationChangeError, ClaudeDirectorySettings, ClaudeSettingsPublishError, Gateway,
     GatewayStartup as ApplicationStartup, GatewayStartupEvents, GatewayStartupPhase, StartupStep,
 };
+#[cfg(any(target_os = "macos", test))]
+use super::super::application::{RuntimeCopyPhase, RuntimeCopyProgress};
 use crate::gateway::domain::value_objects::claude_config_directory_is_durable;
+#[cfg(any(target_os = "macos", test))]
+use crate::host::{RuntimeCopy, RuntimeCopyState, RUNTIME_COPY};
 use crate::settings::SettingsStore;
 use crate::{
     composition::HostDependencies,
@@ -15,6 +19,8 @@ use crate::{
 };
 use serde::Serialize;
 use std::sync::Arc;
+#[cfg(any(target_os = "macos", test))]
+use std::sync::Mutex;
 use std::{
     io::Error as IoError,
     panic::{catch_unwind, AssertUnwindSafe},
@@ -24,9 +30,84 @@ use tauri::{AppHandle, Emitter, State, WebviewWindow};
 
 pub(super) struct HostGatewayStartupEvents {
     app: AppHandle,
+    #[cfg(any(target_os = "macos", test))]
+    copy: RetainedRuntimeCopy,
+}
+
+/// The latest copy report, written before the host emits it.
+///
+/// A poisoned lock still yields the report. The snapshot is progress, and
+/// dropping it because an earlier holder panicked would hide the copy again.
+#[cfg(any(target_os = "macos", test))]
+struct RetainedRuntimeCopy {
+    latest: Mutex<Option<RuntimeCopyProgress>>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl Default for RetainedRuntimeCopy {
+    fn default() -> Self {
+        Self {
+            latest: Mutex::new(None),
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl RetainedRuntimeCopy {
+    /// Stores `progress`, then returns the payload the event and the snapshot
+    /// command both send. The store is updated before the return, so the emit
+    /// that follows cannot be the only copy of the report.
+    fn remember(&self, progress: &RuntimeCopyProgress) -> RuntimeCopy {
+        *self
+            .latest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(*progress);
+        runtime_copy_payload(progress)
+    }
+
+    fn latest(&self) -> Option<RuntimeCopyProgress> {
+        *self
+            .latest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn runtime_copy_payload(progress: &RuntimeCopyProgress) -> RuntimeCopy {
+    RuntimeCopy {
+        state: match progress.state {
+            RuntimeCopyPhase::Copying => RuntimeCopyState::Copying,
+            RuntimeCopyPhase::Settled => RuntimeCopyState::Settled,
+        },
+        files_completed: progress.files_completed,
+        files_total: progress.files_total,
+        bytes_completed: progress.bytes_completed,
+        bytes_total: progress.bytes_total,
+    }
 }
 
 impl GatewayStartupEvents for HostGatewayStartupEvents {
+    #[cfg(any(target_os = "macos", test))]
+    fn runtime_copy(&self, progress: &RuntimeCopyProgress) {
+        let payload = self.copy.remember(progress);
+        for (label, _) in BUNDLED_WINDOWS {
+            if let Err(error) = self.app.emit_to(label, RUNTIME_COPY, &payload) {
+                tracing::warn!(
+                    target: "nessa.launch",
+                    label,
+                    %error,
+                    "could not publish runtime copy progress"
+                );
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    fn latest_runtime_copy(&self) -> Option<RuntimeCopyProgress> {
+        self.copy.latest()
+    }
+
     fn publish(&self, startup: &ApplicationStartup) {
         log_startup_phase(startup);
         let payload = payload(startup);
@@ -67,7 +148,28 @@ fn log_startup_phase(startup: &ApplicationStartup) {
 }
 
 pub fn startup_events(app: &AppHandle) -> Arc<dyn GatewayStartupEvents> {
-    Arc::new(HostGatewayStartupEvents { app: app.clone() })
+    Arc::new(HostGatewayStartupEvents {
+        app: app.clone(),
+        #[cfg(any(target_os = "macos", test))]
+        copy: RetainedRuntimeCopy::default(),
+    })
+}
+
+fn retained_runtime_copy(gateway: Option<&Gateway>) -> Option<serde_json::Value> {
+    #[cfg(any(target_os = "macos", test))]
+    {
+        gateway.and_then(|gateway| {
+            gateway.runtime_copy().map(|progress| {
+                serde_json::to_value(runtime_copy_payload(&progress))
+                    .expect("a runtime copy report is a plain value")
+            })
+        })
+    }
+    #[cfg(not(any(target_os = "macos", test)))]
+    {
+        let _ = gateway;
+        None
+    }
 }
 
 fn payload(startup: &ApplicationStartup) -> GatewayStartup {
@@ -184,6 +286,20 @@ pub fn gateway_startup(
         .transpose()
         .map(|startup| startup.unwrap_or(GatewayStartup::Unmanaged { revision: 0 }))
         .map_err(|error| error.to_string())
+}
+
+/// The latest private-runtime copy report, for a bundled window.
+///
+/// `Ok(None)` means the host has not reported. The desktop window is refused,
+/// the same way it is refused for gateway startup. This does not change
+/// readiness.
+#[tauri::command]
+pub fn runtime_copy(
+    window: WebviewWindow,
+    deps: State<'_, HostDependencies>,
+) -> Result<Option<serde_json::Value>, String> {
+    bundled_window(window.label())?;
+    Ok(retained_runtime_copy(deps.gateway.as_deref()))
 }
 
 #[tauri::command]
@@ -954,5 +1070,60 @@ mod configuration_directory {
             host.causes.lock().unwrap().as_slice(),
             [ReconciliationCause::ClaudeConfigurationChanged]
         );
+    }
+}
+
+#[cfg(test)]
+mod runtime_copy_snapshot {
+    use super::{retained_runtime_copy, runtime_copy_payload, RetainedRuntimeCopy};
+    use crate::gateway::application::testing::recording_gateway;
+    use crate::gateway::application::{RuntimeCopyPhase, RuntimeCopyProgress};
+    use crate::host::RuntimeCopyState;
+
+    fn copying() -> RuntimeCopyProgress {
+        RuntimeCopyProgress {
+            state: RuntimeCopyPhase::Copying,
+            files_completed: 1,
+            files_total: 4,
+            bytes_completed: 10,
+            bytes_total: 40,
+        }
+    }
+
+    #[test]
+    fn a_later_report_replaces_what_a_late_subscriber_reads() {
+        let retained = RetainedRuntimeCopy::default();
+        assert_eq!(retained.latest(), None);
+
+        let first = retained.remember(&copying());
+        assert_eq!(retained.latest(), Some(copying()));
+        assert_eq!(first, runtime_copy_payload(&copying()));
+        assert_eq!(first.state, RuntimeCopyState::Copying);
+
+        let settled = RuntimeCopyProgress::settled();
+        let second = retained.remember(&settled);
+        assert_eq!(retained.latest(), Some(settled));
+        assert_eq!(second, runtime_copy_payload(&settled));
+        assert_eq!(second.state, RuntimeCopyState::Settled);
+        assert_eq!(second.files_completed, 0);
+        let value = serde_json::to_value(second).unwrap();
+        assert_eq!(value["state"], "settled");
+        assert_eq!(value["filesCompleted"], 0);
+        assert_eq!(value["bytesCompleted"], 0);
+        assert_eq!(value["bytesTotal"], 0);
+    }
+
+    #[test]
+    fn a_host_without_a_managed_gateway_has_no_runtime_copy_snapshot() {
+        assert_eq!(retained_runtime_copy(None), None);
+    }
+
+    #[test]
+    fn an_unreported_gateway_has_no_runtime_copy_snapshot() {
+        let (gateway, _) = recording_gateway(Ok(
+            crate::gateway::application::testing::reconciled_registration(),
+        ));
+        assert_eq!(retained_runtime_copy(Some(&gateway)), None);
+        assert_eq!(gateway.runtime_copy(), None);
     }
 }
