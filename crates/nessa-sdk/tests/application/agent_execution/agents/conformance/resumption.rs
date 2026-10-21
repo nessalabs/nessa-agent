@@ -1765,6 +1765,10 @@ async fn no_acquisition_evidence_retires_prior_proof(
                 _ => {}
             }
         }
+        let writer_failed = matches!(
+            write,
+            RetirementWrite::Rejected | RetirementWrite::LostAcknowledgement
+        );
         backend.audit.reject.store(reject, Ordering::SeqCst);
         let mut authorization = Some(
             agent
@@ -1810,7 +1814,7 @@ async fn no_acquisition_evidence_retires_prior_proof(
             .await;
             assert_eq!(
                 agent.attachment_status().phase(),
-                if reject {
+                if reject || writer_failed {
                     AttachmentPhase::Failed(AttachmentFailureCode::Audit)
                 } else {
                     AttachmentPhase::Absent
@@ -1821,10 +1825,6 @@ async fn no_acquisition_evidence_retires_prior_proof(
         assert!(
             !agent.may_hold_provider_resources(),
             "authorization alone acquired no provider resources"
-        );
-        let writer_failed = matches!(
-            write,
-            RetirementWrite::Rejected | RetirementWrite::LostAcknowledgement
         );
         if writer_failed {
             assert_eq!(
