@@ -18,6 +18,28 @@ night scene, or the drag.
 | drag-drop | columns | 62, 103, 61 | 62 | One frame holds `pointerup` and the commit's animation callback; `styleAndLayout` 27–47 |
 | drag-drop | sidebar | 89, 79, 101 | 89 | The same pair; `styleAndLayout` 27–44 |
 
+Measured again on `c2079e507` with the same command, production Chromium,
+4× throttle, viewport 1600×1000, both layouts, three runs. Calibration
+ratio 4.07 (busy loop 46 ms → 188 ms). The 120 ms frame measured 120.7 ms
+and was attributed. Durations below are unrounded and shown to 0.1 ms.
+The row max is the unrounded maximum.
+
+| Check | Layout | Runs (ms) | Max | Median |
+| --- | --- | --- | --- | --- |
+| split-right | columns | 39.2, 40.0, 40.3 | 40.3 | 40.0 |
+| drag-drop | columns | 42.8, 75.3, 42.1 | 75.3 | 42.8 |
+| split-right | sidebar | 57.0, 47.9, 49.3 | 57.0 | 49.3 |
+| drag-drop | sidebar | 53.8, 45.7, 44.9 | 53.8 | 45.7 |
+
+The exact row maxima are 40.29999999701977 ms, 75.30000000447035 ms,
+57 ms, and 53.80000000447035 ms. The columns drag-drop frame of 75.3 ms
+had a Long Animation Frame of 67 ms with 6 ms of style and layout, and no
+script over the attribution threshold. The sidebar split-right frame of
+57 ms had a Long Animation Frame of 56 ms, also 6 ms of style and layout,
+and no script over the threshold. The sidebar drag-drop frame of 53.8 ms
+had no Long Animation Frame record. Columns split-right stayed under 50 ms.
+This pass records the numbers. It does not change the paint.
+
 `--desktop-flight` is `0ms`. `FlipScope` returns no snapshot at that
 duration and does not read `getBoundingClientRect` on the product path.
 The drag already computes a landing box in `drawn` while carrying. A read
@@ -307,5 +329,6 @@ box frame.
   1034, 345, 337, and 746.
 - Check the agreement of `paneBox` with the four placement calcs, the
   order unmark then commit then preview release, and a scene whose first
-  height is 0. The production numbers are unverified until the checks
-  have been run on that head.
+  height is 0. Split and drop were measured on `c2079e507`; those rows
+  are in Measured again on this head. The subagents rows stay the
+  `a5ede358f` measurement.
