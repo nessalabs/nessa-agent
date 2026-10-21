@@ -1033,16 +1033,17 @@ async fn a_rejected_decline_preparation_retains_first_actor_without_a_terminal_o
     );
     let later = ActionContext::new("other", "another_surface", "later-close").unwrap();
     bounded(agent.decline_turn(&turn, later)).await.unwrap();
-    let records = backend.audit.records.lock().unwrap();
-    let declined = records
-        .iter()
-        .find_map(|record| match record {
-            ExecutionAuditRecord::TurnResumed(record) => Some(record),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(declined.resumed_by(), &resumer());
-    drop(records);
+    {
+        let records = backend.audit.records.lock().unwrap();
+        let declined = records
+            .iter()
+            .find_map(|record| match record {
+                ExecutionAuditRecord::TurnResumed(record) => Some(record),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(declined.resumed_by(), &resumer());
+    }
     assert!(storage.snapshot().invocations[0]
         .decline
         .as_ref()

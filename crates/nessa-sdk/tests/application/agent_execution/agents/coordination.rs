@@ -390,9 +390,12 @@ async fn agent() -> Agent {
     agent_with_backend().await.0
 }
 async fn agent_with_backend() -> (Agent, Arc<Backend>) {
+    agent_with_backend_for_session(None).await
+}
+async fn agent_with_backend_for_session(session: Option<SessionId>) -> (Agent, Arc<Backend>) {
     let backend = Arc::new(Backend::default());
     let manager = SessionManager::open(
-        None,
+        session,
         Arc::new(InMemoryStorage::new()),
         std::sync::Arc::new(
             nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
