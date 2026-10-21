@@ -2215,6 +2215,7 @@ impl ConversationService {
                                 let holds = agent.may_hold_provider_resources();
                                 return Err(OpeningFailure { cause, holds });
                             }
+                            owner.acquisition.start_sdk_attachment();
                             let authorization = agent
                                 .authorize_attachment(AttachmentRequest::CallerRequested(actor.clone()))
                                 .map_err(|error| OpeningFailure {
@@ -2272,7 +2273,6 @@ impl ConversationService {
                             let attachment_id = id.clone();
                             let attachment_service = service.clone();
                             let readiness = configured.readiness.clone();
-                            let sdk_acquisition = owner.acquisition.clone();
                             let owner = tokio::spawn(async move {
                                 if let Some(readiness) = readiness {
                                     let cancellation = authorization.cancellation();
@@ -2285,7 +2285,6 @@ impl ConversationService {
                                 if attachment_service.inner.retirement.get().is_some() {
                                     return;
                                 }
-                                sdk_acquisition.start_sdk_attachment();
                                 match attachment.start_attachment(authorization) {
                                     Ok(wait) => {
                                         if let Err(error) = wait.wait().await {

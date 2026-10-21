@@ -800,3 +800,33 @@ fn actual_cleanup_fact_is_independent_of_diagnostics_and_retained_release() {
         );
     }
 }
+
+#[test]
+fn nested_close_storage_failures_preserve_cleanup_without_acknowledging_other_obligations() {
+    let wrap = |error, cleanup_result| AgentError::StorageDuringClose {
+        error,
+        cleanup_result: Box::new(cleanup_result),
+    };
+    let outcome = CloseOutcome { forced: true };
+    let nested = wrap(
+        StorageError::Io("lease finalization".into()),
+        Err(wrap(StorageError::Io("SDK proof".into()), Ok(outcome))),
+    );
+    let original = nested.clone();
+    assert_eq!(confirmed_despite(&nested), Some(outcome));
+    assert_eq!(
+        nested, original,
+        "both independent storage causes remain unchanged"
+    );
+    for failure in [
+        AgentError::AuditFailure,
+        AgentError::CleanupUncertain,
+        AgentError::Deadline,
+    ] {
+        let nested = wrap(
+            StorageError::Io("lease finalization".into()),
+            Err(wrap(StorageError::Io("SDK proof".into()), Err(failure))),
+        );
+        assert_eq!(confirmed_despite(&nested), None);
+    }
+}

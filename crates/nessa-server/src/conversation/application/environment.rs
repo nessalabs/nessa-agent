@@ -914,12 +914,17 @@ fn confirmed_cleanup(report: &CleanupReport) -> Option<CloseOutcome> {
 /// the evidence of it failed. Its agent holds nothing then, whatever the
 /// close answers.
 pub(crate) fn confirmed_despite(error: &AgentError) -> Option<CloseOutcome> {
-    match error {
-        AgentError::StorageDuringClose { cleanup_result, .. } => {
-            cleanup_result.as_ref().as_ref().ok().copied()
+    // Each storage wrapper retains the independently observed cleanup result.
+    // Following that typed result acknowledges no write and discards no error;
+    // SDK proof and lease-finalization writes can both fail around one cleanup.
+    let mut current = error;
+    while let AgentError::StorageDuringClose { cleanup_result, .. } = current {
+        match cleanup_result.as_ref() {
+            Ok(outcome) => return Some(*outcome),
+            Err(error) => current = error,
         }
-        _ => None,
     }
+    None
 }
 
 /// What a close does with the agent's unfinished work. [`Self::Close`] ends

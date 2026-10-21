@@ -1856,3 +1856,8 @@ no assertion, deadline, concurrency or review cap is relaxed.
 | SDK was prepared but no provider was opened | The actual installed lifetime gate may publish confirmed no-resource cleanup. A newly prepared cold history writer has no installed gate and cannot fabricate this proof. |
 | Opening completes without ever starting SDK attachment | Exact opening owner plus its actual environment release and correlated current lease establish non-acquisition. Failed history reads or a later different lease cannot use that receipt. |
 | SDK cleanup audit fails | No SDK resource proof, including after successful environment End or cancellation/decline audit repair. |
+
+| SDK proof and lease-finalization writes both fail | The existing typed cleanup-result projection follows nested StorageDuringClose wrappers to their actual cleanup outcome. Both original errors stay returned. Audit, deadline, and pending-resource failures do not become confirmed cleanup. Normal owned close retains the writer; explicit deletion hands it to erasure and waits for its acknowledgement. |
+
+The opening records attachment ownership before SDK authorization can produce
+an independent audit obligation, including when provider startup is delayed.
