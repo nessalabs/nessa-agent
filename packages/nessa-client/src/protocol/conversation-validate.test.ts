@@ -42,6 +42,7 @@ function view() {
     revision: "1",
     serverNowMs: 1_700_000_000_000,
     approvalMode: "ask",
+    model: "claude-sonnet-5",
     approvalModes: [
       {
         id: "ask",
@@ -1394,6 +1395,11 @@ describe("the view's lease", () => {
       }
       expect(String(error), key).not.toMatch(/unknown fields/)
     }
+    expect(conversationView(view(), "conversation").model).toBe("claude-sonnet-5")
+    const { model: _omitted, ...withoutModel } = view()
+    expect(() => conversationView(withoutModel, "conversation")).toThrow(
+      /Invalid conversation model/,
+    )
     const properties = defs.ConversationLease.properties as Record<
       string,
       { enum?: string[] }

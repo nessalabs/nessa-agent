@@ -1007,23 +1007,31 @@ not hash the MCP servers. Its inputs are listed once, on `fingerprint` in
   process's arguments to every user, and its environment only to its own
   user; the token is in the stand-in's environment instead, where the
   gateway's own user can still read it (what the token keeps apart, above).
-- **The one-time strand.** The earlier fingerprint hashed the number of
-  servers, even when it was zero, and each server's name, command and
-  arguments; for a stand-in the command is the gateway's executable. Dropping
-  them changes every saved identity, so the release that ships this answers
-  `conversation_configuration_changed` for conversations saved before it.
-  Nothing moves them, and no reader of the earlier fingerprint is kept (one
-  current contract). The same release re-runs the agent warm-up once, since
-  the configuration part of the warm-up's key is this fingerprint
+- **A fingerprint change opens a new native session.** The earlier
+  fingerprint hashed the number of servers, even when it was zero, and each
+  server's name, command and arguments; for a stand-in the command is the
+  gateway's executable. Dropping them changes every identity saved before
+  that release. A context-only mismatch does not refuse the conversation:
+  the history continues on a new native session
+  ([restoration fingerprint](restoration-fingerprint.md)). Nothing reads the
+  earlier fingerprint (one current contract). The same release re-runs the
+  agent warm-up once, since the restoration fingerprint is part of the
+  warm-up's key
   ([`RuntimeFingerprint`](../../crates/nessa-server/src/agent_warm_up/domain/value_objects/runtime_fingerprint.rs));
-  that costs one background launch and is harmless.
-- **What still strands a saved conversation.** A change to any hashed input,
-  and that includes every update that changes the staged runtime tree, which
-  in practice is every release. The desktop stages the runtime under a
-  directory named by the prepared tree's content fingerprint
+  that costs one background launch and is harmless. The warm-up also keeps
+  the launch fingerprint — the executable, the arguments, and the runtime
+  environment — so a later release that only moves the staged runtime
+  re-warms without changing the restoration identity.
+- **What still strands a saved conversation.** A different provider name or
+  model. A hashed input changing does not: it opens a new native session
+  and keeps the history. The staged runtime's path is not a hashed input.
+  The desktop stages the runtime under a directory named by the prepared
+  tree's content fingerprint
   ([`staging.rs`](../../src-tauri/src/gateway/infrastructure/macos/staging.rs), `tree_fingerprint`)
   and launches the agent runtime's executable and entry from it (`configure`
   in [`composition/desktop.rs`](../../crates/nessa-server/src/composition/desktop.rs)),
-  so the executable path and the first argument move with every such update.
-  What stops stranding a conversation after this release is only a change to
-  the MCP servers, and with it the gateway's own path.
+  so the executable path and the staged adapter entry move with every
+  release. That move is the warm-up's launch fingerprint, not the
+  restoration identity, so the saved native session is resumed. Every
+  other argument is hashed; the list is on `fingerprint` in
+  `crates/nessa-sdk/src/infrastructure/acp/sessions/identity.rs`.

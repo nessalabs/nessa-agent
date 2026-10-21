@@ -453,6 +453,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     "approvalModeChange",
     "modelChange",
     "modelChangeEffect",
+    "model",
   ])
   if (identity(item, "conversationId") !== expected)
     throw new Error("Conversation response belongs to another conversation")
@@ -492,6 +493,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   if (item.modelChangeEffect !== undefined)
     oneOf(text(item, "modelChangeEffect"), ["subsequentResponses", "nextTurn"])
+  text(item, "model", 256, false)
   if (item.interactionViewError !== undefined)
     text(item, "interactionViewError", 2048, false)
   const messages = items(item, "messages", 128)

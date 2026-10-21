@@ -1,0 +1,222 @@
+# Review brief: restoration fingerprint (#1071)
+
+Pre-implementation review of
+[the design note](../design/restoration-fingerprint.md) against
+[the local code review gate](../../CODING_STANDARDS.md#local-code-review-gate).
+No product code had been edited. The tree was `main` at the review, plus this
+note and the design note.
+
+## Brief
+
+- **Checkout:** `nessalabs/nessa-agent`, branch `main`, plus the two uncommitted
+  documents named above. No product diff.
+- **Intended behavior:** `PATH`, `TMPDIR`, `USER`, `LOGNAME`, `CODEX_PATH`, and
+  `CLAUDE_CODE_EXECUTABLE` do not change the restoration fingerprint. A
+  fingerprint mismatch with the same provider name and model opens a new
+  native session and records `ProviderIdentityChanged`, in one save with the
+  new context when the provider would otherwise resume the old one. A
+  different name or model is still `IdentityMismatch`. The desktop shows the
+  conversation record's model when no runtime is attached, and says the chat
+  cannot be reopened when a model change is not sent or is refused
+  `conversation_configuration_changed`. A stress step restarts the gateway
+  with a changed agent `PATH` and `TMPDIR` and expects the next send to an
+  existing conversation to complete.
+- **Owned scope:** `fingerprint` inputs; `SessionManager::prepare` and
+  `attach` for rows S1–S6; the product view's selected model; the desktop
+  composer model and the model-change sentence; the conversation-stress
+  step. Not in scope: launchd `PATH` registration, provider name or model
+  refusal, migrations, issues #965, #981, #1038, #1039, #1030, #1034, #345,
+  #337, #746.
+- **Known findings:** none yet. The cloud reproduction in the issue is the
+  behavior this review is checking the design against. It had not been
+  re-run in this checkout at the time of the review.
+
+## What was inspected
+
+- `crates/nessa-sdk/src/infrastructure/acp/sessions/identity.rs` — the
+  fingerprint hashes the whole `AcpConfig::environment`.
+- `crates/nessa-sdk/src/application/agent_execution/sessions/manager.rs`
+  `prepare` and `attach` — a fingerprint mismatch that would resume the
+  saved context returns `IdentityMismatch`; the not-restorable path records
+  `ProviderIdentityChanged` and opens fresh.
+- `ProviderContext::validate_evidence` — `Absent` is illegal once a turn has
+  provider evidence, so S6 cannot clear the context.
+- `crates/nessa-server/src/composition/agent.rs` `process_environment` and
+  `provider_for_managed_adapter` — `PATH` comes from `NESSA_AGENT_PATH`,
+  and `CODEX_PATH` / `CLAUDE_CODE_EXECUTABLE` are merged into the same map.
+- `crates/nessa-server/src/product/conversation.rs` `wire_view` — the
+  selected model is copied onto `runtime` only when a runtime exists.
+  `read_unopened` sets `selection` and not `runtime`.
+- `src/desktop/workspace/adapters/gateway/gateway-views.ts` `runningModel`
+  and `gateway-source.ts` `setModel` — no runtime means the catalogue
+  default, and `setModel` throws an uncertain `unavailable` before any RPC.
+- `packages/nessa-client` `rejectedBeforeDispatch` —
+  `conversation_configuration_changed` is not classified as rejected before
+  dispatch, so a gateway refusal of that code is uncertain. The sentence
+  change is in the composer, not in that classification.
+- Gates 13, 15, and 16, and the agreement check: one fingerprint function;
+  the state table; name and model stay a hard refusal; the new fingerprint
+  and the new context are one save on S6 so a crash cannot resume the old
+  session under the new fingerprint.
+
+## Agreement
+
+Authoritative facts: provider name, model id, and context fingerprint live
+on `ProviderIdentity`; the native session id lives on `ProviderContext`;
+the conversation's selected model lives on the metadata record and on
+`ConversationSelectionView`. `prepare` is the owner of S1, S2, and whether
+S5 writes `ProviderIdentityChanged` before launch. `attach` is the owner of
+which session id is passed to `open`, and of the S6 save. `wire_view` is
+the owner of the model id on the product view. The desktop reads that
+field; it does not derive a model of its own when the field is present.
+
+Checked combination: same name and model, different fingerprint, provider
+would resume (S6). Writing the fingerprint first and then crashing would
+make the next open look like S3 and resume a session that belongs to the
+old fingerprint. The design forbids that write until the new session id is
+in the same unit. The opposite combination, S3, still resumes.
+
+## Result
+
+No finding at any priority. Implementation may follow the table. XDG roots
+stay in the allowlist as OpenCode's vendor directories, the same rule as
+`CODEX_HOME` and `CLAUDE_CONFIG_DIR`, not a second list.
+
+Unverified until the code exists: the recipe in the issue (restart with
+`NESSA_AGENT_PATH`, then with `TMPDIR`), the S6 crash retry, and the
+stress step.
+
+## Scope revision
+
+A later finding changed what the restoration fingerprint hashes. Every
+release stages the node binary and the adapter under a new directory, and
+those paths were still in the fingerprint, so an app update still changed
+the restoration identity. The revision, written into the design note's
+state table and invariant 7:
+
+- the restoration fingerprint no longer hashes the executable or the
+  arguments. A moved runtime with the same provider name and model is S3;
+- `PATH`, `TMPDIR`, `USER`, `LOGNAME`, `CODEX_PATH`, and
+  `CLAUDE_CODE_EXECUTABLE` live in `AcpConfig::runtime_environment`, which
+  the restoration fingerprint does not read;
+- warm-up records a separate launch fingerprint of the executable, the
+  arguments, and that runtime environment;
+- there is still no reader for an older fingerprint format. A saved
+  conversation whose fingerprint included the executable takes S6;
+- a provider name or model change is still S1 or S2.
+
+The stress step restarts with both the runtime directory moved and `PATH`
+changed. The desktop model and the reopen sentence are unchanged.
+
+## Implementation review
+
+Reviewed head `9e405df5e` on `cursor/restoration-fingerprint-de61`, base
+`main`, clean tree. The checkout is the implementation of the design note,
+including the scope revision above.
+
+Intended behavior: a moved executable, changed arguments, or a change to
+`PATH`, `TMPDIR`, `USER`, `LOGNAME`, `CODEX_PATH`, or
+`CLAUDE_CODE_EXECUTABLE` does not change the restoration fingerprint, so a
+saved conversation resumes. Those inputs are the warm-up launch
+fingerprint. A context-only mismatch still opens a fresh native session. A
+different provider name or model is still refused, with nothing launched.
+The desktop shows the conversation's model and says the chat cannot be
+reopened when that refusal is what the window has.
+
+Inspected:
+
+- `fingerprint` and `launch_fingerprint` in
+  `crates/nessa-sdk/src/infrastructure/acp/sessions/identity.rs`, and
+  `AcpConfig::runtime_environment` plus the disjoint-key check.
+- The three ACP bindings, `CredentialedClaudeProvider`, and the lease fence,
+  each returning the launch fingerprint rather than the empty default.
+- `split_runtime_environment` in composition, and
+  `runtime_fingerprint_for` used by both warm-up call sites.
+- `SessionManager` rows S1–S6, unchanged by this revision except for which
+  inputs reach S3.
+- The product view's `model` field and the desktop sentence, already on the
+  branch.
+- The stress drift step, which moves the runtime and changes `PATH`.
+
+Agreement: `ProviderIdentity` owns the restoration decision.
+`launch_fingerprint` is not part of it. Warm-up owns the launch key and
+reads both through `runtime_fingerprint_for`, so a moved runtime re-warms
+and a saved conversation still resumes. `prepare` still owns S1 and S2.
+`attach` still owns which session id is passed to `open`.
+
+Revert probes, each restored before the next, and the test re-run green
+after the last restore:
+
+- Hashing the executable in `fingerprint_fields` failed
+  `plumbing_environment_does_not_change_the_fingerprint` at the moved
+  executable's identity comparison.
+- Hashing `runtime_environment` failed the same test at the `PATH`
+  comparison.
+- Hashing the arguments failed the same test at the argument comparison.
+
+No finding at any priority. Not re-run in this review: the full default
+stress plan. On the following CI run the model step found the picker
+disabled immediately after a mode switch; the step now waits for that
+change to settle. The macOS page-load and Windows device-client jobs on
+the previous head failed for reasons outside this diff.
+
+## Codex review
+
+Reviewed head `4452857d`. Two P2 findings.
+
+Endpoint and profile selectors left in the identity environment were not
+hashed, because the restoration fingerprint read only a directory allowlist.
+The binding still forwarded them, so a changed `ANTHROPIC_BASE_URL` kept the
+identity and attach would resume the previous backend's native session id.
+The fingerprint now hashes every entry of `AcpConfig::environment`. `PATH`,
+`TMPDIR`, and the other runtime keys stay in `runtime_environment` and stay
+out of that hash. A changed endpoint is S6. The contract is
+`plumbing_environment_does_not_change_the_fingerprint` and the
+identity-credentials session in
+`a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_without_persistence`.
+
+`ConversationView.model` was emitted for every conversation and left out of
+`required`, so the generated field stayed optional and the desktop could
+read the runtime model or the catalogue default. `model` is required on the
+current product schema. A view that omits it fails
+`scripts/check-product-protocol.mjs` and `conversationView`. The desktop
+reads that field only.
+
+Reviewed head `852b5361`. One P2 finding: a public `AcpConfig` consumer
+that changes an argument selecting a provider, model, or profile
+(`--profile staging`) left the restoration fingerprint unchanged, and
+attach resumed the previous backend's native session id. The executable
+path and every argument had been left out together.
+
+The restoration fingerprint now hashes every semantic argument: one that
+is not an absolute path. Absolute-path arguments, the executable path, and
+`runtime_environment` (`PATH`, `TMPDIR`, `USER`, `LOGNAME`, `CODEX_PATH`,
+`CLAUDE_CODE_EXECUTABLE`) stay on the launch fingerprint. The list is on
+`fingerprint` in `identity.rs`, and the design note's "What selects a
+saved native session" states the same membership. A semantic argument
+change is S6. A moved runtime stays S3.
+
+`a_semantic_argument_changes_the_restoration_identity` fails when those
+arguments are not hashed (the identity comparison). Restoring the hash
+makes it pass.
+`a_bundled_runtime_path_does_not_change_the_restoration_identity` moves
+the executable, appends an absolute adapter path, and changes `PATH` and
+`TMPDIR`, and the restoration identity stays equal. The identity-credentials
+session appends `--profile staging` and opens a new native session.
+
+Reviewed head `eff019e2b`. One P2 finding: `bundled_runtime_path` treated
+every absolute argument as a staged runtime path, so `--config
+/profiles/staging.toml` stayed out of the restoration fingerprint and
+attach could resume the previous profile's native session.
+
+The restoration fingerprint now hashes every `AcpConfig::arguments` entry.
+The only paths left out are `AcpConfig::staged_runtime_arguments`, which
+composition sets from the bundled runtime location it placed. Desktop
+configure writes the adapter entry there. The launch fingerprint still
+hashes the executable, those staged paths, the arguments, and the runtime
+environment.
+
+`a_config_path_changes_the_restoration_identity_and_a_moved_staged_runtime_does_not`
+changes `/profiles/staging.toml` to `/profiles/other.toml` and the
+restoration identity differs. Moving the executable and the staged adapter
+path, and changing `PATH` and `TMPDIR`, leaves it equal.

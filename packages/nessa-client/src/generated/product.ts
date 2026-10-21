@@ -703,6 +703,8 @@ export interface ConversationView {
   modelChange?: ModelChange
   /** Native effect boundary of the last confirmed model change. */
   modelChangeEffect?: ModelChangeEffect
+  /** The conversation's selected catalog model, present whether or not an agent is open. */
+  model: string
 }
 /** One file its agent published under a lease: read from the environment, verified by its digest, held, and then recorded with the lease as its cause. The record outlives the hold. The bytes are never in the view. */
 export interface ConversationArtifact {

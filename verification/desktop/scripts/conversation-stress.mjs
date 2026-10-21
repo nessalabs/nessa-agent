@@ -75,6 +75,11 @@
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
  *               message sent after it is answered
+ *   drift       the gateway is stopped and started again with its staged
+ *               runtime directory moved and a different agent PATH and
+ *               TMPDIR, the way an app update stages a new tree and
+ *               re-registers the launchd job; the next message sent in the
+ *               window to the existing conversation is answered
  *   pool        native linking is turned on in Settings and two real
  *               `nessa env dial` workers pair with the gateway; a
  *               conversation created on `peer:any` is bound to one of them
@@ -111,9 +116,19 @@
  */
 import catalog from "../../../crates/nessa-sdk/data/models.json" with { type: "json" }
 import { randomUUID } from "node:crypto"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
@@ -775,10 +790,55 @@ async function startedBeside(run, client, step, n, failures) {
   )
 }
 
+/**
+ * Points the selected agent's command and its absolute file arguments at a
+ * new directory. A script becomes a wrapper there that runs the real file:
+ * a symlink would make `process.argv[1]` differ from the path the script
+ * records, so it would never start, and a copy would break a root it
+ * derives from its own path. The node binary and every other file are
+ * symlinks, so the bytes stay where they are.
+ */
+function moveStagedRuntime(directory) {
+  const configPath = join(directory, "ci", "instances", INSTANCE, "config.json")
+  const config = JSON.parse(readFileSync(configPath, "utf8"))
+  const runtime = config.agents.runtimes[config.agents.selected]
+  const staged = mkdtempSync(join(tmpdir(), "nessa-stress-runtime-"))
+  let n = 0
+  const wrapScript = (path) => {
+    const dest = join(staged, `${n++}-${basename(path)}`)
+    writeFileSync(
+      dest,
+      `import { spawnSync } from "node:child_process"
+import { realpathSync } from "node:fs"
+const result = spawnSync(realpathSync(process.execPath), [${JSON.stringify(path)}, ...process.argv.slice(2)], { stdio: "inherit" })
+process.exit(result.status ?? 1)
+`,
+    )
+    return dest
+  }
+  const relocate = (path) => {
+    if (typeof path !== "string" || !isAbsolute(path) || !existsSync(path)) return path
+    if (lstatSync(path).isDirectory()) return path
+    if (/\.(?:mjs|cjs|js)$/.test(path)) return wrapScript(path)
+    const dest = join(staged, `${n++}-${basename(path)}`)
+    symlinkSync(path, dest)
+    return dest
+  }
+  runtime.command = relocate(runtime.command)
+  // Only the staged runtime moves. An absolute argument such as
+  // `--config /profiles/staging.toml` is the restoration identity.
+  runtime.stagedRuntime = (runtime.stagedRuntime ?? []).map(relocate)
+  writeFileSync(configPath, JSON.stringify(config))
+  chmodSync(configPath, 0o600)
+}
+
 const steps = {
   async model(run, step, failures) {
     const picker = dock(run.page).locator(css.modelChip)
-    if (await picker.isDisabled()) {
+    // A mode switch just before this step can still be settling. The picker
+    // is disabled only while that change is in flight.
+    const enabled = await waitFor(async () => !(await picker.isDisabled()), 10_000)
+    if (!enabled) {
       failures.push("the established conversation's model picker is disabled")
       return
     }
@@ -1061,6 +1121,54 @@ const steps = {
         return failures.length === before
       })
     })
+  },
+
+  async drift(run, step, failures) {
+    await run.exclusive(async () => {
+      await run.restartConsole.during(run.opened, async () => {
+        const before = failures.length
+        // The composer is already on screen. The window has come back only
+        // once its new session socket has received a frame.
+        let stop = () => {}
+        const recovered = new Promise((resolve) => {
+          const onSocket = (socket) => {
+            if (!socket.url().endsWith("/session")) return
+            const received = () => resolve(true)
+            stop = () => {
+              socket.off("framereceived", received)
+              run.page.off("websocket", onSocket)
+            }
+            socket.once("framereceived", received)
+          }
+          run.page.on("websocket", onSocket)
+          stop = () => run.page.off("websocket", onSocket)
+        })
+        const old = run.client
+        run.restarts += 1
+        const drifted = mkdtempSync(join(tmpdir(), "nessa-stress-drift-"))
+        const path = `/opt/homebrew/bin:${process.env.PATH ?? ""}`
+        try {
+          await run.stack.gateway.restart("SIGTERM", {
+            overlay: {
+              NESSA_AGENT_PATH: path,
+              PATH: path,
+              TMPDIR: drifted,
+            },
+            whileStopped: async () => moveStagedRuntime(run.stack.gateway.directory),
+          })
+          old.close()
+          run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+          const back = await Promise.race([recovered, sleep(60_000).then(() => false)])
+          if (!back)
+            failures.push("the window did not come back after the agent path changed")
+        } finally {
+          stop()
+        }
+        return failures.length === before
+      })
+    })
+    // The existing conversation still takes a message, in the window.
+    if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
   async linking(run, step, failures) {
