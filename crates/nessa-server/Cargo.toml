@@ -69,6 +69,9 @@ async-trait = "0.1"
 # implementation rather than two.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 sha2 = "0.10"
+# macOS compares composed and decomposed names as one path. The fold is pure
+# so the same rule can be checked on Linux.
+unicode-normalization = "0.1.25"
 # The tool policy's evaluator (conversation/infrastructure/tool_policy/cedar),
 # the environment host's lease policy (env_serve/infrastructure/cedar), and
 # the deletion inventory (backup/infrastructure/cedar), the same

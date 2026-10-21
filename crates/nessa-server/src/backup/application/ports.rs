@@ -280,8 +280,9 @@ pub struct RestoreEvidence<'a> {
     pub decision: &'a str,
     pub policies: &'a [String],
     /// Acceptance stores `lease receipt` lines. A fetch stores the publication
-    /// id of the session file. A sealed stage stores the digest of the journal
-    /// bytes. Empty for every other transition.
+    /// id of the session file. A sealed stage stores the journal digest and
+    /// the staging id. A later effect that names that id spends it. Empty for
+    /// every other transition.
     pub attestations: &'a str,
 }
 
@@ -302,15 +303,61 @@ pub trait RestoreAudit: Send + Sync {
         publication: &str,
     ) -> Result<bool, DecisionAuditError>;
 
-    /// Whether an effect line records `digest` as the journal sealed at `target`.
+    /// The staging id of the latest unspent seal of `digest` at `target`.
     ///
-    /// `target` is the anchored quarantine path. The line is `absent` to
+    /// `target` is the anchored quarantine path. The seal is `absent` to
     /// `verified`, cause `sealed`, decision `effect`, and its attestations are
-    /// that digest. The readiness marker is not this evidence.
-    fn sealed(&self, target: &str, digest: &str) -> Result<bool, DecisionAuditError>;
+    /// the digest and the staging id. A later effect on that target that names
+    /// the id spends it. An older seal does not stay current. The readiness
+    /// marker is not this evidence.
+    fn sealed(&self, target: &str, digest: &str) -> Result<Option<String>, DecisionAuditError>;
 }
 
-/// The sealed effect names this journal digest.
+/// One audit line reduced to the fields a seal lookup reads.
+pub struct SealFields<'a> {
+    pub target: &'a str,
+    pub before: &'a str,
+    pub after: &'a str,
+    pub cause: &'a str,
+    pub decision: &'a str,
+    pub attestations: &'a str,
+}
+
+/// The latest unspent staging id for this journal digest at `target`.
+pub fn current_staging_id<'a>(
+    lines: impl IntoIterator<Item = SealFields<'a>>,
+    target: &str,
+    digest: &str,
+) -> Option<String> {
+    let mut latest: Option<(String, bool)> = None;
+    for line in lines {
+        if line.target != target {
+            continue;
+        }
+        if line.before == "absent"
+            && line.after == "verified"
+            && line.cause == "sealed"
+            && line.decision == "effect"
+        {
+            latest = crate::backup::domain::seal_staging_id(line.attestations, digest)
+                .map(|id| (id, false));
+            continue;
+        }
+        if line.decision == "effect" {
+            if let Some((id, spent)) = &mut latest {
+                if crate::backup::domain::attestation_mentions(line.attestations, id) {
+                    *spent = true;
+                }
+            }
+        }
+    }
+    match latest {
+        Some((id, false)) => Some(id),
+        _ => None,
+    }
+}
+
+/// The sealed effect names this journal digest and a staging id.
 pub fn effect_names_seal(
     before: &str,
     after: &str,
@@ -323,7 +370,7 @@ pub fn effect_names_seal(
         && after == "verified"
         && cause == "sealed"
         && decision == "effect"
-        && attestations == digest
+        && crate::backup::domain::seal_staging_id(attestations, digest).is_some()
 }
 
 /// Names the publication written beside one fetched session.
@@ -331,6 +378,14 @@ pub fn effect_names_seal(
 /// Infrastructure supplies the id. A test supplies a fixed id, or a failure.
 pub trait PublicationIds: Send + Sync {
     fn publication_id(&self) -> Result<String, RestoreFault>;
+}
+
+/// Names one staging of a quarantine.
+///
+/// Infrastructure supplies the id. A test supplies a fixed id, or a failure.
+/// The sealed audit and the readiness marker both store it.
+pub trait StagingIds: Send + Sync {
+    fn staging_id(&self) -> Result<String, RestoreFault>;
 }
 
 /// `target` is the conversation id, a newline, then the anchored root.

@@ -98,13 +98,18 @@ fails is live, recorded as `unsynced`, and is not rolled back. A fetch is
 available only for the publication stored beside that file. That publication
 and its conversation stay available after the quarantine folder is renamed
 onto the live path. Accept refuses a session whose publication was never
-recorded available. On Windows, two roots that differ only by ASCII case are
-the same path and are refused before either lock is taken. The audit
+recorded available. On Windows and macOS, two roots that differ only by
+Unicode case are the same path. On macOS, a composed name and its
+decomposition are the same path. The drive letter folds with the name. They
+are refused before either lock is taken. The audit
 names the anchored root rather than the caller's spelling. A path that is
 not Unicode is refused and is not audited under a lossy spelling. A published
 directory is an exclusive rename, so an empty live directory is not replaced.
 A partial session that cannot be removed is retained, and that name is not a
 helper. A staging directory that survives a failed write is unready. The
-readiness marker's directory is synced, and a failed sync clears the marker.
-A lease and its receipt are percent-encoded. A canonical session image that cannot be read is not
+sealed audit names the journal digest and one staging id from the staging-id
+port. The readiness marker stores that id. Accept spends it. A historical
+seal, a spent id, or the constant `ready` marker is not accepted. The
+readiness marker's directory is synced. A failed sync retires the marker,
+and a marker that still names an id is retained. A lease and its receipt are percent-encoded. A canonical session image that cannot be read is not
 sealed while a conversation fence applies.

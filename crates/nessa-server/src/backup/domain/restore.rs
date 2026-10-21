@@ -4,7 +4,10 @@
 //! these functions what to keep.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
+
+use unicode_normalization::UnicodeNormalization;
 
 use super::encoding::{decode_identity, encode_identity};
 use super::record::{checked_identity, Fingerprint, MAX_NAME_BYTES};
@@ -254,48 +257,101 @@ pub fn restore_lock_path(root: &Path) -> Result<PathBuf, RestoreFault> {
 }
 
 /// The two roots of a restore. Neither may be the other, or sit inside it.
-/// `.` and `..` are collapsed before the comparison. ASCII case folds on
-/// Windows and macOS.
+/// `.` and `..` are collapsed before the comparison. Windows and macOS fold
+/// Unicode case. macOS also treats a composed name and its decomposition as
+/// one path. The comparison happens before either lock is taken.
 pub fn paths_are_distinct(quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
-    let quarantine = normalized_root(quarantine)?;
-    let live = normalized_root(live)?;
-    if same_root(&quarantine, &live)
-        || root_contains(&quarantine, &live)
-        || root_contains(&live, &quarantine)
-    {
+    paths_conflict(quarantine, live, host_volume())
+}
+
+/// How a volume compares two path components that do not exist yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VolumeCase {
+    /// Linux. Bytes are the identity.
+    Bytes,
+    /// Windows. Unicode case folds. Composition does not.
+    Unicode,
+    /// macOS. Unicode case folds, and names are compared decomposed.
+    UnicodeDecomposed,
+}
+
+fn host_volume() -> VolumeCase {
+    if cfg!(target_os = "macos") {
+        VolumeCase::UnicodeDecomposed
+    } else if cfg!(windows) {
+        VolumeCase::Unicode
+    } else {
+        VolumeCase::Bytes
+    }
+}
+
+pub fn paths_conflict(left: &Path, right: &Path, volume: VolumeCase) -> Result<(), RestoreFault> {
+    let left = identity_parts(left, volume)?;
+    let right = identity_parts(right, volume)?;
+    if left == right || starts_with_longer(&left, &right) || starts_with_longer(&right, &left) {
         return Err(RestoreFault::Paths);
     }
     Ok(())
 }
 
-fn same_root(left: &Path, right: &Path) -> bool {
-    if folds_ascii_case() {
-        fold_root(left) == fold_root(right)
-    } else {
-        left == right
+fn starts_with_longer(parent: &[String], child: &[String]) -> bool {
+    child.starts_with(parent) && child.len() > parent.len()
+}
+
+fn identity_parts(path: &Path, volume: VolumeCase) -> Result<Vec<String>, RestoreFault> {
+    let path = normalized_root(path)?;
+    Ok(path
+        .components()
+        .map(|component| component_key(component, volume))
+        .collect())
+}
+
+fn component_key(component: Component<'_>, volume: VolumeCase) -> String {
+    match component {
+        Component::Prefix(prefix) => fold_name(prefix.as_os_str(), volume),
+        Component::RootDir => String::new(),
+        Component::CurDir | Component::ParentDir => String::new(),
+        Component::Normal(name) => fold_name(name, volume),
     }
 }
 
-fn root_contains(parent: &Path, child: &Path) -> bool {
-    if folds_ascii_case() {
-        let parent = fold_root(parent);
-        let child = fold_root(child);
-        child.starts_with(&parent) && child.len() > parent.len()
-    } else {
-        child.starts_with(parent)
+fn fold_name(name: &OsStr, volume: VolumeCase) -> String {
+    let Some(text) = name.to_str() else {
+        return raw_name(name);
+    };
+    match volume {
+        VolumeCase::Bytes => text.to_owned(),
+        VolumeCase::Unicode => unicode_fold(text),
+        VolumeCase::UnicodeDecomposed => unicode_fold(&text.nfd().collect::<String>()),
     }
 }
 
-/// Default Windows and macOS volumes compare paths without regard to ASCII
-/// case, including a final component that does not exist yet.
-fn folds_ascii_case() -> bool {
-    cfg!(any(windows, target_os = "macos"))
+fn unicode_fold(text: &str) -> String {
+    text.chars().flat_map(char::to_lowercase).collect()
 }
 
-fn fold_root(path: &Path) -> Vec<String> {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
-        .collect()
+/// A non-Unicode component stays byte-distinct. A lossy display is not an identity.
+fn raw_name(name: &OsStr) -> String {
+    let mut out = String::from("raw:");
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        for byte in name.as_bytes() {
+            out.push_str(&format!("{byte:02x}"));
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        for unit in name.encode_wide() {
+            out.push_str(&format!("{unit:04x}"));
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = name;
+    }
+    out
 }
 
 /// An absolute path with `.` and `..` removed. A `..` above the root is refused.
@@ -571,6 +627,53 @@ pub fn attested_pair(lease: &str, receipt: &str) -> String {
     format!("{} {}\n", encode_identity(lease), encode_identity(receipt))
 }
 
+/// The sealed effect names this journal digest and this one staging.
+pub fn seal_attestation(digest: &str, staging_id: &str) -> String {
+    format!(
+        "{} {}",
+        encode_identity(digest),
+        encode_identity(staging_id)
+    )
+}
+
+/// The staging id stored beside `digest`, when the attestation is that pair.
+pub fn seal_staging_id(attestations: &str, digest: &str) -> Option<String> {
+    let mut tokens = attestations.split_whitespace();
+    let left = tokens.next()?;
+    let right = tokens.next()?;
+    if tokens.next().is_some() {
+        return None;
+    }
+    let left = decode_identity(left, MAX_NAME_BYTES).ok()?;
+    let right = decode_identity(right, MAX_NAME_BYTES).ok()?;
+    if left == digest {
+        Some(right)
+    } else {
+        None
+    }
+}
+
+/// Whether an effect's attestations name `id` as one of their tokens.
+pub fn attestation_mentions(attestations: &str, id: &str) -> bool {
+    attestations.split_whitespace().any(|token| {
+        decode_identity(token, MAX_NAME_BYTES)
+            .ok()
+            .is_some_and(|decoded| decoded == id)
+    })
+}
+
+/// A staging id that can be stored in the readiness marker.
+pub fn staging_id_is_usable(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_NAME_BYTES
+        && id.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~'
+            )
+        })
+}
+
 pub fn deferred_session_name(conversation_id: &str) -> Result<String, RestoreFault> {
     checked_identity(conversation_id.to_owned()).map_err(|_| RestoreFault::Unreadable)?;
     Ok(format!(
@@ -789,6 +892,52 @@ mod tests {
             paths_are_distinct(&root.join("parent").join("..").join("live"), &live).unwrap_err(),
             RestoreFault::Paths
         );
+        let upper = root.join("Ä");
+        let lower = root.join("ä");
+        assert!(paths_conflict(&upper, &lower, VolumeCase::Bytes).is_ok());
+        assert_eq!(
+            paths_conflict(&upper, &lower, VolumeCase::Unicode).unwrap_err(),
+            RestoreFault::Paths
+        );
+        assert_eq!(
+            paths_conflict(&upper, &lower, VolumeCase::UnicodeDecomposed).unwrap_err(),
+            RestoreFault::Paths
+        );
+        let composed = root.join("\u{00e9}");
+        let decomposed = root.join("e\u{0301}");
+        assert!(paths_conflict(&composed, &decomposed, VolumeCase::Unicode).is_ok());
+        assert_eq!(
+            paths_conflict(&composed, &decomposed, VolumeCase::UnicodeDecomposed).unwrap_err(),
+            RestoreFault::Paths
+        );
+        assert_eq!(
+            paths_conflict(
+                &root.join("Ä").join("child"),
+                &root.join("ä"),
+                VolumeCase::Unicode
+            )
+            .unwrap_err(),
+            RestoreFault::Paths
+        );
+        let digest = "abc";
+        let staged = seal_attestation(digest, "stage-1");
+        assert_eq!(seal_staging_id(&staged, digest).as_deref(), Some("stage-1"));
+        assert!(seal_staging_id(&staged, "other").is_none());
+        assert!(attestation_mentions("stage-1", "stage-1"));
+        assert!(attestation_mentions(&staged, "stage-1"));
+        assert!(staging_id_is_usable("stage-1"));
+        assert!(!staging_id_is_usable("stage 1"));
+        if cfg!(windows) {
+            assert_eq!(
+                paths_conflict(
+                    &PathBuf::from(r"C:\Live"),
+                    &PathBuf::from(r"c:\live"),
+                    VolumeCase::Unicode,
+                )
+                .unwrap_err(),
+                RestoreFault::Paths
+            );
+        }
         if cfg!(any(windows, target_os = "macos")) {
             assert_eq!(
                 paths_are_distinct(&root.join("Restore"), &root.join("restore")).unwrap_err(),

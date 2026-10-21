@@ -62,17 +62,22 @@ its target. The publication id comes from the publication-id port. The OS
 adapter reads sixteen random bytes. A test supplies the id, or a failure.
 
 A staged quarantine has a third identity: the digest of the journal bytes
-stage wrote, stored as the attestations of the sealed effect. Accept trusts
-that line. The readiness marker records that the line was stored. It is not
-the seal. A journal rewritten so its own file hashes match is still a
-different digest.
+stage wrote, and a staging id from the staging-id port. The sealed effect
+stores both. The readiness marker stores that same id. Accept trusts the
+latest unspent id for that digest at that quarantine path. A later effect
+that names the id spends it, including the accept itself and a readiness
+failure. A historical seal, a spent id, or the constant `ready` marker is
+not a generation. A journal rewritten so its own file hashes match is still
+a different digest. The OS adapter reads sixteen random bytes. A test
+supplies the id.
 
 | What happened | Who owns the bytes | Audit | Caller is told |
 | --- | --- | --- | --- |
 | Rename not done | The quarantine, when it still exists. The live path is unchanged | `unchanged → unchanged` | The error |
-| Rename done, a parent sync failed | The live path | `verified → live`, cause `unsynced` | Live |
-| Rename done, sync succeeded, live audit stored | The live path | `verified → live`, cause `accepted` | Live |
-| Rename done, live audit not stored | The live path | The live line is missing | Audit failure. The tree stays live |
+| Rename done, the staging id recorded spent, then the live line stored | The live path. That staging id is spent | `verified → spent`, cause `spent`, then `verified → live` | Live |
+| Rename done, a parent sync failed, and the id was spent | The live path | `verified → live`, cause `unsynced` | Live |
+| Rename done, the spend line not stored | The live path. The id may still be unspent | The spend line is missing | Audit. The tree stays live |
+| Rename done, live audit not stored | The live path. The id is spent | The live line is missing | Audit failure. The tree stays live |
 | Fetch publish not done | No session file | The refusal, or the match line only | The error |
 | File and publication stored, and the available line names that publication | That publication | `held → available`. Attestations are the publication. Target is the anchored root and the conversation | The session |
 | Available line not stored, and the file was removed or emptied | No readable publication | The available line is absent | Audit |
@@ -80,15 +85,17 @@ different digest.
 | Open through another spelling of the same root | The publication already stored for that anchored root | The same target as the first open | Already present |
 | Fetched in quarantine, then the folder is renamed to live | The same publication, now at the live path | The available line still names that publication and conversation. The root on the line is where the fetch ran | Already present. The file is not fetched again |
 | A session extra whose publication has no available line | The quarantine. Accept does not rename | `unchanged → unchanged` | The error. The live path is not created |
-| Two roots that differ only by ASCII case on Windows or macOS | One filesystem object | Refused before either lock is taken | Paths |
+| Two roots that differ only by Unicode case on Windows or macOS, or by composition on macOS | One filesystem object. The drive letter folds with the name | Refused before either lock is taken | Paths |
 | Publish fails after the bytes may already have the final name | Neither name. The final name is retired even when retiring the temp name fails | The publish error when both retire. Retained when either name cannot | The error. A file that remains is retained |
 | Publication id | The id from the publication-id port. The OS adapter reads 16 random bytes | Attestations are that id | Entropy failure retires the published file |
-| Sealed journal | The audit. Attestations are the digest of the journal bytes stage wrote | `absent → verified`, cause `sealed` | |
+| Sealed journal | The audit. Attestations are the journal digest and the staging id | `absent → verified`, cause `sealed` | |
+| The same journal bytes staged again after that id was spent | A new staging id. The old marker is not this generation | The latest unspent seal. A spent id is not current | Tamper when the marker is the spent id or `ready` |
+| Readiness failed and the marker still names the id | The quarantine, unready. The id is spent | `verified → unready` or `verified → absent`. Attestations are the staging id | The error. A later accept does not promote that marker |
 | Journal replaced and recomputed so its own seal matches | The quarantine. Accept does not rename | `unchanged → unchanged` | Tamper. The audit still names the journal stage wrote |
-| Derived partial directory is the live path, including an ASCII case alias on Windows or macOS | The live path. The partial directory is not deleted | `unchanged → unchanged` | Paths |
+| Derived partial directory is the live path, including a Unicode case alias on Windows or macOS, or a composed alias on macOS | The live path. The partial directory is not deleted | `unchanged → unchanged` | Paths |
 | One root's lock file is the other root | Neither root is created as a lock file | `unchanged → unchanged` | Paths |
 | A file whose name ends in `.publication` outside `sessions/<id>.sqlite3` | The quarantine. Accept does not rename | `unchanged → unchanged` | Tamper. The file is part of the seal |
-| Readiness bytes synced, then renamed to `accept-ready`, then the quarantine directory synced | The marker. A file sync failure deletes the temporary file. A directory sync failure clears the marker | The sealed line stays. The marker is absent | The error. A partial file is not readiness |
+| Readiness bytes synced, then renamed to `accept-ready`, then the quarantine directory synced | The marker, whose bytes are the staging id. A file sync failure retires the temporary file. A directory sync failure retires the marker | The sealed line stays when retirement succeeds. A marker that still names an id is retained, and the id is spent | The error. A partial file is not readiness. Retained when the id remains |
 | Empty directory at the live path when the rename runs | The quarantine. The empty directory is unchanged | `unchanged → unchanged` | LiveOccupied |
 | A root that is not Unicode | Neither path is audited under a lossy spelling | No line | Paths |
 | Fetch wrote a partial session and that name is gone | No partial file | `unchanged → unchanged` with the source cause | The source error |
@@ -113,12 +120,16 @@ different digest.
   separate existence check that a created directory could slip past.
   `an_occupied_live_root_is_not_replaced`,
   `an_empty_live_directory_is_not_replaced`
-- The seal is the set of file hashes in the journal, and accept requires the
-  sealed audit line to name the digest of those journal bytes. A changed
-  byte, a missing file, an unexpected file outside `sessions/`, or a journal
-  rewritten to match a replaced file refuses accept.
+- The seal is the set of file hashes in the journal. Accept requires the
+  latest unspent sealed line for that quarantine path to name the digest of
+  those journal bytes and a staging id, and the readiness marker to store
+  that same id. A changed byte, a missing file, an unexpected file outside
+  `sessions/`, a journal rewritten to match a replaced file, a spent id, or
+  the constant `ready` marker refuses accept.
   `a_tampered_quarantine_is_not_promoted`,
-  `a_resealed_quarantine_is_not_promoted`
+  `a_resealed_quarantine_is_not_promoted`,
+  `a_spent_staging_id_is_not_promoted`,
+  `a_constant_ready_marker_is_not_a_generation`
 - A session file published by fetch is allowed only for a deferred
   conversation id, and only at `sessions/<id>.sqlite3`.
 - Historical outbox bytes stay, and `replay.blocked` stays in the seal, so
@@ -171,11 +182,14 @@ different digest.
   `accept_holds_the_live_lock_across_promotion`
 - A quarantine is acceptable only after the sealed audit is stored. The
   marker is a file inside that quarantine, not a sibling, and it is not part
-  of the seal. A stage whose cleanup cannot delete the tree is still refused
-  by accept. A failed readiness mark records whether that tree was removed
-  or left unready. A finish that finds the quarantine already occupied does
-  not delete it. `a_failed_stage_cleanup_still_refuses_acceptance`,
+  of the seal. It stores the staging id from that seal. A stage whose cleanup
+  cannot delete the tree is still refused by accept. A failed readiness mark
+  spends that id and records whether the tree was removed or left unready.
+  A marker that still names the id after retirement fails is retained. A
+  finish that finds the quarantine already occupied does not delete it.
+  `a_failed_stage_cleanup_still_refuses_acceptance`,
   `a_failed_readiness_mark_records_whether_the_tree_remains`,
+  `a_marker_that_cannot_be_cleared_is_retained`,
   `a_quarantine_owned_by_someone_else_is_not_deleted`
 - A fetched session is checked by the layout, not by the source that wrote
   it. The match is stored before the session name exists. The session is
@@ -228,8 +242,10 @@ different digest.
   session extra whose publication has no available line, and does not rename.
   `a_fetch_in_quarantine_stays_available_after_accept`,
   `an_unaudited_session_is_not_promoted`
-- On Windows, `Restore` and `restore` are one root. The refusal happens
-  before either lock is taken. `paths_and_receipts_are_constrained`
+- On Windows and macOS, `Restore` and `restore` are one root, and so are `Ä`
+  and `ä`. On macOS, a composed name and its decomposition are one root. The
+  drive letter folds with the name. The refusal happens before either lock
+  is taken. `paths_and_receipts_are_constrained`
 - A realistic session whose database is over 64 MiB is deferred by the
   export, then recovered by this open. `a_session_over_64_mib_is_restored_when_opened`
 - A failed publish retires the temp name and the final name independently.
@@ -243,11 +259,13 @@ different digest.
   is not deleted when it is the live path. A root's lock file is not the
   other root. A helper suffix is a sidecar only beside `sessions/<id>.sqlite3`
   for a deferred conversation. A `.partial` session file is an extra. The
-  readiness marker is the final name after its bytes are synced, and the
-  quarantine directory is synced after that rename. A failed directory sync
-  clears the marker. `a_lock_file_is_not_the_live_path`,
+  readiness marker is the staging id, written under its final name after its
+  bytes are synced, and the quarantine directory is synced after that rename.
+  A failed directory sync retires the marker. Retirement that leaves a valid
+  id returns retained. `a_lock_file_is_not_the_live_path`,
   `an_injected_publication_suffix_is_not_promoted`,
   `a_readiness_directory_sync_failure_clears_the_marker`,
+  `a_marker_that_cannot_be_cleared_is_retained`,
   `paths_and_receipts_are_constrained`
 - A path that is not Unicode is not an audit identity.
   `a_non_unicode_root_is_not_audited`, `paths_and_receipts_are_constrained`

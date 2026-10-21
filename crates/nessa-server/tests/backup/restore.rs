@@ -14,24 +14,24 @@ use async_trait::async_trait;
 
 use crate::backup::application::Authenticator;
 use crate::backup::application::{
-    accept_quarantine, effect_names_seal, open_deferred_conversation, root_posture,
+    accept_quarantine, current_staging_id, open_deferred_conversation, root_posture,
     stage_quarantine, AcceptRequest, DecisionAuditError, DeferredSessionSource, ExportClock,
     FetchProgress, InventoryCause, InventoryDecision, LeaseReceipts, LoadedTree, MacKey,
     ManifestPublisher, MutationAdmission, OpenRequest, Promoted, PublicationIds, QuarantineLayout,
-    RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SessionCut,
-    SessionSourceError, StageRequest, Staging, VerificationFailure, VerificationLimits,
-    VerificationSource,
+    RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SealFields,
+    SessionCut, SessionSourceError, StageRequest, Staging, StagingIds, VerificationFailure,
+    VerificationLimits, VerificationSource,
 };
 use crate::backup::domain::{
-    encode_journal, read_journal, AuthenticatedManifest, CapturedRecord, CredentialKind,
-    DeferredEntry, DeletionFence, DeletionLog, Fingerprint, GrantRole, Manifest, Posture,
-    RestoreFault, Sensitivity, SourceCut, StoreKind, Watermark, WRITER_INVENTORY,
+    encode_journal, read_journal, seal_staging_id, AuthenticatedManifest, CapturedRecord,
+    CredentialKind, DeferredEntry, DeletionFence, DeletionLog, Fingerprint, GrantRole, Manifest,
+    Posture, RestoreFault, Sensitivity, SourceCut, StoreKind, Watermark, WRITER_INVENTORY,
 };
 use crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT;
 use crate::backup::infrastructure::{
     capture_namespace, CedarInventoryPolicy, DirectoryMaterializer, DirectoryPublisher,
     DirectoryQuarantine, DirectoryVerificationSource, ExportFormat, FileDeletionLog,
-    FileRestoreAudit, KeyedInventory, OsPublicationIds, SqliteDeferredSource,
+    FileRestoreAudit, KeyedInventory, OsPublicationIds, OsStagingIds, SqliteDeferredSource,
 };
 
 struct Roots {
@@ -165,22 +165,23 @@ impl RestoreAudit for MemoryAudit {
         }))
     }
 
-    fn sealed(&self, target: &str, digest: &str) -> Result<bool, DecisionAuditError> {
+    fn sealed(&self, target: &str, digest: &str) -> Result<Option<String>, DecisionAuditError> {
         let lines = self
             .lines
             .lock()
             .map_err(|_| DecisionAuditError::NotStored)?;
-        Ok(lines.iter().any(|line| {
-            line.target == target
-                && effect_names_seal(
-                    &line.before,
-                    &line.after,
-                    &line.cause,
-                    &line.decision,
-                    &line.attestations,
-                    digest,
-                )
-        }))
+        Ok(current_staging_id(
+            lines.iter().map(|line| SealFields {
+                target: &line.target,
+                before: &line.before,
+                after: &line.after,
+                cause: &line.cause,
+                decision: &line.decision,
+                attestations: &line.attestations,
+            }),
+            target,
+            digest,
+        ))
     }
 }
 
@@ -368,6 +369,7 @@ fn stage(
         &DirectoryQuarantine,
         &DirectoryMaterializer,
         &KeyedInventory::new(bundle.key),
+        &OsStagingIds,
     )
 }
 
@@ -428,6 +430,7 @@ async fn a_replaced_manifest_is_not_what_quarantine_seals() {
         &DirectoryQuarantine,
         &DirectoryMaterializer,
         &KeyedInventory::new(bundle.key),
+        &OsStagingIds,
     )
     .unwrap();
     assert_eq!(source.reads.load(Ordering::SeqCst), 1);
@@ -511,6 +514,7 @@ async fn a_changed_inventory_body_is_not_a_fence() {
         &DirectoryQuarantine,
         &DirectoryMaterializer,
         &KeyedInventory::new(bundle.key),
+        &OsStagingIds,
     )
     .unwrap_err();
     assert_eq!(error, RestoreFault::Verification);
@@ -582,11 +586,11 @@ impl QuarantineLayout for StickyQuarantine {
         DirectoryQuarantine.hold(root)
     }
 
-    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
-        DirectoryQuarantine.mark_ready(root)
+    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root, staging_id)
     }
 
-    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
 
@@ -669,11 +673,11 @@ impl QuarantineLayout for KeepsSession {
         DirectoryQuarantine.hold(root)
     }
 
-    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
-        DirectoryQuarantine.mark_ready(root)
+    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root, staging_id)
     }
 
-    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
 
@@ -712,6 +716,7 @@ async fn a_failed_cleanup_removes_the_journal() {
         &StickyQuarantine,
         &DirectoryMaterializer,
         &KeyedInventory::new(bundle.key),
+        &OsStagingIds,
     )
     .unwrap_err();
     assert_eq!(error, RestoreFault::Audit);
@@ -1051,6 +1056,98 @@ async fn a_resealed_quarantine_is_not_promoted() {
     assert_eq!(error, RestoreFault::Tamper);
     assert!(!place.live.exists());
     assert!(journal_path.is_file());
+}
+
+struct FixedStage(&'static str);
+
+impl StagingIds for FixedStage {
+    fn staging_id(&self) -> Result<String, RestoreFault> {
+        Ok(self.0.to_owned())
+    }
+}
+
+fn stage_with_id(
+    bundle: &Bundle,
+    quarantine: &Path,
+    live: &Path,
+    audit: &dyn RestoreAudit,
+    ids: &dyn StagingIds,
+) -> Result<crate::backup::application::StageReport, RestoreFault> {
+    let source = DirectoryVerificationSource::open(bundle.root.clone()).unwrap();
+    stage_quarantine(
+        &StageRequest {
+            facts: person(RestoreAction::Stage),
+            bundle: &source,
+            format: &ExportFormat,
+            verifier: &bundle.key,
+            limits: VerificationLimits::default(),
+            later_inventory: None,
+            quarantine,
+            live,
+        },
+        &policy(),
+        audit,
+        &DirectoryQuarantine,
+        &DirectoryMaterializer,
+        &KeyedInventory::new(bundle.key),
+        ids,
+    )
+}
+
+#[tokio::test]
+async fn a_spent_staging_id_is_not_promoted() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let audit = MemoryAudit::open();
+    stage_with_id(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &audit,
+        &FixedStage("stage-fixed"),
+    )
+    .unwrap();
+    let journal = fs::read(place.quarantine.join("journal.txt")).unwrap();
+    let digest = Fingerprint::of(&journal).hex();
+    let sealed = audit
+        .lines()
+        .into_iter()
+        .find(|line| line.cause == "sealed")
+        .unwrap();
+    assert_eq!(
+        seal_staging_id(&sealed.attestations, &digest).as_deref(),
+        Some("stage-fixed")
+    );
+    assert_eq!(
+        fs::read(place.quarantine.join("accept-ready")).unwrap(),
+        b"stage-fixed\n"
+    );
+    accept(&place, &audit, &NoReceipts).unwrap();
+    fs::rename(&place.live, &place.quarantine).unwrap();
+    fs::write(place.quarantine.join("accept-ready"), b"stage-fixed\n").unwrap();
+    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
+    assert_eq!(error, RestoreFault::Tamper);
+    assert!(!place.live.exists());
+    assert!(place.quarantine.join("journal.txt").is_file());
+}
+
+#[tokio::test]
+async fn a_constant_ready_marker_is_not_a_generation() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let audit = MemoryAudit::open();
+    stage_with_id(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &audit,
+        &FixedStage("stage-fixed"),
+    )
+    .unwrap();
+    fs::write(place.quarantine.join("accept-ready"), b"ready\n").unwrap();
+    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
+    assert_eq!(error, RestoreFault::Tamper);
+    assert!(!place.live.exists());
 }
 
 #[tokio::test]
@@ -1459,10 +1556,10 @@ impl QuarantineLayout for ReportsOccupied {
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
-        DirectoryQuarantine.mark_ready(root)
+    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -1496,6 +1593,7 @@ async fn a_quarantine_owned_by_someone_else_is_not_deleted() {
         },
         &DirectoryMaterializer,
         &KeyedInventory::new(bundle.key),
+        &OsStagingIds,
     )
     .unwrap_err();
     assert_eq!(error, RestoreFault::QuarantineOccupied);
@@ -1562,10 +1660,10 @@ impl QuarantineLayout for ReadyFails {
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, _root: &Path) -> Result<(), RestoreFault> {
+    fn mark_ready(&self, _root: &Path, _staging_id: &str) -> Result<(), RestoreFault> {
         Err(RestoreFault::Unreadable)
     }
-    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -1598,6 +1696,7 @@ async fn a_failed_readiness_mark_records_whether_the_tree_remains() {
         &ReadyFails { keep: false },
         &DirectoryMaterializer,
         &KeyedInventory::new(bundle.key),
+        &OsStagingIds,
     )
     .unwrap_err();
     assert_eq!(error, RestoreFault::Unreadable);
@@ -1624,13 +1723,29 @@ async fn a_failed_readiness_mark_records_whether_the_tree_remains() {
         &ReadyFails { keep: true },
         &DirectoryMaterializer,
         &KeyedInventory::new(bundle.key),
+        &OsStagingIds,
     )
     .unwrap_err();
     assert_eq!(error, RestoreFault::Unreadable);
     assert!(kept.quarantine.join("journal.txt").is_file());
+    let digest = Fingerprint::of(&fs::read(kept.quarantine.join("journal.txt")).unwrap()).hex();
+    let staging_id = kept_audit
+        .lines()
+        .iter()
+        .find(|line| line.cause == "sealed")
+        .and_then(|line| seal_staging_id(&line.attestations, &digest))
+        .unwrap();
     assert!(kept_audit.lines().iter().any(|line| {
-        line.before == "verified" && line.after == "unready" && line.cause == "unreadable"
+        line.before == "verified"
+            && line.after == "unready"
+            && line.cause == "unreadable"
+            && line.attestations == staging_id
     }));
+    fs::write(
+        kept.quarantine.join("accept-ready"),
+        format!("{staging_id}\n"),
+    )
+    .unwrap();
     let accepted = accept(&kept, &kept_audit, &NoReceipts).unwrap_err();
     assert_eq!(accepted, RestoreFault::Tamper);
     assert!(!kept.live.exists());
@@ -2394,10 +2509,10 @@ impl QuarantineLayout for KeepsPartialSession {
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
-        DirectoryQuarantine.mark_ready(root)
+    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -2486,10 +2601,10 @@ impl QuarantineLayout for LeavesPartialTree {
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
-        DirectoryQuarantine.mark_ready(root)
+    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -2525,6 +2640,7 @@ async fn a_partial_directory_that_survives_a_failed_write_is_unready() {
         },
         &DirectoryMaterializer,
         &KeyedInventory::new(bundle.key),
+        &OsStagingIds,
     )
     .unwrap_err();
     assert_eq!(error, RestoreFault::Retained);
@@ -3164,10 +3280,10 @@ impl QuarantineLayout for KeepsTree {
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
-        DirectoryQuarantine.mark_ready(root)
+    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -3199,11 +3315,15 @@ async fn a_failed_stage_cleanup_still_refuses_acceptance() {
         &KeepsTree,
         &DirectoryMaterializer,
         &KeyedInventory::new(bundle.key),
+        &OsStagingIds,
     )
     .unwrap_err();
     assert_eq!(error, RestoreFault::Audit);
     assert!(place.quarantine.join("journal.txt").is_file());
-    assert!(!DirectoryQuarantine.ready(&place.quarantine).unwrap());
+    assert!(DirectoryQuarantine
+        .ready(&place.quarantine)
+        .unwrap()
+        .is_none());
     let accepted = accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap_err();
     assert_eq!(accepted, RestoreFault::Tamper);
     assert!(!place.live.exists());
@@ -3297,10 +3417,10 @@ impl QuarantineLayout for KeepsBytes {
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
-        DirectoryQuarantine.mark_ready(root)
+    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, _path: &Path) -> Result<(), RestoreFault> {
@@ -3485,10 +3605,10 @@ impl QuarantineLayout for ReportsUnsynced {
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
-        DirectoryQuarantine.mark_ready(root)
+    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -3721,10 +3841,10 @@ impl QuarantineLayout for ExistsFailsAfterPublish {
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
-        DirectoryQuarantine.mark_ready(root)
+    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -3837,10 +3957,10 @@ impl QuarantineLayout for RetainsFinish {
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
-        DirectoryQuarantine.mark_ready(root)
+    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -3873,6 +3993,7 @@ async fn a_retained_quarantine_is_recorded_unready() {
         &RetainsFinish,
         &DirectoryMaterializer,
         &KeyedInventory::new(bundle.key),
+        &OsStagingIds,
     )
     .unwrap_err();
     assert_eq!(error, RestoreFault::Retained);

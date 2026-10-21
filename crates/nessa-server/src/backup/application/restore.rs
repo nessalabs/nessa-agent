@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use super::ports::{
     DeferredSessionSource, FetchProgress, InventoryDecision, InventoryDenial, LeaseReceipts,
     PublicationIds, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
-    RestorePolicyEvaluator, SessionCut, SessionSourceError,
+    RestorePolicyEvaluator, SessionCut, SessionSourceError, StagingIds,
 };
 use super::verification::{
     authenticated_bundle, ManifestMacVerifier, VerificationFailure, VerificationLimits,
@@ -33,9 +33,9 @@ use super::verification_format::VerificationFormat;
 use crate::backup::domain::{
     attested_pair, audit_path, decode_deferred, deferred_for_open, deferred_session_name,
     encode_journal, extra_session_allowed, paths_are_distinct, posture, read_journal,
-    receipt_is_usable, relative_path_is_safe, restore_lock_path, session_sidecar, DeferredLine,
-    DeletionLog, Fingerprint, Freshness, Journal, ManifestListing, Posture, RestoreFault,
-    SealedFile,
+    receipt_is_usable, relative_path_is_safe, restore_lock_path, seal_attestation, session_sidecar,
+    staging_id_is_usable, DeferredLine, DeletionLog, Fingerprint, Freshness, Journal,
+    ManifestListing, Posture, RestoreFault, SealedFile,
 };
 
 /// Drop releases the restore-root lock.
@@ -74,10 +74,10 @@ pub trait QuarantineLayout {
     fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault>;
     /// One lock for this root, held across publication and the audit that records it.
     fn hold(&self, root: &Path) -> Result<Box<dyn RestoreHold>, RestoreFault>;
-    /// Record that the sealed audit was stored. Accept refuses without it.
-    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault>;
-    /// Whether [`QuarantineLayout::mark_ready`] has been stored for `root`.
-    fn ready(&self, root: &Path) -> Result<bool, RestoreFault>;
+    /// Record that the sealed audit for `staging_id` was stored. Accept refuses without it.
+    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault>;
+    /// The staging id stored by [`QuarantineLayout::mark_ready`], when the marker is intact.
+    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault>;
     /// Make a published session unreadable in place.
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault>;
     /// Stream size and fingerprint of one session file.
@@ -169,6 +169,7 @@ pub fn stage_quarantine(
     layout: &dyn QuarantineLayout,
     materializer: &dyn CutMaterializer,
     later_reader: &dyn SealedInventoryReader,
+    ids: &dyn StagingIds,
 ) -> Result<StageReport, RestoreFault> {
     let facts = entry_facts(&request.facts, RestoreAction::Stage);
     let (quarantine, label) = resolve_root(
@@ -266,24 +267,35 @@ pub fn stage_quarantine(
         return Err(recorded.stop(error));
     }
     let digest = Fingerprint::of(journal.as_bytes()).hex();
+    let staging_id = match ids.staging_id() {
+        Ok(id) if staging_id_is_usable(&id) => id,
+        Ok(_) => {
+            let _ = layout.remove_tree(&quarantine);
+            return Err(recorded.stop(RestoreFault::Unreadable));
+        }
+        Err(error) => {
+            let _ = layout.remove_tree(&quarantine);
+            return Err(recorded.stop(error));
+        }
+    };
+    let attestation = seal_attestation(&digest, &staging_id);
     if recorded
-        .record("absent", "verified", "sealed", "effect", &digest)
+        .record("absent", "verified", "sealed", "effect", &attestation)
         .is_err()
     {
         let _ = layout.remove_tree(&quarantine);
         let _ = layout.remove_file(&quarantine.join("journal.txt"));
         return Err(RestoreFault::Audit);
     }
-    if let Err(error) = layout.mark_ready(&quarantine) {
-        if layout.remove_tree(&quarantine).is_ok() {
-            if recorded
-                .write("verified", "absent", error.cause(), "effect")
-                .is_err()
-            {
-                return Err(RestoreFault::Audit);
-            }
-        } else if recorded
-            .write("verified", "unready", error.cause(), "effect")
+    if let Err(error) = layout.mark_ready(&quarantine, &staging_id) {
+        // The id is spent either way. A marker that remains is not a later accept.
+        let after = if layout.remove_tree(&quarantine).is_ok() {
+            "absent"
+        } else {
+            "unready"
+        };
+        if recorded
+            .record("verified", after, error.cause(), "effect", &staging_id)
             .is_err()
         {
             return Err(RestoreFault::Audit);
@@ -358,11 +370,11 @@ pub fn accept_quarantine(
         Err(error) => return Err(recorded.stop(error)),
     };
     let digest = Fingerprint::of(loaded.journal.as_bytes()).hex();
-    match audit.sealed(&label, &digest) {
-        Ok(true) => {}
-        Ok(false) => return Err(recorded.stop(RestoreFault::Tamper)),
+    let staging_id = match audit.sealed(&label, &digest) {
+        Ok(Some(id)) => id,
+        Ok(None) => return Err(recorded.stop(RestoreFault::Tamper)),
         Err(_) => return Err(RestoreFault::Audit),
-    }
+    };
     let deferred = match deferred_lines(layout, &quarantine) {
         Ok(lines) => lines,
         Err(error) => return Err(recorded.stop(error)),
@@ -379,8 +391,8 @@ pub fn accept_quarantine(
         Err(error) => return Err(recorded.stop(error)),
     }
     match layout.ready(&quarantine) {
-        Ok(true) => {}
-        Ok(false) => return Err(recorded.stop(RestoreFault::Tamper)),
+        Ok(Some(marker)) if marker == staging_id => {}
+        Ok(_) => return Err(recorded.stop(RestoreFault::Tamper)),
         Err(error) => return Err(recorded.stop(error)),
     }
     let attestations = match attested(&journal, request.receipts) {
@@ -398,6 +410,14 @@ pub fn accept_quarantine(
         Ok(promoted) => promoted,
         Err(error) => return Err(recorded.stop(error)),
     };
+    // The rename has happened. Spend the staging id on the quarantine path
+    // before the live line, so a later tree at that path cannot reuse it.
+    if recorded
+        .record("verified", "spent", "spent", "effect", &staging_id)
+        .is_err()
+    {
+        return Err(RestoreFault::Audit);
+    }
     let cause = if promoted.durable {
         "accepted"
     } else {

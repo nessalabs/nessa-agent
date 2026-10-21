@@ -15,18 +15,19 @@ use serde_json::{json, Value};
 use sha2::Digest;
 
 use crate::backup::application::{
-    CutMaterializer, DecisionAuditError, ExportClock, FetchProgress, LoadedTree, MacKey,
-    PreparedCut, Promoted, PublicationIds, QuarantineLayout, RestoreAudit, RestoreEvidence,
-    RestoreHold, SealedInventoryReader, SessionCut, SessionSourceError, Staging,
-    VerificationFormat, VerificationLimits, VerificationSource,
+    current_staging_id, CutMaterializer, DecisionAuditError, ExportClock, FetchProgress,
+    LoadedTree, MacKey, PreparedCut, Promoted, PublicationIds, QuarantineLayout, RestoreAudit,
+    RestoreEvidence, RestoreHold, SealFields, SealedInventoryReader, SessionCut,
+    SessionSourceError, Staging, StagingIds, VerificationFormat, VerificationLimits,
+    VerificationSource,
 };
 use crate::backup::domain::{
     conversation_is_fenced, credential_is_fenced, encode_deferred, fresher_fences,
     leases_to_interrupt, metadata_omitted, normalized_root, paths_are_distinct,
     relative_path_is_safe, restore_lock_path, session_sidecar, share_grant_is_fenced,
-    CredentialKind, DeferredEntry, DeferredLine, DeletionFence, DeletionLog, FenceKind,
-    Fingerprint, LeaseMark, ManifestListing, MetadataFacts, MetadataRow, RestoreFault, SealedFile,
-    StoreKind, IDENTITY_BODY, MAX_NAME_BYTES, REPLAY_BODY,
+    staging_id_is_usable, CredentialKind, DeferredEntry, DeferredLine, DeletionFence, DeletionLog,
+    FenceKind, Fingerprint, LeaseMark, ManifestListing, MetadataFacts, MetadataRow, RestoreFault,
+    SealedFile, StoreKind, IDENTITY_BODY, MAX_NAME_BYTES, REPLAY_BODY,
 };
 
 use super::log::{authenticate_inventory, exclusive, persist};
@@ -628,18 +629,15 @@ impl QuarantineLayout for DirectoryQuarantine {
         Ok(Box::new(RootHold { _file: file }))
     }
 
-    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
-        publish_marker(root, |directory| {
+    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+        let body = marker_bytes(staging_id)?;
+        publish_marker(root, &body, |directory| {
             sync_directory(directory).map_err(|_| RestoreFault::Unreadable)
         })
     }
 
-    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
-        let path = ready_path(root);
-        if !path.is_file() {
-            return Ok(false);
-        }
-        Ok(fs::read(&path).map_err(|_| RestoreFault::Unreadable)? == b"ready\n")
+    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
+        read_marker_id(&ready_path(root))
     }
 
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -763,10 +761,64 @@ impl Drop for PartialTree {
     }
 }
 
-fn clear_ready_file(path: &Path) {
-    let _ = fs::remove_file(path);
-    if path.is_file() {
-        let _ = fs::OpenOptions::new().write(true).truncate(true).open(path);
+fn marker_bytes(staging_id: &str) -> Result<Vec<u8>, RestoreFault> {
+    if !staging_id_is_usable(staging_id) {
+        return Err(RestoreFault::Unreadable);
+    }
+    let mut body = staging_id.as_bytes().to_vec();
+    body.push(b'\n');
+    Ok(body)
+}
+
+fn read_marker_id(path: &Path) -> Result<Option<String>, RestoreFault> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let bytes = fs::read(path).map_err(|_| RestoreFault::Unreadable)?;
+    let Some(text) = bytes.strip_suffix(b"\n") else {
+        return Ok(None);
+    };
+    let Ok(id) = std::str::from_utf8(text) else {
+        return Ok(None);
+    };
+    if staging_id_is_usable(id) {
+        Ok(Some(id.to_owned()))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Remove a readiness file. `Retained` means it still names a staging id.
+fn retire_marker(path: &Path) -> Result<(), RestoreFault> {
+    retire_marker_with(
+        path,
+        |path| fs::remove_file(path),
+        |path| {
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(path)?;
+            file.sync_all()
+        },
+    )
+}
+
+fn retire_marker_with(
+    path: &Path,
+    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
+    mut spoil: impl FnMut(&Path) -> std::io::Result<()>,
+) -> Result<(), RestoreFault> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let _ = remove(path);
+    if !path.exists() {
+        return Ok(());
+    }
+    let _ = spoil(path);
+    match read_marker_id(path) {
+        Ok(Some(_)) => Err(RestoreFault::Retained),
+        _ => Ok(()),
     }
 }
 
@@ -793,6 +845,7 @@ fn remove_partial(path: &Path) -> Result<(), RestoreFault> {
 /// A failed directory sync clears the marker. A partial file is not readiness.
 fn publish_marker(
     root: &Path,
+    body: &[u8],
     mut sync_root: impl FnMut(&Path) -> Result<(), RestoreFault>,
 ) -> Result<(), RestoreFault> {
     let path = ready_path(root);
@@ -804,24 +857,27 @@ fn publish_marker(
         fs::remove_file(&path).map_err(|_| RestoreFault::Unreadable)?;
     }
     let mut file = open(&temp, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)?;
-    let synced = file.write_all(b"ready\n").and_then(|_| file.sync_all());
+    let synced = file.write_all(body).and_then(|_| file.sync_all());
     drop(file);
     if synced.is_err() {
-        clear_ready_file(&temp);
-        clear_ready_file(&path);
-        return Err(RestoreFault::Unreadable);
+        return retire_both(&temp, &path, RestoreFault::Unreadable);
     }
     if rename_new(&temp, &path, RestoreFault::Unreadable).is_err() {
-        clear_ready_file(&temp);
-        clear_ready_file(&path);
-        return Err(RestoreFault::Unreadable);
+        return retire_both(&temp, &path, RestoreFault::Unreadable);
     }
     if sync_root(root).is_err() {
-        clear_ready_file(&temp);
-        clear_ready_file(&path);
-        return Err(RestoreFault::Unreadable);
+        return retire_both(&temp, &path, RestoreFault::Unreadable);
     }
     Ok(())
+}
+
+fn retire_both(temp: &Path, path: &Path, cleared: RestoreFault) -> Result<(), RestoreFault> {
+    let temp_gone = retire_marker(temp);
+    let path_gone = retire_marker(path);
+    if temp_gone.is_err() || path_gone.is_err() {
+        return Err(RestoreFault::Retained);
+    }
+    Err(cleared)
 }
 
 fn walk(
@@ -1051,34 +1107,42 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
         Ok(false)
     }
 
-    fn sealed(&self, target: &str, digest: &str) -> Result<bool, DecisionAuditError> {
+    fn sealed(&self, target: &str, digest: &str) -> Result<Option<String>, DecisionAuditError> {
         let _gate = self
             .gate
             .lock()
             .map_err(|_| DecisionAuditError::NotStored)?;
         let _file = exclusive(&self.directory).map_err(|_| DecisionAuditError::NotStored)?;
         if !self.path.is_file() {
-            return Ok(false);
+            return Ok(None);
         }
         let text = fs::read_to_string(&self.path).map_err(|_| DecisionAuditError::NotStored)?;
+        let mut lines = Vec::new();
         for line in text.lines().filter(|line| !line.is_empty()) {
             let value: Value =
                 serde_json::from_str(line).map_err(|_| DecisionAuditError::NotStored)?;
             let field = |name: &str| value.get(name).and_then(Value::as_str).unwrap_or("");
-            if value.get("target").and_then(Value::as_str) == Some(target)
-                && crate::backup::application::effect_names_seal(
-                    field("before"),
-                    field("after"),
-                    field("cause"),
-                    field("decision"),
-                    field("attestations"),
-                    digest,
-                )
-            {
-                return Ok(true);
-            }
+            lines.push((
+                field("target").to_owned(),
+                field("before").to_owned(),
+                field("after").to_owned(),
+                field("cause").to_owned(),
+                field("decision").to_owned(),
+                field("attestations").to_owned(),
+            ));
         }
-        Ok(false)
+        Ok(current_staging_id(
+            lines.iter().map(|line| SealFields {
+                target: &line.0,
+                before: &line.1,
+                after: &line.2,
+                cause: &line.3,
+                decision: &line.4,
+                attestations: &line.5,
+            }),
+            target,
+            digest,
+        ))
     }
 }
 
@@ -1087,14 +1151,27 @@ pub struct OsPublicationIds;
 
 impl PublicationIds for OsPublicationIds {
     fn publication_id(&self) -> Result<String, RestoreFault> {
-        let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes).map_err(|_| RestoreFault::Unreadable)?;
-        let mut name = String::from("pub-");
-        for byte in bytes {
-            name.push_str(&format!("{byte:02x}"));
-        }
-        Ok(name)
+        random_id("pub-")
     }
+}
+
+/// Sixteen bytes from the operating system, written `stage-` plus lowercase hex.
+pub struct OsStagingIds;
+
+impl StagingIds for OsStagingIds {
+    fn staging_id(&self) -> Result<String, RestoreFault> {
+        random_id("stage-")
+    }
+}
+
+fn random_id(prefix: &str) -> Result<String, RestoreFault> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|_| RestoreFault::Unreadable)?;
+    let mut name = String::from(prefix);
+    for byte in bytes {
+        name.push_str(&format!("{byte:02x}"));
+    }
+    Ok(name)
 }
 
 fn next_sequence(path: &Path) -> std::io::Result<u64> {
@@ -1223,7 +1300,7 @@ fn a_restore_audit_waits_for_the_directory_lock() {
     assert!(text.contains("\"recordId\":\"restore-2\""));
     assert!(text.contains("lease-1 stopped"));
     assert!(text.contains("sealed"));
-    assert!(!first.sealed("quarantine", "digest-a").unwrap());
+    assert!(first.sealed("quarantine", "digest-a").unwrap().is_none());
 }
 
 #[test]
@@ -1237,6 +1314,7 @@ fn a_sealed_audit_names_the_journal_digest() {
 
     let root = tempfile::tempdir().unwrap();
     let audit = FileRestoreAudit::open(root.path().join("audit"), Clock).unwrap();
+    let attestation = crate::backup::domain::seal_attestation("digest-a", "stage-1");
     audit
         .append(&RestoreEvidence {
             target: "quarantine",
@@ -1246,12 +1324,28 @@ fn a_sealed_audit_names_the_journal_digest() {
             initiator: "person",
             decision: "effect",
             policies: &[],
-            attestations: "digest-a",
+            attestations: &attestation,
         })
         .unwrap();
-    assert!(audit.sealed("quarantine", "digest-a").unwrap());
-    assert!(!audit.sealed("quarantine", "digest-b").unwrap());
-    assert!(!audit.sealed("other", "digest-a").unwrap());
+    assert_eq!(
+        audit.sealed("quarantine", "digest-a").unwrap().as_deref(),
+        Some("stage-1")
+    );
+    assert!(audit.sealed("quarantine", "digest-b").unwrap().is_none());
+    assert!(audit.sealed("other", "digest-a").unwrap().is_none());
+    audit
+        .append(&RestoreEvidence {
+            target: "quarantine",
+            before: "verified",
+            after: "spent",
+            cause: "spent",
+            initiator: "person",
+            decision: "effect",
+            policies: &[],
+            attestations: "stage-1",
+        })
+        .unwrap();
+    assert!(audit.sealed("quarantine", "digest-a").unwrap().is_none());
 }
 
 #[test]
@@ -1260,12 +1354,15 @@ fn a_partial_readiness_file_is_not_the_marker() {
     let tree = root.path().join("quarantine");
     fs::create_dir(&tree).unwrap();
     fs::write(tree.join("accept-ready.partial"), b"ready\n").unwrap();
-    assert!(!DirectoryQuarantine.ready(&tree).unwrap());
-    DirectoryQuarantine.mark_ready(&tree).unwrap();
-    assert!(DirectoryQuarantine.ready(&tree).unwrap());
+    assert!(DirectoryQuarantine.ready(&tree).unwrap().is_none());
+    DirectoryQuarantine.mark_ready(&tree, "stage-1").unwrap();
+    assert_eq!(
+        DirectoryQuarantine.ready(&tree).unwrap().as_deref(),
+        Some("stage-1")
+    );
     assert!(!tree.join("accept-ready.partial").exists());
-    clear_ready_file(&tree.join("accept-ready"));
-    assert!(!DirectoryQuarantine.ready(&tree).unwrap());
+    retire_marker(&tree.join("accept-ready")).unwrap();
+    assert!(DirectoryQuarantine.ready(&tree).unwrap().is_none());
 }
 
 #[test]
@@ -1273,11 +1370,26 @@ fn a_readiness_directory_sync_failure_clears_the_marker() {
     let root = tempfile::tempdir().unwrap();
     let tree = root.path().join("quarantine");
     fs::create_dir(&tree).unwrap();
-    let error = publish_marker(&tree, |_| Err(RestoreFault::Unreadable)).unwrap_err();
+    let error = publish_marker(&tree, b"stage-1\n", |_| Err(RestoreFault::Unreadable)).unwrap_err();
     assert_eq!(error, RestoreFault::Unreadable);
     assert!(!tree.join("accept-ready").exists());
     assert!(!tree.join("accept-ready.partial").exists());
-    assert!(!DirectoryQuarantine.ready(&tree).unwrap());
+    assert!(DirectoryQuarantine.ready(&tree).unwrap().is_none());
+}
+
+#[test]
+fn a_marker_that_cannot_be_cleared_is_retained() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("accept-ready");
+    fs::write(&marker, b"stage-1\n").unwrap();
+    let error = retire_marker_with(
+        &marker,
+        |_| Err(std::io::Error::other("remove")),
+        |_| Err(std::io::Error::other("spoil")),
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Retained);
+    assert_eq!(fs::read(&marker).unwrap(), b"stage-1\n");
 }
 
 /// The ended line is the environment ledger's `ended` record.

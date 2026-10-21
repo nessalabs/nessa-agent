@@ -34,7 +34,7 @@ pub use jsonl::jsonl_cut;
 pub use log::FileDeletionLog;
 pub use quarantine::{
     DirectoryMaterializer, DirectoryQuarantine, FileRestoreAudit, KeyedInventory, OsPublicationIds,
-    SqliteDeferredSource,
+    OsStagingIds, SqliteDeferredSource,
 };
 pub use sensitivity::path_sensitivity;
 
