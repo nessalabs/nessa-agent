@@ -2,12 +2,14 @@
 //! then publish once; old and already-published generations are never rewritten.
 //!
 //! The shipping copy clones the whole source tree with one `clonefile`, checks
-//! that clone against the survey, then one thread seals each file and runs
-//! `sync_all`. A path that is not the surveyed type — a directory or file
-//! replaced by a symlink, or a symlink the survey did not record — refuses
-//! the attempt before any permission, attribute, or sync call. The digest
-//! follows the seal: it reads execute bits, and those bits have to be the
-//! sealed mode.
+//! that clone against the survey, then one thread seals every directory and
+//! every file. A directory is opened without following a link, set to `0700`,
+//! and stripped of extended attributes by the same normalization a file gets,
+//! before any file is sealed. A path that is not the surveyed type — a
+//! directory or file replaced by a symlink, or a symlink the survey did not
+//! record — refuses the attempt before any permission, attribute, or sync
+//! call. The digest follows the seal: it reads execute bits, and those bits
+//! have to be the sealed mode.
 //! `ENOTSUP` and `EXDEV` fall back to per-file work on one thread, and that
 //! path's digest overlaps the syncs after every seal has returned. Progress
 //! counts a file only after that `sync_all` returns, and the zero report is
@@ -1083,11 +1085,7 @@ fn seal_cloned_tree(
 ) -> Result<(), String> {
     cloned_tree_matches(staged, plan)?;
     for directory in &plan.directories {
-        phase!(
-            Phase::Permissions,
-            fs::set_permissions(directory, Permissions::from_mode(0o700))
-                .map_err(|error| error.to_string())
-        )?;
+        seal_directory(directory)?;
     }
     // One thread, so the digest cannot overlap this loop without hashing a
     // file that is not sealed yet. The fingerprint includes execute bits.
@@ -1395,6 +1393,31 @@ fn copy_file(
     Ok(())
 }
 
+/// Mode and extended attributes for one surveyed directory.
+///
+/// The descriptor is the directory itself: `O_NOFOLLOW` refuses a symlink
+/// substituted after the survey match, and `fchmod` does not follow. Attribute
+/// removal is [`normalize_extended_attributes`], the same call a sealed file
+/// uses, so a cloned directory cannot publish a bundle quarantine or any
+/// other removable attribute the file path would have dropped.
+fn seal_directory(path: &Path) -> Result<(), String> {
+    let directory = phase!(
+        Phase::Open,
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|error| error.to_string())
+    )?;
+    phase!(
+        Phase::Permissions,
+        directory
+            .set_permissions(Permissions::from_mode(0o700))
+            .map_err(|error| error.to_string())
+    )?;
+    phase!(Phase::Xattr, normalize_extended_attributes(&directory))
+}
+
 fn seal_file(file: &fs::File, source_mode: u32) -> Result<(), String> {
     phase!(
         Phase::Permissions,
@@ -1432,7 +1455,8 @@ fn normalize_extended_attributes(file: &fs::File) -> Result<(), String> {
         let error = Error::last_os_error();
         if name == PROVENANCE && error.raw_os_error() == Some(libc::EPERM) {
             // macOS attaches this protected process-provenance marker to files
-            // created by both copy paths. It cannot carry bundle-supplied policy.
+            // and directories created by both copy paths. It cannot carry
+            // bundle-supplied policy.
             continue;
         }
         if error.raw_os_error() != Some(libc::ENOATTR) {
@@ -1441,7 +1465,7 @@ fn normalize_extended_attributes(file: &fs::File) -> Result<(), String> {
     }
     let remaining = extended_attribute_names(file.as_raw_fd())?;
     if remaining.iter().any(|name| name != PROVENANCE) {
-        return Err("Staged runtime file retains extended attributes".into());
+        return Err("Staged runtime entry retains extended attributes".into());
     }
     Ok(())
 }

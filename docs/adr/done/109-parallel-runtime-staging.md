@@ -72,12 +72,12 @@ directory onto `.staging-<id>` in one call. The clone is then compared with
 that survey without following links. A path whose type is not the surveyed
 one, including a directory or file replaced by a symlink and a symlink the
 survey did not record, refuses the attempt before any mode, attribute, or
-sync call. One thread then sets every directory to `0700`, and for each file
-opens it, seals the mode and extended attributes, and runs `sync_all`.
+sync call. One thread then opens every directory without following a link,
+sets it to `0700`, and removes its extended attributes with the same
+normalization a file gets. Each file is then opened, sealed, and `sync_all`'d.
 Progress counts a file only after that `sync_all` returns. The digest runs
-after that loop: the fingerprint includes
-execute bits, and on one thread a hash started earlier would read a file
-that is not sealed yet. Directory sync, the publication checks, and one
+after that loop: the fingerprint includes execute bits, and on one thread a
+hash started earlier would read a file that is not sealed yet. Directory sync, the publication checks, and one
 `renamex_np` follow, unchanged. The per-file fallback still overlaps the
 digest with `sync_all`, and only after every seal has returned.
 

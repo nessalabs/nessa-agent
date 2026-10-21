@@ -308,6 +308,49 @@ fn a_cloned_tree_that_matches_the_survey_is_sealed() {
 }
 
 #[test]
+fn a_cloned_directory_extended_attribute_is_stripped_before_publication() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    fs::create_dir(source.join("pkg")).unwrap();
+    fs::write(source.join("pkg/lib"), b"library").unwrap();
+    set_test_attribute(&source);
+    set_test_attribute(&source.join("pkg"));
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+
+    let staged = stage_runtime_tree(
+        &source,
+        &versions,
+        &fingerprint,
+        None,
+        &|source, destination| {
+            reproduce_tree(source, destination);
+            set_test_attribute(destination);
+            set_test_attribute(&destination.join("pkg"));
+            Ok(true)
+        },
+    )
+    .unwrap();
+
+    assert!(has_test_attribute(&source));
+    assert!(has_test_attribute(&source.join("pkg")));
+    assert!(!has_test_attribute(&staged));
+    assert!(!has_test_attribute(&staged.join("pkg")));
+    assert_eq!(
+        fs::metadata(&staged).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(staged.join("pkg"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+}
+
+#[test]
 fn a_directory_replaced_by_a_symlink_is_refused_before_sealing() {
     let fixture = Fixture::new();
     let source = fixture.source();

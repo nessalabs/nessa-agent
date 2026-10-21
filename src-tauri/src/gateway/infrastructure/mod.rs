@@ -23,8 +23,10 @@
 //! the rest of this process while the installed definition still names it. A
 //! failure after the early ready publish carries a strictly newer startup
 //! revision. The copy clones the source tree with one `clonefile`, checks that
-//! clone against the survey, then one thread seals each file and runs
-//! `sync_all`. A substituted symlink refuses the attempt before that seal. A
+//! clone against the survey, then one thread seals each directory and each
+//! file. A directory is set to `0700` and its extended attributes are removed
+//! with the same normalization a file gets, before `sync_all`. A substituted
+//! symlink refuses the attempt before that seal. A
 //! filesystem that cannot clone copies one file at a time on that same single
 //! thread. Progress counts a
 //! file only after that sync returns, and the zero report is sent once the
