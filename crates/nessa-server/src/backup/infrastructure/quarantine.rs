@@ -1251,6 +1251,8 @@ fn case_of(dir: &Path) -> Result<VolumeCase, RestoreFault> {
 }
 
 /// Case rule for a reported filesystem. `casefold` is the ext4 directory flag.
+/// Linux calls this from `statfs`. Other hosts keep it for the same table.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn case_for_reported_fs(fstype: &str, casefold: bool) -> VolumeCase {
     match fstype {
         "ext2" | "ext3" | "ext4" => {
