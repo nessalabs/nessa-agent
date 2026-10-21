@@ -322,63 +322,6 @@ fn cancel_matching(
     Ok(cancelled)
 }
 
-/// Cancel `submitting` rows whose lease is at or before `now_ms`. A live lease stays.
-fn cancel_expired_submitting(
-    transaction: &Transaction<'_>,
-    now_ms: i64,
-    actor: &ScheduleActor,
-    at_ms: i64,
-    cause: &str,
-) -> Result<usize, ConversationError> {
-    let rows = {
-        let mut statement = transaction
-            .prepare(
-                "SELECT conversation, causal_execution, execution_id FROM message \
-                 WHERE status = 'submitting' AND fence_until_ms <= ?1",
-            )
-            .map_err(failed)?;
-        let selected = statement
-            .query_map(params![now_ms], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .map_err(failed)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(failed)?;
-        selected
-    };
-    let mut cancelled = 0;
-    for (conversation, causal, execution) in rows {
-        let changed = transaction
-            .execute(
-                "UPDATE message SET status = 'cancelled', fence_owner = '', fence_until_ms = 0 \
-                 WHERE execution_id = ?1 AND status = 'submitting' AND fence_until_ms <= ?2",
-                params![execution, now_ms],
-            )
-            .map_err(failed)?;
-        if changed == 1 {
-            audit(
-                transaction,
-                &AuditChange {
-                    at_ms,
-                    conversation: &conversation,
-                    causal_execution: &causal,
-                    execution_id: &execution,
-                    before_status: Some("submitting"),
-                    after_status: "cancelled",
-                    cause,
-                    actor,
-                },
-            )?;
-            cancelled += 1;
-        }
-    }
-    Ok(cancelled)
-}
-
 fn holds(armed: &Mutex<HashSet<String>>) -> std::sync::MutexGuard<'_, HashSet<String>> {
     armed.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -395,13 +338,6 @@ fn cancel_open_preference(
         ContinuationCause::PreferenceDisabled.as_str(),
         actor,
         at_ms,
-    )?;
-    cancel_expired_submitting(
-        transaction,
-        at_ms,
-        actor,
-        at_ms,
-        ContinuationCause::PreferenceDisabled.as_str(),
     )?;
     Ok(())
 }
@@ -1029,6 +965,77 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         })
     }
 
+    fn invalidate_usage_limit(
+        &self,
+        conversation: &str,
+        request_id: &str,
+        causal_execution: Option<&str>,
+        token: &PlanToken,
+        actor: ScheduleActor,
+        at_ms: u64,
+    ) -> ConversationFuture<'_, bool> {
+        let conversation = conversation.to_owned();
+        let request_id = request_id.to_owned();
+        let causal = causal_execution.unwrap_or_default().to_owned();
+        let token = token.clone();
+        self.run(move |connection| {
+            let at_ms = millis(at_ms)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            let recorded: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM usage_limit_invalidation \
+                 WHERE conversation = ?1 AND request_id = ?2)",
+                    params![conversation, request_id],
+                    |row| row.get(0),
+                )
+                .map_err(failed)?;
+            if recorded {
+                transaction.commit().map_err(failed)?;
+                return Ok(true);
+            }
+            if !claim_plan(&transaction, &conversation, &token)? {
+                transaction.rollback().map_err(failed)?;
+                return Ok(false);
+            }
+            transaction
+                .execute(
+                    "INSERT INTO usage_limit_invalidation \
+                 (conversation, request_id, incarnation, causal_execution) VALUES (?1, ?2, ?3, ?4)",
+                    params![conversation, request_id, token.history.incarnation, causal],
+                )
+                .map_err(failed)?;
+            cancel_matching(
+                &transaction,
+                "WHERE conversation = ?1 AND status IN ('scheduled', 'delivering')",
+                &[&conversation],
+                ContinuationCause::ModelChanged.as_str(),
+                &actor,
+                at_ms,
+            )?;
+            audit(
+                &transaction,
+                &AuditChange {
+                    at_ms,
+                    conversation: &conversation,
+                    causal_execution: &causal,
+                    execution_id: "",
+                    before_status: (!causal.is_empty()).then_some("blocked"),
+                    after_status: if causal.is_empty() {
+                        "no_limit"
+                    } else {
+                        "invalidated"
+                    },
+                    cause: ContinuationCause::ModelChanged.as_str(),
+                    actor: &actor,
+                },
+            )?;
+            transaction.commit().map_err(failed)?;
+            Ok(true)
+        })
+    }
+
     fn note_history(
         &self,
         conversation: &str,
@@ -1122,23 +1129,51 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 transaction.commit().map_err(failed)?;
                 return Ok(None);
             }
-            let existing: Option<(String, String, i64)> = transaction
+            let invalidated: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM usage_limit_invalidation \
+                 WHERE conversation = ?1 AND incarnation = ?2 AND causal_execution = ?3)",
+                params![draft.conversation, draft.history.incarnation, draft.causal_execution],
+                |row| row.get(0),
+            ).map_err(failed)?;
+            if invalidated {
+                transaction.rollback().map_err(failed)?;
+                return Ok(None);
+            }
+            let existing: Option<(String, String, i64, String, String)> = transaction
                 .query_row(
-                    "SELECT execution_id, status, due_at_ms FROM message \
+                    "SELECT execution_id, status, due_at_ms, agent, model FROM message \
                      WHERE conversation = ?1 AND causal_execution = ?2",
                     params![draft.conversation, draft.causal_execution],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
                 )
                 .optional()
                 .map_err(failed)?;
-            if let Some((execution_id, status, due_at_ms)) = existing {
+            if let Some((execution_id, status, due_at_ms, agent, model)) = existing {
                 if status == "submitting" {
                     transaction.commit().map_err(failed)?;
                     return Ok(None);
                 }
-                // A disable leaves the causal row cancelled. The same turn can
-                // be scheduled again. A submit that finished cannot.
+                // A disable leaves the causal row eligible again. A model or
+                // agent change ends this causal continuation, including when a
+                // later scan reads a fresh token or the selection changes back.
                 if status == "cancelled" {
+                    let configuration_cancelled: bool = transaction
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM audit \
+                             WHERE execution_id = ?1 AND after_status = 'cancelled' \
+                               AND cause IN (?2, ?3))",
+                            params![
+                                execution_id,
+                                ContinuationCause::ModelChanged.as_str(),
+                                ContinuationCause::AgentChanged.as_str(),
+                            ],
+                            |row| row.get(0),
+                        )
+                        .map_err(failed)?;
+                    if configuration_cancelled || agent != draft.agent || model != draft.model {
+                        transaction.rollback().map_err(failed)?;
+                        return Ok(None);
+                    }
                     let submitting: bool = transaction
                         .query_row(
                             "SELECT EXISTS( \
@@ -1498,6 +1533,7 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                     .prepare(
                         "SELECT execution_id FROM message \
                          WHERE status = 'scheduled' AND due_at_ms <= ?1 \
+                           AND EXISTS (SELECT 1 FROM preference WHERE id = 1 AND enabled = 1) \
                          ORDER BY due_at_ms LIMIT ?2",
                     )
                     .map_err(failed)?;
@@ -1537,7 +1573,7 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             let mut statement = connection
                 .prepare(&format!(
                     "SELECT {MESSAGE_COLUMNS} FROM message \
-                     WHERE ({DELIVERING_DUE}) \
+                     WHERE (({DELIVERING_DUE}) AND EXISTS (SELECT 1 FROM preference WHERE id = 1 AND enabled = 1)) \
                         OR (status = 'submitting' AND retry_at_ms <= ?1 \
                             AND (fence_until_ms <= ?1 OR fence_owner = ?2)) \
                      ORDER BY due_at_ms LIMIT ?3"
@@ -1580,8 +1616,9 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                     &format!(
                         "SELECT EXISTS( \
                          SELECT 1 FROM message \
-                         WHERE ({DELIVERING_DUE}) \
-                            OR (status = 'scheduled' AND due_at_ms <= ?1) \
+                         WHERE (({DELIVERING_DUE}) AND EXISTS (SELECT 1 FROM preference WHERE id = 1 AND enabled = 1)) \
+                            OR (status = 'scheduled' AND due_at_ms <= ?1 \
+                                AND EXISTS (SELECT 1 FROM preference WHERE id = 1 AND enabled = 1)) \
                             OR (status = 'submitting' AND retry_at_ms <= ?1 \
                                 AND (fence_until_ms <= ?1 OR fence_owner = ?2)) \
                      )"
@@ -1598,6 +1635,7 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                     "SELECT MIN(at_ms) FROM ( \
                          SELECT due_at_ms AS at_ms FROM message \
                           WHERE status = 'scheduled' AND due_at_ms > ?1 \
+                            AND EXISTS (SELECT 1 FROM preference WHERE id = 1 AND enabled = 1) \
                          UNION ALL \
                          SELECT retry_at_ms AS at_ms FROM message \
                           WHERE status = 'submitting' AND retry_at_ms > ?1 \
@@ -1635,7 +1673,8 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 .execute(
                     "UPDATE message SET status = 'submitting', fence_owner = ?2, \
                      fence_until_ms = ?3 \
-                     WHERE execution_id = ?1 AND status = 'delivering'",
+                     WHERE execution_id = ?1 AND status = 'delivering' \
+                       AND EXISTS (SELECT 1 FROM preference WHERE id = 1 AND enabled = 1)",
                     params![execution_id, owner, until],
                 )
                 .map_err(failed)?
@@ -1687,8 +1726,8 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 .query_row(
                     "SELECT conversation, causal_execution FROM message \
                      WHERE execution_id = ?1 AND status = 'submitting' AND fence_owner = ?2 \
-                       AND retry_failures = ?3",
-                    params![execution_id, owner, previous],
+                       AND retry_failures = ?3 AND fence_until_ms > ?4",
+                    params![execution_id, owner, previous, at_ms],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()
@@ -1701,8 +1740,8 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 .execute(
                     "UPDATE message SET retry_at_ms = ?2, retry_failures = ?3 \
                      WHERE execution_id = ?1 AND status = 'submitting' AND fence_owner = ?4 \
-                       AND retry_failures = ?5",
-                    params![execution_id, retry_at, failures_i, owner, previous],
+                       AND retry_failures = ?5 AND fence_until_ms > ?6",
+                    params![execution_id, retry_at, failures_i, owner, previous, at_ms],
                 )
                 .map_err(failed)?;
             if changed != 1 {
@@ -1756,47 +1795,6 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         self.run(move |_connection| {
             holds(&armed).remove(&execution_id);
             Ok(())
-        })
-    }
-
-    fn retire_unfenced_submissions(&self, at_ms: u64) -> ConversationFuture<'_, usize> {
-        self.run(move |connection| {
-            let at_ms = millis(at_ms)?;
-            let transaction = connection.transaction().map_err(failed)?;
-            let enabled: Option<i64> = transaction
-                .query_row("SELECT enabled FROM preference WHERE id = 1", [], |row| {
-                    row.get(0)
-                })
-                .optional()
-                .map_err(failed)?;
-            if enabled == Some(1) {
-                transaction.commit().map_err(failed)?;
-                return Ok(0);
-            }
-            let cancelled = cancel_expired_submitting(
-                &transaction,
-                at_ms,
-                &ScheduleActor::system(),
-                at_ms,
-                ContinuationCause::PreferenceDisabled.as_str(),
-            )?;
-            transaction.commit().map_err(failed)?;
-            Ok(cancelled)
-        })
-    }
-
-    fn next_live_fence(&self, now_ms: u64) -> ConversationFuture<'_, Option<u64>> {
-        self.run(move |connection| {
-            let now = millis(now_ms)?;
-            let until: Option<i64> = connection
-                .query_row(
-                    "SELECT MIN(fence_until_ms) FROM message \
-                     WHERE status = 'submitting' AND fence_until_ms > ?1",
-                    params![now],
-                    |row| row.get(0),
-                )
-                .map_err(failed)?;
-            Ok(until.and_then(|until| u64::try_from(until).ok()))
         })
     }
 
@@ -1865,8 +1863,9 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             let changed = transaction
                 .execute(
                     "UPDATE message SET status = ?2 \
-                     WHERE execution_id = ?1 AND status = ?3 AND fence_owner = ?4",
-                    params![execution_id, after, status, fence_owner],
+                     WHERE execution_id = ?1 AND status = ?3 AND fence_owner = ?4 \
+                       AND (status != 'submitting' OR fence_until_ms > ?5)",
+                    params![execution_id, after, status, fence_owner, at_ms],
                 )
                 .map_err(failed)?;
             if changed != 1 {
@@ -1896,6 +1895,12 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         self.run(move |connection| {
             let at_ms = millis(at_ms)?;
             let transaction = connection.transaction().map_err(failed)?;
+            transaction
+                .execute(
+                    "DELETE FROM usage_limit_invalidation WHERE conversation = ?1",
+                    params![conversation],
+                )
+                .map_err(failed)?;
             let rows = {
                 let mut statement = transaction
                     .prepare(
@@ -1931,12 +1936,10 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 if row.blank() {
                     continue;
                 }
-                let cancel = matches!(row.status.as_str(), "scheduled" | "delivering")
-                    || (row.status == "submitting" && row.fence_until_ms <= at_ms);
-                let after = if cancel {
-                    "cancelled"
-                } else {
-                    row.status.as_str()
+                let after = match row.status.as_str() {
+                    "scheduled" | "delivering" => "cancelled",
+                    "submitting" if row.fence_until_ms <= at_ms => "unconfirmed",
+                    status => status,
                 };
                 let changed = transaction
                     .execute(
@@ -2493,7 +2496,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_released_fence_can_be_adopted_and_preference_off_retires_an_unheld_one() {
+    async fn a_released_fence_can_be_adopted_and_preference_off_keeps_it_for_recovery() {
         let store = store().await;
         store.set_preference(true, person(), 1).await.unwrap();
         store
@@ -2507,27 +2510,22 @@ mod tests {
         assert_eq!(again.len(), 1);
         assert_eq!(again[0].execution_id, "exec-1");
         assert!(store.begin_submit("exec-1", 10).await.unwrap());
-        // Off while the lease is live leaves the row. Releasing the in-memory
-        // hold does not expire the lease. The next pass cancels it only once
-        // `fence_until_ms` has passed.
+        // Preference changes cannot infer whether the command was admitted,
+        // including after expiry. Application recovery owns that decision.
         assert!(!store.set_preference(false, person(), 3).await.unwrap());
-        assert_eq!(
-            store.status("exec-1").await.unwrap().as_deref(),
-            Some("submitting")
-        );
         store.release_submit("exec-1").await.unwrap();
-        assert_eq!(store.retire_unfenced_submissions(4).await.unwrap(), 0);
+        let expired = 10 + super::FENCE_LEASE_MS;
+        assert!(!store
+            .set_preference(false, person_as("off-again"), expired)
+            .await
+            .unwrap());
         assert_eq!(
             store.status("exec-1").await.unwrap().as_deref(),
             Some("submitting")
         );
-        let expired = 10 + super::FENCE_LEASE_MS;
-        assert_eq!(store.retire_unfenced_submissions(expired).await.unwrap(), 1);
-        assert_eq!(
-            store.status("exec-1").await.unwrap().as_deref(),
-            Some("cancelled")
-        );
-        assert!(!store.begin_submit("exec-1", expired).await.unwrap());
+        let due = store.claim_due(expired, 4).await.unwrap();
+        assert_eq!(due.len(), 1);
+        assert!(store.begin_submit("exec-1", expired).await.unwrap());
     }
 
     #[tokio::test]
@@ -2822,6 +2820,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deleting_an_expired_submission_keeps_admission_uncertain() {
+        let store = enabled_store().await;
+        store
+            .accept(draft("conversation", "causal", "exec-1", 10), 1)
+            .await
+            .unwrap();
+        store.claim_due(10, 4).await.unwrap();
+        assert!(store.begin_submit("exec-1", 10).await.unwrap());
+        let expired = 10 + super::FENCE_LEASE_MS;
+        store
+            .erase_conversation("conversation", expired)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("unconfirmed")
+        );
+        let before = audits(&store);
+        assert_eq!(
+            before.last(),
+            Some(&(
+                "system".into(),
+                "conversation_deleted".into(),
+                "submitting".into(),
+                "unconfirmed".into()
+            ))
+        );
+        store
+            .erase_conversation("conversation", expired + 1)
+            .await
+            .unwrap();
+        assert_eq!(audits(&store), before);
+        let prompt: String = store
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT prompt FROM message WHERE execution_id = 'exec-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(prompt.is_empty());
+    }
+
+    #[tokio::test]
     async fn an_outcome_records_the_instant_it_is_given() {
         let store = enabled_store().await;
         store
@@ -2989,20 +3033,15 @@ mod tests {
             second.status("exec-1").await.unwrap().as_deref(),
             Some("submitting")
         );
-        assert_eq!(
-            second.retire_unfenced_submissions(expired).await.unwrap(),
-            0
-        );
-        assert_eq!(
-            second.next_live_fence(expired).await.unwrap(),
-            Some(expired + super::FENCE_LEASE_MS)
-        );
         let later = expired + super::FENCE_LEASE_MS;
-        assert_eq!(second.retire_unfenced_submissions(later).await.unwrap(), 1);
         assert_eq!(
             second.status("exec-1").await.unwrap().as_deref(),
-            Some("cancelled")
+            Some("submitting")
         );
+        let due = first.claim_due(later, 4).await.unwrap();
+        assert_eq!(due.len(), 1);
+        first.release_submit("exec-1").await.unwrap();
+        assert!(first.begin_submit("exec-1", later).await.unwrap());
         drop(directory);
     }
 
@@ -3038,6 +3077,52 @@ mod tests {
         assert!(second.begin_submit("exec-1", expired).await.unwrap());
         assert!(!first.renew_fence("exec-1", expired).await.unwrap());
         drop(directory);
+    }
+
+    #[tokio::test]
+    async fn an_expired_owner_cannot_write_an_outcome_or_retry_before_adoption() {
+        let store = store().await;
+        store.set_preference(true, person(), 1).await.unwrap();
+        store
+            .accept(draft("conversation", "causal", "exec-1", 1000), 2)
+            .await
+            .unwrap();
+        store.claim_due(1000, 1).await.unwrap();
+        assert!(store.begin_submit("exec-1", 1000).await.unwrap());
+        let expired = 1000 + super::FENCE_LEASE_MS;
+        let before = audits(&store);
+        assert!(!store
+            .defer_submit("exec-1", 1, expired + 1000, expired)
+            .await
+            .unwrap());
+        store
+            .record_outcome(
+                "exec-1",
+                ScheduleSettlement::Delivered,
+                "delivered",
+                expired,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("submitting")
+        );
+        assert_eq!(audits(&store), before);
+        assert!(store.begin_submit("exec-1", expired).await.unwrap());
+        store
+            .record_outcome(
+                "exec-1",
+                ScheduleSettlement::Delivered,
+                "delivered",
+                expired + 1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("delivered")
+        );
     }
 
     #[tokio::test]
@@ -3304,6 +3389,10 @@ mod tests {
             Some("cancelled")
         );
         let written = audits(&store).len();
+        let mut rescanned = paused.clone();
+        rescanned.model = "sonnet".into();
+        rescanned.history.generation = store.history_generation("conversation").await.unwrap();
+        assert!(store.accept(rescanned, 3).await.unwrap().is_none());
         assert!(store.accept(paused.clone(), 3).await.unwrap().is_none());
         let mut back = token(paused.history.clone(), 1);
         back.history.generation = store.history_generation("conversation").await.unwrap();
@@ -3323,10 +3412,203 @@ mod tests {
         );
         let mut current = scheduled;
         current.history.generation = store.history_generation("conversation").await.unwrap();
-        assert!(store.accept(current, 6).await.unwrap().is_some());
+        assert!(store.accept(current.clone(), 6).await.unwrap().is_none());
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("cancelled")
+        );
+        current.causal_execution = "new-limit".into();
+        current.execution_id = "exec-new".into();
+        assert!(store.accept(current, 7).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn configuration_cancellation_survives_restart_and_preference_toggles() {
+        for cause in [
+            ContinuationCause::ModelChanged,
+            ContinuationCause::AgentChanged,
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let private = directory.path().join("scheduled");
+            nessa_local_storage::create_directory(&private).unwrap();
+            let path = private.join("scheduled-chat-messages.sqlite3");
+            let store = LocalScheduledMessages::open(&path).unwrap();
+            store.set_preference(true, person(), 1).await.unwrap();
+            let row = draft("conversation", "causal", "exec-1", 50);
+            store.accept(row.clone(), 2).await.unwrap().unwrap();
+            let current = sealed_token(&store, "conversation", row.history.clone(), 1).await;
+            assert!(store
+                .cancel_open("conversation", cause, ScheduleActor::system(), &current, 3)
+                .await
+                .unwrap());
+            let written = audits(&store).len();
+            drop(store);
+
+            let store = LocalScheduledMessages::open(&path).unwrap();
+            let mut rescanned = row;
+            rescanned.history.generation = store.history_generation("conversation").await.unwrap();
+            assert!(store.accept(rescanned.clone(), 4).await.unwrap().is_none());
+            assert_eq!(audits(&store).len(), written);
+            store.set_preference(false, person(), 5).await.unwrap();
+            store.set_preference(true, person(), 6).await.unwrap();
+            rescanned.preference_revision = store.preference().await.unwrap().revision;
+            assert!(store.accept(rescanned.clone(), 7).await.unwrap().is_none());
+            assert_eq!(
+                store.status("exec-1").await.unwrap().as_deref(),
+                Some("cancelled")
+            );
+            rescanned.causal_execution = "later-limit".into();
+            rescanned.execution_id = "exec-later".into();
+            assert!(store.accept(rescanned, 8).await.unwrap().is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn model_invalidation_without_a_schedule_is_durable_and_request_scoped() {
+        for causal in [Some("causal"), None] {
+            let directory = tempfile::tempdir().unwrap();
+            let private = directory.path().join("scheduled");
+            nessa_local_storage::create_directory(&private).unwrap();
+            let path = private.join("scheduled-chat-messages.sqlite3");
+            let store = LocalScheduledMessages::open(&path).unwrap();
+            let mut row = draft("conversation", "causal", "exec-1", 50);
+            let initial = token(row.history.clone(), 0);
+            assert!(store
+                .invalidate_usage_limit(
+                    "conversation",
+                    "model-request",
+                    causal,
+                    &initial,
+                    person_as("model-request"),
+                    1
+                )
+                .await
+                .unwrap());
+            let written = audits(&store).len();
+            drop(store);
+            let store = LocalScheduledMessages::open(&path).unwrap();
+            store.set_preference(true, person(), 2).await.unwrap();
+            row.preference_revision = store.preference().await.unwrap().revision;
+            row.history.generation = store.history_generation("conversation").await.unwrap();
+            if causal.is_some() {
+                assert!(store.accept(row.clone(), 3).await.unwrap().is_none());
+                assert_eq!(audits(&store).len(), written + 1);
+            }
+            row.causal_execution = "later-limit".into();
+            row.execution_id = "exec-later".into();
+            assert!(store.accept(row.clone(), 4).await.unwrap().is_some());
+            let written = audits(&store).len();
+            // Replaying the old applied command must not target this later limit.
+            assert!(store
+                .invalidate_usage_limit(
+                    "conversation",
+                    "model-request",
+                    Some("later-limit"),
+                    &initial,
+                    person_as("model-request"),
+                    5
+                )
+                .await
+                .unwrap());
+            assert_eq!(audits(&store).len(), written);
+            assert!(store.open("conversation").await.unwrap().is_some());
+            // Another request cannot use a token from before the first invalidation.
+            assert!(!store
+                .invalidate_usage_limit(
+                    "conversation",
+                    "new-request",
+                    Some("later-limit"),
+                    &initial,
+                    person_as("new-request"),
+                    6
+                )
+                .await
+                .unwrap());
+            assert!(store.open("conversation").await.unwrap().is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn model_invalidation_audit_failure_keeps_the_limit_and_receipt_unchanged() {
+        let store = enabled_store().await;
+        let row = draft("conversation", "causal", "exec-1", 50);
+        store.accept(row.clone(), 1).await.unwrap().unwrap();
+        let current = sealed_token(&store, "conversation", row.history.clone(), 1).await;
+        store
+            .connection
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_invalidation BEFORE INSERT ON audit \
+             WHEN NEW.after_status = 'invalidated' BEGIN SELECT RAISE(ABORT, 'audit failed'); END;",
+            )
+            .unwrap();
+        assert!(store
+            .invalidate_usage_limit(
+                "conversation",
+                "model-request",
+                Some("causal"),
+                &current,
+                person_as("model-request"),
+                2
+            )
+            .await
+            .is_err());
         assert_eq!(
             store.status("exec-1").await.unwrap().as_deref(),
             Some("scheduled")
+        );
+        let receipts: i64 = store
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM usage_limit_invalidation", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(receipts, 0);
+        store
+            .connection
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER reject_invalidation")
+            .unwrap();
+        assert!(store
+            .invalidate_usage_limit(
+                "conversation",
+                "model-request",
+                Some("causal"),
+                &current,
+                person_as("model-request"),
+                3
+            )
+            .await
+            .unwrap());
+        let attribution: Vec<(String, String, String)> = {
+            let connection = store.connection.lock().unwrap();
+            let mut statement = connection
+                .prepare(
+                    "SELECT initiator_kind, principal_id, action_id FROM audit \
+                 WHERE cause = 'model_changed' ORDER BY id",
+                )
+                .unwrap();
+            let selected = statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            selected
+        };
+        assert_eq!(
+            attribution,
+            vec![
+                ("person".into(), "person".into(), "model-request".into()),
+                ("person".into(), "person".into(), "model-request".into()),
+            ]
+        );
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("cancelled")
         );
     }
 

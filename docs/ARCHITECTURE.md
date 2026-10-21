@@ -856,6 +856,12 @@ especially [Agent/storage](../crates/nessa-sdk/docs/agent_execution/agent.md),
 The gateway now owns a prepared shared Agent for each authorized conversation. The
 conversation context owns durable creator/organization metadata and a bounded
 read projection; SDK Agent remains the sole scheduler and execution authority.
+Usage-limit continuations use the conversation application's scheduled-message
+store, separate from ordinary SDK resumption. Its SQLite dataset owns the
+preference, continuation rows, and per-model-request causal invalidations. A
+native model change records its invalidation before metadata marks that request
+applied; replay reads the request receipt and leaves later limits eligible.
+The ordering and tests are mapped in [usage-limit continuation](design/usage-limit-continuation.md).
 The projection also carries ordered runtime-owned declined-review notices from
 persisted invocation events, replacing selection with later local write evidence
 by identity without turning it into permission authority or provider output.

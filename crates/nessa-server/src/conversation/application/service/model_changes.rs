@@ -7,7 +7,7 @@ use super::{
 };
 use crate::conversation::application::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
-    ConversationModelSelection,
+    ConversationModelSelection, ScheduleActor,
 };
 use nessa_protocol::conversation::domain::ConversationApprovalMode;
 use nessa_protocol::conversation::projection::{bound_view, CommittedCursor};
@@ -226,6 +226,14 @@ impl ConversationService {
                 return Err(ConversationError::ModelChangeUncertain);
             }
         };
+        if state == ConversationModelRequestState::Applied {
+            self.invalidate_model_usage_limit(
+                id,
+                &observed.request_id,
+                ScheduleActor::model_request(&observed),
+            )
+            .await?;
+        }
         let expected = ConversationModelRequest { state, ..observed };
         let write = contain_mode_terminal(async {
             self.inner
@@ -443,6 +451,14 @@ impl ConversationService {
                 return Err(ConversationError::ModelChangeUncertain)
             }
         };
+        if state == ConversationModelRequestState::Applied {
+            self.invalidate_model_usage_limit(
+                id,
+                &observed.request_id,
+                ScheduleActor::model_request(&observed),
+            )
+            .await?;
+        }
         let expected = ConversationModelRequest { state, ..observed };
         let written = contain_mode_terminal(async {
             self.inner

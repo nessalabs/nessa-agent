@@ -1755,6 +1755,11 @@ It shows the gateway preference, stays enabled, turns off when the person
 unchecks it, and snaps back when that change fails. A pure limit does not say
 the turn ended early and does not show the required-work sentence. At 360px
 and 1000px the card stays inside its surface.
+The scheduling-failure case holds the client clock one minute ahead of the
+gateway reset and advances only its injected clock to the translated deadline.
+Within 3 seconds both mounted cards change from **Scheduling failed.** to
+**Resets** with the original reset time, without a new conversation view
+([card clock subscription](../../src/conversation/ui/usage-limit-card.tsx)).
 
 ## Provider authentication recovery (#501)
 

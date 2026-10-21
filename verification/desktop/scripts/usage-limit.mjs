@@ -55,6 +55,8 @@ await main(
               url: target.href,
               width,
               height: 800,
+              preparePage: (page) =>
+                page.clock.setFixedTime(new Date(Date.UTC(2026, 9, 21, 16, 1))),
               readySelector: `${selectors.desktop} ${selectors.card}`,
             })
             const { page } = opened
@@ -102,6 +104,24 @@ await main(
                 throw new Error("a usage limit revived the early-turn notice")
               if (text.includes(REQUIRED))
                 throw new Error("a pure usage limit shows the required-work sentence")
+              let resetTransitions = 0
+              if (item.name === "scheduling-failed") {
+                // Change only the injected clock: neither transcript gets a new view.
+                await page.evaluate(() => {
+                  window.__usageLimit.nowMs += 1000
+                })
+                await page.waitForFunction(
+                  ({ desktop, panel, detail }) =>
+                    [desktop, panel].every((surface) =>
+                      document
+                        .querySelector(`${surface} ${detail}`)
+                        ?.textContent?.startsWith("Resets "),
+                    ),
+                  selectors,
+                  { timeout: 3000 },
+                )
+                resetTransitions = 2
+              }
               if (item.name === "timed" && width === 1000) {
                 if (options.shots) {
                   mkdirSync(options.shots, { recursive: true })
@@ -153,6 +173,7 @@ await main(
               return {
                 passed: true,
                 detail: details[0],
+                resetTransitions,
                 errors: opened.heldErrorCount,
               }
             } finally {

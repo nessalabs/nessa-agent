@@ -90,6 +90,10 @@
 //! `CedarOwnerPhonePolicyEvaluator` owns first-party method and input restrictions.
 //! `CedarUsageLimitPreferencePolicy` owns who may change the gateway usage-limit
 //! preference.
+//! `LocalScheduledMessages` owns `scheduled_messages.sql`: continuations,
+//! preference receipts, history fences, and per-model-request usage-limit
+//! invalidations. Invalidation, open-row cancellation, and their audit share
+//! one transaction; `accept` checks the retained causal invalidation.
 pub mod owner_phone_policy;
 pub use owner_phone_policy::CedarOwnerPhonePolicyEvaluator;
 mod usage_limit_policy;

@@ -526,6 +526,19 @@ fn schedule_unavailable<'a, T: Send + 'static>() -> ConversationFuture<'a, T> {
 }
 
 impl ScheduledMessageStore for ScheduleReads {
+    // This double exercises unrelated store behavior; model invalidation has
+    // dedicated tests against LocalScheduledMessages.
+    fn invalidate_usage_limit(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+        _: &crate::conversation::application::PlanToken,
+        _: crate::conversation::application::ScheduleActor,
+        _: u64,
+    ) -> ConversationFuture<'_, bool> {
+        Box::pin(async { Ok(true) })
+    }
     fn preference(&self) -> ConversationFuture<'_, PreferenceReading> {
         if self.fail_preference {
             return schedule_unavailable();
@@ -603,12 +616,6 @@ impl ScheduledMessageStore for ScheduleReads {
         schedule_unavailable()
     }
     fn release_submit(&self, _: &str) -> ConversationFuture<'_, ()> {
-        schedule_unavailable()
-    }
-    fn retire_unfenced_submissions(&self, _: u64) -> ConversationFuture<'_, usize> {
-        schedule_unavailable()
-    }
-    fn next_live_fence(&self, _: u64) -> ConversationFuture<'_, Option<u64>> {
         schedule_unavailable()
     }
     fn record_preference_decision(

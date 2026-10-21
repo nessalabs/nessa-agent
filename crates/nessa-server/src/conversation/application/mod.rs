@@ -45,6 +45,9 @@
 //! -> observed native configuration -> atomic model and approval selection.
 //! The SDK owns native context/history; model_requests owns publication and
 //! retries. Recovery correlates both records before admitting another message.
+//! Before a model request becomes applied, `service/scheduled_messages` records
+//! its causal usage-limit invalidation through `ScheduledMessageStore`. The
+//! request receipt prevents a retry from invalidating a later blocked turn.
 //! A retirement, or a close while a mode change is pending, whose stop runs past
 //! its budget carries on until that slot is released
 //! (`a_mode_retirement_past_its_budget_lets_the_agent_go`,

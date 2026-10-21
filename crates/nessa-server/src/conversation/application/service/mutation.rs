@@ -35,7 +35,8 @@ impl ConversationService {
     /// `delivery` is the submission receipt from the call that actually
     /// enqueued. A settled retry leaves it empty; the socket then reads the
     /// saved turn without enqueueing again. A submit settled
-    /// [`MutationOutcome::NoEffect`] is returned as [`ConversationError::Revoked`]:
+    /// [`MutationOutcome::NoEffect`] or [`MutationOutcome::RefusedBeforeAttempt`]
+    /// is returned as [`ConversationError::Revoked`]:
     /// the effect refused before anything was enqueued, and the same request
     /// answers that refusal again. A submit settled
     /// [`MutationOutcome::RefusedAfterSave`] is returned as
@@ -110,7 +111,7 @@ impl ConversationService {
         .await
         .map_err(|error| MutationFailure::TaskFault(CreationTaskFault::from_join_error(error)))??;
         match progress.outcome() {
-            Some(MutationOutcome::NoEffect) => {
+            Some(MutationOutcome::NoEffect | MutationOutcome::RefusedBeforeAttempt) => {
                 return Err(MutationFailure::Target(ConversationError::Revoked));
             }
             Some(MutationOutcome::RefusedAfterSave) => {

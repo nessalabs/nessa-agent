@@ -12,9 +12,10 @@ pub struct ObservedUsageLimit {
     pub causal_execution: String,
     /// Absolute Unix milliseconds, only when the recovery is a timed reset.
     pub resets_at_ms: Option<u64>,
-    /// The conversation's agent when the limit was saved.
+    /// The conversation's agent associated with this plan.
     pub agent: String,
-    /// The conversation's model when the limit was saved.
+    /// The conversation's model associated with this plan. Native model requests
+    /// invalidate earlier blocked history through the schedule store.
     pub model: String,
 }
 

@@ -8,6 +8,7 @@ import { createRef } from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { applyView } from "../../../../src/conversation/application/usecases/apply-view"
+import { conversationView } from "../../../../src/conversation/adapters/gateway/effects"
 import { conversation as newConversation } from "../../../../src/conversation/model"
 import type { Conversation } from "../../../../src/conversation/model"
 import { Transcript as PanelTranscript } from "../../../../src/conversation/ui/transcript"
@@ -20,10 +21,7 @@ import {
   openSession,
 } from "../../../../src/desktop/workspace"
 import { transcriptFrom } from "../../../../src/desktop/workspace/adapters/gateway/gateway-views"
-import {
-  GATEWAY_NOW_MS,
-  view,
-} from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
+import { view } from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
 import { Transcript } from "../../../../src/desktop/workspace/ui/transcript/transcript"
 import { fakeSource, testIndex } from "../../../../src/desktop/workspace/testing"
 import "@fontsource-variable/geist"
@@ -37,6 +35,8 @@ const preference = params.get("preference") === "off" ? false : kind !== "unknow
 const recovery =
   kind === "user-action" ? "user_action" : kind === "unknown" ? "unknown" : "timed_reset"
 const resetsAtMs = Date.UTC(2026, 9, 21, 16, 0, 0)
+const gatewayNowMs = resetsAtMs - 1000
+const clientNowMs = resetsAtMs + 60_000
 const autoResuming = kind === "timed" && preference
 const usageLimit = {
   provider,
@@ -68,6 +68,7 @@ const wire = {
     ],
   }),
   notes: [],
+  serverNowMs: gatewayNowMs,
   reviewsWaiting: [],
   questionsWaiting: [],
   questions: [],
@@ -78,12 +79,13 @@ const fixture = {
   desktopCalls: [] as { enabled: boolean; initiator: string }[],
   panelCalls: [] as boolean[],
   fail: false,
+  nowMs: clientNowMs,
 }
 Object.assign(window, { __usageLimit: fixture })
 
 const index = testIndex()
 const source = fakeSource(index)
-const transcript = transcriptFrom(wire, 1, () => 1000, GATEWAY_NOW_MS)
+const transcript = transcriptFrom(wire, 1, () => clientNowMs, clientNowMs)
 source.transcripts.set("b", transcript)
 const original = source.setUsageLimitAutoContinue.bind(source)
 source.setUsageLimitAutoContinue = async (enabled, initiator) => {
@@ -100,7 +102,7 @@ store.dispatch(openSession({ sessionId: "b" }))
 
 function Panel() {
   const [current, setCurrent] = useState<Conversation>(() =>
-    applyView(newConversation("b"), wire),
+    applyView(newConversation("b"), conversationView(wire, clientNowMs)),
   )
   return (
     <PanelTranscript
@@ -132,7 +134,7 @@ container.style.display = "flex"
 container.style.flexDirection = "column"
 createRoot(container).render(
   <Provider store={store}>
-    <ClockProvider now={() => GATEWAY_NOW_MS}>
+    <ClockProvider now={() => fixture.nowMs}>
       <div
         id="desktop"
         style={{ display: "flex", flex: "1 1 50%", minWidth: 0, minHeight: 0 }}

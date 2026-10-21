@@ -7,8 +7,9 @@
 import * as React from "react"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { afterEach, beforeEach, expect, it } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 
+import { ClockProvider } from "../../clock"
 import { formatUsageLimitReset, usageLimitDetail } from "../model/usage-limit"
 import { UsageLimitCard } from "./usage-limit-card"
 
@@ -33,11 +34,44 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount())
   host.remove()
+  vi.useRealTimers()
 })
 
 function detail(): string {
   return host.querySelector("[data-usage-limit-detail]")?.textContent ?? ""
 }
+
+function render(card: React.ReactNode, now = () => reset - 1) {
+  root.render(<ClockProvider now={now}>{card}</ClockProvider>)
+}
+
+it("refreshes an unscheduled limit at its translated reset without a parent render", () => {
+  vi.useFakeTimers()
+  const clientReset = reset + 60_000
+  let now = clientReset - 1000
+  act(() => {
+    render(
+      <UsageLimitCard limit={{ ...limit, resetsAtClientMs: clientReset }} enabled />,
+      () => now,
+    )
+  })
+  expect(detail()).toBe("Scheduling failed.")
+  now = clientReset
+  act(() => vi.advanceTimersByTime(1000))
+  expect(detail()).toBe(`Resets ${formatUsageLimitReset(reset)}`)
+})
+
+it("keeps an accepted continuation visible after the reset clock tick", () => {
+  vi.useFakeTimers()
+  let now = reset - 1000
+  act(() => {
+    render(<UsageLimitCard limit={{ ...limit, autoResuming: true }} enabled />, () => now)
+  })
+  expect(detail()).toBe(`Auto-resuming ${formatUsageLimitReset(reset)}`)
+  now = reset
+  act(() => vi.advanceTimersByTime(1000))
+  expect(detail()).toBe(`Auto-resuming ${formatUsageLimitReset(reset)}`)
+})
 
 it("keeps the reset line while an enable is still pending", async () => {
   let release: () => void = () => {}
@@ -45,14 +79,7 @@ it("keeps the reset line while an enable is still pending", async () => {
     release = resolve
   })
   await act(async () => {
-    root.render(
-      <UsageLimitCard
-        limit={limit}
-        enabled={false}
-        nowMs={reset - 1}
-        onChange={() => pending}
-      />,
-    )
+    render(<UsageLimitCard limit={limit} enabled={false} onChange={() => pending} />)
   })
   const box = host.querySelector("input")
   if (!(box instanceof HTMLInputElement)) throw new Error("missing checkbox")
@@ -76,11 +103,10 @@ it("releases the checkbox when the confirmed preference is not the pending choic
   })
   let clicks = 0
   await act(async () => {
-    root.render(
+    render(
       <UsageLimitCard
         limit={limit}
         enabled={false}
-        nowMs={reset - 1}
         onChange={() => {
           clicks += 1
           return held
@@ -112,11 +138,10 @@ it("releases the checkbox when the confirmed preference is not the pending choic
     again = resolve
   })
   await act(async () => {
-    root.render(
+    render(
       <UsageLimitCard
         limit={limit}
         enabled={false}
-        nowMs={reset - 1}
         onChange={() => {
           clicks += 1
           return next
@@ -154,14 +179,7 @@ it("a superseded toggle completion does not settle the next choice", async () =>
     return calls.length === 1 ? first : second
   }
   await act(async () => {
-    root.render(
-      <UsageLimitCard
-        limit={limit}
-        enabled={false}
-        nowMs={reset - 1}
-        onChange={change}
-      />,
-    )
+    render(<UsageLimitCard limit={limit} enabled={false} onChange={change} />)
   })
   const box = () => {
     const node = host.querySelector("input")
@@ -177,9 +195,7 @@ it("a superseded toggle completion does not settle the next choice", async () =>
   expect(calls).toEqual([true])
   expect(pending()).toBe(true)
   await act(async () => {
-    root.render(
-      <UsageLimitCard limit={limit} enabled nowMs={reset - 1} onChange={change} />,
-    )
+    render(<UsageLimitCard limit={limit} enabled onChange={change} />)
   })
   expect(pending()).toBe(false)
   await act(async () => {
@@ -217,14 +233,7 @@ it("a superseded toggle rejection does not clear the next choice", async () => {
     return calls.length === 1 ? first : second
   }
   await act(async () => {
-    root.render(
-      <UsageLimitCard
-        limit={limit}
-        enabled={false}
-        nowMs={reset - 1}
-        onChange={change}
-      />,
-    )
+    render(<UsageLimitCard limit={limit} enabled={false} onChange={change} />)
   })
   const box = () => {
     const node = host.querySelector("input")
@@ -238,9 +247,7 @@ it("a superseded toggle rejection does not clear the next choice", async () => {
     box().click()
   })
   await act(async () => {
-    root.render(
-      <UsageLimitCard limit={limit} enabled nowMs={reset - 1} onChange={change} />,
-    )
+    render(<UsageLimitCard limit={limit} enabled onChange={change} />)
   })
   await act(async () => {
     box().click()
@@ -263,9 +270,7 @@ it("a superseded toggle rejection does not clear the next choice", async () => {
 
 it("says scheduling failed once the confirmed preference is on and nothing is auto-resuming", async () => {
   await act(async () => {
-    root.render(
-      <UsageLimitCard limit={limit} enabled nowMs={reset - 1} onChange={() => {}} />,
-    )
+    render(<UsageLimitCard limit={limit} enabled onChange={() => {}} />)
   })
   expect(detail()).toBe(usageLimitDetail(limit, true, reset - 1))
   expect(detail()).toBe("Scheduling failed.")

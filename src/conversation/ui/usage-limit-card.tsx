@@ -5,6 +5,7 @@ import {
   usageLimitDetail,
   type UsageLimitNotice,
 } from "../model/usage-limit"
+import { useNow } from "../../clock"
 import "./usage-limit-card.css"
 
 /**
@@ -16,23 +17,21 @@ import "./usage-limit-card.css"
  * newer click supersedes that request, and an older resolution or rejection
  * does not change the choice that replaced it. The line under the title
  * follows the confirmed preference, so a choice that has not landed does
- * not read as a scheduling failure. `nowMs` is this client's clock. A reset
- * that arrived on a view is compared through `resetsAtClientMs`, which the
- * adapter put on that same clock.
+ * not read as a scheduling failure. The injected ticking clock is this
+ * client's. A reset that arrived on a view is compared through
+ * `resetsAtClientMs`, which the adapter put on that same clock.
  */
 export function UsageLimitCard({
   limit,
   enabled,
-  nowMs,
   onChange,
 }: {
   limit: UsageLimitNotice
   /** The gateway preference. Absent is off. */
   enabled: boolean
-  /** This client's clock, the clock `resetsAtClientMs` is on. */
-  nowMs: number
   onChange?: (enabled: boolean) => Promise<void> | void
 }) {
+  const nowMs = useNow(1000)
   const [pending, setPending] = useState<boolean | null>(null)
   const [settled, setSettled] = useState(false)
   const request = useRef(0)

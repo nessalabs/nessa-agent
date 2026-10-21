@@ -1194,7 +1194,9 @@ fn command_receipt(request_id: &str, receipt: &MutationReceipt) -> ConversationC
             MutationOutcome::Withdrawn => ConversationCommandOutcome::Withdrawn,
             MutationOutcome::Cancelled => ConversationCommandOutcome::Cancelled,
             MutationOutcome::AlreadyFinal => ConversationCommandOutcome::AlreadyFinal,
-            MutationOutcome::NoEffect => ConversationCommandOutcome::NoEffect,
+            MutationOutcome::NoEffect | MutationOutcome::RefusedBeforeAttempt => {
+                ConversationCommandOutcome::NoEffect
+            }
             MutationOutcome::RefusedAfterSave => ConversationCommandOutcome::RefusedAfterSave,
             MutationOutcome::UnavailableAfterSave => {
                 ConversationCommandOutcome::UnavailableAfterSave

@@ -25,7 +25,8 @@
 -- compare that token in the same transaction as the row change. A miss
 -- writes nothing. Accept and settle of a submitting row also match the owner
 -- of that write. A cancelled
--- row for the same causal turn can be scheduled again. delivered, refused,
+-- row for the same causal turn can be scheduled again unless an agent or
+-- model change cancelled it, as retained by its cancellation audit. delivered, refused,
 -- and unconfirmed cannot. A submitting row another process still leases is
 -- not due until that lease's deadline.
 -- user_version stays 1. An earlier copy of this file is recreated.
@@ -99,6 +100,19 @@ CREATE TABLE history_fence (
     agent TEXT NOT NULL,
     model TEXT NOT NULL
 ) STRICT;
+
+-- One applied model request invalidates only the limit it first observed.
+-- Empty causal_execution records that there was no limit at that boundary.
+CREATE TABLE usage_limit_invalidation (
+    conversation TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    incarnation TEXT NOT NULL,
+    causal_execution TEXT NOT NULL,
+    PRIMARY KEY (conversation, request_id)
+) STRICT;
+
+CREATE INDEX usage_limit_invalidation_causal ON usage_limit_invalidation
+    (conversation, incarnation, causal_execution);
 
 CREATE TABLE audit (
     id INTEGER PRIMARY KEY,

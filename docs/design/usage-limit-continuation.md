@@ -88,7 +88,10 @@ move them. `cancelled` is not open either, so a later causal turn can still
 be accepted beside it. The same causal turn can leave `cancelled` and become
 `scheduled` again when `accept` still sees the stale-work token it observed:
 the preference revision enabled, the history generation, and the agent and
-model. The partial unique index covers only `scheduled`, `delivering`, and
+model. A cancellation for an agent or model change ends that causal
+continuation; a fresh scan, restart, preference toggle, or switch back does
+not reactivate it. `accept` checks the committed cancellation audit. A later
+causal turn remains eligible. The partial unique index covers only `scheduled`, `delivering`, and
 `submitting`.
 
 | Status | What is true |
@@ -98,7 +101,7 @@ model. The partial unique index covers only `scheduled`, `delivering`, and
 | `submitting` | `begin_submit` committed. Cancel and defer no longer match. `fence_owner` holds the lease until `fence_until_ms`. `retry_at_ms` is 0, or already past, when the row may be attempted. A later `retry_at_ms` is the next attempt, and the row is not due before it. The in-memory `armed` set only stops this process entering twice |
 | `delivered` | The execution was saved, or `submit_command` admitted it. Audit `delivered` |
 | `refused` | The submit ended for a reason that will not change on retry: deleted, not found, revoked, unavailable after save, or a caller that cannot be rebuilt |
-| `cancelled` | The row ended without a submit: preference off, a later turn, an agent or model change, or deletion of a row whose lease has expired. The same causal turn can be scheduled again. A finished submit cannot |
+| `cancelled` | The row ended without a submit: preference off, a later turn, an agent or model change, or deletion before submit. The same causal turn can be scheduled again unless an agent or model change cancelled it. A finished submit cannot |
 | `unconfirmed` | The mutation journal recorded `Attempted` and the invocation was not saved. The effect must not run again. Audit `submission_interrupted` |
 
 ### Who owns each transition
@@ -108,7 +111,7 @@ model. The partial unique index covers only `scheduled`, `delivering`, and
 | From | Event | Owner | To | Durable write | If it fails |
 | --- | --- | --- | --- | --- | --- |
 | none | Preference on, future reset, newest invocation is the limit | `plan_continuation`, then `accept` | `scheduled` | The row and its audit, one transaction, only while the preference revision that read is still enabled | Not this column. A miss writes nothing |
-| `cancelled` | The same causal turn is still the limit, the preference revision is enabled, and the history generation is current | `accept` | `scheduled` | Status, due time, and the planned payload, with the fence and retry cleared, and one audit. The execution id stays. A `submitting` row for the conversation matches nothing. `delivered`, `refused`, and `unconfirmed` match nothing | Not this column. A miss writes nothing |
+| `cancelled` | The same causal turn is still the limit, no agent or model change cancelled it, the preference revision is enabled, and the history generation is current | `accept` | `scheduled` | Status, due time, and the planned payload, with the fence and retry cleared, and one audit. The execution id stays. A `submitting` row for the conversation matches nothing. `delivered`, `refused`, and `unconfirmed` match nothing | Not this column. A miss writes nothing |
 | `scheduled` | Same causal turn, later future reset | `plan_continuation`, then `move_due` | `scheduled` | Due time and audit, one transaction that still sees the history generation and the preference revision that plan read | Not this column. A miss writes nothing |
 | `scheduled` or `delivering` | Preference off, a later invocation, agent or model change, or a different causal turn | `plan_continuation`, `set_preference`, `cancel_open`, `defer_claim`, or `accept` | `cancelled` or `scheduled` | Status and audit, one transaction against that history generation and preference revision. A switch is `accept`: it cancels the open row and inserts the replacement together | Not this column. A miss writes nothing |
 | `scheduled` | Due, and still the open row | `claim_due` | `delivering` | Status only. The claim is not an audit row | Not this column |
@@ -120,16 +123,19 @@ model. The partial unique index covers only `scheduled`, `delivering`, and
 | `submitting` | The clock reaches the `fence_until_ms` this process wrote, or `renew_fence` returns false | no longer this process | `submitting`, until another process adopts it | Renewal stops and `lost` is set. An expired lease is not extended. `submit_command` does not start. The process that adopts the row records a saved execution without submitting again | Not this column. A submit already running writes no outcome and no retry |
 | `submitting` | The saved execution cannot be read | `finish_fenced_submit` | `submitting` | No status, no outcome, and no `retry_at_ms`. The execution may already be saved | `next_attempt`, kept only in this process. The later pass reads again and does not submit |
 | `submitting` | Execution already saved, or `submit_command` admits | `finish_fenced_submit`, then `record_outcome` | `delivered` | Status and audit, after the observation. The clock is read then | Not this column. A write that does not commit is the outcome row. A committed outcome publishes the conversation |
+| `submitting` | Payload was scrubbed by deletion and the saved execution is absent | `finish_fenced_submit` after lease adoption | `unconfirmed` | Audit `conversation_deleted`; erased inputs are not reconstructed into a command | Unread execution retains the submission for bounded retry |
 | `submitting` | `submit_command` returns a terminal refusal, or the caller cannot be rebuilt | `finish_fenced_submit` | `refused` | Status and audit, after the observation | Not this column. A write that does not commit is the outcome row. A committed outcome publishes the conversation, including when the conversation itself did not change |
 | `submitting` | The mutation journal returns `Interrupted` | `finish_fenced_submit` | `unconfirmed` | Status and audit `submission_interrupted`. No second submit | Not this column. A write that does not commit is the outcome row. A committed outcome publishes the conversation |
 | `submitting` | `submit_command` returns a retryable or unclassified failure, or the command store is absent | `finish_fenced_submit`, then `defer_submit` | `submitting` | `retry_at_ms`, `retry_failures`, and audit `submission_retry`, one transaction. The status stays `submitting`. `begin_submit` does not adopt the row before `retry_at_ms` | `next_attempt` on `submission_retry`. A lost lease writes nothing |
 | `submitting` | An observed outcome's `record_outcome` does not commit | `finish_fenced_submit`, then `defer_submit` | `submitting` | The status and the outcome audit stay unwritten. The next pass records that same outcome and does not mint an execution id. A missing row writes nothing and does not publish | `next_attempt` on `submission_retry` |
 | none | Settlement's plan returns an error, and catch-up is already complete | `consider_usage_limit` | reconcile debt | One `reconcile_retry` row. A plan that commits deletes the debt | `next_attempt` on the reconcile debt |
-| `submitting` | Preference off, and `fence_until_ms` is at or before the clock | `record_preference_decision`, `set_preference`, or `retire_unfenced_submissions` | `cancelled` | Status and audit. A later pass waits until a still-live lease and then cancels it | Not this column |
+| `submitting` | Preference off; lease can be adopted | `begin_submit`, then saved-execution and command-receipt recovery | Saved execution or dispatched receipt: `delivered`; attempted receipt without saved execution: `unconfirmed`; confirmed no-effect receipt: terminal `refused` with original `revoked` cause; recovery refusal before any attempt: terminal `refused` with `preference_disabled` cause; absent or merely accepted receipt: seal `Settled(RefusedBeforeAttempt)` under the command lease, then terminal `refused` | Recovery retains command evidence before considering cancellation. The command coordinator serializes retirement with the original submit: a delayed submit observes the saved refusal-before-attempt receipt and cannot enqueue. A command retired this way cannot be rearmed for the same causal turn: its stable command identity is sealed. Earlier scheduled/delivering cancellations remain reversible. Disabling alone does not prove no effect | Unread execution, receipt, or preference leaves `submitting` and waits for bounded retry |
 | `submitting` | Preference off, and the lease is still live | the owning process | `submitting` | The submit finishes into `delivered`, `refused`, or `unconfirmed` | Not this column |
+| any or no row | An acknowledged applied model request is still pending in metadata, including while the preference is off | `invalidate_usage_limit` | Current causal limit invalidated; an open row cancelled | A per-request receipt records the current causal execution and incarnation, including explicit absence. The token compare, invalidation audit, and open-row cancellation commit together before metadata marks the model request applied; a crash before this write leaves a pending request for recovery. A retry of that request reads its receipt and never invalidates a later limit. `accept` refuses the invalidated causal execution in that incarnation | Model reconciliation stays owed |
+| `cancelled` | A fresh scan, restart, preference toggle, or switch back after an agent or model change cancelled this causal turn | `accept` | `cancelled` | The committed cancellation audit refuses reactivation without a row, fence, or audit write. A later causal turn remains eligible | Not this column |
 | `scheduled` or `delivering` | An applied model change | `commit_applied_model_plan`, from `change_model` or from `recover_model_change` | `cancelled` or `scheduled` | The plan seals the new agent and model as the next history generation even when the session position does not move, in the same transaction as the row change. A plan that read the previous generation writes nothing. An applied transition returns only after the plan commits, including one recovery finishes from a stopped request. A refusal is not reconciled. Delivery does not submit while the plan returns an error | `next_attempt` on the reconcile debt |
 | preference | Cedar allow or deny | `record_preference_decision` | the stored boolean, unchanged on a deny | One audit with the policy ids, and the request's receipt, in the same transaction as any preference write. An enable's receipt is `pending` until the scan settles or the rollback commits. A disable and a deny finish in that transaction. A failed audit leaves the preference and writes no receipt. A retry of a finished request returns the receipt and does not apply again. A retry of `pending` resumes the scan or the rollback. A different input for the same request is a conflict and writes nothing. An allow publishes every followed conversation. A deny does not | Not this column |
-| any row that still holds a prompt | Conversation deletion | `erase_conversation` | `cancelled` for `scheduled`, `delivering`, and a `submitting` row whose lease has expired; the same status otherwise | Payload blanked and one new audit, one transaction | Not this column |
+| any row that still holds a prompt | Conversation deletion | `erase_conversation` | `cancelled` for `scheduled` and `delivering`; `unconfirmed` for an expired `submitting` row; the same status otherwise | Payload blanked and one new audit, one transaction | Not this column |
 
 The gateway preference is a separate row. `UsageLimitPreferencePolicyEvaluator`
 allows or refuses the change before any write. The facts are the caller's
@@ -254,8 +260,8 @@ schedule with nothing due and no live lease. A store error is never that.
 
 | State | Who owns the fence | Transient error | What the pass does | When it tries again |
 | --- | --- | --- | --- | --- |
-| No open submit | Nobody. `fence_owner` is empty | `preference`, `retire_unfenced_submissions`, `next_live_fence`, `claim_due`, or `next_due` returns an error | The pass waits one second (`SCHEDULE_RETRY_MS`). It does not park until a notification storage recovery will not send | That one second, or sooner when a wakeup fires |
-| Preference off, lease still live | `fence_owner` until `fence_until_ms` | `retire_unfenced_submissions` or `next_live_fence` returns an error | Same one-second wait. A successful read waits until the live lease and then cancels it | `SCHEDULE_RETRY_MS`, or until `fence_until_ms` when the read succeeded |
+| No open submit | Nobody. `fence_owner` is empty | `preference`, `claim_due`, or `next_due` returns an error | The pass waits one second (`SCHEDULE_RETRY_MS`). It does not park until a notification storage recovery will not send | That one second, or sooner when a wakeup fires |
+| Preference off, lease still live | `fence_owner` until `fence_until_ms` | `claim_due` or `next_due` returns an error | Same one-second wait. A successful read waits until the live lease and then recovers its saved execution and command evidence | `SCHEDULE_RETRY_MS`, or until `fence_until_ms` when the read succeeded |
 | `submitting`, this process inside `finish_fenced_submit`, lease still ahead | This process, while `renew_fence` returns true and `fence_until_ms` is ahead of the clock | `renew_fence` returns an error, such as SQLite busy, before the deadline | Renewal continues. `lost` stays false. `submit_command` is not abandoned | `FENCE_RENEW_RETRY_MS` (one second) until a renew succeeds, then every ten seconds, and only while the deadline is still ahead |
 | `submitting`, the lease this process wrote has expired | Whoever adopts it after `fence_until_ms` | Renew keeps returning an error through the deadline, or `renew_fence` returns false because the deadline has passed | `lost` is set and renewal stops. The expired lease is not extended. `submit_command` does not start. A submit already running does not record an outcome or a retry | No further renew from this process. The next due pass adopts the row. A saved execution is recorded as delivered and is not submitted again |
 | `submitting`, renew reports this process does not own the row | Whoever the store now names, or nobody | `renew_fence` returns false | `lost` is set and renewal stops. `submit_command` does not start. A submit already running does not record an outcome. This process does not write a retry time on a row it does not own | No further renew from this process. The next due pass, or the process that adopted the expired lease, continues the row |
@@ -313,7 +319,11 @@ turn with no saved result clears it.
 4. At most one open schedule (`scheduled`, `delivering`, or `submitting`)
    exists per conversation. `delivered`, `refused`, and `unconfirmed` are
    terminal. `cancelled` is not open, and the same causal turn can become
-   `scheduled` again with the execution id it already has. A finished submit
+   `scheduled` again with the execution id it already has, unless an agent or
+   model change cancelled it. That cancellation stays final for this causal
+   execution across fresh scans, restart, preference toggles, and switching
+   back, enforced by `configuration_cancellation_survives_restart_and_preference_toggles`
+   and `an_equal_history_after_a_model_change_does_not_restore_the_cancelled_row`. A finished submit
    cannot. The open row's execution id is minted once.
 5. Only `begin_submit` may call `submit_command`. It moves `delivering` to
    `submitting` and writes `fence_owner` and `fence_until_ms` in that update,
@@ -364,7 +374,10 @@ turn with no saved result clears it.
 10. Audit initiator for a provider limit is the system. The person is the
     initiator of the preference decision, allow and deny, and of the
     cancellations that decision causes. The system is the initiator of a
-    failed-scan rollback.
+    failed-scan rollback. A model-request invalidation and its cancellations
+    retain that request's original organization, person, surface, and request
+    id, including recovery from another surface; the recovery caller does not
+    replace that initiator.
 11. A published usage limit omits the required-work sentence when every nested
     failure is that usage limit. `ExecutionObservation` of the same limit on
     both sides is that case: the live settlement records the provider error
@@ -419,8 +432,10 @@ turn with no saved result clears it.
     column is kept in this process, and the later pass reads again after
     it. The same execution id is not submitted on that failed read.
 16. Deleting a conversation blanks `prompt` and the identifying fields on
-    every schedule row for it, cancels a row that is not inside a live
-    submit lease, and writes one audit. A second scrub writes nothing. The
+    every schedule row for it, cancels an unsubmitted row, records an expired
+    submitting row as unconfirmed, and writes one audit. A live submitting row
+    retains its status until recovery: a saved execution confirms delivery;
+    after erasure an absent execution leaves admission unconfirmed. A second scrub writes nothing. The
     audit table's older rows are not deleted or rewritten.
 17. The delivery loop registers its wakeup before it reads the schedule. A
     continuation accepted during that read is waited on by the same pass.
