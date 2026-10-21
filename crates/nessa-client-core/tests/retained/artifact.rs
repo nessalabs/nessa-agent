@@ -76,6 +76,61 @@ impl HeldFileSource for Counting {
     }
 }
 
+struct OpenFails;
+impl super::ArtifactFiles for OpenFails {
+    fn open(
+        &self,
+        _: &super::ArtifactRequest<'_>,
+    ) -> Result<
+        Box<dyn crate::read_only_sync::application::held_file::FetchFiles + Send>,
+        super::ArtifactOpenError,
+    > {
+        Err(super::ArtifactOpenError::File(
+            crate::read_only_sync::application::held_file::FileStep::Open,
+        ))
+    }
+}
+
+#[test]
+fn a_substituted_open_is_the_file_fault_on_both_paths() {
+    let bytes = b"ab";
+    let conversation = conversation();
+    let digest = digest_of(bytes);
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("missing.bin");
+    let request = request(&conversation, &digest, &output);
+    let found = local_held_file(&request, &OpenFails)
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(
+        found.kind(),
+        ArtifactFaultKind::File(super::ArtifactFileStep::Open)
+    );
+    let reads = Arc::new(AtomicUsize::new(0));
+    let mut source = Counting {
+        bytes,
+        reads: reads.clone(),
+        wrong_length: false,
+        corrupt: false,
+    };
+    let fault = confirmed_held_file(
+        &mut source,
+        &Still,
+        &request,
+        &running(ReadStop::new()),
+        &OpenFails,
+    )
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(
+        fault.kind(),
+        ArtifactFaultKind::File(super::ArtifactFileStep::Open)
+    );
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
+    assert!(!output.exists());
+}
+
 #[test]
 fn a_file_already_on_disk_is_a_local_match_and_asks_nothing() {
     let root = tempfile::tempdir().unwrap();
@@ -91,19 +146,25 @@ fn a_file_already_on_disk_is_a_local_match_and_asks_nothing() {
     };
     let conversation = conversation();
     let digest = digest_of(bytes);
-    let outcome = local_held_file(&request(&conversation, &digest, &output))
-        .unwrap()
-        .unwrap()
-        .unwrap();
+    let outcome = local_held_file(
+        &request(&conversation, &digest, &output),
+        &super::DiskArtifactFiles,
+    )
+    .unwrap()
+    .unwrap()
+    .unwrap();
     assert_eq!(outcome, ArtifactFreshness::LocalMatch { bytes: 2 });
     // The source is in scope and stays unused: a local match has no range to ask.
     let _ = &mut source;
     assert_eq!(reads.load(Ordering::SeqCst), 0);
     fs::write(&output, b"zz").unwrap();
-    let refused = local_held_file(&request(&conversation, &digest, &output))
-        .unwrap()
-        .unwrap()
-        .unwrap_err();
+    let refused = local_held_file(
+        &request(&conversation, &digest, &output),
+        &super::DiskArtifactFiles,
+    )
+    .unwrap()
+    .unwrap()
+    .unwrap_err();
     assert_eq!(refused.kind(), ArtifactFaultKind::OutputExists);
     assert_eq!(reads.load(Ordering::SeqCst), 0);
 }
@@ -127,6 +188,7 @@ fn a_gateway_answer_is_fresh_only_when_the_digest_matches() {
         &Still,
         &request(&conversation, &digest, &output),
         &running(ReadStop::new()),
+        &super::DiskArtifactFiles,
     )
     .unwrap()
     .unwrap();
@@ -153,6 +215,7 @@ fn a_gateway_answer_is_fresh_only_when_the_digest_matches() {
         &Still,
         &request(&conversation, &digest, &output),
         &running(ReadStop::new()),
+        &super::DiskArtifactFiles,
     )
     .unwrap()
     .unwrap_err();
@@ -172,6 +235,7 @@ fn a_gateway_answer_is_fresh_only_when_the_digest_matches() {
         &Still,
         &request(&conversation, &digest, &output),
         &running(ReadStop::new()),
+        &super::DiskArtifactFiles,
     )
     .unwrap()
     .unwrap_err();
@@ -287,6 +351,7 @@ fn a_stop_during_the_part_reread_does_not_keep_the_file() {
         &Still,
         &request(&conversation, &digest, &output),
         &ending,
+        &super::DiskArtifactFiles,
     )
     .unwrap()
     .unwrap_err();
@@ -322,6 +387,7 @@ fn a_stopped_source_is_not_a_fresh_file_and_asks_nothing() {
         &Still,
         &request(&conversation, &digest, &output),
         &ending,
+        &super::DiskArtifactFiles,
     )
     .unwrap()
     .unwrap_err();
@@ -486,6 +552,7 @@ fn a_spent_budget_is_unreachable_and_an_explicit_stop_stays_stopped() {
             Duration::from_millis(0),
             &request,
             &Still,
+            &super::DiskArtifactFiles
         ),
         Err(ReadFailure::Unreachable)
     );
@@ -499,6 +566,7 @@ fn a_spent_budget_is_unreachable_and_an_explicit_stop_stays_stopped() {
             Duration::from_secs(5),
             &request,
             &Still,
+            &super::DiskArtifactFiles
         ),
         Err(ReadFailure::Stopped)
     );
@@ -534,13 +602,14 @@ fn a_stop_does_not_publish_a_local_match() {
             Duration::from_secs(5),
             &request,
             &Still,
+            &super::DiskArtifactFiles
         ),
         Err(ReadFailure::Stopped)
     );
     let during = ReadStop::new();
     let stopped = super::local_held_outcome(&during, || {
         during.stop();
-        local_held_file(&request)
+        local_held_file(&request, &super::DiskArtifactFiles)
     });
     assert_eq!(stopped, Err(ReadFailure::Stopped));
 }
@@ -556,7 +625,7 @@ fn a_settled_local_fault_survives_a_later_stop() {
     let occupied = request(&conversation, &digest, &directory);
     let stop = ReadStop::new();
     let outcome = super::local_held_outcome(&stop, || {
-        let found = local_held_file(&occupied);
+        let found = local_held_file(&occupied, &super::DiskArtifactFiles);
         stop.stop();
         found
     });
@@ -569,7 +638,10 @@ fn a_settled_local_fault_survives_a_later_stop() {
     let unnamed = root.path().join("a".repeat(220));
     let stop = ReadStop::new();
     let outcome = super::local_held_outcome(&stop, || {
-        let found = local_held_file(&request(&conversation, &digest, &unnamed));
+        let found = local_held_file(
+            &request(&conversation, &digest, &unnamed),
+            &super::DiskArtifactFiles,
+        );
         stop.stop();
         found
     });
@@ -611,6 +683,7 @@ fn a_failed_handshake_releases_the_socket_the_stop_registered() {
             Duration::from_secs(5),
             &request,
             &Still,
+            &super::DiskArtifactFiles,
         )
         .unwrap_err();
     assert_eq!(failure, ReadFailure::Unreachable);
@@ -655,6 +728,7 @@ fn an_offline_relay_makes_the_artifact_fetch_away() {
             Duration::from_secs(5),
             &request,
             &Still,
+            &super::DiskArtifactFiles,
         )
         .unwrap_err();
     serving.join().unwrap();
@@ -721,6 +795,7 @@ fn an_exhausted_busy_retry_is_unreachable() {
         &Still,
         &request(&conversation, &digest, &output),
         &running(ReadStop::new()),
+        &super::DiskArtifactFiles,
     )
     .unwrap()
     .unwrap_err();
@@ -771,6 +846,7 @@ fn a_stop_during_a_busy_pause_returns_within_one_slice() {
         &super::ThreadPause,
         &request(&conversation, &digest, &output),
         &ending,
+        &super::DiskArtifactFiles,
     )
     .unwrap()
     .unwrap_err();
@@ -863,6 +939,7 @@ fn a_budget_that_ends_during_a_busy_pause_is_unreachable() {
         &super::ThreadPause,
         &request(&conversation, &digest, &output),
         &ending,
+        &super::DiskArtifactFiles,
     )
     .unwrap()
     .unwrap_err();
@@ -1113,6 +1190,7 @@ fn a_budget_that_expires_during_a_mismatched_reread_is_unreachable() {
         &Still,
         &request(&conversation, &digest, &output),
         &ending,
+        &super::DiskArtifactFiles,
     )
     .unwrap()
     .unwrap_err();
@@ -1153,6 +1231,7 @@ fn a_budget_that_expires_after_the_range_does_not_publish() {
         &Still,
         &request(&conversation, &digest, &output),
         &ending,
+        &super::DiskArtifactFiles,
     )
     .unwrap()
     .unwrap_err();

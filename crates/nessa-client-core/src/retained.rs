@@ -91,11 +91,14 @@ mod relay;
 mod saved;
 mod subscribe;
 pub use crate::read_only_sync::application::held_file::Pause;
+pub use crate::read_only_sync::application::held_file::{
+    FetchFiles, FileStep, KeepRefusal, OutputFound,
+};
 pub use active::RetainedDeviceReader;
 pub use artifact::{
     artifact_name_accepted, local_held_file, local_held_outcome, ArtifactFault, ArtifactFaultKind,
-    ArtifactFetch, ArtifactFileStep, ArtifactFreshness, ArtifactPartCleanup, ArtifactRequest,
-    ThreadPause,
+    ArtifactFetch, ArtifactFileStep, ArtifactFiles, ArtifactFreshness, ArtifactOpenError,
+    ArtifactPartCleanup, ArtifactRequest, DiskArtifactFiles, ThreadPause,
 };
 pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
 pub use phone::{CataloguePresence, PhoneFence, PhoneLease, PhoneStamp};

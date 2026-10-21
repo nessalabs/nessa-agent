@@ -70,6 +70,7 @@ fn compose(root: &Path, connector: Arc<dyn EnrollmentConnector>) -> NativeSessio
         connector,
         entropy: Arc::new(OsEntropyFactory),
         files: Arc::new(OsCacheFiles),
+        artifacts: Arc::new(DiskArtifactFiles),
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
         pause: Arc::new(ThreadPause),

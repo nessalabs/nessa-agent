@@ -26,11 +26,12 @@ use nessa_client_core::{
         ProductWake, ThreadProductWake,
     },
     retained::{
-        ArtifactFault, ArtifactFaultKind, ArtifactFetch, ArtifactFreshness, ArtifactRequest,
-        CataloguePresence, FeedEvent, Pause, PhoneFence, PhoneLease, PhoneStamp, ReadFailure,
-        ReadReport, ReadStop, RetainedCache, RetainedCataloguePage, RetainedDeviceReader,
-        RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedOwnerStatus, RetainedPurge,
-        RetainedTranscript, ThreadPause, HANDSHAKE,
+        ArtifactFault, ArtifactFaultKind, ArtifactFetch, ArtifactFiles, ArtifactFreshness,
+        ArtifactRequest, CataloguePresence, DiskArtifactFiles, FeedEvent, Pause, PhoneFence,
+        PhoneLease, PhoneStamp, ReadFailure, ReadReport, ReadStop, RetainedCache,
+        RetainedCataloguePage, RetainedDeviceReader, RetainedEnrollmentClient,
+        RetainedEnrollmentStatus, RetainedOwnerStatus, RetainedPurge, RetainedTranscript,
+        ThreadPause, HANDSHAKE,
     },
 };
 use nessa_protocol::{
@@ -468,6 +469,7 @@ struct Driver {
     connector: Arc<dyn EnrollmentConnector>,
     entropy: Arc<dyn EnrollmentEntropyFactory>,
     files: Arc<dyn CacheFiles>,
+    artifacts: Arc<dyn ArtifactFiles>,
     address: SocketAddr,
     path: PathBuf,
     wall: Arc<dyn WallClock>,
@@ -487,6 +489,7 @@ struct Dependencies {
     connector: Arc<dyn EnrollmentConnector>,
     entropy: Arc<dyn EnrollmentEntropyFactory>,
     files: Arc<dyn CacheFiles>,
+    artifacts: Arc<dyn ArtifactFiles>,
     path: PathBuf,
     address: SocketAddr,
     wall: Arc<dyn WallClock>,
@@ -951,6 +954,7 @@ impl NativeSession {
             connector: Arc::new(SocketConnector),
             entropy: Arc::new(OsEntropyFactory),
             files: Arc::new(OsCacheFiles),
+            artifacts: Arc::new(DiskArtifactFiles),
             runtime,
             product: ProductDependencies::default(),
         })
@@ -966,6 +970,7 @@ impl NativeSession {
             connector,
             entropy,
             files,
+            artifacts,
             runtime,
             product,
         } = dependencies;
@@ -995,6 +1000,7 @@ impl NativeSession {
                 connector,
                 entropy,
                 files,
+                artifacts,
                 address,
                 path,
                 wall,
@@ -1441,7 +1447,7 @@ impl NativeSession {
         driver.accept_publication(stamp)?;
         let started = driver.clock.elapsed_ms();
         let inspected = nessa_client_core::retained::local_held_outcome(&stop, || {
-            nessa_client_core::retained::local_held_file(request)
+            nessa_client_core::retained::local_held_file(request, driver.artifacts.as_ref())
         });
         match inspected {
             Err(ReadFailure::Stopped) => return Err(SessionFailure::Stopped),
@@ -1482,6 +1488,7 @@ impl NativeSession {
             return Err(SessionFailure::Fenced(PhoneFence::Replaced));
         }
         let pause = Arc::clone(&driver.pause);
+        let artifacts = Arc::clone(&driver.artifacts);
         let fetched = match driver
             .cache()
             .map_err(SessionFailure::Cache)?
@@ -1491,6 +1498,7 @@ impl NativeSession {
                 Duration::from_secs(5),
                 request,
                 pause.as_ref(),
+                artifacts.as_ref(),
             ) {
             Ok(fetched) => fetched,
             Err(ReadFailure::Refused) => {

@@ -62,13 +62,18 @@ pub trait Pause: Send + Sync {
 
 /// The step of the files' lifecycle that failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FileStep {
+pub enum FileStep {
+    /// The output or the part could not be opened.
     Open,
     /// Another fetch of the same file holds its part.
     Locked,
+    /// The part or the output could not be read.
     Read,
+    /// The part could not be emptied.
     Restart,
+    /// A range could not be appended to the part.
     Write,
+    /// The part could not be synced before it was linked.
     Sync,
     /// The part could not be linked at the output's name for a reason other
     /// than something being there; a file system without hard links fails
@@ -76,6 +81,7 @@ pub(crate) enum FileStep {
     Link,
     /// The directory that holds the output could not be synced.
     SyncDirectory,
+    /// The part's name could not be removed.
     Remove,
     /// The output's name has no room for a part beside it: it names no file,
     /// or the part's name (the output's file name and 70 more bytes) would
@@ -88,7 +94,8 @@ pub(crate) enum FileStep {
 
 /// What is at the output's name before anything is fetched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OutputFound {
+pub enum OutputFound {
+    /// Nothing is at the output's name.
     Absent,
     /// Something that cannot be the file, so it was not opened: not a
     /// regular file (a directory, or a link even to nothing, never followed),
@@ -101,7 +108,7 @@ pub(crate) enum OutputFound {
 
 /// Why the part could not be kept under the output's name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum KeepRefusal {
+pub enum KeepRefusal {
     /// Something appeared at the output's name during the fetch; it is never
     /// replaced.
     OutputExists,
@@ -110,7 +117,10 @@ pub(crate) enum KeepRefusal {
     /// Cancellation won before the hard link. This keep created no output.
     Stopped,
     /// The hard link exists. `step` is the cleanup that then failed.
-    Published { step: FileStep },
+    Published {
+        /// The cleanup step that failed after the link.
+        step: FileStep,
+    },
 }
 
 /// The output and the part file it is assembled in. The part is named for
@@ -119,7 +129,7 @@ pub(crate) enum KeepRefusal {
 /// conversation, is never resumed; it is
 /// held exclusively from `open_part` or the first `append` until `keep` or
 /// `discard`, so two fetches never write one part.
-pub(crate) trait FetchFiles {
+pub trait FetchFiles {
     /// What is at the output's name; when it is a regular file of `size`
     /// bytes, every byte of it handed to `visit`.
     fn read_output(
@@ -146,6 +156,15 @@ pub(crate) trait FetchFiles {
     /// it was). Once that link exists, a failure to drop the part's name or
     /// to sync the directory is `Published`: the output is already there.
     fn keep(&mut self) -> Result<(), KeepRefusal>;
+    /// Sync the held part before the link. A failure here has not published
+    /// the output.
+    fn sync_held(&mut self) -> Result<(), KeepRefusal>;
+    /// Hard-link the held part at the output's name. This call is what
+    /// publishes the output.
+    fn link_held(&mut self) -> Result<(), KeepRefusal>;
+    /// Drop the part's name and sync the output's directory. The link
+    /// already exists, so a failure here reports the output as published.
+    fn retire_held(&mut self) -> Result<(), KeepRefusal>;
     /// Remove the part: what it holds is not the file.
     fn discard(&mut self) -> Result<(), FileStep>;
 }

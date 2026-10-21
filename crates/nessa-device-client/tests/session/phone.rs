@@ -11,7 +11,8 @@ use nessa_auth::{
     },
 };
 use nessa_client_core::retained::{
-    ArtifactFault, ArtifactFaultKind, ArtifactFetch, ArtifactFreshness, ArtifactRequest,
+    ArtifactFault, ArtifactFaultKind, ArtifactFetch, ArtifactFileStep, ArtifactFiles,
+    ArtifactFreshness, ArtifactOpenError, ArtifactRequest, FetchFiles, FileStep,
 };
 use nessa_local_storage::create_directory_beneath;
 use std::fs;
@@ -88,6 +89,7 @@ fn compose_opened(clock: Arc<dyn Clock>) -> Opened {
         connector: connector.clone(),
         entropy: Arc::new(OsEntropyFactory),
         files: Arc::new(OsCacheFiles),
+        artifacts: Arc::new(DiskArtifactFiles),
         wall: Arc::new(Wall),
         clock,
         pause: Arc::new(ThreadPause),
@@ -197,6 +199,53 @@ fn a_missing_file_reports_the_connector_failure() {
     session.close().unwrap();
 }
 
+struct RefusingFiles;
+impl ArtifactFiles for RefusingFiles {
+    fn open(
+        &self,
+        _: &ArtifactRequest<'_>,
+    ) -> Result<Box<dyn FetchFiles + Send>, ArtifactOpenError> {
+        Err(ArtifactOpenError::File(FileStep::Open))
+    }
+}
+
+#[test]
+fn an_injected_held_file_port_is_the_fetch_filesystem() {
+    let root = PrivateFixture::new();
+    create_directory_beneath(root.path(), Path::new("private")).unwrap();
+    let session = compose_files(
+        &root,
+        Arc::new(OsEntropyFactory),
+        Arc::new(OsCacheFiles),
+        Arc::new(RefusingFiles),
+    )
+    .unwrap();
+    let stamp = session.bind_saved_receiver().unwrap();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let output = root.path().join("private/not-created.bin");
+    let request = ArtifactRequest::new(
+        &conversation,
+        "sha256:fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+        "application/octet-stream",
+        2,
+        &output,
+    );
+    let admitted = session
+        .fetch_artifact(&stamp, &request, ReadStop::new())
+        .unwrap();
+    assert!(admitted.initial().is_none() && admitted.recheck().is_none());
+    assert_eq!(
+        admitted.fetched().unwrap().as_ref().unwrap().outcome(),
+        Err(ArtifactFault::progress(
+            ArtifactFaultKind::File(ArtifactFileStep::Open),
+            0,
+            0,
+        ))
+    );
+    assert!(!output.exists());
+    session.close().unwrap();
+}
+
 #[test]
 fn a_successful_purge_releases_the_publication_without_an_observation() {
     let Opened {
@@ -246,6 +295,7 @@ fn a_replacement_session_refuses_the_closed_sessions_stamp() {
         connector: connector.clone(),
         entropy: Arc::new(OsEntropyFactory),
         files: Arc::new(OsCacheFiles),
+        artifacts: Arc::new(DiskArtifactFiles),
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
         pause: Arc::new(ThreadPause),
@@ -323,12 +373,18 @@ fn compose_with(
     root: &PrivateFixture,
     entropy: Arc<dyn EnrollmentEntropyFactory>,
 ) -> Result<NativeSession, SessionFailure> {
-    compose_files(root, entropy, Arc::new(OsCacheFiles))
+    compose_files(
+        root,
+        entropy,
+        Arc::new(OsCacheFiles),
+        Arc::new(DiskArtifactFiles),
+    )
 }
 fn compose_files(
     root: &PrivateFixture,
     entropy: Arc<dyn EnrollmentEntropyFactory>,
     files: Arc<dyn CacheFiles>,
+    artifacts: Arc<dyn ArtifactFiles>,
 ) -> Result<NativeSession, SessionFailure> {
     let state = Arc::new(FilePairingState::open(root.path(), Path::new("private")).unwrap());
     issued(&state, "issued-a", "receiver-a");
@@ -341,6 +397,7 @@ fn compose_files(
         }),
         entropy,
         files,
+        artifacts,
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
         pause: Arc::new(ThreadPause),
@@ -413,6 +470,7 @@ fn a_cache_file_that_cannot_be_stated_does_not_bind() {
         &root,
         Arc::new(StampFactory([1u8; 16])),
         Arc::new(BlindFiles),
+        Arc::new(DiskArtifactFiles),
     )
     .unwrap();
     assert!(matches!(

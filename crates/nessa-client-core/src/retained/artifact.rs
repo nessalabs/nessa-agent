@@ -352,6 +352,47 @@ impl<'a> ArtifactRequest<'a> {
     }
 }
 
+/// Why opening the output and its part failed before a fetch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArtifactOpenError {
+    /// The digest, media type, or size does not name a held file.
+    Protocol,
+    /// The files refused at this step.
+    File(FileStep),
+}
+
+/// Opens the output and the part beside it for one held-file fetch.
+/// Session composition supplies the disk. A test supplies a substitute.
+pub trait ArtifactFiles: Send + Sync {
+    /// Open `request`'s output and part. Nothing is read until the handle is used.
+    fn open(
+        &self,
+        request: &ArtifactRequest<'_>,
+    ) -> Result<Box<dyn FetchFiles + Send>, ArtifactOpenError>;
+}
+
+/// The process filesystem. `open` builds the disk output and part.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DiskArtifactFiles;
+
+impl ArtifactFiles for DiskArtifactFiles {
+    fn open(
+        &self,
+        request: &ArtifactRequest<'_>,
+    ) -> Result<Box<dyn FetchFiles + Send>, ArtifactOpenError> {
+        let file = named(
+            request.conversation,
+            request.digest,
+            request.media_type,
+            request.size,
+        )
+        .map_err(|_| ArtifactOpenError::Protocol)?;
+        DiskFiles::new(request.output, &file)
+            .map(|files| Box::new(files) as Box<dyn FetchFiles + Send>)
+            .map_err(ArtifactOpenError::File)
+    }
+}
+
 /// Whether `digest`, `media_type`, and `size` name a held file.
 /// A malformed digest or media type, a size of zero, or a size above the
 /// held-file maximum does not. This reads nothing.
@@ -365,6 +406,7 @@ pub fn artifact_name_accepted(digest: &str, media_type: &str, size: u64) -> bool
 /// still has to be fetched. `Err` is a local refusal, also before any dial.
 pub fn local_held_file(
     request: &ArtifactRequest<'_>,
+    files: &dyn ArtifactFiles,
 ) -> Result<Option<Result<ArtifactFreshness, ArtifactFault>>, ReadFailure> {
     let file = named(
         request.conversation,
@@ -372,9 +414,10 @@ pub fn local_held_file(
         request.media_type,
         request.size,
     )?;
-    let mut files = match DiskFiles::new(request.output, &file) {
+    let mut files = match files.open(request) {
         Ok(files) => files,
-        Err(step) => {
+        Err(ArtifactOpenError::Protocol) => return Err(ReadFailure::Protocol),
+        Err(ArtifactOpenError::File(step)) => {
             return Ok(Some(Err(ArtifactFault {
                 kind: ArtifactFaultKind::File(file_step(step)),
                 reached: 0,
@@ -382,7 +425,7 @@ pub fn local_held_file(
             })))
         }
     };
-    match kept_output(&mut files, &file) {
+    match kept_output(files.as_mut(), &file) {
         Ok(None) => Ok(None),
         Ok(Some(progress)) => Ok(Some(Ok(ArtifactFreshness::LocalMatch {
             bytes: progress.reached,
@@ -426,6 +469,17 @@ impl HeldPart for DiskFiles {
     }
     fn retire_held(&mut self) -> Result<(), KeepRefusal> {
         DiskFiles::retire_held(self)
+    }
+}
+impl HeldPart for Box<dyn FetchFiles + Send> {
+    fn sync_held(&mut self) -> Result<(), KeepRefusal> {
+        FetchFiles::sync_held(&mut **self)
+    }
+    fn link_held(&mut self) -> Result<(), KeepRefusal> {
+        FetchFiles::link_held(&mut **self)
+    }
+    fn retire_held(&mut self) -> Result<(), KeepRefusal> {
+        FetchFiles::retire_held(&mut **self)
     }
 }
 
@@ -490,7 +544,7 @@ fn publish_part(ending: &Stopping, part: &mut impl HeldPart) -> PublishEnd {
 /// Files whose publication follows [`Publication`], so a cancellation during
 /// the part's re-read or during the sync does not link the output.
 struct StopGate<'a> {
-    files: DiskFiles,
+    files: Box<dyn FetchFiles + Send>,
     ending: &'a Stopping,
     /// `keep` saw the stop or a spent budget and did not link. A failure
     /// settled before that stays the failure, even if `stop` is set afterwards.
@@ -527,6 +581,15 @@ impl FetchFiles for StopGate<'_> {
         self.keep_saw_stop = end.phase == Publication::Stopped;
         end.result
     }
+    fn sync_held(&mut self) -> Result<(), KeepRefusal> {
+        self.files.sync_held()
+    }
+    fn link_held(&mut self) -> Result<(), KeepRefusal> {
+        self.files.link_held()
+    }
+    fn retire_held(&mut self) -> Result<(), KeepRefusal> {
+        self.files.retire_held()
+    }
     fn discard(&mut self) -> Result<(), FileStep> {
         self.files.discard()
     }
@@ -562,6 +625,7 @@ pub(crate) fn confirmed_held_file(
     pause: &dyn Pause,
     request: &ArtifactRequest<'_>,
     ending: &Stopping,
+    files: &dyn ArtifactFiles,
 ) -> Result<Result<ArtifactFreshness, ArtifactFault>, ReadFailure> {
     let file = named(
         request.conversation,
@@ -569,13 +633,14 @@ pub(crate) fn confirmed_held_file(
         request.media_type,
         request.size,
     )?;
-    let mut files = match DiskFiles::new(request.output, &file) {
+    let mut files = match files.open(request) {
         Ok(files) => StopGate {
             files,
             ending,
             keep_saw_stop: false,
         },
-        Err(step) => {
+        Err(ArtifactOpenError::Protocol) => return Err(ReadFailure::Protocol),
+        Err(ArtifactOpenError::File(step)) => {
             return Ok(Err(ArtifactFault {
                 kind: ArtifactFaultKind::File(file_step(step)),
                 reached: 0,
@@ -623,10 +688,11 @@ impl RetainedCache {
         budget: Duration,
         request: &ArtifactRequest<'_>,
         pause: &dyn Pause,
+        files: &dyn ArtifactFiles,
     ) -> Result<ArtifactFetch, ReadFailure> {
         let started = self.clock.elapsed_ms();
         let elapsed = |cache: &Self| cache.clock.elapsed_ms().saturating_sub(started);
-        if let Some(outcome) = local_held_outcome(stop, || local_held_file(request))? {
+        if let Some(outcome) = local_held_outcome(stop, || local_held_file(request, files))? {
             return Ok(ArtifactFetch {
                 outcome,
                 elapsed_ms: elapsed(self),
@@ -654,7 +720,7 @@ impl RetainedCache {
                 source: GatewayConnection::new(session),
                 ending: &ending,
             };
-            confirmed_held_file(&mut source, pause, request, &ending)
+            confirmed_held_file(&mut source, pause, request, &ending, files)
         };
         stop.release();
         let outcome = match fetched? {

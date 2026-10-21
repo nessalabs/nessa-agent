@@ -164,12 +164,24 @@ impl FetchFiles for Part {
         Ok(())
     }
     fn keep(&mut self) -> Result<(), KeepRefusal> {
+        self.sync_held()?;
+        self.link_held()?;
+        self.retire_held()
+    }
+    fn sync_held(&mut self) -> Result<(), KeepRefusal> {
+        self.step(FileStep::Sync).map_err(KeepRefusal::File)
+    }
+    fn link_held(&mut self) -> Result<(), KeepRefusal> {
         if self.output_appears {
             return Err(KeepRefusal::OutputExists);
         }
         self.step(FileStep::Link).map_err(KeepRefusal::File)?;
         self.kept = Some(std::mem::take(&mut self.bytes));
         Ok(())
+    }
+    fn retire_held(&mut self) -> Result<(), KeepRefusal> {
+        self.step(FileStep::SyncDirectory)
+            .map_err(|step| KeepRefusal::Published { step })
     }
     fn discard(&mut self) -> Result<(), FileStep> {
         self.step(FileStep::Remove)?;

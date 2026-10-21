@@ -133,6 +133,7 @@ fn compose(
         connector,
         entropy: Arc::new(NoEntropy(AtomicUsize::new(0))),
         files: Arc::new(OsCacheFiles),
+        artifacts: Arc::new(DiskArtifactFiles),
         path: root.join("private/cache.sqlite"),
         address: "127.0.0.1:9".parse().unwrap(),
         wall: Arc::new(Wall),

@@ -328,6 +328,15 @@ impl FetchFiles for DiskFiles {
         self.link_held()?;
         self.retire_held()
     }
+    fn sync_held(&mut self) -> Result<(), KeepRefusal> {
+        DiskFiles::sync_held(self)
+    }
+    fn link_held(&mut self) -> Result<(), KeepRefusal> {
+        DiskFiles::link_held(self)
+    }
+    fn retire_held(&mut self) -> Result<(), KeepRefusal> {
+        DiskFiles::retire_held(self)
+    }
     fn discard(&mut self) -> Result<(), FileStep> {
         if self.held.is_none() {
             return Ok(());
