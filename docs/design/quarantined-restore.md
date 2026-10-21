@@ -23,7 +23,8 @@ open ──▶ anchor the root, hold that same lock, stream one deferred convers
 Arrows are the order one call runs. The live path is not created, opened for
 write, or renamed until accept. A failed stage deletes its partial directory.
 Fetch writes `sessions/<id>.sqlite3` and the publication beside it, under the
-anchored root, and only by renaming a temp file after the check.
+directory the anchored root holds. The session name is a new file of the
+bytes that matched, not a rename of the temp inode.
 
 ## States
 
@@ -42,10 +43,11 @@ the result is a visible audit failure, not a second rename back.
 ## Who owns the name
 
 The audit identity of a path is the anchored path, and only when that path
-is Unicode. A caller spelling, including an alias such as `other/../live`,
-is not an identity. Stage, accept, and fetch anchor before the decision
-line. A path that cannot be anchored is refused under its Unicode caller
-spelling. A path that is not Unicode is refused with no audit line:
+is Unicode. The anchor keeps the ancestor directory open. Lock, partial
+directory, fetch, and promotion use that handle. A caller spelling,
+including an alias such as `other/../live`, is not an identity. Stage,
+accept, and fetch anchor before the decision line. A path that cannot be
+anchored is refused under its Unicode caller spelling. A path that is not Unicode is refused with no audit line:
 `Path::display` would replace those bytes, and two roots could share one line.
 
 A published name is an exclusive rename. An empty directory at the
@@ -107,6 +109,10 @@ supplies the id.
 | Fetch wrote a partial session and that name is a symlink | The symlink. Its target is not created | `unchanged → unchanged`, or retained when the name remains | The error. SQLite opens only a file this attempt created |
 | A directory inside the partial tree is a symlink when a file is written there | The symlink. The target is not created | `unchanged → unchanged`, or `absent → unready` when the partial directory remains | Unreadable. The file is created beneath the partial directory |
 | `sessions/` is a symlink when the session file is reserved | The symlink. The target is not created | `unchanged → unchanged`, or retained when a partial name remains | Unreadable. The reservation is created beneath that directory |
+| The ancestor is renamed and a symlink takes its name after the root is anchored | The held ancestor. The symlink's target is not created | The symlink target is unchanged | The lock and the partial directory are created under the held ancestor |
+| A writer still holds the temp session and writes after the matching bytes were copied | The new session file. The temp inode is not that file | `held → available` names the copied bytes | The published file is those bytes. A different byte is not published |
+| The quarantine directory is renamed aside and the original path is gone | The directory the open handle names, removed, including its readiness marker | `verified → spent` when that retirement succeeds | The missing original path is not success |
+| mountinfo encodes a space in the mount point | That mount's filesystem, after the octal escape is decoded | One lock order for the two spellings | The case rule of that filesystem, not of `/` |
 | Two restores whose roots differ only by case on a folding volume | One lock order, from the folded identity | Each waits for the same first lock | Neither deadlocks on the other spelling |
 | Fetch wrote a partial session and that name is gone | No partial file | `unchanged → unchanged` with the source cause | The source error |
 | Fetch wrote a partial session and that name remains | The partial file. Not a helper | No unchanged line | Retained. A later open treats the file as an extra |
@@ -152,6 +158,10 @@ supplies the id.
 - Cleanup deletes the directory the open handle names. A directory renamed
   aside is the one removed. A replacement at the old path stays.
   `a_renamed_directory_is_removed_by_its_handle`
+- Promotion retires the quarantine directory it still holds. A missing
+  original path is not success. That handle's directory is removed, and so
+  is its readiness marker.
+  `a_renamed_source_is_retired_through_its_handle`
 - A source that is still the directory we read, and whose removal failed,
   loses its readiness marker before promotion succeeds. A different directory
   at that path keeps its marker. A marker that still names an id is retained.
@@ -166,6 +176,11 @@ supplies the id.
   and the write does not create the file in the link's target. The sealed
   copy uses the same create. `a_symlink_parent_is_not_a_staging_directory`,
   `an_existing_directory_is_not_a_new_private_directory`
+- The anchored root keeps the ancestor directory open for the rest of the
+  attempt. The lock, the partial directory, the fetch, and promotion run
+  beneath that handle. A symlink placed at the old ancestor name is not
+  where those effects land.
+  `a_renamed_ancestor_is_not_where_later_effects_land`
 - The session file is the regular file this attempt still holds when SQLite
   opens it. It is created beneath its parent directory, so a symlink at
   `sessions/` is not that directory and the file is not created in the
@@ -174,6 +189,12 @@ supplies the id.
   `a_dangling_symlink_is_not_the_session_file`,
   `a_symlink_planted_after_reserve_is_not_opened`,
   `a_symlink_sessions_directory_is_not_the_reservation`
+- The published session is a new file of the bytes whose digest matched.
+  It is created beneath the held session directory. A write through the
+  temp file's descriptor does not change it. A different byte is not given
+  the session name, and no verified partial remains.
+  `a_write_through_the_temp_inode_does_not_change_the_published_file`,
+  `a_different_byte_is_not_published`
 - That directory is opened as a directory. On Windows the open sets backup
   semantics, so the handle names the directory. A reparse point is not that
   directory. The volume of the temporary directory is read the same way.
@@ -318,6 +339,9 @@ supplies the id.
   `paths_and_receipts_are_constrained`,
   `a_folding_volume_orders_spellings_together`,
   `case_for_a_reported_filesystem_follows_the_volume`
+- A mount point is compared after mountinfo octal escapes are decoded. A
+  space in the mount point is that filesystem's case rule, not the rule of
+  `/`. `a_mount_point_with_a_space_is_that_filesystem`
 - A realistic session whose database is over 64 MiB is deferred by the
   export, then recovered by this open. `a_session_over_64_mib_is_restored_when_opened`
 - A failed publish retires the temp name and the final name independently.

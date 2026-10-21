@@ -119,11 +119,16 @@ succeeds, and a marker that still names an id is retained. A credential
 body whose id is not the manifest identity is not restored.
 A file is created only beneath a directory this attempt holds. That directory
 is a new private directory, so a symlink inside the partial tree is not a
-staging directory. The session file is the
-regular file this attempt still holds when SQLite opens it. That file is
-created beneath its parent directory, and that open does not follow a
-symlink. A folding volume compares names by uppercase then lowercase, so
-final sigma and sigma are one path.
+staging directory. The anchored root keeps that ancestor directory open, and
+the lock, the partial tree, the fetch, and promotion use the handle. The
+session file is the regular file this attempt still holds when SQLite opens
+it. That file is created beneath its parent directory, and that open does
+not follow a symlink. The published session is a new file of the bytes that
+matched the fingerprint. Promotion retires the quarantine directory the
+open handle still names when the original path is gone. A mount point is
+read after octal escapes in mountinfo are decoded. A folding volume
+compares names by uppercase then lowercase, so final sigma and sigma are
+one path.
 Cleanup removes only the directory object this stage published. A
 directory swapped in at that path is not promoted and is not deleted. A
 live path that is a different directory after that rename is moved back, and

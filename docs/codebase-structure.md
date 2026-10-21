@@ -1690,7 +1690,9 @@ mac key stays beside the deletion inventory and is not part of the bundle.
 `domain/restore.rs` decides quarantine paths, the seal, fence omission, and
 which deferred line an open must match. `application/restore.rs` runs stage,
 accept, and open. `infrastructure/quarantine.rs` writes the partial directory,
-reads record JSON, and streams one deferred conversation.
+reads record JSON, and streams one deferred conversation. It keeps the
+ancestor directory open and runs the lock, the partial tree, the session
+publish, and source retirement through that handle.
 `infrastructure/cedar` permits a person or the gateway surface to stage, accept,
 or fetch when the cause is operator, and forbids a device, peer, environment
 peer, or worker. The ordering table is

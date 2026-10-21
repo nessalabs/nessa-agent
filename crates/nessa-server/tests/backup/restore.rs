@@ -15,12 +15,12 @@ use async_trait::async_trait;
 use crate::backup::application::Authenticator;
 use crate::backup::application::{
     accept_quarantine, current_staging_id, open_deferred_conversation, ordered_roots, root_posture,
-    stage_quarantine, AcceptRequest, DecisionAuditError, DeferredSessionSource, ExportClock,
-    FetchProgress, InventoryCause, InventoryDecision, LeaseReceipts, LoadedTree, MacKey,
-    ManifestPublisher, MutationAdmission, OpenRequest, Promoted, PublicationIds, QuarantineLayout,
-    RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SealFields,
-    SessionCut, SessionSourceError, StageRequest, Staging, StagingIds, TreeId, VerificationFailure,
-    VerificationLimits, VerificationSource,
+    stage_quarantine, AcceptRequest, AnchoredRoot, DecisionAuditError, DeferredSessionSource,
+    ExportClock, FetchProgress, InventoryCause, InventoryDecision, LeaseReceipts, LoadedTree,
+    MacKey, ManifestPublisher, MutationAdmission, OpenRequest, Promoted, PublicationIds,
+    QuarantineLayout, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
+    RestorePolicyEvaluator, SealFields, SessionCut, SessionSourceError, StageRequest, Staging,
+    StagingIds, TreeId, VerificationFailure, VerificationLimits, VerificationSource,
 };
 use crate::backup::domain::{
     encode_journal, read_journal, seal_staging_id, AuthenticatedManifest, CapturedRecord,
@@ -526,18 +526,22 @@ async fn a_changed_inventory_body_is_not_a_fence() {
 struct StickyQuarantine;
 
 impl QuarantineLayout for StickyQuarantine {
-    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+    fn begin(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
         DirectoryQuarantine.begin(quarantine, live)
     }
 
-    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
 
     fn promote(
         &self,
-        quarantine: &Path,
-        live: &Path,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live, loaded)
@@ -551,7 +555,7 @@ impl QuarantineLayout for StickyQuarantine {
         DirectoryQuarantine.read_bytes(path)
     }
 
-    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.session_temp(root, relative)
     }
 
@@ -580,22 +584,22 @@ impl QuarantineLayout for StickyQuarantine {
         DirectoryQuarantine.canonicalize(path)
     }
 
-    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
 
     fn hold(
         &self,
-        root: &Path,
+        root: &AnchoredRoot,
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
 
-    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
         DirectoryQuarantine.mark_ready(root, staging_id)
     }
 
-    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
 
@@ -615,18 +619,22 @@ impl QuarantineLayout for StickyQuarantine {
 struct KeepsSession;
 
 impl QuarantineLayout for KeepsSession {
-    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+    fn begin(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
         DirectoryQuarantine.begin(quarantine, live)
     }
 
-    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
 
     fn promote(
         &self,
-        quarantine: &Path,
-        live: &Path,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live, loaded)
@@ -640,7 +648,7 @@ impl QuarantineLayout for KeepsSession {
         DirectoryQuarantine.read_bytes(path)
     }
 
-    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.session_temp(root, relative)
     }
 
@@ -672,22 +680,22 @@ impl QuarantineLayout for KeepsSession {
         DirectoryQuarantine.canonicalize(path)
     }
 
-    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
 
     fn hold(
         &self,
-        root: &Path,
+        root: &AnchoredRoot,
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
 
-    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
         DirectoryQuarantine.mark_ready(root, staging_id)
     }
 
-    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
 
@@ -887,9 +895,9 @@ fn a_partial_copy_removes_quarantine_and_leaves_live_data() {
     fs::create_dir(&place.live).unwrap();
     fs::write(place.live.join("sentinel"), b"live-bytes").unwrap();
     {
-        let mut staging = DirectoryQuarantine
-            .begin(&place.quarantine, &place.live)
-            .unwrap();
+        let quarantine = DirectoryQuarantine.anchor(&place.quarantine).unwrap();
+        let live = DirectoryQuarantine.anchor(&place.live).unwrap();
+        let mut staging = DirectoryQuarantine.begin(&quarantine, &live).unwrap();
         staging.write("records/notes/note-1", b"partial").unwrap();
     }
     assert!(!place.quarantine.exists());
@@ -931,9 +939,11 @@ fn an_empty_live_directory_is_not_replaced() {
     fs::create_dir_all(place.quarantine.join("records")).unwrap();
     fs::write(place.quarantine.join("journal.txt"), b"sealed\n").unwrap();
     fs::create_dir(&place.live).unwrap();
-    let loaded = DirectoryQuarantine.load(&place.quarantine).unwrap();
+    let quarantine = DirectoryQuarantine.anchor(&place.quarantine).unwrap();
+    let live = DirectoryQuarantine.anchor(&place.live).unwrap();
+    let loaded = DirectoryQuarantine.load(&quarantine).unwrap();
     let error = DirectoryQuarantine
-        .promote(&place.quarantine, &place.live, &loaded)
+        .promote(&quarantine, &live, &loaded)
         .unwrap_err();
     assert_eq!(error, RestoreFault::LiveOccupied);
     assert!(place.quarantine.join("journal.txt").is_file());
@@ -945,13 +955,15 @@ fn a_swapped_quarantine_directory_is_not_promoted() {
     let place = roots();
     fs::create_dir_all(&place.quarantine).unwrap();
     fs::write(place.quarantine.join("journal.txt"), b"sealed\n").unwrap();
-    let loaded = DirectoryQuarantine.load(&place.quarantine).unwrap();
+    let quarantine = DirectoryQuarantine.anchor(&place.quarantine).unwrap();
+    let live = DirectoryQuarantine.anchor(&place.live).unwrap();
+    let loaded = DirectoryQuarantine.load(&quarantine).unwrap();
     let saved = place.quarantine.with_extension("saved");
     fs::rename(&place.quarantine, &saved).unwrap();
     fs::create_dir(&place.quarantine).unwrap();
     fs::write(place.quarantine.join("journal.txt"), b"other\n").unwrap();
     let error = DirectoryQuarantine
-        .promote(&place.quarantine, &place.live, &loaded)
+        .promote(&quarantine, &live, &loaded)
         .unwrap_err();
     assert_eq!(error, RestoreFault::Tamper);
     assert!(!place.live.exists());
@@ -968,13 +980,15 @@ fn an_open_descriptor_does_not_change_the_promoted_file() {
     fs::create_dir_all(place.quarantine.join("records")).unwrap();
     fs::write(place.quarantine.join("journal.txt"), b"sealed\n").unwrap();
     fs::write(place.quarantine.join("records/note"), b"one").unwrap();
-    let loaded = DirectoryQuarantine.load(&place.quarantine).unwrap();
+    let quarantine = DirectoryQuarantine.anchor(&place.quarantine).unwrap();
+    let live = DirectoryQuarantine.anchor(&place.live).unwrap();
+    let loaded = DirectoryQuarantine.load(&quarantine).unwrap();
     let mut held = fs::OpenOptions::new()
         .write(true)
         .open(place.quarantine.join("records/note"))
         .unwrap();
     DirectoryQuarantine
-        .promote(&place.quarantine, &place.live, &loaded)
+        .promote(&quarantine, &live, &loaded)
         .unwrap();
     use std::io::{Seek, SeekFrom, Write};
     held.seek(SeekFrom::Start(0)).unwrap();
@@ -990,10 +1004,12 @@ fn a_changed_quarantine_file_is_not_promoted() {
     fs::create_dir_all(place.quarantine.join("records")).unwrap();
     fs::write(place.quarantine.join("journal.txt"), b"sealed\n").unwrap();
     fs::write(place.quarantine.join("records/note"), b"one").unwrap();
-    let loaded = DirectoryQuarantine.load(&place.quarantine).unwrap();
+    let quarantine = DirectoryQuarantine.anchor(&place.quarantine).unwrap();
+    let live = DirectoryQuarantine.anchor(&place.live).unwrap();
+    let loaded = DirectoryQuarantine.load(&quarantine).unwrap();
     fs::write(place.quarantine.join("records/note"), b"two").unwrap();
     let error = DirectoryQuarantine
-        .promote(&place.quarantine, &place.live, &loaded)
+        .promote(&quarantine, &live, &loaded)
         .unwrap_err();
     assert_eq!(error, RestoreFault::Tamper);
     assert!(!place.live.exists());
@@ -1041,9 +1057,9 @@ fn folding_lock_spellings() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
 #[test]
 fn a_discarded_partial_directory_is_removed() {
     let place = roots();
-    let mut staging = DirectoryQuarantine
-        .begin(&place.quarantine, &place.live)
-        .unwrap();
+    let quarantine = DirectoryQuarantine.anchor(&place.quarantine).unwrap();
+    let live = DirectoryQuarantine.anchor(&place.live).unwrap();
+    let mut staging = DirectoryQuarantine.begin(&quarantine, &live).unwrap();
     staging.write("records/notes/note-1", b"partial").unwrap();
     staging.discard().unwrap();
     assert!(partial_names(place._keep.path()).is_empty());
@@ -1685,18 +1701,22 @@ struct ReportsOccupied {
 }
 
 impl QuarantineLayout for ReportsOccupied {
-    fn begin(&self, _quarantine: &Path, _live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+    fn begin(
+        &self,
+        _quarantine: &AnchoredRoot,
+        _live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
         Ok(Box::new(OtherQuarantine {
             quarantine: self.quarantine.clone(),
         }))
     }
-    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
     fn promote(
         &self,
-        quarantine: &Path,
-        live: &Path,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live, loaded)
@@ -1707,7 +1727,7 @@ impl QuarantineLayout for ReportsOccupied {
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
         DirectoryQuarantine.read_bytes(path)
     }
-    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.session_temp(root, relative)
     }
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
@@ -1731,19 +1751,19 @@ impl QuarantineLayout for ReportsOccupied {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.canonicalize(path)
     }
-    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
     fn hold(
         &self,
-        root: &Path,
+        root: &AnchoredRoot,
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
         DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -1793,16 +1813,20 @@ struct ReadyFails {
 }
 
 impl QuarantineLayout for ReadyFails {
-    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+    fn begin(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
         DirectoryQuarantine.begin(quarantine, live)
     }
-    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
     fn promote(
         &self,
-        quarantine: &Path,
-        live: &Path,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live, loaded)
@@ -1816,7 +1840,7 @@ impl QuarantineLayout for ReadyFails {
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
         DirectoryQuarantine.read_bytes(path)
     }
-    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.session_temp(root, relative)
     }
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
@@ -1840,19 +1864,19 @@ impl QuarantineLayout for ReadyFails {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.canonicalize(path)
     }
-    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
     fn hold(
         &self,
-        root: &Path,
+        root: &AnchoredRoot,
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, _root: &Path, _staging_id: &str) -> Result<(), RestoreFault> {
+    fn mark_ready(&self, _root: &AnchoredRoot, _staging_id: &str) -> Result<(), RestoreFault> {
         Err(RestoreFault::Unreadable)
     }
-    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -2644,16 +2668,20 @@ fn session_partial(path: &Path) -> bool {
 struct KeepsPartialSession;
 
 impl QuarantineLayout for KeepsPartialSession {
-    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+    fn begin(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
         DirectoryQuarantine.begin(quarantine, live)
     }
-    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
     fn promote(
         &self,
-        quarantine: &Path,
-        live: &Path,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live, loaded)
@@ -2664,7 +2692,7 @@ impl QuarantineLayout for KeepsPartialSession {
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
         DirectoryQuarantine.read_bytes(path)
     }
-    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.session_temp(root, relative)
     }
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
@@ -2694,19 +2722,19 @@ impl QuarantineLayout for KeepsPartialSession {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.canonicalize(path)
     }
-    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
     fn hold(
         &self,
-        root: &Path,
+        root: &AnchoredRoot,
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
         DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -2745,18 +2773,22 @@ struct LeavesPartialTree {
 }
 
 impl QuarantineLayout for LeavesPartialTree {
-    fn begin(&self, _quarantine: &Path, _live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+    fn begin(
+        &self,
+        _quarantine: &AnchoredRoot,
+        _live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
         Ok(Box::new(LeavesPartial {
             partial: self.partial.clone(),
         }))
     }
-    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
     fn promote(
         &self,
-        quarantine: &Path,
-        live: &Path,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live, loaded)
@@ -2767,7 +2799,7 @@ impl QuarantineLayout for LeavesPartialTree {
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
         DirectoryQuarantine.read_bytes(path)
     }
-    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.session_temp(root, relative)
     }
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
@@ -2791,19 +2823,19 @@ impl QuarantineLayout for LeavesPartialTree {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.canonicalize(path)
     }
-    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
     fn hold(
         &self,
-        root: &Path,
+        root: &AnchoredRoot,
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
         DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -3287,7 +3319,7 @@ async fn accept_and_fetch_wait_for_the_restore_root() {
     let hold = DirectoryQuarantine.hold(&quarantine).unwrap();
     let (fetch_started, fetch_ready) = mpsc::channel();
     let (fetch_finished, fetch_result) = mpsc::channel();
-    let fetch_root = quarantine.clone();
+    let fetch_root = quarantine.path().to_path_buf();
     std::thread::spawn(move || {
         fetch_started.send(()).unwrap();
         let outcome = open_deferred_conversation(
@@ -3307,8 +3339,8 @@ async fn accept_and_fetch_wait_for_the_restore_root() {
     });
     let (accept_started, accept_ready) = mpsc::channel();
     let (accept_finished, accept_result) = mpsc::channel();
-    let accept_root = quarantine.clone();
-    let accept_live = live.clone();
+    let accept_root = quarantine.path().to_path_buf();
+    let accept_live = live.path().to_path_buf();
     std::thread::spawn(move || {
         accept_started.send(()).unwrap();
         let outcome = accept_quarantine(
@@ -3388,7 +3420,7 @@ async fn accept_holds_the_live_lock_across_promotion() {
     let hold = DirectoryQuarantine.hold(&live).unwrap();
     let (started, ready) = mpsc::channel();
     let (finished, result) = mpsc::channel();
-    let accept_live = live.clone();
+    let accept_live = live.path().to_path_buf();
     std::thread::spawn(move || {
         started.send(()).unwrap();
         let outcome = accept_quarantine(
@@ -3424,16 +3456,20 @@ async fn accept_holds_the_live_lock_across_promotion() {
 struct KeepsTree;
 
 impl QuarantineLayout for KeepsTree {
-    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+    fn begin(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
         DirectoryQuarantine.begin(quarantine, live)
     }
-    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
     fn promote(
         &self,
-        quarantine: &Path,
-        live: &Path,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live, loaded)
@@ -3444,7 +3480,7 @@ impl QuarantineLayout for KeepsTree {
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
         DirectoryQuarantine.read_bytes(path)
     }
-    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.session_temp(root, relative)
     }
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
@@ -3475,19 +3511,19 @@ impl QuarantineLayout for KeepsTree {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.canonicalize(path)
     }
-    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
     fn hold(
         &self,
-        root: &Path,
+        root: &AnchoredRoot,
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
         DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -3524,10 +3560,8 @@ async fn a_failed_stage_cleanup_still_refuses_acceptance() {
     .unwrap_err();
     assert_eq!(error, RestoreFault::Audit);
     assert!(place.quarantine.join("journal.txt").is_file());
-    assert!(DirectoryQuarantine
-        .ready(&place.quarantine)
-        .unwrap()
-        .is_none());
+    let quarantine = DirectoryQuarantine.anchor(&place.quarantine).unwrap();
+    assert!(DirectoryQuarantine.ready(&quarantine).unwrap().is_none());
     let accepted = accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap_err();
     assert_eq!(accepted, RestoreFault::Tamper);
     assert!(!place.live.exists());
@@ -3563,16 +3597,20 @@ async fn a_failed_fetch_fallback_empties_the_session() {
 struct KeepsBytes;
 
 impl QuarantineLayout for KeepsBytes {
-    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+    fn begin(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
         DirectoryQuarantine.begin(quarantine, live)
     }
-    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
     fn promote(
         &self,
-        quarantine: &Path,
-        live: &Path,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live, loaded)
@@ -3583,7 +3621,7 @@ impl QuarantineLayout for KeepsBytes {
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
         DirectoryQuarantine.read_bytes(path)
     }
-    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.session_temp(root, relative)
     }
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
@@ -3617,19 +3655,19 @@ impl QuarantineLayout for KeepsBytes {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.canonicalize(path)
     }
-    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
     fn hold(
         &self,
-        root: &Path,
+        root: &AnchoredRoot,
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
         DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, _path: &Path) -> Result<(), RestoreFault> {
@@ -3765,16 +3803,20 @@ async fn a_promoted_tree_stays_live_when_the_parent_sync_fails() {
 struct ReportsUnsynced;
 
 impl QuarantineLayout for ReportsUnsynced {
-    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+    fn begin(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
         DirectoryQuarantine.begin(quarantine, live)
     }
-    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
     fn promote(
         &self,
-        quarantine: &Path,
-        live: &Path,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live, loaded)?;
@@ -3786,7 +3828,7 @@ impl QuarantineLayout for ReportsUnsynced {
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
         DirectoryQuarantine.read_bytes(path)
     }
-    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.session_temp(root, relative)
     }
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
@@ -3810,19 +3852,19 @@ impl QuarantineLayout for ReportsUnsynced {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.canonicalize(path)
     }
-    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
     fn hold(
         &self,
-        root: &Path,
+        root: &AnchoredRoot,
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
         DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -4002,16 +4044,20 @@ struct ExistsFailsAfterPublish {
 }
 
 impl QuarantineLayout for ExistsFailsAfterPublish {
-    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+    fn begin(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
         DirectoryQuarantine.begin(quarantine, live)
     }
-    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
     fn promote(
         &self,
-        quarantine: &Path,
-        live: &Path,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live, loaded)
@@ -4022,7 +4068,7 @@ impl QuarantineLayout for ExistsFailsAfterPublish {
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
         DirectoryQuarantine.read_bytes(path)
     }
-    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.session_temp(root, relative)
     }
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
@@ -4051,19 +4097,19 @@ impl QuarantineLayout for ExistsFailsAfterPublish {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.canonicalize(path)
     }
-    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
     fn hold(
         &self,
-        root: &Path,
+        root: &AnchoredRoot,
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
         DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -4125,19 +4171,23 @@ impl Staging for RetainedStaging {
 struct RetainsFinish;
 
 impl QuarantineLayout for RetainsFinish {
-    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+    fn begin(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
         let _ = live;
         Ok(Box::new(RetainedStaging {
             quarantine: quarantine.to_path_buf(),
         }))
     }
-    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
     fn promote(
         &self,
-        quarantine: &Path,
-        live: &Path,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live, loaded)
@@ -4148,7 +4198,7 @@ impl QuarantineLayout for RetainsFinish {
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
         DirectoryQuarantine.read_bytes(path)
     }
-    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.session_temp(root, relative)
     }
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
@@ -4172,19 +4222,19 @@ impl QuarantineLayout for RetainsFinish {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
         DirectoryQuarantine.canonicalize(path)
     }
-    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
     fn hold(
         &self,
-        root: &Path,
+        root: &AnchoredRoot,
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
-    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault> {
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
         DirectoryQuarantine.mark_ready(root, staging_id)
     }
-    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault> {
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
         DirectoryQuarantine.ready(root)
     }
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {

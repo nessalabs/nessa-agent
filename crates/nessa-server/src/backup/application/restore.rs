@@ -18,6 +18,8 @@
 //! Arrows are the order one call runs. The live path is not written before
 //! accept's rename. This module has no harness, command, or lease issuer.
 
+use std::fs::File;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use super::ports::{
@@ -41,6 +43,55 @@ use crate::backup::domain::{
 /// Drop releases the restore-root lock.
 pub trait RestoreHold: Send {}
 
+/// A restore root bound to the directory that existed when it was anchored.
+///
+/// The handle is that directory. Later lock, staging, fetch, and promotion
+/// use it. The spelling is the audit label, captured from the handle.
+pub struct AnchoredRoot {
+    pub(crate) ancestor: File,
+    pub(crate) tail: Vec<std::ffi::OsString>,
+    spelling: PathBuf,
+    probe: VolumeProbe,
+}
+
+impl AnchoredRoot {
+    pub(crate) fn bind(
+        ancestor: File,
+        tail: Vec<std::ffi::OsString>,
+        spelling: PathBuf,
+        probe: VolumeProbe,
+    ) -> Self {
+        Self {
+            ancestor,
+            tail,
+            spelling,
+            probe,
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.spelling
+    }
+
+    pub fn probe(&self) -> VolumeProbe {
+        self.probe
+    }
+}
+
+impl Deref for AnchoredRoot {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.spelling
+    }
+}
+
+impl AsRef<Path> for AnchoredRoot {
+    fn as_ref(&self) -> &Path {
+        &self.spelling
+    }
+}
+
 /// The rename onto the live path has happened.
 ///
 /// `durable` is false when a parent directory could not be synced. The live
@@ -52,14 +103,18 @@ pub struct Promoted {
 
 /// Filesystem effects of a quarantine. Tests substitute a layout that fails.
 pub trait QuarantineLayout {
-    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault>;
-    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault>;
+    fn begin(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault>;
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault>;
     /// `Err` means the rename did not happen. [`Promoted`] means the live path
     /// owns the tree.
     fn promote(
         &self,
-        quarantine: &Path,
-        live: &Path,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault>;
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault>;
@@ -72,19 +127,68 @@ pub trait QuarantineLayout {
         self.remove_tree(path)
     }
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault>;
-    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault>;
+    /// Read `relative` through the directory `root` holds.
+    fn read_relative(&self, root: &AnchoredRoot, relative: &str) -> Result<Vec<u8>, RestoreFault> {
+        self.read_bytes(&join_relative(root.path(), relative)?)
+    }
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault>;
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault>;
+    /// Publish a new file of the session whose stream hashed to `digest`.
+    ///
+    /// The default renames `temp`. The directory adapter copies into a file
+    /// this attempt creates and checks that copy, so a descriptor already
+    /// open on `temp` is not the published file.
+    fn publish_verified(
+        &self,
+        root: &AnchoredRoot,
+        temp: &Path,
+        relative: &str,
+        conversation_id: &str,
+        digest: &Fingerprint,
+    ) -> Result<(), RestoreFault> {
+        let _ = (root, conversation_id, digest);
+        self.publish_file(temp, &join_relative(root.path(), relative)?)
+    }
     /// Record `publication` beside the session file this publish just created.
     fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault>;
+    fn note_publication_relative(
+        &self,
+        root: &AnchoredRoot,
+        relative: &str,
+        publication: &str,
+    ) -> Result<(), RestoreFault> {
+        self.note_publication(&join_relative(root.path(), relative)?, publication)
+    }
     /// The publication stored beside `session`. `None` means this file has none.
     fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault>;
+    fn publication_relative(
+        &self,
+        root: &AnchoredRoot,
+        relative: &str,
+    ) -> Result<Option<String>, RestoreFault> {
+        self.publication(&join_relative(root.path(), relative)?)
+    }
     /// Remove the publication stored beside `session`, if one is there.
     fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault>;
+    fn remove_publication_relative(
+        &self,
+        root: &AnchoredRoot,
+        relative: &str,
+    ) -> Result<(), RestoreFault> {
+        self.remove_publication(&join_relative(root.path(), relative)?)
+    }
     fn remove_file(&self, path: &Path) -> Result<(), RestoreFault>;
     fn exists(&self, path: &Path) -> Result<bool, RestoreFault>;
+    /// Whether the root name exists under the directory this anchor holds.
+    fn occupied(&self, root: &AnchoredRoot) -> Result<bool, RestoreFault> {
+        self.exists(root.path())
+    }
+    fn exists_relative(&self, root: &AnchoredRoot, relative: &str) -> Result<bool, RestoreFault> {
+        self.exists(&join_relative(root.path(), relative)?)
+    }
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault>;
-    /// The path after `.` and `..` are removed and an existing ancestor is resolved.
-    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault>;
+    /// The directory that existed, held open, plus the names under it.
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault>;
     /// How the volume that will hold `path`'s final component compares names.
     ///
     /// The default is the host rule and one shared device. The directory adapter
@@ -97,15 +201,23 @@ pub trait QuarantineLayout {
         })
     }
     /// One lock for this root, held across publication and the audit that records it.
-    fn hold(&self, root: &Path) -> Result<Box<dyn RestoreHold>, RestoreFault>;
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault>;
     /// Record that the sealed audit for `staging_id` was stored. Accept refuses without it.
-    fn mark_ready(&self, root: &Path, staging_id: &str) -> Result<(), RestoreFault>;
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault>;
     /// The staging id stored by [`QuarantineLayout::mark_ready`], when the marker is intact.
-    fn ready(&self, root: &Path) -> Result<Option<String>, RestoreFault>;
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault>;
     /// Make a published session unreadable in place.
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault>;
     /// Stream size and fingerprint of one session file.
     fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault>;
+    fn session_cut_relative(
+        &self,
+        root: &AnchoredRoot,
+        relative: &str,
+        conversation_id: &str,
+    ) -> Result<SessionCut, RestoreFault> {
+        self.session_cut(&join_relative(root.path(), relative)?, conversation_id)
+    }
 }
 
 /// A partial directory.
@@ -234,7 +346,7 @@ pub fn stage_quarantine(
         initiator: kind,
         policies: &policies,
     };
-    if let Err(error) = roots_are_distinct(layout, &quarantine, &live) {
+    if let Err(error) = roots_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
     }
     let _hold = match hold_roots(layout, &quarantine, &live) {
@@ -309,7 +421,7 @@ pub fn stage_quarantine(
         Ok(_) => {
             return Err(remove_published(
                 layout,
-                &quarantine,
+                quarantine.path(),
                 &published,
                 &recorded,
                 RestoreFault::Unreadable,
@@ -318,7 +430,7 @@ pub fn stage_quarantine(
         Err(error) => {
             return Err(remove_published(
                 layout,
-                &quarantine,
+                quarantine.path(),
                 &published,
                 &recorded,
                 error,
@@ -330,7 +442,7 @@ pub fn stage_quarantine(
         .record("absent", "verified", "sealed", "effect", &attestation)
         .is_err()
     {
-        match layout.remove_known(&quarantine, &published) {
+        match layout.remove_known(quarantine.path(), &published) {
             Ok(()) | Err(RestoreFault::Tamper) => {}
             Err(_) => {
                 let _ = layout.remove_file(&quarantine.join("journal.txt"));
@@ -341,7 +453,7 @@ pub fn stage_quarantine(
     if let Err(error) = layout.mark_ready(&quarantine, &staging_id) {
         // The id is spent either way. A marker that remains is not a later accept.
         // A different directory at this path is left in place.
-        let after = if layout.remove_known(&quarantine, &published).is_ok() {
+        let after = if layout.remove_known(quarantine.path(), &published).is_ok() {
             "absent"
         } else {
             "unready"
@@ -406,7 +518,7 @@ pub fn accept_quarantine(
         initiator: kind,
         policies: &policies,
     };
-    if let Err(error) = roots_are_distinct(layout, &quarantine, &live) {
+    if let Err(error) = roots_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
     }
     let _hold = match hold_roots(layout, &quarantine, &live) {
@@ -451,7 +563,7 @@ pub fn accept_quarantine(
         Ok(text) => text,
         Err(error) => return Err(recorded.stop(error)),
     };
-    match layout.exists(&live) {
+    match layout.occupied(&live) {
         Ok(true) => {
             return Err(recorded.stop(RestoreFault::LiveOccupied));
         }
@@ -559,12 +671,12 @@ pub fn open_deferred_conversation(
         Ok(path) => path,
         Err(error) => return Err(recorded.stop(error)),
     };
-    let present = match layout.exists(&final_path) {
+    let present = match layout.exists_relative(&root, &relative) {
         Ok(present) => present,
         Err(error) => return Err(recorded.stop(error)),
     };
     if present {
-        let current = match layout.publication(&final_path) {
+        let current = match layout.publication_relative(&root, &relative) {
             Ok(current) => current,
             Err(error) => return Err(recorded.stop(error)),
         };
@@ -576,7 +688,7 @@ pub fn open_deferred_conversation(
             None => false,
         };
         if let Some(publication) = current.filter(|_| audited) {
-            return match layout.session_cut(&final_path, request.conversation_id) {
+            return match layout.session_cut_relative(&root, &relative, request.conversation_id) {
                 Ok(cut) if cut.size == expected.size && cut.digest == expected.digest => {
                     recorded.record("available", "available", "already", "effect", &publication)?;
                     Ok(OpenReport {
@@ -626,7 +738,13 @@ pub fn open_deferred_conversation(
     {
         return Err(retire_or_audit(layout, &temp));
     }
-    if let Err(error) = layout.publish_file(&temp, &final_path) {
+    if let Err(error) = layout.publish_verified(
+        &root,
+        &temp,
+        &relative,
+        request.conversation_id,
+        &cut.digest,
+    ) {
         // The rename may have happened before the error. Retire each name
         // on its own: a failure for the temp must still retire the final path.
         let retired_temp = retire_session(layout, &temp);
@@ -645,7 +763,7 @@ pub fn open_deferred_conversation(
             return Err(recorded.stop(error));
         }
     };
-    if let Err(error) = layout.note_publication(&final_path, &publication) {
+    if let Err(error) = layout.note_publication_relative(&root, &relative, &publication) {
         if !retire_session(layout, &final_path) {
             return Err(RestoreFault::Retained);
         }
@@ -670,9 +788,10 @@ pub fn root_posture(
     live: &Path,
     layout: &dyn QuarantineLayout,
 ) -> Result<Posture, RestoreFault> {
-    let loaded = layout.load(root)?;
+    let anchored = layout.anchor(root)?;
+    let loaded = layout.load(&anchored)?;
     let _journal = read_journal(&loaded.journal)?;
-    let root = layout.canonicalize(root)?;
+    let root = layout.canonicalize(anchored.path())?;
     if !layout.exists(live)? {
         return Ok(Posture::Quarantined);
     }
@@ -713,9 +832,9 @@ fn seal_matches(
 
 fn deferred_lines(
     layout: &dyn QuarantineLayout,
-    root: &Path,
+    root: &AnchoredRoot,
 ) -> Result<Vec<DeferredLine>, RestoreFault> {
-    let bytes = layout.read_bytes(&root.join("deferred.txt"))?;
+    let bytes = layout.read_relative(root, "deferred.txt")?;
     let text = std::str::from_utf8(&bytes).map_err(|_| RestoreFault::Tamper)?;
     decode_deferred(text)
 }
@@ -753,7 +872,7 @@ fn fetch_target(root_label: &str, conversation_id: &str) -> String {
 fn publications_are_available(
     layout: &dyn QuarantineLayout,
     audit: &dyn RestoreAudit,
-    root: &Path,
+    root: &AnchoredRoot,
     deferred: &[DeferredLine],
     extras: &[String],
 ) -> Result<(), RestoreFault> {
@@ -763,8 +882,7 @@ fn publications_are_available(
         }) else {
             return Err(RestoreFault::Tamper);
         };
-        let path = join_relative(root, extra)?;
-        let Some(publication) = layout.publication(&path)? else {
+        let Some(publication) = layout.publication_relative(root, extra)? else {
             return Err(RestoreFault::Tamper);
         };
         match audit.available(&line.conversation_id, &publication) {
@@ -778,12 +896,11 @@ fn publications_are_available(
 
 fn sessions_match(
     layout: &dyn QuarantineLayout,
-    root: &Path,
+    root: &AnchoredRoot,
     deferred: &[DeferredLine],
     extras: &[String],
 ) -> Result<(), RestoreFault> {
     for extra in extras {
-        let path = join_relative(root, extra)?;
         let mut matched = false;
         for line in deferred {
             let Ok(name) = deferred_session_name(&line.conversation_id) else {
@@ -793,7 +910,7 @@ fn sessions_match(
                 continue;
             }
             let cut = layout
-                .session_cut(&path, &line.conversation_id)
+                .session_cut_relative(root, extra, &line.conversation_id)
                 .map_err(|_| RestoreFault::Tamper)?;
             if cut.size != line.size || cut.digest != line.digest {
                 return Err(RestoreFault::Tamper);
@@ -813,19 +930,23 @@ struct HeldRoots {
 }
 
 /// The two roots, and each root's lock file, are different identities.
-fn roots_are_distinct(
-    layout: &dyn QuarantineLayout,
-    quarantine: &Path,
-    live: &Path,
-) -> Result<(), RestoreFault> {
-    distinct(layout, quarantine, live)?;
-    distinct(layout, &restore_lock_path(quarantine)?, live)?;
-    distinct(layout, &restore_lock_path(live)?, quarantine)?;
+fn roots_are_distinct(quarantine: &AnchoredRoot, live: &AnchoredRoot) -> Result<(), RestoreFault> {
+    let left = quarantine.probe();
+    let right = live.probe();
+    paths_conflict_on(quarantine.path(), live.path(), left, right)?;
+    paths_conflict_on(
+        &restore_lock_path(quarantine.path())?,
+        live.path(),
+        left,
+        right,
+    )?;
+    paths_conflict_on(
+        &restore_lock_path(live.path())?,
+        quarantine.path(),
+        right,
+        left,
+    )?;
     Ok(())
-}
-
-fn distinct(layout: &dyn QuarantineLayout, left: &Path, right: &Path) -> Result<(), RestoreFault> {
-    paths_conflict_on(left, right, layout.volume(left)?, layout.volume(right)?)
 }
 
 /// The quarantine directory is already published. Removing it keeps the caller's
@@ -856,18 +977,23 @@ fn remove_published(
 
 fn hold_roots(
     layout: &dyn QuarantineLayout,
-    first: &Path,
-    second: &Path,
+    first: &AnchoredRoot,
+    second: &AnchoredRoot,
 ) -> Result<HeldRoots, RestoreFault> {
-    let (left, right) = ordered_roots(
-        first,
-        layout.volume(first)?.case,
-        second,
-        layout.volume(second)?.case,
+    let (left, _right) = ordered_roots(
+        first.path(),
+        first.probe().case,
+        second.path(),
+        second.probe().case,
     )?;
+    let (earlier, later) = if left == first.path() {
+        (first, second)
+    } else {
+        (second, first)
+    };
     Ok(HeldRoots {
-        _earlier: layout.hold(&left)?,
-        _later: layout.hold(&right)?,
+        _earlier: layout.hold(earlier)?,
+        _later: layout.hold(later)?,
     })
 }
 
@@ -899,7 +1025,7 @@ fn resolve_root(
     audit: &dyn RestoreAudit,
     before: &str,
     after: &str,
-) -> Result<(PathBuf, String), RestoreFault> {
+) -> Result<(AnchoredRoot, String), RestoreFault> {
     // A lossy display of a non-Unicode path can collide with another root.
     // Refuse it before any audit line is stored.
     if audit_path(path).is_err() {
@@ -907,7 +1033,7 @@ fn resolve_root(
     }
     match layout.anchor(path) {
         Ok(anchored) => {
-            let label = audit_path(&anchored)?;
+            let label = audit_path(anchored.path())?;
             Ok((anchored, label))
         }
         Err(error) => {

@@ -37,7 +37,7 @@ pub use ports::{
 pub(crate) use restore::ordered_roots;
 pub use restore::{
     accept_quarantine, open_deferred_conversation, root_posture, stage_quarantine, AcceptReport,
-    AcceptRequest, CutMaterializer, LoadedTree, OpenReport, OpenRequest, PreparedCut, Promoted,
-    QuarantineLayout, RestoreHold, SealedInventoryReader, StageReport, StageRequest, Staging,
-    TreeId,
+    AcceptRequest, AnchoredRoot, CutMaterializer, LoadedTree, OpenReport, OpenRequest, PreparedCut,
+    Promoted, QuarantineLayout, RestoreHold, SealedInventoryReader, StageReport, StageRequest,
+    Staging, TreeId,
 };
