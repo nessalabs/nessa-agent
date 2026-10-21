@@ -191,6 +191,7 @@ flowchart LR
 ### Invariants
 
 - A stamp names one lease instance, one generation, and one receiver. `accept` also requires the identity the minting lease holds. That identity is not on the public stamp. Only `bind` and `stamp` mint a stamp. A published lease id, replayed through another lease, does not accept. Session composition mints the instance and the identity from one fill of the injected entropy. A source that refuses is an enrollment entropy failure and opens no session. A generation that starts again on a different instance does not accept the earlier stamp.
+- Saved catalogue and transcript reads present that stamp. The session, its native handle, and the Swift worker have no unstamped entry point for those reads. A caller who does not hold the current stamp cannot select the issued receiver.
 - The same issued receiver keeps the generation. A different receiver, a successful terminal purge, or session close advances it. The previous stamp then fails and no bytes are read.
 - Close is permanent for that session. A successful purge only releases the receiver, so a later enrollment in the same session can bind the next one. That release happens when the purge succeeded, including when the status has no observation. No observation and no successful purge leaves the bound receiver in place.
 - Catalogue presence is one stored identity, read from one snapshot of the fence, the row, and the purge receipt. A live row is Live. A deletion fence or receiver purge receipt is Tombstone. No row, no fence, and no receipt is Absent. A page that does not mention a chat does not write a tombstone.
@@ -208,7 +209,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | Unbound | `bind` receiver A | Stamp generation 1 for A | `binding_the_same_receiver_keeps_the_stamp_and_replacement_refuses_it` |
 | Bound A | `bind` A again | Same stamp | same |
-| Bound A | `bind` B | New stamp; A's stamp is Replaced and reads nothing | same, and `a_replaced_receiver_stamp_reads_nothing_and_dials_nothing` |
+| Bound A | `bind` B | New stamp; A's stamp is Replaced and reads nothing, including the catalogue page | same, and `a_replaced_receiver_stamp_reads_nothing_and_dials_nothing` |
 | Bound A | successful terminal purge | Receiver released; A's stamp is Unbound/Replaced; a later `bind` B is admitted | `a_purge_releases_the_receiver_and_a_later_bind_is_admitted` |
 | Bound A | successful purge and no observation | Unbound; the credential may remain, and a later bind advances the generation | `a_successful_purge_releases_the_publication_without_an_observation` |
 | Output already the file | session fetch | LocalMatch, source not asked, elapsed is the session clock | `a_local_match_reports_the_session_clock` |
@@ -240,6 +241,7 @@ flowchart LR
 - Treating a missing inbox row as deleted. Owner and granted catalogues omit rows for reasons other than deletion: a partial page, a grant filter, a withdraw. The deletion fence is the tombstone. Absence is not.
 - Treating an unreadable cache path as absence. Absence has no purge receipt to consult. A metadata failure has not established that, so bind must fail closed.
 - Minting a stamp from the published lease id and the next generation. That id is observable. The identity `accept` compares is not, and another lease that copies the id does not hold it.
+- Keeping an unstamped `catalogue_page` or `transcript` next to the stamped reads. Those methods select the current issued credential, so a delayed caller reads the replacement receiver without presenting a stamp.
 - Confirming a file because a part is already complete. The existing fetch asks the last range again so a part cannot stand in for the gateway. Reporting that part as fresh would undo that rule.
 - Blocking the UI thread on the fetch. The session methods stay synchronous and the existing Swift worker admits them off the UI queue. This slice does not add a second queue.
 - Rebuilding #783, #785 and #789. Those pulls are merged. This slice starts from current main.

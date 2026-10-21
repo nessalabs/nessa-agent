@@ -1095,33 +1095,6 @@ impl NativeDeviceSession {
             .map(|value| Arc::new(NativeRefresh { value }))
             .map_err(Into::into)
     }
-    /// Saved page derives receiver and scope from actual issued/cache evidence.
-    /// Core owns entry bounds; foreign u32 conversion is checked before its call.
-    pub fn catalogue_page(
-        &self,
-        after: Option<Arc<NativeEntryKey>>,
-        maximum: u32,
-    ) -> Result<Option<Arc<NativeCataloguePage>>, NativeCallError> {
-        let maximum = usize::try_from(maximum).map_err(|_| NativeCallError::InvalidArgument)?;
-        self.value
-            .catalogue_page(after.as_ref().map(|value| &value.value), maximum)
-            .map(|value| value.map(|value| Arc::new(NativeCataloguePage { value })))
-            .map_err(Into::into)
-    }
-    /// Passive saved transcript. The view revision is presentation identity only.
-    pub fn transcript(
-        &self,
-        conversation: String,
-        revision: String,
-    ) -> Result<Arc<NativeTranscript>, NativeCallError> {
-        let conversation =
-            ConversationId::new(&conversation).map_err(|_| NativeCallError::InvalidArgument)?;
-        let revision = Uuid::parse_str(&revision).map_err(|_| NativeCallError::InvalidArgument)?;
-        self.value
-            .transcript(&conversation, revision)
-            .map(|value| Arc::new(NativeTranscript { value }))
-            .map_err(Into::into)
-    }
     /// Bind the publication lease to the saved issued receiver. Nothing is dialed.
     pub fn bind_saved_receiver(&self) -> Result<Arc<NativePhoneStamp>, NativeCallError> {
         self.value

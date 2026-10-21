@@ -121,6 +121,10 @@ fn a_replaced_receiver_stamp_reads_nothing_and_dials_nothing() {
         session.published_transcript(&first, &conversation, Uuid::nil()),
         Err(SessionFailure::Fenced(PhoneFence::Replaced))
     ));
+    assert!(matches!(
+        session.published_catalogue_page(&first, None, 1),
+        Err(SessionFailure::Fenced(PhoneFence::Replaced))
+    ));
     assert!(!cache.exists(), "a replaced stamp opens no cache");
     assert_eq!(connector.calls.load(Ordering::SeqCst), 0);
 
@@ -129,6 +133,10 @@ fn a_replaced_receiver_stamp_reads_nothing_and_dials_nothing() {
     assert!(matches!(
         session.published_transcript(&second, &conversation, Uuid::nil()),
         Ok(RetainedTranscript::NotLoaded)
+    ));
+    assert!(matches!(
+        session.published_catalogue_page(&second, None, 1),
+        Ok(None)
     ));
     let output = root.path().join("private/held.bin");
     fs::write(&output, b"ab").unwrap();

@@ -1274,52 +1274,6 @@ impl NativeSession {
         child.start().map_err(SessionFailure::Product)?;
         Ok(SessionProduct { value: child })
     }
-    /// Saved selection derives receiver from the issued record and origin/stream
-    /// from actual retained scope; address metadata is not used as scope.
-    pub fn catalogue_page(
-        &self,
-        after: Option<&EntryKey>,
-        maximum: usize,
-    ) -> Result<Option<RetainedCataloguePage>, SessionFailure> {
-        let mut operation = self.enter(None)?;
-        let driver = operation.driver();
-        let Some(scope) = driver.saved_scope()? else {
-            return Ok(None);
-        };
-        driver
-            .cache()
-            .map_err(SessionFailure::Cache)?
-            .catalogue_page(
-                scope.receiver().as_str(),
-                scope.origin().as_str(),
-                scope.stream().as_str(),
-                after,
-                maximum,
-            )
-            .map_err(SessionFailure::Cache)
-    }
-    /// Project the current issued receiver's saved transcript; no transport call.
-    pub fn transcript(
-        &self,
-        conversation: &ConversationId,
-        revision: Uuid,
-    ) -> Result<RetainedTranscript, SessionFailure> {
-        let mut operation = self.enter(None)?;
-        let driver = operation.driver();
-        let Some(scope) = driver.saved_scope()? else {
-            return Ok(RetainedTranscript::NotLoaded);
-        };
-        driver
-            .cache()
-            .map_err(SessionFailure::Cache)?
-            .transcript_view(
-                scope.receiver().as_str(),
-                scope.origin().as_str(),
-                conversation,
-                revision,
-            )
-            .map_err(SessionFailure::Cache)
-    }
     /// Bind the lease to the saved issued receiver without dialing.
     /// The same receiver keeps its stamp. No credential leaves the lease unbound.
     /// A receiver with a successful purge receipt is not bound again, even when

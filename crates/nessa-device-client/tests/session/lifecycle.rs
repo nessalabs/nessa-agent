@@ -130,15 +130,12 @@ fn saved_selection_without_issued_receiver_does_not_create_cache_or_dial() {
     });
     let session = compose(root.path(), connector.clone());
     assert!(matches!(
-        session.catalogue_page(None, 1),
+        session.bind_saved_receiver(),
         Err(SessionFailure::NoCredential)
     ));
     assert!(matches!(
-        session.transcript(
-            &ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap(),
-            Uuid::nil()
-        ),
-        Err(SessionFailure::NoCredential)
+        session.publication(),
+        Err(SessionFailure::Fenced(PhoneFence::Unbound))
     ));
     assert_eq!(connector.calls.load(Ordering::SeqCst), 0);
     assert!(!root.path().join("private/cache.sqlite").exists());

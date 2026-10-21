@@ -6,7 +6,7 @@ use clock::{watched, ManualClock};
 use nessa_auth::domain::pairing::ConsentClass;
 use nessa_client_core::{
     pairing::NativeClientError,
-    retained::{ReadFailure, ReadStop, RetainedTranscript},
+    retained::{PhoneFence, ReadFailure, ReadStop, RetainedTranscript},
 };
 use nessa_device_client::{NativeSession, SessionFailure};
 use nessa_protocol::{conversation::domain::ConversationId, pairing::wire::NativePairingStatus};
@@ -122,11 +122,16 @@ fn native_refusal_rechecks_pinned_status_without_purging_confirmed_partial_histo
     assert_eq!(observation.enrollment(), &Err(NativeClientError::Refused));
     assert!(recheck.purge().is_none());
     assert!(native.purge_receipt(&setup.receiver).unwrap().is_none());
-    let page = native.catalogue_page(None, 16).unwrap().unwrap();
+    let stamp = native.bind_saved_receiver().unwrap();
+    let page = native
+        .published_catalogue_page(&stamp, None, 16)
+        .unwrap()
+        .unwrap();
     assert!(page.entries().len() >= 2);
     let conversation = ConversationId::new(&setup.conversation).unwrap();
-    let RetainedTranscript::Retained(partial) =
-        native.transcript(&conversation, Uuid::nil()).unwrap()
+    let RetainedTranscript::Retained(partial) = native
+        .published_transcript(&stamp, &conversation, Uuid::nil())
+        .unwrap()
     else {
         panic!("confirmed page must remain available after a generic refusal");
     };
@@ -136,8 +141,10 @@ fn native_refusal_rechecks_pinned_status_without_purging_confirmed_partial_histo
     native.close().unwrap();
     drop(gateway);
     let offline = NativeSession::open(state_root, state_directory, address).unwrap();
-    let RetainedTranscript::Retained(saved) =
-        offline.transcript(&conversation, Uuid::nil()).unwrap()
+    let offline_stamp = offline.bind_saved_receiver().unwrap();
+    let RetainedTranscript::Retained(saved) = offline
+        .published_transcript(&offline_stamp, &conversation, Uuid::nil())
+        .unwrap()
     else {
         panic!("offline reopen lost confirmed partial history");
     };
@@ -189,7 +196,11 @@ fn native_budget_after_catalogue_progress_is_incomplete_without_a_refusal_rechec
     assert!(report.conversations >= 2);
     assert!(refresh.recheck().is_none());
     assert!(refresh.read().unwrap().withdrawn().is_empty());
-    let page = native.catalogue_page(None, 16).unwrap().unwrap();
+    let stamp = native.bind_saved_receiver().unwrap();
+    let page = native
+        .published_catalogue_page(&stamp, None, 16)
+        .unwrap()
+        .unwrap();
     assert!(page.entries().len() >= 2);
     assert!(native
         .purge_receipt(page.progress().scope.receiver().as_str())
@@ -232,15 +243,20 @@ fn native_session_keeps_paired_records_offline_reopens_and_purges_on_terminal() 
     );
     assert!(refresh.read().unwrap().withdrawn().is_empty());
     assert!(refresh.recheck().is_none());
-    let page = native.catalogue_page(None, 16).unwrap().unwrap();
+    let stamp = native.bind_saved_receiver().unwrap();
+    let page = native
+        .published_catalogue_page(&stamp, None, 16)
+        .unwrap()
+        .unwrap();
     assert_eq!(page.progress().scope.receiver().as_str(), setup.receiver);
     assert!(page
         .entries()
         .iter()
         .any(|entry| entry.manifest().key.id.as_str() == setup.conversation));
     let conversation = ConversationId::new(&setup.conversation).unwrap();
-    let RetainedTranscript::Retained(original) =
-        native.transcript(&conversation, Uuid::nil()).unwrap()
+    let RetainedTranscript::Retained(original) = native
+        .published_transcript(&stamp, &conversation, Uuid::nil())
+        .unwrap()
     else {
         panic!("paired canonical records were not projected");
     };
@@ -253,13 +269,15 @@ fn native_session_keeps_paired_records_offline_reopens_and_purges_on_terminal() 
     let view = serde_json::to_value(original.view()).unwrap();
     native.close().unwrap();
     assert!(matches!(
-        native.transcript(&conversation, Uuid::nil()),
+        native.published_transcript(&stamp, &conversation, Uuid::nil()),
         Err(SessionFailure::Closed)
     ));
     drop(gateway);
     let offline = open();
-    let RetainedTranscript::Retained(saved) =
-        offline.transcript(&conversation, Uuid::nil()).unwrap()
+    let offline_stamp = offline.bind_saved_receiver().unwrap();
+    let RetainedTranscript::Retained(saved) = offline
+        .published_transcript(&offline_stamp, &conversation, Uuid::nil())
+        .unwrap()
     else {
         panic!("offline session lost saved records");
     };
@@ -268,6 +286,7 @@ fn native_session_keeps_paired_records_offline_reopens_and_purges_on_terminal() 
     offline.close().unwrap();
     let restarted = Gateway::start(&root);
     let resumed = open();
+    let resumed_stamp = resumed.bind_saved_receiver().unwrap();
     let refresh = resumed.refresh(ReadStop::new()).unwrap();
     assert!(refresh.read().unwrap().result().as_ref().unwrap().complete);
     assert!(!refresh.read().unwrap().result().as_ref().unwrap().moved);
@@ -290,7 +309,11 @@ fn native_session_keeps_paired_records_offline_reopens_and_purges_on_terminal() 
         Some(purge)
     );
     assert!(matches!(
-        resumed.transcript(&conversation, Uuid::nil()),
+        resumed.published_transcript(&resumed_stamp, &conversation, Uuid::nil()),
+        Err(SessionFailure::Fenced(PhoneFence::Unbound))
+    ));
+    assert!(matches!(
+        resumed.bind_saved_receiver(),
         Err(SessionFailure::NoCredential)
     ));
     // Escaped snapshots remain historical owned evidence after terminal purge.

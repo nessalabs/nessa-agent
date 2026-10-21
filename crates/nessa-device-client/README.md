@@ -46,7 +46,8 @@ Current development surface:
 
 The explicit saved selector grants no connection, enrollment or command
 permission. The phone publication lease (`PhoneLease`) is what a later saved
-read or held-file fetch must present. Session composition mints that lease's
+read or held-file fetch must present. Saved catalogue and transcript reads on
+the session go through that stamp; there is no unstamped session entry point. Session composition mints that lease's
 instance and its unexported identity from the injected entropy; a source that refuses opens no session.
 A published lease id is not itself a stamp.
 A stamp from an earlier receiver, or from an earlier session's lease, reads

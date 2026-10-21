@@ -175,28 +175,6 @@ public final class NativeSessionWorker: @unchecked Sendable {
             try capture(try session.refresh(stop: stop))
         }
     }
-    public func cataloguePage(after: NativeEntryKey?, maximum: UInt32) async throws -> NativeCataloguePage? {
-        try await cataloguePage(after: after, maximum: maximum, capture: { $0 })
-    }
-    /// Capture a bounded passive value off UI before releasing admission.
-    public func cataloguePage<Value: Sendable>(
-        after: NativeEntryKey?, maximum: UInt32, capture: @escaping @Sendable (NativeCataloguePage?) throws -> Value
-    ) async throws -> Value {
-        try await perform { session, _ in
-            try capture(try session.cataloguePage(after: after, maximum: maximum))
-        }
-    }
-    public func transcript(conversation: String, revision: String) async throws -> NativeTranscript {
-        try await transcript(conversation: conversation, revision: revision, capture: { $0 })
-    }
-    /// Capture a bounded passive value off UI before releasing admission.
-    public func transcript<Value: Sendable>(
-        conversation: String, revision: String, capture: @escaping @Sendable (NativeTranscript) throws -> Value
-    ) async throws -> Value {
-        try await perform { session, _ in
-            try capture(try session.transcript(conversation: conversation, revision: revision))
-        }
-    }
     public func bindSavedReceiver() async throws -> NativePhoneStamp {
         try await bindSavedReceiver(capture: { $0 })
     }
