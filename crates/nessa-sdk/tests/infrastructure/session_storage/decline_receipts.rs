@@ -284,15 +284,35 @@ fn cancellation_receipt_semantic_checkpoint_and_refusal_keep_original_input() {
 #[tokio::test]
 async fn cancellation_receipt_rejected_and_lost_history_acks_rejoin_the_same_writer_before_restart()
 {
+    use crate::application::agent_execution::providers::{
+        AgentProvider, HarnessHostIdentity, ProviderIdentity, ProviderOpenFuture,
+        ProviderOpenRequest,
+    };
     use crate::application::agent_execution::sessions::{
         SessionLoad, SessionManager, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
         SessionStorage, SessionStorageLease, StorageError, StorageFuture,
     };
+    use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
     use crate::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+    struct HistoryOnlyProvider(ProviderIdentity);
+    impl AgentProvider for HistoryOnlyProvider {
+        fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+            HarnessHostIdentity::local()
+        }
+        fn identity(&self) -> ProviderIdentity {
+            self.0.clone()
+        }
+        fn capabilities(&self) -> &EffectiveCapabilities {
+            unreachable!("history preparation never asks for execution capabilities")
+        }
+        fn open(&self, _: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+            unreachable!("history preparation never opens a provider")
+        }
+    }
     struct FaultStorage {
         inner: Arc<InMemoryStorage>,
         mode: Arc<AtomicUsize>,
@@ -361,6 +381,7 @@ async fn cancellation_receipt_rejected_and_lost_history_acks_rejoin_the_same_wri
             actor: Some(record.actor.clone()),
         }];
         let id = original.id.clone();
+        let provider = HistoryOnlyProvider(original.provider.clone());
         let inner = Arc::new(InMemoryStorage::new());
         let lease = inner.open(id.clone()).await.unwrap();
         lease
@@ -384,13 +405,14 @@ async fn cancellation_receipt_rejected_and_lost_history_acks_rejoin_the_same_wri
             inner: inner.clone(),
             mode: switch.clone(),
         });
-        let manager = SessionManager::open(
+        let mut manager = SessionManager::open(
             Some(id.clone()),
             fault,
             Arc::new(RuntimeMessageCommitClock::new()),
         )
         .await
         .unwrap();
+        manager.prepare_for_lease_record(&provider).await.unwrap();
         let event = InvocationSchedulingEvent {
             kind: InvocationKind::Queued,
             target: None,
@@ -446,10 +468,11 @@ async fn cancellation_receipt_rejected_and_lost_history_acks_rejoin_the_same_wri
             manager.flush_cancellation_receipts().await.unwrap();
         }
         drop(manager);
-        let restored =
+        let mut restored =
             SessionManager::open(Some(id), inner, Arc::new(RuntimeMessageCommitClock::new()))
                 .await
                 .unwrap();
+        restored.prepare_for_lease_record(&provider).await.unwrap();
         let snapshot = restored.snapshot().await.unwrap();
         let receipt = snapshot.invocations[0]
             .cancellation_delivery
