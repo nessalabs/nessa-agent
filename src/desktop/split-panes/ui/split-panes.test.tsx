@@ -20,7 +20,47 @@ let root: Root
 /** Each grid the page observes, and how to tell it its size changed. */
 const observed: { target: Element; resized: () => void }[] = []
 
+/**
+ * jsdom fires animation frames on an interval. A busy loop can run one
+ * before a test asks, so the frames here run only when `run` says so.
+ */
+function steppedFrames() {
+  const queued = new Map<number, FrameRequestCallback>()
+  let next = 1
+  const request = window.requestAnimationFrame
+  const cancel = window.cancelAnimationFrame
+  window.requestAnimationFrame = (callback) => {
+    const id = next++
+    queued.set(id, callback)
+    return id
+  }
+  window.cancelAnimationFrame = (id) => {
+    queued.delete(id)
+  }
+  return {
+    async run() {
+      const pending = [...queued.keys()]
+      await act(async () => {
+        for (const id of pending) {
+          const callback = queued.get(id)
+          if (callback === undefined) continue
+          queued.delete(id)
+          callback(0)
+        }
+      })
+    },
+    restore() {
+      queued.clear()
+      window.requestAnimationFrame = request
+      window.cancelAnimationFrame = cancel
+    },
+  }
+}
+
+let frames: ReturnType<typeof steppedFrames>
+
 beforeEach(() => {
+  frames = steppedFrames()
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   observed.length = 0
   globalThis.ResizeObserver = class {
@@ -40,6 +80,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
+  frames.restore()
   host.remove()
 })
 
@@ -118,15 +159,11 @@ const grid = () => {
 }
 
 /** The frame a column change paints on: three frames after it commits. */
-const nextPaint = () =>
-  act(
-    async () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-        ),
-      ),
-  )
+const nextPaint = async () => {
+  await frames.run()
+  await frames.run()
+  await frames.run()
+}
 
 it("puts the frame on the host's own pane root, with nothing around it", async () => {
   await mounted(fakeSource(two()))
@@ -162,18 +199,12 @@ it("paints a new arrangement on the frame after it commits", async () => {
   // the frame after that: a drop's copy lets go, then a column title glides.
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
   expect(host.hasAttribute("data-spare-held")).toBe(false)
-  await act(
-    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-  )
+  await frames.run()
   expect(host.hasAttribute("data-spare-held")).toBe(true)
-  await act(
-    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-  )
+  await frames.run()
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
   expect(host.hasAttribute("data-spare-held")).toBe(true)
-  await act(
-    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-  )
+  await frames.run()
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
   expect(host.hasAttribute("data-spare-held")).toBe(false)
   // That paint skips scene text. The frame after shows it again.
@@ -224,9 +255,7 @@ it("paints a resize of the same panes on the frame it happens", async () => {
   const layout = two()
   const fake = fakeSource(layout)
   await mounted(fake)
-  await act(
-    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-  )
+  await frames.run()
   const first = () => grid().querySelector<HTMLElement>(".host-pane")
   expect(first()?.style.getPropertyValue("--cw")).toBe("0.5")
   expect(grid().hasAttribute(marks.painting)).toBe(false)
