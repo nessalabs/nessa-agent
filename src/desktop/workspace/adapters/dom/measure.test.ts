@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { expect, it } from "vitest"
+import { afterEach, expect, it, vi } from "vitest"
 import { measureWorkspace, paintedRoom } from "./measure"
 
 /** jsdom lays nothing out: the boxes are set by hand, as the browser would. */
 function box(element: HTMLElement, width: number, height: number) {
-  Object.defineProperty(element, "offsetWidth", { value: width })
-  Object.defineProperty(element, "offsetHeight", { value: height })
+  Object.defineProperty(element, "offsetWidth", { value: width, configurable: true })
+  Object.defineProperty(element, "offsetHeight", { value: height, configurable: true })
 }
 
 it("measures the grid as laid out, whatever transform a flight draws it with", () => {
@@ -32,4 +32,44 @@ it("counts no spare room for a sidebar already folded, and no room without a gri
   expect(measureWorkspace(page)?.spare).toBe(0)
   expect(measureWorkspace(document.createElement("div"))).toBeUndefined()
   expect(paintedRoom()).toEqual({ width: 900, height: 700, spare: 0 })
+})
+
+it("follows a resize and a sidebar toggle into the room a later click reads", () => {
+  const callbacks: ResizeObserverCallback[] = []
+  class Observer {
+    constructor(callback: ResizeObserverCallback) {
+      callbacks.push(callback)
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal("ResizeObserver", Observer)
+  const page = document.createElement("div")
+  page.innerHTML = `<div data-workspace data-sidebar="open">
+      <aside class="workspace-sidebar"></aside>
+      <div data-split-grid></div>
+    </div>`
+  document.body.append(page)
+  const grid = page.querySelector<HTMLElement>("[data-split-grid]")
+  const sidebar = page.querySelector<HTMLElement>(".workspace-sidebar")
+  const root = page.querySelector<HTMLElement>("[data-workspace]")
+  if (!grid || !sidebar || !root) throw new Error("the fixture has no grid")
+  box(grid, 900, 700)
+  box(sidebar, 240, 700)
+  expect(measureWorkspace(page)).toEqual({ width: 900, height: 700, spare: 248 })
+  // The window grew. The watch writes the room; the click does not measure.
+  box(grid, 1200, 700)
+  for (const callback of callbacks) callback([], {} as ResizeObserver)
+  expect(paintedRoom()).toEqual({ width: 1200, height: 700, spare: 248 })
+  // The sidebar folds and the grid takes its width.
+  root.dataset.sidebar = "closed"
+  box(grid, 1440, 700)
+  for (const callback of callbacks) callback([], {} as ResizeObserver)
+  expect(paintedRoom()).toEqual({ width: 1440, height: 700, spare: 0 })
+  page.remove()
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
