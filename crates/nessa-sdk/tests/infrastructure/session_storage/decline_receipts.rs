@@ -280,3 +280,182 @@ fn cancellation_receipt_semantic_checkpoint_and_refusal_keep_original_input() {
     assert_eq!(receipt.event(), &event);
     assert!(receipt.acknowledged());
 }
+
+#[tokio::test]
+async fn cancellation_receipt_rejected_and_lost_history_acks_rejoin_the_same_writer_before_restart()
+{
+    use crate::application::agent_execution::sessions::{
+        SessionLoad, SessionManager, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+        SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+    };
+    use crate::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    struct FaultStorage {
+        inner: Arc<InMemoryStorage>,
+        mode: Arc<AtomicUsize>,
+    }
+    struct FaultLease {
+        inner: Box<dyn SessionStorageLease>,
+        mode: Arc<AtomicUsize>,
+    }
+    impl SessionStorage for FaultStorage {
+        fn open(
+            &self,
+            id: crate::domain::agent_execution::sessions::SessionId,
+        ) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+            Box::pin(async move {
+                Ok(Box::new(FaultLease {
+                    inner: self.inner.open(id).await?,
+                    mode: self.mode.clone(),
+                }) as Box<dyn SessionStorageLease>)
+            })
+        }
+    }
+    impl SessionStorageLease for FaultLease {
+        fn load(&self) -> StorageFuture<'_, SessionLoad> {
+            self.inner.load()
+        }
+        fn erase(&self) -> StorageFuture<'_, ()> {
+            self.inner.erase()
+        }
+        fn save_changes(
+            &self,
+            binding: SessionSaveGeneration,
+            units: Vec<SessionSaveUnit>,
+        ) -> StorageFuture<'_, SessionSaveReceipt> {
+            Box::pin(async move {
+                let mode = self.mode.load(Ordering::SeqCst);
+                let targeted = units
+                    .iter()
+                    .flat_map(SessionSaveUnit::changes)
+                    .any(|change| match change {
+                        SessionChange::CancellationPrepared { .. } => mode == 1 || mode == 4,
+                        SessionChange::CancellationAcknowledged { .. } => mode == 2 || mode == 3,
+                        _ => false,
+                    });
+                if targeted {
+                    if mode == 3 || mode == 4 {
+                        self.inner.save_changes(binding, units).await?;
+                    }
+                    return Err(StorageError::Io(
+                        "controlled cancellation receipt ACK failure".into(),
+                    ));
+                }
+                self.inner.save_changes(binding, units).await
+            })
+        }
+    }
+    for mode in [1, 4, 2, 3] {
+        let mut original = history_fixture(1);
+        let record = &mut original.invocations[0];
+        record.submission = crate::application::agent_execution::executions::SubmissionMode::Queued;
+        record.scheduling = vec![InvocationSchedulingEvent {
+            kind: InvocationKind::Queued,
+            target: None,
+            before: None,
+            stage: InvocationStage::Queued,
+            cause: SchedulingCause::Submitted,
+            actor: Some(record.actor.clone()),
+        }];
+        let id = original.id.clone();
+        let inner = Arc::new(InMemoryStorage::new());
+        let lease = inner.open(id.clone()).await.unwrap();
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                vec![SessionSaveUnit::new(vec![
+                    SessionChange::Opened {
+                        id: id.clone(),
+                        provider: original.provider.clone(),
+                        context: original.provider_context.clone(),
+                    },
+                    SessionChange::InputAccepted(Box::new(original.invocations.remove(0))),
+                ])
+                .unwrap()],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+        let switch = Arc::new(AtomicUsize::new(0));
+        let fault = Arc::new(FaultStorage {
+            inner: inner.clone(),
+            mode: switch.clone(),
+        });
+        let manager = SessionManager::open(
+            Some(id.clone()),
+            fault,
+            Arc::new(RuntimeMessageCommitClock::new()),
+        )
+        .await
+        .unwrap();
+        let event = InvocationSchedulingEvent {
+            kind: InvocationKind::Queued,
+            target: None,
+            before: Some(InvocationStage::Queued),
+            stage: InvocationStage::Cancelled,
+            cause: SchedulingCause::SessionClosed,
+            actor: Some(ActionContext::new("first-person", "panel", "original-cancel").unwrap()),
+        };
+        if mode == 1 || mode == 4 {
+            switch.store(mode, Ordering::SeqCst);
+            assert!(manager
+                .prepare_cancellation(0, event.clone())
+                .await
+                .is_err());
+            let committed = inner.read_committed(id.clone()).await.unwrap().unwrap();
+            assert_eq!(
+                committed.snapshot().unwrap().invocations[0]
+                    .cancellation_delivery
+                    .is_some(),
+                mode == 4
+            );
+            switch.store(0, Ordering::SeqCst);
+            manager.flush_cancellation_receipts().await.unwrap();
+            let retained = manager
+                .prepare_cancellation(
+                    0,
+                    InvocationSchedulingEvent {
+                        actor: Some(ActionContext::new("other", "panel", "retry").unwrap()),
+                        ..event.clone()
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(retained.event(), &event);
+            assert!(!retained.acknowledged());
+        } else {
+            manager
+                .prepare_cancellation(0, event.clone())
+                .await
+                .unwrap();
+            switch.store(mode, Ordering::SeqCst);
+            assert!(manager.acknowledge_cancellation(0, true).await.is_err());
+            let committed = inner.read_committed(id.clone()).await.unwrap().unwrap();
+            assert_eq!(
+                committed.snapshot().unwrap().invocations[0]
+                    .cancellation_delivery
+                    .as_ref()
+                    .unwrap()
+                    .acknowledged(),
+                mode == 3
+            );
+            switch.store(0, Ordering::SeqCst);
+            manager.flush_cancellation_receipts().await.unwrap();
+        }
+        drop(manager);
+        let restored =
+            SessionManager::open(Some(id), inner, Arc::new(RuntimeMessageCommitClock::new()))
+                .await
+                .unwrap();
+        let snapshot = restored.snapshot().await.unwrap();
+        let receipt = snapshot.invocations[0]
+            .cancellation_delivery
+            .as_ref()
+            .unwrap();
+        assert_eq!(receipt.event(), &event);
+        assert_eq!(receipt.acknowledged(), mode == 2 || mode == 3);
+    }
+}
