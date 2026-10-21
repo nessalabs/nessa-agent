@@ -7,8 +7,10 @@
 -- deferred. reconcile_retry is a settlement whose plan did not commit.
 -- preference_command is one request's receipt. It commits with that
 -- request's decision audit. installed_request names the enable a revert
--- marks failed. user_version stays 1. An earlier copy of this file is
--- recreated.
+-- marks failed. A scan that fails marks that request failed even when it
+-- installed nothing. history_fence is the conversation generation a plan
+-- observed. Accept inserts only while that generation is still current.
+-- user_version stays 1. An earlier copy of this file is recreated.
 CREATE TABLE preference (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
@@ -69,6 +71,12 @@ CREATE TABLE reconcile_retry (
     conversation TEXT PRIMARY KEY,
     failures INTEGER NOT NULL,
     retry_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE history_fence (
+    conversation TEXT PRIMARY KEY,
+    incarnation TEXT NOT NULL,
+    position INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE audit (

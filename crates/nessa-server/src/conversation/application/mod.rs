@@ -323,8 +323,8 @@ pub use service::{
 pub use service::{
     AwaitedTurn, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
     ConversationAgents, ConversationCaller, ConversationDeletionBudgets, ConversationDependencies,
-    ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, McpAppCall,
-    McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, PendingReport,
+    ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, HistoryGeneration,
+    McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, PendingReport,
     PreferenceCommandOutcome, PreferenceCommandReceipt, PreferenceReading, PreferenceUpdate,
     QuestionChoiceInput, ReadOpening, ReconcileRetry, RecordedPreference, ReportRegistration,
     RequestedAgent, RequestedConversation, ScheduleActor, ScheduleDraft, ScheduleSettlement,

@@ -510,35 +510,55 @@ fn authentication_independent_failure(record: &InvocationRecord) -> bool {
         .and_then(|report| report.clone().into_result().err());
     report_error.as_ref().is_some_and(|error| error != refusal) || refusal != final_error
 }
-/// The saved usage limit, unwrapping the same operation wrappers as an
-/// authentication refusal. A diagnostic that merely mentions a limit is not one.
+/// The saved usage limit, unwrapping the same operation wrappers as
+/// [`AgentError::usage_limit`]. A provider report owns the settlement when
+/// one was saved. Without one, every position of an aggregate is searched, so
+/// a limit carried only as `subsequent_error` is still the card. A diagnostic
+/// that merely mentions a limit is not one.
 fn usage_limit_refusal(record: &InvocationRecord) -> Option<&AgentError> {
-    let mut error = match record.provider_report.as_ref() {
+    let error = match record.provider_report.as_ref() {
         Some(report) => report.provider_result()?.as_ref().err()?,
         None => record.result.as_ref()?.as_ref().err()?,
     };
-    loop {
-        match error {
-            AgentError::UsageLimitReached(_) => return Some(error),
-            AgentError::MultipleOperationFailures { first_error, .. } => error = first_error,
-            AgentError::OperationAndCleanupFailure {
-                operation_error, ..
-            } => error = operation_error,
-            AgentError::StorageAfterExecution {
-                execution_result, ..
-            } => {
-                error = execution_result.as_ref().as_ref().err()?;
-            }
-            AgentError::ExecutionObservation {
-                error: observed, ..
-            } => error = observed,
-            AgentError::AfterInvocationHooks {
-                execution_result, ..
-            } => {
-                error = execution_result.as_ref().as_ref().err()?;
-            }
-            _ => return None,
-        }
+    find_usage_limit(error)
+}
+
+/// The usage-limit error inside `error`, including a later aggregate position.
+fn find_usage_limit(error: &AgentError) -> Option<&AgentError> {
+    match error {
+        AgentError::UsageLimitReached(_) => Some(error),
+        AgentError::MultipleOperationFailures {
+            first_error,
+            subsequent_error,
+        } => find_usage_limit(first_error).or_else(|| find_usage_limit(subsequent_error)),
+        AgentError::OperationAndCleanupFailure {
+            operation_error,
+            cleanup_error,
+        } => find_usage_limit(operation_error).or_else(|| find_usage_limit(cleanup_error)),
+        AgentError::StorageAfterExecution {
+            execution_result, ..
+        } => execution_result
+            .as_ref()
+            .as_ref()
+            .err()
+            .and_then(find_usage_limit),
+        AgentError::ExecutionObservation {
+            error: observed,
+            execution_result,
+        } => find_usage_limit(observed).or_else(|| {
+            execution_result
+                .as_deref()
+                .and_then(|result| result.as_ref().err())
+                .and_then(find_usage_limit)
+        }),
+        AgentError::AfterInvocationHooks {
+            execution_result, ..
+        } => execution_result
+            .as_ref()
+            .as_ref()
+            .err()
+            .and_then(find_usage_limit),
+        _ => None,
     }
 }
 

@@ -1,7 +1,7 @@
 //! Explicit reads retry stopped cleanup without replaying an acknowledged control.
 use super::*;
 use crate::conversation::application::{
-    PreferenceUpdate, ScheduleActor, ScheduleDraft, ScheduledMessageStore,
+    HistoryGeneration, PreferenceUpdate, ScheduleActor, ScheduleDraft, ScheduledMessageStore,
 };
 use crate::conversation::domain::ContinuationCause;
 use crate::conversation::infrastructure::LocalScheduledMessages;
@@ -76,6 +76,10 @@ async fn a_recovered_model_change_cancels_the_open_continuation() {
                 policy_revision: None,
                 tools_checked: false,
                 preference_revision: recorded.revision,
+                history: HistoryGeneration {
+                    incarnation: "history".into(),
+                    position: 1,
+                },
             },
             2,
         )

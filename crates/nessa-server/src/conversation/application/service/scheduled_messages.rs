@@ -122,6 +122,15 @@ pub struct ReconcileRetry {
     pub retry_at_ms: u64,
 }
 
+/// The committed history a plan read. `position` moves forward inside one
+/// `incarnation`. Accept inserts only while this generation is still the one
+/// sealed for the conversation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryGeneration {
+    pub incarnation: String,
+    pub position: u64,
+}
+
 /// What accepting a row needs. `execution_id` is used only when no row exists
 /// yet for this causal turn; a later update keeps the id the row was minted with.
 #[derive(Clone, Debug)]
@@ -146,6 +155,9 @@ pub struct ScheduleDraft {
     /// The preference revision the planner read. The insert matches only while
     /// that revision is still enabled.
     pub preference_revision: u64,
+    /// The history generation the planner read. The insert matches only while
+    /// a newer generation has not been sealed.
+    pub history: HistoryGeneration,
 }
 
 /// How a fenced submit ended.
@@ -254,8 +266,10 @@ pub trait ScheduledMessageStore: Send + Sync {
     /// The open row for one conversation, if it is scheduled or delivering.
     fn open(&self, conversation: &str) -> ConversationFuture<'_, Option<ScheduledMessage>>;
     /// Insert the row, or move its due time when it is still open, only while
-    /// `draft.preference_revision` is still the enabled preference. A finished
-    /// causal turn, or a revision a preference change has replaced, returns `None`.
+    /// `draft.preference_revision` is still the enabled preference and
+    /// `draft.history` is still the sealed generation. A finished causal turn,
+    /// a revision a preference change has replaced, or a newer history returns
+    /// `None`.
     fn accept(
         &self,
         draft: ScheduleDraft,
@@ -321,8 +335,10 @@ pub trait ScheduledMessageStore: Send + Sync {
         retry_at_ms: u64,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool>;
-    /// Extend this process's lease on a `submitting` row. False when this
-    /// process is not the owner, or the row is no longer `submitting`.
+    /// Extend this process's lease on a `submitting` row, only while that
+    /// lease has not expired. False when this process is not the owner, the
+    /// row is no longer `submitting`, or `fence_until_ms` is at or before
+    /// `now_ms`. An expired lease is not extended.
     fn renew_fence(&self, execution_id: &str, now_ms: u64) -> ConversationFuture<'_, bool>;
     /// Drop this process's in-memory hold on a `submitting` row without
     /// changing its status or its lease. This process can enter again. Another
@@ -334,6 +350,28 @@ pub trait ScheduledMessageStore: Send + Sync {
     /// The earliest still-live `submitting` lease, so the off path can wake
     /// and cancel it when it expires.
     fn next_live_fence(&self, now_ms: u64) -> ConversationFuture<'_, Option<u64>>;
+    /// Seal `history` as the generation this plan observed. A newer position
+    /// in the same incarnation replaces an older one. An older position writes
+    /// nothing and returns false. When `dismiss_open` is true and this
+    /// generation is current, an open `scheduled` or `delivering` row is
+    /// cancelled in that same transaction. The default seals nothing.
+    fn note_history(
+        &self,
+        conversation: &str,
+        history: &HistoryGeneration,
+        dismiss_open: bool,
+        actor: ScheduleActor,
+        at_ms: u64,
+    ) -> ConversationFuture<'_, bool> {
+        let _ = (conversation, history, dismiss_open, actor, at_ms);
+        Box::pin(async { Ok(true) })
+    }
+    /// Mark this request's receipt failed. The preference and any other
+    /// request stay as they are. The default records nothing.
+    fn fail_preference_command(&self, request_id: &str) -> ConversationFuture<'_, ()> {
+        let _ = request_id;
+        Box::pin(async { Ok(()) })
+    }
     /// The receipt for `request_id`, when this store has committed one.
     /// The default is none, for a double that does not record commands.
     fn preference_command(
@@ -559,13 +597,24 @@ impl ConversationService {
             {
                 if recorded.installed_enable {
                     let now = self.inner.clock.unix_milliseconds();
-                    store
+                    let reverted = store
                         .revert_installed_preference(
                             recorded.revision,
                             ScheduleActor::system(),
                             now,
                         )
                         .await?;
+                    // The revert marks the request that installed this
+                    // revision. A revert that no longer matches leaves that
+                    // receipt stored, so this request is marked failed here.
+                    if !reverted {
+                        store.fail_preference_command(&caller.action_id).await?;
+                    }
+                } else {
+                    // This request did not install the preference. The scan
+                    // still failed, so its receipt is failed and a retry does
+                    // not report success. Another request's revision stays.
+                    store.fail_preference_command(&caller.action_id).await?;
                 }
                 self.publish_preference(&visited);
                 return Err(error);
@@ -831,6 +880,7 @@ impl ConversationService {
                 model: row.model.clone(),
             });
         let now_ms = self.inner.clock.unix_milliseconds();
+        let history = facts.history.clone();
         let decided = crate::conversation::domain::plan_continuation(
             standing.enabled,
             now_ms,
@@ -841,22 +891,61 @@ impl ConversationService {
             enabled_by_person,
         );
         match decided {
-            ContinuationPlan::Hold => {}
+            ContinuationPlan::Hold => {
+                // No row was kept. Seal this generation and dismiss a row a
+                // stale accept may have inserted after the plan was read.
+                self.seal_history(
+                    store,
+                    &facts.conversation,
+                    &history,
+                    open.is_none(),
+                    actor.clone(),
+                    now_ms,
+                )
+                .await?;
+            }
             ContinuationPlan::Accept { due_at_ms, cause } => {
                 self.accept_usage_limit(store, &facts, due_at_ms, cause, actor, standing)
                     .await?;
             }
             ContinuationPlan::MoveDue { due_at_ms } => {
+                self.seal_history(
+                    store,
+                    &facts.conversation,
+                    &history,
+                    false,
+                    actor.clone(),
+                    now_ms,
+                )
+                .await?;
                 store
                     .move_due(&id.to_string(), &facts_causal(&facts), due_at_ms, now_ms)
                     .await?;
             }
             ContinuationPlan::Defer { due_at_ms } => {
+                self.seal_history(
+                    store,
+                    &facts.conversation,
+                    &history,
+                    false,
+                    actor.clone(),
+                    now_ms,
+                )
+                .await?;
                 store
                     .defer_claim(&id.to_string(), &facts_causal(&facts), due_at_ms, now_ms)
                     .await?;
             }
             ContinuationPlan::Cancel { cause } => {
+                self.seal_history(
+                    store,
+                    &facts.conversation,
+                    &history,
+                    false,
+                    actor.clone(),
+                    now_ms,
+                )
+                .await?;
                 store
                     .cancel_open(&id.to_string(), cause, actor, now_ms)
                     .await?;
@@ -866,6 +955,15 @@ impl ConversationService {
                 due_at_ms,
                 cause,
             } => {
+                self.seal_history(
+                    store,
+                    &facts.conversation,
+                    &history,
+                    false,
+                    actor.clone(),
+                    now_ms,
+                )
+                .await?;
                 store
                     .cancel_open(&id.to_string(), cancel, actor.clone(), now_ms)
                     .await?;
@@ -919,9 +1017,30 @@ impl ConversationService {
                     policy_revision: facts.policy_revision,
                     tools_checked: facts.tools_checked,
                     preference_revision: standing.revision,
+                    history: facts.history.clone(),
                 },
                 at_ms,
             )
+            .await?;
+        Ok(())
+    }
+
+    /// Record the history this plan observed, when that read had a generation.
+    /// An empty incarnation was not a committed history and does not move the fence.
+    async fn seal_history(
+        &self,
+        store: &Arc<dyn ScheduledMessageStore>,
+        conversation: &str,
+        history: &HistoryGeneration,
+        dismiss_open: bool,
+        actor: ScheduleActor,
+        at_ms: u64,
+    ) -> Result<(), ConversationError> {
+        if history.incarnation.is_empty() {
+            return Ok(());
+        }
+        store
+            .note_history(conversation, history, dismiss_open, actor, at_ms)
             .await?;
         Ok(())
     }
@@ -948,6 +1067,10 @@ impl ConversationService {
                 grant_id: None,
                 policy_revision: None,
                 tools_checked: false,
+                history: HistoryGeneration {
+                    incarnation: String::new(),
+                    position: 0,
+                },
             }));
         };
         let session = super::conversation_session(id);
@@ -1033,6 +1156,10 @@ impl ConversationService {
             grant_id,
             policy_revision,
             tools_checked,
+            history: HistoryGeneration {
+                incarnation: committed.incarnation().to_owned(),
+                position: committed.position(),
+            },
         }))
     }
 
@@ -1227,7 +1354,10 @@ impl ConversationService {
         let Ok(true) = store.begin_submit(&row.execution_id, now).await else {
             return false;
         };
-        let unrecorded = self.finish_fenced_submit(store.clone(), id, &row).await;
+        let lease_until = now.saturating_add(FENCE_LEASE_MS);
+        let unrecorded = self
+            .finish_fenced_submit(store.clone(), id, &row, lease_until)
+            .await;
         let _ = store.release_submit(&row.execution_id).await;
         unrecorded
     }
@@ -1237,6 +1367,7 @@ impl ConversationService {
         store: Arc<dyn ScheduledMessageStore>,
         id: ConversationId,
         row: &ScheduledMessage,
+        lease_until: u64,
     ) -> bool {
         let lost = Arc::new(AtomicBool::new(false));
         let renew = {
@@ -1245,10 +1376,17 @@ impl ConversationService {
             let clock = self.inner.clock.clone();
             let lost = lost.clone();
             tokio::spawn(async move {
-                renew_while_held(store, execution_id, clock, lost).await;
+                renew_while_held(store, execution_id, clock, lost, lease_until).await;
             })
         };
         let _renew = StopRenew(renew);
+        // The lease this process wrote has already expired. Do not start a
+        // submit, and do not record an outcome on a row another process may
+        // adopt. A saved execution is recorded by the process that adopts it.
+        if self.inner.clock.unix_milliseconds() >= lease_until {
+            lost.store(true, Ordering::SeqCst);
+            return false;
+        }
         if self.execution_saved(&id, &row.execution_id).await {
             let now = self.inner.clock.unix_milliseconds();
             let _ = store
@@ -1262,6 +1400,9 @@ impl ConversationService {
             return false;
         }
         let Some(commands) = self.commands() else {
+            if lost.load(Ordering::SeqCst) {
+                return false;
+            }
             return !self.hold_submit_retry(&store, row).await;
         };
         // A stored caller or grant that cannot be rebuilt will never pass
@@ -1270,6 +1411,9 @@ impl ConversationService {
         let (caller, initiation) = match (schedule_caller(row), continuation_initiation(row)) {
             (Ok(caller), Ok(initiation)) => (caller, initiation),
             _ => {
+                if lost.load(Ordering::SeqCst) {
+                    return false;
+                }
                 let now = self.inner.clock.unix_milliseconds();
                 let _ = store
                     .record_outcome(
@@ -1282,9 +1426,9 @@ impl ConversationService {
                 return false;
             }
         };
-        // The store said this process no longer owns the row. Do not start a
-        // second effect, and do not move a retry time on a row we do not own.
-        // A submit that has already run still records below.
+        // The store said this process no longer owns the row, or the lease it
+        // wrote has expired. Do not start a second effect, and do not move a
+        // retry time on a row we do not own.
         if lost.load(Ordering::SeqCst) {
             return false;
         }
@@ -1305,6 +1449,9 @@ impl ConversationService {
             .await
         {
             Ok(_) => {
+                if lost.load(Ordering::SeqCst) {
+                    return false;
+                }
                 let now = self.inner.clock.unix_milliseconds();
                 let _ = store
                     .record_outcome(
@@ -1317,6 +1464,9 @@ impl ConversationService {
                 false
             }
             Err(error) => {
+                if lost.load(Ordering::SeqCst) {
+                    return false;
+                }
                 if let Some((outcome, cause)) = settled_outcome(&error) {
                     let now = self.inner.clock.unix_milliseconds();
                     let _ = store
@@ -1406,24 +1556,45 @@ fn next_pass_wait(
     [delivery, catch_up, reconcile].into_iter().flatten().min()
 }
 
-/// Renew `execution_id` until the store says this process does not own it.
+/// Renew `execution_id` until this process no longer holds a live lease.
 ///
-/// `Ok(true)` waits [`FENCE_RENEW_EVERY_MS`] and renews again. `Err` waits
-/// [`FENCE_RENEW_RETRY_MS`] and renews again, and leaves `lost` false. `Ok(false)`
-/// sets `lost` and stops. A transient renew failure does not abandon a submit
-/// that is still running.
+/// `deadline` is the `fence_until_ms` this process last wrote. `Ok(true)`
+/// waits [`FENCE_RENEW_EVERY_MS`] and renews again, and the deadline becomes
+/// the instant that renew wrote. `Err` waits [`FENCE_RENEW_RETRY_MS`] and
+/// renews again only while `deadline` is still ahead. Once the clock reaches
+/// `deadline`, or `renew_fence` returns false, `lost` is set and renewal
+/// stops. An expired lease is not retried and is not extended.
 async fn renew_while_held(
     store: Arc<dyn ScheduledMessageStore>,
     execution_id: String,
     clock: Arc<dyn Clock>,
     lost: Arc<AtomicBool>,
+    mut deadline: u64,
 ) {
     loop {
-        tokio::time::sleep(Duration::from_millis(FENCE_RENEW_EVERY_MS)).await;
+        if clock.unix_milliseconds() >= deadline {
+            lost.store(true, Ordering::SeqCst);
+            return;
+        }
+        let until_renew = deadline
+            .saturating_sub(clock.unix_milliseconds())
+            .min(FENCE_RENEW_EVERY_MS);
+        tokio::time::sleep(Duration::from_millis(until_renew)).await;
+        if clock.unix_milliseconds() >= deadline {
+            lost.store(true, Ordering::SeqCst);
+            return;
+        }
         loop {
             let now = clock.unix_milliseconds();
+            if now >= deadline {
+                lost.store(true, Ordering::SeqCst);
+                return;
+            }
             match store.renew_fence(&execution_id, now).await {
-                Ok(true) => break,
+                Ok(true) => {
+                    deadline = now.saturating_add(FENCE_LEASE_MS);
+                    break;
+                }
                 Ok(false) => {
                     lost.store(true, Ordering::SeqCst);
                     return;
@@ -1434,6 +1605,10 @@ async fn renew_while_held(
                         %execution_id,
                         "the submitting lease could not be renewed; retrying"
                     );
+                    if clock.unix_milliseconds() >= deadline {
+                        lost.store(true, Ordering::SeqCst);
+                        return;
+                    }
                     tokio::time::sleep(Duration::from_millis(FENCE_RENEW_RETRY_MS)).await;
                 }
             }
@@ -1464,6 +1639,7 @@ struct UsageLimitFacts {
     grant_id: Option<String>,
     policy_revision: Option<u64>,
     tools_checked: bool,
+    history: HistoryGeneration,
 }
 
 /// Read one catalogue page into `out`. `Ok(true)` is the last page. An
@@ -1499,8 +1675,18 @@ fn facts_causal(facts: &UsageLimitFacts) -> String {
 pub(crate) fn continuation_prompt(user_text: &str, max_bytes: usize) -> String {
     const NOTICE: &str =
         "The usage limit reset. Continue the request that was waiting.\n\nThe request was:\n";
-    let mut prompt = String::from(NOTICE);
-    let room = max_bytes.saturating_sub(NOTICE.len());
+    if max_bytes == 0 {
+        return String::new();
+    }
+    // The notice is the prompt when the input bound is shorter than it. The
+    // scheduled submission has to pass the same bound, so the prompt never
+    // starts longer than `max_bytes`.
+    let notice_end = floor_bytes(NOTICE, max_bytes);
+    let mut prompt = NOTICE[..notice_end].to_owned();
+    let room = max_bytes.saturating_sub(prompt.len());
+    if room == 0 {
+        return prompt;
+    }
     let text = user_text.trim();
     let end = floor_bytes(text, room);
     prompt.push_str(&text[..end]);
@@ -1660,8 +1846,8 @@ mod catalogue_pages {
     use super::{
         renew_while_held, PreferenceCommandOutcome, PreferenceCommandReceipt, PreferenceReading,
         PreferenceUpdate, RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement,
-        ScheduledMessage, ScheduledMessageStore, FENCE_RENEW_EVERY_MS, FENCE_RENEW_RETRY_MS,
-        SCHEDULE_RETRY_MS,
+        ScheduledMessage, ScheduledMessageStore, FENCE_LEASE_MS, FENCE_RENEW_EVERY_MS,
+        FENCE_RENEW_RETRY_MS, SCHEDULE_RETRY_MS,
     };
     use crate::conversation::application::{
         ConversationCaller, ConversationDependencies, ConversationFuture, ConversationLimits,
@@ -2119,6 +2305,22 @@ mod catalogue_pages {
             }
             Box::pin(async move { Ok(matches) })
         }
+        fn fail_preference_command(&self, request_id: &str) -> ConversationFuture<'_, ()> {
+            let request_id = request_id.to_owned();
+            let saved = self.commands.lock().unwrap().get(&request_id).cloned();
+            if let Some(saved) = saved {
+                if matches!(saved.outcome, PreferenceCommandOutcome::Stored(_)) {
+                    self.commands.lock().unwrap().insert(
+                        request_id,
+                        PreferenceCommandReceipt {
+                            outcome: PreferenceCommandOutcome::Failed,
+                            ..saved
+                        },
+                    );
+                }
+            }
+            Box::pin(async { Ok(()) })
+        }
         fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
             refused()
         }
@@ -2475,6 +2677,14 @@ mod catalogue_pages {
         assert!(error.is_err());
         assert!(store.preference().await.unwrap().enabled);
         assert_eq!(store.changes.lock().unwrap().as_slice(), &[(true, false)]);
+        let receipt = store.preference_command("toggle").await.unwrap().unwrap();
+        assert!(matches!(receipt.outcome, PreferenceCommandOutcome::Failed));
+        let retry = service
+            .set_usage_limit_auto_continue(true, caller(), facts("admin"))
+            .await;
+        assert!(matches!(retry, Err(ConversationError::Unavailable)));
+        assert!(store.preference().await.unwrap().enabled);
+        assert_eq!(store.changes.lock().unwrap().as_slice(), &[(true, false)]);
     }
 
     #[tokio::test]
@@ -2571,6 +2781,7 @@ mod catalogue_pages {
                 store.clone(),
                 ConversationId::new(conversation).unwrap(),
                 &row,
+                u64::MAX,
             )
             .await;
         assert_eq!(
@@ -3322,6 +3533,7 @@ mod catalogue_pages {
             "exec-1".into(),
             Arc::new(TestClock),
             lost.clone(),
+            TestClock.unix_milliseconds() + FENCE_LEASE_MS,
         ));
         tokio::time::sleep(Duration::from_millis(
             FENCE_RENEW_EVERY_MS + FENCE_RENEW_RETRY_MS + 1,
@@ -3342,6 +3554,7 @@ mod catalogue_pages {
             "exec-1".into(),
             Arc::new(TestClock),
             lost.clone(),
+            TestClock.unix_milliseconds() + FENCE_LEASE_MS,
         ));
         tokio::time::sleep(Duration::from_millis(FENCE_RENEW_EVERY_MS + 1)).await;
         assert!(lost.load(Ordering::SeqCst));
@@ -3349,6 +3562,53 @@ mod catalogue_pages {
         tokio::time::sleep(Duration::from_millis(FENCE_RENEW_EVERY_MS)).await;
         assert_eq!(schedule.renew_calls.load(Ordering::SeqCst), 1);
         task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_renewal_error_after_the_lease_expires_stops() {
+        let schedule = Arc::new(ScriptedSchedule::new(true));
+        for _ in 0..40 {
+            schedule
+                .renew
+                .lock()
+                .unwrap()
+                .push(Err(ConversationError::Metadata));
+        }
+        let clock = Arc::new(PausingClock {
+            origin: tokio::time::Instant::now(),
+            base: 1_000,
+        });
+        let lost = Arc::new(AtomicBool::new(false));
+        let task = tokio::spawn(renew_while_held(
+            schedule.clone(),
+            "exec-1".into(),
+            clock,
+            lost.clone(),
+            1_000 + FENCE_LEASE_MS,
+        ));
+        tokio::time::sleep(Duration::from_millis(FENCE_LEASE_MS + FENCE_RENEW_EVERY_MS)).await;
+        assert!(lost.load(Ordering::SeqCst));
+        let calls = schedule.renew_calls.load(Ordering::SeqCst);
+        assert!(calls >= 1);
+        tokio::time::sleep(Duration::from_millis(FENCE_RENEW_EVERY_MS * 3)).await;
+        assert_eq!(schedule.renew_calls.load(Ordering::SeqCst), calls);
+        task.abort();
+    }
+
+    #[test]
+    fn a_continuation_prompt_stays_within_the_input_limit() {
+        let notice =
+            "The usage limit reset. Continue the request that was waiting.\n\nThe request was:\n";
+        let request = "please continue the request that was waiting on the limit";
+        for max in [1_usize, notice.len() - 1, notice.len(), notice.len() + 4] {
+            let prompt = super::continuation_prompt(request, max);
+            assert!(prompt.len() <= max, "{prompt:?} exceeds {max}");
+            assert!(!prompt.trim().is_empty());
+        }
+        let fitted = super::continuation_prompt("hello", notice.len() + 5);
+        assert!(fitted.starts_with(notice));
+        assert!(fitted.ends_with("hello"));
+        assert!(fitted.len() <= notice.len() + 5);
     }
 
     #[test]

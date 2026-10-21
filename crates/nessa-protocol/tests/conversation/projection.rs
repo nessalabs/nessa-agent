@@ -2358,6 +2358,24 @@ fn a_usage_limit_keeps_a_different_failure_beside_it() {
     }
 }
 
+#[test]
+fn a_usage_limit_in_a_later_aggregate_error_is_published_without_a_provider_report() {
+    let reached = AgentError::UsageLimitReached(weekly_limit());
+    let mut snapshot = review_snapshot(Vec::new());
+    snapshot.invocations[0].result = Some(Err(AgentError::MultipleOperationFailures {
+        first_error: Box::new(AgentError::Protocol("provider had no report".into())),
+        subsequent_error: Box::new(reached),
+    }));
+    snapshot.invocations[0].provider_report = None;
+    let message = &project_snapshot(&snapshot).messages[0];
+    let usage = message.usage_limit.as_ref().expect("usage limit");
+    assert_eq!(
+        usage.provider,
+        crate::conversation::view::ConversationUsageLimitProvider::Claude
+    );
+    assert_eq!(message.required_work_failed, Some(true));
+}
+
 fn weekly_limit() -> nessa_sdk::application::agent_execution::agents::UsageLimit {
     nessa_sdk::application::agent_execution::agents::UsageLimit::unknown(
         UsageLimitProvider::Claude,

@@ -104,8 +104,8 @@ so a later causal turn can still be accepted after a terminal row.
 | `delivering` | `begin_submit` compare-and-set | the store | `submitting` | Status, `fence_owner`, and `fence_until_ms` in one update. The in-memory arm is inserted only after that commit |
 | `submitting` | Lease expired, or this process already owns it and is not inside it | `begin_submit` | `submitting` | One update replaces `fence_owner` and `fence_until_ms`. A live lease owned by someone else matches nothing |
 | `submitting` | `renew_fence` succeeds | the owning process | `submitting` | `renew_fence` extends `fence_until_ms` for `fence_owner` only |
-| `submitting` | `renew_fence` returns an error | the owning process | `submitting` | The lease stays. Renewal tries again after one second. A `submit_command` already running keeps running |
-| `submitting` | `renew_fence` returns false | no longer this process | `submitting`, or the status the owner left | Renewal stops and `lost` is set. `submit_command` does not start. A submit that already ran still records its outcome |
+| `submitting` | `renew_fence` returns an error, and the lease this process wrote is still ahead | the owning process | `submitting` | The lease stays. Renewal tries again after one second. A `submit_command` already running keeps running |
+| `submitting` | The clock reaches the `fence_until_ms` this process wrote, or `renew_fence` returns false | no longer this process | `submitting`, until another process adopts it | Renewal stops and `lost` is set. An expired lease is not extended. `submit_command` does not start. A submit already running does not record an outcome or a retry time. The process that adopts the row records a saved execution without submitting again |
 | `submitting` | Execution already saved, or `submit_command` admits | `finish_fenced_submit`, then `record_outcome` | `delivered` | Status and audit, after the observation. The clock is read then |
 | `submitting` | `submit_command` returns a terminal refusal, or the caller cannot be rebuilt | `finish_fenced_submit` | `refused` | Status and audit, after the observation |
 | `submitting` | The mutation journal returns `Interrupted` | `finish_fenced_submit` | `unconfirmed` | Status and audit `submission_interrupted`. No second submit |
@@ -212,12 +212,13 @@ schedule with nothing due and no live lease. A store error is never that.
 | --- | --- | --- | --- | --- |
 | No open submit | Nobody. `fence_owner` is empty | `preference`, `retire_unfenced_submissions`, `next_live_fence`, `claim_due`, or `next_due` returns an error | The pass waits one second (`SCHEDULE_RETRY_MS`). It does not park until a notification storage recovery will not send | That one second, or sooner when a wakeup fires |
 | Preference off, lease still live | `fence_owner` until `fence_until_ms` | `retire_unfenced_submissions` or `next_live_fence` returns an error | Same one-second wait. A successful read waits until the live lease and then cancels it | `SCHEDULE_RETRY_MS`, or until `fence_until_ms` when the read succeeded |
-| `submitting`, this process inside `finish_fenced_submit` | This process, while `renew_fence` returns true | `renew_fence` returns an error, such as SQLite busy | Renewal continues. `lost` stays false. `submit_command` is not abandoned | `FENCE_RENEW_RETRY_MS` (one second) until a renew succeeds, then every ten seconds |
-| `submitting`, renew reports this process does not own the row | Whoever the store now names, or nobody | `renew_fence` returns false | `lost` is set and renewal stops. `submit_command` does not start. A submit that already ran still records its outcome. This process does not write a retry time on a row it does not own | No further renew from this process. The next due pass, or the process that adopted the expired lease, continues the row |
+| `submitting`, this process inside `finish_fenced_submit`, lease still ahead | This process, while `renew_fence` returns true and `fence_until_ms` is ahead of the clock | `renew_fence` returns an error, such as SQLite busy, before the deadline | Renewal continues. `lost` stays false. `submit_command` is not abandoned | `FENCE_RENEW_RETRY_MS` (one second) until a renew succeeds, then every ten seconds, and only while the deadline is still ahead |
+| `submitting`, the lease this process wrote has expired | Whoever adopts it after `fence_until_ms` | Renew keeps returning an error through the deadline, or `renew_fence` returns false because the deadline has passed | `lost` is set and renewal stops. The expired lease is not extended. `submit_command` does not start. A submit already running does not record an outcome or a retry | No further renew from this process. The next due pass adopts the row. A saved execution is recorded as delivered and is not submitted again |
+| `submitting`, renew reports this process does not own the row | Whoever the store now names, or nobody | `renew_fence` returns false | `lost` is set and renewal stops. `submit_command` does not start. A submit already running does not record an outcome. This process does not write a retry time on a row it does not own | No further renew from this process. The next due pass, or the process that adopted the expired lease, continues the row |
 | `submitting`, retry time still ahead | This process until the lease, then whoever adopts it | A retryable submit failure already wrote `retry_at_ms` | The pass does not claim the row and does not call `submit_command` | `retry_at_ms`. The first failure waits one second. Each later failure doubles that wait, at most one minute. A shorter delivery or catch-up wait wins |
 | Reconcile debt, catch-up already complete | The delivery loop | The plan failed at settlement | The debt stays. The log line is not the end of the attempt | `retry_at_ms` on the debt, on the same curve. The loop wakes for that debt. A later successful plan deletes it |
 | Enable in progress, this request installed the revision | The decision transaction, then the scan | The catalogue scan fails | Revert that revision only while it is still enabled and unsettled. The audit cause is `preference` and the initiator is the system | The revert is one compare-and-set. A revision a later request already settled matches nothing and stays on |
-| Enable in progress, this request did not install the revision | The earlier installer until a scan settles it | This request's scan fails | This request does not turn the preference off. A scan that finishes settles the revision it observed, so the installer's later revert matches nothing | None for this request. The command returns the error. It does not record the scan as finished |
+| Enable in progress, this request did not install the revision | The earlier installer until a scan settles it | This request's scan fails | This request does not turn the preference off and does not revert the other revision. Its own receipt is marked failed in that update. A scan that finishes settles the revision it observed, so the installer's later revert matches nothing | The retry of this request returns the failure. It does not report the original success and it does not scan again |
 | Catch-up pending, preference on | The delivery loop | `schedule_every_owner` fails, including a catalogue page that cannot be read | Catch-up stays pending. Owners and pages already planned stay planned. The pass does not park on an empty schedule | One second, then double, at most one minute (`CATCH_UP_RETRY_MAX_MS`). A shorter delivery wait wins. The next pass traverses every owner again |
 
 A past reset does not schedule. An overdue row that was accepted while the
@@ -225,9 +226,26 @@ reset was still in the future is delivered after the process starts. Nothing
 promises that minute while the process is down. Two overlapping loops in one
 process, or two processes on the file, take the compare-and-set. A live lease
 has one owner. The loser does not submit. The owner renews the lease until
-the outcome is recorded. A renew that returns an error is tried again after
-one second and does not drop the lease. The lease is thirty seconds, renewed
-every ten while the renew succeeds.
+the outcome is recorded or the lease it wrote expires. A renew that returns
+an error is tried again after one second only while that deadline is still
+ahead. At the deadline, renewal stops. The lease is thirty seconds, renewed
+every ten while the renew succeeds and the previous deadline has not passed.
+
+### Lock and lease lifecycle
+
+Four locks order a continuation. Each names one owner, when it expires, what
+renews it, and what releases it.
+
+| Lock | Owner | Expires | Renewal | Release | What another writer may do |
+| --- | --- | --- | --- | --- | --- |
+| Submit lease `fence_owner` / `fence_until_ms` | The process whose `begin_submit` committed | `fence_until_ms`. Thirty seconds, from the clock of that write | `renew_fence` extends it only while `fence_until_ms` is still ahead and `fence_owner` is this process. An error retries after one second until that deadline. At the deadline, `lost` is set and renewal stops. An expired lease is not extended | `record_outcome` while the lease is still held, or adoption by `begin_submit` after expiry. `release_submit` drops only this process's in-memory arm | Adopt after expiry and submit, or record a saved execution without submitting again. It does not submit while the lease is live |
+| Preference revision | The decision transaction that changed the boolean | When a later decision commits a higher revision | An enable that finds the preference already on does not bump it. A finished scan settles the revision it observed | A disable, a direct write, or the revert of an unsettled enable | `accept` inserts only while the revision the planner read is still enabled, in that same transaction |
+| History generation `history_fence` | The plan that observed `(incarnation, position)` | When a later plan seals a higher position in the same incarnation, or a different incarnation | Every plan seals the generation it read, including a hold that found no row. Position only moves forward inside one incarnation | A newer seal replaces it. A hold that found no row also cancels an open `scheduled` or `delivering` row in that transaction | `accept` inserts only while its generation is still sealed. An older generation writes nothing |
+| Preference request receipt | The request id, in the same transaction as its decision audit | When that receipt is marked `failed`, or the row stays as the committed outcome | A retry returns the receipt and does not apply again | A failed audit writes no receipt. A scan that fails marks that request `failed` even when the request installed nothing, and does not revert another request's revision | A different enabled value, or a different person, for the same request writes nothing |
+
+The submit lease is the only one with a clock. The other three expire when a newer writer commits, not when time passes. A submit whose lease expires while `submit_command` is still inside it does not record the outcome and does not write a retry time. The adopter owns that row.
+
+The history fence is what acceptance adds to the preference revision. A later turn or model change advances `position` in the committed session. Its reconciliation seals that generation. An accept that read the older generation then writes nothing, including when the preference revision still matches. The row does not stay visible as auto-resuming until its due time.
 
 A pass claims at most eight due rows. A scheduled row still due at that
 clock, a delivering row, or a submitting row whose retry time has arrived,
@@ -256,11 +274,12 @@ turn with no saved result clears it.
    that transaction commits. `armed` is this process's re-entry guard. A
    failed commit leaves the id unarmed and the row `delivering`. A second
    process does not submit while the lease is live. A `renew_fence` error
-   does not drop the lease or set `lost`: renewal tries again after one
-   second until the store extends it or reports that this process does not
-   own the row. `lost` is that false result. It stops a `submit_command`
-   that has not started. A submit that has already run still records its
-   outcome.
+   retries after one second only while the `fence_until_ms` this process
+   wrote is still ahead. At that deadline, or when `renew_fence` returns
+   false, `lost` is set and renewal stops. An expired lease is not extended.
+   `lost` stops a `submit_command` that has not started. A submit already
+   running does not record an outcome or a retry time. The process that
+   adopts the row records a saved execution without submitting again.
 6. Schedule and cancellation audits commit with the status change. The
    outcome audit commits after the observation, with the clock read at that
    observation. If that audit fails, the row stays `submitting` and the next
@@ -345,8 +364,11 @@ turn with no saved result clears it.
     read that fails leaves catch-up pending; it does not treat the preference
     as off for the life of the process.
 19. `accept` writes only while the preference revision the planner read is
-    still enabled, in that same transaction. A preference change that commits
-    first leaves no new row. The card's line follows the confirmed preference.
+    still enabled and the history generation it observed is still the sealed
+    generation, in that same transaction. A preference change, or a newer
+    history, that commits first leaves no new row. A plan seals the generation
+    it read, including a hold that found no row, and that hold cancels an open
+    row the newer history does not keep. The card's line follows the confirmed preference.
     The checkbox may show a pending choice until the command settles. Once it
     has settled, a confirmed value that is not that choice releases the
     checkbox. Scheduling failed is the line only when that confirmed
@@ -366,7 +388,11 @@ turn with no saved result clears it.
     after a later disable. A different input for the same request writes
     nothing. A blank, oversized, or control-character request id is rejected
     before Cedar and before any write. A scan that reverts the enable marks
-    that receipt failed in the revert's transaction.
+    that receipt failed in the revert's transaction. A scan that fails for a
+    request that installed nothing marks that request's receipt failed and
+    does not revert another request's revision. The continuation prompt is
+    non-blank and no longer than the input bound. A saved usage limit with no
+    provider report is read from every position of an aggregate.
 
 ## Card
 

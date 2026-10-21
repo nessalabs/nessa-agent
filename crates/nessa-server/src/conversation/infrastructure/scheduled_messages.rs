@@ -12,10 +12,10 @@
 //! each commit their own audit, with the policy ids, before the command result.
 
 use crate::conversation::application::{
-    ConversationError, ConversationFuture, PreferenceCommandOutcome, PreferenceCommandReceipt,
-    PreferenceReading, PreferenceUpdate, ReconcileRetry, RecordedPreference, ScheduleActor,
-    ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore, UsageLimitSnapshot,
-    FENCE_LEASE_MS,
+    ConversationError, ConversationFuture, HistoryGeneration, PreferenceCommandOutcome,
+    PreferenceCommandReceipt, PreferenceReading, PreferenceUpdate, ReconcileRetry,
+    RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage,
+    ScheduledMessageStore, UsageLimitSnapshot, FENCE_LEASE_MS,
 };
 use crate::conversation::domain::ContinuationCause;
 use nessa_local_database::{
@@ -399,6 +399,48 @@ fn cancel_open_preference(
 
 fn lease_until(now_ms: u64) -> Result<i64, ConversationError> {
     millis(now_ms.saturating_add(FENCE_LEASE_MS))
+}
+
+/// Record `history` when it is still current. False when a newer position in
+/// the same incarnation is already sealed. A different incarnation replaces
+/// the fence: it is a new history. An empty incarnation is not a generation
+/// and leaves the fence where it is.
+fn claim_history(
+    transaction: &Transaction<'_>,
+    conversation: &str,
+    history: &HistoryGeneration,
+) -> Result<bool, ConversationError> {
+    if history.incarnation.is_empty() {
+        return Ok(true);
+    }
+    let observed = i64::try_from(history.position).map_err(|_| ConversationError::InvalidInput)?;
+    let stored: Option<(String, i64)> = transaction
+        .query_row(
+            "SELECT incarnation, position FROM history_fence WHERE conversation = ?1",
+            params![conversation],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(failed)?;
+    if let Some((incarnation, position)) = stored {
+        if incarnation == history.incarnation && position > observed {
+            return Ok(false);
+        }
+        if incarnation == history.incarnation && position == observed {
+            return Ok(true);
+        }
+    }
+    transaction
+        .execute(
+            "INSERT INTO history_fence (conversation, incarnation, position) \
+             VALUES (?1, ?2, ?3) \
+             ON CONFLICT (conversation) DO UPDATE SET \
+               incarnation = excluded.incarnation, \
+               position = excluded.position",
+            params![conversation, history.incarnation, observed],
+        )
+        .map_err(failed)?;
+    Ok(true)
 }
 
 struct PreferenceStanding {
@@ -877,6 +919,51 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         self.run(move |connection| load_open(connection, &conversation))
     }
 
+    fn note_history(
+        &self,
+        conversation: &str,
+        history: &HistoryGeneration,
+        dismiss_open: bool,
+        actor: ScheduleActor,
+        at_ms: u64,
+    ) -> ConversationFuture<'_, bool> {
+        let conversation = conversation.to_owned();
+        let history = history.clone();
+        self.run(move |connection| {
+            let at_ms = millis(at_ms)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            let current = claim_history(&transaction, &conversation, &history)?;
+            if current && dismiss_open {
+                cancel_matching(
+                    &transaction,
+                    "WHERE conversation = ?1 AND status IN ('scheduled', 'delivering')",
+                    &[&conversation],
+                    ContinuationCause::NoLongerBlocked.as_str(),
+                    &actor,
+                    at_ms,
+                )?;
+            }
+            transaction.commit().map_err(failed)?;
+            Ok(current)
+        })
+    }
+
+    fn fail_preference_command(&self, request_id: &str) -> ConversationFuture<'_, ()> {
+        let request_id = request_id.to_owned();
+        self.run(move |connection| {
+            connection
+                .execute(
+                    "UPDATE preference_command SET outcome = 'failed' \
+                     WHERE request_id = ?1 AND outcome = 'stored'",
+                    params![request_id],
+                )
+                .map_err(failed)?;
+            Ok(())
+        })
+    }
+
     fn accept(
         &self,
         draft: ScheduleDraft,
@@ -886,6 +973,10 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             let at_ms = millis(at_ms)?;
             let due = millis(draft.due_at_ms)?;
             let transaction = connection.transaction().map_err(failed)?;
+            if !claim_history(&transaction, &draft.conversation, &draft.history)? {
+                transaction.commit().map_err(failed)?;
+                return Ok(None);
+            }
             let current = standing(&transaction)?;
             if !current.enabled || current.revision != draft.preference_revision {
                 transaction.commit().map_err(failed)?;
@@ -1393,12 +1484,15 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         let execution_id = execution_id.to_owned();
         let owner = self.owner.clone();
         self.run(move |connection| {
+            let now = millis(now_ms)?;
             let until = lease_until(now_ms)?;
+            // An expired lease is not extended. Another process may adopt it.
             let changed = connection
                 .execute(
                     "UPDATE message SET fence_until_ms = ?1 \
-                     WHERE execution_id = ?2 AND status = 'submitting' AND fence_owner = ?3",
-                    params![until, execution_id, owner],
+                     WHERE execution_id = ?2 AND status = 'submitting' AND fence_owner = ?3 \
+                       AND fence_until_ms > ?4",
+                    params![until, execution_id, owner, now],
                 )
                 .map_err(failed)?;
             Ok(changed == 1)
@@ -1723,6 +1817,10 @@ mod tests {
             policy_revision: None,
             tools_checked: false,
             preference_revision: 1,
+            history: HistoryGeneration {
+                incarnation: "history".into(),
+                position: 1,
+            },
         }
     }
 
@@ -2450,7 +2548,7 @@ mod tests {
         first.claim_due(now, 4).await.unwrap();
         assert!(first.begin_submit("exec-1", now).await.unwrap());
         assert!(!second.begin_submit("exec-1", now).await.unwrap());
-        let renewed_at = now + super::FENCE_LEASE_MS;
+        let renewed_at = now + super::FENCE_LEASE_MS - 1;
         assert!(first.renew_fence("exec-1", renewed_at).await.unwrap());
         assert!(!second.begin_submit("exec-1", renewed_at).await.unwrap());
         let expired = renewed_at + super::FENCE_LEASE_MS;
@@ -2479,6 +2577,107 @@ mod tests {
             Some("cancelled")
         );
         drop(directory);
+    }
+
+    #[tokio::test]
+    async fn an_expired_lease_is_not_renewed_and_another_process_adopts_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("scheduled");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("scheduled-chat-messages.sqlite3");
+        let first = LocalScheduledMessages::open(&path).unwrap();
+        let second = LocalScheduledMessages::open(&path).unwrap();
+        let now = 1_000;
+        first.set_preference(true, person(), 1).await.unwrap();
+        first
+            .accept(draft("conversation", "causal", "exec-1", now), 2)
+            .await
+            .unwrap();
+        first.claim_due(now, 4).await.unwrap();
+        assert!(first.begin_submit("exec-1", now).await.unwrap());
+        let expired = now + super::FENCE_LEASE_MS;
+        assert!(!first.renew_fence("exec-1", expired).await.unwrap());
+        let until: i64 = first
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT fence_until_ms FROM message WHERE execution_id = 'exec-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(until, i64::try_from(expired).unwrap());
+        assert!(second.begin_submit("exec-1", expired).await.unwrap());
+        assert!(!first.renew_fence("exec-1", expired).await.unwrap());
+        drop(directory);
+    }
+
+    #[tokio::test]
+    async fn a_later_history_rejects_a_stale_accept_and_dismisses_its_row() {
+        let store = enabled_store().await;
+        let older = HistoryGeneration {
+            incarnation: "inc".into(),
+            position: 1,
+        };
+        let newer = HistoryGeneration {
+            incarnation: "inc".into(),
+            position: 2,
+        };
+        let mut stale = draft("conversation", "causal", "exec-old", 50);
+        stale.history = older.clone();
+        assert!(store.accept(stale, 3).await.unwrap().is_some());
+        assert!(store
+            .note_history("conversation", &newer, true, ScheduleActor::system(), 4,)
+            .await
+            .unwrap());
+        assert!(store.open("conversation").await.unwrap().is_none());
+        let mut again = draft("conversation", "causal", "exec-stale", 50);
+        again.history = older;
+        assert!(store.accept(again, 5).await.unwrap().is_none());
+        assert!(store.open("conversation").await.unwrap().is_none());
+        let mut current = draft("conversation", "later", "exec-new", 50);
+        current.history = newer;
+        assert!(store.accept(current, 6).await.unwrap().is_some());
+        assert_eq!(
+            store.status("exec-new").await.unwrap().as_deref(),
+            Some("scheduled")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_scan_marks_the_request_that_did_not_install() {
+        let store = store().await;
+        let first = store
+            .record_preference_decision(true, true, &[], person_as("install"), 1)
+            .await
+            .unwrap();
+        assert!(first.installed_enable);
+        assert!(store
+            .settle_installed_preference(first.revision)
+            .await
+            .unwrap());
+        let revision = store.preference().await.unwrap().revision;
+        let second = store
+            .record_preference_decision(true, true, &[], person_as("again"), 2)
+            .await
+            .unwrap();
+        assert!(!second.installed_enable);
+        store.fail_preference_command("again").await.unwrap();
+        assert_eq!(store.preference().await.unwrap().revision, revision);
+        assert!(store.preference().await.unwrap().enabled);
+        let installed = store.preference_command("install").await.unwrap().unwrap();
+        assert!(matches!(
+            installed.outcome,
+            PreferenceCommandOutcome::Stored(true)
+        ));
+        let failed = store.preference_command("again").await.unwrap().unwrap();
+        assert!(matches!(failed.outcome, PreferenceCommandOutcome::Failed));
+        let replay = store
+            .record_preference_decision(true, true, &[], person_as("again"), 3)
+            .await;
+        assert!(matches!(replay, Err(ConversationError::Unavailable)));
+        assert!(store.preference().await.unwrap().enabled);
     }
 
     #[tokio::test]
