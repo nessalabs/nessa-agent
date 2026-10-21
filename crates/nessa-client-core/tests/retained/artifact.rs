@@ -770,13 +770,14 @@ fn a_stop_during_a_busy_pause_returns_within_one_slice() {
         fault.kind(),
         ArtifactFaultKind::Gateway(ReadFailure::Stopped)
     );
-    // The first busy delay is 250ms. The pause sleeps one stop slice at a
-    // time, so it is back within a slice of this stop, not at the end of
-    // that delay. The bound is from the stop, so a late stopper does not
-    // count as a pause that ignored it.
+    // The first busy delay is 250ms, and the stopper waits 20ms before
+    // stopping, so a pause that ignores the stop still has about 230ms to
+    // run. The wait sleeps one stop slice at a time. A loaded macOS runner
+    // delivered that slice 162ms after the stop, past three slices and short
+    // of the delay, so the bound is four slices (200ms).
     let since_stop = stopped_at.lock().unwrap().expect("stop ran").elapsed();
     assert!(
-        since_stop < super::super::STOP_SLICE * 3,
+        since_stop < super::super::STOP_SLICE * 4,
         "pause ignored the stop: {since_stop:?}"
     );
     assert_eq!(reads.load(Ordering::SeqCst), 1);
@@ -868,8 +869,9 @@ fn a_budget_that_ends_during_a_busy_pause_is_unreachable() {
         ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
     );
     // The first busy delay is 250ms. The budget becomes spent 30ms into that
-    // pause. The wait is back within a slice of that moment, not at the end
-    // of the delay. The bound is from the moment the budget was spent.
+    // pause, so a wait that ignores it still has about 220ms to run. The
+    // bound is four stop slices (200ms) from the moment the budget was
+    // spent: one slice of sleep, and the late wake a loaded runner gives it.
     let since_spent = clock
         .spent_at
         .lock()
@@ -877,7 +879,7 @@ fn a_budget_that_ends_during_a_busy_pause_is_unreachable() {
         .expect("budget spent")
         .elapsed();
     assert!(
-        since_spent < super::super::STOP_SLICE * 3,
+        since_spent < super::super::STOP_SLICE * 4,
         "pause ignored the budget: {since_spent:?}"
     );
     assert_eq!(reads.load(Ordering::SeqCst), 1);
