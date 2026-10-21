@@ -162,7 +162,9 @@ it("paints a new arrangement on the frame after it commits", async () => {
   // the frame after that: a drop's copy lets go, then a column title glides.
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
   expect(host.hasAttribute("data-spare-held")).toBe(false)
-  await act(async () => new Promise<void>((resolve) => requestAnimationFrame(resolve)))
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
   expect(host.hasAttribute("data-spare-held")).toBe(true)
   await act(
     async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
