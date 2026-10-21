@@ -4,8 +4,9 @@
 //! of the gateway. Gateway freshness is only the run whose ranges were
 //! answered and whose part, read back from disk, matched the named digest.
 //! Elapsed time is this fetch on the retained clock, not model generation.
-//! Busy retries wait on the injected pause. A stop during that wait, during
-//! the fetch, during the link, and after the link follows [`Publication`].
+//! Busy retries wait on the injected pause. A stop or a spent budget during
+//! that wait, and a stop during the fetch, the link, and after the link,
+//! follows [`Publication`].
 
 use super::{failure, ReadFailure, ReadStop, ReaderAccess, RetainedCache, Stopping};
 use crate::read_only_sync::application::held_file::{
@@ -113,8 +114,10 @@ pub enum ArtifactFaultKind {
 /// Where one phone fetch stands, and what [`ReadStop::stop`] does there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Publication {
-    /// Between busy retries. `stop` ends the wait within one stop slice.
-    /// The range is not asked again. The result is [`ReadFailure::Stopped`].
+    /// Between busy retries. The caller stop or a spent fetch budget ends
+    /// the wait within one stop slice. The range is not asked again. A
+    /// caller stop is [`ReadFailure::Stopped`]. A spent budget, with the
+    /// stop clear, is [`ReadFailure::Unreachable`].
     Waiting,
     /// A range read or the part's re-read. The next source read is cancelled.
     /// `keep` has not published the output.
@@ -507,12 +510,15 @@ fn publish_fetch(failure: FetchFailure, keep_saw_stop: bool) -> ArtifactFault {
 /// Ask the gateway and keep the file only when the part matches. The caller
 /// has already applied [`local_held_file`]. A stop set while the part is
 /// re-read refuses `keep` and is `Stopped`, not a gateway confirmation.
+/// `ending` is the same end as a socket read: a caller stop, or a spent
+/// budget. Either cuts a busy pause short and asks no later range.
 pub(crate) fn confirmed_held_file(
     source: &mut dyn HeldFileSource,
     pause: &dyn Pause,
     request: &ArtifactRequest<'_>,
-    stop: &ReadStop,
+    ending: &Stopping,
 ) -> Result<Result<ArtifactFreshness, ArtifactFault>, ReadFailure> {
+    let stop = &ending.stop;
     let file = named(
         request.conversation,
         request.digest,
@@ -540,7 +546,9 @@ pub(crate) fn confirmed_held_file(
             0,
         ))));
     }
-    match fetch_held_file(source, pause, &mut files, &file, &|| stop.is_stopped()) {
+    match fetch_held_file(source, pause, &mut files, &file, &|| {
+        stop.is_stopped() || ending.spent()
+    }) {
         Ok(progress) => Ok(Ok(ArtifactFreshness::GatewayConfirmed {
             ranges: progress.ranges,
             resumed_from: progress.resumed_from,
@@ -555,8 +563,9 @@ impl RetainedCache {
     /// `elapsed_ms` is this call on the cache clock.
     ///
     /// A socket registered on `stop` is released on every exit after the dial,
-    /// including a handshake that fails. A budget that cancels a range is
-    /// `Unreachable`. `ReadStop::stop` stays `Stopped`, including a local
+    /// including a handshake that fails. A budget that cancels a range, or
+    /// that runs out during a busy pause, is `Unreachable` within one stop
+    /// slice. `ReadStop::stop` stays `Stopped`, including a local
     /// match that was cancelled while the output was read. A relay that says
     /// the gateway is offline, when the direct dial did not connect, is `Away`.
     pub fn fetch_artifact(
@@ -598,7 +607,7 @@ impl RetainedCache {
                 source: GatewayConnection::new(session),
                 stop: stop.clone(),
             };
-            confirmed_held_file(&mut source, pause, request, stop)
+            confirmed_held_file(&mut source, pause, request, &ending)
         };
         stop.release();
         let outcome = match fetched? {

@@ -15,7 +15,7 @@ use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,6 +23,15 @@ use std::time::{Duration, Instant};
 struct Still;
 impl Pause for Still {
     fn pause(&self, _: Duration, _: &dyn Fn() -> bool) {}
+}
+
+/// A fetch whose budget is not spent on the zero clock.
+fn running(stop: Arc<ReadStop>) -> super::super::Stopping {
+    super::super::Stopping {
+        stop,
+        clock: Arc::new(Held),
+        until: u64::MAX,
+    }
 }
 
 const CONVERSATION: &str = "00000000-0000-4000-8000-000000000001";
@@ -121,7 +130,7 @@ fn a_gateway_answer_is_fresh_only_when_the_digest_matches() {
         &mut source,
         &Still,
         &request(&conversation, &digest, &output),
-        &ReadStop::new(),
+        &running(ReadStop::new()),
     )
     .unwrap()
     .unwrap();
@@ -147,7 +156,7 @@ fn a_gateway_answer_is_fresh_only_when_the_digest_matches() {
         &mut source,
         &Still,
         &request(&conversation, &digest, &output),
-        &ReadStop::new(),
+        &running(ReadStop::new()),
     )
     .unwrap()
     .unwrap_err();
@@ -166,7 +175,7 @@ fn a_gateway_answer_is_fresh_only_when_the_digest_matches() {
         &mut source,
         &Still,
         &request(&conversation, &digest, &output),
-        &ReadStop::new(),
+        &running(ReadStop::new()),
     )
     .unwrap()
     .unwrap_err();
@@ -272,6 +281,7 @@ fn a_stop_during_the_part_reread_does_not_keep_the_file() {
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("file.bin");
     let stop = ReadStop::new();
+    let ending = running(stop.clone());
     let mut source = CancelAfterRange {
         bytes,
         stop: stop.clone(),
@@ -280,7 +290,7 @@ fn a_stop_during_the_part_reread_does_not_keep_the_file() {
         &mut source,
         &Still,
         &request(&conversation, &digest, &output),
-        &stop,
+        &ending,
     )
     .unwrap()
     .unwrap_err();
@@ -314,7 +324,7 @@ fn a_stopped_source_is_not_a_fresh_file_and_asks_nothing() {
         &mut source,
         &Still,
         &request(&conversation, &digest, &output),
-        &ReadStop::new(),
+        &running(ReadStop::new()),
     )
     .unwrap()
     .unwrap_err();
@@ -602,6 +612,7 @@ fn a_stop_during_a_busy_pause_returns_within_one_slice() {
         reads: reads.clone(),
         asked: asked.clone(),
     };
+    let ending = running(stop.clone());
     let stopping = stop.clone();
     let stopper = thread::spawn(move || {
         let started = Instant::now();
@@ -620,7 +631,7 @@ fn a_stop_during_a_busy_pause_returns_within_one_slice() {
         &mut source,
         &super::ThreadPause,
         &request(&conversation, &digest, &output),
-        &stop,
+        &ending,
     )
     .unwrap()
     .unwrap_err();
@@ -638,6 +649,97 @@ fn a_stop_during_a_busy_pause_returns_within_one_slice() {
     );
     assert_eq!(reads.load(Ordering::SeqCst), 1);
     assert!(!output.exists());
+}
+
+/// Stays at zero until 30ms after the busy answer, then reports the budget spent.
+struct BudgetClock {
+    origin: Instant,
+    asked_ms: AtomicU64,
+}
+impl nessa_protocol::clock::Clock for BudgetClock {
+    fn elapsed_ms(&self) -> u64 {
+        let asked = self.asked_ms.load(Ordering::SeqCst);
+        if asked == 0 {
+            return 0;
+        }
+        let now = u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if now.saturating_sub(asked) >= 30 {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+struct BusyBeforeBudget {
+    reads: Arc<AtomicUsize>,
+    clock: Arc<BudgetClock>,
+}
+impl HeldFileSource for BusyBeforeBudget {
+    fn read(
+        &mut self,
+        _: &crate::read_only_sync::domain::HeldFile,
+        _: HeldRange,
+    ) -> Result<RangeAnswer, GatewayError> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        let now = u64::try_from(self.clock.origin.elapsed().as_millis())
+            .unwrap_or(1)
+            .max(1);
+        self.clock.asked_ms.store(now, Ordering::SeqCst);
+        Err(GatewayError::HeldFile(HeldFileRefusal::Conversation(
+            ConversationErrorCode::TemporarilyUnavailable,
+        )))
+    }
+}
+
+#[test]
+fn a_budget_that_ends_during_a_busy_pause_is_unreachable() {
+    let bytes = b"ab";
+    let conversation = conversation();
+    let digest = digest_of(bytes);
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("file.bin");
+    let reads = Arc::new(AtomicUsize::new(0));
+    let clock = Arc::new(BudgetClock {
+        origin: Instant::now(),
+        asked_ms: AtomicU64::new(0),
+    });
+    let ending = super::super::Stopping {
+        stop: ReadStop::new(),
+        clock: clock.clone(),
+        until: 1,
+    };
+    let mut source = BusyBeforeBudget {
+        reads: reads.clone(),
+        clock,
+    };
+    let started = Instant::now();
+    let fault = confirmed_held_file(
+        &mut source,
+        &super::ThreadPause,
+        &request(&conversation, &digest, &output),
+        &ending,
+    )
+    .unwrap()
+    .unwrap_err();
+    let elapsed = started.elapsed();
+    assert_eq!(
+        fault.kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Stopped)
+    );
+    assert_eq!(
+        super::classify_artifact_fault(fault, &ending.stop, &ending).kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
+    );
+    // The first busy delay is 250ms. The budget becomes spent 30ms into that
+    // pause, so a wait that observes it is back within one stop slice.
+    assert!(
+        elapsed < Duration::from_millis(200),
+        "pause ignored the budget: {elapsed:?}"
+    );
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    assert!(!output.exists());
+    assert!(!ending.stop.is_stopped());
 }
 
 struct SyncStops {
