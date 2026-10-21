@@ -10,6 +10,7 @@ import type { ComposerAccessModeValue } from "@nessa-ui/react/composer-access-mo
 import type { AccessMode } from "../../model/access"
 import { chooseAccess } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import { useHeldDraftValue } from "../../adapters/store/remembered-session"
 import { selectAccess, selectAccessNotice } from "../../adapters/store/selectors"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import type { ComposerAccess } from "../../../ui/composer"
@@ -57,8 +58,10 @@ export const pendingAccessCopy = "Access changes when the agent stops."
 /** The shield's value, its change handler, and what to say of its last choice, for a session's composer. */
 export function useComposerAccess(sessionId: string): ComposerAccess {
   const dispatch = useWorkspaceDispatch()
-  const mode = useWorkspaceSelector((state) => selectAccess(state, sessionId))
-  const said = useWorkspaceSelector((state) => selectAccessNotice(state, sessionId))
+  const modeLive = useWorkspaceSelector((state) => selectAccess(state, sessionId))
+  const saidLive = useWorkspaceSelector((state) => selectAccessNotice(state, sessionId))
+  const mode = useHeldDraftValue(sessionId, modeLive)
+  const said = useHeldDraftValue(sessionId, saidLive)
   const onChange = useCallback(
     (value: ComposerAccessModeValue) =>
       void dispatch(

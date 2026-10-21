@@ -51,6 +51,7 @@ const checks = [
   "rail-off",
   "overview-covers",
   "rail-fold-focus",
+  "draft-held",
 ]
 
 const meta = {
@@ -87,7 +88,9 @@ Checks, per engine, layout and size:
   overview-covers  with the Agents overview open, the session list and the
                    panes under it are inert
   rail-fold-focus  a rail button with the keyboard on it, folded away for
-                   room, hands the keyboard to the toggle`,
+                   room, hands the keyboard to the toggle
+  draft-held       closing a new session that is not the last pane keeps its
+                   home and unsent text on the next frame, until the box goes`,
 }
 
 /** The columns in the order they stand; the chat area and the overview share the last place. */
@@ -846,6 +849,65 @@ const body = {
       if (!late.reduced && !late.sweeping) failures.push("the text is not sweeping")
     }
     return { opened, late, failures }
+  },
+
+  /**
+   * A non-last draft is dropped in the close, and the box stays three
+   * frames. The next frame still shows that home and the unsent text.
+   */
+  "draft-held": async ({ page }) => {
+    const text = "unsent line"
+    const before = await page.locator(css.pane).count()
+    await page.keyboard.press(keys.newSessionBeside)
+    await need(page, css.paneHome, "a new session's home")
+    const field = page.locator(`${css.paneHome} textarea`)
+    await field.fill(text)
+    await frames(page, 2)
+    const typed = await field.inputValue()
+    if (typed !== text) throw new CannotRun(`the home field reads "${typed}"`)
+    await page.evaluate(
+      ({ pane, home }) => {
+        window.__heldDraft = null
+        window.addEventListener(
+          "keydown",
+          (event) => {
+            if (event.code !== "KeyW" || !event.metaKey) return
+            requestAnimationFrame(() => {
+              window.__heldDraft = [...document.querySelectorAll(pane)].map((item) => ({
+                label: item.getAttribute("aria-label"),
+                home: item.querySelector(home) !== null,
+                text: item.querySelector("textarea")?.value ?? "",
+              }))
+            })
+          },
+          true,
+        )
+      },
+      { pane: css.pane, home: css.paneHome },
+    )
+    await page.keyboard.press(keys.closePane)
+    await page.waitForFunction(() => window.__heldDraft !== null)
+    const sample = await page.evaluate(() => window.__heldDraft)
+    await settled(page)
+    await frames(page, 4)
+    const after = await page.locator(css.pane).count()
+    const failures = []
+    const kept = sample?.find((item) => item.text === text)
+    if (!sample) failures.push("the close did not sample the next frame")
+    else if (!kept)
+      failures.push(`the next frame has no unsent text: ${JSON.stringify(sample)}`)
+    else {
+      if (!kept.home) failures.push("the held box has the text but not the home")
+      if (kept.label !== "New session")
+        failures.push(`the held box is labelled ${kept.label}`)
+      if (sample.length < before + 1)
+        failures.push(
+          `the next frame has ${sample.length} panes; the close started from ${before + 1}`,
+        )
+    }
+    if (after !== before)
+      failures.push(`after the box goes, ${after} panes remain; started from ${before}`)
+    return { sample, before, after, failures }
   },
 }
 

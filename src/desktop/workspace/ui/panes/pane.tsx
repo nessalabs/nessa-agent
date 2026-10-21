@@ -5,8 +5,11 @@ import {
   useWorkspaceSelector,
   useWorkspaceStore,
 } from "../../adapters/store/hooks"
-import { selectDraft, selectPaneSession } from "../../adapters/store/selectors"
-import { useRememberedSession } from "../../adapters/store/remembered-session"
+import { selectPaneSession } from "../../adapters/store/selectors"
+import {
+  useRememberedSession,
+  useShownDraft,
+} from "../../adapters/store/remembered-session"
 import { settleOnReshape } from "../../adapters/dom/home-shape"
 import { retireHomeFocus } from "../../adapters/dom/focus"
 import { FocusedSliver, PaneFocusMark } from "./pane-focus-mark"
@@ -56,9 +59,9 @@ export const Pane = memo(function Pane({
   const shownId = useRef(sessionId)
   if (sessionId) shownId.current = sessionId
   const id = sessionId || shownId.current
-  const draft = useWorkspaceSelector((state) => selectDraft(state, id) !== undefined)
   const sessionTitle = useRememberedSession(id)?.title
   const listed = sessionTitle !== undefined
+  const showHome = useShownDraft(id, liveSession, listed)
   const [headingVisible, setHeadingVisible] = useState(false)
   const filled = useFilledAfterFirstPaint()
 
@@ -99,7 +102,6 @@ export const Pane = memo(function Pane({
     },
     [dispatch, key, store],
   )
-  const showHome = draft
   // A new session's home settles when its pane changes its shape, not as it appears.
   const homeShown = filled && showHome
   useLayoutEffect(() => {
@@ -113,7 +115,7 @@ export const Pane = memo(function Pane({
     <article
       className="workspace-pane"
       {...frame}
-      aria-label={sessionTitle ?? (draft ? "New session" : "Empty pane")}
+      aria-label={sessionTitle ?? (showHome ? "New session" : "Empty pane")}
       {...focusHandlers}
     >
       <PaneFocusMark paneKey={key} multi={multi} />

@@ -1,15 +1,19 @@
 /**
- * The session a pane was showing, kept for the frames its box stays after
- * the source removes it. The layout drops the pane immediately and the grid
+ * What a pane was showing, kept for the frames its box stays after the
+ * source removes it. The layout drops the pane immediately and the grid
  * holds the box; the record is already gone, so the box would paint empty.
  * The snapshot stays with the component that read it. A later mount of the
  * same id reads the store, and finds nothing once the box has gone.
+ *
+ * A new session's draft goes the same way. `withPanes` lets it go in the
+ * close, and the home would go with it while the box is still there. The
+ * home and what its composer was showing stay with the component.
  */
 import { useRef } from "react"
 import type { Transcript } from "../../model/transcript"
 import type { SessionSummary } from "../../model/workspace-index"
 import { useWorkspaceSelector } from "./hooks"
-import { selectSession, selectTranscript } from "./selectors"
+import { selectDraft, selectSession, selectTranscript } from "./selectors"
 
 export function useRememberedSession(sessionId: string): SessionSummary | undefined {
   const live = useWorkspaceSelector((state) => selectSession(state, sessionId))
@@ -29,4 +33,41 @@ export function useRememberedTranscript(sessionId: string): Transcript | undefin
     live ??
     (remembered.current?.id === sessionId ? remembered.current.transcript : undefined)
   )
+}
+
+/**
+ * Whether this pane shows a new session's home. The live draft does. So
+ * does a draft the close already let go, while its box stays and no listed
+ * session has taken the id: the layout drops the record at once. A session
+ * this pane started is listed, so the home goes with the record.
+ */
+export function useShownDraft(
+  sessionId: string,
+  liveSession: string,
+  listed: boolean,
+): boolean {
+  const live = useWorkspaceSelector(
+    (state) => selectDraft(state, sessionId) !== undefined,
+  )
+  const remembered = useRef<string | null>(null)
+  if (live) remembered.current = sessionId
+  if (live) return true
+  return (
+    liveSession === "" && !listed && remembered.current === sessionId && sessionId !== ""
+  )
+}
+
+/**
+ * The value last read while `sessionId` was a draft, for the frames after
+ * the close drops that draft and the box is still on screen. A session
+ * this component never read as a draft keeps the live value.
+ */
+export function useHeldDraftValue<T>(sessionId: string, live: T): T {
+  const draft = useWorkspaceSelector(
+    (state) => selectDraft(state, sessionId) !== undefined,
+  )
+  const remembered = useRef<{ id: string; value: T } | null>(null)
+  if (draft) remembered.current = { id: sessionId, value: live }
+  if (draft || remembered.current?.id !== sessionId) return live
+  return remembered.current.value
 }

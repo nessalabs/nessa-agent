@@ -19,6 +19,7 @@ import {
   newSession,
   openBeside,
   openWidget,
+  setComposerText,
   showContent,
   toggleSidebar,
 } from "../../adapters/store/commands"
@@ -509,6 +510,52 @@ describe("a source removing a session", () => {
       expect(labels()).toEqual(["Session a", "Session b"])
       await act(async () => frames.runFrame())
       expect(labels()).toEqual(["Session a"])
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+})
+
+describe("a draft's close", () => {
+  it("keeps the home and its unsent text until the box goes", async () => {
+    // jsdom runs animation frames on a timer. Stepping them keeps a busy
+    // event loop from painting the closed box away before the assertion.
+    const { store, root } = await render(ThreeColumns)
+    const frames = controlledAnimationFrames()
+    try {
+      let draftId = ""
+      await act(async () => {
+        draftId = store.dispatch(newSession({ beside: "right" })) ?? ""
+      })
+      if (!draftId) throw new Error("no draft")
+      await act(async () => {
+        store.dispatch(setComposerText({ sessionId: draftId, text: "unsent line" }))
+      })
+      const homes = () =>
+        [...host.querySelectorAll("article.workspace-pane")].map((pane) => ({
+          label: pane.getAttribute("aria-label"),
+          home: pane.querySelector(".workspace-pane-home") !== null,
+          text: pane.querySelector("textarea")?.value ?? "",
+        }))
+      const showing = () => homes().find((pane) => pane.text === "unsent line")
+      for (let step = 0; step < 8 && !showing(); step++)
+        await act(async () => frames.runFrame())
+      expect(showing()).toEqual({ label: "New session", home: true, text: "unsent line" })
+      const pane = store.getState().workspace.panes
+      const draftPane = pane
+        ? panesOf(pane).find((item) => shownBy(item) === draftId)
+        : undefined
+      if (!draftPane) throw new Error("draft pane missing")
+      await act(async () => void store.dispatch(closePane({ pane: draftPane.key })))
+      expect(store.getState().workspace.drafts).not.toHaveProperty(draftId)
+      expect(store.getState().workspace.composerText).not.toHaveProperty(draftId)
+      expect(showing()).toEqual({ label: "New session", home: true, text: "unsent line" })
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(showing()).toEqual({ label: "New session", home: true, text: "unsent line" })
+      await act(async () => frames.runFrame())
+      expect(showing()).toBeUndefined()
       await act(async () => root.unmount())
     } finally {
       frames.restore()

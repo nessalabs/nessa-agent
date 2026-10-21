@@ -877,6 +877,12 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   position. _ADR 238 › A new session's home takes its pane's shape_.
   _Check:_ `responsive.mjs --only home-shape --shots <dir>`, then look at the
   shots beside the conversation pane.
+- [ ] **A closing draft keeps its home until the box goes.** Closing a new
+  session that is not the last pane drops the draft and its composer text
+  at once and keeps the box. On the next frame that box still shows the
+  home, labelled New session, with the unsent text. After the box goes,
+  the pane count is what it was before the split.
+  _Check:_ `columns.mjs --only draft-held`.
 - [ ] **First-message handoff has one composer.** Sending from a new-session
   home replaces it without overlapping composer instances; the reply receives
   the caret and keeps the next draft. The composer glides into its dock and

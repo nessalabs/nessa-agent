@@ -1,4 +1,5 @@
 import { modelChanging, modelRequesting } from "../../adapters/store/model-commands"
+import { useHeldDraftValue } from "../../adapters/store/remembered-session"
 import { draftOf, entry } from "../../application/workspace-state"
 import { WorkspaceSendFailure } from "../send-failure"
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
@@ -33,13 +34,15 @@ const stayCard = () => {}
  * what the picker shows while it stays mounted (`conversation.test.tsx`).
  */
 function useNextModel(sessionId: string): ModelRef | undefined {
-  return useWorkspaceSelector((state) => selectNextModel(state, sessionId))
+  const live = useWorkspaceSelector((state) => selectNextModel(state, sessionId))
+  return useHeldDraftValue(sessionId, live)
 }
 
 /** A session's unsent text, held in the workspace so it outlives a change of layout. */
 function useComposerText(sessionId: string) {
   const dispatch = useWorkspaceDispatch()
-  const text = useWorkspaceSelector((state) => selectComposerText(state, sessionId))
+  const live = useWorkspaceSelector((state) => selectComposerText(state, sessionId))
+  const text = useHeldDraftValue(sessionId, live)
   const onTextChange = useCallback(
     (next: string) => dispatch(setComposerText({ sessionId, text: next })),
     [dispatch, sessionId],
@@ -49,9 +52,10 @@ function useComposerText(sessionId: string) {
 
 function useComposerActions(sessionId: string) {
   const dispatch = useWorkspaceDispatch()
-  const canChangeModel = useWorkspaceSelector((state) =>
+  const canChangeLive = useWorkspaceSelector((state) =>
     selectCanChooseModel(state, sessionId),
   )
+  const canChangeModel = useHeldDraftValue(sessionId, canChangeLive)
   const send = useCallback(
     (text: string) =>
       void dispatch(sendMessage({ sessionId, text, initiator: "person" })),
