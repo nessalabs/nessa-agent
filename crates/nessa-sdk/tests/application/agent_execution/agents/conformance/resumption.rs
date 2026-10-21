@@ -10,6 +10,7 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::executions::Resumption;
 
 mod canonical_admission;
+mod cleanup_proof_panics;
 
 fn resumer() -> ActionContext {
     ActionContext::new("gateway", "resume_after_restart", "restart").unwrap()

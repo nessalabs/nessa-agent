@@ -1718,7 +1718,7 @@ impl SessionManager {
                 if lifetime == scope.lifetime())
         });
         if pending {
-            self.save_observed(&mut evidence).await
+            catch_storage_operation(|| Box::pin(self.save_observed(&mut evidence))).await
         } else {
             Ok(())
         }

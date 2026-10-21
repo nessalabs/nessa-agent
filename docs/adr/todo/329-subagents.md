@@ -1992,3 +1992,20 @@ and fences an older ticket even though provider generation is unchanged.
 
 The provider-close failure is a separate unresolved causal result. No assertion,
 deadline, concurrency, policy, physical-release fact or audit error is waived.
+
+
+Cycle10's first fresh review was executed against unchanged ed7acd56: fifteen
+construction/poll/drop retirement-save probes failed. Five Started probes also
+failed against pre-cycle10 cec42484. Abandonment remained Waiting; Started
+remained Starting; Authorized-close reported the audit failure but lost its
+attributed evidence failure. This is one confirmed containment P2, with the
+Started exposure pre-existing and the two no-acquisition routes newly exposed.
+The same bounded correction continues; previous caps and failed receipts remain.
+
+| Additional ordering | Existing owner and required result | Regression |
+| --- | --- | --- |
+| Retirement save construction/poll/drop panics, before commit | SessionManager's existing catch_storage_operation contains the same save under its retained Evidence lock/binding; lifecycle publishes terminal failure and retains the actual evidence failure | cleanup_proof_panics construction/before-commit matrix |
+| Retirement save poll/drop panics after commit | Keep the committed retirement fact distinct from the missing ACK; retain the writer plan and actual failure; no fabricated success or replacement cleanup owner | cleanup_proof_panics after-commit matrix |
+
+Contain only the retirement transaction through the already shared storage
+operation helper; do not rewrite every save or introduce a second supervisor.

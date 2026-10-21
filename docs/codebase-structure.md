@@ -2541,7 +2541,9 @@ native cancel acknowledgement and turn settlement, retaining exact command autho
 It also rejects the final decline write or loses its acknowledgement through real
 SQLite, then checks retry, settlement and reopening. `resumption.rs` flushes the
 existing session owner's retained evidence before recovery completes or its durable
-unfinished mark clears. The SDK session manager distinguishes an applied scheduling
+unfinished mark clears. `conformance/resumption/cleanup_proof_panics.rs` exercises
+retirement save construction, poll and drop faults for start, abandonment and
+Authorized-close through that same writer. The SDK session manager distinguishes an applied scheduling
 decision from its persistence acknowledgement; the decline owner audits that actual
 decision and retains independent persistence and audit failures.
 `verification/desktop/scripts/parent-stop.mjs` exercises the ordinary Stop button.
