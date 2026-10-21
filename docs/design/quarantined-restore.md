@@ -128,11 +128,17 @@ supplies the id.
   separate existence check that a created directory could slip past.
   `an_occupied_live_root_is_not_replaced`,
   `an_empty_live_directory_is_not_replaced`
-- Accept renames the directory it read. A different directory placed at the
-  quarantine path after that read is not promoted. If the rename has already
-  happened and the live path is a different directory, it is moved back; when
-  it remains, the result is retained and no unchanged line is written.
+- Accept renames a new directory written from the sealed bytes, not the
+  directory that was read. An open descriptor on a quarantined file does not
+  change the live file. A different directory placed at the quarantine path
+  after that read is not promoted. If the live path is a different directory
+  after the rename, it is moved back; when it remains, the result is retained
+  and no unchanged line is written.
+  `an_open_descriptor_does_not_change_the_promoted_file`,
   `a_swapped_quarantine_directory_is_not_promoted`
+- Cleanup removes the directory object this stage published. A different
+  directory at that path is left in place, including its files.
+  `a_different_published_directory_is_not_removed`
 - That directory is opened as a directory. On Windows the open sets backup
   semantics, so the handle names the directory. A reparse point is not that
   directory. The volume of the temporary directory is read the same way.

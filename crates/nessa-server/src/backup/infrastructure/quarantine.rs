@@ -501,20 +501,58 @@ impl QuarantineLayout for DirectoryQuarantine {
         if on_disk != loaded.journal || content_token(quarantine)? != loaded.content {
             return Err(RestoreFault::Tamper);
         }
-        let from_parent = quarantine.parent().map(Path::to_path_buf);
+        // The live tree is a directory this attempt writes from those sealed
+        // bytes. An open descriptor on the quarantine file keeps the old inode.
+        let dest = sealed_dest(quarantine)?;
+        let dest_identity = tree_id(&dest)?;
+        let copied = match copy_sealed(quarantine, &dest) {
+            Ok(token) => token,
+            Err(error) => {
+                let _ = remove_same(&dest, &dest_identity);
+                return Err(error);
+            }
+        };
+        if copied != loaded.content || tree_id_of(&opened)? != loaded.identity {
+            let _ = remove_same(&dest, &dest_identity);
+            return Err(RestoreFault::Tamper);
+        }
+        if write_new(&dest.join("journal.txt"), loaded.journal.as_bytes()).is_err() {
+            let _ = remove_same(&dest, &dest_identity);
+            return Err(RestoreFault::Unreadable);
+        }
+        let dest_opened = match open_directory(&dest, false) {
+            Ok(file) => file,
+            Err(_) => {
+                let _ = remove_same(&dest, &dest_identity);
+                return Err(RestoreFault::Unreadable);
+            }
+        };
+        let published = match tree_id_of(&dest_opened) {
+            Ok(identity) => identity,
+            Err(error) => {
+                let _ = remove_same(&dest, &dest_identity);
+                return Err(error);
+            }
+        };
+        if sync_tree(&dest).is_err() {
+            let _ = remove_same(&dest, &published);
+            return Err(RestoreFault::Unreadable);
+        }
+        let from_parent = dest.parent().map(Path::to_path_buf);
         let to_parent = live.parent().map(Path::to_path_buf);
         // The rename itself refuses an existing destination, including an
         // empty directory created where a separate existence check would miss it.
-        rename_new(quarantine, live, RestoreFault::LiveOccupied)?;
+        if let Err(error) = rename_new(&dest, live, RestoreFault::LiveOccupied) {
+            let _ = remove_same(&dest, &published);
+            return Err(error);
+        }
         // A stat failure is not a match. Leaving it as `?` would report the
         // promotion unread while a different directory still sits at live.
         let live_id = tree_id(live).ok();
-        let opened_id = tree_id_of(&opened).ok();
-        if live_id.as_ref() != Some(&loaded.identity)
-            || opened_id.as_ref() != Some(&loaded.identity)
-        {
-            if !quarantine.exists() && live_id.as_ref() != Some(&loaded.identity) {
-                let _ = rename_new(live, quarantine, RestoreFault::Tamper);
+        let opened_id = tree_id_of(&dest_opened).ok();
+        if live_id.as_ref() != Some(&published) || opened_id.as_ref() != Some(&published) {
+            if !dest.exists() && live_id.as_ref() != Some(&published) {
+                let _ = rename_new(live, &dest, RestoreFault::Tamper);
             }
             return if live.exists() {
                 Err(RestoreFault::Retained)
@@ -522,6 +560,9 @@ impl QuarantineLayout for DirectoryQuarantine {
                 Err(RestoreFault::Tamper)
             };
         }
+        // The copy is live. The quarantine directory is removed only when it
+        // is still the object that was read.
+        let _ = remove_same(quarantine, &loaded.identity);
         // The rename already made the tree live. A parent that cannot be
         // synced does not put it back, and does not make the promotion a
         // refusal.
@@ -536,10 +577,6 @@ impl QuarantineLayout for DirectoryQuarantine {
                 durable = false;
             }
         }
-        let marker = live.join("accept-ready");
-        if marker.exists() {
-            let _ = fs::remove_file(marker);
-        }
         Ok(Promoted { durable })
     }
 
@@ -548,6 +585,10 @@ impl QuarantineLayout for DirectoryQuarantine {
             fs::remove_dir_all(path).map_err(|_| RestoreFault::Unreadable)?;
         }
         Ok(())
+    }
+
+    fn remove_known(&self, path: &Path, identity: &TreeId) -> Result<(), RestoreFault> {
+        remove_same(path, identity)
     }
 
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
@@ -757,24 +798,29 @@ impl Staging for PartialTree {
         Ok(())
     }
 
-    fn finish(mut self: Box<Self>, journal: &str) -> Result<(), RestoreFault> {
+    fn finish(mut self: Box<Self>, journal: &str) -> Result<TreeId, RestoreFault> {
         self.write("journal.txt", journal.as_bytes())?;
         sync_tree(&self.partial)?;
+        let opened = open_directory(&self.partial, false).map_err(|_| RestoreFault::Unreadable)?;
+        let identity = tree_id_of(&opened)?;
         rename_new(
             &self.partial,
             &self.quarantine,
             RestoreFault::QuarantineOccupied,
         )?;
         self.armed = false;
+        if tree_id(&self.quarantine).ok().as_ref() != Some(&identity) {
+            return Err(RestoreFault::Tamper);
+        }
         if let Some(parent) = self.quarantine.parent() {
             if sync_directory(parent).is_err() {
-                if fs::remove_dir_all(&self.quarantine).is_err() {
-                    return Err(RestoreFault::Retained);
-                }
-                return Err(RestoreFault::Unreadable);
+                return match remove_same(&self.quarantine, &identity) {
+                    Ok(()) => Err(RestoreFault::Unreadable),
+                    Err(_) => Err(RestoreFault::Retained),
+                };
             }
         }
-        Ok(())
+        Ok(identity)
     }
 
     fn discard(mut self: Box<Self>) -> Result<(), RestoreFault> {
@@ -859,6 +905,122 @@ fn rename_new(from: &Path, to: &Path, occupied: RestoreFault) -> Result<(), Rest
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(occupied),
         Err(_) => Err(RestoreFault::Rename),
     }
+}
+
+/// Remove `path` when it is still `identity`. A different directory stays.
+fn remove_same(path: &Path, identity: &TreeId) -> Result<(), RestoreFault> {
+    match symlink_metadata_dir(path) {
+        Ok(false) => Ok(()),
+        Ok(true) => {
+            if tree_id(path)? != *identity {
+                return Err(RestoreFault::Tamper);
+            }
+            fs::remove_dir_all(path).map_err(|_| RestoreFault::Unreadable)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn symlink_metadata_dir(path: &Path) -> Result<bool, RestoreFault> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => Ok(true),
+        Ok(_) => Err(RestoreFault::Tamper),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(RestoreFault::Unreadable),
+    }
+}
+
+fn sealed_dest(quarantine: &Path) -> Result<PathBuf, RestoreFault> {
+    let parent = quarantine.parent().ok_or(RestoreFault::Paths)?;
+    let name = quarantine
+        .file_name()
+        .ok_or(RestoreFault::Paths)?
+        .to_os_string();
+    for attempt in 0..32 {
+        let mut staged = name.clone();
+        staged.push(format!(".sealed-{}-{attempt}", std::process::id()));
+        let path = parent.join(&staged);
+        match mkdir_exclusive(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err(RestoreFault::Unreadable),
+        }
+    }
+    Err(RestoreFault::Unreadable)
+}
+
+/// Copy every sealed file into `dest`, which this attempt just created.
+/// The fingerprint is the bytes written there.
+fn copy_sealed(source: &Path, dest: &Path) -> Result<Fingerprint, RestoreFault> {
+    let mut lines = Vec::new();
+    copy_content(source, source, dest, &mut lines)?;
+    lines.sort();
+    Ok(Fingerprint::of(lines.join("\n").as_bytes()))
+}
+
+fn copy_content(
+    root: &Path,
+    directory: &Path,
+    dest: &Path,
+    lines: &mut Vec<String>,
+) -> Result<(), RestoreFault> {
+    for entry in fs::read_dir(directory).map_err(|_| RestoreFault::Unreadable)? {
+        let path = entry.map_err(|_| RestoreFault::Unreadable)?.path();
+        let meta = fs::symlink_metadata(&path).map_err(|_| RestoreFault::Unreadable)?;
+        if meta.file_type().is_symlink() {
+            return Err(RestoreFault::Tamper);
+        }
+        if meta.is_dir() {
+            copy_content(root, &path, dest, lines)?;
+            continue;
+        }
+        if !meta.is_file() {
+            return Err(RestoreFault::Tamper);
+        }
+        let relative = relative_to(root, &path)?;
+        if relative == "journal.txt" || relative == "accept-ready" {
+            continue;
+        }
+        let fingerprint = copy_file(&path, &resolve(dest, &relative)?)?;
+        lines.push(format!("{relative} {}", fingerprint.hex()));
+    }
+    Ok(())
+}
+
+fn copy_file(source: &Path, dest: &Path) -> Result<Fingerprint, RestoreFault> {
+    let mut input = File::open(source).map_err(|_| RestoreFault::Unreadable)?;
+    if let Some(parent) = dest.parent() {
+        create_directory(parent).ok();
+        if !parent.is_dir() {
+            fs::create_dir_all(parent).map_err(|_| RestoreFault::Unreadable)?;
+        }
+    }
+    write_hashed(&mut input, dest)
+}
+
+fn write_new(path: &Path, bytes: &[u8]) -> Result<(), RestoreFault> {
+    let mut input = std::io::Cursor::new(bytes);
+    write_hashed(&mut input, path).map(|_| ())
+}
+
+fn write_hashed(input: &mut impl Read, dest: &Path) -> Result<Fingerprint, RestoreFault> {
+    let mut output = open(dest, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let count = input
+            .read(&mut buffer)
+            .map_err(|_| RestoreFault::Unreadable)?;
+        if count == 0 {
+            break;
+        }
+        Digest::update(&mut hasher, &buffer[..count]);
+        output
+            .write_all(&buffer[..count])
+            .map_err(|_| RestoreFault::Unreadable)?;
+    }
+    output.sync_all().map_err(|_| RestoreFault::Unreadable)?;
+    Ok(Fingerprint::from_digest(hasher.finalize().into()))
 }
 
 fn remove_partial(path: &Path) -> Result<(), RestoreFault> {
@@ -1657,6 +1819,32 @@ fn a_dangling_symlink_is_removed_without_creating_its_target() {
     DirectoryQuarantine.remove_file(&link).unwrap();
     assert!(!outside.exists());
     assert!(fs::symlink_metadata(&link).is_err());
+}
+
+#[test]
+fn a_different_published_directory_is_not_removed() {
+    let root = tempfile::tempdir().unwrap();
+    let quarantine = root.path().join("q");
+    let live = root.path().join("live");
+    fs::create_dir(&live).unwrap();
+    let mut staging = DirectoryQuarantine.begin(&quarantine, &live).unwrap();
+    staging.write("records/note", b"one").unwrap();
+    let published = staging.finish("sealed\n").unwrap();
+    let saved = quarantine.with_extension("saved");
+    fs::rename(&quarantine, &saved).unwrap();
+    fs::create_dir(&quarantine).unwrap();
+    fs::write(quarantine.join("sentinel"), b"keep").unwrap();
+    assert_eq!(
+        DirectoryQuarantine
+            .remove_known(&quarantine, &published)
+            .unwrap_err(),
+        RestoreFault::Tamper
+    );
+    assert_eq!(fs::read(quarantine.join("sentinel")).unwrap(), b"keep");
+    DirectoryQuarantine
+        .remove_known(&saved, &published)
+        .unwrap();
+    assert!(!saved.exists());
 }
 
 #[test]

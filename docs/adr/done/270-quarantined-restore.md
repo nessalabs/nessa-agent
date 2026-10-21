@@ -106,9 +106,11 @@ case-sensitive. Linux vfat, exFAT, NTFS, and casefolded ext4 fold the same
 way. The drive letter folds with the name. They
 are refused before either lock is taken. A partial name that already exists
 is not deleted; the attempt creates another name. A staging id that cannot
-be minted records a tree it cannot remove as unready. Accept renames the
-directory it read. On Windows that directory is opened with backup semantics,
-so the handle names the directory. A directory swapped in at that path is not promoted. A
+be minted records a tree it cannot remove as unready. Accept publishes a new directory written from the sealed bytes, so an open
+descriptor on the quarantined file does not change the live file. On Windows
+that directory is opened with backup semantics, so the handle names the
+directory. Cleanup removes only the directory object this stage published. A
+directory swapped in at that path is not promoted and is not deleted. A
 live path that is a different directory after that rename is moved back, and
 is retained when it remains. The audit
 names the anchored root rather than the caller's spelling. A path that is

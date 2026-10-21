@@ -63,6 +63,14 @@ pub trait QuarantineLayout {
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault>;
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault>;
+    /// Remove `path` only when it is still `identity`.
+    ///
+    /// The default ignores `identity` so a test layout that already fails
+    /// `remove_tree` keeps that failure. The directory adapter checks the object.
+    fn remove_known(&self, path: &Path, identity: &TreeId) -> Result<(), RestoreFault> {
+        let _ = identity;
+        self.remove_tree(path)
+    }
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault>;
     fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault>;
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault>;
@@ -106,7 +114,8 @@ pub trait QuarantineLayout {
 /// Dropping it without discard or [`Staging::finish`] removes it on a best-effort basis.
 pub trait Staging {
     fn write(&mut self, relative: &str, bytes: &[u8]) -> Result<(), RestoreFault>;
-    fn finish(self: Box<Self>, journal: &str) -> Result<(), RestoreFault>;
+    /// Publish the partial directory and return the object that was published.
+    fn finish(self: Box<Self>, journal: &str) -> Result<TreeId, RestoreFault>;
     /// Remove the partial directory. [`RestoreFault::Retained`] means it is still there.
     fn discard(self: Box<Self>) -> Result<(), RestoreFault>;
 }
@@ -279,10 +288,11 @@ pub fn stage_quarantine(
             return Err(abandon(staging, &recorded, error));
         }
     }
-    if let Err(error) = staging.finish(&journal) {
+    let published = match staging.finish(&journal) {
+        Ok(identity) => identity,
         // A rename whose cleanup could not delete the tree left it unready.
         // Any other finish error means this attempt did not leave a tree.
-        if error == RestoreFault::Retained {
+        Err(error) if error == RestoreFault::Retained => {
             if recorded
                 .write("absent", "unready", error.cause(), "effect")
                 .is_err()
@@ -291,8 +301,8 @@ pub fn stage_quarantine(
             }
             return Err(error);
         }
-        return Err(recorded.stop(error));
-    }
+        Err(error) => return Err(recorded.stop(error)),
+    };
     let digest = Fingerprint::of(journal.as_bytes()).hex();
     let staging_id = match ids.staging_id() {
         Ok(id) if staging_id_is_usable(&id) => id,
@@ -300,24 +310,38 @@ pub fn stage_quarantine(
             return Err(remove_published(
                 layout,
                 &quarantine,
+                &published,
                 &recorded,
                 RestoreFault::Unreadable,
             ))
         }
-        Err(error) => return Err(remove_published(layout, &quarantine, &recorded, error)),
+        Err(error) => {
+            return Err(remove_published(
+                layout,
+                &quarantine,
+                &published,
+                &recorded,
+                error,
+            ))
+        }
     };
     let attestation = seal_attestation(&digest, &staging_id);
     if recorded
         .record("absent", "verified", "sealed", "effect", &attestation)
         .is_err()
     {
-        let _ = layout.remove_tree(&quarantine);
-        let _ = layout.remove_file(&quarantine.join("journal.txt"));
+        match layout.remove_known(&quarantine, &published) {
+            Ok(()) | Err(RestoreFault::Tamper) => {}
+            Err(_) => {
+                let _ = layout.remove_file(&quarantine.join("journal.txt"));
+            }
+        }
         return Err(RestoreFault::Audit);
     }
     if let Err(error) = layout.mark_ready(&quarantine, &staging_id) {
         // The id is spent either way. A marker that remains is not a later accept.
-        let after = if layout.remove_tree(&quarantine).is_ok() {
+        // A different directory at this path is left in place.
+        let after = if layout.remove_known(&quarantine, &published).is_ok() {
             "absent"
         } else {
             "unready"
@@ -809,10 +833,11 @@ fn distinct(layout: &dyn QuarantineLayout, left: &Path, right: &Path) -> Result<
 fn remove_published(
     layout: &dyn QuarantineLayout,
     quarantine: &Path,
+    identity: &TreeId,
     recorded: &Recorded<'_>,
     error: RestoreFault,
 ) -> RestoreFault {
-    if layout.remove_tree(quarantine).is_ok() {
+    if layout.remove_known(quarantine, identity).is_ok() {
         return recorded.stop(error);
     }
     if recorded

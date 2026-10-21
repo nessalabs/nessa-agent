@@ -19,7 +19,7 @@ use crate::backup::application::{
     FetchProgress, InventoryCause, InventoryDecision, LeaseReceipts, LoadedTree, MacKey,
     ManifestPublisher, MutationAdmission, OpenRequest, Promoted, PublicationIds, QuarantineLayout,
     RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SealFields,
-    SessionCut, SessionSourceError, StageRequest, Staging, StagingIds, VerificationFailure,
+    SessionCut, SessionSourceError, StageRequest, Staging, StagingIds, TreeId, VerificationFailure,
     VerificationLimits, VerificationSource,
 };
 use crate::backup::domain::{
@@ -963,6 +963,28 @@ fn a_swapped_quarantine_directory_is_not_promoted() {
 }
 
 #[test]
+fn an_open_descriptor_does_not_change_the_promoted_file() {
+    let place = roots();
+    fs::create_dir_all(place.quarantine.join("records")).unwrap();
+    fs::write(place.quarantine.join("journal.txt"), b"sealed\n").unwrap();
+    fs::write(place.quarantine.join("records/note"), b"one").unwrap();
+    let loaded = DirectoryQuarantine.load(&place.quarantine).unwrap();
+    let mut held = fs::OpenOptions::new()
+        .write(true)
+        .open(place.quarantine.join("records/note"))
+        .unwrap();
+    DirectoryQuarantine
+        .promote(&place.quarantine, &place.live, &loaded)
+        .unwrap();
+    use std::io::{Seek, SeekFrom, Write};
+    held.seek(SeekFrom::Start(0)).unwrap();
+    held.write_all(b"two").unwrap();
+    held.sync_all().unwrap();
+    assert_eq!(fs::read(place.live.join("records/note")).unwrap(), b"one");
+    assert!(!place.live.join("accept-ready").exists());
+}
+
+#[test]
 fn a_changed_quarantine_file_is_not_promoted() {
     let place = roots();
     fs::create_dir_all(place.quarantine.join("records")).unwrap();
@@ -1646,7 +1668,7 @@ impl Staging for OtherQuarantine {
         Ok(())
     }
 
-    fn finish(self: Box<Self>, _journal: &str) -> Result<(), RestoreFault> {
+    fn finish(self: Box<Self>, _journal: &str) -> Result<TreeId, RestoreFault> {
         fs::create_dir_all(&self.quarantine).map_err(|_| RestoreFault::Unreadable)?;
         fs::write(self.quarantine.join("owned-by-other"), b"keep")
             .map_err(|_| RestoreFault::Unreadable)?;
@@ -2709,7 +2731,7 @@ impl Staging for LeavesPartial {
         Err(RestoreFault::Unreadable)
     }
 
-    fn finish(self: Box<Self>, _journal: &str) -> Result<(), RestoreFault> {
+    fn finish(self: Box<Self>, _journal: &str) -> Result<TreeId, RestoreFault> {
         Err(RestoreFault::Unreadable)
     }
 
@@ -4089,7 +4111,7 @@ impl Staging for RetainedStaging {
         Ok(())
     }
 
-    fn finish(self: Box<Self>, _journal: &str) -> Result<(), RestoreFault> {
+    fn finish(self: Box<Self>, _journal: &str) -> Result<TreeId, RestoreFault> {
         fs::create_dir_all(&self.quarantine).unwrap();
         fs::write(self.quarantine.join("journal.txt"), b"kept\n").unwrap();
         Err(RestoreFault::Retained)
