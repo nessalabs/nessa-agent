@@ -1291,19 +1291,19 @@ it("accepts the inclusive reset bound the schema publishes", () => {
     tools: [],
   })
   expect(
-    conversationView(limited(4_102_444_800_000), "conversation").messages[0]
-      ?.usageLimit?.resetsAtMs,
+    conversationView(limited(4_102_444_800_000), "conversation").messages[0]?.usageLimit
+      ?.resetsAtMs,
   ).toBe(4_102_444_800_000)
   expect(
-    conversationView(limited(1_704_067_200_000), "conversation").messages[0]
-      ?.usageLimit?.resetsAtMs,
+    conversationView(limited(1_704_067_200_000), "conversation").messages[0]?.usageLimit
+      ?.resetsAtMs,
   ).toBe(1_704_067_200_000)
-  expect(() =>
-    conversationView(limited(4_102_444_800_001), "conversation"),
-  ).toThrow(/reset instant/)
-  expect(() =>
-    conversationView(limited(1_704_067_199_999), "conversation"),
-  ).toThrow(/reset instant/)
+  expect(() => conversationView(limited(4_102_444_800_001), "conversation")).toThrow(
+    /reset instant/,
+  )
+  expect(() => conversationView(limited(1_704_067_199_999), "conversation")).toThrow(
+    /reset instant/,
+  )
 })
 
 function protocolFile(path: string) {
