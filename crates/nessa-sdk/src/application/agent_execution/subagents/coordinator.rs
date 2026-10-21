@@ -3056,8 +3056,7 @@ mod lifetime_races {
             "matching target attributes cannot replace gate identity"
         );
         coordinator
-            .bind_resources(&root, Arc::new(Released))
-            .await
+            .bind_resources(root.clone(), Arc::new(Released))
             .unwrap();
         coordinator
             .end_lifetime(CloseCommand {
