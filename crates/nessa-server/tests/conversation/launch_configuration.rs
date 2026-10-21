@@ -27,7 +27,7 @@ use nessa_sdk::infrastructure::{
 };
 use std::{
     collections::{BTreeMap, HashMap},
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     path::PathBuf,
     sync::Arc,
     time::Duration,
@@ -50,7 +50,8 @@ fn agents_config() -> AgentsConfig {
 fn runtime() -> AgentRuntime {
     AgentRuntime {
         command: ExecutableUseSnapshot::unmanaged(PathBuf::from("/runtime/node")),
-        args: vec!["/runtime/acp/index.js".into()],
+        staged_runtime: vec!["/runtime/acp/index.js".into()],
+        args: vec!["--config".into(), "/profiles/staging.toml".into()],
         model: "claude-sonnet-5".into(),
         context_tokens: 100_000,
         output_tokens: 4096,
@@ -133,6 +134,7 @@ fn what_the_launch_is_given_is_what_it_carries() {
         Some(images),
     );
     assert_eq!(injected.environment, environment);
+    assert!(injected.runtime_environment.is_empty());
     assert_eq!(injected.credential_environment, credentials);
     assert!(injected.images.is_some());
     // And a binding given no source offers no image input at all.
@@ -146,6 +148,93 @@ fn what_the_launch_is_given_is_what_it_carries() {
     )
     .images
     .is_none());
+}
+
+/// Process plumbing and the native executable locator are the runtime, not
+/// the account the saved conversation resumes.
+#[test]
+fn plumbing_keys_are_the_runtime_and_the_vendor_directory_stays() {
+    let mut environment = BTreeMap::from([
+        (OsString::from("CODEX_HOME"), OsString::from("/home/x")),
+        (OsString::from("PATH"), OsString::from("/usr/bin")),
+        (OsString::from("TMPDIR"), OsString::from("/tmp/drift")),
+        (OsString::from("USER"), OsString::from("someone")),
+        (OsString::from("LOGNAME"), OsString::from("someone")),
+        (
+            OsString::from("CLAUDE_CODE_EXECUTABLE"),
+            OsString::from("/opt/claude"),
+        ),
+        (OsString::from("CODEX_PATH"), OsString::from("/opt/codex")),
+    ]);
+    let injected = launch_configuration(
+        &agents_config(),
+        &runtime(),
+        PathBuf::from("/workspace"),
+        environment.clone(),
+        BTreeMap::new(),
+        None,
+    );
+    environment.remove(OsStr::new("PATH"));
+    environment.remove(OsStr::new("TMPDIR"));
+    environment.remove(OsStr::new("USER"));
+    environment.remove(OsStr::new("LOGNAME"));
+    environment.remove(OsStr::new("CLAUDE_CODE_EXECUTABLE"));
+    environment.remove(OsStr::new("CODEX_PATH"));
+    assert_eq!(injected.environment, environment);
+    assert_eq!(
+        injected
+            .runtime_environment
+            .get(OsStr::new("PATH"))
+            .map(OsString::as_os_str),
+        Some(OsStr::new("/usr/bin"))
+    );
+    assert_eq!(
+        injected
+            .runtime_environment
+            .get(OsStr::new("TMPDIR"))
+            .map(OsString::as_os_str),
+        Some(OsStr::new("/tmp/drift"))
+    );
+    assert_eq!(
+        injected
+            .runtime_environment
+            .get(OsStr::new("USER"))
+            .map(OsString::as_os_str),
+        Some(OsStr::new("someone"))
+    );
+    assert_eq!(
+        injected
+            .runtime_environment
+            .get(OsStr::new("LOGNAME"))
+            .map(OsString::as_os_str),
+        Some(OsStr::new("someone"))
+    );
+    assert_eq!(
+        injected
+            .runtime_environment
+            .get(OsStr::new("CLAUDE_CODE_EXECUTABLE"))
+            .map(OsString::as_os_str),
+        Some(OsStr::new("/opt/claude"))
+    );
+    assert_eq!(
+        injected
+            .runtime_environment
+            .get(OsStr::new("CODEX_PATH"))
+            .map(OsString::as_os_str),
+        Some(OsStr::new("/opt/codex"))
+    );
+    assert_eq!(injected.runtime_environment.len(), 6);
+    assert_eq!(
+        injected.staged_runtime_arguments,
+        vec![OsString::from("/runtime/acp/index.js")]
+    );
+    assert_eq!(
+        injected.arguments,
+        vec![
+            OsString::from("--config"),
+            OsString::from("/profiles/staging.toml")
+        ]
+    );
 }
 
 /// A source nothing in this test reads: what is asserted is that it arrives,
@@ -313,6 +402,7 @@ async fn a_tools_disabled_agent_opens_and_deletes_with_a_server_saved() {
             None,
         );
         acp.executable = ExecutableUseSnapshot::unmanaged(PathBuf::from("/usr/bin/python3"));
+        acp.staged_runtime_arguments.clear();
         acp.arguments = std::iter::once(fixtures.join(handler).into_os_string())
             .chain(arguments.iter().map(OsString::from))
             .collect();
@@ -487,6 +577,7 @@ fn composed_provider(
     };
     let runtime = AgentRuntime {
         command: ExecutableUseSnapshot::unmanaged(executable.to_owned()),
+        staged_runtime: Vec::new(),
         args: Vec::new(),
         model: model.into(),
         context_tokens: 100_000,

@@ -14,7 +14,6 @@ use crate::mcp_servers::application::BuiltInServer;
 use crate::{
     agent_warm_up::{
         application::{AgentWarmUp, WarmUpSessionPorts},
-        domain::RuntimeFingerprint,
         infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
     },
     agents::infrastructure::AgentLaunchFiles,
@@ -1152,14 +1151,11 @@ async fn conversations(
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
     for agent in built.providers.values_mut() {
-        // The provider's own credential-free identity, rather than a
-        // hand-picked list of fields, computed from raw OS bytes rather than
-        // a lossy path conversion; what it makes a warm-up cover is stated on
-        // `RuntimeFingerprint`.
-        let identity = agent.provider.identity();
-        let runtime =
-            RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())
-                .map_err(|error| RunError::Agent(error.to_string()))?;
+        // The provider's own credential-free identity plus its launch
+        // fingerprint, rather than a hand-picked list of fields. What that
+        // makes a warm-up cover is stated on `RuntimeFingerprint`.
+        let runtime = super::warm_up::runtime_fingerprint_for(agent.provider.as_ref())
+            .map_err(|error| RunError::Agent(error.to_string()))?;
         let prepared = AgentWarmUp::new(
             agent.provider.clone(),
             agent.execution_audit.clone(),

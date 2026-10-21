@@ -638,6 +638,9 @@ impl AgentProvider for LeaseFence {
     fn effort_level(&self) -> Option<EffortLevel> {
         self.inner.effort_level()
     }
+    fn launch_fingerprint(&self) -> String {
+        self.inner.launch_fingerprint()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.inner.identity()
     }

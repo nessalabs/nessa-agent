@@ -8,6 +8,7 @@
 //!                                   |
 //!                                   +--> ExecutionAudit
 //! refusal evidence --> ExecutionController::decline_review --> ReviewDeclineRecord
+//!                  --> DeclinedReview (same rule) --> the event the panel reads
 //!                  --> with_delivery (same identity, refusal and stopping rule)
 //! configured refusal --> admit_configured_outcome --> OperationCapabilities
 //! permission deadline --> ApprovalBasis::Deadline (actor permission-deadline)
@@ -40,8 +41,8 @@ pub use approval::{
     HookRefusal, PermissionResolution,
 };
 pub use audit::{
-    PermissionAnswerDelivery, PermissionAnswerRecord, QuestionAnswerRecord, QuestionRefusalRecord,
-    RefusedAsk, ReviewDeclineRecord,
+    DeclinedReview, PermissionAnswerDelivery, PermissionAnswerRecord, QuestionAnswerRecord,
+    QuestionRefusalRecord, RefusedAsk, ReviewDeclineRecord,
 };
 pub(crate) use cancellation::validate_hook_withdrawal;
 pub use cancellation::{CancellationOrigin, PermissionCancellation, PermissionCancellationRequest};

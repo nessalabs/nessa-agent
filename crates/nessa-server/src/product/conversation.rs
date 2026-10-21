@@ -1256,6 +1256,7 @@ fn wire_view(
         "approvalMode".into(),
         json!(selection.approval_mode.as_str()),
     );
+    fields.insert("model".into(), json!(selection.model));
     fields.insert(
         "approvalModes".into(),
         serde_json::to_value(&model.approval_modes).map_err(|_| ConversationError::Unavailable)?,

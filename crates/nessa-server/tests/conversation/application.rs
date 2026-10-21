@@ -4452,7 +4452,7 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
 }
 
 #[tokio::test]
-async fn changed_configuration_retains_history_and_reports_exact_opening_failure() {
+async fn a_context_only_fingerprint_change_opens_fresh_and_keeps_the_conversation() {
     let (service, provider, repository, storage) = fixture(ConversationLimits::default());
     let id = id();
     repository.records.lock().unwrap().insert(
@@ -4499,28 +4499,41 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
         .await
         .unwrap();
     drop(lease);
-    for _ in 0..2 {
-        assert!(matches!(
-            service.read(id.clone(), caller("panel", "read")).await,
-            Err(ConversationError::Agent(AgentError::Storage(
-                StorageError::IdentityMismatch
-            )))
-        ));
-    }
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
-    let lease = storage.open(session_id.clone()).await.unwrap();
-    let saved = SessionSnapshot::load_saved(lease.as_ref(), &session_id)
+    // Same provider and model, a different context fingerprint. The saved
+    // native session is not resumed; a new one is opened and recorded with
+    // the fingerprint that opened it. The conversation itself stays.
+    service
+        .read(id.clone(), caller("panel", "read"))
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    let opened = provider.provider_opens.lock().unwrap().clone();
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].1, None);
+    // The attached agent holds the storage lease, so the saved identity is
+    // read without taking it.
+    let saved = storage
+        .read_committed(session_id.clone())
         .await
         .unwrap()
-        .unwrap();
-    assert_eq!(
+        .unwrap()
+        .snapshot()
+        .unwrap()
+        .clone();
+    assert_eq!(saved.provider_context.recorded(), Some(&opened[0].0));
+    assert_ne!(
         saved.provider_context.recorded().unwrap().as_str(),
         "retained-context"
     );
     assert_eq!(
         saved.provider,
-        ProviderIdentity::new("gateway-test", "test", "previous-config").unwrap()
+        ProviderIdentity::new("gateway-test", "test", "test").unwrap()
     );
+    service
+        .read(id.clone(), caller("panel", "read-again"))
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     service.shutdown().await.unwrap();
 }
 

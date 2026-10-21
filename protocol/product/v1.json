@@ -1689,6 +1689,13 @@
         "modelChangeEffect": {
           "$ref": "#/$defs/ModelChangeEffect",
           "description": "Native effect boundary of the last confirmed model change."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The conversation's selected catalog model, present whether or not an agent is open."
         }
       },
       "required": [
@@ -1711,7 +1718,8 @@
         "unreadable",
         "unreadableTruncated",
         "approvalMode",
-        "approvalModes"
+        "approvalModes",
+        "model"
       ]
     },
     "ConversationArtifact": {
@@ -3118,6 +3126,11 @@
       ],
       "description": "Runtime configuration selected by the gateway composition for this conversation."
     },
+    "ConversationNoticeKind": {
+      "type": "string",
+      "enum": ["review", "hook", "deadline"],
+      "description": "Which local decision a notice records. review is a declined review. hook is a permission-review hook that stopped the turn or closed the session. deadline is a deadline that settled its review. The three may share one decimal id."
+    },
     "ConversationPart": {
       "type": "object",
       "additionalProperties": false,
@@ -3150,7 +3163,11 @@
           "maxLength": 20,
           "x-utf8MaxBytes": 20,
           "pattern": "^[1-9][0-9]{0,19}$|^$",
-          "description": "Stable execution-scoped declined-review identity for a local notice; empty otherwise."
+          "description": "Decimal identity of a local notice; empty otherwise. A review notice uses the declined-review id. A hook notice and a deadline notice use the permission id. Those identities are independent, so one decimal may name each of them; noticeKind says which decision it is."
+        },
+        "noticeKind": {
+          "$ref": "#/$defs/ConversationNoticeKind",
+          "description": "Which local decision this notice is. Absent on every part that is not a local notice."
         },
         "messageId": {
           "type": "string",

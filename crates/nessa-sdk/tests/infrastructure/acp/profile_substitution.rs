@@ -365,6 +365,7 @@ async fn a_non_claude_profile_uses_shared_sessions_permissions_and_transport() {
             .args(&process_config.arguments)
             .env_clear()
             .envs(&process_config.environment)
+            .envs(&process_config.runtime_environment)
             .envs(&process_config.credential_environment)
             .current_dir(&process_config.workspace);
         ProcessScope::spawn(command).map_err(Into::into)
@@ -520,6 +521,7 @@ async fn an_open_holds_its_sessions_grant_until_the_provider_session_ends() {
                 .args(&process_config.arguments)
                 .env_clear()
                 .envs(&process_config.environment)
+                .envs(&process_config.runtime_environment)
                 .envs(&process_config.credential_environment)
                 .current_dir(&process_config.workspace);
             ProcessScope::spawn(command).map_err(Into::into)
@@ -652,7 +654,9 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         arguments: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/infrastructure/acp/contracts/fixtures/test_acp_handler.py")
             .into_os_string()],
+        staged_runtime_arguments: Vec::new(),
         environment: BTreeMap::new(),
+        runtime_environment: BTreeMap::new(),
         credential_environment: BTreeMap::new(),
         workspace: root.path().to_owned(),
         tools_enabled: true,
@@ -1590,6 +1594,7 @@ async fn a_profile_with_nothing_to_configure_still_has_its_session_held_to_the_f
             .args(&process_config.arguments)
             .env_clear()
             .envs(&process_config.environment)
+            .envs(&process_config.runtime_environment)
             .envs(&process_config.credential_environment)
             .current_dir(&process_config.workspace);
         ProcessScope::spawn(command).map_err(Into::into)

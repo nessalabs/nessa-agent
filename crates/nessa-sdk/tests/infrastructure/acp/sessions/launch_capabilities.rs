@@ -131,7 +131,9 @@ fn config() -> AcpConfig {
     AcpConfig {
         executable: ExecutableUseSnapshot::unmanaged(PathBuf::from("/usr/bin/true")),
         arguments: Vec::new(),
+        staged_runtime_arguments: Vec::new(),
         environment: BTreeMap::new(),
+        runtime_environment: BTreeMap::new(),
         credential_environment: BTreeMap::new(),
         workspace: PathBuf::from("/tmp"),
         tools_enabled: true,

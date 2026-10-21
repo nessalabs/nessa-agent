@@ -130,9 +130,15 @@ export function sameSummary(a: Said, b: Said): boolean {
   )
 }
 
-/** The catalogue's entry for the model a view says its conversation runs on, if it lists one. */
+/**
+ * The catalogue's entry for the model a view says its conversation selected,
+ * if the catalogue lists it. The selected model is on the view whether or
+ * not an agent is open. The runtime's model is not a substitute: a missing
+ * selection is not the catalogue default and not whatever the process last
+ * reported.
+ */
 export function runningModel(view: ConversationView | undefined): ModelRef | undefined {
-  const running = view?.runtime?.model
+  const running = view?.model
   const listed = composerModels.find((model) => model.modelId === running)
   return listed && { provider: listed.provider, modelId: listed.modelId }
 }
