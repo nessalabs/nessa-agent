@@ -105,6 +105,8 @@ supplies the id.
 | Empty directory at the live path when the rename runs | The quarantine. The empty directory is unchanged | `unchanged → unchanged` | LiveOccupied |
 | A root that is not Unicode | Neither path is audited under a lossy spelling | No line | Paths |
 | Fetch wrote a partial session and that name is a symlink | The symlink. Its target is not created | `unchanged → unchanged`, or retained when the name remains | The error. SQLite opens only a file this attempt created |
+| A directory inside the partial tree is a symlink when a file is written there | The symlink. The target is not created | `unchanged → unchanged`, or `absent → unready` when the partial directory remains | Unreadable. The file is created beneath the partial directory |
+| `sessions/` is a symlink when the session file is reserved | The symlink. The target is not created | `unchanged → unchanged`, or retained when a partial name remains | Unreadable. The reservation is created beneath that directory |
 | Two restores whose roots differ only by case on a folding volume | One lock order, from the folded identity | Each waits for the same first lock | Neither deadlocks on the other spelling |
 | Fetch wrote a partial session and that name is gone | No partial file | `unchanged → unchanged` with the source cause | The source error |
 | Fetch wrote a partial session and that name remains | The partial file. Not a helper | No unchanged line | Retained. A later open treats the file as an extra |
@@ -158,11 +160,18 @@ supplies the id.
 - A credential record is restored only when its JSON id is the manifest
   identity. The fence is applied to that id.
   `a_credential_body_must_name_the_manifest_identity`
+- A file is created only beneath a directory this attempt holds. A symlink
+  at a parent inside the partial directory is not that directory, and the
+  write does not create the file in the link's target. The sealed copy uses
+  the same create. `a_symlink_parent_is_not_a_staging_directory`
 - The session file is the regular file this attempt still holds when SQLite
-  opens it. The open does not follow a symlink, and the name must still be
+  opens it. It is created beneath its parent directory, so a symlink at
+  `sessions/` is not that directory and the file is not created in the
+  target. The open does not follow a symlink, and the name must still be
   that file. Drop unlinks a planted symlink and does not write its target.
   `a_dangling_symlink_is_not_the_session_file`,
-  `a_symlink_planted_after_reserve_is_not_opened`
+  `a_symlink_planted_after_reserve_is_not_opened`,
+  `a_symlink_sessions_directory_is_not_the_reservation`
 - That directory is opened as a directory. On Windows the open sets backup
   semantics, so the handle names the directory. A reparse point is not that
   directory. The volume of the temporary directory is read the same way.

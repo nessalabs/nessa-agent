@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use nessa_local_storage::{create_directory, open, publish_new, sync_directory, OpenMode};
+use nessa_local_storage::{
+    create_directory, create_directory_beneath, open, open_beneath, publish_new, sync_directory,
+    OpenMode,
+};
 use serde_json::{json, Value};
 
 use sha2::Digest;
@@ -526,7 +529,7 @@ impl QuarantineLayout for DirectoryQuarantine {
             let _ = remove_same(&dest, &created_id);
             return Err(RestoreFault::Tamper);
         }
-        if write_new(&dest.join("journal.txt"), loaded.journal.as_bytes()).is_err() {
+        if write_new(&dest, "journal.txt", loaded.journal.as_bytes()).is_err() {
             let _ = remove_same(&dest, &created_id);
             return Err(RestoreFault::Unreadable);
         }
@@ -791,14 +794,20 @@ struct PartialTree {
 
 impl Staging for PartialTree {
     fn write(&mut self, relative: &str, bytes: &[u8]) -> Result<(), RestoreFault> {
-        let path = resolve(&self.partial, relative)?;
-        if let Some(parent) = path.parent() {
-            create_directory(parent).ok();
-            if !parent.is_dir() {
-                fs::create_dir_all(parent).map_err(|_| RestoreFault::Unreadable)?;
+        if !relative_path_is_safe(relative) {
+            return Err(RestoreFault::Tamper);
+        }
+        let relative_path = Path::new(relative);
+        if let Some(parent) = relative_path.parent() {
+            if parent.components().next().is_some() {
+                create_directory_beneath(&self.partial, parent)
+                    .map_err(|_| RestoreFault::Unreadable)?;
             }
         }
-        let mut file = open(&path, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)?;
+        // The partial directory is the anchor. A symlink planted at a parent
+        // inside it is not a directory this attempt owns.
+        let mut file = open_beneath(&self.partial, relative_path, OpenMode::CreateNew)
+            .map_err(|_| RestoreFault::Unreadable)?;
         file.write_all(bytes)
             .map_err(|_| RestoreFault::Unreadable)?;
         file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
@@ -1144,30 +1153,35 @@ fn copy_content(
         if relative == "journal.txt" || relative == "accept-ready" {
             continue;
         }
-        let fingerprint = copy_file(&path, &resolve(dest, &relative)?)?;
+        let fingerprint = copy_file(dest, &relative, &path)?;
         lines.push(format!("{relative} {}", fingerprint.hex()));
     }
     Ok(())
 }
 
-fn copy_file(source: &Path, dest: &Path) -> Result<Fingerprint, RestoreFault> {
-    let mut input = File::open(source).map_err(|_| RestoreFault::Unreadable)?;
-    if let Some(parent) = dest.parent() {
-        create_directory(parent).ok();
-        if !parent.is_dir() {
-            fs::create_dir_all(parent).map_err(|_| RestoreFault::Unreadable)?;
+fn copy_file(root: &Path, relative: &str, source: &Path) -> Result<Fingerprint, RestoreFault> {
+    let relative_path = Path::new(relative);
+    if let Some(parent) = relative_path.parent() {
+        if parent.components().next().is_some() {
+            create_directory_beneath(root, parent).map_err(|_| RestoreFault::Unreadable)?;
         }
     }
-    write_hashed(&mut input, dest)
+    let mut input = File::open(source).map_err(|_| RestoreFault::Unreadable)?;
+    write_hashed(&mut input, root, relative_path)
 }
 
-fn write_new(path: &Path, bytes: &[u8]) -> Result<(), RestoreFault> {
+fn write_new(root: &Path, relative: &str, bytes: &[u8]) -> Result<(), RestoreFault> {
     let mut input = std::io::Cursor::new(bytes);
-    write_hashed(&mut input, path).map(|_| ())
+    write_hashed(&mut input, root, Path::new(relative)).map(|_| ())
 }
 
-fn write_hashed(input: &mut impl Read, dest: &Path) -> Result<Fingerprint, RestoreFault> {
-    let mut output = open(dest, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)?;
+fn write_hashed(
+    input: &mut impl Read,
+    root: &Path,
+    relative: &Path,
+) -> Result<Fingerprint, RestoreFault> {
+    let mut output =
+        open_beneath(root, relative, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)?;
     let mut hasher = sha2::Sha256::new();
     let mut buffer = [0u8; 8192];
     loop {
@@ -1970,6 +1984,33 @@ fn materialize_error(error: MaterializeError) -> SessionSourceError {
         MaterializeError::Interrupted => SessionSourceError::Interrupted,
         MaterializeError::Unreadable => SessionSourceError::Unreadable,
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_parent_is_not_a_staging_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let partial = root.path().join("partial");
+    mkdir_exclusive(&partial).unwrap();
+    let outside = root.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, partial.join("records")).unwrap();
+    let mut staging = PartialTree {
+        partial: partial.clone(),
+        quarantine: root.path().join("quarantine"),
+        armed: false,
+    };
+    assert_eq!(
+        staging.write("records/note", b"one").unwrap_err(),
+        RestoreFault::Unreadable
+    );
+    assert!(!outside.join("note").exists());
+    assert!(partial
+        .join("records")
+        .symlink_metadata()
+        .unwrap()
+        .file_type()
+        .is_symlink());
 }
 
 #[cfg(unix)]

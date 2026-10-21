@@ -8,7 +8,7 @@ use nessa_local_database::rusqlite::backup::{Backup, StepResult};
 use nessa_local_database::rusqlite::ffi::{self, sqlite3_int64};
 use nessa_local_database::rusqlite::{Connection, OpenFlags};
 #[cfg(unix)]
-use nessa_local_storage::{open, OpenMode};
+use nessa_local_storage::{open_beneath, OpenMode};
 use sha2::{Digest, Sha256};
 
 /// A session file larger than this is named and left out of the cut.
@@ -325,8 +325,9 @@ struct CreatedDestination<'a> {
 
 impl<'a> CreatedDestination<'a> {
     fn new(path: &'a Path) -> Result<Self, MaterializeError> {
-        // Exclusive and no-follow. The handle stays open until SQLite has
-        // opened this same file. A symlink planted at the name is not it.
+        // Created beneath the parent this attempt holds. The handle stays
+        // open until SQLite has opened this same file. A symlink at the
+        // parent or at the name is not that file.
         let reserved = reserve_session(path)?;
         Ok(Self {
             path,
@@ -375,36 +376,49 @@ enum NameBinding {
 fn reserve_session(path: &Path) -> Result<File, MaterializeError> {
     #[cfg(unix)]
     {
-        open(path, OpenMode::CreateNew).map_err(|_| MaterializeError::Unreadable)
+        // openat from the parent. A symlink at that directory fails the
+        // directory open, so the leaf is not created in the link's target.
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or(MaterializeError::Unreadable)?;
+        let name = path.file_name().ok_or(MaterializeError::Unreadable)?;
+        open_beneath(parent, Path::new(name), OpenMode::CreateNew)
+            .map_err(|_| MaterializeError::Unreadable)
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        use std::os::windows::fs::OpenOptionsExt;
         const FILE_SHARE_READ: u32 = 0x0000_0001;
         const FILE_SHARE_WRITE: u32 = 0x0000_0002;
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        for parent in path
-            .ancestors()
-            .skip(1)
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        let parent = path
+            .parent()
             .filter(|parent| parent.parent().is_some())
-        {
-            let meta =
-                std::fs::symlink_metadata(parent).map_err(|_| MaterializeError::Unreadable)?;
-            if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                return Err(MaterializeError::Unreadable);
-            }
-        }
-        // No delete share, and the reparse point is the object itself. A peer
-        // cannot replace this name while the handle is open.
-        std::fs::OpenOptions::new()
+            .ok_or(MaterializeError::Unreadable)?;
+        // Held across the create, and not shared for delete, so this
+        // directory cannot be replaced while the file is created. The
+        // reparse flag makes a symlink the object we see, and that object
+        // is refused. The file handle itself is not shared for delete, so
+        // this does not use the storage opener (that opener shares delete).
+        let parent_dir = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(parent)
+            .map_err(|_| MaterializeError::Unreadable)?;
+        file_index(&parent_dir)?;
+        let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create_new(true)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
             .open(path)
-            .map_err(|_| MaterializeError::Unreadable)
+            .map_err(|_| MaterializeError::Unreadable)?;
+        drop(parent_dir);
+        Ok(file)
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -830,11 +844,16 @@ impl Drop for SqliteMalloc {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     #[cfg(unix)]
     #[test]
     fn a_dangling_symlink_is_not_the_session_file() {
         let root = tempfile::tempdir().unwrap();
+        // The reservation opens this directory. It must be private, as the
+        // sessions directory create_directory makes is.
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let outside = root.path().join("outside");
         let link = root.path().join("session.sqlite3.partial");
         std::os::unix::fs::symlink(&outside, &link).unwrap();
@@ -847,6 +866,7 @@ mod tests {
     #[test]
     fn a_symlink_planted_after_reserve_is_not_opened() {
         let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let outside = root.path().join("outside");
         std::fs::write(&outside, b"keep").unwrap();
         let path = root.path().join("session.sqlite3.partial");
@@ -859,6 +879,24 @@ mod tests {
         drop(created);
         assert_eq!(std::fs::read(&outside).unwrap(), b"keep");
         assert!(std::fs::symlink_metadata(&path).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_sessions_directory_is_not_the_reservation() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = root.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let sessions = root.path().join("sessions");
+        std::os::unix::fs::symlink(&outside, &sessions).unwrap();
+        let path = sessions.join("chat.sqlite3.partial");
+        assert!(CreatedDestination::new(&path).is_err());
+        assert!(!outside.join("chat.sqlite3.partial").exists());
+        assert!(sessions
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 
     #[test]

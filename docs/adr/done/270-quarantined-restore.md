@@ -117,9 +117,12 @@ Cleanup deletes the directory the open handle names. A source that remains
 after that removal fails loses its readiness marker before promotion
 succeeds, and a marker that still names an id is retained. A credential
 body whose id is not the manifest identity is not restored.
-The session file is the regular file this attempt still holds when SQLite
-opens it, and that open does not follow a symlink. A folding volume compares
-names by uppercase then lowercase, so final sigma and sigma are one path.
+A file is created only beneath a directory this attempt holds, so a symlink
+inside the partial tree is not a staging directory. The session file is the
+regular file this attempt still holds when SQLite opens it. That file is
+created beneath its parent directory, and that open does not follow a
+symlink. A folding volume compares names by uppercase then lowercase, so
+final sigma and sigma are one path.
 Cleanup removes only the directory object this stage published. A
 directory swapped in at that path is not promoted and is not deleted. A
 live path that is a different directory after that rename is moved back, and
