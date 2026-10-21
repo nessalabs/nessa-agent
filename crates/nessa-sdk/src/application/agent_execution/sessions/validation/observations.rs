@@ -62,13 +62,10 @@ impl Observations {
             ExecutionUpdate::PermissionRequested { id, tool_id, .. } => {
                 validate_observation_id(id.as_str()).map_err(corrupt)?;
                 validate_observation_id(tool_id.as_str()).map_err(corrupt)?;
-                // A review and a decline share one identity sequence, so a
-                // deadline notice, which takes its review's id, never names a
-                // decline's notice.
-                if self.review_ids.contains(id)
-                    || ReviewDeclineId::new(id.as_str())
-                        .is_ok_and(|decline| self.declines.contains_key(&decline))
-                {
+                // A permission id and a decline id are different identities.
+                // The same decimal may name both. A second request for one
+                // permission id is still the same review repeated.
+                if self.review_ids.contains(id) {
                     return Err(corrupt(
                         "permission identity is repeated within an invocation",
                     ));
@@ -142,13 +139,6 @@ impl Observations {
             ExecutionUpdate::ReviewDeclined(observation) => {
                 let previous = self.declines.get(observation.id()).copied();
                 match previous {
-                    None if PermissionId::new(observation.id().as_str())
-                        .is_ok_and(|review| self.review_ids.contains(&review)) =>
-                    {
-                        return Err(corrupt(
-                            "declined review identity repeats a permission identity",
-                        ))
-                    }
                     None if observation.stage() == ReviewDeclineStage::Selected => {}
                     Some(previous) => {
                         let ExecutionUpdate::ReviewDeclined(selected) =

@@ -550,7 +550,15 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Invalid steering offset")
     let previousOffset = -1
     for (const part of items(message, "parts", 512)) {
-      exact(part, ["offset", "kind", "text", "toolId", "noticeId", "messageId"])
+      exact(part, [
+        "offset",
+        "kind",
+        "text",
+        "toolId",
+        "noticeId",
+        "noticeKind",
+        "messageId",
+      ])
       if (!Number.isSafeInteger(part.offset) || (part.offset as number) <= previousOffset)
         throw new Error("Invalid part order")
       previousOffset = part.offset as number
@@ -559,6 +567,14 @@ export function conversationView(value: unknown, expected: string): Conversation
       text(part, "text")
       const toolId = text(part, "toolId", 256)
       const noticeId = text(part, "noticeId", 20)
+      const noticeKind = part.noticeKind
+      if (
+        noticeKind !== undefined &&
+        noticeKind !== "review" &&
+        noticeKind !== "hook" &&
+        noticeKind !== "deadline"
+      )
+        throw new Error("Conversation local notice has no source")
       if (kind === "tool") {
         if (!toolId.length) throw new Error("Conversation tool part has no tool identity")
         const key = JSON.stringify([executionId, toolId])
@@ -570,16 +586,18 @@ export function conversationView(value: unknown, expected: string): Conversation
         throw new Error("Conversation non-tool part has a tool identity")
       }
       if (kind === "local_notice") {
+        if (noticeKind !== "review" && noticeKind !== "hook" && noticeKind !== "deadline")
+          throw new Error("Conversation local notice has no source")
         if (
           !/^[1-9][0-9]{0,19}$/.test(noticeId) ||
           (noticeId.length === 20 && noticeId > "18446744073709551615")
         )
           throw new Error("Conversation local notice has no valid identity")
-        const key = JSON.stringify([executionId, noticeId])
+        const key = JSON.stringify([executionId, noticeKind, noticeId])
         if (noticePartIds.has(key))
           throw new Error("Conversation response repeats a local notice identity")
         noticePartIds.add(key)
-      } else if (noticeId.length) {
+      } else if (noticeId.length || noticeKind !== undefined) {
         throw new Error("Conversation non-notice part has a notice identity")
       }
       if (part.messageId !== undefined) identity(part, "messageId")

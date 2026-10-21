@@ -1798,6 +1798,12 @@ async fn a_refusal_can_end_the_turn_and_leave_the_session_usable() {
         panic!("expected the refusal notice");
     };
     assert_eq!(selected.decline().outcome(), RefusalOutcome::EndTurn);
+    let rule = selected.rule().expect("a stop names its rule");
+    assert_eq!(rule.rule_id(), "refuse-shell");
+    assert_eq!(rule.revision(), "1");
+    assert_eq!(rule.granted_by().principal_id(), "host");
+    assert_eq!(rule.granted_by().surface_id(), "policy");
+    assert_eq!(rule.granted_by().request_id(), "grant");
     assert!(matches!(
         next(&mut opened).await,
         ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)
@@ -1888,10 +1894,15 @@ async fn a_stalled_stop_audit_fails_after_the_local_stop() {
     let mut opened = open_that_stops(&binding, audit).await;
     let active = start(&opened, "stop-without-audit").await;
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
-    assert!(matches!(
-        next(&mut opened).await,
-        ExecutionUpdate::ReviewDeclined(_)
-    ));
+    let ExecutionUpdate::ReviewDeclined(selected) = next(&mut opened).await else {
+        panic!("expected the refusal notice");
+    };
+    let rule = selected
+        .rule()
+        .expect("a failed audit still publishes the rule");
+    assert_eq!(rule.rule_id(), "refuse-shell");
+    assert_eq!(rule.revision(), "1");
+    assert_eq!(rule.granted_by().principal_id(), "host");
     assert!(matches!(
         next(&mut opened).await,
         ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)
