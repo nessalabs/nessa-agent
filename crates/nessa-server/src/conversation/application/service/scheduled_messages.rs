@@ -19,6 +19,9 @@ pub(crate) const FENCE_RENEW_EVERY_MS: u64 = 10_000;
 /// How long a delivery pass waits after a schedule-store read fails.
 pub(crate) const SCHEDULE_RETRY_MS: u64 = 1_000;
 
+/// The longest wait before a failed catch-up scan is tried again.
+pub(crate) const CATCH_UP_RETRY_MAX_MS: u64 = 60_000;
+
 /// How long renewal waits after `renew_fence` returns an error.
 pub(crate) const FENCE_RENEW_RETRY_MS: u64 = 1_000;
 
@@ -749,24 +752,27 @@ impl ConversationService {
     /// Run delivery until the gateway retires.
     ///
     /// The wakeup is registered before the catch-up scan and before each
-    /// schedule read. While the preference is on, the first pass that can
-    /// read it scans every catalogue owner, so a crash during an earlier
-    /// enable finishes. A preference read that fails retries that scan on a
-    /// later pass.
+    /// schedule read. Catch-up is complete only after every catalogue owner
+    /// has been traversed while the preference is on, or when the preference
+    /// is off. A failed scan leaves it pending. The next pass tries again
+    /// after [`catch_up_backoff`]. A preference read that fails leaves it
+    /// pending the same way.
     pub async fn run_scheduled_messages(&self) {
         let mut caught_up = self.scheduled_messages().is_none();
+        let mut catch_up_failures = 0_u32;
         loop {
             if self.inner.retirement.get().is_some() {
                 return;
             }
             let wakeup = self.inner.schedule_wakeup.notified();
+            let mut catch_up_wait = None;
             if !caught_up {
                 if let Some(store) = self.scheduled_messages() {
                     match store.preference().await {
                         Ok(enabled) => {
                             if enabled {
                                 let mut visited = Vec::new();
-                                if let Err(error) = self
+                                match self
                                     .schedule_every_owner(
                                         &store,
                                         false,
@@ -775,16 +781,28 @@ impl ConversationService {
                                     )
                                     .await
                                 {
-                                    tracing::warn!(
-                                        %error,
-                                        "a usage-limit continuation scan did not finish"
-                                    );
+                                    Ok(()) => {
+                                        caught_up = true;
+                                        catch_up_failures = 0;
+                                    }
+                                    Err(error) => {
+                                        catch_up_failures = catch_up_failures.saturating_add(1);
+                                        let retry = catch_up_backoff(catch_up_failures);
+                                        catch_up_wait = Some(retry);
+                                        tracing::warn!(
+                                            %error,
+                                            retry_ms = retry,
+                                            "a usage-limit continuation scan did not finish"
+                                        );
+                                    }
                                 }
                                 for id in &visited {
                                     self.inner.live_changes.publish(id);
                                 }
+                            } else {
+                                caught_up = true;
+                                catch_up_failures = 0;
                             }
-                            caught_up = true;
                         }
                         Err(error) => {
                             tracing::warn!(
@@ -795,7 +813,7 @@ impl ConversationService {
                     }
                 }
             }
-            let wait = self.deliver_due_scheduled().await;
+            let wait = next_pass_wait(self.deliver_due_scheduled().await, catch_up_wait);
             tokio::select! {
                 () = async {
                     match wait {
@@ -942,6 +960,34 @@ impl ConversationService {
                 .iter()
                 .any(|invocation| invocation.request.execution_id.as_str() == execution_id)
         })
+    }
+}
+
+/// How long to wait before the next catch-up attempt.
+///
+/// The first failure waits [`SCHEDULE_RETRY_MS`]. Each later failure doubles
+/// that wait, up to [`CATCH_UP_RETRY_MAX_MS`].
+fn catch_up_backoff(failures: u32) -> u64 {
+    let mut wait = SCHEDULE_RETRY_MS;
+    for _ in 0..failures.saturating_sub(1) {
+        let doubled = wait.saturating_mul(2);
+        if doubled >= CATCH_UP_RETRY_MAX_MS {
+            return CATCH_UP_RETRY_MAX_MS;
+        }
+        wait = doubled;
+    }
+    wait
+}
+
+/// The sooner of a delivery wait and a pending catch-up retry.
+///
+/// A catch-up that is still owed must not park on an empty schedule. A due
+/// row must not wait out the whole catch-up backoff.
+fn next_pass_wait(delivery: Option<u64>, catch_up: Option<u64>) -> Option<u64> {
+    match (delivery, catch_up) {
+        (Some(delivery), Some(retry)) => Some(delivery.min(retry)),
+        (None, Some(retry)) => Some(retry),
+        (delivery, None) => delivery,
     }
 }
 
@@ -1202,7 +1248,7 @@ mod catalogue_pages {
         ConversationCaller, ConversationDependencies, ConversationFuture, ConversationLimits,
         ConversationListing, ConversationModelApplication, ConversationModelRequest,
         ConversationModelRequestState, ConversationModelSelection, ConversationService,
-        ListedConversations, ObservationCursor, ObservedConversations,
+        ListedConversation, ListedConversations, ObservationCursor, ObservedConversations,
         UsageLimitPreferenceDecision, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
         UsageLimitPreferencePolicyEvaluator,
     };
@@ -1213,7 +1259,9 @@ mod catalogue_pages {
         DELETION_BUDGETS,
     };
     use nessa_protocol::conversation::domain::ConversationId;
-    use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
+    use nessa_protocol::conversation::domain::{
+        ConversationApprovalMode, ConversationModelId, ConversationSummary,
+    };
     use nessa_protocol::conversation::view::ConversationModelChangeEffect;
     use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 
@@ -1316,8 +1364,12 @@ mod catalogue_pages {
         fail_decision: AtomicBool,
         submits: AtomicUsize,
         opens: AtomicUsize,
+        /// Conversation ids passed to `open`, in order.
+        opened: Mutex<Vec<String>>,
         /// While set, `open` fails and a delivery or model reconciliation cannot commit.
         fail_open: AtomicBool,
+        /// While set, a delivery pass finds nothing due instead of failing the read.
+        idle_delivery: AtomicBool,
     }
 
     impl RecordingStore {
@@ -1332,7 +1384,9 @@ mod catalogue_pages {
                 fail_decision: AtomicBool::new(false),
                 submits: AtomicUsize::new(0),
                 opens: AtomicUsize::new(0),
+                opened: Mutex::new(Vec::new()),
                 fail_open: AtomicBool::new(true),
+                idle_delivery: AtomicBool::new(false),
             }
         }
 
@@ -1372,8 +1426,9 @@ mod catalogue_pages {
             }
             Box::pin(async move { Ok(enabled) })
         }
-        fn open(&self, _: &str) -> ConversationFuture<'_, Option<ScheduledMessage>> {
+        fn open(&self, conversation: &str) -> ConversationFuture<'_, Option<ScheduledMessage>> {
             self.opens.fetch_add(1, Ordering::SeqCst);
+            self.opened.lock().unwrap().push(conversation.to_owned());
             if self.fail_open.load(Ordering::SeqCst) {
                 refused()
             } else {
@@ -1403,10 +1458,18 @@ mod catalogue_pages {
             refused()
         }
         fn claim_due(&self, _: u64, _: usize) -> ConversationFuture<'_, Vec<ScheduledMessage>> {
-            refused()
+            if self.idle_delivery.load(Ordering::SeqCst) {
+                Box::pin(async { Ok(Vec::new()) })
+            } else {
+                refused()
+            }
         }
         fn next_due(&self, _: u64) -> ConversationFuture<'_, Option<u64>> {
-            refused()
+            if self.idle_delivery.load(Ordering::SeqCst) {
+                Box::pin(async { Ok(None) })
+            } else {
+                refused()
+            }
         }
         fn begin_submit(&self, _: &str, _: u64) -> ConversationFuture<'_, bool> {
             self.submits.fetch_add(1, Ordering::SeqCst);
@@ -2421,5 +2484,168 @@ mod catalogue_pages {
         tokio::time::sleep(Duration::from_millis(FENCE_RENEW_EVERY_MS)).await;
         assert_eq!(schedule.renew_calls.load(Ordering::SeqCst), 1);
         task.abort();
+    }
+
+    #[test]
+    fn catch_up_backoff_doubles_until_it_is_capped() {
+        assert_eq!(super::catch_up_backoff(1), SCHEDULE_RETRY_MS);
+        assert_eq!(super::catch_up_backoff(2), SCHEDULE_RETRY_MS * 2);
+        assert_eq!(super::catch_up_backoff(3), SCHEDULE_RETRY_MS * 4);
+        assert_eq!(super::catch_up_backoff(30), super::CATCH_UP_RETRY_MAX_MS);
+    }
+
+    /// The first page of `person-a` cannot say where to resume. `person-b`
+    /// is the owner that page skips.
+    struct FailThenPlan {
+        conversation: crate::conversation::domain::Conversation,
+        summary: ConversationSummary,
+        seen: Mutex<Vec<String>>,
+        failed_pages: AtomicUsize,
+    }
+
+    impl ConversationListing for FailThenPlan {
+        fn list(
+            &self,
+            _: &OrganizationId,
+            _: &PrincipalId,
+            _: bool,
+            _: usize,
+        ) -> ConversationFuture<'_, ListedConversations> {
+            Box::pin(async { Ok(ListedConversations::default()) })
+        }
+        fn observe(
+            &self,
+            _: &OrganizationId,
+            owner: &PrincipalId,
+            _: bool,
+            _: Option<ObservationCursor>,
+        ) -> ConversationFuture<'_, ObservedConversations> {
+            let name = owner.as_str().to_owned();
+            self.seen.lock().unwrap().push(name.clone());
+            if name == "person-a" && self.failed_pages.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Box::pin(async {
+                    Ok(ObservedConversations {
+                        conversations: Vec::new(),
+                        complete: false,
+                        cursor: None,
+                    })
+                });
+            }
+            let conversations = if name == "person-b" {
+                vec![ListedConversation {
+                    conversation: self.conversation.clone(),
+                    summary: self.summary.clone(),
+                }]
+            } else {
+                Vec::new()
+            };
+            Box::pin(async move {
+                Ok(ObservedConversations {
+                    conversations,
+                    complete: true,
+                    cursor: None,
+                })
+            })
+        }
+        fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>> {
+            Box::pin(async {
+                Ok(vec![
+                    (
+                        OrganizationId::new("org-a").unwrap(),
+                        PrincipalId::new("person-a").unwrap(),
+                    ),
+                    (
+                        OrganizationId::new("org-b").unwrap(),
+                        PrincipalId::new("person-b").unwrap(),
+                    ),
+                ])
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_catch_up_scan_schedules_the_skipped_owner_on_a_later_pass() {
+        let id = ConversationId::new("33333333-3333-4333-8333-333333333333").unwrap();
+        let conversation = crate::conversation::domain::Conversation::restore(
+            id.clone(),
+            OrganizationId::new("org-b").unwrap(),
+            PrincipalId::new("person-b").unwrap(),
+            "desktop".into(),
+            "create".into(),
+            1,
+            None,
+            ConversationModelId::new("opus").unwrap(),
+            ConversationApprovalMode::Ask,
+        )
+        .unwrap();
+        let repository = Arc::new(MemoryRepository::default());
+        repository
+            .records
+            .lock()
+            .unwrap()
+            .insert(id.clone(), conversation.clone());
+        let listing = Arc::new(FailThenPlan {
+            conversation,
+            summary: ConversationSummary::new(None, None, 1, false).unwrap(),
+            seen: Mutex::new(Vec::new()),
+            failed_pages: AtomicUsize::new(0),
+        });
+        let service = service_over(repository, listing.clone(), Arc::new(TestClock));
+        let store = Arc::new(RecordingStore::new(true));
+        store.fail_open.store(false, Ordering::SeqCst);
+        store.idle_delivery.store(true, Ordering::SeqCst);
+        service.bind_scheduled_messages(store.clone());
+        let retired = service.inner.retired.clone();
+        let task = tokio::spawn(async move {
+            service.run_scheduled_messages().await;
+        });
+
+        let saw_failure = tokio::time::timeout(Duration::from_secs(5), async {
+            while listing.failed_pages.load(Ordering::SeqCst) < 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(saw_failure.is_ok(), "the catalogue page did not fail");
+        assert!(store.opened.lock().unwrap().is_empty());
+        assert_eq!(listing.seen.lock().unwrap().as_slice(), ["person-a"]);
+
+        tokio::time::sleep(Duration::from_millis(SCHEDULE_RETRY_MS - 1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(listing.failed_pages.load(Ordering::SeqCst), 1);
+        assert!(store.opened.lock().unwrap().is_empty());
+
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        let planned = tokio::time::timeout(Duration::from_secs(5), async {
+            while !store
+                .opened
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|opened| opened == &id.to_string())
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(planned.is_ok(), "the skipped owner was not planned");
+        let seen = listing.seen.lock().unwrap().clone();
+        let skipped = seen
+            .iter()
+            .position(|owner| owner == "person-b")
+            .expect("person-b was not visited");
+        assert!(
+            seen[..skipped]
+                .iter()
+                .filter(|owner| owner.as_str() == "person-a")
+                .count()
+                >= 2
+        );
+
+        retired.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("the schedule loop did not stop")
+            .unwrap();
     }
 }
