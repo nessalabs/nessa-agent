@@ -301,6 +301,131 @@ mod tests {
         }
     }
 
+    /// `RuntimeCopy` is the host struct. The shell interface has to name the
+    /// same camelCase fields and the same kebab-case states, or a rename
+    /// compiles on both sides and setup reads `undefined`.
+    #[test]
+    fn shell_runtime_copy_matches_the_host() {
+        let host = include_str!("host.rs");
+        let shell = include_str!("../../src/host/window.ts");
+        let struct_at = host
+            .find("pub struct RuntimeCopy {")
+            .expect("host.rs is missing RuntimeCopy");
+        let attribute = serde_attribute_before(host, struct_at);
+        assert!(
+            attribute.starts_with("#[serde(rename_all = \"camelCase\")]"),
+            "RuntimeCopy fields cross the seam in camelCase"
+        );
+        let body = item_body(host, struct_at);
+
+        let shell_at = shell
+            .find("export interface RuntimeCopy")
+            .expect("src/host/window.ts is missing RuntimeCopy");
+        let declared = &shell[shell_at..];
+        let shell_close = declared.find('}').expect("RuntimeCopy closes");
+        let declared = &declared[..shell_close];
+
+        let mut counted = 0;
+        for line in body.lines() {
+            let Some(rest) = line.trim().strip_prefix("pub ") else {
+                continue;
+            };
+            let Some((name, ty)) = rest.split_once(':') else {
+                continue;
+            };
+            let name = name.trim();
+            let ty = ty.trim().trim_end_matches(',');
+            if ty == "RuntimeCopyState" {
+                let union = runtime_copy_states(host);
+                assert!(
+                    declared.contains(&format!("{name}: {union}")),
+                    "RuntimeCopy.{name} is not the host's {union}"
+                );
+                continue;
+            }
+            let camel = snake_to_camel(name);
+            assert!(
+                declared.contains(&format!("{camel}: number")),
+                "src/host/window.ts RuntimeCopy is missing {camel}"
+            );
+            counted += 1;
+        }
+        assert!(
+            counted >= 4,
+            "only {counted} RuntimeCopy counters were found; the scrape is broken"
+        );
+    }
+
+    fn serde_attribute_before(source: &str, at: usize) -> &str {
+        let prelude = &source[..at];
+        let serde_at = prelude
+            .rfind("#[serde(")
+            .expect("the item is missing its serde attribute");
+        &prelude[serde_at..]
+    }
+
+    fn item_body(source: &str, at: usize) -> &str {
+        let body = &source[at..];
+        let close = body.find('}').expect("the item closes");
+        &body[..close]
+    }
+
+    fn runtime_copy_states(host: &str) -> String {
+        let enum_at = host
+            .find("pub enum RuntimeCopyState {")
+            .expect("host.rs is missing RuntimeCopyState");
+        let attribute = serde_attribute_before(host, enum_at);
+        assert!(
+            attribute.starts_with("#[serde(rename_all = \"kebab-case\")]"),
+            "RuntimeCopyState crosses the seam in kebab-case"
+        );
+        let mut states = Vec::new();
+        for line in item_body(host, enum_at).lines().skip(1) {
+            let line = line.trim().trim_end_matches(',');
+            if line.is_empty() || line.starts_with("//") || line.starts_with('#') {
+                continue;
+            }
+            assert!(
+                line.chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_'),
+                "RuntimeCopyState variant {line} is not a plain name"
+            );
+            states.push(format!("\"{}\"", variant_to_kebab(line)));
+        }
+        assert!(
+            !states.is_empty(),
+            "no RuntimeCopyState variants were found; the scrape is broken"
+        );
+        states.join(" | ")
+    }
+
+    fn snake_to_camel(name: &str) -> String {
+        let mut out = String::new();
+        let mut upper = false;
+        for ch in name.chars() {
+            if ch == '_' {
+                upper = true;
+            } else if upper {
+                out.extend(ch.to_uppercase());
+                upper = false;
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    }
+
+    fn variant_to_kebab(variant: &str) -> String {
+        let mut out = String::new();
+        for (index, ch) in variant.chars().enumerate() {
+            if ch.is_uppercase() && index > 0 {
+                out.push('-');
+            }
+            out.extend(ch.to_lowercase());
+        }
+        out
+    }
+
     #[test]
     fn shell_host_startup_matches_the_host() {
         let shell = include_str!("../../src/startup/application/ports.ts");
