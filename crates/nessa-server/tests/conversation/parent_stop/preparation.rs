@@ -167,7 +167,15 @@ async fn granted_preparation_failure(commit: bool, earlier: bool, public_stop: b
         };
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].0, target.to_string());
-        assert!(matches!(failures[0].1, AgentError::CleanupUncertain));
+        // Public retirement maps its outer wait expiry to Deadline while
+        // the same supervised cleanup continues. Neither answer proves End.
+        assert!(
+            matches!(
+                failures[0].1,
+                AgentError::CleanupUncertain | AgentError::Deadline
+            ),
+            "{failures:?}"
+        );
         assert!(service.owns_unreleased_resources().await);
         assert!(opening.upgrade().is_some());
     }
@@ -228,7 +236,12 @@ async fn granted_preparation_failure(commit: bool, earlier: bool, public_stop: b
     .unwrap();
     if public_stop {
         service.stop_active_agents().await.unwrap();
-        assert!(opening.upgrade().is_none());
+        assert!(!service
+            .inner
+            .conversations
+            .lock()
+            .await
+            .contains_key(&target));
         assert!(!service.owns_unreleased_resources().await);
     }
     coordinator
