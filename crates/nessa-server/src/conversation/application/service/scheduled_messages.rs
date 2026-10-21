@@ -5,11 +5,13 @@
 //! with the causal turn's initiation, so Cedar and a deleted conversation are
 //! decided there. The compare-and-set from `delivering` to `submitting` is the
 //! only permission to submit, and it takes a lease the other processes on this
-//! file can see. A retryable submit failure keeps the row `submitting` until
-//! a bounded retry time. An outcome whose audit does not commit is that
-//! same retry: the next pass records the outcome and does not mint an
-//! execution id. A settlement whose plan does not commit keeps the
-//! same kind of debt and is planned again at that time. Cancel, defer, and a
+//! file can see. A retryable submit, an outcome whose audit does not commit,
+//! a reconciliation whose plan does not commit, and a delivery whose plan
+//! does not commit are one retry: [`next_attempt`]. The next pass does not
+//! enter that work before `retry_at_ms`. When the durable retry does not
+//! commit, this process keeps the same attempt. A lost lease writes nothing.
+//! An unread execution writes no `retry_at_ms` and is still that attempt.
+//! Cancel, defer, and a
 //! model change lose to that transition and win against a claim that has not
 //! made it. An applied model change is not complete until that plan commits.
 //! Cedar's allow and deny of the preference are each one audit before the
@@ -869,9 +871,8 @@ impl ConversationService {
     ) -> u64 {
         let now = self.inner.clock.unix_milliseconds();
         let previous = self.reconcile_failure_count(store, conversation).await;
-        let failures = previous.saturating_add(1);
-        let wait = attempt_backoff(failures);
-        let retry_at = now.saturating_add(wait);
+        let (failures, retry_at) = next_attempt(now, previous);
+        let wait = retry_at.saturating_sub(now);
         if store
             .note_reconcile_retry(conversation, failures, retry_at)
             .await
@@ -904,17 +905,20 @@ impl ConversationService {
         store: &Arc<dyn ScheduledMessageStore>,
         conversation: &str,
     ) -> u32 {
+        let mut failures = 0;
         if let Ok(rows) = store.reconcile_retries().await {
             if let Some(row) = rows
                 .into_iter()
                 .find(|row| row.conversation == conversation)
             {
-                return row.failures;
+                failures = row.failures;
             }
         }
-        self.memory_reconcile(conversation)
-            .map(|(failures, _)| failures)
-            .unwrap_or(0)
+        failures.max(
+            self.memory_reconcile(conversation)
+                .map(|(failures, _)| failures)
+                .unwrap_or(0),
+        )
     }
 
     fn memory_reconcile(&self, conversation: &str) -> Option<(u32, u64)> {
@@ -954,6 +958,67 @@ impl ConversationService {
             .lock()
             .expect("reconcile retry")
             .remove(conversation);
+    }
+
+    fn submit_retries(&self) -> Vec<(String, u64)> {
+        self.inner
+            .submit_retry_owed
+            .lock()
+            .expect("submit retry")
+            .iter()
+            .map(|(execution_id, (_, retry_at_ms))| (execution_id.clone(), *retry_at_ms))
+            .collect()
+    }
+
+    fn submit_retry_failures(&self, execution_id: &str) -> u32 {
+        self.inner
+            .submit_retry_owed
+            .lock()
+            .expect("submit retry")
+            .get(execution_id)
+            .map(|(failures, _)| *failures)
+            .unwrap_or(0)
+    }
+
+    /// How long until this execution's uncommitted retry, when it is still ahead.
+    fn submit_wait_remaining(&self, execution_id: &str) -> Option<u64> {
+        let now = self.inner.clock.unix_milliseconds();
+        self.inner
+            .submit_retry_owed
+            .lock()
+            .expect("submit retry")
+            .get(execution_id)
+            .filter(|(_, retry_at)| *retry_at > now)
+            .map(|(_, retry_at)| retry_at - now)
+    }
+
+    fn remember_submit_retry(&self, execution_id: &str, failures: u32, retry_at_ms: u64) {
+        self.inner
+            .submit_retry_owed
+            .lock()
+            .expect("submit retry")
+            .insert(execution_id.to_owned(), (failures, retry_at_ms));
+    }
+
+    fn forget_submit_retry(&self, execution_id: &str) {
+        self.inner
+            .submit_retry_owed
+            .lock()
+            .expect("submit retry")
+            .remove(execution_id);
+    }
+
+    /// The next attempt for a submit or an outcome whose durable retry did
+    /// not commit. Nothing is written on the row. The loop waits this long
+    /// and does not enter the submit again before then.
+    fn note_uncommitted_submit(&self, row: &ScheduledMessage) -> u64 {
+        let now = self.inner.clock.unix_milliseconds();
+        let previous = row
+            .retry_failures
+            .max(self.submit_retry_failures(&row.execution_id));
+        let (failures, retry_at) = next_attempt(now, previous);
+        self.remember_submit_retry(&row.execution_id, failures, retry_at);
+        retry_at.saturating_sub(now)
     }
 
     /// How long until `conversation`'s reconcile debt, when that retry is
@@ -1005,6 +1070,9 @@ impl ConversationService {
         for owed in self.memory_reconcile_debts() {
             soonest = sooner_hold(soonest, owed.retry_at_ms, now);
         }
+        for (_, retry_at) in self.submit_retries() {
+            soonest = sooner_hold(soonest, retry_at, now);
+        }
         soonest
     }
 
@@ -1022,10 +1090,17 @@ impl ConversationService {
             }
         };
         for owed in self.memory_reconcile_debts() {
-            if !debts
-                .iter()
-                .any(|row| row.conversation == owed.conversation)
+            if let Some(existing) = debts
+                .iter_mut()
+                .find(|row| row.conversation == owed.conversation)
             {
+                // A note the database refused is the later attempt. The stored
+                // row is the previous one and must not be entered again.
+                if owed.retry_at_ms >= existing.retry_at_ms {
+                    existing.failures = existing.failures.max(owed.failures);
+                    existing.retry_at_ms = owed.retry_at_ms;
+                }
+            } else {
                 debts.push(owed);
             }
         }
@@ -1058,24 +1133,14 @@ impl ConversationService {
                     self.forget_memory_reconcile(&debt.conversation);
                 }
                 Err(error) => {
-                    let failures = debt.failures.saturating_add(1);
-                    let wait = attempt_backoff(failures);
-                    let retry_at = now.saturating_add(wait);
-                    if store
-                        .note_reconcile_retry(&debt.conversation, failures, retry_at)
-                        .await
-                        .is_ok()
-                    {
-                        self.forget_memory_reconcile(&debt.conversation);
-                    } else {
-                        self.remember_reconcile_retry(&debt.conversation, failures, retry_at);
-                    }
+                    let wait = self
+                        .note_reconcile_failure(&store, &debt.conversation)
+                        .await;
                     soonest = Some(soonest.map_or(wait, |current| current.min(wait)));
                     tracing::warn!(
                         conversation = %debt.conversation,
                         %error,
                         retry_ms = wait,
-                        failures,
                         "a usage-limit continuation will be planned again"
                     );
                 }
@@ -1420,19 +1485,14 @@ impl ConversationService {
             Ok(rows) => rows,
             Err(_) => return Some(SCHEDULE_RETRY_MS),
         };
-        let mut retry_unrecorded = false;
         let mut claimed = 0_usize;
         let mut held = 0_usize;
         for row in rows {
             claimed += 1;
             match self.deliver_scheduled(store.clone(), row).await {
-                DeliveredStep::Unrecorded => retry_unrecorded = true,
-                DeliveredStep::Reconcile => held += 1,
+                DeliveredStep::Held => held += 1,
                 DeliveredStep::Quiet => {}
             }
-        }
-        if retry_unrecorded {
-            return Some(SCHEDULE_RETRY_MS);
         }
         let now = self.inner.clock.unix_milliseconds();
         let next = match store.next_due(now).await {
@@ -1559,8 +1619,9 @@ impl ConversationService {
             .reconcile_wait_remaining(&store, &row.conversation)
             .await
             .is_some()
+            || self.submit_wait_remaining(&row.execution_id).is_some()
         {
-            return DeliveredStep::Reconcile;
+            return DeliveredStep::Held;
         }
         if self
             .apply_usage_limit_plan(&id, &store, false, ScheduleActor::system())
@@ -1573,7 +1634,7 @@ impl ConversationService {
                 retry_ms = wait,
                 "a usage-limit delivery could not reconcile; the row stays delivering"
             );
-            return DeliveredStep::Reconcile;
+            return DeliveredStep::Held;
         }
         // Reconciliation above may cancel or defer while the row is still
         // `delivering`. The transition below is the decision to submit: a
@@ -1584,12 +1645,12 @@ impl ConversationService {
             return DeliveredStep::Quiet;
         };
         let lease_until = now.saturating_add(FENCE_LEASE_MS);
-        let unrecorded = self
+        let held = self
             .finish_fenced_submit(store.clone(), id, &row, lease_until)
             .await;
         let _ = store.release_submit(&row.execution_id).await;
-        if unrecorded {
-            DeliveredStep::Unrecorded
+        if held {
+            DeliveredStep::Held
         } else {
             DeliveredStep::Quiet
         }
@@ -1636,9 +1697,11 @@ impl ConversationService {
                 // The invocation may already be saved. An unread session is
                 // not absence: submitting would see Attempted and record
                 // unconfirmed for a turn that is still running.
+                let wait = self.note_uncommitted_submit(row);
                 tracing::warn!(
                     execution_id = %row.execution_id,
                     %error,
+                    retry_ms = wait,
                     "the saved execution could not be read; the submission stays and will be read again"
                 );
                 return true;
@@ -1721,9 +1784,9 @@ impl ConversationService {
     /// `false` when the outcome committed, the row is gone, or the retry time
     /// committed: [`ScheduledMessageStore::next_due`] then carries the wait.
     /// `true` when the outcome did not commit and the retry time did not
-    /// either, so the delivery loop waits one step instead of claiming the
-    /// row again immediately. A lost compare-and-set writes no status and no
-    /// audit, and is not a debt.
+    /// either. [`next_attempt`] still names the wait, kept in this process,
+    /// and the submit is not entered again before it. A lost compare-and-set
+    /// writes no status and no audit, and is not a debt.
     async fn persist_observed_outcome(
         &self,
         store: &Arc<dyn ScheduledMessageStore>,
@@ -1764,24 +1827,33 @@ impl ConversationService {
         row: &ScheduledMessage,
     ) -> bool {
         let now = self.inner.clock.unix_milliseconds();
-        let failures = row.retry_failures.saturating_add(1);
-        let retry_at = now.saturating_add(attempt_backoff(failures));
+        let previous = row
+            .retry_failures
+            .max(self.submit_retry_failures(&row.execution_id));
+        let (failures, retry_at) = next_attempt(now, previous);
         match store
             .defer_submit(&row.execution_id, failures, retry_at, now)
             .await
         {
-            Ok(true) => true,
+            Ok(true) => {
+                self.forget_submit_retry(&row.execution_id);
+                true
+            }
             Ok(false) => {
+                self.remember_submit_retry(&row.execution_id, failures, retry_at);
                 tracing::warn!(
                     execution_id = %row.execution_id,
+                    retry_ms = retry_at.saturating_sub(now),
                     "a retryable scheduled submission could not be deferred"
                 );
                 false
             }
             Err(error) => {
+                self.remember_submit_retry(&row.execution_id, failures, retry_at);
                 tracing::warn!(
                     execution_id = %row.execution_id,
                     %error,
+                    retry_ms = retry_at.saturating_sub(now),
                     "a retryable scheduled submission could not be deferred"
                 );
                 false
@@ -1809,13 +1881,22 @@ impl ConversationService {
 
 /// What one claimed row asked the delivery loop to do.
 enum DeliveredStep {
-    /// The outcome or its retry time did not commit. Wait one step.
-    Unrecorded,
-    /// The plan did not commit, or its retry is still ahead. The row stays
-    /// `delivering` and is not due until that retry.
-    Reconcile,
+    /// A retry is still ahead. The row is not due, and the work is not
+    /// entered again until [`next_attempt`]'s time.
+    Held,
     /// The row was submitted, cancelled, or left for `next_due`.
     Quiet,
+}
+
+/// The next retry after `previous` failures.
+///
+/// Submit, an outcome write, reconciliation, and a delivery whose plan did
+/// not commit all use this. The first failure waits [`SCHEDULE_RETRY_MS`].
+/// Each later failure doubles that wait, up to [`CATCH_UP_RETRY_MAX_MS`].
+fn next_attempt(now_ms: u64, previous: u32) -> (u32, u64) {
+    let failures = previous.saturating_add(1);
+    let retry_at = now_ms.saturating_add(attempt_backoff(failures));
+    (failures, retry_at)
 }
 
 /// How long to wait before the next failed attempt.
@@ -3359,6 +3440,48 @@ mod catalogue_pages {
         assert!(store.defers.lock().unwrap().is_empty());
     }
 
+    #[tokio::test]
+    async fn an_unread_execution_waits_out_the_same_backoff() {
+        let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+        let service = service_stored(
+            Arc::new(MemoryRepository::default()),
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            clock.clone(),
+            Arc::new(UnreadableSessions),
+        );
+        let store = Arc::new(RecordingStore::new(true));
+        store.submit_attempts.store(true, Ordering::SeqCst);
+        *store.due_row.lock().unwrap() = Some(due_row("owner"));
+        service.bind_scheduled_messages(store.clone());
+
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+        assert!(store.outcomes.lock().unwrap().is_empty());
+        assert!(store.defers.lock().unwrap().is_empty());
+        for _ in 0..30 {
+            assert_eq!(
+                service.deliver_due_scheduled().await,
+                Some(SCHEDULE_RETRY_MS)
+            );
+        }
+        assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+
+        clock.0.store(5_000 + SCHEDULE_RETRY_MS, Ordering::SeqCst);
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS * 2)
+        );
+        assert_eq!(store.submits.load(Ordering::SeqCst), 2);
+        assert!(store.outcomes.lock().unwrap().is_empty());
+        assert!(store.defers.lock().unwrap().is_empty());
+    }
+
     fn due_row(initiation: &str) -> ScheduledMessage {
         ScheduledMessage {
             conversation: "11111111-1111-4111-8111-111111111111".into(),
@@ -3501,6 +3624,25 @@ mod catalogue_pages {
         assert!(store.outcomes.lock().unwrap().is_empty());
         assert!(store.defers.lock().unwrap().is_empty());
         assert_eq!(store.retry_at_ms.load(Ordering::SeqCst), 0);
+        for _ in 0..30 {
+            assert_eq!(
+                service.deliver_due_scheduled().await,
+                Some(SCHEDULE_RETRY_MS)
+            );
+        }
+        assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+        assert!(store.defers.lock().unwrap().is_empty());
+
+        clock.0.store(5_000 + SCHEDULE_RETRY_MS, Ordering::SeqCst);
+        store.fail_outcome.store(1, Ordering::SeqCst);
+        store.fail_defer.store(true, Ordering::SeqCst);
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS * 2)
+        );
+        assert_eq!(store.submits.load(Ordering::SeqCst), 2);
+        assert!(store.outcomes.lock().unwrap().is_empty());
+        assert!(store.defers.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -4858,6 +5000,73 @@ mod catalogue_pages {
         assert_eq!(store.opens.load(Ordering::SeqCst), 2);
     }
 
+    #[tokio::test]
+    async fn a_later_reconcile_note_that_does_not_commit_keeps_its_backoff() {
+        let id = ConversationId::new("11111111-1111-4111-8111-111111111111").unwrap();
+        let repository = Arc::new(MemoryRepository::default());
+        repository
+            .records
+            .lock()
+            .unwrap()
+            .insert(id.clone(), blocked_conversation(&id));
+        let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+        let service = service_over(
+            repository,
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            clock.clone(),
+        );
+        let store = Arc::new(RecordingStore::new(true));
+        store.idle_delivery.store(true, Ordering::SeqCst);
+        service.bind_scheduled_messages(store.clone());
+        service
+            .consider_usage_limit(&id, false, ScheduleActor::system())
+            .await;
+        assert_eq!(store.opens.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            store
+                .reconciles
+                .lock()
+                .unwrap()
+                .get(&id.to_string())
+                .copied(),
+            Some((1, 5_000 + SCHEDULE_RETRY_MS))
+        );
+
+        clock.0.store(5_000 + SCHEDULE_RETRY_MS, Ordering::SeqCst);
+        store.fail_reconcile_note.store(true, Ordering::SeqCst);
+        assert_eq!(
+            service.retry_due_reconciles().await,
+            Some(SCHEDULE_RETRY_MS * 2)
+        );
+        assert_eq!(store.opens.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            store
+                .reconciles
+                .lock()
+                .unwrap()
+                .get(&id.to_string())
+                .copied(),
+            Some((1, 5_000 + SCHEDULE_RETRY_MS))
+        );
+        for _ in 0..30 {
+            assert_eq!(
+                service.retry_due_reconciles().await,
+                Some(SCHEDULE_RETRY_MS * 2)
+            );
+        }
+        assert_eq!(store.opens.load(Ordering::SeqCst), 2);
+
+        clock.0.store(
+            5_000 + SCHEDULE_RETRY_MS + SCHEDULE_RETRY_MS * 2,
+            Ordering::SeqCst,
+        );
+        service.retry_due_reconciles().await;
+        assert_eq!(store.opens.load(Ordering::SeqCst), 3);
+    }
+
     struct BusyCommands;
 
     impl CreationStorage for BusyCommands {
@@ -4947,5 +5156,53 @@ mod catalogue_pages {
                 ("exec-1".into(), 2, 5_000 + SCHEDULE_RETRY_MS * 3),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn a_retryable_submit_whose_retry_does_not_commit_still_waits() {
+        let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+        let service = service(
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            clock.clone(),
+        );
+        let store = Arc::new(RecordingStore::new(true));
+        store.submit_attempts.store(true, Ordering::SeqCst);
+        store.fail_defer.store(true, Ordering::SeqCst);
+        let conversation = "11111111-1111-4111-8111-111111111111";
+        store
+            .due_row
+            .lock()
+            .unwrap()
+            .replace(submitting_row(conversation));
+        service.bind_scheduled_messages(store.clone());
+        service.bind_commands(Arc::new(BusyCommands));
+
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+        assert!(store.defers.lock().unwrap().is_empty());
+        assert_eq!(store.retry_at_ms.load(Ordering::SeqCst), 0);
+        for _ in 0..30 {
+            assert_eq!(
+                service.deliver_due_scheduled().await,
+                Some(SCHEDULE_RETRY_MS)
+            );
+        }
+        assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+
+        clock.0.store(5_000 + SCHEDULE_RETRY_MS, Ordering::SeqCst);
+        store.fail_defer.store(true, Ordering::SeqCst);
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS * 2)
+        );
+        assert_eq!(store.submits.load(Ordering::SeqCst), 2);
+        assert!(store.outcomes.lock().unwrap().is_empty());
+        assert!(store.defers.lock().unwrap().is_empty());
     }
 }

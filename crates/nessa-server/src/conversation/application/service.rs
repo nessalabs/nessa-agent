@@ -868,6 +868,10 @@ struct Inner {
     /// when that write failed, so this process still retries it. A crash
     /// drops it; the next start's catch-up plans every owner.
     reconcile_retry_owed: std::sync::Mutex<HashMap<String, (u32, u64)>>,
+    /// A submit or an outcome whose retry row did not commit. Keyed by
+    /// execution id. The same backoff as a reconcile debt. A crash drops it;
+    /// the submitting row is still due, and the next pass records the retry.
+    submit_retry_owed: std::sync::Mutex<HashMap<String, (u32, u64)>>,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1392,6 +1396,7 @@ impl ConversationService {
                 schedule_wakeup: Arc::new(Notify::new()),
                 model_reconcile_owed: std::sync::Mutex::default(),
                 reconcile_retry_owed: std::sync::Mutex::default(),
+                submit_retry_owed: std::sync::Mutex::default(),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
