@@ -1759,3 +1759,17 @@ namespace migration or repair of previously untracked evidence.
 | SDK guard release rejects after remote End | Preserve ReleasePending and independent evidence failures; retain exact Slot/writer and graph uncertainty until that SDK owner acknowledges. Remote End remains once-only. |
 | Reconciliation sees later independent failures | Preserve initial and new audit/scheduling/completion failures, without duplicating identical cached diagnostics. Final/Suspend retain their original intent and actor. |
 | Unfinished mark clear rejects or loses ACK | Return its failure and retain the owner; a completed physical close does not acknowledge a failed metadata write. |
+
+
+Cycle6 cold recovery controls extend the restart row: the original `Resources`
+adapter retains a prepared SDK history writer without starting an attachment.
+It joins the durable unfinished-mark owner directly; the startup retry index is
+only a live hint and may not yet contain the restored mark. A released physical
+observation with pending resource evidence remains a graph cleanup target, so a
+vacant restored adapter may rebind for that obligation. Fully acknowledged
+release, absence, Closed, existing ownership and factory flights keep their
+transfer refusals. The process-loss regression covers preparation, audit
+rejection and committed/lost ACK; independent rejected/lost mark-clear ACKs;
+and an unconfirmed old lease that stays Closing despite acknowledged decline.
+A positive whole-close case requires an actual pre-crash End receipt. Process
+loss or `NotHeld` is insufficient.

@@ -514,7 +514,8 @@ impl OwnershipCoordinator {
     /// A successful transfer is retained for close even if later audit/storage fails.
     /// Binding and never-bound absence claims serialize under the admission scope.
     /// An existing owner is not replaced; Closing recovery may accept a vacant
-    /// owner slot only before physical release or an absence claim.
+    /// owner slot while the graph still requires that owner's cleanup or evidence.
+    /// Confirmed absence and fully acknowledged resource release exclude transfer.
     ///
     /// # Errors
     /// Returns [`BindResourcesFailure`] with the exact rejected owner for an
@@ -860,9 +861,11 @@ impl Shared {
                     .lock()
                     .expect("absence claims")
                     .contains(lifetime)
-                || graph.snapshot().settlements.iter().any(|row| {
+                || (graph.snapshot().settlements.iter().any(|row| {
                     row.target == *lifetime && row.physical == PhysicalFact::Released
-                }) =>
+                }) && !graph
+                    .close_owner(lifetime)
+                    .is_some_and(|root| graph.cleanup_targets(&root).contains(lifetime))) =>
             {
                 Some(BindResourcesRefusal::Released)
             }

@@ -762,6 +762,19 @@ fn historical_decline_crash_child() {
                 .active_lifetime_for_session(&conversation_session(&target))
                 .unwrap();
             std::fs::write(root.join("decline-lifetime"), lifetime.as_str()).unwrap();
+            // This positive recovery case has a real pre-crash physical receipt.
+            // Process death alone cannot acknowledge an in-process lease.
+            if std::env::var("NESSA_DECLINE_PHYSICAL").as_deref() != Ok("unknown") {
+                service
+                    .close_leased(
+                        &live,
+                        nessa_sdk::domain::agent_execution::leases::LeaseEndCause::Closed,
+                        caller("physical-before-decline").actor().unwrap(),
+                        crate::conversation::application::environment::AgentEnd::Suspend,
+                    )
+                    .await
+                    .unwrap();
+            }
             let close = coordinator.end_lifetime(CloseCommand {
                 lifetime,
                 cause: LifetimeCause::HostClose,
@@ -795,8 +808,15 @@ fn historical_decline_crash_child() {
 
 #[tokio::test]
 async fn original_decline_preparation_and_audit_receipt_survive_actual_process_loss() {
+    let _trace =
+        tracing::subscriber::set_default(tracing_subscriber::fmt().with_test_writer().finish());
     use nessa_sdk::domain::agent_execution::subagents::AgentLifetimeId;
-    for stage in ["prepared", "audit-rejected", "audit-lost-ack"] {
+    for (stage, physical) in [
+        ("prepared", "confirmed"),
+        ("audit-rejected", "confirmed"),
+        ("audit-lost-ack", "confirmed"),
+        ("prepared", "unknown"),
+    ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("data");
         let target = id();
@@ -805,7 +825,7 @@ async fn original_decline_preparation_and_audit_receipt_survive_actual_process_l
         let output = std::fs::File::create(&log).unwrap();
         let mut process=ChildOwner(Command::new(std::env::current_exe().unwrap())
             .args(["--exact","conversation::application::service::mutation::tests::parent_stop::confirmed_recovery::historical_decline_crash_child","--ignored","--nocapture"])
-            .env("NESSA_MUTATION_ROOT",&root).env("NESSA_MUTATION_TARGET",target.to_string()).env("NESSA_DECLINE_STAGE",stage)
+            .env("NESSA_MUTATION_ROOT",&root).env("NESSA_MUTATION_TARGET",target.to_string()).env("NESSA_DECLINE_STAGE",stage).env("NESSA_DECLINE_PHYSICAL",physical)
             .stdout(Stdio::from(output.try_clone().unwrap())).stderr(Stdio::from(output)).spawn().unwrap());
         wait_marker(&root, "decline-ready", &mut process, &log).await;
         process.0.kill().unwrap();
@@ -833,14 +853,69 @@ async fn original_decline_preparation_and_audit_receipt_survive_actual_process_l
                 .unwrap(),
             ),
             commit_lost_ack: false,
-            reject: AtomicBool::new(false),
+            reject: AtomicBool::new(true),
             attempts: Mutex::new(Vec::new()),
         });
         Arc::get_mut(&mut service.inner).unwrap().agents =
             crate::conversation_test_support::mode_agents(provider.clone(), audit.clone());
-        service.bind_unfinished_turns(metadata.clone(), FailureBackoff::default());
+        let marks = Arc::new(UnfinishedClearFault {
+            inner: metadata.clone(),
+            reject: AtomicBool::new(true),
+            commit: stage == "audit-lost-ack",
+        });
+        service.bind_unfinished_turns(marks.clone(), FailureBackoff::default());
         let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
-        tokio::time::timeout(
+        let retry = || CloseCommand {
+            lifetime: lifetime.clone(),
+            cause: LifetimeCause::HostClose,
+            initiator: Initiator::Host(
+                HostActor::new("different-person", "different-panel", "later-retry").unwrap(),
+            ),
+            external_attachment: false,
+            timeout: None,
+        };
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), coordinator.end_lifetime(retry()))
+                .await
+                .unwrap()
+                .is_err(),
+            "cold physical release cannot acknowledge a rejected original audit"
+        );
+        assert!(!storage
+            .read_committed(conversation_session(&target))
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .invocations[0]
+            .decline
+            .as_ref()
+            .unwrap()
+            .acknowledged());
+        audit.reject.store(false, Ordering::SeqCst);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), coordinator.end_lifetime(retry()))
+                .await
+                .unwrap()
+                .is_err(),
+            "decline ACK cannot acknowledge an unanswered mark clear"
+        );
+        assert!(storage
+            .read_committed(conversation_session(&target))
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .invocations[0]
+            .decline
+            .as_ref()
+            .unwrap()
+            .acknowledged());
+        let attempts_after_ack = audit.attempts.lock().unwrap().len();
+        marks.reject.store(false, Ordering::SeqCst);
+        let recovered = tokio::time::timeout(
             Duration::from_secs(5),
             coordinator.end_lifetime(CloseCommand {
                 lifetime: lifetime.clone(),
@@ -853,11 +928,35 @@ async fn original_decline_preparation_and_audit_receipt_survive_actual_process_l
             }),
         )
         .await
-        .unwrap()
         .unwrap();
+        if physical == "confirmed" {
+            assert!(
+                recovered.is_ok(),
+                "stage={stage} physical={physical}: {recovered:?}; audit={:?}; history={:?}",
+                audit.attempts.lock().unwrap(),
+                storage
+                    .read_committed(conversation_session(&target))
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                coordinator.lifetime_state(&lifetime),
+                Some(LifetimeState::Closed)
+            );
+        } else {
+            assert!(
+                recovered.is_err(),
+                "NotHeld cannot acknowledge an earlier process tree"
+            );
+            assert_eq!(
+                coordinator.lifetime_state(&lifetime),
+                Some(LifetimeState::Closing)
+            );
+        }
         assert_eq!(
-            coordinator.lifetime_state(&lifetime),
-            Some(LifetimeState::Closed)
+            audit.attempts.lock().unwrap().len(),
+            attempts_after_ack,
+            "mark-clear retry rejoins the acknowledged original decision without redelivery"
         );
         let committed = storage
             .read_committed(conversation_session(&target))

@@ -15,12 +15,12 @@ use super::{
 use async_trait::async_trait;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
-use nessa_sdk::application::agent_execution::agents::OwnedLifetime;
+use nessa_sdk::application::agent_execution::agents::{Agent, OwnedLifetime};
 use nessa_sdk::application::agent_execution::commands::{
     CreationFailure, CreationReceipt, CreationStorage, CreationTaskFault, MutationFailure,
 };
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
-use nessa_sdk::application::agent_execution::sessions::CommittedViewState;
+use nessa_sdk::application::agent_execution::sessions::{CommittedViewState, SessionManager};
 use nessa_sdk::application::agent_execution::subagents::{
     BindResourcesRefusal, ChildFactory, ChildResources, CloseCommand, InitialSubmit,
     OwnershipCoordinator, PortFailure, PrepareFailure, PrepareRequest, PreparedChild,
@@ -302,6 +302,7 @@ impl ConversationService {
                     service: Arc::downgrade(&self.inner),
                     id,
                     acquisition: None,
+                    history: tokio::sync::Mutex::new(None),
                 }),
             );
         }
@@ -366,6 +367,7 @@ impl ConversationService {
             service: Arc::downgrade(&self.inner),
             id: id.clone(),
             acquisition: None,
+            history: tokio::sync::Mutex::new(None),
         });
         let _ = ownership
             .coordinator
@@ -530,6 +532,7 @@ impl ConversationService {
             service: Arc::downgrade(&self.inner),
             id: id.clone(),
             acquisition,
+            history: tokio::sync::Mutex::new(None),
         });
         match coordinator.bind_resources(lifetime.clone(), resources) {
             Ok(()) => {}
@@ -582,6 +585,7 @@ impl ConversationService {
                 service: Arc::downgrade(&self.inner),
                 id: id.clone(),
                 acquisition: Some(opening.acquisition.clone()),
+                history: tokio::sync::Mutex::new(None),
             }),
             opening,
         });
@@ -747,6 +751,8 @@ struct Resources {
     service: Weak<Inner>,
     id: ConversationId,
     acquisition: Option<Arc<super::OpeningResources>>,
+    // The existing resource adapter retains the SDK writer across failed receipts.
+    history: tokio::sync::Mutex<Option<Agent>>,
 }
 #[async_trait]
 impl ChildResources for Resources {
@@ -788,6 +794,69 @@ impl ChildResources for Resources {
     }
 }
 impl Resources {
+    async fn join_cold_decline(
+        &self,
+        service: &ConversationService,
+    ) -> Result<(), ConversationError> {
+        let mut history = self.history.lock().await;
+        if history.is_none() {
+            let committed = service
+                .inner
+                .storage
+                .read_committed(conversation_session(&self.id))
+                .await?;
+            let has_decline = committed
+                .as_ref()
+                .and_then(|session| session.snapshot())
+                .is_some_and(|snapshot| {
+                    snapshot
+                        .invocations
+                        .iter()
+                        .any(|record| record.decline.is_some())
+                });
+            if !has_decline {
+                return Ok(());
+            }
+            let record = super::load_conversation(service.inner.metadata.as_ref(), &self.id)
+                .await?
+                .ok_or(ConversationError::NotFound)?;
+            let configured = service
+                .inner
+                .agents
+                .resolve_for(
+                    record.agent().ok_or(ConversationError::AgentUnsupported)?,
+                    record.model().as_str(),
+                    record.approval_mode(),
+                )
+                .await?;
+            let manager = SessionManager::open(
+                Some(conversation_session(&self.id)),
+                service.inner.storage.clone(),
+                service.inner.message_commit_clock.clone(),
+            )
+            .await?;
+            // prepare restores evidence only; authorize/start_attachment are never called.
+            let agent = Agent::prepare(configured.provider, manager, configured.execution_audit)
+                .await
+                .map_err(|error| ConversationError::Agent(error.cause().clone()))?;
+            *history = Some(agent);
+        }
+        let agent = history.as_ref().expect("restored decline owner");
+        agent
+            .retry_declined_turns()
+            .await
+            .map_err(ConversationError::Agent)?;
+        agent
+            .session_manager()
+            .save_retained_lease_records()
+            .await?;
+        // Startup may not have loaded the live retry index yet. Join the durable mark owner.
+        service.clear_mark(&self.id).await?;
+        // The actual writer has acknowledged both persisted history and its recovery mark.
+        *history = None;
+        Ok(())
+    }
+
     async fn close_acquired(
         &self,
         service: &ConversationService,
@@ -816,9 +885,14 @@ impl Resources {
             .get(&self.id)
             .cloned();
         let Some(slot) = slot else {
-            return service
+            let mut report = service
                 .cold_owned_resources(&self.id, self.acquisition.as_deref())
                 .await;
+            if let Err(error) = self.join_cold_decline(service).await {
+                tracing::warn!(conversation_id = %self.id, %error, "restored decline evidence remains unacknowledged");
+                report.evidence = EvidenceFact::Failed;
+            }
+            return report;
         };
         // A pending or failed opening may retain a newer physical hold before
         // its lease is published. Historical cleanup cannot release that owner.
