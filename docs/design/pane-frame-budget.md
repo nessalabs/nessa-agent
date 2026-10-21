@@ -62,7 +62,7 @@ geometry share one layout.
 
 | State | Event | Result |
 | --- | --- | --- |
-| Resting | A shape change (split, open beside, open the subagents pane, resize, drop commit) | The layout is known. The grid keeps the boxes it last painted. An existing scene keeps the layout size of its lines and is only cropped. A new scene's lines are not laid out. |
+| Resting | A shape change (split, open beside, open the subagents pane, drop commit) | The layout is known. The grid keeps the boxes it last painted. An existing scene keeps the layout size of its lines and is only cropped. A new scene's lines are not laid out. A resize of the same panes paints on the frame it happens. |
 | Shell | The scene's `ResizeObserver` reports a positive content height | The scale is written from that height. The lines stay unlaid. |
 | Measured | The next frame | The new pane takes focus. The lines stay unlaid, so focus does not share their layout. |
 | Focused | The frame after that | The dim layer's text mounts and lays out. The scene is `data-scene-ready`. The layers' width is fixed at that text's width. Rain, the lit layer, and steam are not mounted. |
@@ -105,9 +105,10 @@ starts the measured row.
    after that. The spare mark clears in the commit that paints the boxes.
    The frame after the click is the column title's glide, while the grid
    is still on its last boxes. The grid mounted with whatever layout it
-   first read; that first paint does not wait. The paint frame marks the
+   first read; that first paint does not wait.    The paint frame marks the
    grid `data-split-painting`, and scene text that has already laid out
-   stays unpainted until the next frame. The grain comes back the frame
+   stays unpainted until the next frame. A resize that keeps the same
+   panes paints on the frame it happens, and does not mark that. The grain comes back the frame
    after that paint, and the composer's blur the frame after the grain.
    A drag's copy does not paint the night scene. A pane change does not
    render the shell, and it does not render the fitted window. A person's
@@ -277,7 +278,8 @@ box frame.
   ≤ 50 ms unrounded. A shown night scene has laid out its text once the
   open has settled. A drop commits on the frame after pointerup paints.
 - Owned scope: `paneBox`, the drop's two callbacks, the grid painting a
-  column change three frames later, the workspace marked `data-spare-held`
+  column change three frames later and a same-pane resize on the frame
+  it happens, the workspace marked `data-spare-held`
   for that wait so a folded sidebar stays in the row, the side-column fit
   waiting one frame when the pane count changes,   the window painting the
   fold with the new boxes (`usePaintedWithPanes`, passed into the source

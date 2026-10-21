@@ -11,7 +11,7 @@ import {
 } from "react"
 import type { SplitPanesSource } from "../application/ports"
 import { paneTabOrder } from "../adapters/dom/tab-order"
-import type { PaneKey } from "../model/pane-layout"
+import type { Column, PaneKey } from "../model/pane-layout"
 import {
   edgeSides,
   placements,
@@ -21,6 +21,14 @@ import {
 import { ResizeEdge } from "../../ui/resize-edge"
 import { classes, marks } from "../adapters/dom/marks"
 import "./split-panes.css"
+
+/** Which pane is where, ignoring the shares a resize changes. */
+function arrangementOf(columns: readonly Column[] | null): string {
+  if (!columns) return ""
+  return columns
+    .map((column) => `${column.key}:${column.panes.map((pane) => pane.key).join(",")}`)
+    .join("|")
+}
 
 /**
  * What a pane's root takes from the grid, spread onto the host's own element
@@ -95,12 +103,14 @@ export const SplitPanes = memo(function SplitPanes({
   empty?: ReactNode
 }) {
   const gridRef = useRef<HTMLDivElement>(null)
-  // What is on screen lags the layout. The frame that commits a split, a
-  // resize, or a drop runs its script only — the grid does not render for
-  // it. The next frame is when a drop's copy lets go and, in the workspace,
-  // when a side column folds for the new count. The frame after that is the
-  // column title's glide. The third frame paints the new boxes, so none of
-  // those share a paint. The first paint uses the layout the grid mounted with.
+  // What is on screen lags a new arrangement. The frame that commits a split
+  // or a drop runs its script only — the grid does not render for it. The
+  // next frame is when a drop's copy lets go and, in the workspace, when a
+  // side column folds for the new count. The frame after that is the column
+  // title's glide. The third frame paints the new boxes, so none of those
+  // share a paint. A resize of the same panes paints on the frame it happens,
+  // so a separator follows the pointer. The first paint uses the layout the
+  // grid mounted with.
   const [drawn, setDrawn] = useState(() => source.layout()?.columns ?? null)
   const drawnRef = useRef(drawn)
   drawnRef.current = drawn
@@ -158,6 +168,16 @@ export const SplitPanes = memo(function SplitPanes({
         hold(false)
         return
       }
+      // The same panes, resized. Waiting three frames would restart on every
+      // pointer frame, and the separator would not follow the pointer.
+      if (arrangementOf(next) === arrangementOf(drawnRef.current)) {
+        cancel()
+        armed = false
+        waiting = null
+        hold(false)
+        setDrawn(next)
+        return
+      }
       arm(next)
     }
     const unsubscribe = source.subscribe(reconcile)
@@ -169,13 +189,15 @@ export const SplitPanes = memo(function SplitPanes({
   }, [source])
   // The frame that first paints a new arrangement skips scene text. The text
   // is already laid out at a fixed width; painting it again is the resize.
+  // A resize of the same panes does not, so a drag does not hide the scene.
+  const shape = arrangementOf(drawn)
   useLayoutEffect(() => {
     const grid = gridRef.current
     if (!grid) return
     grid.setAttribute(marks.painting, "")
     const id = requestAnimationFrame(() => grid.removeAttribute(marks.painting))
     return () => cancelAnimationFrame(id)
-  }, [drawn])
+  }, [shape])
   // The workspace holds the sidebar in the row until these boxes paint.
   // Folding it out of the row on the earlier frame widens the one pane and
   // lays its text out, then the boxes lay it out again.

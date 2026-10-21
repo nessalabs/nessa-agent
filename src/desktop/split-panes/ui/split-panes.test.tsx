@@ -11,7 +11,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import type { EdgeMove, SplitPanesSource } from "../application/ports"
 import { focusPane, singlePane, splitPane, type PaneLayout } from "../model/pane-layout"
-import type { PaneRoom } from "../model/pane-sizing"
+import { resizeEdge, type PaneRoom } from "../model/pane-sizing"
 import { gridOf, marks } from "../adapters/dom/marks"
 import { SplitPanes, type ShownPane } from "./split-panes"
 
@@ -218,6 +218,27 @@ it("renders again when the arrangement changes, and not when only focus moves", 
   await nextPaint()
   expect(renders.some((key) => key !== 1 && key !== 2)).toBe(true)
   expect(host.querySelectorAll(".host-pane")).toHaveLength(3)
+})
+
+it("paints a resize of the same panes on the frame it happens", async () => {
+  const layout = two()
+  const fake = fakeSource(layout)
+  await mounted(fake)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  const first = () => grid().querySelector<HTMLElement>(".host-pane")
+  expect(first()?.style.getPropertyValue("--cw")).toBe("0.5")
+  expect(grid().hasAttribute(marks.painting)).toBe(false)
+  const wider = resizeEdge(layout, { axis: "x", column: 0 }, 0.7, 1000)
+  await fake.change(wider)
+  expect(first()?.style.getPropertyValue("--cw")).toBe("0.7")
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  expect(host.hasAttribute("data-spare-held")).toBe(false)
+  const narrower = resizeEdge(wider, { axis: "x", column: 0 }, 0.35, 1000)
+  await fake.change(narrower)
+  expect(first()?.style.getPropertyValue("--cw")).toBe("0.35")
+  expect(grid().hasAttribute(marks.painting)).toBe(false)
 })
 
 it("resizes, evens and fits through the source", async () => {
