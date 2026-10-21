@@ -39,6 +39,19 @@ const release = () => act(() => void window.dispatchEvent(new Event("pointerup")
 const press = () => act(() => void window.dispatchEvent(new Event("pointerdown")))
 const blur = () => act(() => void window.dispatchEvent(new Event("blur")))
 
+it("keeps the same controls while the reveal does not change", () => {
+  const seen: EdgePeekControls[] = []
+  function Watch() {
+    seen.push(useEdgePeek(true, false))
+    return null
+  }
+  const host = createRoot(document.createElement("div"))
+  act(() => host.render(<Watch />))
+  act(() => host.render(<Watch />))
+  expect(seen.at(-1)).toBe(seen[0])
+  act(() => host.unmount())
+})
+
 it("reveals on a rest at the edge and hides once the pointer has left", async () => {
   act(() => peek.enter(free))
   await wait(200)

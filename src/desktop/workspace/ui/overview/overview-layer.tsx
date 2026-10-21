@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -40,7 +41,11 @@ import { overviewKeys } from "./overview-keys"
  * back to the focused pane's composer after the cover lifts and the target
  * has had its paint (`focus.ts`, `focus.test.tsx`).
  */
-export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> }) {
+export const OverviewLayer = memo(function OverviewLayer({
+  root,
+}: {
+  root: RefObject<HTMLElement | null>
+}) {
   const dispatch = useWorkspaceDispatch()
   const open = useWorkspaceSelector(selectOverviewOpen)
   const group = useWorkspaceSelector(selectOverviewGroup)
@@ -176,4 +181,4 @@ export function OverviewLayer({ root }: { root: RefObject<HTMLElement | null> })
       ) : null}
     </div>
   )
-}
+})

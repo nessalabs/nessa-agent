@@ -1,4 +1,5 @@
 import { modelChanging, modelRequesting } from "../../adapters/store/model-commands"
+import { useRememberedValue } from "../../adapters/store/remembered-session"
 import { draftOf, entry } from "../../application/workspace-state"
 import { WorkspaceSendFailure } from "../send-failure"
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
@@ -33,13 +34,15 @@ const stayCard = () => {}
  * what the picker shows while it stays mounted (`conversation.test.tsx`).
  */
 function useNextModel(sessionId: string): ModelRef | undefined {
-  return useWorkspaceSelector((state) => selectNextModel(state, sessionId))
+  const live = useWorkspaceSelector((state) => selectNextModel(state, sessionId))
+  return useRememberedValue(sessionId, live)
 }
 
 /** A session's unsent text, held in the workspace so it outlives a change of layout. */
 function useComposerText(sessionId: string) {
   const dispatch = useWorkspaceDispatch()
-  const text = useWorkspaceSelector((state) => selectComposerText(state, sessionId))
+  const live = useWorkspaceSelector((state) => selectComposerText(state, sessionId))
+  const text = useRememberedValue(sessionId, live)
   const onTextChange = useCallback(
     (next: string) => dispatch(setComposerText({ sessionId, text: next })),
     [dispatch, sessionId],
@@ -49,9 +52,10 @@ function useComposerText(sessionId: string) {
 
 function useComposerActions(sessionId: string) {
   const dispatch = useWorkspaceDispatch()
-  const canChangeModel = useWorkspaceSelector((state) =>
+  const canChangeLive = useWorkspaceSelector((state) =>
     selectCanChooseModel(state, sessionId),
   )
+  const canChangeModel = useRememberedValue(sessionId, canChangeLive)
   const send = useCallback(
     (text: string) =>
       void dispatch(sendMessage({ sessionId, text, initiator: "person" })),
@@ -68,10 +72,14 @@ function useComposerActions(sessionId: string) {
  * Stop, while the session's agent is at work (`atWork`): what the docked
  * composer's send button becomes. Held as asked until the stop settles, so
  * one press asks once; the turn's end arrives as the source's update.
+ * A removed session keeps that Stop until its box goes. The transcript is
+ * already gone, and the live read would turn the button back into Send
+ * while the held conversation still shows the turn.
  */
 function useStop(sessionId: string) {
   const dispatch = useWorkspaceDispatch()
-  const working = useWorkspaceSelector((state) => selectAtWork(state, sessionId))
+  const workingLive = useWorkspaceSelector((state) => selectAtWork(state, sessionId))
+  const working = useRememberedValue(sessionId, workingLive)
   const [stopping, setStopping] = useState(false)
   const stop = useCallback(() => {
     setStopping(true)
@@ -161,18 +169,22 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
   const { text, onTextChange } = useComposerText(sessionId)
   const stop = useStop(sessionId)
   const access = useComposerAccess(sessionId)
-  const modelChoice = useWorkspaceSelector((state) =>
+  const modelChoiceLive = useWorkspaceSelector((state) =>
     entry(state.workspace.modelChoices, sessionId),
   )
-  const modelControl = useWorkspaceSelector(
+  const modelChoice = useRememberedValue(sessionId, modelChoiceLive)
+  const modelControlLive = useWorkspaceSelector(
     (state) => entry(state.workspace.transcripts, sessionId)?.modelControl,
   )
-  const modelRequest = useWorkspaceSelector((state) =>
+  const modelControl = useRememberedValue(sessionId, modelControlLive)
+  const modelRequestLive = useWorkspaceSelector((state) =>
     modelRequesting(state.workspace, sessionId),
   )
-  const modelBusy = useWorkspaceSelector((state) =>
+  const modelRequest = useRememberedValue(sessionId, modelRequestLive)
+  const modelBusyLive = useWorkspaceSelector((state) =>
     modelChanging(state.workspace, sessionId),
   )
+  const modelBusy = useRememberedValue(sessionId, modelBusyLive)
   const isDraft = useWorkspaceSelector((state) => !!draftOf(state.workspace, sessionId))
   const choiceCode =
     modelChoice &&

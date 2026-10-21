@@ -16,6 +16,8 @@ import {
 /** A pane's rectangle as fractions of the grid, and its place in it. */
 export interface PanePlacement {
   readonly key: PaneKey
+  /** The item the pane showed when this box was placed. A box held after the pane closes still names it. */
+  readonly item: string
   readonly x: number
   readonly width: number
   readonly column: number
@@ -53,6 +55,34 @@ export interface EdgePlacement {
 const total = (items: readonly { share: number }[]) =>
   items.reduce((sum, item) => sum + item.share, 0)
 
+/** A pane's box in a grid, in pixels. The stylesheet draws the same box. */
+export interface PaneBox {
+  readonly left: number
+  readonly top: number
+  readonly width: number
+  readonly height: number
+}
+
+/**
+ * Where a placement is drawn in `grid`, as `ui/split-panes.css` draws it:
+ * the content box is the grid less one gutter between each column and each
+ * row, then the fractions and the gutters before this pane.
+ */
+export function paneBox(
+  placement: PanePlacement,
+  grid: Pick<PaneBox, "left" | "top" | "width" | "height">,
+  gutter = paneLimits.gutter,
+): PaneBox {
+  const width = grid.width - (placement.columns - 1) * gutter
+  const height = grid.height - (placement.rows - 1) * gutter
+  return {
+    left: grid.left + width * placement.x + placement.column * gutter,
+    top: grid.top + height * placement.y + placement.row * gutter,
+    width: width * placement.width,
+    height: height * placement.height,
+  }
+}
+
 /**
  * Where every pane and edge is drawn, as fractions the stylesheet turns into
  * boxes. Only the columns decide it: which pane is focused does not move any.
@@ -73,6 +103,7 @@ export function placements(columns: PaneLayout["columns"]): {
       const h = pane.share / height
       panes.push({
         key: pane.key,
+        item: pane.item,
         x,
         width: w,
         column: c,
