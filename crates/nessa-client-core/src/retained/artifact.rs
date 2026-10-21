@@ -336,6 +336,9 @@ pub fn local_held_outcome(
 struct StopGate<'a> {
     files: DiskFiles,
     stop: &'a ReadStop,
+    /// `keep` saw the stop and did not link. A failure settled before that
+    /// stays the failure, even if `stop` is set afterwards.
+    keep_saw_stop: bool,
 }
 impl FetchFiles for StopGate<'_> {
     fn read_output(
@@ -362,8 +365,9 @@ impl FetchFiles for StopGate<'_> {
     }
     fn keep(&mut self) -> Result<(), KeepRefusal> {
         if self.stop.is_stopped() {
-            // The step is not published. A set stop replaces this refusal
-            // with `ReadFailure::Stopped` before the caller sees it.
+            self.keep_saw_stop = true;
+            // The step is not published. Only this refusal becomes
+            // `ReadFailure::Stopped`. A failure already returned does not.
             return Err(KeepRefusal::File(FileStep::Link));
         }
         self.files.keep()
@@ -379,6 +383,17 @@ fn stopped_fault(fault: ArtifactFault) -> ArtifactFault {
         fault.reached(),
         fault.resumed_from(),
     )
+}
+
+/// `keep_saw_stop` is the only cancellation that replaces a settled failure.
+/// An integrity or file failure returned before `keep` keeps its cause.
+fn publish_fetch(failure: FetchFailure, keep_saw_stop: bool) -> ArtifactFault {
+    let fault = fault_from(failure);
+    if keep_saw_stop {
+        stopped_fault(fault)
+    } else {
+        fault
+    }
 }
 
 /// Ask the gateway and keep the file only when the part matches. The caller
@@ -397,7 +412,11 @@ pub(crate) fn confirmed_held_file(
         request.size,
     )?;
     let mut files = match DiskFiles::new(request.output, &file) {
-        Ok(files) => StopGate { files, stop },
+        Ok(files) => StopGate {
+            files,
+            stop,
+            keep_saw_stop: false,
+        },
         Err(step) => {
             return Ok(Err(ArtifactFault {
                 kind: ArtifactFaultKind::File(file_step(step)),
@@ -414,17 +433,11 @@ pub(crate) fn confirmed_held_file(
         ))));
     }
     match fetch_held_file(source, pause, &mut files, &file) {
-        Ok(progress) if stop.is_stopped() => Ok(Err(stopped_fault(ArtifactFault::progress(
-            ArtifactFaultKind::Gateway(ReadFailure::Stopped),
-            progress.reached,
-            progress.resumed_from,
-        )))),
         Ok(progress) => Ok(Ok(ArtifactFreshness::GatewayConfirmed {
             ranges: progress.ranges,
             resumed_from: progress.resumed_from,
         })),
-        Err(failure) if stop.is_stopped() => Ok(Err(stopped_fault(fault_from(failure)))),
-        Err(failure) => Ok(Err(fault_from(failure))),
+        Err(failure) => Ok(Err(publish_fetch(failure, files.keep_saw_stop))),
     }
 }
 

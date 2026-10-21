@@ -177,6 +177,39 @@ fn a_gateway_answer_is_fresh_only_when_the_digest_matches() {
 }
 
 #[test]
+fn a_settled_integrity_failure_survives_a_stop_keep_did_not_see() {
+    use crate::read_only_sync::application::held_file::{
+        FetchCause, FetchFailure, FetchProgress, FileStep, PartCleanup,
+    };
+    let failure = FetchFailure {
+        cause: FetchCause::Integrity {
+            cleanup: PartCleanup::Left {
+                remove: FileStep::Remove,
+                restart: FileStep::Restart,
+            },
+        },
+        progress: FetchProgress {
+            resumed_from: 4,
+            ..FetchProgress::default()
+        },
+    };
+    let kept = super::publish_fetch(failure, false);
+    assert_eq!(
+        kept.kind(),
+        ArtifactFaultKind::Integrity {
+            cleanup: super::ArtifactPartCleanup::Left {
+                remove: super::ArtifactFileStep::Remove,
+                restart: super::ArtifactFileStep::Restart,
+            },
+        }
+    );
+    assert_eq!(
+        super::publish_fetch(failure, true).kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Stopped)
+    );
+}
+
+#[test]
 fn an_integrity_fault_keeps_a_part_that_could_not_be_removed() {
     use crate::read_only_sync::application::held_file::{
         FetchCause, FetchFailure, FetchProgress, FileStep, PartCleanup,
