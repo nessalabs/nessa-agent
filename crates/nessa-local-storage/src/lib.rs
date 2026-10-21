@@ -36,9 +36,12 @@ pub use retained_directory::{
     PublishedPrivateFile,
 };
 pub use shared_read::{find_shared_read, SharedReadCandidate, SharedReadKind};
-// One owner: a temporary file is published by the type that reserved it, so
-// that nothing can publish a name it did not create privately first.
-pub(crate) use platform::publish_new;
+// Exclusive rename. An existing destination, including an empty directory, is
+// `AlreadyExists` and is not replaced. A private temporary file is still
+// published by the type that reserved it; this is the rename that publication
+// and a directory promotion share. Both platforms rename, so the name does
+// not stay behind on one of them.
+pub use platform::publish_new;
 
 const TEMPORARY_PREFIX: &str = ".nessa-";
 const TEMPORARY_SUFFIX: &str = ".tmp";

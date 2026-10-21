@@ -553,6 +553,24 @@ pub fn receipt_is_usable(text: &str) -> bool {
     !text.is_empty() && text.len() <= MAX_NAME_BYTES && text.bytes().all(|byte| byte >= 0x20)
 }
 
+/// The audit spelling of a path.
+///
+/// `Path::display` replaces bytes that are not Unicode, so two roots can share
+/// one line. A path that is not Unicode is not a root.
+pub fn audit_path(path: &Path) -> Result<String, RestoreFault> {
+    path.to_str()
+        .map(ToOwned::to_owned)
+        .ok_or(RestoreFault::Paths)
+}
+
+/// One lease and the receipt that covered it.
+///
+/// Each value is percent-encoded. A space in either value is not the separator,
+/// so `a b` with `c` is a different line from `a` with `b c`.
+pub fn attested_pair(lease: &str, receipt: &str) -> String {
+    format!("{} {}\n", encode_identity(lease), encode_identity(receipt))
+}
+
 pub fn deferred_session_name(conversation_id: &str) -> Result<String, RestoreFault> {
     checked_identity(conversation_id.to_owned()).map_err(|_| RestoreFault::Unreadable)?;
     Ok(format!(
@@ -562,11 +580,13 @@ pub fn deferred_session_name(conversation_id: &str) -> Result<String, RestoreFau
 }
 
 /// A helper beside one session file: `sessions/<id>.sqlite3` plus
-/// `.partial`, `.rejected`, or `.publication`. Any other suffix is a sealed file.
+/// `.rejected` or `.publication`.
+///
+/// A `.partial` file is not a helper. Bytes that were not published are an
+/// extra, and accept refuses them.
 pub fn session_sidecar(relative: &str) -> Option<String> {
     let session = relative
-        .strip_suffix(".partial")
-        .or_else(|| relative.strip_suffix(".rejected"))
+        .strip_suffix(".rejected")
         .or_else(|| relative.strip_suffix(".publication"))?;
     if !session.starts_with("sessions/")
         || !session.ends_with(".sqlite3")
@@ -800,7 +820,29 @@ mod tests {
             session_sidecar("sessions/conv-bulk.sqlite3.publication").as_deref(),
             Some("sessions/conv-bulk.sqlite3")
         );
+        assert!(session_sidecar("sessions/conv-bulk.sqlite3.partial").is_none());
+        assert!(session_sidecar("sessions/conv-bulk.sqlite3.partial.rejected").is_none());
         assert!(session_sidecar("records/share-grants/revoked.publication").is_none());
+        assert_eq!(
+            attested_pair("lease-9", "host-stopped"),
+            "lease-9 host-stopped\n"
+        );
+        assert_eq!(attested_pair("a b", "c"), "a%20b c\n");
+        assert_eq!(attested_pair("a", "b c"), "a b%20c\n");
+        assert_ne!(attested_pair("a b", "c"), attested_pair("a", "b c"));
+        assert_eq!(audit_path(Path::new("/live")).unwrap(), "/live");
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            assert_eq!(
+                audit_path(Path::new(std::ffi::OsStr::from_bytes(&[0xff]))).unwrap_err(),
+                RestoreFault::Paths
+            );
+            assert_eq!(
+                audit_path(Path::new(std::ffi::OsStr::from_bytes(&[0xfe]))).unwrap_err(),
+                RestoreFault::Paths
+            );
+        }
         assert!(receipt_is_usable("stopped-host-1"));
         assert!(!receipt_is_usable(""));
         assert!(!receipt_is_usable("has\nline"));

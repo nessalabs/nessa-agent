@@ -100,5 +100,11 @@ and its conversation stay available after the quarantine folder is renamed
 onto the live path. Accept refuses a session whose publication was never
 recorded available. On Windows, two roots that differ only by ASCII case are
 the same path and are refused before either lock is taken. The audit
-names the anchored root rather than the caller's spelling. A canonical session image that cannot be read is not
+names the anchored root rather than the caller's spelling. A path that is
+not Unicode is refused and is not audited under a lossy spelling. A published
+directory is an exclusive rename, so an empty live directory is not replaced.
+A partial session that cannot be removed is retained, and that name is not a
+helper. A staging directory that survives a failed write is unready. The
+readiness marker's directory is synced, and a failed sync clears the marker.
+A lease and its receipt are percent-encoded. A canonical session image that cannot be read is not
 sealed while a conversation fence applies.

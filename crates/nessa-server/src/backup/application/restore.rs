@@ -11,7 +11,8 @@
 //! open ──▶ anchor the root ──▶ decision audit on that path
 //!             ──▶ fingerprint ──▶ match audit ──▶ rename into sessions/
 //!             ──▶ publication id from the port ──▶ available audit
-//!             (failure retires the temp name and the final name)
+//!             (failure retires the temp name and the final name;
+//!              a partial name that remains is retained, not unchanged)
 //! ```
 //!
 //! Arrows are the order one call runs. The live path is not written before
@@ -30,10 +31,11 @@ use super::verification::{
 };
 use super::verification_format::VerificationFormat;
 use crate::backup::domain::{
-    decode_deferred, deferred_for_open, deferred_session_name, encode_journal,
-    extra_session_allowed, paths_are_distinct, posture, read_journal, receipt_is_usable,
-    relative_path_is_safe, restore_lock_path, session_sidecar, DeferredLine, DeletionLog,
-    Fingerprint, Freshness, Journal, ManifestListing, Posture, RestoreFault, SealedFile,
+    attested_pair, audit_path, decode_deferred, deferred_for_open, deferred_session_name,
+    encode_journal, extra_session_allowed, paths_are_distinct, posture, read_journal,
+    receipt_is_usable, relative_path_is_safe, restore_lock_path, session_sidecar, DeferredLine,
+    DeletionLog, Fingerprint, Freshness, Journal, ManifestListing, Posture, RestoreFault,
+    SealedFile,
 };
 
 /// Drop releases the restore-root lock.
@@ -82,10 +84,15 @@ pub trait QuarantineLayout {
     fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault>;
 }
 
-/// A partial directory. Dropping it without [`Staging::finish`] removes it.
+/// A partial directory.
+///
+/// [`Staging::discard`] removes it and reports when the directory remains.
+/// Dropping it without discard or [`Staging::finish`] removes it on a best-effort basis.
 pub trait Staging {
     fn write(&mut self, relative: &str, bytes: &[u8]) -> Result<(), RestoreFault>;
     fn finish(self: Box<Self>, journal: &str) -> Result<(), RestoreFault>;
+    /// Remove the partial directory. [`RestoreFault::Retained`] means it is still there.
+    fn discard(self: Box<Self>) -> Result<(), RestoreFault>;
 }
 
 /// What [`QuarantineLayout::load`] observed. `files` are the sealed set.
@@ -164,7 +171,7 @@ pub fn stage_quarantine(
     later_reader: &dyn SealedInventoryReader,
 ) -> Result<StageReport, RestoreFault> {
     let facts = entry_facts(&request.facts, RestoreAction::Stage);
-    let quarantine = resolve_root(
+    let (quarantine, label) = resolve_root(
         layout,
         request.quarantine,
         policy,
@@ -173,7 +180,7 @@ pub fn stage_quarantine(
         "absent",
         "absent",
     )?;
-    let live = resolve_root(
+    let (live, _) = resolve_root(
         layout,
         request.live,
         policy,
@@ -182,7 +189,6 @@ pub fn stage_quarantine(
         "absent",
         "absent",
     )?;
-    let label = quarantine.display().to_string();
     let kind = facts.kind;
     let policies = decide(policy, &facts, audit, &label, "absent", "absent")?;
     let recorded = Recorded {
@@ -242,8 +248,7 @@ pub fn stage_quarantine(
     };
     for (path, bytes) in &prepared.files {
         if let Err(error) = staging.write(path, bytes) {
-            drop(staging);
-            return Err(recorded.stop(error));
+            return Err(abandon(staging, &recorded, error));
         }
     }
     if let Err(error) = staging.finish(&journal) {
@@ -311,7 +316,7 @@ pub fn accept_quarantine(
     layout: &dyn QuarantineLayout,
 ) -> Result<AcceptReport, RestoreFault> {
     let facts = entry_facts(&request.facts, RestoreAction::Accept);
-    let quarantine = resolve_root(
+    let (quarantine, label) = resolve_root(
         layout,
         request.quarantine,
         policy,
@@ -320,7 +325,7 @@ pub fn accept_quarantine(
         "verified",
         "verified",
     )?;
-    let live = resolve_root(
+    let (live, live_label) = resolve_root(
         layout,
         request.live,
         policy,
@@ -329,7 +334,6 @@ pub fn accept_quarantine(
         "verified",
         "verified",
     )?;
-    let label = quarantine.display().to_string();
     let kind = facts.kind;
     let policies = decide(policy, &facts, audit, &label, "verified", "verified")?;
     let recorded = Recorded {
@@ -394,7 +398,6 @@ pub fn accept_quarantine(
         Ok(promoted) => promoted,
         Err(error) => return Err(recorded.stop(error)),
     };
-    let live_label = live.display().to_string();
     let cause = if promoted.durable {
         "accepted"
     } else {
@@ -434,7 +437,7 @@ pub fn open_deferred_conversation(
     progress: &mut dyn FetchProgress,
 ) -> Result<OpenReport, RestoreFault> {
     let facts = entry_facts(&request.facts, RestoreAction::Fetch);
-    let root = resolve_root(
+    let (root, root_label) = resolve_root(
         layout,
         request.root,
         policy,
@@ -443,7 +446,7 @@ pub fn open_deferred_conversation(
         "deferred",
         "deferred",
     )?;
-    let label = fetch_target(&root, request.conversation_id);
+    let label = fetch_target(&root_label, request.conversation_id);
     let kind = facts.kind;
     let policies = decide(policy, &facts, audit, &label, "deferred", "deferred")?;
     let recorded = Recorded {
@@ -525,19 +528,24 @@ pub fn open_deferred_conversation(
         return Err(recorded.stop(error));
     }
     if let Err(error) = source.write_session(request.conversation_id, &temp, progress) {
-        let _ = layout.remove_file(&temp);
-        return Err(recorded.stop(source_fault(error)));
+        return Err(refuse_unpublished(
+            layout,
+            &temp,
+            &recorded,
+            source_fault(error),
+        ));
     }
     let cut = match layout.session_cut(&temp, request.conversation_id) {
         Ok(cut) => cut,
-        Err(error) => {
-            let _ = layout.remove_file(&temp);
-            return Err(recorded.stop(error));
-        }
+        Err(error) => return Err(refuse_unpublished(layout, &temp, &recorded, error)),
     };
     if cut.size != expected.size || cut.digest != expected.digest {
-        let _ = layout.remove_file(&temp);
-        return Err(recorded.stop(RestoreFault::SourceChanged));
+        return Err(refuse_unpublished(
+            layout,
+            &temp,
+            &recorded,
+            RestoreFault::SourceChanged,
+        ));
     }
     if recorded
         .write("deferred", "held", "matched", "effect")
@@ -644,10 +652,7 @@ fn attested(journal: &Journal, receipts: &dyn LeaseReceipts) -> Result<String, R
     for lease in &journal.leases {
         match receipts.receipt(lease) {
             Some(receipt) if receipt_is_usable(&receipt) => {
-                text.push_str(lease);
-                text.push(' ');
-                text.push_str(&receipt);
-                text.push('\n');
+                text.push_str(&attested_pair(lease, &receipt));
             }
             _ => return Err(RestoreFault::ExecutorsUnfenced),
         }
@@ -667,8 +672,8 @@ fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
 }
 
 /// A fetched session stays available for its publication after the root is renamed.
-fn fetch_target(root: &Path, conversation_id: &str) -> String {
-    format!("{conversation_id}\n{}", root.display())
+fn fetch_target(root_label: &str, conversation_id: &str) -> String {
+    format!("{conversation_id}\n{root_label}")
 }
 
 /// An extra session is promotable only when its publication was recorded available.
@@ -766,11 +771,19 @@ fn resolve_root(
     audit: &dyn RestoreAudit,
     before: &str,
     after: &str,
-) -> Result<PathBuf, RestoreFault> {
+) -> Result<(PathBuf, String), RestoreFault> {
+    // A lossy display of a non-Unicode path can collide with another root.
+    // Refuse it before any audit line is stored.
+    if audit_path(path).is_err() {
+        return Err(RestoreFault::Paths);
+    }
     match layout.anchor(path) {
-        Ok(path) => Ok(path),
+        Ok(anchored) => {
+            let label = audit_path(&anchored)?;
+            Ok((anchored, label))
+        }
         Err(error) => {
-            let label = path.display().to_string();
+            let label = audit_path(path)?;
             let policies = decide(policy, facts, audit, &label, before, after)?;
             Err(Recorded {
                 audit,
@@ -780,6 +793,56 @@ fn resolve_root(
             }
             .stop(error))
         }
+    }
+}
+
+/// The partial directory is gone, or it is still there and the caller is told retained.
+fn abandon(
+    staging: Box<dyn Staging>,
+    recorded: &Recorded<'_>,
+    error: RestoreFault,
+) -> RestoreFault {
+    match staging.discard() {
+        Ok(()) => recorded.stop(error),
+        Err(RestoreFault::Retained) => {
+            if recorded
+                .write(
+                    "absent",
+                    "unready",
+                    RestoreFault::Retained.cause(),
+                    "effect",
+                )
+                .is_err()
+            {
+                return RestoreFault::Audit;
+            }
+            RestoreFault::Retained
+        }
+        Err(discarded) => recorded.stop(discarded),
+    }
+}
+
+/// Retire an unpublished session name. A name that remains is retained, and
+/// that outcome is not recorded as unchanged.
+fn refuse_unpublished(
+    layout: &dyn QuarantineLayout,
+    temp: &Path,
+    recorded: &Recorded<'_>,
+    error: RestoreFault,
+) -> RestoreFault {
+    match clear_unpublished(layout, temp) {
+        Ok(()) => recorded.stop(error),
+        Err(retained) => retained,
+    }
+}
+
+fn clear_unpublished(layout: &dyn QuarantineLayout, temp: &Path) -> Result<(), RestoreFault> {
+    if !retire_session(layout, temp) {
+        return Err(RestoreFault::Retained);
+    }
+    match layout.exists(temp) {
+        Ok(false) => Ok(()),
+        Ok(true) | Err(_) => Err(RestoreFault::Retained),
     }
 }
 

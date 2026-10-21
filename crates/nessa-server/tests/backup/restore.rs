@@ -910,6 +910,32 @@ async fn an_occupied_live_root_is_not_replaced() {
     assert!(place.quarantine.join("journal.txt").is_file());
 }
 
+#[test]
+fn an_empty_live_directory_is_not_replaced() {
+    let place = roots();
+    fs::create_dir_all(place.quarantine.join("records")).unwrap();
+    fs::write(place.quarantine.join("journal.txt"), b"sealed\n").unwrap();
+    fs::create_dir(&place.live).unwrap();
+    let error = DirectoryQuarantine
+        .promote(&place.quarantine, &place.live)
+        .unwrap_err();
+    assert_eq!(error, RestoreFault::LiveOccupied);
+    assert!(place.quarantine.join("journal.txt").is_file());
+    assert!(fs::read_dir(&place.live).unwrap().next().is_none());
+}
+
+#[test]
+fn a_discarded_partial_directory_is_removed() {
+    let place = roots();
+    let mut staging = DirectoryQuarantine
+        .begin(&place.quarantine, &place.live)
+        .unwrap();
+    staging.write("records/notes/note-1", b"partial").unwrap();
+    staging.discard().unwrap();
+    assert!(partial_names(place._keep.path()).is_empty());
+    assert!(!place.quarantine.exists());
+}
+
 #[tokio::test]
 async fn a_tampered_quarantine_is_not_promoted() {
     let bundle = publish(note_bundle_rows(), vec![], None).await;
@@ -1371,6 +1397,10 @@ impl Staging for OtherQuarantine {
         fs::write(self.quarantine.join("owned-by-other"), b"keep")
             .map_err(|_| RestoreFault::Unreadable)?;
         Err(RestoreFault::QuarantineOccupied)
+    }
+
+    fn discard(self: Box<Self>) -> Result<(), RestoreFault> {
+        Ok(())
     }
 }
 
@@ -2240,6 +2270,271 @@ async fn an_interrupted_fetch_leaves_no_partial_session() {
         .live
         .join("sessions/conv-bulk.sqlite3.partial")
         .exists());
+}
+
+#[tokio::test]
+async fn an_interrupted_fetch_that_cannot_be_removed_is_retained() {
+    let digest = Fingerprint::of(b"session-v1");
+    let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
+    let mut source = FakeSource::unused();
+    source.mode = "interrupted";
+    let audit = MemoryAudit::open();
+    let error = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.live,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &audit,
+        &KeepsPartialSession,
+        &source,
+        &OsPublicationIds,
+        &mut Quiet,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Retained);
+    assert!(place
+        .live
+        .join("sessions/conv-bulk.sqlite3.partial")
+        .is_file());
+    assert!(audit.lines().iter().all(|line| line.after != "unchanged"));
+    let later = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
+    assert_eq!(later, RestoreFault::Tamper);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_non_unicode_root_is_not_audited() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let quarantine = place
+        ._keep
+        .path()
+        .join(OsString::from_vec(vec![0xff, 0xfe]));
+    let audit = MemoryAudit::open();
+    let error = stage(
+        &bundle,
+        &quarantine,
+        &place.live,
+        &audit,
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Paths);
+    assert!(audit.lines().is_empty());
+    assert!(!place.live.exists());
+}
+
+fn session_partial(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".partial"))
+}
+
+/// Removal, the move aside, and emptying all fail for a `.partial` session.
+struct KeepsPartialSession;
+
+impl QuarantineLayout for KeepsPartialSession {
+    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+        DirectoryQuarantine.begin(quarantine, live)
+    }
+    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+        DirectoryQuarantine.load(root)
+    }
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live)
+    }
+    fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_tree(path)
+    }
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
+        DirectoryQuarantine.read_bytes(path)
+    }
+    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.session_temp(root, relative)
+    }
+    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
+        if session_partial(temp) {
+            return Err(RestoreFault::Rename);
+        }
+        DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_publication(session)
+    }
+    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
+        if session_partial(path) && path.exists() {
+            return Err(RestoreFault::Unreadable);
+        }
+        DirectoryQuarantine.remove_file(path)
+    }
+    fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.exists(path)
+    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.canonicalize(path)
+    }
+    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.anchor(path)
+    }
+    fn hold(
+        &self,
+        root: &Path,
+    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root)
+    }
+    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        if session_partial(path) {
+            return Err(RestoreFault::Unreadable);
+        }
+        DirectoryQuarantine.spoil(path)
+    }
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        DirectoryQuarantine.session_cut(path, conversation_id)
+    }
+}
+
+struct LeavesPartial {
+    partial: PathBuf,
+}
+
+impl Staging for LeavesPartial {
+    fn write(&mut self, _relative: &str, _bytes: &[u8]) -> Result<(), RestoreFault> {
+        fs::create_dir_all(&self.partial).unwrap();
+        fs::write(self.partial.join("kept"), b"partial").unwrap();
+        Err(RestoreFault::Unreadable)
+    }
+
+    fn finish(self: Box<Self>, _journal: &str) -> Result<(), RestoreFault> {
+        Err(RestoreFault::Unreadable)
+    }
+
+    fn discard(self: Box<Self>) -> Result<(), RestoreFault> {
+        Err(RestoreFault::Retained)
+    }
+}
+
+struct LeavesPartialTree {
+    partial: PathBuf,
+}
+
+impl QuarantineLayout for LeavesPartialTree {
+    fn begin(&self, _quarantine: &Path, _live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+        Ok(Box::new(LeavesPartial {
+            partial: self.partial.clone(),
+        }))
+    }
+    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+        DirectoryQuarantine.load(root)
+    }
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live)
+    }
+    fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_tree(path)
+    }
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
+        DirectoryQuarantine.read_bytes(path)
+    }
+    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.session_temp(root, relative)
+    }
+    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_publication(session)
+    }
+    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_file(path)
+    }
+    fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.exists(path)
+    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.canonicalize(path)
+    }
+    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.anchor(path)
+    }
+    fn hold(
+        &self,
+        root: &Path,
+    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root)
+    }
+    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.spoil(path)
+    }
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        DirectoryQuarantine.session_cut(path, conversation_id)
+    }
+}
+
+#[tokio::test]
+async fn a_partial_directory_that_survives_a_failed_write_is_unready() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let partial = place._keep.path().join("left-behind");
+    let source = DirectoryVerificationSource::open(bundle.root.clone()).unwrap();
+    let audit = MemoryAudit::open();
+    let error = stage_quarantine(
+        &StageRequest {
+            facts: person(RestoreAction::Stage),
+            bundle: &source,
+            format: &ExportFormat,
+            verifier: &bundle.key,
+            limits: VerificationLimits::default(),
+            later_inventory: None,
+            quarantine: &place.quarantine,
+            live: &place.live,
+        },
+        &policy(),
+        &audit,
+        &LeavesPartialTree {
+            partial: partial.clone(),
+        },
+        &DirectoryMaterializer,
+        &KeyedInventory::new(bundle.key),
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Retained);
+    assert_eq!(fs::read(partial.join("kept")).unwrap(), b"partial");
+    assert!(audit.lines().iter().any(|line| {
+        line.before == "absent" && line.after == "unready" && line.cause == "retained"
+    }));
+    assert!(audit.lines().iter().all(|line| line.after != "unchanged"));
+    assert!(!place.live.exists());
+    assert!(!place.quarantine.exists());
 }
 
 #[tokio::test]
@@ -3481,6 +3776,10 @@ impl Staging for RetainedStaging {
         fs::create_dir_all(&self.quarantine).unwrap();
         fs::write(self.quarantine.join("journal.txt"), b"kept\n").unwrap();
         Err(RestoreFault::Retained)
+    }
+
+    fn discard(self: Box<Self>) -> Result<(), RestoreFault> {
+        Ok(())
     }
 }
 

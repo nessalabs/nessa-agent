@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use nessa_local_storage::{create_directory, open, sync_directory, OpenMode};
+use nessa_local_storage::{create_directory, open, publish_new, sync_directory, OpenMode};
 use serde_json::{json, Value};
 
 use sha2::Digest;
@@ -487,12 +487,11 @@ impl QuarantineLayout for DirectoryQuarantine {
     }
 
     fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
-        if symlink_exists(live)? {
-            return Err(RestoreFault::LiveOccupied);
-        }
         let from_parent = quarantine.parent().map(Path::to_path_buf);
         let to_parent = live.parent().map(Path::to_path_buf);
-        fs::rename(quarantine, live).map_err(|_| RestoreFault::Rename)?;
+        // The rename itself refuses an existing destination, including an
+        // empty directory created where a separate existence check would miss it.
+        rename_new(quarantine, live, RestoreFault::LiveOccupied)?;
         // The rename already made the tree live. A parent that cannot be
         // synced does not put it back, and does not make the promotion a
         // refusal.
@@ -535,13 +534,11 @@ impl QuarantineLayout for DirectoryQuarantine {
     }
 
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
-        if symlink_exists(final_path)? {
-            return Err(RestoreFault::SessionDiffers);
-        }
         // Durable bytes, then the name. A read-only open cannot flush on
         // Windows, so the writable handle is taken before the rename.
+        // The rename refuses a destination that already exists.
         sync_writable(temp)?;
-        fs::rename(temp, final_path).map_err(|_| RestoreFault::Rename)?;
+        rename_new(temp, final_path, RestoreFault::SessionDiffers)?;
         if let Some(parent) = final_path.parent() {
             sync_directory(parent).map_err(|_| RestoreFault::Unreadable)?;
         }
@@ -632,28 +629,9 @@ impl QuarantineLayout for DirectoryQuarantine {
     }
 
     fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
-        let path = ready_path(root);
-        let temp = root.join("accept-ready.partial");
-        if temp.exists() {
-            fs::remove_file(&temp).map_err(|_| RestoreFault::Unreadable)?;
-        }
-        if path.exists() {
-            fs::remove_file(&path).map_err(|_| RestoreFault::Unreadable)?;
-        }
-        let mut file = open(&temp, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)?;
-        let synced = file.write_all(b"ready\n").and_then(|_| file.sync_all());
-        drop(file);
-        if synced.is_err() {
-            clear_ready_file(&temp);
-            clear_ready_file(&path);
-            return Err(RestoreFault::Unreadable);
-        }
-        if fs::rename(&temp, &path).is_err() {
-            clear_ready_file(&temp);
-            clear_ready_file(&path);
-            return Err(RestoreFault::Unreadable);
-        }
-        Ok(())
+        publish_marker(root, |directory| {
+            sync_directory(directory).map_err(|_| RestoreFault::Unreadable)
+        })
     }
 
     fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
@@ -754,10 +732,11 @@ impl Staging for PartialTree {
     fn finish(mut self: Box<Self>, journal: &str) -> Result<(), RestoreFault> {
         self.write("journal.txt", journal.as_bytes())?;
         sync_tree(&self.partial)?;
-        if symlink_exists(&self.quarantine)? {
-            return Err(RestoreFault::QuarantineOccupied);
-        }
-        fs::rename(&self.partial, &self.quarantine).map_err(|_| RestoreFault::Rename)?;
+        rename_new(
+            &self.partial,
+            &self.quarantine,
+            RestoreFault::QuarantineOccupied,
+        )?;
         self.armed = false;
         if let Some(parent) = self.quarantine.parent() {
             if sync_directory(parent).is_err() {
@@ -768,6 +747,11 @@ impl Staging for PartialTree {
             }
         }
         Ok(())
+    }
+
+    fn discard(mut self: Box<Self>) -> Result<(), RestoreFault> {
+        self.armed = false;
+        remove_partial(&self.partial)
     }
 }
 
@@ -784,6 +768,60 @@ fn clear_ready_file(path: &Path) {
     if path.is_file() {
         let _ = fs::OpenOptions::new().write(true).truncate(true).open(path);
     }
+}
+
+/// Rename `from` onto `to` only when `to` does not exist.
+fn rename_new(from: &Path, to: &Path, occupied: RestoreFault) -> Result<(), RestoreFault> {
+    match publish_new(from, to) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(occupied),
+        Err(_) => Err(RestoreFault::Rename),
+    }
+}
+
+fn remove_partial(path: &Path) -> Result<(), RestoreFault> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) if !path.exists() => Ok(()),
+        Err(_) => Err(RestoreFault::Retained),
+    }
+}
+
+/// Write the readiness marker, rename it into place, then sync `root`.
+///
+/// A failed directory sync clears the marker. A partial file is not readiness.
+fn publish_marker(
+    root: &Path,
+    mut sync_root: impl FnMut(&Path) -> Result<(), RestoreFault>,
+) -> Result<(), RestoreFault> {
+    let path = ready_path(root);
+    let temp = root.join("accept-ready.partial");
+    if temp.exists() {
+        fs::remove_file(&temp).map_err(|_| RestoreFault::Unreadable)?;
+    }
+    if path.exists() {
+        fs::remove_file(&path).map_err(|_| RestoreFault::Unreadable)?;
+    }
+    let mut file = open(&temp, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)?;
+    let synced = file.write_all(b"ready\n").and_then(|_| file.sync_all());
+    drop(file);
+    if synced.is_err() {
+        clear_ready_file(&temp);
+        clear_ready_file(&path);
+        return Err(RestoreFault::Unreadable);
+    }
+    if rename_new(&temp, &path, RestoreFault::Unreadable).is_err() {
+        clear_ready_file(&temp);
+        clear_ready_file(&path);
+        return Err(RestoreFault::Unreadable);
+    }
+    if sync_root(root).is_err() {
+        clear_ready_file(&temp);
+        clear_ready_file(&path);
+        return Err(RestoreFault::Unreadable);
+    }
+    Ok(())
 }
 
 fn walk(
@@ -1227,6 +1265,18 @@ fn a_partial_readiness_file_is_not_the_marker() {
     assert!(DirectoryQuarantine.ready(&tree).unwrap());
     assert!(!tree.join("accept-ready.partial").exists());
     clear_ready_file(&tree.join("accept-ready"));
+    assert!(!DirectoryQuarantine.ready(&tree).unwrap());
+}
+
+#[test]
+fn a_readiness_directory_sync_failure_clears_the_marker() {
+    let root = tempfile::tempdir().unwrap();
+    let tree = root.path().join("quarantine");
+    fs::create_dir(&tree).unwrap();
+    let error = publish_marker(&tree, |_| Err(RestoreFault::Unreadable)).unwrap_err();
+    assert_eq!(error, RestoreFault::Unreadable);
+    assert!(!tree.join("accept-ready").exists());
+    assert!(!tree.join("accept-ready.partial").exists());
     assert!(!DirectoryQuarantine.ready(&tree).unwrap());
 }
 

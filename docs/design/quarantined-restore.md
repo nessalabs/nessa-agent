@@ -41,10 +41,18 @@ the result is a visible audit failure, not a second rename back.
 
 ## Who owns the name
 
-The audit identity of a path is the anchored path. A caller spelling,
-including an alias such as `other/../live`, is not an identity. Stage,
-accept, and fetch anchor before the decision line. A path that cannot be
-anchored is refused under the caller spelling.
+The audit identity of a path is the anchored path, and only when that path
+is Unicode. A caller spelling, including an alias such as `other/../live`,
+is not an identity. Stage, accept, and fetch anchor before the decision
+line. A path that cannot be anchored is refused under its Unicode caller
+spelling. A path that is not Unicode is refused with no audit line:
+`Path::display` would replace those bytes, and two roots could share one line.
+
+A published name is an exclusive rename. An empty directory at the
+destination is occupied. The source stays. A leftover name is either absent
+or recorded retained, and it is not acceptable. A `.partial` session file
+is not a helper. A lease and its receipt are percent-encoded, so a space in
+either value is not the separator.
 
 A fetched session has a second identity: the publication written beside the
 session file in that same publish. An `available` effect names that
@@ -80,7 +88,14 @@ different digest.
 | Derived partial directory is the live path, including an ASCII case alias on Windows or macOS | The live path. The partial directory is not deleted | `unchanged → unchanged` | Paths |
 | One root's lock file is the other root | Neither root is created as a lock file | `unchanged → unchanged` | Paths |
 | A file whose name ends in `.publication` outside `sessions/<id>.sqlite3` | The quarantine. Accept does not rename | `unchanged → unchanged` | Tamper. The file is part of the seal |
-| Readiness bytes synced, then renamed to `accept-ready` | The marker. A sync failure deletes the temporary file | The sealed line stays. The marker is absent | The error. A partial file is not readiness |
+| Readiness bytes synced, then renamed to `accept-ready`, then the quarantine directory synced | The marker. A file sync failure deletes the temporary file. A directory sync failure clears the marker | The sealed line stays. The marker is absent | The error. A partial file is not readiness |
+| Empty directory at the live path when the rename runs | The quarantine. The empty directory is unchanged | `unchanged → unchanged` | LiveOccupied |
+| A root that is not Unicode | Neither path is audited under a lossy spelling | No line | Paths |
+| Fetch wrote a partial session and that name is gone | No partial file | `unchanged → unchanged` with the source cause | The source error |
+| Fetch wrote a partial session and that name remains | The partial file. Not a helper | No unchanged line | Retained. A later open treats the file as an extra |
+| Staging write failed and the partial directory is gone | No partial directory | `unchanged → unchanged` | The write error |
+| Staging write failed and the partial directory remains | The partial directory | `absent → unready`, cause `retained` | Retained |
+| Lease `a b` with receipt `c`, and lease `a` with receipt `b c` | Two attestations | `a%20b c` and `a b%20c` | Distinct lines |
 | Quarantine rename whose parent sync fails, and the tree is removed | No quarantine | `unchanged → unchanged` | Unreadable |
 | Quarantine rename whose parent sync fails, and the tree remains | The quarantine, unready | `absent → unready`, cause `retained` | Retained. Not an unchanged refusal |
 
@@ -94,7 +109,10 @@ different digest.
   modify a sentinel beside it. `a_tampered_bundle_does_not_touch_live_data`,
   `a_partial_copy_removes_quarantine_and_leaves_live_data`
 - Accept refuses when the live path already exists, and leaves those bytes
-  as they were. `an_occupied_live_root_is_not_replaced`
+  as they were. The rename itself refuses an empty directory, with no
+  separate existence check that a created directory could slip past.
+  `an_occupied_live_root_is_not_replaced`,
+  `an_empty_live_directory_is_not_replaced`
 - The seal is the set of file hashes in the journal, and accept requires the
   sealed audit line to name the digest of those journal bytes. A changed
   byte, a missing file, an unexpected file outside `sessions/`, or a journal
@@ -224,9 +242,25 @@ different digest.
 - A derived name uses the same path identity as a root. The partial directory
   is not deleted when it is the live path. A root's lock file is not the
   other root. A helper suffix is a sidecar only beside `sessions/<id>.sqlite3`
-  for a deferred conversation. The readiness marker is the final name after
-  its bytes are synced. `a_lock_file_is_not_the_live_path`,
+  for a deferred conversation. A `.partial` session file is an extra. The
+  readiness marker is the final name after its bytes are synced, and the
+  quarantine directory is synced after that rename. A failed directory sync
+  clears the marker. `a_lock_file_is_not_the_live_path`,
   `an_injected_publication_suffix_is_not_promoted`,
+  `a_readiness_directory_sync_failure_clears_the_marker`,
+  `paths_and_receipts_are_constrained`
+- A path that is not Unicode is not an audit identity.
+  `a_non_unicode_root_is_not_audited`, `paths_and_receipts_are_constrained`
+- An interrupted fetch that cannot remove its partial session returns
+  retained and does not record unchanged. A later open refuses that file.
+  `an_interrupted_fetch_that_cannot_be_removed_is_retained`,
+  `an_interrupted_fetch_leaves_no_partial_session`
+- A staging write whose partial directory cannot be removed records
+  `absent → unready` and returns retained.
+  `a_partial_directory_that_survives_a_failed_write_is_unready`,
+  `a_discarded_partial_directory_is_removed`
+- A lease and its receipt are percent-encoded. `a b` with receipt `c` is
+  not the same attestation as lease `a` with receipt `b c`.
   `paths_and_receipts_are_constrained`
 
 ## Decisions that bound this
