@@ -2778,10 +2778,16 @@ impl Agent {
                         // this actual owner's proof together; failed ACK stays retained.
                         let proof = agent
                             .inner
-                            .manager
-                            .acknowledge_sdk_cleanup(&scope)
-                            .await
-                            .map_err(AgentError::Storage);
+                            .lifecycle
+                            .record_cleanup_proof(&attempt, async {
+                                agent
+                                    .inner
+                                    .manager
+                                    .acknowledge_sdk_cleanup(&scope)
+                                    .await
+                                    .map_err(AgentError::Storage)
+                            })
+                            .await;
                         scheduling = super::closing::join_acknowledgements(scheduling, proof);
                     }
                 }

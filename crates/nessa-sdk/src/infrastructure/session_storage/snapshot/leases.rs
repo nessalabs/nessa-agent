@@ -126,7 +126,7 @@ struct Issuance {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SdkCleanupAcknowledged {
+struct SdkCleanupEvidence {
     lease: String,
     lifetime: String,
 }
@@ -781,9 +781,16 @@ impl From<&LeaseRecord> for WireLease {
                     actor: actor.as_ref().map(Actor::from),
                 },
             ),
+            LeaseRecord::SdkCleanupRetired { lease, lifetime } => text(
+                "sdk_cleanup_retired",
+                &SdkCleanupEvidence {
+                    lease: lease.as_str().into(),
+                    lifetime: lifetime.as_str().into(),
+                },
+            ),
             LeaseRecord::SdkCleanupAcknowledged { lease, lifetime } => text(
                 "sdk_cleanup_acknowledged",
-                &SdkCleanupAcknowledged {
+                &SdkCleanupEvidence {
                     lease: lease.as_str().into(),
                     lifetime: lifetime.as_str().into(),
                 },
@@ -944,8 +951,15 @@ impl WireLease {
                     _ => return Err(corrupt("a lease issuance and its refusal disagree")),
                 }
             }
+            "sdk_cleanup_retired" => {
+                let saved: SdkCleanupEvidence = body(&self.body)?;
+                LeaseRecord::SdkCleanupRetired {
+                    lease: lease(saved.lease)?,
+                    lifetime: AgentLifetimeId::new(saved.lifetime).map_err(corrupt)?,
+                }
+            }
             "sdk_cleanup_acknowledged" => {
-                let saved: SdkCleanupAcknowledged = body(&self.body)?;
+                let saved: SdkCleanupEvidence = body(&self.body)?;
                 LeaseRecord::SdkCleanupAcknowledged {
                     lease: lease(saved.lease)?,
                     lifetime: AgentLifetimeId::new(saved.lifetime).map_err(corrupt)?,

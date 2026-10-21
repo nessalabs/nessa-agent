@@ -876,6 +876,25 @@ impl SessionLifecycle {
         }
         operation.await
     }
+    // The same resource fence orders durable proof publication against a
+    // replacement's acknowledged retirement before its first external effect.
+    pub(super) async fn record_cleanup_proof(
+        &self,
+        ticket: &CloseAttempt,
+        operation: impl Future<Output = Result<(), AgentError>>,
+    ) -> Result<(), AgentError> {
+        let _transition = self.resource_transition.lock().await;
+        let current = self
+            .state
+            .lock()
+            .expect("session lifecycle")
+            .provider_generation
+            .0;
+        if current != ticket.provider_generation {
+            return Err(AgentError::AttachmentAuthorizationStale);
+        }
+        operation.await
+    }
     pub(super) fn publish_attachment(
         &self,
         generation: u64,
@@ -1430,6 +1449,7 @@ impl SessionLifecycle {
                         prior.request.clone(),
                         report.clone(),
                         prior.evidence.clone(),
+                        state.provider_generation.0,
                     );
                     ticket.folded_evidence = prior.folded_evidence;
                     let recovery = match &state.work_status {
@@ -1479,6 +1499,7 @@ impl SessionLifecycle {
                         SessionCloseRequest::ExecutionFailed,
                         report.clone(),
                         state.attachment_evidence.clone(),
+                        state.provider_generation.0,
                     );
                     state.work_status = WorkStatus::Blocked(Stop {
                         ticket,
@@ -1514,6 +1535,7 @@ impl SessionLifecycle {
                 SessionCloseRequest::ExecutionFailed,
                 report,
                 state.attachment_evidence.clone(),
+                state.provider_generation.0,
             );
             state.work_generation.0 += 1;
             state.work_status = WorkStatus::Blocked(Stop {
@@ -1802,6 +1824,7 @@ impl SessionLifecycle {
         let ticket = CloseAttempt {
             id: stop_id,
             attempt_id,
+            provider_generation: state.provider_generation.0,
             request: first_request,
             physical: physical.clone(),
             result,

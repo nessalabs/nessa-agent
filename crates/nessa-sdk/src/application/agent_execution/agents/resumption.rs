@@ -38,6 +38,24 @@ use crate::domain::agent_execution::{
     prompts::{PromptText, UserMessage},
 };
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+use tokio::sync::watch;
+
+type DeclineResult = watch::Receiver<Option<Result<(), AgentError>>>;
+#[derive(Default)]
+pub(super) struct DeclineAttempts(Arc<Mutex<HashMap<ExecutionId, DeclineResult>>>);
+struct DeclineFlight {
+    attempts: Arc<Mutex<HashMap<ExecutionId, DeclineResult>>>,
+    execution: ExecutionId,
+}
+impl Drop for DeclineFlight {
+    fn drop(&mut self) {
+        self.attempts
+            .lock()
+            .expect("decline attempts")
+            .remove(&self.execution);
+    }
+}
 
 /// Opens the successor of a turn the provider had been given.
 const CUT_OFF_NOTICE: &str = "[Nessa restarted while you were working on this request, so your \
@@ -680,6 +698,44 @@ impl Agent {
     }
 
     async fn decline_owned(&self, turn: &OwedTurn, actor: ActionContext) -> Result<(), AgentError> {
+        let mut joined = {
+            let mut attempts = self
+                .inner
+                .decline_attempts
+                .0
+                .lock()
+                .expect("decline attempts");
+            if let Some(joined) = attempts.get(&turn.execution_id) {
+                joined.clone()
+            } else {
+                let (completion, joined) = watch::channel(None);
+                attempts.insert(turn.execution_id.clone(), joined.clone());
+                let flight = DeclineFlight {
+                    attempts: self.inner.decline_attempts.0.clone(),
+                    execution: turn.execution_id.clone(),
+                };
+                let agent = self.clone();
+                let turn = turn.clone();
+                tokio::spawn(async move {
+                    let _flight = flight;
+                    completion.send_replace(Some(agent.deliver_decline(&turn, actor).await));
+                });
+                joined
+            }
+        };
+        loop {
+            if let Some(result) = joined.borrow().clone() {
+                return result;
+            }
+            joined.changed().await.map_err(|_| AgentError::Closed)?;
+        }
+    }
+
+    async fn deliver_decline(
+        &self,
+        turn: &OwedTurn,
+        actor: ActionContext,
+    ) -> Result<(), AgentError> {
         let existing = self
             .inner
             .manager

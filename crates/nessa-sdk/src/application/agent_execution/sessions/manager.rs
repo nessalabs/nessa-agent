@@ -1688,12 +1688,46 @@ impl SessionManager {
     ) -> Result<(), StorageError> {
         self.record_scheduling_with_queue(index, event, None).await
     }
-    /// Return the locally applied decision even if its save is not acknowledged.
-    /// Validation failure returns no commit and grants no decision authority.
-    /// Flush only when a decline receipt itself still awaits storage ACK.
-    /// Other pending facts keep their existing close/lease persistence owner.
-    /// Actual SDK close producer only: record its non-decline ACK under the
-    /// minted lifetime and exact current lease, then join the real writer ACK.
+    /// Retire earlier SDK proof and join this owner's retained write before
+    /// the replacement attachment can produce external effects.
+    pub(crate) async fn retire_sdk_cleanup(
+        &self,
+        scope: &OwnedCleanupScope,
+    ) -> Result<(), StorageError> {
+        if scope.session() != &self.id {
+            return Err(StorageError::Corrupt(
+                "SDK attachment scope names another session".into(),
+            ));
+        }
+        let mut evidence = self.evidence.lock().await;
+        if let Some(current) = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.lease.as_ref())
+        {
+            if current.sdk_cleanup_acknowledged(scope) {
+                let record = LeaseRecord::SdkCleanupRetired {
+                    lease: current
+                        .held()
+                        .expect("acknowledged held lease")
+                        .id()
+                        .clone(),
+                    lifetime: scope.lifetime().clone(),
+                };
+                evidence.record(vec![SessionChange::Lease(record)])?;
+            }
+        }
+        let pending = evidence.pending.iter().flat_map(SessionSaveUnit::changes).any(|change| {
+            matches!(change, SessionChange::Lease(LeaseRecord::SdkCleanupRetired { lifetime, .. })
+                if lifetime == scope.lifetime())
+        });
+        if pending {
+            self.save_observed(&mut evidence).await
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Actual SDK close producer: join the writer ACK for this lifetime and lease.
     pub(crate) async fn acknowledge_sdk_cleanup(
         &self,
         scope: &OwnedCleanupScope,

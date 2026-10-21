@@ -1877,3 +1877,44 @@ waits for its own acknowledgement. All original error objects remain returned.
 | Actual SDK/environment resources confirmed; only record writes failed | Preserve nested storage errors and their ordinary typed result; permit only the existing handoff rules. |
 | ReleasePending/Unconfirmed carries a storage-close diagnostic with an inner Ok | No resource confirmation, upload handoff or mode/deletion release from that diagnostic. |
 | Slot replaced while a close waits | Read only the captured original Slot's lease receipt. |
+
+### Cycle9: acquisition proof retirement and joined decline observations
+
+Explicit owner direction continues the bounded correction after cycle8's completed
+review; prior caps, failures and source-specific receipts remain retained. The
+85697c4f production code reproduced both failures with test-only additions. This
+is not evidence of a stock gateway false-Closed command sequence.
+
+The session lease fold owns durable SDK proof ordering. Before a later provider
+acquisition or its Started audit effect, the actual attachment owner saves a
+retirement of any prior lifetime proof and joins that write's acknowledgement.
+Missing proof already means unknown. Rejected or lost save acknowledgement
+prevents those effects and remains under the same writer. The lifecycle's
+existing resource-transition lock orders this retirement against proof publication;
+publication also checks the original close ticket's provider generation. Thus an
+old close cannot certify a replacement acquisition. These process-local ticket
+generations fence live publication only; they are not durable identities. The
+durable ordering is in the existing lease stream, under the exact lease/lifetime.
+The fold alone validates lease identity; consumers use that published invariant.
+
+The prepared-decline owner retains one in-flight result per execution decision.
+Concurrent callers join that supervised result, including its original deadline,
+actor, rejected write and failed audit. Completion retires the in-flight join;
+only a later explicit call may retry a terminal failure. Durable preparation and
+its real audit/history acknowledgements remain separate. No second cleanup owner
+or replay exemption is introduced.
+
+| Ordering | Required result / regression |
+| --- | --- |
+| Successful SDK close then same-lease actual reattachment | Earlier proof retired before effects; original reopening remains allowed; next actual cleanup can certify again |
+| Proof retirement save rejects or reply is lost | No provider open or Started audit; retain writer debt; restart cannot accept stale proof after a new acquisition |
+| First close publishes while new start races | Resource-transition ordering plus original ticket generation prevents a late old ACK from certifying replacement |
+| Process loss after acknowledged retirement, before/after provider open | Cold proof is unknown until actual new cleanup ACK |
+| Concurrent decline while first audit is held | Join first observation/result; no second sink entry or new deadline |
+| First decline audit or ACK save fails | All current joiners observe the same failure; later explicit retry keeps original preparation/actor |
+| Decline caller is lost, or joined task panics | Existing supervised owner retains progress; join registration is retired on owner drop without leaking an entry |
+
+The original cycle8 failed assertions are retained unchanged. Positive controls,
+ordering/storage-fault controls, mutation evidence and a fresh scoped independent
+review qualify the resulting source; unavailable Windows/WebKit/browser gates
+remain open and are not substituted by Linux focused passes.

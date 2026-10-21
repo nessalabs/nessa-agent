@@ -217,6 +217,56 @@ fn sdk_cleanup_acknowledgement_requires_exact_lease_target_and_atomic_history() 
                 .clone()
         )])
         .is_err());
+
+    let retired = SessionChange::Lease(LeaseRecord::SdkCleanupRetired {
+        lease: id("lease-1"),
+        lifetime: scope.lifetime().clone(),
+    });
+    let before = continuation.snapshot.clone();
+    let bad_retirement = SessionChange::Lease(LeaseRecord::SdkCleanupRetired {
+        lease: id("wrong-lease"),
+        lifetime: scope.lifetime().clone(),
+    });
+    assert!(continuation.apply_unit(&[bad_retirement]).is_err());
+    assert_eq!(
+        continuation.snapshot, before,
+        "wrong-lease retirement is atomic"
+    );
+    let encoded = encode_semantic_batch(std::slice::from_ref(&retired)).unwrap();
+    let decoded = decode_semantic_batch(&encoded, &snapshot.provider_context).unwrap();
+    assert_eq!(decoded, vec![retired.clone()]);
+    continuation.apply_unit(&decoded).unwrap();
+    let checkpoint =
+        serde_json::to_vec(&SnapshotRef(continuation.snapshot.as_ref().unwrap())).unwrap();
+    let restored: Snapshot = serde_json::from_slice(&checkpoint).unwrap();
+    let restored = restored.decode().unwrap();
+    assert!(
+        !restored
+            .lease
+            .as_ref()
+            .unwrap()
+            .sdk_cleanup_acknowledged(&scope),
+        "restart cannot recover the retired acquisition's proof"
+    );
+    let mut restarted = Continuation::restore(Some(restored)).unwrap();
+    assert!(
+        restarted.apply_unit(&[retired]).is_err(),
+        "retirement needs a current ACK"
+    );
+    restarted
+        .apply_unit(&[SessionChange::Lease(LeaseRecord::SdkCleanupAcknowledged {
+            lease: id("lease-1"),
+            lifetime: scope.lifetime().clone(),
+        })])
+        .unwrap();
+    assert!(restarted
+        .snapshot
+        .as_ref()
+        .unwrap()
+        .lease
+        .as_ref()
+        .unwrap()
+        .sdk_cleanup_acknowledged(&scope));
 }
 
 #[test]

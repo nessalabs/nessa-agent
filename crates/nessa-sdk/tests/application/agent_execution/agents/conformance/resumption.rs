@@ -1380,3 +1380,230 @@ async fn prepared_cancellation_receipt_restarts_under_its_original_decision_and_
     assert_eq!(fresh.audit.records.lock().unwrap().len(), calls);
     bounded(restored.close(actor())).await.unwrap();
 }
+
+// Test-only additions for disposable exact-85697c4f source copy.
+// Append to tests/application/agent_execution/agents/conformance/resumption.rs.
+#[tokio::test]
+async fn cycle8_same_lease_sdk_proof_is_retired_before_reacquisition() {
+    for lose_ack in [false, true] {
+        use nessa_sdk::application::agent_execution::{sessions::LeaseRecord, subagents::*};
+        use nessa_sdk::domain::agent_execution::{leases::*, subagents::*};
+        struct NoFactory;
+        #[async_trait::async_trait]
+        impl ChildFactory for NoFactory {
+            async fn prepare(&self, _: PrepareRequest) -> Result<PreparedChild, PrepareFailure> {
+                panic!("no child factory is reached by this root-only test")
+            }
+        }
+        struct Accept;
+        #[async_trait::async_trait]
+        impl OwnershipAudit for Accept {
+            async fn record(&self, _: &OwnershipEvidence) -> Result<(), PortFailure> {
+                Ok(())
+            }
+        }
+        let storage = MemoryStorage::default();
+        let backend = workflow_backend();
+        let agent = Agent::prepare(
+            Arc::new(WorkflowProvider(backend.clone())),
+            storage.manager().await,
+            backend.audit.clone(),
+        )
+        .await
+        .unwrap();
+        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+            store: Arc::new(MemoryOwnershipStore::new()),
+            audit: Arc::new(Accept),
+            factory: Arc::new(NoFactory),
+            room: Arc::new(LiveCapacity::new(1)),
+        });
+        let root = coordinator
+            .open_root(agent.session_manager().id().clone(), Initiator::Runtime)
+            .await
+            .unwrap();
+        let gate = coordinator.participation(&root).unwrap();
+        let scope = gate.cleanup_scope().unwrap();
+        agent.install_owned_lifetime(gate).unwrap();
+        agent
+            .session_manager()
+            .record_lease(|_| {
+                (
+                    vec![LeaseRecord::Issued {
+                        lease: LeaseId::new("cycle8-same-lease").unwrap(),
+                        revision: LeaseRevision::FIRST,
+                        terms: LeaseTerms {
+                            environment: EnvironmentRef::Here,
+                            work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+                            sandbox: SandboxProfile::HarnessDefault,
+                            grants: LeaseGrants::Opening,
+                            deadline: LeaseDeadline::UntilEnded,
+                        },
+                        actor: actor(),
+                    }],
+                    (),
+                )
+            })
+            .await
+            .unwrap()
+            .saved
+            .unwrap();
+        let auth = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        bounded(agent.start_attachment(auth).unwrap().wait())
+            .await
+            .unwrap();
+        bounded(agent.close_report(actor()))
+            .await
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert!(storage
+            .snapshot()
+            .lease
+            .as_ref()
+            .unwrap()
+            .sdk_cleanup_acknowledged(&scope));
+        reattach_after_explicit_close(&agent).await;
+        let stale = storage
+            .snapshot()
+            .lease
+            .as_ref()
+            .unwrap()
+            .sdk_cleanup_acknowledged(&scope);
+        let _ = bounded(agent.close_report(actor())).await;
+        assert!(
+            !stale,
+            "cycle8: first cleanup ACK still certifies an actual later same-lease attachment"
+        );
+        assert!(
+            storage
+                .snapshot()
+                .lease
+                .as_ref()
+                .unwrap()
+                .sdk_cleanup_acknowledged(&scope),
+            "the actual second cleanup may acknowledge the new acquisition"
+        );
+        if lose_ack {
+            storage.lose_next_ack();
+        } else {
+            storage.fail_next();
+        }
+        let started_before = backend.audit.records.lock().unwrap().iter().filter(|record| {
+        matches!(record, ExecutionAuditRecord::Attachment(record)
+            if record.after() == nessa_sdk::application::agent_execution::executions::AttachmentAuditStage::Starting)
+    }).count();
+        let auth = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        assert!(bounded(agent.start_attachment(auth).unwrap().wait())
+            .await
+            .is_err());
+        let started_after = backend.audit.records.lock().unwrap().iter().filter(|record| {
+        matches!(record, ExecutionAuditRecord::Attachment(record)
+            if record.after() == nessa_sdk::application::agent_execution::executions::AttachmentAuditStage::Starting)
+    }).count();
+        assert_eq!(
+            started_before, started_after,
+            "rejected proof retirement prevents Started effects"
+        );
+        assert_eq!(storage.snapshot().lease.as_ref().unwrap().sdk_cleanup_acknowledged(&scope), !lose_ack,
+        "committed retirement survives a lost reply; rejected retirement had no acquisition effects");
+        let _ = bounded(agent.close_report(actor())).await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn cycle8_overlapping_decline_joins_first_audit_attempt() {
+    let saved = cut_off_while_running("cycle8-decline-overlap").await;
+    let (agent, backend, _storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    let (entered, waiting) = oneshot::channel();
+    let (release, held) = oneshot::channel();
+    *backend.audit.pause.lock().unwrap() = Some((entered, held));
+    let first = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.decline_turn(&turn, resumer()).await }
+    });
+    bounded(waiting).await.unwrap();
+    // This second deterministic sink gate records whether an overlapping retry
+    // starts another sink call while the first exact decision is still held.
+    let (entered_second, mut waiting_second) = oneshot::channel();
+    let (release_second, held_second) = oneshot::channel();
+    *backend.audit.pause.lock().unwrap() = Some((entered_second, held_second));
+    let second = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.retry_declined_turns().await }
+    });
+    let duplicated = tokio::select! {
+        biased;
+        entry = &mut waiting_second => { entry.unwrap(); true }
+        () = tokio::time::sleep(Duration::from_secs(1)) => false,
+    };
+    // Release both actual writes before reporting a failed oracle.
+    release.send(()).unwrap();
+    let _ = release_second.send(());
+    bounded(first).await.unwrap().unwrap();
+    bounded(second).await.unwrap().unwrap();
+    let calls = resumptions(&backend).len();
+    let _ = bounded(agent.close(actor())).await;
+    assert!(
+        !duplicated,
+        "cycle8: overlapping decline retry entered a second audit before the first ACK"
+    );
+    assert_eq!(
+        calls, 1,
+        "cycle8: same prepared decline has one joined audit attempt"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn cycle9_decline_joiners_share_failure_deadline_then_explicit_retry() {
+    let saved = cut_off_while_running("cycle9-decline-deadline").await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    let (entered, waiting) = oneshot::channel();
+    let (release, held) = oneshot::channel();
+    *backend.audit.pause.lock().unwrap() = Some((entered, held));
+    let first = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.decline_turn(&turn, resumer()).await }
+    });
+    bounded(waiting).await.unwrap();
+    tokio::time::advance(Duration::from_secs(25)).await;
+    let mut second = Box::pin(agent.retry_declined_turns());
+    tokio::select! {
+        biased;
+        result = &mut second => panic!("a joined pending audit cannot finish early: {result:?}"),
+        () = tokio::time::sleep(Duration::from_secs(1)) => {}
+    }
+    tokio::time::advance(Duration::from_secs(4)).await;
+    assert!(matches!(
+        bounded(first).await.unwrap(),
+        Err(AgentError::AuditFailure)
+    ));
+    assert!(matches!(
+        bounded(second).await,
+        Err(AgentError::AuditFailure)
+    ));
+    assert_eq!(resumptions(&backend).len(), 1);
+    assert!(!storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    let _ = release.send(());
+    bounded(agent.retry_declined_turns()).await.unwrap();
+    assert_eq!(
+        resumptions(&backend).len(),
+        2,
+        "only later explicit retry starts another attempt"
+    );
+    assert!(storage.snapshot().invocations[0]
+        .decline
+        .as_ref()
+        .unwrap()
+        .acknowledged());
+    let _ = bounded(agent.close(actor())).await;
+}

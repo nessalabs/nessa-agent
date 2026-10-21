@@ -436,6 +436,7 @@ pub(super) struct Inner {
     updates: broadcast::Sender<ExecutionEvent>,
     pub(super) reorder: Mutex<()>,
     pub(super) scheduler: Mutex<Scheduler>,
+    pub(super) decline_attempts: super::resumption::DeclineAttempts,
     pub(super) lifecycle: Arc<SessionLifecycle>,
 }
 impl Agent {
@@ -1213,6 +1214,7 @@ impl Agent {
                 permission_hook_running: Arc::new(AtomicBool::new(false)),
                 reorder: Mutex::new(()),
                 scheduler: Mutex::new(Scheduler::new()),
+                decline_attempts: super::resumption::DeclineAttempts::default(),
                 lifecycle,
                 updates,
             }),
@@ -1309,11 +1311,36 @@ impl Agent {
         let (start, wait) = self.inner.lifecycle.start_attachment(authorization)?;
         let agent = self.clone();
         runtime.spawn(async move {
-            let started = agent
+            let retired = agent
                 .inner
                 .lifecycle
-                .record_attachment_audit(ExecutionAuditRecord::Attachment(start.record))
+                .run_attachment(start.generation, async {
+                    if let Some(scope) = agent
+                        .inner
+                        .lifecycle
+                        .owned_gate()
+                        .and_then(|gate| gate.cleanup_scope())
+                    {
+                        agent
+                            .inner
+                            .manager
+                            .retire_sdk_cleanup(&scope)
+                            .await
+                            .map_err(AgentError::Storage)?;
+                    }
+                    Ok::<_, AgentError>(())
+                })
                 .await;
+            let started = match retired {
+                Ok(()) => {
+                    agent
+                        .inner
+                        .lifecycle
+                        .record_attachment_audit(ExecutionAuditRecord::Attachment(start.record))
+                        .await
+                }
+                Err(error) => Err(error),
+            };
             start.started_evidence.send_replace(Some(started.clone()));
             let lifecycle = agent.inner.lifecycle.clone();
             let provider = agent.current_provider();

@@ -363,3 +363,57 @@ async fn repeated_confirmation_keeps_distinct_failures_without_growing_history()
         assert_eq!(close.is_err(), audit);
     }
 }
+
+#[tokio::test]
+async fn cycle9_old_cleanup_ticket_cannot_publish_after_replacement_start() {
+    let backend = Arc::new(Backend::default());
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = attached_agent(Arc::new(Provider(backend)), manager)
+        .await
+        .unwrap();
+    let old = agent.start_shutdown(SessionCloseRequest::Explicit(actor()));
+    assert!(timeout(
+        Duration::from_secs(2),
+        agent.inner.lifecycle.complete_stop(&old)
+    )
+    .await
+    .unwrap()
+    .is_confirmed());
+    let auth = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    timeout(
+        Duration::from_secs(2),
+        agent.start_attachment(auth).unwrap().wait(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let called = std::sync::atomic::AtomicBool::new(false);
+    let result = agent
+        .inner
+        .lifecycle
+        .record_cleanup_proof(&old, async {
+            called.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+    assert!(matches!(
+        result,
+        Err(AgentError::AttachmentAuthorizationStale)
+    ));
+    assert!(
+        !called.load(std::sync::atomic::Ordering::SeqCst),
+        "stale close cannot execute proof publication"
+    );
+    timeout(Duration::from_secs(2), agent.close(actor()))
+        .await
+        .unwrap()
+        .unwrap();
+}
