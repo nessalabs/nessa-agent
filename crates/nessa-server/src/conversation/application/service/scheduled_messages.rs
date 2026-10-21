@@ -306,18 +306,23 @@ pub trait ScheduledMessageStore: Send + Sync {
         at_ms: u64,
     ) -> ConversationFuture<'_, bool>;
     /// Claim due scheduled rows, then return those claims, rows already
-    /// delivering, and `submitting` rows whose retry time has arrived. A
-    /// submitting row waiting for a later retry is not claimed. Each
-    /// execution id appears once. The claim is not itself an audit row: the
-    /// delivery or refusal audit follows admission, and a released claim is
-    /// audited as `reset_moved`.
+    /// delivering, and `submitting` rows this process may attempt. A
+    /// submitting row waiting for a later retry is not claimed. A submitting
+    /// row whose lease is still live and owned by another process is not
+    /// claimed; [`Self::next_due`] waits until that deadline. Each execution
+    /// id appears once. The claim is not itself an audit row: the delivery or
+    /// refusal audit follows admission, and a released claim is audited as
+    /// `reset_moved`.
     fn claim_due(&self, now_ms: u64, limit: usize)
         -> ConversationFuture<'_, Vec<ScheduledMessage>>;
     /// When the next pass should run. `Some(now_ms)` when a scheduled row is
-    /// already due, a row is `delivering`, or a `submitting` row's retry time
-    /// has arrived (`retry_at_ms` is 0 or at or before `now_ms`). A submitting
-    /// row whose retry time is still ahead waits until that time. Otherwise
-    /// the soonest of a later scheduled due time and a later submit retry.
+    /// already due, a row is `delivering`, or a `submitting` row this process
+    /// may attempt: its retry time has arrived and its lease has expired or
+    /// belongs to this process. A submitting row whose retry time is still
+    /// ahead waits until that time. A live lease owned by another process
+    /// waits until `fence_until_ms`, or until `retry_at_ms` when that is
+    /// later. Otherwise the soonest of a later scheduled due time and a later
+    /// submit retry.
     fn next_due(&self, now_ms: u64) -> ConversationFuture<'_, Option<u64>>;
     /// Move `delivering` to `submitting` under a lease that lasts
     /// [`FENCE_LEASE_MS`] from `now_ms`, or adopt a `submitting` row whose
@@ -1417,17 +1422,31 @@ impl ConversationService {
             lost.store(true, Ordering::SeqCst);
             return false;
         }
-        if self.execution_saved(&id, &row.execution_id).await {
-            let now = self.inner.clock.unix_milliseconds();
-            let _ = store
-                .record_outcome(
-                    &row.execution_id,
-                    ScheduleSettlement::Delivered,
-                    "delivered",
-                    now,
-                )
-                .await;
-            return false;
+        match self.execution_saved(&id, &row.execution_id).await {
+            Ok(true) => {
+                let now = self.inner.clock.unix_milliseconds();
+                let _ = store
+                    .record_outcome(
+                        &row.execution_id,
+                        ScheduleSettlement::Delivered,
+                        "delivered",
+                        now,
+                    )
+                    .await;
+                return false;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                // The invocation may already be saved. An unread session is
+                // not absence: submitting would see Attempted and record
+                // unconfirmed for a turn that is still running.
+                tracing::warn!(
+                    execution_id = %row.execution_id,
+                    %error,
+                    "the saved execution could not be read; the submission stays and will be read again"
+                );
+                return true;
+            }
         }
         let Some(commands) = self.commands() else {
             if lost.load(Ordering::SeqCst) {
@@ -1543,17 +1562,21 @@ impl ConversationService {
         }
     }
 
-    async fn execution_saved(&self, id: &ConversationId, execution_id: &str) -> bool {
+    async fn execution_saved(
+        &self,
+        id: &ConversationId,
+        execution_id: &str,
+    ) -> Result<bool, ConversationError> {
         let session = super::conversation_session(id);
-        let Ok(Some(committed)) = self.inner.storage.read_committed(session).await else {
-            return false;
+        let Some(committed) = self.inner.storage.read_committed(session).await? else {
+            return Ok(false);
         };
-        committed.snapshot().is_some_and(|snapshot| {
+        Ok(committed.snapshot().is_some_and(|snapshot| {
             snapshot
                 .invocations
                 .iter()
                 .any(|invocation| invocation.request.execution_id.as_str() == execution_id)
-        })
+        }))
     }
 }
 
@@ -1871,7 +1894,10 @@ mod catalogue_pages {
         CreationFuture, CreationReceipt, CreationStorage, CreationStorageError,
         CreationStorageLease, MutationReceipt,
     };
-    use nessa_sdk::application::agent_execution::sessions::StorageError;
+    use nessa_sdk::application::agent_execution::sessions::{
+        SessionStorage, StorageError, StorageFuture,
+    };
+    use nessa_sdk::domain::agent_execution::sessions::SessionId;
 
     use super::{
         renew_while_held, PreferenceCommandOutcome, PreferenceCommandReceipt, PreferenceReading,
@@ -1941,12 +1967,21 @@ mod catalogue_pages {
         listing: Arc<dyn ConversationListing>,
         clock: Arc<dyn Clock>,
     ) -> ConversationService {
+        service_stored(metadata, listing, clock, Arc::new(InMemoryStorage::new()))
+    }
+
+    fn service_stored(
+        metadata: Arc<MemoryRepository>,
+        listing: Arc<dyn ConversationListing>,
+        clock: Arc<dyn Clock>,
+        storage: Arc<dyn SessionStorage>,
+    ) -> ConversationService {
         let provider = Arc::new(ProviderFactory::default());
         ConversationService::new(
             ConversationDependencies {
                 access_policy: crate::conversation_test_support::access_policy(),
                 agents: only(Arc::new(Provider::new(provider))),
-                storage: Arc::new(InMemoryStorage::new()),
+                storage,
                 metadata,
                 mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
                 creation_audit: Arc::new(AcceptingCreationAudit),
@@ -2848,6 +2883,85 @@ mod catalogue_pages {
             store.outcomes.lock().unwrap().as_slice(),
             [("exec-1".into(), 9_000)]
         );
+    }
+
+    /// A committed-session read that fails. Absence is `Ok(None)`.
+    struct UnreadableSessions;
+
+    impl SessionStorage for UnreadableSessions {
+        fn read_committed(
+            &self,
+            _: SessionId,
+        ) -> StorageFuture<
+            '_,
+            Option<nessa_sdk::application::agent_execution::sessions::CommittedSession>,
+        > {
+            Box::pin(async {
+                Err(StorageError::Io(
+                    "the committed session could not be read".into(),
+                ))
+            })
+        }
+
+        fn open(
+            &self,
+            _: SessionId,
+        ) -> StorageFuture<
+            '_,
+            Box<dyn nessa_sdk::application::agent_execution::sessions::SessionStorageLease>,
+        > {
+            Box::pin(async {
+                Err(StorageError::Io(
+                    "the committed session could not be read".into(),
+                ))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_execution_read_does_not_settle_the_submission() {
+        let service = service_stored(
+            Arc::new(MemoryRepository::default()),
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            Arc::new(TestClock),
+            Arc::new(UnreadableSessions),
+        );
+        let store = Arc::new(RecordingStore::new(false));
+        service.bind_scheduled_messages(store.clone());
+        let conversation = "11111111-1111-4111-8111-111111111111";
+        let row = ScheduledMessage {
+            conversation: conversation.into(),
+            causal_execution: "causal".into(),
+            execution_id: "exec-1".into(),
+            due_at_ms: 10,
+            delivering: true,
+            agent: "claude".into(),
+            model: "opus".into(),
+            prompt: "continue".into(),
+            organization_id: "org".into(),
+            principal_id: "person".into(),
+            surface_id: "desktop".into(),
+            action_id: "action".into(),
+            initiation: "owner".into(),
+            grant_id: None,
+            policy_revision: None,
+            tools_checked: false,
+            retry_failures: 0,
+        };
+        let retry = service
+            .finish_fenced_submit(
+                store.clone(),
+                ConversationId::new(conversation).unwrap(),
+                &row,
+                1_700_000_000_123 + 60_000,
+            )
+            .await;
+        assert!(retry);
+        assert!(store.outcomes.lock().unwrap().is_empty());
+        assert!(store.defers.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

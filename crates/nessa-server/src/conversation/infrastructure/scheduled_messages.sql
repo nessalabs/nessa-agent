@@ -14,7 +14,10 @@
 -- the generation number of the fence at that read. A different incarnation
 -- or a later position replaces the fence only when it observed the
 -- generation now stored. An older generation writes nothing. Accept and
--- settle of a submitting row also match the owner of that write.
+-- settle of a submitting row also match the owner of that write. A cancelled
+-- row for the same causal turn can be scheduled again. delivered, refused,
+-- and unconfirmed cannot. A submitting row another process still leases is
+-- not due until that lease's deadline.
 -- user_version stays 1. An earlier copy of this file is recreated.
 CREATE TABLE preference (
     id INTEGER PRIMARY KEY CHECK (id = 1),

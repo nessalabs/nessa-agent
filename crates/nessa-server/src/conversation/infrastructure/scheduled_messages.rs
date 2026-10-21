@@ -1040,6 +1040,78 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                     transaction.commit().map_err(failed)?;
                     return Ok(None);
                 }
+                // A disable leaves the causal row cancelled. The same turn can
+                // be scheduled again. A submit that finished cannot.
+                if status == "cancelled" {
+                    let submitting: bool = transaction
+                        .query_row(
+                            "SELECT EXISTS( \
+                                 SELECT 1 FROM message \
+                                 WHERE conversation = ?1 AND status = 'submitting' \
+                             )",
+                            params![draft.conversation],
+                            |row| row.get(0),
+                        )
+                        .map_err(failed)?;
+                    if submitting {
+                        transaction.commit().map_err(failed)?;
+                        return Ok(None);
+                    }
+                    cancel_matching(
+                        &transaction,
+                        "WHERE conversation = ?1 AND status IN ('scheduled', 'delivering')",
+                        &[&draft.conversation],
+                        ContinuationCause::Superseded.as_str(),
+                        &draft.actor,
+                        at_ms,
+                    )?;
+                    let changed = transaction
+                        .execute(
+                            "UPDATE message SET status = 'scheduled', due_at_ms = ?3, \
+                             agent = ?4, model = ?5, prompt = ?6, organization_id = ?7, \
+                             principal_id = ?8, surface_id = ?9, action_id = ?10, \
+                             initiation = ?11, grant_id = ?12, policy_revision = ?13, \
+                             tools_checked = ?14, fence_owner = '', fence_until_ms = 0, \
+                             retry_at_ms = 0, retry_failures = 0 \
+                             WHERE conversation = ?1 AND causal_execution = ?2 \
+                               AND status = 'cancelled'",
+                            params![
+                                draft.conversation,
+                                draft.causal_execution,
+                                due,
+                                draft.agent,
+                                draft.model,
+                                draft.prompt,
+                                draft.organization_id,
+                                draft.principal_id,
+                                draft.surface_id,
+                                draft.action_id,
+                                draft.initiation,
+                                draft.grant_id,
+                                draft.policy_revision.map(|value| value as i64),
+                                i64::from(draft.tools_checked),
+                            ],
+                        )
+                        .map_err(failed)?;
+                    if changed == 1 {
+                        audit(
+                            &transaction,
+                            &AuditChange {
+                                at_ms,
+                                conversation: &draft.conversation,
+                                causal_execution: &draft.causal_execution,
+                                execution_id: &execution_id,
+                                before_status: Some("cancelled"),
+                                after_status: "scheduled",
+                                cause: draft.cause.as_str(),
+                                actor: &draft.actor,
+                            },
+                        )?;
+                    }
+                    let conversation = draft.conversation.clone();
+                    transaction.commit().map_err(failed)?;
+                    return load_open(connection, &conversation);
+                }
                 if status != "scheduled" && status != "delivering" {
                     transaction.commit().map_err(failed)?;
                     return Ok(None);
@@ -1297,6 +1369,7 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         now_ms: u64,
         limit: usize,
     ) -> ConversationFuture<'_, Vec<ScheduledMessage>> {
+        let owner = self.owner.clone();
         self.run(move |connection| {
             let now = millis(now_ms)?;
             let transaction = connection.transaction().map_err(failed)?;
@@ -1345,12 +1418,13 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 .prepare(&format!(
                     "SELECT {MESSAGE_COLUMNS} FROM message \
                      WHERE status = 'delivering' \
-                        OR (status = 'submitting' AND retry_at_ms <= ?1) \
-                     ORDER BY due_at_ms LIMIT ?2"
+                        OR (status = 'submitting' AND retry_at_ms <= ?1 \
+                            AND (fence_until_ms <= ?1 OR fence_owner = ?2)) \
+                     ORDER BY due_at_ms LIMIT ?3"
                 ))
                 .map_err(failed)?;
             let already = statement
-                .query_map(params![now, limit as i64], read_message)
+                .query_map(params![now, owner, limit as i64], read_message)
                 .map_err(failed)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(failed)?;
@@ -1371,20 +1445,24 @@ impl ScheduledMessageStore for LocalScheduledMessages {
     }
 
     fn next_due(&self, now_ms: u64) -> ConversationFuture<'_, Option<u64>> {
+        let owner = self.owner.clone();
         self.run(move |connection| {
             let now = millis(now_ms)?;
             // A claim stops at its limit, and a failed outcome audit leaves the
-            // row delivering. Either one is already due. A submitting row is
-            // due only once its retry time has arrived; a later retry waits.
+            // row delivering. Either one is already due. A submitting row this
+            // process owns, or whose lease has expired, is due once its retry
+            // time has arrived. A live lease owned by someone else waits until
+            // that deadline, or until a later retry time.
             let pending: bool = connection
                 .query_row(
                     "SELECT EXISTS( \
                          SELECT 1 FROM message \
                          WHERE status = 'delivering' \
-                            OR (status = 'submitting' AND retry_at_ms <= ?1) \
                             OR (status = 'scheduled' AND due_at_ms <= ?1) \
+                            OR (status = 'submitting' AND retry_at_ms <= ?1 \
+                                AND (fence_until_ms <= ?1 OR fence_owner = ?2)) \
                      )",
-                    params![now],
+                    params![now, owner],
                     |row| row.get(0),
                 )
                 .map_err(failed)?;
@@ -1399,8 +1477,13 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                          UNION ALL \
                          SELECT retry_at_ms AS at_ms FROM message \
                           WHERE status = 'submitting' AND retry_at_ms > ?1 \
+                            AND (fence_until_ms <= ?1 OR fence_owner = ?2) \
+                         UNION ALL \
+                         SELECT MAX(retry_at_ms, fence_until_ms) AS at_ms FROM message \
+                          WHERE status = 'submitting' AND fence_until_ms > ?1 \
+                            AND fence_owner != ?2 \
                      )",
-                    params![now],
+                    params![now, owner],
                     |row| row.get(0),
                 )
                 .map_err(failed)?;
@@ -2586,6 +2669,109 @@ mod tests {
             .unwrap()
             .map(|row| row.unwrap())
             .collect()
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_row_is_scheduled_again_and_a_finished_row_is_not() {
+        let store = enabled_store().await;
+        store
+            .accept(draft("conversation", "causal", "exec-1", 50), 1)
+            .await
+            .unwrap();
+        assert!(!store.set_preference(false, person(), 2).await.unwrap());
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("cancelled")
+        );
+        assert!(store.set_preference(true, person(), 3).await.unwrap());
+        let revision = store.preference().await.unwrap().revision;
+        let mut again = draft("conversation", "causal", "exec-new", 90);
+        again.preference_revision = revision;
+        again.cause = ContinuationCause::PreferenceEnabled;
+        again.actor = person();
+        again.prompt = "again".into();
+        let reopened = store.accept(again, 4).await.unwrap().unwrap();
+        assert_eq!(reopened.execution_id, "exec-1");
+        assert_eq!(reopened.due_at_ms, 90);
+        assert_eq!(reopened.prompt, "again");
+        assert!(!reopened.delivering);
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("scheduled")
+        );
+        assert!(audits(&store).iter().any(|row| {
+            row.0 == "person"
+                && row.1 == "preference_enabled"
+                && row.2 == "cancelled"
+                && row.3 == "scheduled"
+        }));
+        for (conversation, causal, execution, outcome, cause) in [
+            (
+                "delivered-turn",
+                "causal-delivered",
+                "exec-delivered",
+                ScheduleSettlement::Delivered,
+                "delivered",
+            ),
+            (
+                "refused-turn",
+                "causal-refused",
+                "exec-refused",
+                ScheduleSettlement::Refused,
+                "revoked",
+            ),
+            (
+                "unconfirmed-turn",
+                "causal-unconfirmed",
+                "exec-unconfirmed",
+                ScheduleSettlement::Unconfirmed,
+                "submission_interrupted",
+            ),
+        ] {
+            let mut scheduled = draft(conversation, causal, execution, 50);
+            scheduled.preference_revision = revision;
+            store.accept(scheduled, 5).await.unwrap().unwrap();
+            store.claim_due(50, 4).await.unwrap();
+            store
+                .record_outcome(execution, outcome, cause, 6)
+                .await
+                .unwrap();
+            let mut retry = draft(conversation, causal, "exec-other", 90);
+            retry.preference_revision = revision;
+            retry.cause = ContinuationCause::PreferenceEnabled;
+            assert!(store.accept(retry, 7).await.unwrap().is_none());
+            assert_eq!(
+                store.status(execution).await.unwrap().as_deref(),
+                Some(outcome.status())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_live_foreign_lease_is_not_due_until_its_deadline() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("scheduled");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("scheduled-chat-messages.sqlite3");
+        let first = LocalScheduledMessages::open(&path).unwrap();
+        let second = LocalScheduledMessages::open(&path).unwrap();
+        let now = 1_000;
+        let deadline = now + super::FENCE_LEASE_MS;
+        first.set_preference(true, person(), 1).await.unwrap();
+        first
+            .accept(draft("conversation", "causal", "exec-1", now), 2)
+            .await
+            .unwrap();
+        first.claim_due(now, 4).await.unwrap();
+        assert!(first.begin_submit("exec-1", now).await.unwrap());
+        assert!(second.claim_due(now, 4).await.unwrap().is_empty());
+        assert_eq!(second.next_due(now).await.unwrap(), Some(deadline));
+        assert_eq!(first.next_due(now).await.unwrap(), Some(now));
+        let due = second.claim_due(deadline, 4).await.unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].execution_id, "exec-1");
+        assert_eq!(second.next_due(deadline).await.unwrap(), Some(deadline));
+        drop(directory);
     }
 
     #[tokio::test]

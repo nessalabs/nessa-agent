@@ -1268,6 +1268,44 @@ it("accepts required work beside a usage limit on a failed turn", () => {
   ).toThrow(/required-work failure/)
 })
 
+it("accepts the inclusive reset bound the schema publishes", () => {
+  const sample = view()
+  const limited = (resetsAtMs: number) => ({
+    ...sample,
+    messages: [
+      {
+        ...sample.messages[1],
+        parts: [],
+        status: "failed",
+        error: "Usage limit reached.",
+        usageLimit: {
+          provider: "claude",
+          recovery: "timed_reset",
+          resetsAtMs,
+        },
+      },
+    ],
+    pending: [],
+    permissions: [],
+    questions: [],
+    tools: [],
+  })
+  expect(
+    conversationView(limited(4_102_444_800_000), "conversation").messages[0]
+      ?.usageLimit?.resetsAtMs,
+  ).toBe(4_102_444_800_000)
+  expect(
+    conversationView(limited(1_704_067_200_000), "conversation").messages[0]
+      ?.usageLimit?.resetsAtMs,
+  ).toBe(1_704_067_200_000)
+  expect(() =>
+    conversationView(limited(4_102_444_800_001), "conversation"),
+  ).toThrow(/reset instant/)
+  expect(() =>
+    conversationView(limited(1_704_067_199_999), "conversation"),
+  ).toThrow(/reset instant/)
+})
+
 function protocolFile(path: string) {
   return JSON.parse(
     readFileSync(

@@ -567,7 +567,7 @@ export function conversationView(value: unknown, expected: string): Conversation
           typeof resetsAtMs !== "number" ||
           !Number.isSafeInteger(resetsAtMs) ||
           resetsAtMs < 1_704_067_200_000 ||
-          resetsAtMs >= 4_102_444_800_000
+          resetsAtMs > 4_102_444_800_000
         )
           throw new Error("Conversation usage limit has no reset instant")
       } else if (limit.resetsAtMs !== undefined) {
