@@ -215,6 +215,8 @@ flowchart LR
 | Bound | session close | Closed; `bind` stays closed | `close_refuses_the_stamp_and_a_later_bind` |
 | Closed session's stamp for A | a new lease binds A | Replaced, though both generations are 1 | `a_new_lease_refuses_the_same_generation_from_an_earlier_lease` |
 | Bound B after A | another lease with the same published id binds A then B | Replaced; the identity does not match | `a_replayed_lease_id_does_not_mint_the_current_stamp` |
+| Stamp or lease debug | print | The identity is absent | `a_stamp_debug_does_not_print_its_identity` |
+| Artifact gateway refusal | fetch | The fault is kept and status is asked again | `a_refused_artifact_is_an_authority_failure_and_a_transport_failure_is_not` |
 | Live row | page that omits that row | Stays Live | `catalogue_presence_names_a_fence_and_not_an_absent_row` |
 | Live row | deletion commit aborts | Stays Live | `a_deletion_that_does_not_commit_is_not_a_tombstone` |
 | Live row | deletion fence commits | Tombstone | `catalogue_presence_names_a_fence_and_not_an_absent_row` |

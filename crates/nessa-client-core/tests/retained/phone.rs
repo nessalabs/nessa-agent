@@ -93,6 +93,19 @@ fn a_replayed_lease_id_does_not_mint_the_current_stamp() {
 }
 
 #[test]
+fn a_stamp_debug_does_not_print_its_identity() {
+    let identity = uuid::Uuid::from_u128(0x1111_2222_3333_4444_5555_6666_7777_8888);
+    let mut lease = PhoneLease::new(uuid::Uuid::from_u128(1), identity);
+    let stamp = lease.bind("a").unwrap();
+    let stamp_debug = format!("{stamp:?}");
+    let lease_debug = format!("{lease:?}");
+    assert!(!stamp_debug.contains(&identity.to_string()));
+    assert!(!lease_debug.contains(&identity.to_string()));
+    assert!(stamp_debug.contains(&stamp.lease().to_string()));
+    assert!(stamp_debug.contains("a"));
+}
+
+#[test]
 fn close_refuses_the_stamp_and_a_later_bind() {
     let mut lease = lease(5);
     let stamp = lease.bind("a").unwrap();

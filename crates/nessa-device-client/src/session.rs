@@ -26,11 +26,11 @@ use nessa_client_core::{
         ProductWake, ThreadProductWake,
     },
     retained::{
-        ArtifactFetch, ArtifactRequest, CataloguePresence, FeedEvent, Pause, PhoneFence,
-        PhoneLease, PhoneStamp, ReadFailure, ReadReport, ReadStop, RetainedCache,
-        RetainedCataloguePage, RetainedDeviceReader, RetainedEnrollmentClient,
-        RetainedEnrollmentStatus, RetainedOwnerStatus, RetainedPurge, RetainedTranscript,
-        ThreadPause, HANDSHAKE,
+        ArtifactFault, ArtifactFaultKind, ArtifactFetch, ArtifactFreshness, ArtifactRequest,
+        CataloguePresence, FeedEvent, Pause, PhoneFence, PhoneLease, PhoneStamp, ReadFailure,
+        ReadReport, ReadStop, RetainedCache, RetainedCataloguePage, RetainedDeviceReader,
+        RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedOwnerStatus, RetainedPurge,
+        RetainedTranscript, ThreadPause, HANDSHAKE,
     },
 };
 use nessa_protocol::{
@@ -761,6 +761,16 @@ impl Driver {
         self.runtime.block_on(self.enrollment.shutdown());
     }
 }
+/// A gateway fault that is this device's authority being refused. Status is
+/// asked again, as it is after a refused catalogue read. A stop, a local
+/// match, and a transport failure are not.
+fn artifact_authority_refused(outcome: Result<ArtifactFreshness, ArtifactFault>) -> bool {
+    matches!(
+        outcome,
+        Err(fault) if matches!(fault.kind(), ArtifactFaultKind::Gateway(ReadFailure::Refused))
+    )
+}
+
 /// A status that produced no reader. A connector failure stays that failure.
 /// A completed status without an active reader has nothing to fetch with.
 fn absent_reader(status: &SessionStatus) -> SessionFailure {
@@ -1430,7 +1440,8 @@ impl NativeSession {
     /// A file already at the request's output is a local match and does not dial either.
     /// A stop already set, or set while that file is read, is `Stopped` and not a match.
     /// Elapsed time is this call on the session clock, including the status read
-    /// when the file is not already local.
+    /// when the file is not already local. A gateway authority refusal asks
+    /// status again, as a refused catalogue read does, unless the caller stopped.
     pub fn fetch_artifact(
         &self,
         stamp: &PhoneStamp,
@@ -1478,8 +1489,14 @@ impl NativeSession {
                 pause.as_ref(),
             )
             .map_err(SessionFailure::Cache)?;
+        let outcome = fetched.outcome();
+        // The same authority refusal as a catalogue read: ask status again so
+        // a revocation can purge and fence this publication. A stop does not.
+        if !stop.is_stopped() && artifact_authority_refused(outcome) {
+            let _ = driver.status();
+        }
         let elapsed = driver.clock.elapsed_ms().saturating_sub(started);
-        Ok(ArtifactFetch::decided(fetched.outcome(), elapsed))
+        Ok(ArtifactFetch::decided(outcome, elapsed))
     }
     /// Historical lookup remains available after key removal. This receiver
     /// selects original purge evidence, not read or command authority.

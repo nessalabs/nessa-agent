@@ -10,7 +10,9 @@ use nessa_auth::{
         CredentialId, ResourceId,
     },
 };
-use nessa_client_core::retained::{ArtifactFreshness, ArtifactRequest};
+use nessa_client_core::retained::{
+    ArtifactFault, ArtifactFaultKind, ArtifactFetch, ArtifactFreshness, ArtifactRequest,
+};
 use nessa_local_storage::create_directory_beneath;
 use std::fs;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -364,6 +366,30 @@ impl CacheFiles for BlindFiles {
             "cache metadata",
         ))
     }
+}
+
+#[test]
+fn a_refused_artifact_is_an_authority_failure_and_a_transport_failure_is_not() {
+    let refused = ArtifactFetch::decided(
+        Err(ArtifactFault::progress(
+            ArtifactFaultKind::Gateway(ReadFailure::Refused),
+            0,
+            0,
+        )),
+        1,
+    );
+    assert!(super::artifact_authority_refused(refused.outcome()));
+    let unreachable = ArtifactFetch::decided(
+        Err(ArtifactFault::progress(
+            ArtifactFaultKind::Gateway(ReadFailure::Unreachable),
+            1,
+            0,
+        )),
+        1,
+    );
+    assert!(!super::artifact_authority_refused(unreachable.outcome()));
+    let fresh = ArtifactFetch::decided(Ok(ArtifactFreshness::LocalMatch { bytes: 2 }), 1);
+    assert!(!super::artifact_authority_refused(fresh.outcome()));
 }
 
 #[test]

@@ -18,6 +18,7 @@
 use super::{cache_failure, ReadFailure, RetainedCache};
 use nessa_auth::domain::ResourceId;
 use nessa_sync::replication::domain::Id;
+use std::fmt;
 use uuid::Uuid;
 
 pub use crate::read_only_sync::application::CataloguePresence;
@@ -38,8 +39,9 @@ pub enum PhoneFence {
 /// The lease, receiver, and generation a publication was admitted under.
 /// Only `PhoneLease::bind` and `PhoneLease::stamp` mint one. The published
 /// lease id is not enough to mint another: `accept` also requires the identity
-/// the minting lease holds, and that identity has no getter.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// the minting lease holds, and that identity has no getter. `Debug` does not
+/// print it.
+#[derive(Clone, Eq, PartialEq)]
 pub struct PhoneStamp {
     lease: Uuid,
     identity: Uuid,
@@ -61,9 +63,18 @@ impl PhoneStamp {
         &self.receiver
     }
 }
+impl fmt::Debug for PhoneStamp {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PhoneStamp")
+            .field("lease", &self.lease)
+            .field("generation", &self.generation)
+            .field("receiver", &self.receiver)
+            .finish()
+    }
+}
 
 /// One phone scope's publication generation.
-#[derive(Debug)]
 pub struct PhoneLease {
     lease: Uuid,
     identity: Uuid,
@@ -155,6 +166,17 @@ impl PhoneLease {
             Some(_) => Err(PhoneFence::Replaced),
             None => Err(PhoneFence::Unbound),
         }
+    }
+}
+impl fmt::Debug for PhoneLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PhoneLease")
+            .field("lease", &self.lease)
+            .field("generation", &self.generation)
+            .field("receiver", &self.receiver)
+            .field("closed", &self.closed)
+            .finish()
     }
 }
 impl RetainedCache {
