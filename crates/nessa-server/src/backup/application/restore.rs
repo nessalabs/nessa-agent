@@ -32,8 +32,8 @@ use super::verification_format::VerificationFormat;
 use crate::backup::domain::{
     decode_deferred, deferred_for_open, deferred_session_name, encode_journal,
     extra_session_allowed, paths_are_distinct, posture, read_journal, receipt_is_usable,
-    relative_path_is_safe, DeferredLine, DeletionLog, Fingerprint, Freshness, Journal,
-    ManifestListing, Posture, RestoreFault, SealedFile,
+    relative_path_is_safe, restore_lock_path, session_sidecar, DeferredLine, DeletionLog,
+    Fingerprint, Freshness, Journal, ManifestListing, Posture, RestoreFault, SealedFile,
 };
 
 /// Drop releases the restore-root lock.
@@ -93,6 +93,8 @@ pub struct LoadedTree {
     pub journal: String,
     pub files: Vec<SealedFile>,
     pub extras: Vec<String>,
+    /// Sidecars of a session file. Anything else with a helper suffix is in `files`.
+    pub helpers: Vec<String>,
 }
 
 /// Turns a verified bundle into the files quarantine will seal.
@@ -189,7 +191,7 @@ pub fn stage_quarantine(
         initiator: kind,
         policies: &policies,
     };
-    if let Err(error) = paths_are_distinct(&quarantine, &live) {
+    if let Err(error) = roots_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
     }
     let _hold = match hold_roots(layout, &quarantine, &live) {
@@ -336,7 +338,7 @@ pub fn accept_quarantine(
         initiator: kind,
         policies: &policies,
     };
-    if let Err(error) = paths_are_distinct(&quarantine, &live) {
+    if let Err(error) = roots_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
     }
     let _hold = match hold_roots(layout, &quarantine, &live) {
@@ -601,6 +603,14 @@ fn seal_matches(
     loaded: &LoadedTree,
     deferred: &[DeferredLine],
 ) -> Result<(), RestoreFault> {
+    for helper in &loaded.helpers {
+        let Some(session) = session_sidecar(helper) else {
+            return Err(RestoreFault::Tamper);
+        };
+        if !extra_session_allowed(&session, deferred) {
+            return Err(RestoreFault::Tamper);
+        }
+    }
     if loaded.files.len() != journal.files.len() {
         return Err(RestoreFault::Tamper);
     }
@@ -722,6 +732,14 @@ fn sessions_match(
 struct HeldRoots {
     _earlier: Box<dyn RestoreHold>,
     _later: Box<dyn RestoreHold>,
+}
+
+/// The two roots, and each root's lock file, are different identities.
+fn roots_are_distinct(quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
+    paths_are_distinct(quarantine, live)?;
+    paths_are_distinct(&restore_lock_path(quarantine)?, live)?;
+    paths_are_distinct(&restore_lock_path(live)?, quarantine)?;
+    Ok(())
 }
 
 fn hold_roots(

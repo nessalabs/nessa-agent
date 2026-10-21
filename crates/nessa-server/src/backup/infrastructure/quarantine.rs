@@ -23,9 +23,10 @@ use crate::backup::application::{
 use crate::backup::domain::{
     conversation_is_fenced, credential_is_fenced, encode_deferred, fresher_fences,
     leases_to_interrupt, metadata_omitted, normalized_root, paths_are_distinct,
-    relative_path_is_safe, share_grant_is_fenced, CredentialKind, DeferredEntry, DeferredLine,
-    DeletionFence, DeletionLog, FenceKind, Fingerprint, LeaseMark, ManifestListing, MetadataFacts,
-    MetadataRow, RestoreFault, SealedFile, StoreKind, IDENTITY_BODY, MAX_NAME_BYTES, REPLAY_BODY,
+    relative_path_is_safe, restore_lock_path, session_sidecar, share_grant_is_fenced,
+    CredentialKind, DeferredEntry, DeferredLine, DeletionFence, DeletionLog, FenceKind,
+    Fingerprint, LeaseMark, ManifestListing, MetadataFacts, MetadataRow, RestoreFault, SealedFile,
+    StoreKind, IDENTITY_BODY, MAX_NAME_BYTES, REPLAY_BODY,
 };
 
 use super::log::{authenticate_inventory, exclusive, persist};
@@ -453,7 +454,9 @@ impl QuarantineLayout for DirectoryQuarantine {
             return Err(RestoreFault::QuarantineOccupied);
         }
         let partial = partial_path(quarantine)?;
-        if partial == live {
+        // The same identity as the two roots. A case alias of this directory
+        // is the live path on Windows and macOS, and must not be deleted.
+        if paths_are_distinct(&partial, live).is_err() {
             return Err(RestoreFault::Paths);
         }
         let _ = fs::remove_dir_all(&partial);
@@ -473,11 +476,13 @@ impl QuarantineLayout for DirectoryQuarantine {
         let journal = fs::read_to_string(&journal_path).map_err(|_| RestoreFault::Unreadable)?;
         let mut files = Vec::new();
         let mut extras = Vec::new();
-        walk(root, root, &mut files, &mut extras)?;
+        let mut helpers = Vec::new();
+        walk(root, root, &mut files, &mut extras, &mut helpers)?;
         Ok(LoadedTree {
             journal,
             files,
             extras,
+            helpers,
         })
     }
 
@@ -620,24 +625,34 @@ impl QuarantineLayout for DirectoryQuarantine {
     }
 
     fn hold(&self, root: &Path) -> Result<Box<dyn RestoreHold>, RestoreFault> {
-        let parent = root.parent().ok_or(RestoreFault::Paths)?;
-        let mut name = root.file_name().ok_or(RestoreFault::Paths)?.to_os_string();
-        name.push(".restore-lock");
-        let file = open(&parent.join(name), OpenMode::OpenOrCreate)
-            .map_err(|_| RestoreFault::Unreadable)?;
+        let path = restore_lock_path(root)?;
+        let file = open(&path, OpenMode::OpenOrCreate).map_err(|_| RestoreFault::Unreadable)?;
         file.lock().map_err(|_| RestoreFault::Unreadable)?;
         Ok(Box::new(RootHold { _file: file }))
     }
 
     fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
         let path = ready_path(root);
+        let temp = root.join("accept-ready.partial");
+        if temp.exists() {
+            fs::remove_file(&temp).map_err(|_| RestoreFault::Unreadable)?;
+        }
         if path.exists() {
             fs::remove_file(&path).map_err(|_| RestoreFault::Unreadable)?;
         }
-        let mut file = open(&path, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)?;
-        file.write_all(b"ready\n")
-            .map_err(|_| RestoreFault::Unreadable)?;
-        file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
+        let mut file = open(&temp, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)?;
+        let synced = file.write_all(b"ready\n").and_then(|_| file.sync_all());
+        drop(file);
+        if synced.is_err() {
+            clear_ready_file(&temp);
+            clear_ready_file(&path);
+            return Err(RestoreFault::Unreadable);
+        }
+        if fs::rename(&temp, &path).is_err() {
+            clear_ready_file(&temp);
+            clear_ready_file(&path);
+            return Err(RestoreFault::Unreadable);
+        }
         Ok(())
     }
 
@@ -764,11 +779,19 @@ impl Drop for PartialTree {
     }
 }
 
+fn clear_ready_file(path: &Path) {
+    let _ = fs::remove_file(path);
+    if path.is_file() {
+        let _ = fs::OpenOptions::new().write(true).truncate(true).open(path);
+    }
+}
+
 fn walk(
     root: &Path,
     directory: &Path,
     files: &mut Vec<SealedFile>,
     extras: &mut Vec<String>,
+    helpers: &mut Vec<String>,
 ) -> Result<(), RestoreFault> {
     for entry in fs::read_dir(directory).map_err(|_| RestoreFault::Unreadable)? {
         let entry = entry.map_err(|_| RestoreFault::Unreadable)?;
@@ -778,19 +801,18 @@ fn walk(
             return Err(RestoreFault::Tamper);
         }
         if meta.is_dir() {
-            walk(root, &path, files, extras)?;
+            walk(root, &path, files, extras, helpers)?;
             continue;
         }
         if !meta.is_file() {
             return Err(RestoreFault::Tamper);
         }
         let relative = relative_to(root, &path)?;
-        if relative == "journal.txt"
-            || relative == "accept-ready"
-            || relative.ends_with(".partial")
-            || relative.ends_with(".rejected")
-            || relative.ends_with(".publication")
-        {
+        if relative == "journal.txt" || relative == "accept-ready" {
+            continue;
+        }
+        if session_sidecar(&relative).is_some() {
+            helpers.push(relative);
             continue;
         }
         let fingerprint = hash_file(&path)?;
@@ -1192,6 +1214,20 @@ fn a_sealed_audit_names_the_journal_digest() {
     assert!(audit.sealed("quarantine", "digest-a").unwrap());
     assert!(!audit.sealed("quarantine", "digest-b").unwrap());
     assert!(!audit.sealed("other", "digest-a").unwrap());
+}
+
+#[test]
+fn a_partial_readiness_file_is_not_the_marker() {
+    let root = tempfile::tempdir().unwrap();
+    let tree = root.path().join("quarantine");
+    fs::create_dir(&tree).unwrap();
+    fs::write(tree.join("accept-ready.partial"), b"ready\n").unwrap();
+    assert!(!DirectoryQuarantine.ready(&tree).unwrap());
+    DirectoryQuarantine.mark_ready(&tree).unwrap();
+    assert!(DirectoryQuarantine.ready(&tree).unwrap());
+    assert!(!tree.join("accept-ready.partial").exists());
+    clear_ready_file(&tree.join("accept-ready"));
+    assert!(!DirectoryQuarantine.ready(&tree).unwrap());
 }
 
 /// The ended line is the environment ledger's `ended` record.

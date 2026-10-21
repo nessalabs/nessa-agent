@@ -244,8 +244,18 @@ pub fn metadata_omitted(
     }
 }
 
+/// The lock file for `root`. It is a sibling of `root`, so it has to stay
+/// distinct from the other restore root under the same path identity.
+pub fn restore_lock_path(root: &Path) -> Result<PathBuf, RestoreFault> {
+    let parent = root.parent().ok_or(RestoreFault::Paths)?;
+    let mut name = root.file_name().ok_or(RestoreFault::Paths)?.to_os_string();
+    name.push(".restore-lock");
+    Ok(parent.join(name))
+}
+
 /// The two roots of a restore. Neither may be the other, or sit inside it.
-/// `.` and `..` are collapsed before the comparison.
+/// `.` and `..` are collapsed before the comparison. ASCII case folds on
+/// Windows and macOS.
 pub fn paths_are_distinct(quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
     let quarantine = normalized_root(quarantine)?;
     let live = normalized_root(live)?;
@@ -551,6 +561,22 @@ pub fn deferred_session_name(conversation_id: &str) -> Result<String, RestoreFau
     ))
 }
 
+/// A helper beside one session file: `sessions/<id>.sqlite3` plus
+/// `.partial`, `.rejected`, or `.publication`. Any other suffix is a sealed file.
+pub fn session_sidecar(relative: &str) -> Option<String> {
+    let session = relative
+        .strip_suffix(".partial")
+        .or_else(|| relative.strip_suffix(".rejected"))
+        .or_else(|| relative.strip_suffix(".publication"))?;
+    if !session.starts_with("sessions/")
+        || !session.ends_with(".sqlite3")
+        || !relative_path_is_safe(session)
+    {
+        return None;
+    }
+    Some(session.to_owned())
+}
+
 /// A file accept did not seal. Only a deferred conversation's session file qualifies.
 pub fn extra_session_allowed(relative: &str, deferred: &[DeferredLine]) -> bool {
     deferred
@@ -756,6 +782,25 @@ mod tests {
         } else {
             assert!(paths_are_distinct(&root.join("Restore"), &root.join("restore")).is_ok());
         }
+        let quarantine_lock = restore_lock_path(&quarantine).unwrap();
+        assert_eq!(
+            paths_are_distinct(&quarantine_lock, &quarantine_lock).unwrap_err(),
+            RestoreFault::Paths
+        );
+        let partial = root.join("q.partial-1-1");
+        if cfg!(any(windows, target_os = "macos")) {
+            assert_eq!(
+                paths_are_distinct(&partial, &root.join("Q.partial-1-1")).unwrap_err(),
+                RestoreFault::Paths
+            );
+        } else {
+            assert!(paths_are_distinct(&partial, &root.join("Q.partial-1-1")).is_ok());
+        }
+        assert_eq!(
+            session_sidecar("sessions/conv-bulk.sqlite3.publication").as_deref(),
+            Some("sessions/conv-bulk.sqlite3")
+        );
+        assert!(session_sidecar("records/share-grants/revoked.publication").is_none());
         assert!(receipt_is_usable("stopped-host-1"));
         assert!(!receipt_is_usable(""));
         assert!(!receipt_is_usable("has\nline"));

@@ -936,6 +936,50 @@ async fn a_tampered_quarantine_is_not_promoted() {
 }
 
 #[tokio::test]
+async fn a_lock_file_is_not_the_live_path() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let keep = tempfile::tempdir().unwrap();
+    let quarantine = keep.path().join("q");
+    let live = keep.path().join("q.restore-lock");
+    let error = stage(
+        &bundle,
+        &quarantine,
+        &live,
+        &MemoryAudit::open(),
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Paths);
+    assert!(!live.exists());
+}
+
+#[tokio::test]
+async fn an_injected_publication_suffix_is_not_promoted() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let audit = MemoryAudit::open();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &audit,
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap();
+    let injected = place
+        .quarantine
+        .join("records/share-grants/revoked.publication");
+    fs::create_dir_all(injected.parent().unwrap()).unwrap();
+    fs::write(&injected, b"not-a-session\n").unwrap();
+    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
+    assert_eq!(error, RestoreFault::Tamper);
+    assert!(!place.live.exists());
+    assert!(injected.is_file());
+}
+
+#[tokio::test]
 async fn a_resealed_quarantine_is_not_promoted() {
     let bundle = publish(note_bundle_rows(), vec![], None).await;
     let place = roots();

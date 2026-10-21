@@ -82,7 +82,7 @@ holds the live path's lock across that rename. A quarantine is promotable
 only after its sealed audit is stored, and that line names the digest of the
 journal stage wrote. A journal rewritten to match a replaced file is refused.
 A failed publish retires the temp name and the final name independently. The
-publication id comes from an injected port; the OS adapter reads the randomness. The fetch checks the session with
+publication id comes from an injected port; the OS adapter reads the randomness. A derived partial directory, lock file, session sidecar, and readiness marker each have one identity. A lookalike name is sealed data, or a path collision, and is not that helper. The fetch checks the session with
 the restore layout, and a fetch that cannot be audited removes, moves, or
 empties that file. Emptying truncates the file directly, because the
 storage opener refuses a copy it did not create. When that file still

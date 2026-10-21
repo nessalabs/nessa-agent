@@ -77,6 +77,10 @@ different digest.
 | Publication id | The id from the publication-id port. The OS adapter reads 16 random bytes | Attestations are that id | Entropy failure retires the published file |
 | Sealed journal | The audit. Attestations are the digest of the journal bytes stage wrote | `absent → verified`, cause `sealed` | |
 | Journal replaced and recomputed so its own seal matches | The quarantine. Accept does not rename | `unchanged → unchanged` | Tamper. The audit still names the journal stage wrote |
+| Derived partial directory is the live path, including an ASCII case alias on Windows or macOS | The live path. The partial directory is not deleted | `unchanged → unchanged` | Paths |
+| One root's lock file is the other root | Neither root is created as a lock file | `unchanged → unchanged` | Paths |
+| A file whose name ends in `.publication` outside `sessions/<id>.sqlite3` | The quarantine. Accept does not rename | `unchanged → unchanged` | Tamper. The file is part of the seal |
+| Readiness bytes synced, then renamed to `accept-ready` | The marker. A sync failure deletes the temporary file | The sealed line stays. The marker is absent | The error. A partial file is not readiness |
 | Quarantine rename whose parent sync fails, and the tree is removed | No quarantine | `unchanged → unchanged` | Unreadable |
 | Quarantine rename whose parent sync fails, and the tree remains | The quarantine, unready | `absent → unready`, cause `retained` | Retained. Not an unchanged refusal |
 
@@ -217,6 +221,13 @@ different digest.
   published file is retired and the open does not succeed.
   `a_port_supplied_publication_id_is_the_one_the_audit_names`,
   `a_failed_publication_id_retires_the_published_session`
+- A derived name uses the same path identity as a root. The partial directory
+  is not deleted when it is the live path. A root's lock file is not the
+  other root. A helper suffix is a sidecar only beside `sessions/<id>.sqlite3`
+  for a deferred conversation. The readiness marker is the final name after
+  its bytes are synced. `a_lock_file_is_not_the_live_path`,
+  `an_injected_publication_suffix_is_not_promoted`,
+  `paths_and_receipts_are_constrained`
 
 ## Decisions that bound this
 
