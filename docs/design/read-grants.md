@@ -122,7 +122,7 @@ Every read path asks it:
 | A device's `conversation.recordsHead` and `recordsPage` | `AdmitPassiveRead::execute` → `conversation.read` |
 | A device's catalogue head, manifest and resolve | the store's head, page and resolve, narrowed in SQL (the head over granted rows and the reader's own grant changes); each entry admitted by `catalogue.entry` |
 | `conversation.read` and every view subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_conversation` → `PairedAccess::admit(conversation.read)` |
-| `conversation.list`, `conversation.observe`, every list subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_list`: the owner's surfaces only |
+| `conversation.list`, `conversation.observe`, every list subscription batch (`subscription::authorize_batch`) | `product::read_access::admit_list`: owner surfaces or a paired device admitted by `grant.list`, with the device's catalogue narrowed to its grants; peer gateways are refused |
 
 The catalogue is narrowed in SQL rather than filtered after the read, because
 a filtered page must still be a whole page: a page of 200 rows that loses 199
