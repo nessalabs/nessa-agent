@@ -500,7 +500,24 @@ async fn closing_recovery_after_rebind(withheld: bool) {
         .active_lifetime_for_session(&conversation_session(&child_id))
         .unwrap();
     drop(p);
-    retire(service, storage, metadata).await;
+    if withheld {
+        let Err(ConversationError::Retirement(failures)) = service.shutdown().await else {
+            panic!("shutdown must retain and report unanswered environment cleanup");
+        };
+        assert_eq!(failures.len(), 2);
+        for id in [&parent, &child_id] {
+            assert!(failures
+                .iter()
+                .any(|(target, error)| target == &id.to_string()
+                    && matches!(error, AgentError::CleanupUncertain)));
+        }
+        drop(service);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+        drop(metadata);
+    } else {
+        retire(service, storage, metadata).await;
+    }
     let command = || CloseCommand {
         lifetime: lifetime.clone(),
         cause: LifetimeCause::HostClose,

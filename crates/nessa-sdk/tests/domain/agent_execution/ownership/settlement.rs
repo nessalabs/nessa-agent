@@ -311,3 +311,50 @@ fn absence_proof_rejects_foreign_request_and_restored_contradictions_without_rep
         .note_unbound_root(&life("child"), &close_id("child-close"))
         .is_err());
 }
+
+#[test]
+fn cleanup_targets_distinguish_owner_evidence_from_coordinator_audit_debt() {
+    for evidence in [EvidenceFact::Pending, EvidenceFact::Failed] {
+        let mut graph = closing();
+        assert_eq!(graph.cleanup_targets(&life("root")), vec![life("root")]);
+        observed(&mut graph, PhysicalFact::Failed, EvidenceFact::Acknowledged);
+        assert_eq!(graph.cleanup_targets(&life("root")), vec![life("root")]);
+        let released = observed(&mut graph, PhysicalFact::Released, evidence);
+        assert!(graph.physical_targets(&life("root")).is_empty());
+        graph
+            .acknowledge_observation(&released, EvidenceFact::Acknowledged)
+            .unwrap();
+        assert_eq!(graph.cleanup_targets(&life("root")), vec![life("root")]);
+        let mut graph = OwnershipGraph::restore(graph.snapshot());
+        assert!(graph.refusal().is_none());
+        assert_eq!(graph.cleanup_targets(&life("root")), vec![life("root")]);
+        observed(
+            &mut graph,
+            PhysicalFact::Released,
+            EvidenceFact::Acknowledged,
+        );
+        assert!(graph.cleanup_targets(&life("root")).is_empty());
+        assert!(
+            graph
+                .prepare_completion(&life("root"), &close_id("close"))
+                .is_err(),
+            "earlier coordinator observation debt remains independent"
+        );
+    }
+    let mut graph = closing();
+    let record = observed(
+        &mut graph,
+        PhysicalFact::Released,
+        EvidenceFact::Acknowledged,
+    );
+    graph
+        .acknowledge_observation(&record, EvidenceFact::Failed)
+        .unwrap();
+    assert!(graph.cleanup_targets(&life("root")).is_empty());
+    let mut graph = closing();
+    graph
+        .note_unbound_root(&life("root"), &close_id("close"))
+        .unwrap();
+    assert!(graph.cleanup_targets(&life("root")).is_empty());
+    assert!(graph.cleanup_targets(&life("foreign")).is_empty());
+}

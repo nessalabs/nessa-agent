@@ -190,11 +190,20 @@ struct PublishPause {
     release: Notify,
 }
 
+/// Which capability owns whole-lifetime physical cleanup. Binding a resource
+/// owner only relinquishes attachment authority; restored absence cannot grant it.
+#[derive(Clone, Copy)]
+pub(super) enum CleanupOwner {
+    Attachment,
+    Resources,
+}
+
 struct LifetimeGate {
     inner: Weak<Shared>,
     lifetime: AgentLifetimeId,
     scope: Arc<Mutex<()>>,
     sealed: Arc<AtomicBool>,
+    attachment_only: AtomicBool,
 }
 
 struct InflightGuard {
@@ -531,6 +540,14 @@ impl OwnershipCoordinator {
                 .lock()
                 .expect("bound lifetimes")
                 .insert(lifetime.clone());
+            self.inner
+                .gates
+                .lock()
+                .expect("lifetime gates")
+                .get(&lifetime)
+                .expect("admitted lifetime gate")
+                .attachment_only
+                .store(false, Ordering::Release);
             owned.insert(lifetime, resources);
             Ok(())
         });
@@ -853,13 +870,20 @@ impl Shared {
         }
     }
 
-    pub(super) fn remember(&self, inner: Weak<Shared>, lifetime: AgentLifetimeId, sealed: bool) {
+    pub(super) fn remember(
+        &self,
+        inner: Weak<Shared>,
+        lifetime: AgentLifetimeId,
+        sealed: bool,
+        cleanup: CleanupOwner,
+    ) {
         let flag = Arc::new(AtomicBool::new(sealed));
         let gate = Arc::new(LifetimeGate {
             inner,
             lifetime: lifetime.clone(),
             scope: Arc::clone(&self.scope),
             sealed: Arc::clone(&flag),
+            attachment_only: AtomicBool::new(matches!(cleanup, CleanupOwner::Attachment)),
         });
         self.seals
             .lock()
@@ -1110,7 +1134,7 @@ impl Shared {
                     .lock()
                     .expect("inflight spawns")
                     .insert(child.clone());
-                self.remember(_weak, child.clone(), false);
+                self.remember(_weak, child.clone(), false, CleanupOwner::Resources);
                 let token = self
                     .publication
                     .lock()
@@ -1500,37 +1524,50 @@ impl Shared {
         report: super::ports::ResourceReport,
     ) -> Result<(), OwnershipFailure> {
         self.with_graph(|graph| {
-            let _retained =
-                graph.apply_report(root, operation, target, report.physical, report.evidence)?;
-            if report.physical == PhysicalFact::Released {
-                let request = graph
-                    .snapshot()
-                    .spawns
-                    .iter()
-                    .find(|row| {
-                        &row.child_lifetime == target
-                            && matches!(
-                                row.progress,
-                                SpawnProgress::StartupFailed {
-                                    known: KnownMilestone::Reserved
-                                }
-                            )
-                    })
-                    .map(|row| row.binding.request_id.clone());
-                if let Some(request) = request {
-                    let _ended = graph.advance_spawn(
-                        &request,
-                        SpawnProgress::Ended {
-                            known: KnownMilestone::Reserved,
-                        },
-                    )?;
-                }
-            }
-            Ok::<_, OwnershipError>(())
+            self.install_report_on_graph(graph, root, operation, target, report)
         })
         .map_err(OwnershipFailure::Domain)?;
         if report.physical == PhysicalFact::Released {
             self.release_slot(target);
+        }
+        Ok(())
+    }
+
+    // Caller holds the existing graph/admission scope, including authority
+    // selection when a bare attachment publishes its own resource observation.
+    fn install_report_on_graph(
+        &self,
+        graph: &mut OwnershipGraph,
+        root: &AgentLifetimeId,
+        operation: &CloseOperationId,
+        target: &AgentLifetimeId,
+        report: super::ports::ResourceReport,
+    ) -> Result<(), OwnershipError> {
+        let _retained =
+            graph.apply_report(root, operation, target, report.physical, report.evidence)?;
+        if report.physical == PhysicalFact::Released {
+            let request = graph
+                .snapshot()
+                .spawns
+                .iter()
+                .find(|row| {
+                    &row.child_lifetime == target
+                        && matches!(
+                            row.progress,
+                            SpawnProgress::StartupFailed {
+                                known: KnownMilestone::Reserved
+                            }
+                        )
+                })
+                .map(|row| row.binding.request_id.clone());
+            if let Some(request) = request {
+                let _ended = graph.advance_spawn(
+                    &request,
+                    SpawnProgress::Ended {
+                        known: KnownMilestone::Reserved,
+                    },
+                )?;
+            }
         }
         Ok(())
     }
@@ -2094,7 +2131,7 @@ impl Shared {
 
     fn unclaim_unreleased(&self, root: &AgentLifetimeId) {
         self.with_graph(|graph| {
-            let pending = graph.physical_targets(root);
+            let pending = graph.cleanup_targets(root);
             let mut claimed = self.claimed.lock().expect("close claims");
             for id in pending {
                 claimed.remove(&id);
@@ -2150,7 +2187,7 @@ impl Shared {
         loop {
             let notified = self.notify.notified();
             tokio::pin!(notified);
-            let targets = self.with_graph(|graph| graph.physical_targets(&root));
+            let targets = self.with_graph(|graph| graph.cleanup_targets(&root));
             let mut processed = false;
             for target in &targets {
                 if external.load(Ordering::Acquire) && target == &root {
@@ -2207,7 +2244,7 @@ impl Shared {
     }
 
     fn drain_blocked(&self, root: &AgentLifetimeId, external: &AtomicBool) -> bool {
-        let targets = self.with_graph(|graph| graph.physical_targets(root));
+        let targets = self.with_graph(|graph| graph.cleanup_targets(root));
         let external_root =
             external.load(Ordering::Acquire) && targets.iter().any(|target| target == root);
         if external_root || self.subtree_inflight(root) {
@@ -2347,6 +2384,7 @@ impl Shared {
                     refused
                         || row.state != LifetimeState::Open
                         || nonrunnable_children.contains(&row.lifetime_id),
+                    CleanupOwner::Resources,
                 );
             }
             if release_uncertain {
@@ -2528,34 +2566,56 @@ impl OwnedLifetime for LifetimeGate {
         let Some(shared) = self.inner.upgrade() else {
             return;
         };
-        let physical = if released {
-            PhysicalFact::Released
-        } else {
-            PhysicalFact::Failed
-        };
-        let evidence_fact = if evidence_acknowledged {
-            EvidenceFact::Acknowledged
-        } else {
-            EvidenceFact::Failed
-        };
-        let owner = shared.with_graph(|graph| graph.close_owner(&self.lifetime));
-        if let Some(owner) = owner {
-            let operation = shared.with_graph(|graph| graph.close_operation(&owner).cloned());
-            if let Some(operation) = operation {
-                let _ = shared.install_report(
-                    &owner,
-                    &operation,
-                    &self.lifetime,
-                    super::ports::ResourceReport {
-                        physical,
-                        evidence: evidence_fact,
-                    },
-                );
-                // The resource close can be awaiting this callback. Publish its
-                // observation and let the owned generation reconcile it without
-                // making the producer join its own pending resource future.
-                let _ = shared.start_drain(owner.clone(), false);
+        let mut installed_release = false;
+        let owner = shared.with_graph(|graph| {
+            // Quiescent restoration replaces gates. An old capability cannot
+            // publish into, or hand off a phase of, the reconstructed lifetime.
+            if !shared
+                .gates
+                .lock()
+                .expect("lifetime gates")
+                .get(&self.lifetime)
+                .is_some_and(|current| std::ptr::eq(current.as_ref(), self))
+            {
+                return None;
             }
+            let owner = graph.close_owner(&self.lifetime)?;
+            let operation = graph.close_operation(&owner)?.clone();
+            if self.attachment_only.load(Ordering::Acquire) {
+                let report = super::ports::ResourceReport {
+                    physical: if released {
+                        PhysicalFact::Released
+                    } else {
+                        PhysicalFact::Failed
+                    },
+                    evidence: if evidence_acknowledged {
+                        EvidenceFact::Acknowledged
+                    } else {
+                        EvidenceFact::Failed
+                    },
+                };
+                let installed = shared
+                    .install_report_on_graph(graph, &owner, &operation, &self.lifetime, report)
+                    .is_ok();
+                installed_release = installed && released;
+            }
+            Some(owner)
+        });
+        if installed_release {
+            shared.release_slot(&self.lifetime);
+        }
+        if let Some(owner) = owner {
+            // No graph lock while acquiring drains: registration takes them in
+            // the opposite order. A descendant cannot release its ancestor's
+            // still-running external attachment phase.
+            if owner == self.lifetime {
+                if let Some(drain) = shared.drains.lock().expect("close drains").get(&owner) {
+                    drain.external.store(false, Ordering::Release);
+                }
+            }
+            // The actual resource close may be waiting for this callback.
+            // Hand off and notify; do not await that close here.
+            let _ = shared.start_drain(owner, false);
         }
         shared.notify.notify_waiters();
     }
@@ -3051,9 +3111,12 @@ mod lifetime_races {
             let _ = graph
                 .open_root(session.clone(), root.clone(), Initiator::Runtime)
                 .unwrap();
-            coordinator
-                .inner
-                .remember(Arc::downgrade(&coordinator.inner), root.clone(), false);
+            coordinator.inner.remember(
+                Arc::downgrade(&coordinator.inner),
+                root.clone(),
+                false,
+                CleanupOwner::Attachment,
+            );
         });
         assert_eq!(coordinator.active_root_for_session(&session), None);
 

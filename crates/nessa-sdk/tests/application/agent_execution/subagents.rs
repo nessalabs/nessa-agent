@@ -1898,3 +1898,5 @@ mod transfers;
 mod preparation;
 
 mod capacity;
+
+mod resource_authority;

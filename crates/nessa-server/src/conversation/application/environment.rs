@@ -1236,6 +1236,11 @@ impl LiveLease {
         // audit, a failed save or any other failure of the close is its own
         // fact and stays in the answer.
         let result = match (result, evidence, release) {
+            (Ok(_), None, _) => Err(AgentError::CleanupUncertain),
+            (Err(error), None, _) => Err(AgentError::MultipleOperationFailures {
+                first_error: Box::new(error),
+                subsequent_error: Box::new(AgentError::CleanupUncertain),
+            }),
             (Err(error), Some(LeaseCleanup::Confirmed { forced }), LeaseRelease::Released(_))
                 if confirmed_despite(&error).is_none() =>
             {

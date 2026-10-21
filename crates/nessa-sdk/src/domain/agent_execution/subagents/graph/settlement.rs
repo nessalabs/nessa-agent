@@ -43,6 +43,31 @@ impl OwnershipGraph {
         self.unsettled_targets(root)
     }
 
+    /// Resource owners this close must join for physical release or their own evidence.
+    /// A released owner with unacknowledged evidence remains retryable; coordinator
+    /// audit debt alone does not repeat resource cleanup.
+    pub fn cleanup_targets(&self, root: &AgentLifetimeId) -> Vec<AgentLifetimeId> {
+        let mut targets = self.physical_targets(root);
+        targets.extend(self.settlements.values().filter_map(|settlement| {
+            let row = &settlement.row;
+            if &row.close_lifetime != root
+                || self.lifetime_state(&row.target) != Some(LifetimeState::Closing)
+                || row.physical != PhysicalFact::Released
+                || self.close_owner(&row.target).as_ref() != Some(root)
+            {
+                return None;
+            }
+            let SettlementProof::Resource(slots) = &row.proof else {
+                return None;
+            };
+            slots[physical_slot(PhysicalFact::Released)]
+                .as_ref()
+                .filter(|observation| !observation.provider_acknowledged)
+                .map(|_| row.target.clone())
+        }));
+        targets
+    }
+
     /// Independently closing descendants whose own Completion this root must join.
     pub fn independent_closes(&self, root: &AgentLifetimeId) -> Vec<AgentLifetimeId> {
         self.lifetimes

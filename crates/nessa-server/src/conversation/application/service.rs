@@ -6055,8 +6055,10 @@ impl ConversationService {
         for slot in slots {
             let holds = match slot.value.get() {
                 None => true,
-                Some(Ok(live)) => live.agent.may_hold_provider_resources(),
-                Some(Err(failed)) => failed.holds,
+                Some(Ok(live)) => {
+                    live.agent.may_hold_provider_resources() || live.lease.cleanup().is_none()
+                }
+                Some(Err(_)) => !slot.acquisition.can_retire(),
             };
             if holds {
                 return true;
@@ -6488,7 +6490,19 @@ impl ConversationService {
                     // One rule for a failed opening: while it may still hold
                     // what it launched, its stop cannot be confirmed.
                     Err(failed) if failed.holds => Err(AgentError::CleanupUncertain),
-                    Err(_) => Ok(()),
+                    Err(_) => {
+                        if !slot
+                            .acquisition
+                            .released(self.inner.deletion_budgets.stop)
+                            .await
+                        {
+                            return Err(AgentError::CleanupUncertain);
+                        }
+                        if on_confirm == ConfirmedClose::ReleaseSlot {
+                            self.release_slot(id, &slot).await;
+                        }
+                        Ok(())
+                    }
                 };
             }
             ready.await;

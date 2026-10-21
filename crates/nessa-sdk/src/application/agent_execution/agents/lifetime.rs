@@ -73,8 +73,11 @@ pub trait OwnedLifetime: Send + Sync {
     /// Seal for a host-attributed close and start the descendant drain.
     /// Physical cleanup still starts when the audit port rejects the intent.
     async fn seal_for_host(&self, actor: &ActionContext) -> Result<(), AgentError>;
-    /// Record this Agent's own attachment cleanup under the close that sealed it.
-    /// Returns after publishing the observation and scheduling reconciliation;
+    /// Complete this Agent's attachment phase under the close that sealed it.
+    /// A registered resource owner remains the authority for whole-lifetime
+    /// release: its close consumes this Agent's result and any surrounding
+    /// resources. Bare attachment-owned roots may publish their own observation.
+    /// Returns after handing off the phase and scheduling reconciliation;
     /// it does not await the resource close that may be producing this callback.
     /// Audit and persistence outcomes belong to [`Self::join_descendants`] and
     /// the coordinator's explicit close operation. The real Agent regressions
