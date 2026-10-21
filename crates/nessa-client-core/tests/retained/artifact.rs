@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -670,6 +670,8 @@ fn a_stop_during_a_busy_pause_returns_within_one_slice() {
     };
     let ending = running(stop.clone());
     let stopping = stop.clone();
+    let stopped_at = Arc::new(Mutex::new(None));
+    let marked = Arc::clone(&stopped_at);
     let stopper = thread::spawn(move || {
         let started = Instant::now();
         while !asked.load(Ordering::SeqCst) {
@@ -681,8 +683,8 @@ fn a_stop_during_a_busy_pause_returns_within_one_slice() {
         }
         thread::sleep(Duration::from_millis(20));
         stopping.stop();
+        *marked.lock().unwrap() = Some(Instant::now());
     });
-    let started = Instant::now();
     let fault = confirmed_held_file(
         &mut source,
         &super::ThreadPause,
@@ -691,17 +693,19 @@ fn a_stop_during_a_busy_pause_returns_within_one_slice() {
     )
     .unwrap()
     .unwrap_err();
-    let elapsed = started.elapsed();
     stopper.join().unwrap();
     assert_eq!(
         fault.kind(),
         ArtifactFaultKind::Gateway(ReadFailure::Stopped)
     );
-    // The first busy delay is 250ms. One stop slice is 50ms, so a pause that
-    // observes the latch is back well before that delay.
+    // The first busy delay is 250ms. The pause sleeps one stop slice at a
+    // time, so it is back within a slice of this stop, not at the end of
+    // that delay. The bound is from the stop, so a late stopper does not
+    // count as a pause that ignored it.
+    let since_stop = stopped_at.lock().unwrap().expect("stop ran").elapsed();
     assert!(
-        elapsed < Duration::from_millis(200),
-        "pause ignored the stop: {elapsed:?}"
+        since_stop < super::super::STOP_SLICE * 3,
+        "pause ignored the stop: {since_stop:?}"
     );
     assert_eq!(reads.load(Ordering::SeqCst), 1);
     assert!(!output.exists());
@@ -711,6 +715,7 @@ fn a_stop_during_a_busy_pause_returns_within_one_slice() {
 struct BudgetClock {
     origin: Instant,
     asked_ms: AtomicU64,
+    spent_at: Mutex<Option<Instant>>,
 }
 impl nessa_protocol::clock::Clock for BudgetClock {
     fn elapsed_ms(&self) -> u64 {
@@ -720,6 +725,10 @@ impl nessa_protocol::clock::Clock for BudgetClock {
         }
         let now = u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX);
         if now.saturating_sub(asked) >= 30 {
+            self.spent_at
+                .lock()
+                .unwrap()
+                .get_or_insert_with(Instant::now);
             1
         } else {
             0
@@ -759,6 +768,7 @@ fn a_budget_that_ends_during_a_busy_pause_is_unreachable() {
     let clock = Arc::new(BudgetClock {
         origin: Instant::now(),
         asked_ms: AtomicU64::new(0),
+        spent_at: Mutex::new(None),
     });
     let ending = super::super::Stopping {
         stop: ReadStop::new(),
@@ -767,9 +777,8 @@ fn a_budget_that_ends_during_a_busy_pause_is_unreachable() {
     };
     let mut source = BusyBeforeBudget {
         reads: reads.clone(),
-        clock,
+        clock: Arc::clone(&clock),
     };
-    let started = Instant::now();
     let fault = confirmed_held_file(
         &mut source,
         &super::ThreadPause,
@@ -778,7 +787,6 @@ fn a_budget_that_ends_during_a_busy_pause_is_unreachable() {
     )
     .unwrap()
     .unwrap_err();
-    let elapsed = started.elapsed();
     assert_eq!(
         fault.kind(),
         ArtifactFaultKind::Gateway(ReadFailure::Stopped)
@@ -788,10 +796,17 @@ fn a_budget_that_ends_during_a_busy_pause_is_unreachable() {
         ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
     );
     // The first busy delay is 250ms. The budget becomes spent 30ms into that
-    // pause, so a wait that observes it is back within one stop slice.
+    // pause. The wait is back within a slice of that moment, not at the end
+    // of the delay. The bound is from the moment the budget was spent.
+    let since_spent = clock
+        .spent_at
+        .lock()
+        .unwrap()
+        .expect("budget spent")
+        .elapsed();
     assert!(
-        elapsed < Duration::from_millis(200),
-        "pause ignored the budget: {elapsed:?}"
+        since_spent < super::super::STOP_SLICE * 3,
+        "pause ignored the budget: {since_spent:?}"
     );
     assert_eq!(reads.load(Ordering::SeqCst), 1);
     assert!(!output.exists());
