@@ -740,7 +740,9 @@ receiver holding and linkage before the shared conversation-access policy may
 see a first-party Person. Its Cedar adapter under
 `conversation/infrastructure/owner_phone_policy/cedar/` owns only purpose linkage,
 method and input restrictions; `access_policy/cedar/` remains the single actual
-conversation target and catalogue entry policy owner. The source's admitted
+conversation target and catalogue entry policy owner.
+`conversation/infrastructure/usage_limit_policy/cedar/` owns who may change the
+gateway usage-limit preference. The source's admitted
 reader and caller travel together through bounded catalogue workers. The receiver
 profile hash consumes each enforcing bundle's owning sources, so an actual
 policy change fences saved read epochs. Server fixtures split mounted discovery,

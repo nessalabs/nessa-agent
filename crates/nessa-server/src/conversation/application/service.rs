@@ -102,7 +102,8 @@ use nessa_sdk::domain::agent_execution::{
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 pub use scheduled_messages::{
-    ScheduleActor, ScheduleDraft, ScheduledMessage, ScheduledMessageStore,
+    PreferenceUpdate, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage,
+    ScheduledMessageStore,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -850,8 +851,11 @@ struct Inner {
     thread_reports: thread_reports::ThreadReports,
     /// One-shot continuations after a provider usage limit.
     scheduled_messages: OnceLock<Arc<dyn scheduled_messages::ScheduledMessageStore>>,
+    /// Cedar for the gateway usage-limit preference. Unbound refuses the change.
+    preference_policy:
+        OnceLock<Arc<dyn super::usage_limit_policy::UsageLimitPreferencePolicyEvaluator>>,
     /// Wakes the continuation loop when a row is accepted or the preference changes.
-    schedule_wakeup: Notify,
+    schedule_wakeup: Arc<Notify>,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1372,7 +1376,8 @@ impl ConversationService {
                 workspace_windows: super::WorkspaceWindows::new(),
                 thread_reports: Default::default(),
                 scheduled_messages: OnceLock::new(),
-                schedule_wakeup: Notify::new(),
+                preference_policy: OnceLock::new(),
+                schedule_wakeup: Arc::new(Notify::new()),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
@@ -5537,6 +5542,14 @@ impl ConversationService {
             // the summary's kind of failure, retried with the erasure.
             if let Err(error) = self.inner.environment.erase(&id).await {
                 failures.summary.get_or_insert(error);
+            }
+            if let Some(store) = self.inner.scheduled_messages.get() {
+                if let Err(error) = store
+                    .erase_conversation(&id.to_string(), self.inner.clock.unix_milliseconds())
+                    .await
+                {
+                    failures.schedule = Some(error);
+                }
             }
         }
         drop(lease);

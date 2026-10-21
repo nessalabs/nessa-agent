@@ -47,6 +47,10 @@ pub enum ContinuationCause {
     ResetMoved,
     /// The blocked turn is no longer a timed usage limit.
     NoLongerBlocked,
+    /// The conversation was deleted. The row's prompt is erased with this audit.
+    ConversationDeleted,
+    /// The mutation journal recorded an attempt and the invocation was not saved.
+    SubmissionInterrupted,
 }
 
 impl ContinuationCause {
@@ -61,6 +65,8 @@ impl ContinuationCause {
             Self::ModelChanged => "model_changed",
             Self::ResetMoved => "reset_moved",
             Self::NoLongerBlocked => "no_longer_blocked",
+            Self::ConversationDeleted => "conversation_deleted",
+            Self::SubmissionInterrupted => "submission_interrupted",
         }
     }
 }

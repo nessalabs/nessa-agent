@@ -11,8 +11,9 @@ Harnesses: Claude ACP 0.76.0 with Claude Agent SDK 0.3.257, and Codex ACP
 | --- | --- | --- |
 | ACP usage-limit classifier | Whether an RPC error or a Claude rate-limit object is a usage limit, and which recovery it is | Whether the gateway retries, and whether a continuation is sent |
 | `AgentError::leaves_work_owed` | Whether ordinary resumption may run | What the card says |
-| Scheduled-chat-message store | Due time, one row per causal turn, cancellation, delivery receipt | Authorization. `ConversationService::submit` owns that, Cedar included |
-| Project preference | Whether this gateway may schedule continuations. Default off | Which account is blocked |
+| Scheduled-chat-message store | Due time, one row per causal turn, the arm, cancellation, delivery receipt, deletion scrub | Authorization. `ConversationService::submit` owns delivery, Cedar included. The preference change has its own policy |
+| Usage-limit preference policy | Whether this caller may change the gateway preference. Facts are the current role, whether the membership is active, and each grant | Whether a continuation is due, and which account is blocked |
+| Project preference | Whether this gateway may schedule continuations. Default off. The change and the scan of every catalogue owner are one operation | Which account is blocked |
 
 ```text
 provider frame --> classifier --> UsageLimitReached
@@ -66,35 +67,85 @@ A restart cut-off (`Interrupted` / `Suspended`) whose result is not yet that
 error stays an ordinary cut-off. One prompt can still happen for that
 cut-off; the saved error then blocks the next one.
 
-The schedule row is the durable continuation. The card reads it. Delivery
-does not ask whether the conversation exists or was deleted before
+The schedule row is the durable continuation. The card reads the open row.
+Delivery does not ask whether the conversation exists or was deleted before
 `submit_command`: that command already refuses a deleted target through the
 access port, and Cedar `conversation.act` runs inside the submit it calls.
 The scheduler passes the causal turn's initiation so a grant is re-checked
-there, not as the owner.
+there, not as the owner. Deletion of the conversation blanks the prompt and
+the identifying fields on every row and writes a new audit; it does not
+rewrite the audit rows already stored.
 
-| State | Event | Next | What is true after |
+### Statuses
+
+`delivered`, `cancelled`, `refused`, and `unconfirmed` are terminal. They are
+not open, `next_due` ignores them, and `open` does not return them. The
+partial unique index covers only `scheduled`, `delivering`, and `submitting`,
+so a later causal turn can still be accepted after a terminal row.
+
+| Status | What is true |
+| --- | --- |
+| `scheduled` | Accepted. No submit has been claimed. Cancel, defer, and a model change match it |
+| `delivering` | `claim_due` won. Cancel, defer, and a model change can still win. It may not call `submit_command` |
+| `submitting` | `begin_submit` committed. Cancel and defer no longer match. At most one live process holds the id in `armed` |
+| `delivered` | The execution was saved, or `submit_command` admitted it. Audit `delivered` |
+| `refused` | The submit ended for a reason that will not change on retry: deleted, not found, revoked, unavailable after save, or a caller that cannot be rebuilt |
+| `cancelled` | The row ended without a submit: preference off, a later turn, an agent or model change, or deletion of a row that had not entered an armed submit |
+| `unconfirmed` | The mutation journal recorded `Attempted` and the invocation was not saved. The effect must not run again. Audit `submission_interrupted` |
+
+### Who owns each transition
+
+| From | Event | Owner | To | Durable write |
+| --- | --- | --- | --- | --- |
+| none | Preference on, future reset, newest invocation is the limit | `plan_continuation`, then `accept` | `scheduled` | The row and its audit, one transaction |
+| `scheduled` | Same causal turn, later future reset | `plan_continuation`, then `move_due` | `scheduled` | Due time and audit, one transaction |
+| `scheduled` or `delivering` | Preference off, a later invocation, agent or model change | `plan_continuation`, `set_preference`, `cancel_open`, `defer_claim` | `cancelled` or `scheduled` | Status and audit, one transaction |
+| `scheduled` | Due, and still the open row | `claim_due` | `delivering` | Status only. The claim is not an audit row |
+| `delivering` | `begin_submit` compare-and-set | the store | `submitting` | Status commit. The in-memory arm is inserted only after that commit |
+| `submitting` | Execution already saved, or `submit_command` admits | `finish_fenced_submit`, then `record_outcome` | `delivered` | Status and audit, after the observation. The clock is read then |
+| `submitting` | `submit_command` returns a terminal refusal, or the caller cannot be rebuilt | `finish_fenced_submit` | `refused` | Status and audit, after the observation |
+| `submitting` | The mutation journal returns `Interrupted` | `finish_fenced_submit` | `unconfirmed` | Status and audit `submission_interrupted`. No second submit |
+| `submitting` | Preference off, and this process does not hold the arm | `set_preference` or `retire_unfenced_submissions` | `cancelled` | Status and audit |
+| `submitting` | Preference off, and this process holds the arm | the in-flight submit | `submitting` | The submit finishes into `delivered`, `refused`, or `unconfirmed` |
+| any row that still holds a prompt | Conversation deletion | `erase_conversation` | `cancelled` for `scheduled`, `delivering`, and an unarmed submit; the same status otherwise | Payload blanked and one new audit, one transaction |
+
+The gateway preference is a separate row. `UsageLimitPreferencePolicyEvaluator`
+allows or refuses the change before any write. The facts are the caller's
+current principal, organization, role, whether the membership is active, and
+each grant record. Cedar forbids a member, an inactive membership, and a
+caller from another organization. The permit is an active admin whose grants
+contain `credential.manage` on this gateway. The socket's grant check is not
+this decision.
+
+Turning the preference on and scanning the catalogue are one operation. The
+scan asks every catalogue owner, then every page of that owner's
+conversations. The catalogue is another database, so the two writes are not
+one SQLite transaction. The operation's result is the pair: the preference
+and a finished scan, or the previous preference when the scan fails.
+
+### Crash between durable writes
+
+| After this write | Before the next | What is durable | What recovery does |
 | --- | --- | --- | --- |
-| Running | Saved `UsageLimitReached` | Blocked | That turn is not owed. `RunnerStopped` turns behind it are not owed. Resume budget unchanged |
-| Running | Cut off before the error is saved | Owed | Ordinary resume. The next saved usage limit blocks further resumes |
-| Running | `rateLimitExceeded` text and `end_turn`, or `willRetry` | Unchanged | Not this error |
-| Blocked | Preference off, reset not in the future, or user action | Blocked | No schedule row |
-| Blocked | Preference on and `resets_at_ms` is after the gateway clock | Scheduled | One row. Audit `scheduled`, initiator system or the person who enabled the preference. Card may say auto-resuming |
-| Scheduled | Same causal turn reports a later future reset | Scheduled | Same row, due time replaced. No second row |
-| Scheduled | Preference off, a later invocation exists (settled or not), or agent/model changed | Cancelled | Audit `cancelled`. No submit. A committed model change reconciles immediately |
-| Scheduled | Due, preference on, causal turn still the latest usage-limit failure, agent and model match | Delivering | One compare-and-set wins the claim. It may not submit yet |
-| Delivering | Cancel, defer, or a model change | Cancelled or scheduled | That wins. `begin_submit` is false. No submit |
-| Delivering | `begin_submit` | Submitting | That wins. Cancel, defer, and a model change no longer match this row |
-| Submitting | Submit admits or refuses | Delivered or refused | The outcome audit follows. A second pass does not submit again |
-| Submitting | Preference off while this process holds the fence | Submitting | The submit finishes |
-| Submitting | Preference off and no process holds the fence | Cancelled | A restart does not submit it |
-| Submitting | `submit_command` admits the stored execution id | Delivered | Audit `delivered` in a following transaction. One admission |
-| Submitting | `submit_command` returns deleted, not found, revoked, or the causal turn is no longer the usage limit | Refused | Audit `refused`. The command's own refusal is the deletion fact |
-| Submitting | Submit admitted the turn, then the delivery audit fails | Submitting | No second execution id. The next pass records the audit and does not enqueue again |
-| Submitting | Restart, execution id absent from the session | Submitting | The same id is submitted once |
-| Submitting | Restart, execution id already saved | Delivered or refused | No second enqueue. Not `resume_turn` |
-| Scheduled | Due, but the observed reset is now later | Scheduled | Due time moves. The claim is released. No submit |
-| Delivered, cancelled, or refused | Another due scan | Unchanged | No second submit |
+| nothing | `accept` commits | no row | The plan runs again from the saved usage limit |
+| `accept` commits | `claim_due` | `scheduled`, with its audit | The next due pass claims it |
+| `claim_due` commits | `begin_submit` commits | `delivering`, no claim audit | The next `claim_due` returns the row. `begin_submit` is still required before a submit |
+| `begin_submit` commits | the id is inserted in `armed` | `submitting` | The crashed process is gone, so `armed` is empty. The next process adopts the row and submits the same execution id once |
+| `begin_submit`'s transaction fails | the arm insert | `delivering`, id not armed | The next `begin_submit` tries the compare-and-set again |
+| `submit_command` has not recorded `Attempted` | the invocation is saved | `submitting`, same execution id | Retry `submit_command` with that id. The effect has not been recorded as attempted |
+| the journal records `Attempted` | the invocation is saved | `submitting`, journal `Attempted` | The retry returns `Interrupted` and does not run the effect. One audit moves the row to `unconfirmed`. `next_due` stops returning it |
+| the invocation is saved | `record_outcome` commits | `submitting`, execution present | The next pass records `delivered` from the saved execution and does not enqueue |
+| `record_outcome` fails | its commit | the previous status | The next pass records the same outcome. It does not mint an execution id |
+| preference turns on | the owner scan finishes | preference on, and any rows the scan had accepted | If the scan returns an error and the previous value was off, the operation sets the preference back off as the system, which cancels those rows. If it was already on, it stays on and the error is returned. If the process dies during the scan, the next start of the delivery loop scans every owner before it waits |
+| preference turns off | an unfenced submit retires | preference off; `scheduled`, `delivering`, and unarmed `submitting` cancelled | An armed submit finishes. A later start cancels a `submitting` row nobody holds |
+| `erase_conversation` commits | the tombstone is marked erased | prompt and identifying fields blank, one new audit per row that still held them | A crash before the commit leaves the payload. Deletion stays unfinished and the next attempt scrubs again. A second scrub writes no audit. Older audit rows stay |
+| the outcome is observed | the audit timestamp is chosen | the clock is read when the saved execution or the `submit_command` result is in hand | The audit names that observation. A reading taken before the submit is not reused |
+
+The wakeup is not a durable write. The loop creates the notification future
+before `deliver_due_scheduled` reads the schedule. A continuation accepted
+during that read notifies a waiter that already exists, so the loop does not
+sleep through it. `notify_waiters` does not keep a permit for a waiter
+created afterwards.
 
 A past reset does not schedule. An overdue row that was accepted while the
 reset was still in the future is delivered after the process starts. Nothing
@@ -103,9 +154,9 @@ process, or two processes on the file, take the compare-and-set; the loser
 does not submit.
 
 A pass claims at most eight due rows. A scheduled row still due at that
-clock, or a row left delivering or submitting, is due on the next pass. The loop waits
-until the clock for that pass. It does not wait for a separate notification.
-A row due later waits until that time. The usage limit on the schedule is the
+clock, or a row left delivering or submitting, is due on the next pass. The
+loop is already waiting on the wakeup it registered before the scan, and a
+row due later also waits until that time. The usage limit on the schedule is the
 newest invocation, and only when that invocation is itself the limit. A later
 turn with no saved result clears it.
 
@@ -119,18 +170,28 @@ turn with no saved result clears it.
 3. `resets_at_ms` is set only for `TimedReset`, from a parsed absolute
    instant in 2024–2100. User action never carries one.
 4. At most one open schedule (`scheduled`, `delivering`, or `submitting`)
-   exists per conversation. The open row's execution id is minted once.
+   exists per conversation. `unconfirmed` is terminal, not open. The open
+   row's execution id is minted once.
 5. Only `begin_submit`, the compare-and-set from `delivering` to
-   `submitting`, may call `submit_command`. A second scanner does not submit.
-6. Schedule and cancellation audits commit with the status change. Delivery
-   audit commits after admission. If that audit fails, the row stays
-   `submitting` and the next pass records the audit without a new execution id.
+   `submitting`, may call `submit_command`. The id enters `armed` only after
+   that transaction commits. A failed commit leaves the id unarmed. A second
+   scanner does not submit.
+6. Schedule and cancellation audits commit with the status change. The
+   outcome audit commits after the observation, with the clock read at that
+   observation. If that audit fails, the row stays `submitting` and the next
+   pass records the audit without a new execution id.
 7. The card copies "Auto-resuming" only when the open row is `scheduled`,
-   `delivering`, or `submitting` and the preference is on.
-8. The preference defaults to off. Turning it on walks every catalogue page
-   and schedules each currently blocked eligible turn. The newest-first list
-   bound does not apply. Turning it off cancels open rows that are not inside
-   a submit that has already been fenced.
+   `delivering`, or `submitting` and the preference is on. `unconfirmed` does
+   not say auto-resuming.
+8. The preference defaults to off. Cedar allows the change before the store
+   is written; an active member is refused and the store is unchanged.
+   Turning it on scans every catalogue owner and every page, and schedules
+   each currently blocked eligible turn. The newest-first list bound does
+   not apply. A scan that fails restores the previous off value, as the
+   system. Turning it off cancels open rows that are not inside a submit
+   that has already been armed. The delivery loop, on start, scans every
+   owner again while the preference is on, so a crash during an earlier scan
+   is finished.
 9. OpenCode frames are not classified as usage limits.
 10. Audit initiator for a provider limit is the system. The person is the
     initiator only for the preference change and the cancellations it causes.
@@ -146,10 +207,19 @@ turn with no saved result clears it.
     cancels an open row.
 13. `next_due` is the owner of the loop's next wait. A scheduled row at or
     before the clock, or any delivering or submitting row, is due now. Only a
-    later scheduled time waits.
+    later scheduled time waits. `unconfirmed` is not due.
 14. `begin_submit` is the only permission to submit. It moves `delivering` to
-    `submitting`, or adopts a `submitting` row this process is not inside.
-    Cancel, defer, and a model change match `scheduled` and `delivering` only.
+    `submitting`, or adopts a `submitting` row this process is not inside,
+    and arms the id only after the commit. Cancel, defer, and a model change
+    match `scheduled` and `delivering` only.
+15. `MutationFailure::Interrupted` settles the row to `unconfirmed` once.
+    The same execution id is not submitted again.
+16. Deleting a conversation blanks `prompt` and the identifying fields on
+    every schedule row for it, cancels a row that is not inside an armed
+    submit, and writes one audit. A second scrub writes nothing. The audit
+    table's older rows are not deleted or rewritten.
+17. The delivery loop registers its wakeup before it reads the schedule. A
+    continuation accepted during that read is waited on by the same pass.
 
 ## Card
 

@@ -77,7 +77,7 @@
 //!                       ConversationDeletionAudit
 //!                                   │ acknowledged
 //!                                   ▼
-//!   attachments.release ─ lease.erase ─ summaries.erase ─ tombstone erased
+//!   attachments.release ─ lease.erase ─ summaries.erase ─ schedule scrub ─ tombstone erased
 //! ```
 //!
 //! Arrows are the order of calls. Uploads are released even when the record
@@ -90,7 +90,8 @@
 //! the agent asked until one answer settles it
 //! (`a_tombstone_keeps_the_first_decision_and_reads_its_history_once`,
 //! `the_agent_is_not_asked_while_the_history_is_leased_elsewhere`). The rest —
-//! the deletion record, releasing uploads, erasing history and summary — is
+//! the deletion record, releasing uploads, erasing history and summary, and
+//! blanking a scheduled continuation's prompt — is
 //! repeated on each try until the tombstone is marked erased, and each is
 //! idempotent: the record is acknowledged again, not written twice
 //! (`a_repeated_deletion_is_acknowledged_and_a_contradicting_one_fails_closed`),
@@ -206,6 +207,7 @@ mod source_permits;
 pub use source_permits::{SourcePermit, SourcePermits};
 mod share_grants;
 mod tool_policy;
+mod usage_limit_policy;
 mod workspace_windows;
 pub use crate::conversation::domain::ReceiverBinding;
 pub use access_policy::{
@@ -323,10 +325,10 @@ pub use service::{
     ConversationAgents, ConversationCaller, ConversationDeletionBudgets, ConversationDependencies,
     ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, McpAppCall,
     McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, PendingReport,
-    QuestionChoiceInput, ReadOpening, ReportRegistration, RequestedAgent, RequestedConversation,
-    ScheduleActor, ScheduleDraft, ScheduledMessage, ScheduledMessageStore, SubmissionMode,
-    ThreadReport, ThreadReportStore, ThreadTurn, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS,
-    MAX_RESOURCE_META_BYTES,
+    PreferenceUpdate, QuestionChoiceInput, ReadOpening, ReportRegistration, RequestedAgent,
+    RequestedConversation, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage,
+    ScheduledMessageStore, SubmissionMode, ThreadReport, ThreadReportStore, ThreadTurn,
+    MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
 pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
 pub(crate) use service::{ExportAdmission, ExportHoldFailure};
@@ -343,6 +345,10 @@ pub use share_grants::{
     MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 pub use tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator, ToolPolicyUnavailable};
+pub use usage_limit_policy::{
+    UsageLimitPreferenceDecision, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
+    UsageLimitPreferencePolicyEvaluator,
+};
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/application.rs"]

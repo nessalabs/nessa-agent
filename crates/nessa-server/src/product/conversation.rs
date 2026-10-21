@@ -6,13 +6,15 @@ use super::{
 };
 use crate::conversation::application::{
     error_code, rule_principal, ConversationCaller, ConversationError, ConversationService,
-    ListedPermissionRule, PermissionRuleCatalog, QuestionChoiceInput, ReadOpening, RequestedAgent,
-    RequestedConversation, RuleCatalogError, RuleChange, RulePrincipal, SubmissionMode,
-    SubmittedFile, SubmittedImage, SubmittedMessage,
+    ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate, QuestionChoiceInput,
+    ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError, RuleChange,
+    RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
+    UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
 };
 use base64::Engine as _;
+use nessa_auth::application::ports::{AccessError, AccessSnapshot};
 use nessa_auth::application::session::{AuthenticatedSession, ReadCurrentSession};
-use nessa_auth::domain::MembershipRole;
+use nessa_auth::domain::{MembershipRole, Resource};
 use nessa_protocol::conversation::projection::CommittedCursor;
 use nessa_protocol::conversation::view::{
     ConversationList, ConversationModelChangeEffect, ConversationObservation,
@@ -229,16 +231,37 @@ async fn answer(
             }
             "conversation.setUsageLimitAutoContinue" => {
                 let params = params!(ConversationSetUsageLimitAutoContinueParams);
-                let enabled = service
-                    .set_usage_limit_auto_continue(params.enabled, caller(params.request_id.clone()))
-                    .await?;
-                Ok(success(
-                    &frame.id,
-                    &ConversationSetUsageLimitAutoContinueResult {
-                        request_id: params.request_id,
-                        enabled,
-                    },
-                ))
+                let snapshot = match (ReadCurrentSession {
+                    access: state.access.as_ref(),
+                    clock: state.clock.as_ref(),
+                })
+                .execute(session)
+                .await
+                {
+                    Ok(snapshot) => snapshot,
+                    Err(AccessError::Unavailable | AccessError::Unsupported) => {
+                        return Err(ConversationError::Unavailable);
+                    }
+                    Err(_) => return Ok(failure(&frame.id, "forbidden")),
+                };
+                let facts = usage_limit_preference_facts(&snapshot, &state.gateway);
+                match service
+                    .set_usage_limit_auto_continue(
+                        params.enabled,
+                        caller(params.request_id.clone()),
+                        facts,
+                    )
+                    .await?
+                {
+                    PreferenceUpdate::Stored(enabled) => Ok(success(
+                        &frame.id,
+                        &ConversationSetUsageLimitAutoContinueResult {
+                            request_id: params.request_id,
+                            enabled,
+                        },
+                    )),
+                    PreferenceUpdate::Refused { .. } => Ok(failure(&frame.id, "forbidden")),
+                }
             }
             "conversation.setApprovalMode" => {
                 let params = target_params!(ConversationSetApprovalModeParams);
@@ -979,6 +1002,34 @@ pub(super) async fn read_list(
     let listed = list_result(listed?);
     super::read_access::admit_index_rows(state, session, &listed.conversations).await?;
     Ok(listed)
+}
+
+fn usage_limit_preference_facts(
+    snapshot: &AccessSnapshot,
+    gateway: &Resource,
+) -> UsageLimitPreferenceFacts {
+    UsageLimitPreferenceFacts {
+        principal_id: snapshot.credential.principal_id().as_str().to_owned(),
+        organization_id: snapshot.membership.organization_id().as_str().to_owned(),
+        role: match snapshot.membership.role() {
+            MembershipRole::Admin => "admin",
+            MembershipRole::Member => "member",
+        }
+        .to_owned(),
+        active: snapshot.membership.is_active(),
+        grants: snapshot
+            .credential
+            .grants()
+            .iter()
+            .map(|grant| UsageLimitPreferenceGrant {
+                action: grant.action().as_str().to_owned(),
+                resource_id: grant.resource().id().as_str().to_owned(),
+                organization_id: grant.resource().organization_id().as_str().to_owned(),
+            })
+            .collect(),
+        gateway_id: gateway.id().as_str().to_owned(),
+        gateway_organization: gateway.organization_id().as_str().to_owned(),
+    }
 }
 
 pub(super) fn caller(session: &AuthenticatedSession, request_id: String) -> ConversationCaller {

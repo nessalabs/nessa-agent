@@ -19,7 +19,8 @@ CREATE TABLE message (
             'submitting',
             'delivered',
             'cancelled',
-            'refused'
+            'refused',
+            'unconfirmed'
         )
     ),
     agent TEXT NOT NULL,

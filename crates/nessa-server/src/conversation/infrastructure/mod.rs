@@ -88,8 +88,12 @@
 //! The same memory is the board a waiting review notifies, and clears when
 //! the review ends.
 //! `CedarOwnerPhonePolicyEvaluator` owns first-party method and input restrictions.
+//! `CedarUsageLimitPreferencePolicy` owns who may change the gateway usage-limit
+//! preference.
 pub mod owner_phone_policy;
 pub use owner_phone_policy::CedarOwnerPhonePolicyEvaluator;
+mod usage_limit_policy;
+pub use usage_limit_policy::CedarUsageLimitPreferencePolicy;
 mod change_watch;
 pub use change_watch::NessaRecordWatches;
 // Composed only by the Unix gateway (`composition/local_auth.rs`), as

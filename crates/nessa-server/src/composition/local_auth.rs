@@ -1367,6 +1367,13 @@ async fn conversations(
                 )
             })?,
     ));
+    service.bind_usage_limit_preference_policy(Arc::new(
+        crate::conversation::infrastructure::CedarUsageLimitPreferencePolicy::new().map_err(
+            |_| {
+                RunError::Agent("the usage-limit preference policy bundle does not validate".into())
+            },
+        )?,
+    ));
     conversation_tools.attach(service.clone());
     // A note's author is checked against the same grant table the socket
     // admits it by (row J23).

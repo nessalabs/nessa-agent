@@ -1492,6 +1492,32 @@ impl ConversationSummaries for LocalConversationStore {
 }
 
 impl ConversationListing for LocalConversationStore {
+    fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>> {
+        self.run(|connection| {
+            let mut statement = connection
+                .prepare(
+                    "SELECT organization, owner FROM catalogue_owners \
+                     ORDER BY organization, owner",
+                )
+                .map_err(failed)?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(failed)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(failed)?;
+            let mut owners = Vec::with_capacity(rows.len());
+            for (organization, owner) in rows {
+                let organization =
+                    OrganizationId::new(organization).map_err(|_| ConversationError::Metadata)?;
+                let owner = PrincipalId::new(owner).map_err(|_| ConversationError::Metadata)?;
+                owners.push((organization, owner));
+            }
+            Ok(owners)
+        })
+    }
+
     fn list(
         &self,
         organization: &OrganizationId,

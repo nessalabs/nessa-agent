@@ -175,6 +175,7 @@ fn deletion(out: &mut String, failures: &DeletionFailures) {
         audit,
         attachments,
         summary,
+        schedule,
         tombstone,
         interrupted,
         another_attempt,
@@ -191,6 +192,7 @@ fn deletion(out: &mut String, failures: &DeletionFailures) {
         ("audit", audit),
         ("attachments", attachments),
         ("summary", summary),
+        ("schedule", schedule),
         ("tombstone", tombstone),
     ] {
         if let Some(error) = failure {

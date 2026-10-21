@@ -8,6 +8,9 @@
 //! transition and win against a claim that has not made it.
 
 use super::{ConversationCaller, ConversationError, ConversationId, ConversationService};
+use crate::conversation::application::usage_limit_policy::{
+    UsageLimitPreferenceDecision, UsageLimitPreferenceFacts, UsageLimitPreferencePolicyEvaluator,
+};
 use crate::conversation::application::ConversationFuture;
 use crate::conversation::domain::{ContinuationCause, ContinuationPlan};
 use nessa_sdk::domain::agent_execution::executions::{
@@ -102,6 +105,36 @@ pub struct ScheduleDraft {
     pub tools_checked: bool,
 }
 
+/// How a fenced submit ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScheduleSettlement {
+    /// The execution was saved or the submit admitted it.
+    Delivered,
+    /// The submit will not succeed on retry.
+    Refused,
+    /// The journal recorded an attempt and the invocation was not saved.
+    Unconfirmed,
+}
+
+impl ScheduleSettlement {
+    pub(crate) fn status(self) -> &'static str {
+        match self {
+            Self::Delivered => "delivered",
+            Self::Refused => "refused",
+            Self::Unconfirmed => "unconfirmed",
+        }
+    }
+}
+
+/// The preference write, or Cedar's refusal. A refusal leaves the store unchanged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PreferenceUpdate {
+    /// The stored value after the operation.
+    Stored(bool),
+    /// Cedar refused. `policies` are the ones that decided.
+    Refused { policies: Vec<String> },
+}
+
 /// The private dataset of scheduled continuations.
 pub trait ScheduledMessageStore: Send + Sync {
     /// The gateway preference. Absent means off.
@@ -172,22 +205,37 @@ pub trait ScheduledMessageStore: Send + Sync {
     fn retire_unfenced_submissions(&self, at_ms: u64) -> ConversationFuture<'_, usize>;
     /// The row's status text, when it exists.
     fn status(&self, execution_id: &str) -> ConversationFuture<'_, Option<String>>;
-    /// After submit has admitted or refused the turn. The status change and
-    /// the delivery audit commit together, after admission. `Err` leaves the
-    /// row delivering.
+    /// After the outcome has been observed. The status change and the audit
+    /// commit together. `Err` leaves the previous status. `at_ms` is the
+    /// clock at the observation, not a reading taken before the submit.
     fn record_outcome(
         &self,
         execution_id: &str,
-        delivered: bool,
+        outcome: ScheduleSettlement,
         cause: &str,
         at_ms: u64,
     ) -> ConversationFuture<'_, ()>;
+    /// Blank the prompt and identifying fields of every row for `conversation`.
+    /// `scheduled`, `delivering`, and an unarmed `submitting` row become
+    /// `cancelled`. An armed submit keeps its status. Terminal rows keep
+    /// theirs. One new audit per row that still held a payload. A second call
+    /// writes nothing. Older audit rows stay.
+    fn erase_conversation(&self, conversation: &str, at_ms: u64) -> ConversationFuture<'_, ()>;
 }
 
 impl ConversationService {
     /// Bind the continuation store. A second bind is ignored.
     pub fn bind_scheduled_messages(&self, store: Arc<dyn ScheduledMessageStore>) {
         let _ = self.inner.scheduled_messages.set(store);
+    }
+
+    /// Bind the preference policy. A second bind is ignored. Unbound refuses
+    /// the change.
+    pub fn bind_usage_limit_preference_policy(
+        &self,
+        policy: Arc<dyn UsageLimitPreferencePolicyEvaluator>,
+    ) {
+        let _ = self.inner.preference_policy.set(policy);
     }
 
     fn scheduled_messages(&self) -> Option<Arc<dyn ScheduledMessageStore>> {
@@ -216,26 +264,62 @@ impl ConversationService {
         store.open(&conversation.to_string()).await
     }
 
-    /// Turn the preference on or off. Off cancels open rows as this person.
-    /// On schedules currently blocked eligible turns.
+    /// Turn the preference on or off. Cedar decides first. Off cancels open
+    /// rows as this person. On scans every catalogue owner and schedules each
+    /// currently blocked eligible turn; a failed scan restores an off
+    /// preference that this call turned on.
     pub async fn set_usage_limit_auto_continue(
         &self,
         enabled: bool,
         caller: ConversationCaller,
-    ) -> Result<bool, ConversationError> {
+        facts: UsageLimitPreferenceFacts,
+    ) -> Result<PreferenceUpdate, ConversationError> {
+        if caller.organization_id.as_str() != facts.organization_id
+            || caller.principal_id.as_str() != facts.principal_id
+        {
+            return Err(ConversationError::Unavailable);
+        }
         let Some(store) = self.scheduled_messages() else {
             return Err(ConversationError::Unavailable);
         };
+        let Some(policy) = self.inner.preference_policy.get().cloned() else {
+            return Err(ConversationError::Unavailable);
+        };
+        let decision = policy
+            .evaluate(&facts)
+            .map_err(|_| ConversationError::Unavailable)?;
+        if let UsageLimitPreferenceDecision::Deny { policies } = decision {
+            return Ok(PreferenceUpdate::Refused { policies });
+        }
+        let previous = store.preference().await?;
         let at_ms = self.inner.clock.unix_milliseconds();
-        let enabled = store
+        let stored = store
             .set_preference(enabled, ScheduleActor::person(&caller), at_ms)
             .await?;
-        if enabled {
-            self.schedule_blocked_turns(&caller).await?;
+        if stored {
+            let mut visited = Vec::new();
+            if let Err(error) = self
+                .schedule_every_owner(&store, true, ScheduleActor::person(&caller), &mut visited)
+                .await
+            {
+                if !previous {
+                    let now = self.inner.clock.unix_milliseconds();
+                    store
+                        .set_preference(false, ScheduleActor::system(), now)
+                        .await?;
+                    for id in &visited {
+                        self.inner.live_changes.publish(id);
+                    }
+                    self.inner.schedule_wakeup.notify_waiters();
+                }
+                return Err(error);
+            }
+            for id in &visited {
+                self.inner.live_changes.publish(id);
+            }
         }
-        self.publish_owned_conversations(&caller).await;
         self.inner.schedule_wakeup.notify_waiters();
-        Ok(enabled)
+        Ok(PreferenceUpdate::Stored(stored))
     }
 
     /// Apply [`plan_continuation`] to one conversation's saved history.
@@ -481,56 +565,39 @@ impl ConversationService {
         }))
     }
 
-    async fn publish_owned_conversations(&self, caller: &ConversationCaller) {
-        let Ok(ids) = self.owned_conversations(caller).await else {
-            return;
-        };
-        for id in ids {
-            self.inner.live_changes.publish(&id);
-        }
-    }
-
-    async fn schedule_blocked_turns(
+    /// Every catalogue owner, every page. `visited` collects the conversations
+    /// already planned, including when a later page fails.
+    async fn schedule_every_owner(
         &self,
-        caller: &ConversationCaller,
+        store: &Arc<dyn ScheduledMessageStore>,
+        enabled_by_person: bool,
+        actor: ScheduleActor,
+        visited: &mut Vec<ConversationId>,
     ) -> Result<(), ConversationError> {
-        let actor = ScheduleActor::person(caller);
-        for id in self.owned_conversations(caller).await? {
-            self.consider_usage_limit(&id, true, actor.clone()).await;
-        }
-        Ok(())
-    }
-
-    /// Every non-archived conversation this caller owns, one catalogue page
-    /// after another. The newest-first list stops at
-    /// [`super::MAX_LISTED_CONVERSATIONS`]; this does not.
-    async fn owned_conversations(
-        &self,
-        caller: &ConversationCaller,
-    ) -> Result<Vec<ConversationId>, ConversationError> {
-        let mut cursor = None::<crate::conversation::application::ObservationCursor>;
-        let mut ids = Vec::new();
-        loop {
-            let page = self
-                .inner
-                .listing
-                .observe(
-                    &caller.organization_id,
-                    &caller.principal_id,
-                    false,
-                    cursor.clone(),
-                )
-                .await?;
-            let complete = page.complete;
-            let next = page.cursor;
-            let page_ids = page
-                .conversations
-                .into_iter()
-                .map(|row| row.conversation.id().clone());
-            if fold_catalogue_page(&mut cursor, complete, next, page_ids, &mut ids)? {
-                return Ok(ids);
+        let owners = self.inner.listing.owners().await?;
+        for (organization, principal) in owners {
+            let mut cursor = None::<crate::conversation::application::ObservationCursor>;
+            loop {
+                let page = self
+                    .inner
+                    .listing
+                    .observe(&organization, &principal, false, cursor.clone())
+                    .await?;
+                let complete = page.complete;
+                let next = page.cursor;
+                let mut page_ids = Vec::new();
+                for row in page.conversations {
+                    let id = row.conversation.id().clone();
+                    self.apply_usage_limit_plan(&id, store, enabled_by_person, actor.clone())
+                        .await?;
+                    page_ids.push(id);
+                }
+                if fold_catalogue_page(&mut cursor, complete, next, page_ids, visited)? {
+                    break;
+                }
             }
         }
+        Ok(())
     }
 
     /// Deliver continuations that are due. Returns how long to wait for the
@@ -557,11 +624,31 @@ impl ConversationService {
     }
 
     /// Run delivery until the gateway retires.
+    ///
+    /// While the preference is on, the first pass scans every catalogue owner
+    /// so a crash during an earlier enable finishes. Each later pass creates
+    /// the wakeup before it reads the schedule: a continuation accepted during
+    /// that read notifies a waiter that already exists.
     pub async fn run_scheduled_messages(&self) {
+        if let Some(store) = self.scheduled_messages() {
+            if store.preference().await.unwrap_or(false) {
+                let mut visited = Vec::new();
+                if let Err(error) = self
+                    .schedule_every_owner(&store, false, ScheduleActor::system(), &mut visited)
+                    .await
+                {
+                    tracing::warn!(%error, "a usage-limit continuation scan did not finish");
+                }
+                for id in &visited {
+                    self.inner.live_changes.publish(id);
+                }
+            }
+        }
         loop {
             if self.inner.retirement.get().is_some() {
                 return;
             }
+            let wakeup = self.inner.schedule_wakeup.notified();
             let wait = self.deliver_due_scheduled().await;
             tokio::select! {
                 () = async {
@@ -570,7 +657,7 @@ impl ConversationService {
                         None => std::future::pending().await,
                     }
                 } => {}
-                () = self.inner.schedule_wakeup.notified() => {}
+                () = wakeup => {}
                 () = self.retired() => return,
             }
         }
@@ -603,10 +690,15 @@ impl ConversationService {
         id: ConversationId,
         row: &ScheduledMessage,
     ) {
-        let now = self.inner.clock.unix_milliseconds();
         if self.execution_saved(&id, &row.execution_id).await {
+            let now = self.inner.clock.unix_milliseconds();
             let _ = store
-                .record_outcome(&row.execution_id, true, "delivered", now)
+                .record_outcome(
+                    &row.execution_id,
+                    ScheduleSettlement::Delivered,
+                    "delivered",
+                    now,
+                )
                 .await;
             return;
         }
@@ -619,8 +711,14 @@ impl ConversationService {
         let (caller, initiation) = match (schedule_caller(row), continuation_initiation(row)) {
             (Ok(caller), Ok(initiation)) => (caller, initiation),
             _ => {
+                let now = self.inner.clock.unix_milliseconds();
                 let _ = store
-                    .record_outcome(&row.execution_id, false, "revoked", now)
+                    .record_outcome(
+                        &row.execution_id,
+                        ScheduleSettlement::Refused,
+                        "revoked",
+                        now,
+                    )
                     .await;
                 return;
             }
@@ -642,14 +740,21 @@ impl ConversationService {
             .await
         {
             Ok(_) => {
+                let now = self.inner.clock.unix_milliseconds();
                 let _ = store
-                    .record_outcome(&row.execution_id, true, "delivered", now)
+                    .record_outcome(
+                        &row.execution_id,
+                        ScheduleSettlement::Delivered,
+                        "delivered",
+                        now,
+                    )
                     .await;
             }
             Err(error) => {
-                if let Some(cause) = refusal_cause(&error) {
+                if let Some((outcome, cause)) = settled_outcome(&error) {
+                    let now = self.inner.clock.unix_milliseconds();
                     let _ = store
-                        .record_outcome(&row.execution_id, false, cause, now)
+                        .record_outcome(&row.execution_id, outcome, cause, now)
                         .await;
                 }
             }
@@ -786,18 +891,28 @@ fn schedule_caller(row: &ScheduledMessage) -> Result<ConversationCaller, Convers
     })
 }
 
-fn refusal_cause(
+fn settled_outcome(
     error: &nessa_sdk::application::agent_execution::commands::MutationFailure<ConversationError>,
-) -> Option<&'static str> {
+) -> Option<(ScheduleSettlement, &'static str)> {
     use nessa_sdk::application::agent_execution::commands::MutationFailure;
+    if matches!(error, MutationFailure::Interrupted(_)) {
+        return Some((
+            ScheduleSettlement::Unconfirmed,
+            ContinuationCause::SubmissionInterrupted.as_str(),
+        ));
+    }
     let MutationFailure::Target(error) = error else {
         return None;
     };
     match error {
-        ConversationError::Deleted => Some("deleted"),
-        ConversationError::NotFound => Some("not_found"),
-        ConversationError::Revoked | ConversationError::RevokedAfterSave => Some("revoked"),
-        ConversationError::UnavailableAfterSave => Some("unavailable"),
+        ConversationError::Deleted => Some((ScheduleSettlement::Refused, "deleted")),
+        ConversationError::NotFound => Some((ScheduleSettlement::Refused, "not_found")),
+        ConversationError::Revoked | ConversationError::RevokedAfterSave => {
+            Some((ScheduleSettlement::Refused, "revoked"))
+        }
+        ConversationError::UnavailableAfterSave => {
+            Some((ScheduleSettlement::Refused, "unavailable"))
+        }
         _ => None,
     }
 }
@@ -852,5 +967,545 @@ mod catalogue_pages {
         assert!(!fold_catalogue_page(&mut cursor, false, Some(1_u32), ["a"], &mut ids).unwrap());
         let error = fold_catalogue_page(&mut cursor, false, Some(1), ["a"], &mut ids);
         assert!(matches!(error, Err(ConversationError::Unavailable)));
+    }
+
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use nessa_auth::application::ports::{AccessError, Clock};
+    use nessa_auth::domain::{OrganizationId, PrincipalId};
+    use nessa_sdk::application::agent_execution::commands::{
+        CreationFuture, CreationReceipt, CreationStorage, CreationStorageLease, MutationReceipt,
+    };
+
+    use super::{
+        PreferenceUpdate, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage,
+        ScheduledMessageStore,
+    };
+    use crate::conversation::application::{
+        ConversationCaller, ConversationDependencies, ConversationFuture, ConversationLimits,
+        ConversationListing, ConversationService, ListedConversations, ObservationCursor,
+        ObservedConversations, UsageLimitPreferenceDecision, UsageLimitPreferenceFacts,
+        UsageLimitPreferenceGrant, UsageLimitPreferencePolicyEvaluator,
+    };
+    use crate::conversation::domain::ContinuationCause;
+    use crate::conversation_test_support::{
+        only, AcceptingCreationAudit, AcceptingDeletionAudit, InMemoryStorage, MemoryRepository,
+        MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock,
+        DELETION_BUDGETS,
+    };
+    use nessa_protocol::conversation::domain::ConversationId;
+
+    fn caller() -> ConversationCaller {
+        ConversationCaller {
+            organization_id: OrganizationId::new("org").unwrap(),
+            principal_id: PrincipalId::new("person").unwrap(),
+            surface_id: "desktop".into(),
+            action_id: "toggle".into(),
+        }
+    }
+
+    fn facts(role: &str) -> UsageLimitPreferenceFacts {
+        UsageLimitPreferenceFacts {
+            principal_id: "person".into(),
+            organization_id: "org".into(),
+            role: role.into(),
+            active: true,
+            grants: vec![UsageLimitPreferenceGrant {
+                action: "credential.manage".into(),
+                resource_id: "gateway".into(),
+                organization_id: "org".into(),
+            }],
+            gateway_id: "gateway".into(),
+            gateway_organization: "org".into(),
+        }
+    }
+
+    fn service(
+        listing: Arc<dyn ConversationListing>,
+        clock: Arc<dyn Clock>,
+    ) -> ConversationService {
+        let provider = Arc::new(ProviderFactory::default());
+        ConversationService::new(
+            ConversationDependencies {
+                access_policy: crate::conversation_test_support::access_policy(),
+                agents: only(Arc::new(Provider::new(provider))),
+                storage: Arc::new(InMemoryStorage::new()),
+                metadata: Arc::new(MemoryRepository::default()),
+                mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
+                creation_audit: Arc::new(AcceptingCreationAudit),
+                file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                attachments: None,
+                summaries: Arc::new(MemorySummaries::default()),
+                listing,
+                deletion_audit: Arc::new(AcceptingDeletionAudit),
+                provider_sessions: crate::conversation_test_support::claude_erasers(),
+                deletion_budgets: DELETION_BUDGETS,
+                message_commit_clock:
+                    crate::conversation_test_support::runtime_message_commit_clock(),
+                clock,
+                environment: crate::conversation_test_support::in_process_environment(),
+            },
+            ConversationLimits::default(),
+            None,
+        )
+        .unwrap()
+    }
+
+    /// Allows an active admin and refuses every other role. The Cedar bundle is
+    /// tested beside its policies; this double is what the service is shown.
+    struct AdminOnly;
+
+    impl UsageLimitPreferencePolicyEvaluator for AdminOnly {
+        fn evaluate(
+            &self,
+            facts: &UsageLimitPreferenceFacts,
+        ) -> Result<UsageLimitPreferenceDecision, AccessError> {
+            if facts.role == "admin" && facts.active {
+                Ok(UsageLimitPreferenceDecision::Allow {
+                    policies: vec!["admin".into()],
+                })
+            } else {
+                Ok(UsageLimitPreferenceDecision::Deny {
+                    policies: vec!["member".into()],
+                })
+            }
+        }
+    }
+
+    /// Preference changes and outcome timestamps, without a database.
+    struct RecordingStore {
+        enabled: AtomicBool,
+        /// `(enabled, person)` for each change. An unchanged write is absent.
+        changes: Mutex<Vec<(bool, bool)>>,
+        outcomes: Mutex<Vec<(String, u64)>>,
+    }
+
+    impl RecordingStore {
+        fn new(enabled: bool) -> Self {
+            Self {
+                enabled: AtomicBool::new(enabled),
+                changes: Mutex::new(Vec::new()),
+                outcomes: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    fn refused<T: Send + 'static>() -> ConversationFuture<'static, T> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
+
+    impl ScheduledMessageStore for RecordingStore {
+        fn preference(&self) -> ConversationFuture<'_, bool> {
+            let enabled = self.enabled.load(Ordering::SeqCst);
+            Box::pin(async move { Ok(enabled) })
+        }
+        fn set_preference(
+            &self,
+            enabled: bool,
+            actor: ScheduleActor,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
+            let was = self.enabled.swap(enabled, Ordering::SeqCst);
+            if was != enabled {
+                self.changes.lock().unwrap().push((enabled, actor.person));
+            }
+            Box::pin(async move { Ok(enabled) })
+        }
+        fn open(&self, _: &str) -> ConversationFuture<'_, Option<ScheduledMessage>> {
+            refused()
+        }
+        fn accept(
+            &self,
+            _: ScheduleDraft,
+            _: u64,
+        ) -> ConversationFuture<'_, Option<ScheduledMessage>> {
+            refused()
+        }
+        fn move_due(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+            refused()
+        }
+        fn defer_claim(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+            refused()
+        }
+        fn cancel_open(
+            &self,
+            _: &str,
+            _: ContinuationCause,
+            _: ScheduleActor,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
+            refused()
+        }
+        fn claim_due(&self, _: u64, _: usize) -> ConversationFuture<'_, Vec<ScheduledMessage>> {
+            refused()
+        }
+        fn next_due(&self, _: u64) -> ConversationFuture<'_, Option<u64>> {
+            refused()
+        }
+        fn begin_submit(&self, _: &str) -> ConversationFuture<'_, bool> {
+            refused()
+        }
+        fn release_submit(&self, _: &str) -> ConversationFuture<'_, ()> {
+            refused()
+        }
+        fn retire_unfenced_submissions(&self, _: u64) -> ConversationFuture<'_, usize> {
+            refused()
+        }
+        fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
+            refused()
+        }
+        fn record_outcome(
+            &self,
+            execution_id: &str,
+            _: ScheduleSettlement,
+            _: &str,
+            at_ms: u64,
+        ) -> ConversationFuture<'_, ()> {
+            self.outcomes
+                .lock()
+                .unwrap()
+                .push((execution_id.to_owned(), at_ms));
+            Box::pin(async { Ok(()) })
+        }
+        fn erase_conversation(&self, _: &str, _: u64) -> ConversationFuture<'_, ()> {
+            refused()
+        }
+    }
+
+    fn bind(service: &ConversationService, store: Arc<RecordingStore>) {
+        service.bind_scheduled_messages(store);
+        service.bind_usage_limit_preference_policy(Arc::new(AdminOnly));
+    }
+
+    struct TwoOwners {
+        seen: Mutex<Vec<String>>,
+        fail: bool,
+    }
+
+    impl ConversationListing for TwoOwners {
+        fn list(
+            &self,
+            _: &OrganizationId,
+            _: &PrincipalId,
+            _: bool,
+            _: usize,
+        ) -> ConversationFuture<'_, ListedConversations> {
+            Box::pin(async { Ok(ListedConversations::default()) })
+        }
+        fn observe(
+            &self,
+            _: &OrganizationId,
+            owner: &PrincipalId,
+            _: bool,
+            _: Option<ObservationCursor>,
+        ) -> ConversationFuture<'_, ObservedConversations> {
+            self.seen.lock().unwrap().push(owner.as_str().to_owned());
+            let fail = self.fail;
+            Box::pin(async move {
+                Ok(ObservedConversations {
+                    conversations: Vec::new(),
+                    complete: !fail,
+                    cursor: None,
+                })
+            })
+        }
+        fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>> {
+            Box::pin(async {
+                Ok(vec![
+                    (
+                        OrganizationId::new("org-a").unwrap(),
+                        PrincipalId::new("person-a").unwrap(),
+                    ),
+                    (
+                        OrganizationId::new("org-b").unwrap(),
+                        PrincipalId::new("person-b").unwrap(),
+                    ),
+                ])
+            })
+        }
+    }
+
+    struct NotifyOnDue {
+        wakeup: Arc<tokio::sync::Notify>,
+        scans: Arc<AtomicUsize>,
+    }
+
+    impl ScheduledMessageStore for NotifyOnDue {
+        fn preference(&self) -> ConversationFuture<'_, bool> {
+            Box::pin(async { Ok(true) })
+        }
+        fn set_preference(
+            &self,
+            _: bool,
+            _: ScheduleActor,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
+            Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+        fn open(&self, _: &str) -> ConversationFuture<'_, Option<super::ScheduledMessage>> {
+            Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+        fn accept(
+            &self,
+            _: ScheduleDraft,
+            _: u64,
+        ) -> ConversationFuture<'_, Option<super::ScheduledMessage>> {
+            Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+        fn move_due(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+            Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+        fn defer_claim(&self, _: &str, _: &str, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+            Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+        fn cancel_open(
+            &self,
+            _: &str,
+            _: ContinuationCause,
+            _: ScheduleActor,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
+            Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+        fn claim_due(
+            &self,
+            _: u64,
+            _: usize,
+        ) -> ConversationFuture<'_, Vec<super::ScheduledMessage>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn next_due(&self, _: u64) -> ConversationFuture<'_, Option<u64>> {
+            // One accept, during the first read. A later read must not notify:
+            // the loop would otherwise stay ready and never park.
+            let scan = self.scans.fetch_add(1, Ordering::SeqCst);
+            if scan == 0 {
+                self.wakeup.notify_waiters();
+            }
+            Box::pin(async { Ok(None) })
+        }
+        fn begin_submit(&self, _: &str) -> ConversationFuture<'_, bool> {
+            Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+        fn release_submit(&self, _: &str) -> ConversationFuture<'_, ()> {
+            Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+        fn retire_unfenced_submissions(&self, _: u64) -> ConversationFuture<'_, usize> {
+            Box::pin(async { Ok(0) })
+        }
+        fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
+            Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+        fn record_outcome(
+            &self,
+            _: &str,
+            _: ScheduleSettlement,
+            _: &str,
+            _: u64,
+        ) -> ConversationFuture<'_, ()> {
+            Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+        fn erase_conversation(&self, _: &str, _: u64) -> ConversationFuture<'_, ()> {
+            Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+    }
+
+    struct ShiftClock(AtomicU64);
+
+    impl Clock for ShiftClock {
+        fn unix_milliseconds(&self) -> u64 {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+
+    struct ShiftStorage {
+        clock: Arc<ShiftClock>,
+    }
+
+    struct ShiftLease;
+
+    impl CreationStorage for ShiftStorage {
+        fn open_creation(
+            &self,
+            _: String,
+            _: String,
+            _: bool,
+        ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
+            self.clock.0.store(9_000, Ordering::SeqCst);
+            Box::pin(async { Ok(Some(Arc::new(ShiftLease) as Arc<dyn CreationStorageLease>)) })
+        }
+    }
+
+    impl CreationStorageLease for ShiftLease {
+        fn load(&self, _: &str) -> CreationFuture<'_, Option<CreationReceipt>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn save(&self, _: CreationReceipt) -> CreationFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn load_mutation(&self, _: &str) -> CreationFuture<'_, Option<MutationReceipt>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn save_mutation(&self, _: MutationReceipt) -> CreationFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn enabling_the_preference_scans_every_catalogue_owner() {
+        let listing = Arc::new(TwoOwners {
+            seen: Mutex::new(Vec::new()),
+            fail: false,
+        });
+        let service = service(listing.clone(), Arc::new(TestClock));
+        let store = Arc::new(RecordingStore::new(false));
+        bind(&service, store);
+        let update = service
+            .set_usage_limit_auto_continue(true, caller(), facts("admin"))
+            .await
+            .unwrap();
+        assert_eq!(update, PreferenceUpdate::Stored(true));
+        assert_eq!(
+            listing.seen.lock().unwrap().as_slice(),
+            ["person-a", "person-b"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_catalogue_scan_restores_an_off_preference() {
+        let listing = Arc::new(TwoOwners {
+            seen: Mutex::new(Vec::new()),
+            fail: true,
+        });
+        let service = service(listing, Arc::new(TestClock));
+        let store = Arc::new(RecordingStore::new(false));
+        bind(&service, store.clone());
+        let error = service
+            .set_usage_limit_auto_continue(true, caller(), facts("admin"))
+            .await;
+        assert!(error.is_err());
+        assert!(!store.preference().await.unwrap());
+        assert_eq!(
+            store.changes.lock().unwrap().as_slice(),
+            &[(true, true), (false, false)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_scan_leaves_a_preference_that_was_already_on() {
+        let listing = Arc::new(TwoOwners {
+            seen: Mutex::new(Vec::new()),
+            fail: true,
+        });
+        let service = service(listing, Arc::new(TestClock));
+        let store = Arc::new(RecordingStore::new(false));
+        store
+            .set_preference(true, ScheduleActor::system(), 1)
+            .await
+            .unwrap();
+        bind(&service, store.clone());
+        let error = service
+            .set_usage_limit_auto_continue(true, caller(), facts("admin"))
+            .await;
+        assert!(error.is_err());
+        assert!(store.preference().await.unwrap());
+        assert_eq!(store.changes.lock().unwrap().as_slice(), &[(true, false)]);
+    }
+
+    #[tokio::test]
+    async fn an_active_member_cannot_change_the_preference() {
+        let listing = Arc::new(TwoOwners {
+            seen: Mutex::new(Vec::new()),
+            fail: false,
+        });
+        let service = service(listing.clone(), Arc::new(TestClock));
+        let store = Arc::new(RecordingStore::new(false));
+        bind(&service, store.clone());
+        let update = service
+            .set_usage_limit_auto_continue(true, caller(), facts("member"))
+            .await
+            .unwrap();
+        assert!(matches!(update, PreferenceUpdate::Refused { .. }));
+        assert!(!store.preference().await.unwrap());
+        assert!(store.changes.lock().unwrap().is_empty());
+        assert!(listing.seen.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_continuation_accepted_during_the_scan_wakes_the_loop() {
+        let service = service(
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            Arc::new(TestClock),
+        );
+        let scans = Arc::new(AtomicUsize::new(0));
+        service.bind_scheduled_messages(Arc::new(NotifyOnDue {
+            wakeup: service.inner.schedule_wakeup.clone(),
+            scans: scans.clone(),
+        }));
+        let retired = service.inner.retired.clone();
+        let task = tokio::spawn(async move {
+            service.run_scheduled_messages().await;
+        });
+        let observed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while scans.load(Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        retired.send_replace(true);
+        let finished = tokio::time::timeout(std::time::Duration::from_secs(2), task).await;
+        assert!(
+            observed.is_ok(),
+            "a continuation accepted during the scan did not wake the loop"
+        );
+        finished.expect("the schedule loop did not stop").unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_outcome_clock_is_read_after_submission() {
+        let clock = Arc::new(ShiftClock(AtomicU64::new(1_000)));
+        let service = service(
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            clock.clone(),
+        );
+        let store = Arc::new(RecordingStore::new(false));
+        service.bind_scheduled_messages(store.clone());
+        service.bind_commands(Arc::new(ShiftStorage { clock }));
+        let conversation = "11111111-1111-4111-8111-111111111111";
+        let row = ScheduledMessage {
+            conversation: conversation.into(),
+            causal_execution: "causal".into(),
+            execution_id: "exec-1".into(),
+            due_at_ms: 10,
+            delivering: true,
+            agent: "claude".into(),
+            model: "opus".into(),
+            prompt: "continue".into(),
+            organization_id: "org".into(),
+            principal_id: "person".into(),
+            surface_id: "desktop".into(),
+            action_id: "action".into(),
+            initiation: "owner".into(),
+            grant_id: None,
+            policy_revision: None,
+            tools_checked: false,
+        };
+        service
+            .finish_fenced_submit(
+                store.clone(),
+                ConversationId::new(conversation).unwrap(),
+                &row,
+            )
+            .await;
+        assert_eq!(
+            store.outcomes.lock().unwrap().as_slice(),
+            [("exec-1".into(), 9_000)]
+        );
     }
 }
