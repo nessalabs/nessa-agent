@@ -7,6 +7,8 @@
 )]
 
 use super::host_ownership::DesktopHostOwnership;
+#[cfg(any(target_os = "macos", test))]
+use super::RuntimeCopyProgress;
 #[cfg(test)]
 use super::SystemMonotonicClock;
 use super::{
@@ -21,7 +23,7 @@ use super::{
     ReconciliationHistoryFact, StartupStep,
 };
 #[cfg(any(target_os = "macos", test))]
-use super::{DeferredStageLaunch, DeferredStageReporter};
+use super::{DeferredStageLaunch, DeferredStageReporter, StageMessage};
 use super::{DesktopHostClaim, DesktopHostLease};
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
@@ -368,16 +370,11 @@ struct StartupProgress {
         )
     )]
     attempt: Arc<AttemptReceipt>,
-    #[cfg_attr(
-        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
-        expect(
-            dead_code,
-            reason = "native reconciliation is supported only on macOS and Linux"
-        )
-    )]
+    // Read on every platform. The deferred copy forwards sync progress
+    // through this port while the gateway is already ready.
     events: Arc<dyn GatewayStartupEvents>,
     // Read on every platform: quit yields this session's writer gate while a
-    // deferred copy runs. The other fields stay macOS and Linux only.
+    // deferred copy runs.
     journal: Arc<dyn GatewayReconciliationJournalSession>,
     state: Arc<Mutex<ProgressState>>,
     deferred_stage: Mutex<Option<DeferredStageWait>>,
@@ -393,17 +390,26 @@ struct DeferredStageWait {
 
 impl DeferredStageWait {
     /// The publication result. The copy starts here, after the plan was accepted.
-    fn publication_result(&mut self) -> Result<(), String> {
+    ///
+    /// Sync progress is forwarded while this waits. It does not write startup.
+    fn publication_result(&mut self, events: &dyn GatewayStartupEvents) -> Result<(), String> {
         #[cfg(any(target_os = "macos", test))]
         {
-            let (reporter, result) = DeferredStageReporter::pair();
+            let (reporter, incoming) = DeferredStageReporter::pair();
             self.launch.start(reporter);
-            result.recv().unwrap_or_else(|_| {
-                Err("deferred runtime publication ended without a result".into())
-            })
+            loop {
+                match incoming.recv() {
+                    Ok(StageMessage::Progress(progress)) => events.runtime_copy(&progress),
+                    Ok(StageMessage::Finished(result)) => return result,
+                    Err(_) => {
+                        return Err("deferred runtime publication ended without a result".into())
+                    }
+                }
+            }
         }
         #[cfg(not(any(target_os = "macos", test)))]
         {
+            let _ = events;
             Err("deferred runtime publication is unavailable".into())
         }
     }
@@ -1153,6 +1159,15 @@ impl Gateway {
             .lock()
             .map(|lifecycle| lifecycle.startup.clone())
             .map_err(|_| GatewayError::Registration("gateway startup state is unavailable".into()))
+    }
+
+    /// The latest private-runtime copy report, if the event adapter kept one.
+    ///
+    /// This is not startup. A window that subscribes after the report was
+    /// emitted reads this. `None` means the host has not reported.
+    #[cfg(any(target_os = "macos", test))]
+    pub fn runtime_copy(&self) -> Option<RuntimeCopyProgress> {
+        self.startup_events.latest_runtime_copy()
     }
 
     pub async fn start(&self) -> Result<(), GatewayError> {
@@ -2148,11 +2163,11 @@ fn execute_attempt(
                 // writer gate first so quit can record a stop against the
                 // ready gateway. The stage file lock stays held.
                 let stage_result = if early.is_some() {
-                    progress
-                        .journal
-                        .while_lock_yielded(&mut || deferred.publication_result())
+                    progress.journal.while_lock_yielded(&mut || {
+                        deferred.publication_result(progress.events.as_ref())
+                    })
                 } else {
-                    deferred.publication_result()
+                    deferred.publication_result(progress.events.as_ref())
                 };
                 match complete_deferred_stage(
                     &progress,

@@ -4,6 +4,10 @@ name: Stage runtime phases
 # request (runs 38473593968 and 38485815250). pull_request is gone so later
 # pushes do not pay for the ~390MB tree again. workflow_dispatch is read from
 # the default branch, so this file does not run until it is there.
+#
+# The signed-Mac comparison of the old one-thread copy and the tree clone is
+# local, after `sudo -v`:
+# NESSA_STAGING_PURGE=required cargo test -p nessa-app --release compare_runtime_staging_strategies -- --ignored --nocapture --test-threads=1
 on:
   workflow_dispatch:
 

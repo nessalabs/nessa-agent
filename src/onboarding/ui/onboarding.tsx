@@ -18,6 +18,7 @@ import {
 import { AgentMark } from "./agent-mark"
 import { Keycaps } from "./keycaps"
 import { useHeldKeys } from "./use-held-keys"
+import type { RuntimeCopy } from "../../host"
 import type { GatewayStartupStatus } from "../../startup/application/gateway-startup"
 import { COULD_NOT_START } from "../../startup/application/copy"
 import type { ShortcutPlatform } from "../model/shortcut-display"
@@ -179,6 +180,39 @@ function readinessNote(
   if (failure === "unreachable") return { text: "Can’t reach Nessa", Icon: Unplug }
   if (failure === "unreadable") return { text: "Unexpected answer", Icon: CircleHelp }
   return { text: "Checking…", Icon: LoaderCircle, spin: true }
+}
+
+/** How far the private runtime copy has got, as a percent of bytes when the
+ * host reported a size, otherwise of files. An empty total stays at zero.
+ * While the host is still copying, 100 is held back: rounding a nearly
+ * finished byte count, or a byte total that ignores a zero-length file still
+ * syncing, would otherwise read as done. */
+function runtimeCopyValue(progress: RuntimeCopy): number {
+  const total = progress.bytesTotal > 0 ? progress.bytesTotal : progress.filesTotal
+  const completed =
+    progress.bytesTotal > 0 ? progress.bytesCompleted : progress.filesCompleted
+  if (total === 0) return 0
+  const percent = Math.min(100, Math.round((completed / total) * 100))
+  if (progress.state === "copying" && percent === 100) return 99
+  return percent
+}
+
+/** Shown while files are still finishing `sync_all`. Settled and a missing
+ * report draw nothing. An agent's own readiness decides whether it can be picked. */
+function RuntimeCopyBar({ progress }: { progress?: RuntimeCopy }) {
+  if (progress?.state !== "copying") return null
+  const value = runtimeCopyValue(progress)
+  return (
+    <progress
+      aria-label="Preparing the private runtime"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={value}
+      max={100}
+      value={value}
+      className="h-1.5 w-full"
+    />
+  )
 }
 
 /** One listed agent: its mark, its name, and what it is waiting on. An agent
@@ -473,6 +507,7 @@ export function Onboarding({
   onRetryGateway,
   checking = false,
   platform,
+  runtimeCopy,
 }: {
   state: OnboardingState
   /** Secure-store effect injected by native setup composition. */
@@ -498,6 +533,9 @@ export function Onboarding({
    * stops taking presses, because each ask runs a real probe per agent and a
    * button that looks inert invites being pressed again. */
   checking?: boolean
+  /** Private-runtime copy progress. Absent in a browser and after reporting
+   * stops. An agent's own readiness decides whether it can be picked. */
+  runtimeCopy?: RuntimeCopy
 }) {
   const credentials = useAgentApiKeySave(apiKeys)
   // Called unconditionally, as a hook must be; it only listens on the step
@@ -656,6 +694,7 @@ export function Onboarding({
         <h1 id={SETUP_HEADING_ID} className="nessa-text-6 font-semibold text-foreground">
           Choose an agent
         </h1>
+        <RuntimeCopyBar progress={runtimeCopy} />
         <div role="group" aria-label="Agent" className="flex flex-col gap-2">
           {AGENT_CHOICES.map((choice) => {
             const readiness = agentReadiness(state, choice.id)
