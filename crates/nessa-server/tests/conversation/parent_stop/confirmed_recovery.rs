@@ -997,7 +997,10 @@ async fn original_decline_preparation_and_audit_receipt_survive_actual_process_l
             assert!(
                 recovered.is_ok(),
                 "stage={stage} physical={physical}: {recovered:?}; audit={:?}; history={:?}",
-                audit.attempts.lock().unwrap(),
+                {
+                    let attempts = audit.attempts.lock().unwrap();
+                    attempts.clone()
+                },
                 storage
                     .read_committed(conversation_session(&target))
                     .await

@@ -64,9 +64,11 @@ impl ExecutableUseGuard for UseGuard {
         Ok(())
     }
 }
+type SharedHarnessControl = Arc<tokio::sync::Mutex<Box<dyn HarnessControl>>>;
+
 #[derive(Default)]
 struct HostState {
-    control: Mutex<Option<Arc<tokio::sync::Mutex<Box<dyn HarnessControl>>>>>,
+    control: Mutex<Option<SharedHarnessControl>>,
     physical: Mutex<Option<CloseOutcome>>,
     launches: AtomicUsize,
     stops: AtomicUsize,
