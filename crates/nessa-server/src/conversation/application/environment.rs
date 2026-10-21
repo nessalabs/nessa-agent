@@ -1123,9 +1123,10 @@ impl LiveLease {
     /// or without any, it is Interrupted, and evidence that arrives later
     /// accounts for it (row L8).
     ///
-    /// What this answers is whether anything may still be held: the close's
-    /// confirmation, or the environment's own confirmation that the lease's
-    /// process tree is gone, which holds whatever the close reported.
+    /// The environment's receipt describes its physical process tree. Whole
+    /// SDK release is acknowledged only by its actual cleanup owner, including
+    /// any executable-use guard. Reconciliation after End shares its remaining
+    /// budget. Independent scheduling, audit and storage failures stay visible.
     ///
     /// The caller runs this on a task of its own, so a caller that stops
     /// waiting does not stop the lease from being accounted for.

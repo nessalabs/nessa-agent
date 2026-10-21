@@ -6478,7 +6478,7 @@ impl ConversationService {
                         // rather than waiting unresolved for a resume that
                         // will not come
                         // (`a_close_ends_the_turns_a_restart_cut_off`).
-                        let mut decline_failure = None;
+                        let mut decline_failure: Option<AgentError> = None;
                         if end == AgentEnd::Close {
                             for turn in live.agent.owed_turns().await {
                                 if let Err(error) =
