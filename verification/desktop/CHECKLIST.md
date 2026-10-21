@@ -898,6 +898,11 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   session drops the failure at once. The box still shows the read error
   and Try Again until the box itself goes. A transcript that never arrived
   is what the layout test removes.
+- [ ] **Stop stays until that box goes while a turn was running.** The
+  source removing the session drops the transcript at once. The box still
+  shows the turn and Stop, rather than Send, until the box itself goes.
+  _Check:_ `columns.mjs --only stop-held`. The layout test removes a
+  session whose conversation was showing a running turn.
 - [ ] **A pane preview stays until the dropped arrangement paints.** An
   accepted swap keeps the preview on the panes the grid has not replaced
   yet. The next two frames still show it. It lets go on the frame the new

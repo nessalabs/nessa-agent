@@ -53,6 +53,7 @@ const checks = [
   "rail-fold-focus",
   "draft-held",
   "reply-held",
+  "stop-held",
 ]
 
 const meta = {
@@ -93,7 +94,10 @@ Checks, per engine, layout and size:
   draft-held       closing a new session that is not the last pane keeps its
                    home and unsent text on the next frame, until the box goes
   reply-held       the source removing an established session that is not the
-                   last pane keeps its unsent reply on the next frame`,
+                   last pane keeps its unsent reply on the next frame
+  stop-held        the source removing a session whose agent is at work, and
+                   that is not the last pane, keeps Stop and that turn on the
+                   next frame`,
 }
 
 /** The columns in the order they stand; the chat area and the overview share the last place. */
@@ -996,6 +1000,108 @@ const body = {
         `after the box goes, ${after} panes remain; the removal started from ${opened}`,
       )
     return { sample, label, before, opened, after, failures }
+  },
+
+  /**
+   * The source removes a session whose agent is at work, while another
+   * pane stays. The box keeps Stop and that turn on the next frame.
+   * Send in its place, while the turn is still showing, is the bug.
+   */
+  "stop-held": async ({ page }) => {
+    const title = "Split panes for the chat workspace"
+    const activity = "Editing workspace-panes.tsx"
+    const before = await page.locator(css.pane).count()
+    const place = await page.evaluate((wanted) => {
+      const titled = (item) =>
+        item.querySelector(".desktop-list-row-label")?.textContent === wanted
+      const rows = [...document.querySelectorAll("[data-session-row]")]
+      const listed = rows.find((item) => item.closest(".workspace-list") && titled(item))
+      const row = listed ?? rows.find(titled)
+      const id = row?.getAttribute("data-session-row")
+      return id ? { id, list: listed === row } : null
+    }, title)
+    if (!place) throw new CannotRun(`no session row titled ${title}`)
+    const row = place.list
+      ? page.locator(`.workspace-list [data-session-row="${place.id}"]`)
+      : page.locator(`[data-session-row="${place.id}"]`).first()
+    await row.click()
+    await page.waitForFunction(
+      ({ pane, turn }) =>
+        [...document.querySelectorAll(pane)].some((item) => {
+          const stop =
+            item.querySelector("button.desktop-send")?.getAttribute("aria-label") ===
+            "Stop"
+          const live = item.querySelector(".workspace-live")?.textContent ?? ""
+          return stop && live.includes(turn)
+        }),
+      { pane: css.pane, turn: activity },
+    )
+    await openPanes(page, before + 1)
+    const opened = await page.locator(css.pane).count()
+    const showing = await page.evaluate(
+      ({ pane, turn }) =>
+        [...document.querySelectorAll(pane)].some((item) => {
+          const stop =
+            item.querySelector("button.desktop-send")?.getAttribute("aria-label") ===
+            "Stop"
+          const live = item.querySelector(".workspace-live")?.textContent ?? ""
+          return stop && live.includes(turn)
+        }),
+      { pane: css.pane, turn: activity },
+    )
+    if (!showing) throw new CannotRun("the open turn left the pane before the removal")
+    await page.evaluate((pane) => {
+      window.__heldTurn = null
+      window.addEventListener(
+        "click",
+        (event) => {
+          const target = event.target instanceof Element ? event.target : null
+          const removal = target?.closest(
+            "[data-session-action='archive'], [data-delete-action='confirm']",
+          )
+          if (!removal) return
+          requestAnimationFrame(() => {
+            window.__heldTurn = [...document.querySelectorAll(pane)].map((item) => ({
+              label: item.getAttribute("aria-label"),
+              stop:
+                item.querySelector("button.desktop-send")?.getAttribute("aria-label") ??
+                "",
+              live: item.querySelector(".workspace-live")?.textContent ?? "",
+            }))
+          })
+        },
+        true,
+      )
+    }, css.pane)
+    await row.hover()
+    const archive = row.locator('[data-session-action="archive"]')
+    if ((await archive.count()) > 0) await archive.click()
+    else {
+      await row.click({ button: "right" })
+      await page.getByRole("menuitem", { name: "Delete…" }).click()
+      await page.locator('[data-delete-action="confirm"]').click()
+    }
+    await page.waitForFunction(() => window.__heldTurn !== null)
+    const sample = await page.evaluate(() => window.__heldTurn)
+    await settled(page)
+    await frames(page, 4)
+    const after = await page.locator(css.pane).count()
+    const failures = []
+    const kept = sample?.find((item) => item.live.includes(activity))
+    if (!sample) failures.push("the removal did not sample the next frame")
+    else if (!kept)
+      failures.push(`the next frame has no running turn: ${JSON.stringify(sample)}`)
+    else {
+      if (kept.stop !== "Stop")
+        failures.push(`the held box offers ${kept.stop} while the turn is still showing`)
+      if (kept.label !== title)
+        failures.push(`the held box is labelled ${kept.label}, was ${title}`)
+    }
+    if (after !== opened - 1)
+      failures.push(
+        `after the box goes, ${after} panes remain; the removal started from ${opened}`,
+      )
+    return { sample, title, before, opened, after, failures }
   },
 }
 

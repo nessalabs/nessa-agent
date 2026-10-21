@@ -72,10 +72,14 @@ function useComposerActions(sessionId: string) {
  * Stop, while the session's agent is at work (`atWork`): what the docked
  * composer's send button becomes. Held as asked until the stop settles, so
  * one press asks once; the turn's end arrives as the source's update.
+ * A removed session keeps that Stop until its box goes. The transcript is
+ * already gone, and the live read would turn the button back into Send
+ * while the held conversation still shows the turn.
  */
 function useStop(sessionId: string) {
   const dispatch = useWorkspaceDispatch()
-  const working = useWorkspaceSelector((state) => selectAtWork(state, sessionId))
+  const workingLive = useWorkspaceSelector((state) => selectAtWork(state, sessionId))
+  const working = useRememberedValue(sessionId, workingLive)
   const [stopping, setStopping] = useState(false)
   const stop = useCallback(() => {
     setStopping(true)

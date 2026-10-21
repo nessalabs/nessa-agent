@@ -688,6 +688,60 @@ describe("a source removing a session", () => {
       frames.restore()
     }
   })
+
+  it("keeps Stop until the box goes while a turn was running", async () => {
+    // The turn has to be on screen before the source removes the session,
+    // or the box has nothing to keep. Stop reads that turn.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      const send = () => pane()?.querySelector("button.desktop-send")
+      const live = () => pane()?.querySelector(".workspace-live")
+      for (let step = 0; step < 8 && !pane()?.querySelector("textarea"); step++)
+        await act(async () => frames.runFrame())
+      expect(pane()?.querySelector("textarea")).not.toBeNull()
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.transcriptLoaded({
+            transcript: {
+              sessionId: "b",
+              messages: [],
+              activity: { label: "Running cargo test", since: 1 },
+              approvals: [],
+              revision: 2,
+            },
+          }),
+        )
+      })
+      expect(send()?.getAttribute("aria-label")).toBe("Stop")
+      expect(live()?.textContent).toContain("Running cargo test")
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.transcripts).not.toHaveProperty("b")
+      expect(send()?.getAttribute("aria-label")).toBe("Stop")
+      expect(live()?.textContent).toContain("Running cargo test")
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(send()?.getAttribute("aria-label")).toBe("Stop")
+      expect(live()?.textContent).toContain("Running cargo test")
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
 })
 
 describe("a draft's close", () => {
