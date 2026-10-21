@@ -63,7 +63,9 @@ retries wait on the pause the session was composed with. A stop during that wait
 returns within one stop slice and does not ask the next range. A spent fetch budget
 ends that wait the same way and is unreachable. A gateway refusal, including a
 handshake that refuses before a fetch exists, asks status again even when stop
-arrives after that refusal settled. A local fault already produced stays that
+arrives after that refusal settled. The initial status and that recheck are
+returned with the fetch, including a terminal status that selected no reader.
+A local fault already produced stays that
 fault. A stop during the
 part sync does not link the output. Once the hard link exists, a failure to remove
 the part or to sync the directory reports that the output exists. The native session and compound

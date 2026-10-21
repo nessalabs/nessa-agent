@@ -329,6 +329,36 @@ impl FollowedConversation {
     }
 }
 
+/// One admitted held-file fetch. Status and binding selection match a refresh.
+/// A local match asks no status. An authority refusal, including a handshake
+/// that refuses before a fetch exists, keeps its recheck.
+#[derive(Debug)]
+pub struct SessionArtifact {
+    initial: Option<SessionStatus>,
+    selection_failure: Option<NativeClientError>,
+    fetched: Option<Result<ArtifactFetch, ReadFailure>>,
+    recheck: Option<SessionStatus>,
+}
+impl SessionArtifact {
+    /// Initial pinned status and its purge. Empty when the file was already local.
+    pub fn initial(&self) -> Option<&SessionStatus> {
+        self.initial.as_ref()
+    }
+    /// A contradictory or unreadable current binding refused product selection.
+    pub fn selection_failure(&self) -> Option<NativeClientError> {
+        self.selection_failure
+    }
+    /// The fetch, absent when status or binding selected no reader.
+    /// `Err` is the handshake refusal, kept with [`Self::recheck`].
+    pub fn fetched(&self) -> Option<&Result<ArtifactFetch, ReadFailure>> {
+        self.fetched.as_ref()
+    }
+    /// Fresh refusal recheck and its own purge. A stop the fetch observed does not ask.
+    pub fn recheck(&self) -> Option<&SessionStatus> {
+        self.recheck.as_ref()
+    }
+}
+
 /// One admitted live read. Status and binding selection match a refresh. The
 /// product call is `conversation.subscribe`, and only an authority refusal
 /// asks status again.
@@ -769,16 +799,6 @@ fn artifact_authority_refused(outcome: Result<ArtifactFreshness, ArtifactFault>)
         outcome,
         Err(fault) if matches!(fault.kind(), ArtifactFaultKind::Gateway(ReadFailure::Refused))
     )
-}
-
-/// A status that produced no reader. A connector failure stays that failure.
-/// A completed status without an active reader has nothing to fetch with.
-fn absent_reader(status: &SessionStatus) -> SessionFailure {
-    match status {
-        SessionStatus::ReadOnly(Err(error)) => SessionFailure::Enrollment(*error),
-        SessionStatus::Owner(Err(_)) => SessionFailure::Owner(Arc::new(status.clone())),
-        _ => SessionFailure::NoCredential,
-    }
 }
 
 /// Views the server still marks `stale` are one replay, sent immediately.
@@ -1394,8 +1414,10 @@ impl NativeSession {
     /// A file already at the request's output is a local match and does not dial either.
     /// A stop already set, or set while that file is read, is `Stopped` and not a match.
     /// Elapsed time is this call on the session clock, including the status read
-    /// when the file is not already local. A gateway authority refusal asks
-    /// status again, as a refused catalogue read does. That includes a product
+    /// when the file is not already local. The initial status and any refusal
+    /// recheck come back with the fetch. A terminal status is that status,
+    /// including its purge, and nothing is fetched. A gateway authority refusal
+    /// asks status again, as a refused catalogue read does. That includes a product
     /// handshake that refuses, and a refusal that settled before a later stop.
     /// A stop the fetch itself observed does not ask.
     pub fn fetch_artifact(
@@ -1403,7 +1425,7 @@ impl NativeSession {
         stamp: &PhoneStamp,
         request: &ArtifactRequest<'_>,
         stop: Arc<ReadStop>,
-    ) -> Result<ArtifactFetch, SessionFailure> {
+    ) -> Result<SessionArtifact, SessionFailure> {
         let mut operation = self.enter(Some(stop.clone()))?;
         if stop.is_stopped() {
             return Err(SessionFailure::Stopped);
@@ -1419,17 +1441,36 @@ impl NativeSession {
             Err(error) => return Err(SessionFailure::Cache(error)),
             Ok(Some(outcome)) => {
                 let elapsed = driver.clock.elapsed_ms().saturating_sub(started);
-                return Ok(ArtifactFetch::decided(outcome, elapsed));
+                return Ok(SessionArtifact {
+                    initial: None,
+                    selection_failure: None,
+                    fetched: Some(Ok(ArtifactFetch::decided(outcome, elapsed))),
+                    recheck: None,
+                });
             }
             Ok(None) => {}
         }
         let status = driver.status();
-        driver.accept_publication(stamp)?;
         let selected = match driver.select_reader(&status) {
             Ok(Some(selected)) => selected,
-            Ok(None) => return Err(absent_reader(&status)),
-            Err(error) => return Err(SessionFailure::Enrollment(error)),
+            Ok(None) => {
+                return Ok(SessionArtifact {
+                    initial: Some(status),
+                    selection_failure: None,
+                    fetched: None,
+                    recheck: None,
+                })
+            }
+            Err(error) => {
+                return Ok(SessionArtifact {
+                    initial: Some(status),
+                    selection_failure: Some(error),
+                    fetched: None,
+                    recheck: None,
+                })
+            }
         };
+        driver.accept_publication(stamp)?;
         if selected.reader.receiver() != stamp.receiver() {
             return Err(SessionFailure::Fenced(PhoneFence::Replaced));
         }
@@ -1445,22 +1486,30 @@ impl NativeSession {
                 pause.as_ref(),
             ) {
             Ok(fetched) => fetched,
-            // The handshake refused before a fetch existed. Ask status again
-            // so the revocation can purge, then return that refusal.
             Err(ReadFailure::Refused) => {
-                let _ = driver.status();
-                return Err(SessionFailure::Cache(ReadFailure::Refused));
+                let recheck = driver.status();
+                return Ok(SessionArtifact {
+                    initial: Some(status),
+                    selection_failure: None,
+                    fetched: Some(Err(ReadFailure::Refused)),
+                    recheck: Some(recheck),
+                });
             }
             Err(error) => return Err(SessionFailure::Cache(error)),
         };
         let outcome = fetched.outcome();
-        // A range refusal that already settled, including one a later stop
-        // did not cause. Ask status again so the revocation can purge.
-        if artifact_authority_refused(outcome) {
-            let _ = driver.status();
-        }
+        let recheck = if artifact_authority_refused(outcome) {
+            Some(driver.status())
+        } else {
+            None
+        };
         let elapsed = driver.clock.elapsed_ms().saturating_sub(started);
-        Ok(ArtifactFetch::decided(outcome, elapsed))
+        Ok(SessionArtifact {
+            initial: Some(status),
+            selection_failure: None,
+            fetched: Some(Ok(ArtifactFetch::decided(outcome, elapsed))),
+            recheck,
+        })
     }
     /// Historical lookup remains available after key removal. This receiver
     /// selects original purge evidence, not read or command authority.

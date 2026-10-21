@@ -943,10 +943,58 @@ fn an_artifact_handshake_refusal_rechecks_and_releases_the_lease() {
         2,
         &output,
     );
-    let failure = parent
+    let admitted = parent
         .fetch_artifact(&stamp, &request, ReadStop::new())
-        .unwrap_err();
-    assert_eq!(failure, SessionFailure::Cache(ReadFailure::Refused));
+        .unwrap();
+    assert_eq!(
+        admitted.fetched().unwrap().as_ref().unwrap_err(),
+        &ReadFailure::Refused
+    );
+    assert!(admitted.initial().unwrap().purge().is_none());
+    assert!(admitted
+        .recheck()
+        .unwrap()
+        .purge()
+        .and_then(|purge| purge.as_ref().ok())
+        .is_some());
+    assert!(matches!(
+        parent.publication(),
+        Err(SessionFailure::Fenced(PhoneFence::Unbound))
+    ));
+    peer.join().unwrap();
+}
+
+#[test]
+fn a_terminal_artifact_status_keeps_its_purge() {
+    let fixture = Fixture::new(Mode::Good);
+    let parent = fixture.parent();
+    let peer = fixture.peer(vec![Reply::Active, Reply::Terminal]);
+    captured(parent.status().unwrap());
+    let stamp = parent.publication().unwrap();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let output = fixture.root.path().join("private/missing-held.bin");
+    let request = ArtifactRequest::new(
+        &conversation,
+        "sha256:fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+        "application/octet-stream",
+        2,
+        &output,
+    );
+    let admitted = parent
+        .fetch_artifact(&stamp, &request, ReadStop::new())
+        .unwrap();
+    assert!(admitted.fetched().is_none() && admitted.recheck().is_none());
+    let SessionStatus::Owner(Ok(initial)) = admitted.initial().unwrap() else {
+        panic!("terminal owner status");
+    };
+    assert!(matches!(
+        initial.recovery().unwrap().status(),
+        NativePairingStatus::Terminal { .. }
+    ));
+    assert!(initial
+        .purge()
+        .and_then(|purge| purge.as_ref().ok())
+        .is_some());
     assert!(matches!(
         parent.publication(),
         Err(SessionFailure::Fenced(PhoneFence::Unbound))

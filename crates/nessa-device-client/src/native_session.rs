@@ -9,8 +9,9 @@ use crate::{
     native_owner_recovery::NativeOwnerStatus,
     saved::{NativeScope, NativeTranscript},
     session::{
-        LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionCloseObservation,
-        SessionFailure, SessionFollow, SessionRead, SessionRefresh, SessionStatus,
+        LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionArtifact,
+        SessionCloseObservation, SessionFailure, SessionFollow, SessionRead, SessionRefresh,
+        SessionStatus,
     },
 };
 use nessa_auth::{
@@ -863,6 +864,54 @@ impl From<ArtifactFileStep> for NativeArtifactFileStep {
     }
 }
 
+/// Initial status, selection, held-file fetch, and optional refusal recheck.
+/// A local match has no initial status. A terminal status or a connector
+/// failure that selected no reader has no fetch. A handshake refusal is
+/// [`Self::failure`], kept with [`Self::recheck`].
+#[derive(uniffi::Object)]
+pub struct NativeArtifactAdmission {
+    value: SessionArtifact,
+}
+#[uniffi::export]
+impl NativeArtifactAdmission {
+    /// Initial pinned status and its purge. Empty when the file was already local.
+    pub fn initial(&self) -> Option<Arc<NativeStatus>> {
+        self.value
+            .initial()
+            .cloned()
+            .map(|value| Arc::new(NativeStatus { value }))
+    }
+    /// Exact current binding refusal before product selection.
+    pub fn selection_failure(&self) -> Option<Arc<NativeEnrollmentFailure>> {
+        self.value
+            .selection_failure()
+            .map(|value| Arc::new(NativeEnrollmentFailure { value }))
+    }
+    /// The held-file fetch when a reader was selected and the handshake succeeded.
+    pub fn fetch(&self) -> Option<Arc<NativeArtifactFetch>> {
+        self.value
+            .fetched()
+            .and_then(|result| result.as_ref().ok())
+            .copied()
+            .map(|value| Arc::new(NativeArtifactFetch { value }))
+    }
+    /// Handshake refusal, when a reader was selected and the product refused
+    /// before a fetch existed.
+    pub fn failure(&self) -> Option<NativeReadFailure> {
+        self.value
+            .fetched()
+            .and_then(|result| result.as_ref().err().copied())
+            .map(Into::into)
+    }
+    /// Authority-refusal recheck and its own purge. A stop the fetch observed does not ask.
+    pub fn recheck(&self) -> Option<Arc<NativeStatus>> {
+        self.value
+            .recheck()
+            .cloned()
+            .map(|value| Arc::new(NativeStatus { value }))
+    }
+}
+
 /// One held-file fetch. Freshness getters are empty when the fetch faulted.
 #[derive(uniffi::Object)]
 pub struct NativeArtifactFetch {
@@ -1169,12 +1218,13 @@ impl NativeDeviceSession {
             .map_err(Into::into)
     }
     /// Fetch one held file. A replaced stamp does not dial. A local digest match does not dial.
+    /// The admission returns the initial status and any refusal recheck with the fetch.
     pub fn fetch_artifact(
         &self,
         stamp: Arc<NativePhoneStamp>,
         request: NativeArtifactRequest,
         stop: Arc<NativeReadStop>,
-    ) -> Result<Arc<NativeArtifactFetch>, NativeCallError> {
+    ) -> Result<Arc<NativeArtifactAdmission>, NativeCallError> {
         let conversation = ConversationId::new(&request.conversation)
             .map_err(|_| NativeCallError::InvalidArgument)?;
         if !artifact_name_accepted(&request.digest, &request.media_type, request.size) {
@@ -1189,7 +1239,7 @@ impl NativeDeviceSession {
         );
         self.value
             .fetch_artifact(&stamp.stamp(), &request, stop.value.clone())
-            .map(|value| Arc::new(NativeArtifactFetch { value }))
+            .map(|value| Arc::new(NativeArtifactAdmission { value }))
             .map_err(Into::into)
     }
     /// Historical receipt recovery can select the prior receiver after key removal.

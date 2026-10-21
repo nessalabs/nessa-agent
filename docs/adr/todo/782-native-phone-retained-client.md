@@ -233,7 +233,8 @@ flowchart LR
 | Local file, stop already set or set while it is read | fetch | Stopped, not a local match | `a_stop_does_not_publish_a_local_match` |
 | Local inspection already produced a typed fault, stop set afterwards | fetch | That fault remains | `a_settled_local_fault_survives_a_later_stop` |
 | Gateway refusal already settled, stop set afterwards | fetch | Refused remains, so status is asked again | `a_settled_refusal_survives_a_later_stop` |
-| Product handshake refuses the artifact fetch | fetch | Refused, and status is asked again; a terminal status releases the lease | `an_artifact_handshake_refusal_rechecks_and_releases_the_lease` |
+| Product handshake refuses the artifact fetch | fetch | The admission returns Refused with the recheck status; a terminal recheck releases the lease | `an_artifact_handshake_refusal_rechecks_and_releases_the_lease` |
+| Terminal status before the file is fetched | fetch | That status and its purge are returned; nothing is fetched; the lease is released | `a_terminal_artifact_status_keeps_its_purge` |
 | Stop during the part re-read | fetch | Stopped, output not linked | `a_stop_during_the_part_reread_does_not_keep_the_file` |
 | Waiting: stop during a busy pause | fetch | Stopped within one stop slice; no later range; output absent | `a_stop_during_a_busy_pause_returns_within_one_slice`, `a_busy_pause_that_has_ended_asks_no_further_range` |
 | Waiting: budget spent during a busy pause | fetch | Unreachable within one stop slice; no later range; output absent | `a_budget_that_ends_during_a_busy_pause_is_unreachable` |
@@ -242,7 +243,7 @@ flowchart LR
 | Linked: part removal or directory sync fails | fetch | Linked, naming that step; the output bytes remain; a later stop leaves it | `a_linked_output_keeps_its_cleanup_failure`, `a_part_that_cannot_be_removed_after_the_link_leaves_the_output` |
 | Integrity already settled, stop set later | fetch | Integrity, including a part left in place | `a_settled_integrity_failure_survives_a_stop_keep_did_not_see` |
 | Digest mismatch, part removal and emptying both fail | fetch | Integrity, and both failed steps | `an_integrity_fault_keeps_a_part_that_could_not_be_removed` |
-| Bound, file not on disk | fetch | The connector's typed failure, one dial | `a_missing_file_reports_the_connector_failure` |
+| Bound, file not on disk | fetch | Ok admission whose initial status is the connector failure; nothing is fetched; one dial | `a_missing_file_reports_the_connector_failure` |
 
 ### Alternatives that lose
 

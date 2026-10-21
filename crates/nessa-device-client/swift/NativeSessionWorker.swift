@@ -246,13 +246,14 @@ public final class NativeSessionWorker: @unchecked Sendable {
     }
     public func fetchArtifact(
         stamp: NativePhoneStamp, request: NativeArtifactRequest
-    ) async throws -> NativeArtifactFetch {
+    ) async throws -> NativeArtifactAdmission {
         try await fetchArtifact(stamp: stamp, request: request, capture: { $0 })
     }
-    /// Capture one held-file fetch off UI before releasing admission.
+    /// Capture one held-file admission off UI before releasing admission.
+    /// The value keeps the initial status and any refusal recheck with the fetch.
     public func fetchArtifact<Value: Sendable>(
         stamp: NativePhoneStamp, request: NativeArtifactRequest,
-        capture: @escaping @Sendable (NativeArtifactFetch) throws -> Value
+        capture: @escaping @Sendable (NativeArtifactAdmission) throws -> Value
     ) async throws -> Value {
         try await perform { session, stop in
             try capture(try session.fetchArtifact(stamp: stamp, request: request, stop: stop))

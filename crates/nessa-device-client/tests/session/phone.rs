@@ -151,8 +151,9 @@ fn a_replaced_receiver_stamp_reads_nothing_and_dials_nothing() {
     let fetched = session
         .fetch_artifact(&second, &request, ReadStop::new())
         .unwrap();
+    assert!(fetched.initial().is_none() && fetched.recheck().is_none());
     assert_eq!(
-        fetched.outcome(),
+        fetched.fetched().unwrap().as_ref().unwrap().outcome(),
         Ok(ArtifactFreshness::LocalMatch { bytes: 2 })
     );
     assert!(matches!(
@@ -182,12 +183,16 @@ fn a_missing_file_reports_the_connector_failure() {
         2,
         &output,
     );
+    let admitted = session
+        .fetch_artifact(&stamp, &request, ReadStop::new())
+        .unwrap();
     assert!(matches!(
-        session.fetch_artifact(&stamp, &request, ReadStop::new()),
-        Err(SessionFailure::Enrollment(NativeClientError::Io(
+        admitted.initial(),
+        Some(SessionStatus::ReadOnly(Err(NativeClientError::Io(
             ErrorKind::ConnectionRefused
-        )))
+        ))))
     ));
+    assert!(admitted.fetched().is_none() && admitted.recheck().is_none());
     assert_eq!(connector.calls.load(Ordering::SeqCst), 1);
     session.close().unwrap();
 }
@@ -453,11 +458,13 @@ fn a_local_match_reports_the_session_clock() {
     let fetched = session
         .fetch_artifact(&stamp, &request, ReadStop::new())
         .unwrap();
+    assert!(fetched.initial().is_none() && fetched.recheck().is_none());
+    let decided = fetched.fetched().unwrap().as_ref().unwrap();
     assert_eq!(
-        fetched.outcome(),
+        decided.outcome(),
         Ok(ArtifactFreshness::LocalMatch { bytes: 2 })
     );
-    assert_eq!(fetched.elapsed_ms(), 7);
+    assert_eq!(decided.elapsed_ms(), 7);
     assert_eq!(connector.calls.load(Ordering::SeqCst), 0);
     session.close().unwrap();
 }
