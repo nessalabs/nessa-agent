@@ -8,7 +8,8 @@
 
 use super::{failure, ReadFailure, ReadStop, ReaderAccess, RetainedCache, Stopping};
 use crate::read_only_sync::application::held_file::{
-    fetch_held_file, kept_output, FetchCause, FetchFailure, FileStep, HeldFileSource, Pause,
+    fetch_held_file, kept_output, FetchCause, FetchFailure, FetchFiles, FileStep, HeldFileSource,
+    KeepRefusal, OutputFound, PartCleanup, Pause,
 };
 use crate::read_only_sync::domain::{HeldFile, MAX_HELD_FILE_BYTES};
 use crate::read_only_sync::infrastructure::gateway::GatewayConnection;
@@ -65,6 +66,25 @@ pub enum ArtifactFileStep {
     Changed,
 }
 
+/// What became of a part that was not the named file.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArtifactPartCleanup {
+    /// The part was removed.
+    Removed,
+    /// Removal failed, and the part was emptied so the next run starts over.
+    Emptied {
+        /// The removal step that failed.
+        remove: ArtifactFileStep,
+    },
+    /// Removal and emptying both failed. The part is still there.
+    Left {
+        /// The removal step that failed.
+        remove: ArtifactFileStep,
+        /// The emptying step that failed.
+        restart: ArtifactFileStep,
+    },
+}
+
 /// Why the file was not kept. `reached` is not freshness.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ArtifactFaultKind {
@@ -73,7 +93,11 @@ pub enum ArtifactFaultKind {
     /// An answer was not the range that was asked.
     WrongRange,
     /// The part on disk was not the named size and digest.
-    Integrity,
+    /// `cleanup` is what then happened to that part.
+    Integrity {
+        /// Removal, emptying, or both having failed.
+        cleanup: ArtifactPartCleanup,
+    },
     /// Something other than this file is already at the output.
     OutputExists,
     /// A local file step failed.
@@ -177,6 +201,19 @@ fn named(
     HeldFile::new(conversation.clone(), digest, media_type, size).map_err(|_| ReadFailure::Protocol)
 }
 
+fn part_cleanup(cleanup: PartCleanup) -> ArtifactPartCleanup {
+    match cleanup {
+        PartCleanup::Removed => ArtifactPartCleanup::Removed,
+        PartCleanup::Emptied { remove } => ArtifactPartCleanup::Emptied {
+            remove: file_step(remove),
+        },
+        PartCleanup::Left { remove, restart } => ArtifactPartCleanup::Left {
+            remove: file_step(remove),
+            restart: file_step(restart),
+        },
+    }
+}
+
 fn file_step(step: FileStep) -> ArtifactFileStep {
     match step {
         FileStep::Open => ArtifactFileStep::Open,
@@ -197,7 +234,9 @@ fn fault_from(fetch_failure: FetchFailure) -> ArtifactFault {
     let kind = match fetch_failure.cause {
         FetchCause::Gateway(error) => ArtifactFaultKind::Gateway(failure(error)),
         FetchCause::WrongRange => ArtifactFaultKind::WrongRange,
-        FetchCause::Integrity { .. } => ArtifactFaultKind::Integrity,
+        FetchCause::Integrity { cleanup } => ArtifactFaultKind::Integrity {
+            cleanup: part_cleanup(cleanup),
+        },
         FetchCause::OutputExists => ArtifactFaultKind::OutputExists,
         FetchCause::File(step) => ArtifactFaultKind::File(file_step(step)),
     };
@@ -292,12 +331,64 @@ pub fn local_held_outcome(
     outcome
 }
 
+/// Files whose `keep` refuses once `stop` is set, so a cancellation during
+/// the part's re-read does not link the output.
+struct StopGate<'a> {
+    files: DiskFiles,
+    stop: &'a ReadStop,
+}
+impl FetchFiles for StopGate<'_> {
+    fn read_output(
+        &mut self,
+        size: u64,
+        visit: &mut dyn FnMut(&[u8]),
+    ) -> Result<OutputFound, FileStep> {
+        self.files.read_output(size, visit)
+    }
+    fn remove_unheld_part(&mut self) {
+        self.files.remove_unheld_part();
+    }
+    fn open_part(&mut self) -> Result<u64, FileStep> {
+        self.files.open_part()
+    }
+    fn read_part(&mut self, visit: &mut dyn FnMut(&[u8])) -> Result<u64, FileStep> {
+        self.files.read_part(visit)
+    }
+    fn restart(&mut self) -> Result<(), FileStep> {
+        self.files.restart()
+    }
+    fn append(&mut self, bytes: &[u8]) -> Result<(), FileStep> {
+        self.files.append(bytes)
+    }
+    fn keep(&mut self) -> Result<(), KeepRefusal> {
+        if self.stop.is_stopped() {
+            // The step is not published. A set stop replaces this refusal
+            // with `ReadFailure::Stopped` before the caller sees it.
+            return Err(KeepRefusal::File(FileStep::Link));
+        }
+        self.files.keep()
+    }
+    fn discard(&mut self) -> Result<(), FileStep> {
+        self.files.discard()
+    }
+}
+
+fn stopped_fault(fault: ArtifactFault) -> ArtifactFault {
+    ArtifactFault::progress(
+        ArtifactFaultKind::Gateway(ReadFailure::Stopped),
+        fault.reached(),
+        fault.resumed_from(),
+    )
+}
+
 /// Ask the gateway and keep the file only when the part matches. The caller
-/// has already applied [`local_held_file`].
+/// has already applied [`local_held_file`]. A stop set while the part is
+/// re-read refuses `keep` and is `Stopped`, not a gateway confirmation.
 pub(crate) fn confirmed_held_file(
     source: &mut dyn HeldFileSource,
     pause: &dyn Pause,
     request: &ArtifactRequest<'_>,
+    stop: &ReadStop,
 ) -> Result<Result<ArtifactFreshness, ArtifactFault>, ReadFailure> {
     let file = named(
         request.conversation,
@@ -306,7 +397,7 @@ pub(crate) fn confirmed_held_file(
         request.size,
     )?;
     let mut files = match DiskFiles::new(request.output, &file) {
-        Ok(files) => files,
+        Ok(files) => StopGate { files, stop },
         Err(step) => {
             return Ok(Err(ArtifactFault {
                 kind: ArtifactFaultKind::File(file_step(step)),
@@ -315,11 +406,24 @@ pub(crate) fn confirmed_held_file(
             }))
         }
     };
+    if stop.is_stopped() {
+        return Ok(Err(stopped_fault(ArtifactFault::progress(
+            ArtifactFaultKind::Gateway(ReadFailure::Stopped),
+            0,
+            0,
+        ))));
+    }
     match fetch_held_file(source, pause, &mut files, &file) {
+        Ok(progress) if stop.is_stopped() => Ok(Err(stopped_fault(ArtifactFault::progress(
+            ArtifactFaultKind::Gateway(ReadFailure::Stopped),
+            progress.reached,
+            progress.resumed_from,
+        )))),
         Ok(progress) => Ok(Ok(ArtifactFreshness::GatewayConfirmed {
             ranges: progress.ranges,
             resumed_from: progress.resumed_from,
         })),
+        Err(failure) if stop.is_stopped() => Ok(Err(stopped_fault(fault_from(failure)))),
         Err(failure) => Ok(Err(fault_from(failure))),
     }
 }
@@ -373,7 +477,7 @@ impl RetainedCache {
                 source: GatewayConnection::new(session),
                 stop: stop.clone(),
             };
-            confirmed_held_file(&mut source, pause, request)
+            confirmed_held_file(&mut source, pause, request, stop)
         };
         stop.release();
         let outcome = match fetched? {

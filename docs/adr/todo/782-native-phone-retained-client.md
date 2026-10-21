@@ -227,6 +227,8 @@ flowchart LR
 | Short answer or wrong digest | fetch | Fault, not fresh | same |
 | Stale stamp | fetch or saved read | Fenced, connector not called | `a_replaced_receiver_stamp_reads_nothing_and_dials_nothing` |
 | Local file, stop already set or set while it is read | fetch | Stopped, not a local match | `a_stop_does_not_publish_a_local_match` |
+| Stop during the part re-read | fetch | Stopped, output not linked | `a_stop_during_the_part_reread_does_not_keep_the_file` |
+| Digest mismatch, part removal and emptying both fail | fetch | Integrity, and both failed steps | `an_integrity_fault_keeps_a_part_that_could_not_be_removed` |
 | Bound, file not on disk | fetch | The connector's typed failure, one dial | `a_missing_file_reports_the_connector_failure` |
 
 ### Alternatives that lose

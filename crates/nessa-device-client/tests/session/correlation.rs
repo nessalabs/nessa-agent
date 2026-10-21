@@ -230,7 +230,13 @@ fn a_catalogue_presence_id_that_is_not_a_conversation_dials_nothing() {
 fn a_faulted_fetch_reports_the_bytes_it_resumed_from() {
     let fetch = NativeArtifactFetch {
         value: ArtifactFetch::decided(
-            Err(ArtifactFault::progress(ArtifactFaultKind::Integrity, 9, 4)),
+            Err(ArtifactFault::progress(
+                ArtifactFaultKind::Integrity {
+                    cleanup: ArtifactPartCleanup::Removed,
+                },
+                9,
+                4,
+            )),
             3,
         ),
     };
@@ -238,6 +244,39 @@ fn a_faulted_fetch_reports_the_bytes_it_resumed_from() {
     assert_eq!(fetch.resumed_from(), Some(4));
     assert_eq!(fetch.gateway_resumed_from(), None);
     assert_eq!(fetch.elapsed_ms(), 3);
+    assert_eq!(
+        fetch.part_cleanup(),
+        Some(NativeArtifactPartCleanup::Removed)
+    );
+    assert_eq!(fetch.cleanup_remove(), None);
+    assert_eq!(fetch.cleanup_restart(), None);
+}
+
+#[test]
+fn an_integrity_fault_reports_the_cleanup_that_failed() {
+    let fetch = NativeArtifactFetch {
+        value: ArtifactFetch::decided(
+            Err(ArtifactFault::progress(
+                ArtifactFaultKind::Integrity {
+                    cleanup: ArtifactPartCleanup::Left {
+                        remove: ArtifactFileStep::Remove,
+                        restart: ArtifactFileStep::Restart,
+                    },
+                },
+                0,
+                4,
+            )),
+            1,
+        ),
+    };
+    assert_eq!(fetch.fault(), Some(NativeArtifactFaultKind::Integrity));
+    assert_eq!(fetch.part_cleanup(), Some(NativeArtifactPartCleanup::Left));
+    assert_eq!(fetch.cleanup_remove(), Some(NativeArtifactFileStep::Remove));
+    assert_eq!(
+        fetch.cleanup_restart(),
+        Some(NativeArtifactFileStep::Restart)
+    );
+    assert_eq!(fetch.file_step(), None);
 }
 
 #[test]

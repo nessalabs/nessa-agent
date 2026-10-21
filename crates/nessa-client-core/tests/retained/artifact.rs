@@ -117,6 +117,7 @@ fn a_gateway_answer_is_fresh_only_when_the_digest_matches() {
         &mut source,
         &Still,
         &request(&conversation, &digest, &output),
+        &ReadStop::new(),
     )
     .unwrap()
     .unwrap();
@@ -142,6 +143,7 @@ fn a_gateway_answer_is_fresh_only_when_the_digest_matches() {
         &mut source,
         &Still,
         &request(&conversation, &digest, &output),
+        &ReadStop::new(),
     )
     .unwrap()
     .unwrap_err();
@@ -160,11 +162,95 @@ fn a_gateway_answer_is_fresh_only_when_the_digest_matches() {
         &mut source,
         &Still,
         &request(&conversation, &digest, &output),
+        &ReadStop::new(),
     )
     .unwrap()
     .unwrap_err();
-    assert_eq!(fault.kind(), ArtifactFaultKind::Integrity);
+    assert_eq!(
+        fault.kind(),
+        ArtifactFaultKind::Integrity {
+            cleanup: super::ArtifactPartCleanup::Removed,
+        }
+    );
     assert_eq!(fault.reached(), 0);
+    assert!(!output.exists());
+}
+
+#[test]
+fn an_integrity_fault_keeps_a_part_that_could_not_be_removed() {
+    use crate::read_only_sync::application::held_file::{
+        FetchCause, FetchFailure, FetchProgress, FileStep, PartCleanup,
+    };
+    let fault = super::fault_from(FetchFailure {
+        cause: FetchCause::Integrity {
+            cleanup: PartCleanup::Left {
+                remove: FileStep::Remove,
+                restart: FileStep::Restart,
+            },
+        },
+        progress: FetchProgress {
+            resumed_from: 4,
+            ..FetchProgress::default()
+        },
+    });
+    assert_eq!(
+        fault.kind(),
+        ArtifactFaultKind::Integrity {
+            cleanup: super::ArtifactPartCleanup::Left {
+                remove: super::ArtifactFileStep::Remove,
+                restart: super::ArtifactFileStep::Restart,
+            },
+        }
+    );
+    assert_eq!(fault.reached(), 0);
+    assert_eq!(fault.resumed_from(), 4);
+}
+
+struct CancelAfterRange {
+    bytes: &'static [u8],
+    stop: Arc<ReadStop>,
+}
+impl HeldFileSource for CancelAfterRange {
+    fn read(
+        &mut self,
+        _: &crate::read_only_sync::domain::HeldFile,
+        range: HeldRange,
+    ) -> Result<RangeAnswer, GatewayError> {
+        let start = usize::try_from(range.offset()).unwrap();
+        let end = start + usize::try_from(range.length()).unwrap();
+        let bytes = self.bytes[start..end].to_vec();
+        self.stop.stop();
+        Ok(RangeAnswer {
+            offset: range.offset(),
+            bytes,
+        })
+    }
+}
+
+#[test]
+fn a_stop_during_the_part_reread_does_not_keep_the_file() {
+    let bytes = b"ab";
+    let conversation = conversation();
+    let digest = digest_of(bytes);
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("file.bin");
+    let stop = ReadStop::new();
+    let mut source = CancelAfterRange {
+        bytes,
+        stop: stop.clone(),
+    };
+    let fault = confirmed_held_file(
+        &mut source,
+        &Still,
+        &request(&conversation, &digest, &output),
+        &stop,
+    )
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(
+        fault.kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Stopped)
+    );
     assert!(!output.exists());
 }
 
@@ -191,6 +277,7 @@ fn a_stopped_source_is_not_a_fresh_file_and_asks_nothing() {
         &mut source,
         &Still,
         &request(&conversation, &digest, &output),
+        &ReadStop::new(),
     )
     .unwrap()
     .unwrap_err();

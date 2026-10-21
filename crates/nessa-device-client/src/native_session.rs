@@ -21,8 +21,8 @@ use nessa_client_core::{
     pairing::{NativeClientError, NativeRetryOutcome},
     retained::{
         artifact_name_accepted, ArtifactFaultKind, ArtifactFetch, ArtifactFileStep,
-        ArtifactFreshness, ArtifactRequest, CataloguePresence, PhoneStamp, ReadStop,
-        RetainedCatalogueEntry, RetainedCataloguePage, RetainedPurge,
+        ArtifactFreshness, ArtifactPartCleanup, ArtifactRequest, CataloguePresence, PhoneStamp,
+        ReadStop, RetainedCatalogueEntry, RetainedCataloguePage, RetainedPurge,
     },
 };
 use nessa_protocol::{
@@ -901,7 +901,7 @@ impl NativeArtifactFetch {
         Some(match kind {
             ArtifactFaultKind::Gateway(_) => NativeArtifactFaultKind::Gateway,
             ArtifactFaultKind::WrongRange => NativeArtifactFaultKind::WrongRange,
-            ArtifactFaultKind::Integrity => NativeArtifactFaultKind::Integrity,
+            ArtifactFaultKind::Integrity { .. } => NativeArtifactFaultKind::Integrity,
             ArtifactFaultKind::OutputExists => NativeArtifactFaultKind::OutputExists,
             ArtifactFaultKind::File(_) => NativeArtifactFaultKind::File,
         })
@@ -917,6 +917,41 @@ impl NativeArtifactFetch {
     pub fn file_step(&self) -> Option<NativeArtifactFileStep> {
         match self.value.outcome().err()?.kind() {
             ArtifactFaultKind::File(step) => Some(step.into()),
+            _ => None,
+        }
+    }
+    /// What happened to a part that was not the named file. Empty unless
+    /// `fault` is integrity.
+    pub fn part_cleanup(&self) -> Option<NativeArtifactPartCleanup> {
+        match self.value.outcome().err()?.kind() {
+            ArtifactFaultKind::Integrity { cleanup } => Some(match cleanup {
+                ArtifactPartCleanup::Removed => NativeArtifactPartCleanup::Removed,
+                ArtifactPartCleanup::Emptied { .. } => NativeArtifactPartCleanup::Emptied,
+                ArtifactPartCleanup::Left { .. } => NativeArtifactPartCleanup::Left,
+            }),
+            _ => None,
+        }
+    }
+    /// The removal step that failed while cleaning an integrity mismatch.
+    /// Empty when the part was removed, or the fault is not integrity.
+    pub fn cleanup_remove(&self) -> Option<NativeArtifactFileStep> {
+        match self.value.outcome().err()?.kind() {
+            ArtifactFaultKind::Integrity {
+                cleanup: ArtifactPartCleanup::Emptied { remove },
+            }
+            | ArtifactFaultKind::Integrity {
+                cleanup: ArtifactPartCleanup::Left { remove, .. },
+            } => Some(remove.into()),
+            _ => None,
+        }
+    }
+    /// The emptying step that failed after removal failed. Empty unless the
+    /// part was left in place.
+    pub fn cleanup_restart(&self) -> Option<NativeArtifactFileStep> {
+        match self.value.outcome().err()?.kind() {
+            ArtifactFaultKind::Integrity {
+                cleanup: ArtifactPartCleanup::Left { restart, .. },
+            } => Some(restart.into()),
             _ => None,
         }
     }
@@ -944,6 +979,17 @@ pub struct NativeArtifactRequest {
     pub size: u64,
     /// Path where a matching file is kept.
     pub output: String,
+}
+
+/// What became of a part that was not the named file.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum NativeArtifactPartCleanup {
+    /// The part was removed.
+    Removed,
+    /// Removal failed and the part was emptied.
+    Emptied,
+    /// Removal and emptying both failed. The part is still there.
+    Left,
 }
 
 /// Why a held file was not kept.
