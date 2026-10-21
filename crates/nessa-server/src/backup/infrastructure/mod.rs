@@ -33,7 +33,7 @@ pub use gateway::capture_namespace;
 pub use jsonl::jsonl_cut;
 pub use log::FileDeletionLog;
 pub use quarantine::{
-    DirectoryMaterializer, DirectoryQuarantine, FileRestoreAudit, KeyedInventory,
+    DirectoryMaterializer, DirectoryQuarantine, FileRestoreAudit, KeyedInventory, OsPublicationIds,
     SqliteDeferredSource,
 };
 pub use sensitivity::path_sensitivity;

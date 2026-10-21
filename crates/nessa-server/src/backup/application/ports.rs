@@ -4,7 +4,9 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
-use super::super::domain::{DeletionFence, DeletionLog, Fingerprint, SourceCut, StoreKind};
+use super::super::domain::{
+    DeletionFence, DeletionLog, Fingerprint, RestoreFault, SourceCut, StoreKind,
+};
 
 /// Take the conversation admission lock for the cut, and release it on drop.
 #[async_trait]
@@ -278,7 +280,8 @@ pub struct RestoreEvidence<'a> {
     pub decision: &'a str,
     pub policies: &'a [String],
     /// Acceptance stores `lease receipt` lines. A fetch stores the publication
-    /// id of the session file. Empty for every other transition.
+    /// id of the session file. A sealed stage stores the digest of the journal
+    /// bytes. Empty for every other transition.
     pub attestations: &'a str,
 }
 
@@ -298,6 +301,36 @@ pub trait RestoreAudit: Send + Sync {
         conversation_id: &str,
         publication: &str,
     ) -> Result<bool, DecisionAuditError>;
+
+    /// Whether an effect line records `digest` as the journal sealed at `target`.
+    ///
+    /// `target` is the anchored quarantine path. The line is `absent` to
+    /// `verified`, cause `sealed`, decision `effect`, and its attestations are
+    /// that digest. The readiness marker is not this evidence.
+    fn sealed(&self, target: &str, digest: &str) -> Result<bool, DecisionAuditError>;
+}
+
+/// The sealed effect names this journal digest.
+pub fn effect_names_seal(
+    before: &str,
+    after: &str,
+    cause: &str,
+    decision: &str,
+    attestations: &str,
+    digest: &str,
+) -> bool {
+    before == "absent"
+        && after == "verified"
+        && cause == "sealed"
+        && decision == "effect"
+        && attestations == digest
+}
+
+/// Names the publication written beside one fetched session.
+///
+/// Infrastructure supplies the id. A test supplies a fixed id, or a failure.
+pub trait PublicationIds: Send + Sync {
+    fn publication_id(&self) -> Result<String, RestoreFault>;
 }
 
 /// `target` is the conversation id, a newline, then the anchored root.

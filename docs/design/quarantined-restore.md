@@ -50,7 +50,14 @@ A fetched session has a second identity: the publication written beside the
 session file in that same publish. An `available` effect names that
 publication. An earlier line does not make a different file available. Every
 fetch line for one open uses the anchored root and the conversation id as
-its target.
+its target. The publication id comes from the publication-id port. The OS
+adapter reads sixteen random bytes. A test supplies the id, or a failure.
+
+A staged quarantine has a third identity: the digest of the journal bytes
+stage wrote, stored as the attestations of the sealed effect. Accept trusts
+that line. The readiness marker records that the line was stored. It is not
+the seal. A journal rewritten so its own file hashes match is still a
+different digest.
 
 | What happened | Who owns the bytes | Audit | Caller is told |
 | --- | --- | --- | --- |
@@ -66,8 +73,10 @@ its target.
 | Fetched in quarantine, then the folder is renamed to live | The same publication, now at the live path | The available line still names that publication and conversation. The root on the line is where the fetch ran | Already present. The file is not fetched again |
 | A session extra whose publication has no available line | The quarantine. Accept does not rename | `unchanged → unchanged` | The error. The live path is not created |
 | Two roots that differ only by ASCII case on Windows or macOS | One filesystem object | Refused before either lock is taken | Paths |
-| Publish fails after the bytes may already have the final name | Neither the temp name nor the final name, when both can be retired | The publish error | The error. A file that remains is retained |
-| Publication id | 16 random bytes, not the process id | Attestations are that id | |
+| Publish fails after the bytes may already have the final name | Neither name. The final name is retired even when retiring the temp name fails | The publish error when both retire. Retained when either name cannot | The error. A file that remains is retained |
+| Publication id | The id from the publication-id port. The OS adapter reads 16 random bytes | Attestations are that id | Entropy failure retires the published file |
+| Sealed journal | The audit. Attestations are the digest of the journal bytes stage wrote | `absent → verified`, cause `sealed` | |
+| Journal replaced and recomputed so its own seal matches | The quarantine. Accept does not rename | `unchanged → unchanged` | Tamper. The audit still names the journal stage wrote |
 | Quarantine rename whose parent sync fails, and the tree is removed | No quarantine | `unchanged → unchanged` | Unreadable |
 | Quarantine rename whose parent sync fails, and the tree remains | The quarantine, unready | `absent → unready`, cause `retained` | Retained. Not an unchanged refusal |
 
@@ -82,9 +91,12 @@ its target.
   `a_partial_copy_removes_quarantine_and_leaves_live_data`
 - Accept refuses when the live path already exists, and leaves those bytes
   as they were. `an_occupied_live_root_is_not_replaced`
-- The seal is the set of file hashes in the journal. A changed byte, a
-  missing file, or an unexpected file outside `sessions/` refuses accept.
-  `a_tampered_quarantine_is_not_promoted`
+- The seal is the set of file hashes in the journal, and accept requires the
+  sealed audit line to name the digest of those journal bytes. A changed
+  byte, a missing file, an unexpected file outside `sessions/`, or a journal
+  rewritten to match a replaced file refuses accept.
+  `a_tampered_quarantine_is_not_promoted`,
+  `a_resealed_quarantine_is_not_promoted`
 - A session file published by fetch is allowed only for a deferred
   conversation id, and only at `sessions/<id>.sqlite3`.
 - Historical outbox bytes stay, and `replay.blocked` stays in the seal, so
@@ -198,6 +210,13 @@ its target.
   before either lock is taken. `paths_and_receipts_are_constrained`
 - A realistic session whose database is over 64 MiB is deferred by the
   export, then recovered by this open. `a_session_over_64_mib_is_restored_when_opened`
+- A failed publish retires the temp name and the final name independently.
+  Retiring an absent temp still retires the final name.
+  `a_failed_publish_retires_the_final_name_when_the_temp_is_already_gone`
+- The publication id is the one the port returns. When the port fails, the
+  published file is retired and the open does not succeed.
+  `a_port_supplied_publication_id_is_the_one_the_audit_names`,
+  `a_failed_publication_id_retires_the_published_session`
 
 ## Decisions that bound this
 

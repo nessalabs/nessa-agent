@@ -24,13 +24,13 @@ pub use verification::{
 pub use deletion_inventory::{capture_fences, capture_inventory, CaptureError, InventoryFailure};
 pub use export::{capture_export, ExportFailure, ExportRequest};
 pub use ports::{
-    fetch_names_conversation, AdmissionFailure, AdmissionLease, Authenticator, CopiedStore,
-    DecisionAuditError, DeferredSessionSource, DeletionLogStore, ExportClock, ExportSource,
-    FenceSource, FetchProgress, InventoryAction, InventoryCapturePolicyEvaluator, InventoryCause,
-    InventoryDecision, InventoryDecisionAudit, InventoryDenial, InventoryFacts,
+    effect_names_seal, fetch_names_conversation, AdmissionFailure, AdmissionLease, Authenticator,
+    CopiedStore, DecisionAuditError, DeferredSessionSource, DeletionLogStore, ExportClock,
+    ExportSource, FenceSource, FetchProgress, InventoryAction, InventoryCapturePolicyEvaluator,
+    InventoryCause, InventoryDecision, InventoryDecisionAudit, InventoryDenial, InventoryFacts,
     InventoryReconciliationLease, LeaseReceipts, LogStoreError, MacError, MacKey,
-    ManifestPublisher, MutationAdmission, PinnedStore, PublishedRecord, RestoreAction,
-    RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SessionCut,
+    ManifestPublisher, MutationAdmission, PinnedStore, PublicationIds, PublishedRecord,
+    RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SessionCut,
     SessionSourceError,
 };
 pub use restore::{

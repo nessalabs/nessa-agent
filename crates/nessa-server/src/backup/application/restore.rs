@@ -4,14 +4,14 @@
 //! ```text
 //! stage ──▶ policy ──▶ decision audit ──▶ verify_bundle
 //!             ──▶ prepare files ──▶ seal ──▶ rename partial to quarantine
-//!             ──▶ outcome audit (failure deletes the quarantine)
-//! accept ──▶ policy ──▶ decision audit ──▶ seal and receipts
-//!             ──▶ rename quarantine to live ──▶ outcome audit
+//!             ──▶ outcome audit stores the journal digest
+//! accept ──▶ policy ──▶ decision audit ──▶ that digest still names the journal
+//!             ──▶ seal and receipts ──▶ rename quarantine to live
 //!             (a parent sync that fails after the rename is still live)
 //! open ──▶ anchor the root ──▶ decision audit on that path
 //!             ──▶ fingerprint ──▶ match audit ──▶ rename into sessions/
-//!             ──▶ publication beside the file ──▶ available audit
-//!             (failure retires the session; a retained file is not served)
+//!             ──▶ publication id from the port ──▶ available audit
+//!             (failure retires the temp name and the final name)
 //! ```
 //!
 //! Arrows are the order one call runs. The live path is not written before
@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 
 use super::ports::{
     DeferredSessionSource, FetchProgress, InventoryDecision, InventoryDenial, LeaseReceipts,
-    RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SessionCut,
-    SessionSourceError,
+    PublicationIds, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
+    RestorePolicyEvaluator, SessionCut, SessionSourceError,
 };
 use super::verification::{
     authenticated_bundle, ManifestMacVerifier, VerificationFailure, VerificationLimits,
@@ -258,8 +258,9 @@ pub fn stage_quarantine(
         }
         return Err(recorded.stop(error));
     }
+    let digest = Fingerprint::of(journal.as_bytes()).hex();
     if recorded
-        .write("absent", "verified", "sealed", "effect")
+        .record("absent", "verified", "sealed", "effect", &digest)
         .is_err()
     {
         let _ = layout.remove_tree(&quarantine);
@@ -350,6 +351,12 @@ pub fn accept_quarantine(
         Ok(journal) => journal,
         Err(error) => return Err(recorded.stop(error)),
     };
+    let digest = Fingerprint::of(loaded.journal.as_bytes()).hex();
+    match audit.sealed(&label, &digest) {
+        Ok(true) => {}
+        Ok(false) => return Err(recorded.stop(RestoreFault::Tamper)),
+        Err(_) => return Err(RestoreFault::Audit),
+    }
     let deferred = match deferred_lines(layout, &quarantine) {
         Ok(lines) => lines,
         Err(error) => return Err(recorded.stop(error)),
@@ -421,6 +428,7 @@ pub fn open_deferred_conversation(
     audit: &dyn RestoreAudit,
     layout: &dyn QuarantineLayout,
     source: &dyn DeferredSessionSource,
+    ids: &dyn PublicationIds,
     progress: &mut dyn FetchProgress,
 ) -> Result<OpenReport, RestoreFault> {
     let facts = entry_facts(&request.facts, RestoreAction::Fetch);
@@ -536,15 +544,16 @@ pub fn open_deferred_conversation(
         return Err(retire_or_audit(layout, &temp));
     }
     if let Err(error) = layout.publish_file(&temp, &final_path) {
-        // The rename may have happened before the error. Retire both names.
-        // An exists() error must not be read as "the final path is absent".
-        let retired = retire_session(layout, &temp) && retire_session(layout, &final_path);
-        if !retired {
+        // The rename may have happened before the error. Retire each name
+        // on its own: a failure for the temp must still retire the final path.
+        let retired_temp = retire_session(layout, &temp);
+        let retired_final = retire_session(layout, &final_path);
+        if !retired_temp || !retired_final {
             return Err(RestoreFault::Retained);
         }
         return Err(recorded.stop(error));
     }
-    let publication = match publication_name() {
+    let publication = match ids.publication_id() {
         Ok(publication) => publication,
         Err(error) => {
             if !retire_session(layout, &final_path) {
@@ -754,16 +763,6 @@ fn resolve_root(
             .stop(error))
         }
     }
-}
-
-fn publication_name() -> Result<String, RestoreFault> {
-    let mut bytes = [0u8; 16];
-    getrandom::fill(&mut bytes).map_err(|_| RestoreFault::Unreadable)?;
-    let mut name = String::from("pub-");
-    for byte in bytes {
-        name.push_str(&format!("{byte:02x}"));
-    }
-    Ok(name)
 }
 
 fn entry_facts<'a>(facts: &RestoreFacts<'a>, action: RestoreAction) -> RestoreFacts<'a> {

@@ -79,7 +79,10 @@ that is still inside a session database is removed from that restored image.
 Accept and fetch share one lock so a fetch cannot publish a session that
 acceptance then carries onto the live path without its audit. Accept also
 holds the live path's lock across that rename. A quarantine is promotable
-only after its sealed audit is stored. The fetch checks the session with
+only after its sealed audit is stored, and that line names the digest of the
+journal stage wrote. A journal rewritten to match a replaced file is refused.
+A failed publish retires the temp name and the final name independently. The
+publication id comes from an injected port; the OS adapter reads the randomness. The fetch checks the session with
 the restore layout, and a fetch that cannot be audited removes, moves, or
 empties that file. Emptying truncates the file directly, because the
 storage opener refuses a copy it did not create. When that file still

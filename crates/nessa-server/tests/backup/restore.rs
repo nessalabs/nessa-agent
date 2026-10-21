@@ -7,30 +7,31 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
 
 use crate::backup::application::Authenticator;
 use crate::backup::application::{
-    accept_quarantine, open_deferred_conversation, root_posture, stage_quarantine, AcceptRequest,
-    DecisionAuditError, DeferredSessionSource, ExportClock, FetchProgress, InventoryCause,
-    InventoryDecision, LeaseReceipts, LoadedTree, MacKey, ManifestPublisher, MutationAdmission,
-    OpenRequest, Promoted, QuarantineLayout, RestoreAction, RestoreAudit, RestoreEvidence,
-    RestoreFacts, RestorePolicyEvaluator, SessionCut, SessionSourceError, StageRequest, Staging,
-    VerificationFailure, VerificationLimits, VerificationSource,
+    accept_quarantine, effect_names_seal, open_deferred_conversation, root_posture,
+    stage_quarantine, AcceptRequest, DecisionAuditError, DeferredSessionSource, ExportClock,
+    FetchProgress, InventoryCause, InventoryDecision, LeaseReceipts, LoadedTree, MacKey,
+    ManifestPublisher, MutationAdmission, OpenRequest, Promoted, PublicationIds, QuarantineLayout,
+    RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SessionCut,
+    SessionSourceError, StageRequest, Staging, VerificationFailure, VerificationLimits,
+    VerificationSource,
 };
 use crate::backup::domain::{
-    AuthenticatedManifest, CapturedRecord, CredentialKind, DeferredEntry, DeletionFence,
-    DeletionLog, Fingerprint, GrantRole, Manifest, Posture, RestoreFault, Sensitivity, SourceCut,
-    StoreKind, Watermark, WRITER_INVENTORY,
+    encode_journal, read_journal, AuthenticatedManifest, CapturedRecord, CredentialKind,
+    DeferredEntry, DeletionFence, DeletionLog, Fingerprint, GrantRole, Manifest, Posture,
+    RestoreFault, Sensitivity, SourceCut, StoreKind, Watermark, WRITER_INVENTORY,
 };
 use crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT;
 use crate::backup::infrastructure::{
     capture_namespace, CedarInventoryPolicy, DirectoryMaterializer, DirectoryPublisher,
     DirectoryQuarantine, DirectoryVerificationSource, ExportFormat, FileDeletionLog,
-    FileRestoreAudit, KeyedInventory, SqliteDeferredSource,
+    FileRestoreAudit, KeyedInventory, OsPublicationIds, SqliteDeferredSource,
 };
 
 struct Roots {
@@ -160,6 +161,24 @@ impl RestoreAudit for MemoryAudit {
                 && crate::backup::application::fetch_names_conversation(
                     &line.target,
                     conversation_id,
+                )
+        }))
+    }
+
+    fn sealed(&self, target: &str, digest: &str) -> Result<bool, DecisionAuditError> {
+        let lines = self
+            .lines
+            .lock()
+            .map_err(|_| DecisionAuditError::NotStored)?;
+        Ok(lines.iter().any(|line| {
+            line.target == target
+                && effect_names_seal(
+                    &line.before,
+                    &line.after,
+                    &line.cause,
+                    &line.decision,
+                    &line.attestations,
+                    digest,
                 )
         }))
     }
@@ -917,6 +936,54 @@ async fn a_tampered_quarantine_is_not_promoted() {
 }
 
 #[tokio::test]
+async fn a_resealed_quarantine_is_not_promoted() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let audit = MemoryAudit::open();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &audit,
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap();
+    let journal_path = place.quarantine.join("journal.txt");
+    let original = fs::read_to_string(&journal_path).unwrap();
+    let parsed = read_journal(&original).unwrap();
+    fs::write(place.quarantine.join("identity.txt"), b"tampered\n").unwrap();
+    let mut replaced = false;
+    let files = parsed
+        .files
+        .into_iter()
+        .map(|mut file| {
+            if file.path == "identity.txt" {
+                file.fingerprint = Fingerprint::of(b"tampered\n");
+                replaced = true;
+            }
+            file
+        })
+        .collect::<Vec<_>>();
+    assert!(replaced);
+    let rewritten = encode_journal(parsed.freshness, &parsed.leases, &files).unwrap();
+    fs::write(&journal_path, &rewritten).unwrap();
+    let sealed = audit
+        .lines()
+        .into_iter()
+        .find(|line| line.cause == "sealed")
+        .unwrap();
+    assert_ne!(
+        sealed.attestations,
+        Fingerprint::of(rewritten.as_bytes()).hex()
+    );
+    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
+    assert_eq!(error, RestoreFault::Tamper);
+    assert!(!place.live.exists());
+    assert!(journal_path.is_file());
+}
+
+#[tokio::test]
 async fn quarantine_does_not_permit_replay() {
     let bundle = publish(note_bundle_rows(), vec![], None).await;
     let place = roots();
@@ -1490,7 +1557,7 @@ async fn a_failed_readiness_mark_records_whether_the_tree_remains() {
     assert!(kept_audit.lines().iter().any(|line| {
         line.before == "verified" && line.after == "unready" && line.cause == "unreadable"
     }));
-    let accepted = accept(&kept, &MemoryAudit::open(), &NoReceipts).unwrap_err();
+    let accepted = accept(&kept, &kept_audit, &NoReceipts).unwrap_err();
     assert_eq!(accepted, RestoreFault::Tamper);
     assert!(!kept.live.exists());
 }
@@ -1596,11 +1663,12 @@ async fn a_closed_lease_across_lines_needs_no_receipt() {
     )
     .await;
     let place = roots();
+    let audit = MemoryAudit::open();
     let report = stage(
         &bundle,
         &place.quarantine,
         &place.live,
-        &MemoryAudit::open(),
+        &audit,
         person(RestoreAction::Stage),
         None,
     )
@@ -1610,7 +1678,7 @@ async fn a_closed_lease_across_lines_needs_no_receipt() {
         fs::read(place.quarantine.join("records/lease-records/line-1")).unwrap(),
         granted
     );
-    accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap();
+    accept(&place, &audit, &NoReceipts).unwrap();
     assert!(place.live.join("records/lease-records/line-2").is_file());
 }
 
@@ -1641,11 +1709,12 @@ async fn a_reopened_lease_is_closed_on_its_last_line() {
     )
     .await;
     let place = roots();
+    let audit = MemoryAudit::open();
     let report = stage(
         &bundle,
         &place.quarantine,
         &place.live,
-        &MemoryAudit::open(),
+        &audit,
         person(RestoreAction::Stage),
         None,
     )
@@ -1659,7 +1728,7 @@ async fn a_reopened_lease_is_closed_on_its_last_line() {
     let text = String::from_utf8(last).unwrap();
     assert!(text.contains("\"kind\":\"granted\""));
     assert!(text.contains("\"kind\":\"ended\""));
-    let error = accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap_err();
+    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
     assert_eq!(error, RestoreFault::ExecutorsUnfenced);
 }
 
@@ -1676,18 +1745,19 @@ async fn a_fenced_deferred_conversation_is_not_listed() {
     )
     .await;
     let place = roots();
+    let audit = MemoryAudit::open();
     stage(
         &bundle,
         &place.quarantine,
         &place.live,
-        &MemoryAudit::open(),
+        &audit,
         person(RestoreAction::Stage),
         None,
     )
     .unwrap();
     let text = fs::read_to_string(place.quarantine.join("deferred.txt")).unwrap();
     assert!(!text.contains("conv-bulk"));
-    accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap();
+    accept(&place, &audit, &NoReceipts).unwrap();
     let source = FakeSource::unused();
     let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
     assert_eq!(error, RestoreFault::NotDeferred);
@@ -1704,11 +1774,12 @@ async fn a_changed_session_file_is_not_promoted() {
     )
     .await;
     let place = roots();
+    let audit = MemoryAudit::open();
     stage(
         &bundle,
         &place.quarantine,
         &place.live,
-        &MemoryAudit::open(),
+        &audit,
         person(RestoreAction::Stage),
         None,
     )
@@ -1716,7 +1787,7 @@ async fn a_changed_session_file_is_not_promoted() {
     let session = place.quarantine.join("sessions/conv-bulk.sqlite3");
     nessa_local_storage::create_directory(session.parent().unwrap()).unwrap();
     fs::write(&session, b"not-the-session").unwrap();
-    let error = accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap_err();
+    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
     assert_eq!(error, RestoreFault::Tamper);
     assert!(!place.live.exists());
 }
@@ -1904,6 +1975,7 @@ fn open_one(
         audit,
         &DirectoryQuarantine,
         source,
+        &OsPublicationIds,
         &mut Quiet,
     )
 }
@@ -1946,6 +2018,83 @@ async fn an_opened_deferred_conversation_matches_the_recorded_fingerprint() {
             .as_deref(),
         Some(fetched.attestations.as_str())
     );
+}
+
+struct FixedIds(&'static str);
+
+impl PublicationIds for FixedIds {
+    fn publication_id(&self) -> Result<String, RestoreFault> {
+        Ok(self.0.to_owned())
+    }
+}
+
+struct NoIds;
+
+impl PublicationIds for NoIds {
+    fn publication_id(&self) -> Result<String, RestoreFault> {
+        Err(RestoreFault::Unreadable)
+    }
+}
+
+#[tokio::test]
+async fn a_port_supplied_publication_id_is_the_one_the_audit_names() {
+    let session = sealed_session(b"session-v1");
+    let (_bundle, place) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+    let source = FakeSource::matching(&session);
+    let audit = MemoryAudit::open();
+    open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.live,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &audit,
+        &DirectoryQuarantine,
+        &source,
+        &FixedIds("pub-fixed"),
+        &mut Quiet,
+    )
+    .unwrap();
+    let fetched = audit
+        .lines()
+        .into_iter()
+        .find(|line| line.cause == "fetched")
+        .unwrap();
+    assert_eq!(fetched.attestations, "pub-fixed");
+    assert_eq!(
+        DirectoryQuarantine
+            .publication(&place.live.join("sessions/conv-bulk.sqlite3"))
+            .unwrap()
+            .as_deref(),
+        Some("pub-fixed")
+    );
+}
+
+#[tokio::test]
+async fn a_failed_publication_id_retires_the_published_session() {
+    let session = sealed_session(b"session-v1");
+    let (_bundle, place) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+    let source = FakeSource::matching(&session);
+    let error = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.live,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &MemoryAudit::open(),
+        &DirectoryQuarantine,
+        &source,
+        &NoIds,
+        &mut Quiet,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Unreadable);
+    assert!(!place.live.join("sessions/conv-bulk.sqlite3").exists());
+    assert!(partial_names(&place.live).is_empty());
 }
 
 #[tokio::test]
@@ -1991,6 +2140,7 @@ async fn a_failed_fetch_cleanup_moves_the_session() {
         &MemoryAudit::fail_after(2),
         &KeepsSession,
         &source,
+        &OsPublicationIds,
         &mut Quiet,
     )
     .unwrap_err();
@@ -2496,6 +2646,7 @@ async fn accept_and_fetch_wait_for_the_restore_root() {
             &MemoryAudit::open(),
             &DirectoryQuarantine,
             &FakeSource::matching(&session),
+            &OsPublicationIds,
             &mut Quiet,
         );
         fetch_finished.send(outcome.map(|_| ())).unwrap();
@@ -2568,11 +2719,12 @@ async fn accept_holds_the_live_lock_across_promotion() {
 
     let bundle = publish(note_bundle_rows(), vec![], None).await;
     let place = roots();
+    let audit = MemoryAudit::open();
     stage(
         &bundle,
         &place.quarantine,
         &place.live,
-        &MemoryAudit::open(),
+        &audit,
         person(RestoreAction::Stage),
         None,
     )
@@ -2593,7 +2745,7 @@ async fn accept_holds_the_live_lock_across_promotion() {
                 receipts: &NoReceipts,
             },
             &policy(),
-            &MemoryAudit::open(),
+            &audit,
             &DirectoryQuarantine,
         );
         finished.send(outcome.map(|_| ())).unwrap();
@@ -2734,6 +2886,7 @@ async fn a_failed_fetch_fallback_empties_the_session() {
         &MemoryAudit::fail_after(2),
         &KeepsTree,
         &source,
+        &OsPublicationIds,
         &mut Quiet,
     )
     .unwrap_err();
@@ -2835,6 +2988,7 @@ async fn a_failed_fetch_that_cannot_be_retired_is_not_served() {
         &MemoryAudit::fail_after(2),
         &KeepsBytes,
         &source,
+        &OsPublicationIds,
         &mut Quiet,
     )
     .unwrap_err();
@@ -2851,6 +3005,7 @@ async fn a_failed_fetch_that_cannot_be_retired_is_not_served() {
         &MemoryAudit::open(),
         &KeepsBytes,
         &source,
+        &OsPublicationIds,
         &mut Quiet,
     )
     .unwrap_err();
@@ -2887,6 +3042,7 @@ async fn a_failed_fetch_that_cannot_be_retired_is_not_served() {
         &earlier,
         &KeepsBytes,
         &source,
+        &OsPublicationIds,
         &mut Quiet,
     )
     .unwrap_err();
@@ -2901,16 +3057,16 @@ async fn a_failed_fetch_that_cannot_be_retired_is_not_served() {
 async fn a_promoted_tree_stays_live_when_the_parent_sync_fails() {
     let bundle = publish(note_bundle_rows(), vec![], None).await;
     let place = roots();
+    let audit = MemoryAudit::open();
     stage(
         &bundle,
         &place.quarantine,
         &place.live,
-        &MemoryAudit::open(),
+        &audit,
         person(RestoreAction::Stage),
         None,
     )
     .unwrap();
-    let audit = MemoryAudit::open();
     accept_quarantine(
         &AcceptRequest {
             facts: person(RestoreAction::Accept),
@@ -3026,6 +3182,7 @@ async fn an_alias_of_the_live_root_reuses_the_fetched_session() {
         &audit,
         &DirectoryQuarantine,
         &source,
+        &OsPublicationIds,
         &mut Quiet,
     )
     .unwrap();
@@ -3044,6 +3201,7 @@ async fn an_alias_of_the_live_root_reuses_the_fetched_session() {
         &audit,
         &DirectoryQuarantine,
         &source,
+        &OsPublicationIds,
         &mut Quiet,
     )
     .unwrap();
@@ -3086,6 +3244,7 @@ async fn a_fetch_in_quarantine_stays_available_after_accept() {
         &audit,
         &DirectoryQuarantine,
         &source,
+        &OsPublicationIds,
         &mut Quiet,
     )
     .unwrap();
@@ -3102,6 +3261,7 @@ async fn a_fetch_in_quarantine_stays_available_after_accept() {
         &audit,
         &DirectoryQuarantine,
         &source,
+        &OsPublicationIds,
         &mut Quiet,
     )
     .unwrap();
@@ -3123,11 +3283,12 @@ async fn an_unaudited_session_is_not_promoted() {
     )
     .await;
     let place = roots();
+    let audit = MemoryAudit::open();
     stage(
         &bundle,
         &place.quarantine,
         &place.live,
-        &MemoryAudit::open(),
+        &audit,
         person(RestoreAction::Stage),
         None,
     )
@@ -3143,6 +3304,7 @@ async fn an_unaudited_session_is_not_promoted() {
         &MemoryAudit::fail_after(2),
         &KeepsBytes,
         &source,
+        &OsPublicationIds,
         &mut Quiet,
     )
     .unwrap_err();
@@ -3151,7 +3313,7 @@ async fn an_unaudited_session_is_not_promoted() {
         .quarantine
         .join("sessions/conv-bulk.sqlite3")
         .is_file());
-    let accepted = accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap_err();
+    let accepted = accept(&place, &audit, &NoReceipts).unwrap_err();
     assert_eq!(accepted, RestoreFault::Tamper);
     assert!(!place.live.exists());
     assert!(place
@@ -3160,9 +3322,10 @@ async fn an_unaudited_session_is_not_promoted() {
         .is_file());
 }
 
-/// The rename onto the session name succeeded. A later exists() call fails.
+/// The rename onto the session name succeeded. After that, removing an absent
+/// path fails, so retiring the temp name fails. The final name is still retired.
 struct ExistsFailsAfterPublish {
-    seen: AtomicUsize,
+    published: AtomicBool,
 }
 
 impl QuarantineLayout for ExistsFailsAfterPublish {
@@ -3186,6 +3349,7 @@ impl QuarantineLayout for ExistsFailsAfterPublish {
     }
     fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.publish_file(temp, final_path)?;
+        self.published.store(true, Ordering::Relaxed);
         Err(RestoreFault::Unreadable)
     }
     fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
@@ -3198,16 +3362,12 @@ impl QuarantineLayout for ExistsFailsAfterPublish {
         DirectoryQuarantine.remove_publication(session)
     }
     fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
+        if self.published.load(Ordering::Relaxed) && !path.exists() {
+            return Err(RestoreFault::Unreadable);
+        }
         DirectoryQuarantine.remove_file(path)
     }
     fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("");
-        if name.ends_with(".sqlite3") && self.seen.fetch_add(1, Ordering::Relaxed) > 0 {
-            return Err(RestoreFault::Unreadable);
-        }
         DirectoryQuarantine.exists(path)
     }
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
@@ -3237,13 +3397,13 @@ impl QuarantineLayout for ExistsFailsAfterPublish {
 }
 
 #[tokio::test]
-async fn a_failed_publish_retires_the_final_path_when_exists_fails() {
+async fn a_failed_publish_retires_the_final_name_when_the_temp_is_already_gone() {
     let session = sealed_session(b"session-v1");
     let (_bundle, place) =
         deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let source = FakeSource::matching(&session);
     let layout = ExistsFailsAfterPublish {
-        seen: AtomicUsize::new(0),
+        published: AtomicBool::new(false),
     };
     let error = open_deferred_conversation(
         &OpenRequest {
@@ -3255,10 +3415,11 @@ async fn a_failed_publish_retires_the_final_path_when_exists_fails() {
         &MemoryAudit::open(),
         &layout,
         &source,
+        &OsPublicationIds,
         &mut Quiet,
     )
     .unwrap_err();
-    assert_eq!(error, RestoreFault::Unreadable);
+    assert_eq!(error, RestoreFault::Retained);
     assert!(!place.live.join("sessions/conv-bulk.sqlite3").exists());
     assert!(partial_names(&place.live).is_empty());
 }

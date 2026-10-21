@@ -16,9 +16,9 @@ use sha2::Digest;
 
 use crate::backup::application::{
     CutMaterializer, DecisionAuditError, ExportClock, FetchProgress, LoadedTree, MacKey,
-    PreparedCut, Promoted, QuarantineLayout, RestoreAudit, RestoreEvidence, RestoreHold,
-    SealedInventoryReader, SessionCut, SessionSourceError, Staging, VerificationFormat,
-    VerificationLimits, VerificationSource,
+    PreparedCut, Promoted, PublicationIds, QuarantineLayout, RestoreAudit, RestoreEvidence,
+    RestoreHold, SealedInventoryReader, SessionCut, SessionSourceError, Staging,
+    VerificationFormat, VerificationLimits, VerificationSource,
 };
 use crate::backup::domain::{
     conversation_is_fenced, credential_is_fenced, encode_deferred, fresher_fences,
@@ -990,6 +990,51 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
         }
         Ok(false)
     }
+
+    fn sealed(&self, target: &str, digest: &str) -> Result<bool, DecisionAuditError> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| DecisionAuditError::NotStored)?;
+        let _file = exclusive(&self.directory).map_err(|_| DecisionAuditError::NotStored)?;
+        if !self.path.is_file() {
+            return Ok(false);
+        }
+        let text = fs::read_to_string(&self.path).map_err(|_| DecisionAuditError::NotStored)?;
+        for line in text.lines().filter(|line| !line.is_empty()) {
+            let value: Value =
+                serde_json::from_str(line).map_err(|_| DecisionAuditError::NotStored)?;
+            let field = |name: &str| value.get(name).and_then(Value::as_str).unwrap_or("");
+            if value.get("target").and_then(Value::as_str) == Some(target)
+                && crate::backup::application::effect_names_seal(
+                    field("before"),
+                    field("after"),
+                    field("cause"),
+                    field("decision"),
+                    field("attestations"),
+                    digest,
+                )
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// Sixteen bytes from the operating system, written `pub-` plus lowercase hex.
+pub struct OsPublicationIds;
+
+impl PublicationIds for OsPublicationIds {
+    fn publication_id(&self) -> Result<String, RestoreFault> {
+        let mut bytes = [0u8; 16];
+        getrandom::fill(&mut bytes).map_err(|_| RestoreFault::Unreadable)?;
+        let mut name = String::from("pub-");
+        for byte in bytes {
+            name.push_str(&format!("{byte:02x}"));
+        }
+        Ok(name)
+    }
 }
 
 fn next_sequence(path: &Path) -> std::io::Result<u64> {
@@ -1118,6 +1163,35 @@ fn a_restore_audit_waits_for_the_directory_lock() {
     assert!(text.contains("\"recordId\":\"restore-2\""));
     assert!(text.contains("lease-1 stopped"));
     assert!(text.contains("sealed"));
+    assert!(!first.sealed("quarantine", "digest-a").unwrap());
+}
+
+#[test]
+fn a_sealed_audit_names_the_journal_digest() {
+    struct Clock;
+    impl ExportClock for Clock {
+        fn unix_ms(&self) -> u64 {
+            1
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let audit = FileRestoreAudit::open(root.path().join("audit"), Clock).unwrap();
+    audit
+        .append(&RestoreEvidence {
+            target: "quarantine",
+            before: "absent",
+            after: "verified",
+            cause: "sealed",
+            initiator: "person",
+            decision: "effect",
+            policies: &[],
+            attestations: "digest-a",
+        })
+        .unwrap();
+    assert!(audit.sealed("quarantine", "digest-a").unwrap());
+    assert!(!audit.sealed("quarantine", "digest-b").unwrap());
+    assert!(!audit.sealed("other", "digest-a").unwrap());
 }
 
 /// The ended line is the environment ledger's `ended` record.
