@@ -18,16 +18,16 @@ use crate::backup::application::{
     current_staging_id, CutMaterializer, DecisionAuditError, ExportClock, FetchProgress,
     LoadedTree, MacKey, PreparedCut, Promoted, PublicationIds, QuarantineLayout, RestoreAudit,
     RestoreEvidence, RestoreHold, SealFields, SealedInventoryReader, SessionCut,
-    SessionSourceError, Staging, StagingIds, VerificationFormat, VerificationLimits,
+    SessionSourceError, Staging, StagingIds, TreeId, VerificationFormat, VerificationLimits,
     VerificationSource,
 };
 use crate::backup::domain::{
     conversation_is_fenced, credential_is_fenced, encode_deferred, fresher_fences,
-    leases_to_interrupt, metadata_omitted, normalized_root, paths_are_distinct,
+    leases_to_interrupt, metadata_omitted, normalized_root, paths_conflict_on,
     relative_path_is_safe, restore_lock_path, session_sidecar, share_grant_is_fenced,
     staging_id_is_usable, CredentialKind, DeferredEntry, DeferredLine, DeletionFence, DeletionLog,
     FenceKind, Fingerprint, LeaseMark, ManifestListing, MetadataFacts, MetadataRow, RestoreFault,
-    SealedFile, StoreKind, IDENTITY_BODY, MAX_NAME_BYTES, REPLAY_BODY,
+    SealedFile, StoreKind, VolumeCase, VolumeProbe, IDENTITY_BODY, MAX_NAME_BYTES, REPLAY_BODY,
 };
 
 use super::log::{authenticate_inventory, exclusive, persist};
@@ -449,19 +449,16 @@ fn read_limited(reader: &mut dyn Read, limit: u64) -> Result<Vec<u8>, RestoreFau
 pub struct DirectoryQuarantine;
 
 impl QuarantineLayout for DirectoryQuarantine {
+    fn volume(&self, path: &Path) -> Result<VolumeProbe, RestoreFault> {
+        probe_parent(path)
+    }
+
     fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
-        paths_are_distinct(quarantine, live)?;
+        distinct(self, quarantine, live)?;
         if symlink_exists(quarantine)? {
             return Err(RestoreFault::QuarantineOccupied);
         }
-        let partial = partial_path(quarantine)?;
-        // The same identity as the two roots. A case alias of this directory
-        // is the live path on Windows and macOS, and must not be deleted.
-        if paths_are_distinct(&partial, live).is_err() {
-            return Err(RestoreFault::Paths);
-        }
-        let _ = fs::remove_dir_all(&partial);
-        create_directory(&partial).map_err(|_| RestoreFault::Unreadable)?;
+        let partial = claim_partial(self, quarantine, live)?;
         Ok(Box::new(PartialTree {
             partial,
             quarantine: quarantine.to_path_buf(),
@@ -484,15 +481,39 @@ impl QuarantineLayout for DirectoryQuarantine {
             files,
             extras,
             helpers,
+            identity: tree_id(root)?,
         })
     }
 
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
+    fn promote(
+        &self,
+        quarantine: &Path,
+        live: &Path,
+        identity: &TreeId,
+    ) -> Result<Promoted, RestoreFault> {
+        let opened = File::open(quarantine).map_err(|_| RestoreFault::Unreadable)?;
+        if tree_id_of(&opened)? != *identity || tree_id(quarantine)? != *identity {
+            return Err(RestoreFault::Tamper);
+        }
         let from_parent = quarantine.parent().map(Path::to_path_buf);
         let to_parent = live.parent().map(Path::to_path_buf);
         // The rename itself refuses an existing destination, including an
         // empty directory created where a separate existence check would miss it.
         rename_new(quarantine, live, RestoreFault::LiveOccupied)?;
+        // A stat failure is not a match. Leaving it as `?` would report the
+        // promotion unread while a different directory still sits at live.
+        let live_id = tree_id(live).ok();
+        let opened_id = tree_id_of(&opened).ok();
+        if live_id.as_ref() != Some(identity) || opened_id.as_ref() != Some(identity) {
+            if !quarantine.exists() && live_id.as_ref() != Some(identity) {
+                let _ = rename_new(live, quarantine, RestoreFault::Tamper);
+            }
+            return if live.exists() {
+                Err(RestoreFault::Retained)
+            } else {
+                Err(RestoreFault::Tamper)
+            };
+        }
         // The rename already made the tree live. A parent that cannot be
         // synced does not put it back, and does not make the promotion a
         // refusal.
@@ -967,8 +988,43 @@ fn resolve(root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
     Ok(path)
 }
 
+static PARTIAL_GATE: Mutex<()> = Mutex::new(());
+static ATTEMPT: AtomicU64 = AtomicU64::new(1);
+
+fn distinct(layout: &DirectoryQuarantine, left: &Path, right: &Path) -> Result<(), RestoreFault> {
+    paths_conflict_on(left, right, layout.volume(left)?, layout.volume(right)?)
+}
+
+/// Create a partial directory this attempt owns. An existing name is left alone.
+fn claim_partial(
+    layout: &DirectoryQuarantine,
+    quarantine: &Path,
+    live: &Path,
+) -> Result<PathBuf, RestoreFault> {
+    let _gate = PARTIAL_GATE.lock().map_err(|_| RestoreFault::Unreadable)?;
+    claim_partial_locked(layout, quarantine, live)
+}
+
+fn claim_partial_locked(
+    layout: &DirectoryQuarantine,
+    quarantine: &Path,
+    live: &Path,
+) -> Result<PathBuf, RestoreFault> {
+    for _ in 0..32 {
+        let partial = partial_path(quarantine)?;
+        if distinct(layout, &partial, live).is_err() {
+            continue;
+        }
+        match mkdir_exclusive(&partial) {
+            Ok(()) => return Ok(partial),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err(RestoreFault::Unreadable),
+        }
+    }
+    Err(RestoreFault::Unreadable)
+}
+
 fn partial_path(quarantine: &Path) -> Result<PathBuf, RestoreFault> {
-    static ATTEMPT: AtomicU64 = AtomicU64::new(1);
     let name = quarantine
         .file_name()
         .ok_or(RestoreFault::Paths)?
@@ -984,6 +1040,243 @@ fn partial_path(quarantine: &Path) -> Result<PathBuf, RestoreFault> {
         return Err(RestoreFault::Unreadable);
     }
     Ok(parent.join(staged))
+}
+
+fn tree_id(path: &Path) -> Result<TreeId, RestoreFault> {
+    let file = File::open(path).map_err(|_| RestoreFault::Unreadable)?;
+    tree_id_of(&file)
+}
+
+fn tree_id_of(file: &File) -> Result<TreeId, RestoreFault> {
+    let meta = file.metadata().map_err(|_| RestoreFault::Unreadable)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let mut bytes = [0u8; 16];
+        bytes[..8].copy_from_slice(&meta.ino().to_ne_bytes());
+        Ok(TreeId {
+            volume: meta.dev(),
+            file: bytes,
+        })
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        let index = meta.file_index().ok_or(RestoreFault::Unreadable)?;
+        let volume = meta
+            .volume_serial_number()
+            .ok_or(RestoreFault::Unreadable)?;
+        let mut bytes = [0u8; 16];
+        bytes[..8].copy_from_slice(&index.to_ne_bytes());
+        Ok(TreeId {
+            volume: u64::from(volume),
+            file: bytes,
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = meta;
+        Ok(TreeId {
+            volume: 0,
+            file: [0; 16],
+        })
+    }
+}
+
+fn probe_parent(path: &Path) -> Result<VolumeProbe, RestoreFault> {
+    let start = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => path,
+    };
+    let ancestor = existing_ancestor(start)?;
+    Ok(VolumeProbe {
+        device: device_of(&ancestor)?,
+        case: case_of(&ancestor)?,
+    })
+}
+
+fn existing_ancestor(path: &Path) -> Result<PathBuf, RestoreFault> {
+    let mut current = path.to_path_buf();
+    loop {
+        match fs::metadata(&current) {
+            Ok(meta) if meta.is_dir() => return Ok(current),
+            Ok(_) => return Err(RestoreFault::Unreadable),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !current.pop() {
+                    return Err(RestoreFault::Paths);
+                }
+            }
+            Err(_) => return Err(RestoreFault::Unreadable),
+        }
+    }
+}
+
+fn device_of(dir: &Path) -> Result<u64, RestoreFault> {
+    let meta = fs::metadata(dir).map_err(|_| RestoreFault::Unreadable)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(meta.dev())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        let serial = meta
+            .volume_serial_number()
+            .ok_or(RestoreFault::Unreadable)?;
+        Ok(u64::from(serial))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = meta;
+        Ok(0)
+    }
+}
+
+fn case_of(dir: &Path) -> Result<VolumeCase, RestoreFault> {
+    #[cfg(target_os = "linux")]
+    {
+        linux_case(dir)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_case(dir)
+    }
+    #[cfg(windows)]
+    {
+        let _ = dir;
+        Ok(VolumeCase::Unicode)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        let _ = dir;
+        Ok(VolumeCase::Bytes)
+    }
+}
+
+/// Case rule for a reported filesystem. `casefold` is the ext4 directory flag.
+fn case_for_reported_fs(fstype: &str, casefold: bool) -> VolumeCase {
+    match fstype {
+        "ext2" | "ext3" | "ext4" => {
+            if casefold {
+                VolumeCase::Unicode
+            } else {
+                VolumeCase::Bytes
+            }
+        }
+        "vfat" | "msdos" | "exfat" | "ntfs" | "ntfs3" | "ntfs-3g" | "fuse.ntfs-3g" | "cifs"
+        | "smb" | "smb3" | "iso9660" | "udf" | "fuseblk" => VolumeCase::Unicode,
+        _ => VolumeCase::Bytes,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_case(dir: &Path) -> Result<VolumeCase, RestoreFault> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let name = CString::new(dir.as_os_str().as_bytes()).map_err(|_| RestoreFault::Unreadable)?;
+    let mut stat = unsafe { std::mem::zeroed::<libc::statfs>() };
+    if unsafe { libc::statfs(name.as_ptr(), &mut stat) } != 0 {
+        return Err(RestoreFault::Unreadable);
+    }
+    const EXT: i64 = 0xEF53;
+    const VFAT: i64 = 0x4d44;
+    const EXFAT: i64 = 0x2011_BAB0;
+    const NTFS: i64 = 0x5346_544e;
+    const CIFS: i64 = 0xFF53_4D42;
+    const ISO: i64 = 0x9660;
+    const UDF: i64 = 0x1501_3346;
+    const FUSE: i64 = 0x6573_5546;
+    let magic = stat.f_type as i64;
+    let folding = matches!(magic, VFAT | EXFAT | NTFS | CIFS | ISO | UDF);
+    if folding {
+        return Ok(VolumeCase::Unicode);
+    }
+    if magic == EXT {
+        return Ok(match ext_casefold(dir) {
+            Some(false) => VolumeCase::Bytes,
+            Some(true) | None => VolumeCase::Unicode,
+        });
+    }
+    if magic == FUSE {
+        let kind = mount_fstype(dir).unwrap_or_default();
+        if kind.is_empty() {
+            return Ok(VolumeCase::Unicode);
+        }
+        return Ok(case_for_reported_fs(&kind, false));
+    }
+    Ok(VolumeCase::Bytes)
+}
+
+#[cfg(target_os = "linux")]
+/// `Some(false)` is a readable ext directory that is not casefolded.
+/// `None` means the flag could not be read, so the caller folds.
+fn ext_casefold(dir: &Path) -> Option<bool> {
+    use std::os::fd::AsRawFd;
+    const FS_IOC_GETFLAGS: libc::Ioctl = 0x8008_6601;
+    const FS_CASEFOLD_FL: libc::c_long = 0x4000_0000;
+    let file = File::open(dir).ok()?;
+    let mut flags: libc::c_long = 0;
+    let read = unsafe { libc::ioctl(file.as_raw_fd(), FS_IOC_GETFLAGS, &mut flags) };
+    if read != 0 {
+        return None;
+    }
+    Some(flags & FS_CASEFOLD_FL != 0)
+}
+
+#[cfg(target_os = "linux")]
+fn mount_fstype(dir: &Path) -> Option<String> {
+    let text = fs::read_to_string("/proc/self/mountinfo").ok()?;
+    let target = dir.to_str()?;
+    let mut best: Option<(usize, String)> = None;
+    for line in text.lines() {
+        let Some((pre, post)) = line.split_once(" - ") else {
+            continue;
+        };
+        let Some(mount) = pre.split_whitespace().nth(4) else {
+            continue;
+        };
+        let Some(fstype) = post.split_whitespace().next() else {
+            continue;
+        };
+        let matches = target == mount || mount == "/" || target.starts_with(&format!("{mount}/"));
+        if matches && best.as_ref().is_none_or(|(len, _)| mount.len() > *len) {
+            best = Some((mount.len(), fstype.to_owned()));
+        }
+    }
+    best.map(|(_, fstype)| fstype)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_case(dir: &Path) -> Result<VolumeCase, RestoreFault> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let name = CString::new(dir.as_os_str().as_bytes()).map_err(|_| RestoreFault::Unreadable)?;
+    let sensitive = unsafe { libc::pathconf(name.as_ptr(), libc::_PC_CASE_SENSITIVE) };
+    if sensitive == 1 {
+        Ok(VolumeCase::Bytes)
+    } else {
+        Ok(VolumeCase::UnicodeDecomposed)
+    }
+}
+
+fn mkdir_exclusive(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let name = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "nul"))?;
+        if unsafe { libc::mkdir(name.as_ptr(), 0o700) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(path)
+    }
 }
 
 fn sync_writable(path: &Path) -> Result<(), RestoreFault> {
@@ -1227,6 +1520,43 @@ fn materialize_error(error: MaterializeError) -> SessionSourceError {
         MaterializeError::Interrupted => SessionSourceError::Interrupted,
         MaterializeError::Unreadable => SessionSourceError::Unreadable,
     }
+}
+
+#[test]
+fn a_preexisting_partial_directory_is_not_deleted() {
+    let root = tempfile::tempdir().unwrap();
+    let quarantine = root.path().join("q");
+    let live = root.path().join("live");
+    let _gate = PARTIAL_GATE.lock().unwrap();
+    let attempt = ATTEMPT.load(Ordering::Relaxed);
+    let planted = root
+        .path()
+        .join(format!("q.partial-{}-{attempt}", std::process::id()));
+    fs::create_dir_all(&planted).unwrap();
+    fs::write(planted.join("owned"), b"keep").unwrap();
+    let claimed = claim_partial_locked(&DirectoryQuarantine, &quarantine, &live).unwrap();
+    assert_ne!(claimed, planted);
+    assert_eq!(fs::read(planted.join("owned")).unwrap(), b"keep");
+    assert!(claimed.is_dir());
+    let _ = quarantine;
+}
+
+#[test]
+fn case_for_a_reported_filesystem_follows_the_volume() {
+    assert_eq!(case_for_reported_fs("vfat", false), VolumeCase::Unicode);
+    assert_eq!(case_for_reported_fs("exfat", false), VolumeCase::Unicode);
+    assert_eq!(case_for_reported_fs("ntfs", false), VolumeCase::Unicode);
+    assert_eq!(case_for_reported_fs("ntfs3", false), VolumeCase::Unicode);
+    assert_eq!(case_for_reported_fs("ext4", false), VolumeCase::Bytes);
+    assert_eq!(case_for_reported_fs("ext4", true), VolumeCase::Unicode);
+    assert_eq!(case_for_reported_fs("tmpfs", false), VolumeCase::Bytes);
+    let probed = probe_parent(&std::env::temp_dir()).unwrap();
+    #[cfg(target_os = "linux")]
+    assert_eq!(probed.case, VolumeCase::Bytes);
+    #[cfg(target_os = "macos")]
+    assert_eq!(probed.case, VolumeCase::UnicodeDecomposed);
+    #[cfg(windows)]
+    assert_eq!(probed.case, VolumeCase::Unicode);
 }
 
 #[test]

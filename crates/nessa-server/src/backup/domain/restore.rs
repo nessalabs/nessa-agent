@@ -264,6 +264,57 @@ pub fn paths_are_distinct(quarantine: &Path, live: &Path) -> Result<(), RestoreF
     paths_conflict(quarantine, live, host_volume())
 }
 
+/// The volume that will hold a path's final component.
+///
+/// `device` is the volume identity. Two paths on different devices are different
+/// objects. `case` is how that volume compares names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VolumeProbe {
+    pub device: u64,
+    pub case: VolumeCase,
+}
+
+/// Whether `left` and `right` are one object on the volumes that will hold them.
+///
+/// The same device uses the rule that folds more names. Different devices still
+/// conflict when one path sits inside the other.
+pub fn paths_conflict_on(
+    left: &Path,
+    right: &Path,
+    left_vol: VolumeProbe,
+    right_vol: VolumeProbe,
+) -> Result<(), RestoreFault> {
+    let left_root = normalized_root(left)?;
+    let right_root = normalized_root(right)?;
+    if left_root == right_root {
+        return Err(RestoreFault::Paths);
+    }
+    if left_vol.device == right_vol.device {
+        return paths_conflict(left, right, stricter_case(left_vol.case, right_vol.case));
+    }
+    let left_parts = identity_parts(left, left_vol.case)?;
+    let right_on_left = identity_parts(right, left_vol.case)?;
+    if starts_with_longer(&left_parts, &right_on_left) {
+        return Err(RestoreFault::Paths);
+    }
+    let right_parts = identity_parts(right, right_vol.case)?;
+    let left_on_right = identity_parts(left, right_vol.case)?;
+    if starts_with_longer(&right_parts, &left_on_right) {
+        return Err(RestoreFault::Paths);
+    }
+    Ok(())
+}
+
+fn stricter_case(left: VolumeCase, right: VolumeCase) -> VolumeCase {
+    match (left, right) {
+        (VolumeCase::UnicodeDecomposed, _) | (_, VolumeCase::UnicodeDecomposed) => {
+            VolumeCase::UnicodeDecomposed
+        }
+        (VolumeCase::Unicode, _) | (_, VolumeCase::Unicode) => VolumeCase::Unicode,
+        (VolumeCase::Bytes, VolumeCase::Bytes) => VolumeCase::Bytes,
+    }
+}
+
 /// How a volume compares two path components that do not exist yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VolumeCase {
@@ -275,7 +326,7 @@ pub enum VolumeCase {
     UnicodeDecomposed,
 }
 
-fn host_volume() -> VolumeCase {
+pub fn host_volume() -> VolumeCase {
     if cfg!(target_os = "macos") {
         VolumeCase::UnicodeDecomposed
     } else if cfg!(windows) {
@@ -927,6 +978,30 @@ mod tests {
         assert!(attestation_mentions(&staged, "stage-1"));
         assert!(staging_id_is_usable("stage-1"));
         assert!(!staging_id_is_usable("stage 1"));
+        let folding = VolumeProbe {
+            device: 1,
+            case: VolumeCase::Unicode,
+        };
+        let sensitive = VolumeProbe {
+            device: 2,
+            case: VolumeCase::Bytes,
+        };
+        assert_eq!(
+            paths_conflict_on(&root.join("q"), &root.join("Q"), folding, folding).unwrap_err(),
+            RestoreFault::Paths
+        );
+        assert!(paths_conflict_on(&root.join("q"), &root.join("Q"), sensitive, sensitive).is_ok());
+        assert!(paths_conflict_on(&root.join("q"), &root.join("Q"), folding, sensitive).is_ok());
+        assert_eq!(
+            paths_conflict_on(
+                &root.join("mnt"),
+                &root.join("mnt").join("q"),
+                sensitive,
+                folding
+            )
+            .unwrap_err(),
+            RestoreFault::Paths
+        );
         if cfg!(windows) {
             assert_eq!(
                 paths_conflict(

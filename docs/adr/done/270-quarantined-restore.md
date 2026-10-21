@@ -98,10 +98,18 @@ fails is live, recorded as `unsynced`, and is not rolled back. A fetch is
 available only for the publication stored beside that file. That publication
 and its conversation stay available after the quarantine folder is renamed
 onto the live path. Accept refuses a session whose publication was never
-recorded available. On Windows and macOS, two roots that differ only by
-Unicode case are the same path. On macOS, a composed name and its
-decomposition are the same path. The drive letter folds with the name. They
-are refused before either lock is taken. The audit
+recorded available. Path identity comes from the volume that will hold the
+final component. On Windows and macOS, two roots that differ only by
+Unicode case are the same path when that volume folds. On macOS, a composed
+name and its decomposition are the same path when the volume is not
+case-sensitive. Linux vfat, exFAT, NTFS, and casefolded ext4 fold the same
+way. The drive letter folds with the name. They
+are refused before either lock is taken. A partial name that already exists
+is not deleted; the attempt creates another name. A staging id that cannot
+be minted records a tree it cannot remove as unready. Accept renames the
+directory it read, and a directory swapped in at that path is not promoted. A
+live path that is a different directory after that rename is moved back, and
+is retained when it remains. The audit
 names the anchored root rather than the caller's spelling. A path that is
 not Unicode is refused and is not audited under a lossy spelling. A published
 directory is an exclusive rename, so an empty live directory is not replaced.

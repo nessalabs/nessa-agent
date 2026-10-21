@@ -85,14 +85,19 @@ supplies the id.
 | Open through another spelling of the same root | The publication already stored for that anchored root | The same target as the first open | Already present |
 | Fetched in quarantine, then the folder is renamed to live | The same publication, now at the live path | The available line still names that publication and conversation. The root on the line is where the fetch ran | Already present. The file is not fetched again |
 | A session extra whose publication has no available line | The quarantine. Accept does not rename | `unchanged → unchanged` | The error. The live path is not created |
-| Two roots that differ only by Unicode case on Windows or macOS, or by composition on macOS | One filesystem object. The drive letter folds with the name | Refused before either lock is taken | Paths |
+| Two roots that differ only by the case rule of the volume that will hold them | One filesystem object. Linux vfat, exFAT, NTFS, and casefolded ext4 fold. macOS folds and decomposes when the volume does. Windows folds. The drive letter folds with the name | Refused before either lock is taken | Paths |
 | Publish fails after the bytes may already have the final name | Neither name. The final name is retired even when retiring the temp name fails | The publish error when both retire. Retained when either name cannot | The error. A file that remains is retained |
 | Publication id | The id from the publication-id port. The OS adapter reads 16 random bytes | Attestations are that id | Entropy failure retires the published file |
 | Sealed journal | The audit. Attestations are the journal digest and the staging id | `absent → verified`, cause `sealed` | |
 | The same journal bytes staged again after that id was spent | A new staging id. The old marker is not this generation | The latest unspent seal. A spent id is not current | Tamper when the marker is the spent id or `ready` |
 | Readiness failed and the marker still names the id | The quarantine, unready. The id is spent | `verified → unready` or `verified → absent`. Attestations are the staging id | The error. A later accept does not promote that marker |
+| Staging id fails and the published tree is removed | No quarantine | `unchanged → unchanged` | The id error |
+| Staging id fails and the published tree remains | The quarantine, unready | `absent → unready`, cause `retained` | Retained. Not an unchanged refusal |
+| The quarantine directory is replaced after it was read | The substitute stays at the quarantine path. The verified directory is not renamed | `unchanged → unchanged` | Tamper |
+| Rename finished, then the live path is not that directory, and moving it back clears live | The substitute is not live | `unchanged → unchanged` | Tamper |
+| Rename finished, then the live path is not that directory, and it remains | The substitute at the live path | No unchanged line | Retained |
 | Journal replaced and recomputed so its own seal matches | The quarantine. Accept does not rename | `unchanged → unchanged` | Tamper. The audit still names the journal stage wrote |
-| Derived partial directory is the live path, including a Unicode case alias on Windows or macOS, or a composed alias on macOS | The live path. The partial directory is not deleted | `unchanged → unchanged` | Paths |
+| A partial name that already exists, or that is the live path | The existing directory. This attempt creates a different name and does not delete the old one | The planted directory is not an audit target | The new partial directory |
 | One root's lock file is the other root | Neither root is created as a lock file | `unchanged → unchanged` | Paths |
 | A file whose name ends in `.publication` outside `sessions/<id>.sqlite3` | The quarantine. Accept does not rename | `unchanged → unchanged` | Tamper. The file is part of the seal |
 | Readiness bytes synced, then renamed to `accept-ready`, then the quarantine directory synced | The marker, whose bytes are the staging id. A file sync failure retires the temporary file. A directory sync failure retires the marker | The sealed line stays when retirement succeeds. A marker that still names an id is retained, and the id is spent | The error. A partial file is not readiness. Retained when the id remains |
@@ -120,6 +125,16 @@ supplies the id.
   separate existence check that a created directory could slip past.
   `an_occupied_live_root_is_not_replaced`,
   `an_empty_live_directory_is_not_replaced`
+- Accept renames the directory it read. A different directory placed at the
+  quarantine path after that read is not promoted. If the rename has already
+  happened and the live path is a different directory, it is moved back; when
+  it remains, the result is retained and no unchanged line is written.
+  `a_swapped_quarantine_directory_is_not_promoted`
+- A staging id that cannot be minted removes the published tree when it can.
+  When the tree remains, the audit says `absent → unready` and the result is
+  retained. `a_failed_staging_id_keeps_an_unremoved_tree`
+- A partial directory name that already exists is not deleted. The attempt
+  creates a different name. `a_preexisting_partial_directory_is_not_deleted`
 - The seal is the set of file hashes in the journal. Accept requires the
   latest unspent sealed line for that quarantine path to name the digest of
   those journal bytes and a staging id, and the readiness marker to store
@@ -242,10 +257,14 @@ supplies the id.
   session extra whose publication has no available line, and does not rename.
   `a_fetch_in_quarantine_stays_available_after_accept`,
   `an_unaudited_session_is_not_promoted`
-- On Windows and macOS, `Restore` and `restore` are one root, and so are `Ä`
-  and `ä`. On macOS, a composed name and its decomposition are one root. The
-  drive letter folds with the name. The refusal happens before either lock
-  is taken. `paths_and_receipts_are_constrained`
+- The case rule comes from the volume that will hold the final component, not
+  from the host operating system. On that volume, `Restore` and `restore` are
+  one root when the volume folds case, and so are `Ä` and `ä`. On macOS, a
+  composed name and its decomposition are one root when the volume is not
+  case-sensitive. Linux vfat, exFAT, NTFS, and casefolded ext4 fold. Two
+  paths on different volumes do not fold into each other. The drive letter
+  folds with the name. The refusal happens before either lock is taken.
+  `paths_and_receipts_are_constrained`, `case_for_a_reported_filesystem_follows_the_volume`
 - A realistic session whose database is over 64 MiB is deferred by the
   export, then recovered by this open. `a_session_over_64_mib_is_restored_when_opened`
 - A failed publish retires the temp name and the final name independently.

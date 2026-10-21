@@ -19,7 +19,7 @@ use crate::backup::application::{
     FetchProgress, InventoryCause, InventoryDecision, LeaseReceipts, LoadedTree, MacKey,
     ManifestPublisher, MutationAdmission, OpenRequest, Promoted, PublicationIds, QuarantineLayout,
     RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SealFields,
-    SessionCut, SessionSourceError, StageRequest, Staging, StagingIds, VerificationFailure,
+    SessionCut, SessionSourceError, StageRequest, Staging, StagingIds, TreeId, VerificationFailure,
     VerificationLimits, VerificationSource,
 };
 use crate::backup::domain::{
@@ -534,8 +534,13 @@ impl QuarantineLayout for StickyQuarantine {
         DirectoryQuarantine.load(root)
     }
 
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
-        DirectoryQuarantine.promote(quarantine, live)
+    fn promote(
+        &self,
+        quarantine: &Path,
+        live: &Path,
+        identity: &TreeId,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, identity)
     }
 
     fn remove_tree(&self, _path: &Path) -> Result<(), RestoreFault> {
@@ -618,8 +623,13 @@ impl QuarantineLayout for KeepsSession {
         DirectoryQuarantine.load(root)
     }
 
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
-        DirectoryQuarantine.promote(quarantine, live)
+    fn promote(
+        &self,
+        quarantine: &Path,
+        live: &Path,
+        identity: &TreeId,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, identity)
     }
 
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -921,12 +931,35 @@ fn an_empty_live_directory_is_not_replaced() {
     fs::create_dir_all(place.quarantine.join("records")).unwrap();
     fs::write(place.quarantine.join("journal.txt"), b"sealed\n").unwrap();
     fs::create_dir(&place.live).unwrap();
+    let loaded = DirectoryQuarantine.load(&place.quarantine).unwrap();
     let error = DirectoryQuarantine
-        .promote(&place.quarantine, &place.live)
+        .promote(&place.quarantine, &place.live, &loaded.identity)
         .unwrap_err();
     assert_eq!(error, RestoreFault::LiveOccupied);
     assert!(place.quarantine.join("journal.txt").is_file());
     assert!(fs::read_dir(&place.live).unwrap().next().is_none());
+}
+
+#[test]
+fn a_swapped_quarantine_directory_is_not_promoted() {
+    let place = roots();
+    fs::create_dir_all(&place.quarantine).unwrap();
+    fs::write(place.quarantine.join("journal.txt"), b"sealed\n").unwrap();
+    let loaded = DirectoryQuarantine.load(&place.quarantine).unwrap();
+    let saved = place.quarantine.with_extension("saved");
+    fs::rename(&place.quarantine, &saved).unwrap();
+    fs::create_dir(&place.quarantine).unwrap();
+    fs::write(place.quarantine.join("journal.txt"), b"other\n").unwrap();
+    let error = DirectoryQuarantine
+        .promote(&place.quarantine, &place.live, &loaded.identity)
+        .unwrap_err();
+    assert_eq!(error, RestoreFault::Tamper);
+    assert!(!place.live.exists());
+    assert_eq!(
+        fs::read(place.quarantine.join("journal.txt")).unwrap(),
+        b"other\n"
+    );
+    assert_eq!(fs::read(saved.join("journal.txt")).unwrap(), b"sealed\n");
 }
 
 #[test]
@@ -1056,6 +1089,76 @@ async fn a_resealed_quarantine_is_not_promoted() {
     assert_eq!(error, RestoreFault::Tamper);
     assert!(!place.live.exists());
     assert!(journal_path.is_file());
+}
+
+struct FailingStage;
+
+impl StagingIds for FailingStage {
+    fn staging_id(&self) -> Result<String, RestoreFault> {
+        Err(RestoreFault::Unreadable)
+    }
+}
+
+#[tokio::test]
+async fn a_failed_staging_id_keeps_an_unremoved_tree() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let kept = roots();
+    let source = DirectoryVerificationSource::open(bundle.root.clone()).unwrap();
+    let kept_audit = MemoryAudit::open();
+    let error = stage_quarantine(
+        &StageRequest {
+            facts: person(RestoreAction::Stage),
+            bundle: &source,
+            format: &ExportFormat,
+            verifier: &bundle.key,
+            limits: VerificationLimits::default(),
+            later_inventory: None,
+            quarantine: &kept.quarantine,
+            live: &kept.live,
+        },
+        &policy(),
+        &kept_audit,
+        &ReadyFails { keep: true },
+        &DirectoryMaterializer,
+        &KeyedInventory::new(bundle.key),
+        &FailingStage,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Retained);
+    assert!(kept.quarantine.join("journal.txt").is_file());
+    assert!(kept_audit.lines().iter().any(|line| {
+        line.before == "absent" && line.after == "unready" && line.cause == "retained"
+    }));
+    assert!(kept_audit.lines().iter().all(|line| {
+        !(line.decision == "effect" && line.before == "unchanged" && line.after == "unchanged")
+    }));
+
+    let removed = roots();
+    let removed_audit = MemoryAudit::open();
+    let error = stage_quarantine(
+        &StageRequest {
+            facts: person(RestoreAction::Stage),
+            bundle: &source,
+            format: &ExportFormat,
+            verifier: &bundle.key,
+            limits: VerificationLimits::default(),
+            later_inventory: None,
+            quarantine: &removed.quarantine,
+            live: &removed.live,
+        },
+        &policy(),
+        &removed_audit,
+        &ReadyFails { keep: false },
+        &DirectoryMaterializer,
+        &KeyedInventory::new(bundle.key),
+        &FailingStage,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Unreadable);
+    assert!(!removed.quarantine.exists());
+    assert!(removed_audit.lines().iter().any(|line| {
+        line.decision == "effect" && line.before == "unchanged" && line.after == "unchanged"
+    }));
 }
 
 struct FixedStage(&'static str);
@@ -1514,8 +1617,13 @@ impl QuarantineLayout for ReportsOccupied {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
-        DirectoryQuarantine.promote(quarantine, live)
+    fn promote(
+        &self,
+        quarantine: &Path,
+        live: &Path,
+        identity: &TreeId,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, identity)
     }
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.remove_tree(path)
@@ -1615,8 +1723,13 @@ impl QuarantineLayout for ReadyFails {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
-        DirectoryQuarantine.promote(quarantine, live)
+    fn promote(
+        &self,
+        quarantine: &Path,
+        live: &Path,
+        identity: &TreeId,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, identity)
     }
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
         if self.keep {
@@ -2461,8 +2574,13 @@ impl QuarantineLayout for KeepsPartialSession {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
-        DirectoryQuarantine.promote(quarantine, live)
+    fn promote(
+        &self,
+        quarantine: &Path,
+        live: &Path,
+        identity: &TreeId,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, identity)
     }
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.remove_tree(path)
@@ -2559,8 +2677,13 @@ impl QuarantineLayout for LeavesPartialTree {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
-        DirectoryQuarantine.promote(quarantine, live)
+    fn promote(
+        &self,
+        quarantine: &Path,
+        live: &Path,
+        identity: &TreeId,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, identity)
     }
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.remove_tree(path)
@@ -3231,8 +3354,13 @@ impl QuarantineLayout for KeepsTree {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
-        DirectoryQuarantine.promote(quarantine, live)
+    fn promote(
+        &self,
+        quarantine: &Path,
+        live: &Path,
+        identity: &TreeId,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, identity)
     }
     fn remove_tree(&self, _path: &Path) -> Result<(), RestoreFault> {
         Err(RestoreFault::Unreadable)
@@ -3365,8 +3493,13 @@ impl QuarantineLayout for KeepsBytes {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
-        DirectoryQuarantine.promote(quarantine, live)
+    fn promote(
+        &self,
+        quarantine: &Path,
+        live: &Path,
+        identity: &TreeId,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, identity)
     }
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.remove_tree(path)
@@ -3562,8 +3695,13 @@ impl QuarantineLayout for ReportsUnsynced {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
-        DirectoryQuarantine.promote(quarantine, live)?;
+    fn promote(
+        &self,
+        quarantine: &Path,
+        live: &Path,
+        identity: &TreeId,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, identity)?;
         Ok(Promoted { durable: false })
     }
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -3794,8 +3932,13 @@ impl QuarantineLayout for ExistsFailsAfterPublish {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
-        DirectoryQuarantine.promote(quarantine, live)
+    fn promote(
+        &self,
+        quarantine: &Path,
+        live: &Path,
+        identity: &TreeId,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, identity)
     }
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.remove_tree(path)
@@ -3915,8 +4058,13 @@ impl QuarantineLayout for RetainsFinish {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
         DirectoryQuarantine.load(root)
     }
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault> {
-        DirectoryQuarantine.promote(quarantine, live)
+    fn promote(
+        &self,
+        quarantine: &Path,
+        live: &Path,
+        identity: &TreeId,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, identity)
     }
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.remove_tree(path)

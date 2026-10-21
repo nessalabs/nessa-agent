@@ -32,10 +32,10 @@ use super::verification::{
 use super::verification_format::VerificationFormat;
 use crate::backup::domain::{
     attested_pair, audit_path, decode_deferred, deferred_for_open, deferred_session_name,
-    encode_journal, extra_session_allowed, paths_are_distinct, posture, read_journal,
+    encode_journal, extra_session_allowed, host_volume, paths_conflict_on, posture, read_journal,
     receipt_is_usable, relative_path_is_safe, restore_lock_path, seal_attestation, session_sidecar,
     staging_id_is_usable, DeferredLine, DeletionLog, Fingerprint, Freshness, Journal,
-    ManifestListing, Posture, RestoreFault, SealedFile,
+    ManifestListing, Posture, RestoreFault, SealedFile, VolumeProbe,
 };
 
 /// Drop releases the restore-root lock.
@@ -56,7 +56,12 @@ pub trait QuarantineLayout {
     fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault>;
     /// `Err` means the rename did not happen. [`Promoted`] means the live path
     /// owns the tree.
-    fn promote(&self, quarantine: &Path, live: &Path) -> Result<Promoted, RestoreFault>;
+    fn promote(
+        &self,
+        quarantine: &Path,
+        live: &Path,
+        identity: &TreeId,
+    ) -> Result<Promoted, RestoreFault>;
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault>;
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault>;
     fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault>;
@@ -72,6 +77,17 @@ pub trait QuarantineLayout {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault>;
     /// The path after `.` and `..` are removed and an existing ancestor is resolved.
     fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault>;
+    /// How the volume that will hold `path`'s final component compares names.
+    ///
+    /// The default is the host rule and one shared device. The directory adapter
+    /// reads the volume that actually contains the parent.
+    fn volume(&self, path: &Path) -> Result<VolumeProbe, RestoreFault> {
+        let _ = path;
+        Ok(VolumeProbe {
+            device: 0,
+            case: host_volume(),
+        })
+    }
     /// One lock for this root, held across publication and the audit that records it.
     fn hold(&self, root: &Path) -> Result<Box<dyn RestoreHold>, RestoreFault>;
     /// Record that the sealed audit for `staging_id` was stored. Accept refuses without it.
@@ -96,12 +112,21 @@ pub trait Staging {
 }
 
 /// What [`QuarantineLayout::load`] observed. `files` are the sealed set.
+/// The directory that was read. Promotion renames this object, not whatever later
+/// sits at the same path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TreeId {
+    pub volume: u64,
+    pub file: [u8; 16],
+}
+
 pub struct LoadedTree {
     pub journal: String,
     pub files: Vec<SealedFile>,
     pub extras: Vec<String>,
     /// Sidecars of a session file. Anything else with a helper suffix is in `files`.
     pub helpers: Vec<String>,
+    pub identity: TreeId,
 }
 
 /// Turns a verified bundle into the files quarantine will seal.
@@ -198,7 +223,7 @@ pub fn stage_quarantine(
         initiator: kind,
         policies: &policies,
     };
-    if let Err(error) = roots_are_distinct(&quarantine, &live) {
+    if let Err(error) = roots_are_distinct(layout, &quarantine, &live) {
         return Err(recorded.stop(error));
     }
     let _hold = match hold_roots(layout, &quarantine, &live) {
@@ -270,13 +295,14 @@ pub fn stage_quarantine(
     let staging_id = match ids.staging_id() {
         Ok(id) if staging_id_is_usable(&id) => id,
         Ok(_) => {
-            let _ = layout.remove_tree(&quarantine);
-            return Err(recorded.stop(RestoreFault::Unreadable));
+            return Err(remove_published(
+                layout,
+                &quarantine,
+                &recorded,
+                RestoreFault::Unreadable,
+            ))
         }
-        Err(error) => {
-            let _ = layout.remove_tree(&quarantine);
-            return Err(recorded.stop(error));
-        }
+        Err(error) => return Err(remove_published(layout, &quarantine, &recorded, error)),
     };
     let attestation = seal_attestation(&digest, &staging_id);
     if recorded
@@ -354,7 +380,7 @@ pub fn accept_quarantine(
         initiator: kind,
         policies: &policies,
     };
-    if let Err(error) = roots_are_distinct(&quarantine, &live) {
+    if let Err(error) = roots_are_distinct(layout, &quarantine, &live) {
         return Err(recorded.stop(error));
     }
     let _hold = match hold_roots(layout, &quarantine, &live) {
@@ -406,8 +432,9 @@ pub fn accept_quarantine(
         Ok(false) => {}
         Err(error) => return Err(recorded.stop(error)),
     }
-    let promoted = match layout.promote(&quarantine, &live) {
+    let promoted = match layout.promote(&quarantine, &live, &loaded.identity) {
         Ok(promoted) => promoted,
+        Err(RestoreFault::Retained) => return Err(RestoreFault::Retained),
         Err(error) => return Err(recorded.stop(error)),
     };
     // The rename has happened. Spend the staging id on the quarantine path
@@ -760,11 +787,44 @@ struct HeldRoots {
 }
 
 /// The two roots, and each root's lock file, are different identities.
-fn roots_are_distinct(quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
-    paths_are_distinct(quarantine, live)?;
-    paths_are_distinct(&restore_lock_path(quarantine)?, live)?;
-    paths_are_distinct(&restore_lock_path(live)?, quarantine)?;
+fn roots_are_distinct(
+    layout: &dyn QuarantineLayout,
+    quarantine: &Path,
+    live: &Path,
+) -> Result<(), RestoreFault> {
+    distinct(layout, quarantine, live)?;
+    distinct(layout, &restore_lock_path(quarantine)?, live)?;
+    distinct(layout, &restore_lock_path(live)?, quarantine)?;
     Ok(())
+}
+
+fn distinct(layout: &dyn QuarantineLayout, left: &Path, right: &Path) -> Result<(), RestoreFault> {
+    paths_conflict_on(left, right, layout.volume(left)?, layout.volume(right)?)
+}
+
+/// The quarantine directory is already published. Removing it keeps the caller's
+/// error. Leaving it records the tree as unready and returns retained.
+fn remove_published(
+    layout: &dyn QuarantineLayout,
+    quarantine: &Path,
+    recorded: &Recorded<'_>,
+    error: RestoreFault,
+) -> RestoreFault {
+    if layout.remove_tree(quarantine).is_ok() {
+        return recorded.stop(error);
+    }
+    if recorded
+        .write(
+            "absent",
+            "unready",
+            RestoreFault::Retained.cause(),
+            "effect",
+        )
+        .is_err()
+    {
+        return RestoreFault::Audit;
+    }
+    RestoreFault::Retained
 }
 
 fn hold_roots(
