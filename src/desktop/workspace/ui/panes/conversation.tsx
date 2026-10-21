@@ -169,18 +169,22 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
   const { text, onTextChange } = useComposerText(sessionId)
   const stop = useStop(sessionId)
   const access = useComposerAccess(sessionId)
-  const modelChoice = useWorkspaceSelector((state) =>
+  const modelChoiceLive = useWorkspaceSelector((state) =>
     entry(state.workspace.modelChoices, sessionId),
   )
-  const modelControl = useWorkspaceSelector(
+  const modelChoice = useRememberedValue(sessionId, modelChoiceLive)
+  const modelControlLive = useWorkspaceSelector(
     (state) => entry(state.workspace.transcripts, sessionId)?.modelControl,
   )
-  const modelRequest = useWorkspaceSelector((state) =>
+  const modelControl = useRememberedValue(sessionId, modelControlLive)
+  const modelRequestLive = useWorkspaceSelector((state) =>
     modelRequesting(state.workspace, sessionId),
   )
-  const modelBusy = useWorkspaceSelector((state) =>
+  const modelRequest = useRememberedValue(sessionId, modelRequestLive)
+  const modelBusyLive = useWorkspaceSelector((state) =>
     modelChanging(state.workspace, sessionId),
   )
+  const modelBusy = useRememberedValue(sessionId, modelBusyLive)
   const isDraft = useWorkspaceSelector((state) => !!draftOf(state.workspace, sessionId))
   const modelNotice =
     modelControl?.pending?.status === "recovery_required" ||

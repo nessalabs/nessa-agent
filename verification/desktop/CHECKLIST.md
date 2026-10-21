@@ -903,6 +903,12 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   shows the turn and Stop, rather than Send, until the box itself goes.
   _Check:_ `columns.mjs --only stop-held`. The layout test removes a
   session whose conversation was showing a running turn.
+- [ ] **A model change stays until that box goes.** The source removing
+  the session drops the choice and the transcript's model control at
+  once. The box still shows that notice until the box itself goes. The
+  sample source refuses a model change before the next paint, so this is
+  the layout test that puts an acknowledged change on screen and then
+  removes the session.
 - [ ] **A pane preview stays until the dropped arrangement paints.** An
   accepted swap keeps the preview on the panes the grid has not replaced
   yet. The next two frames still show it. It lets go on the frame the new
