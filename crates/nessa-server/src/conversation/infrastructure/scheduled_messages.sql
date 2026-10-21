@@ -2,6 +2,10 @@
 -- preference for sending them (`scheduled-chat-messages.sqlite3`).
 -- A row is written when a schedule is accepted and kept after it ends, so a
 -- second delivery of the same causal turn cannot mint another execution.
+-- retry_at_ms is 0 when a submitting row may be attempted now. A later
+-- instant is the next attempt. retry_failures counts attempts already
+-- deferred. reconcile_retry is a settlement whose plan did not commit.
+-- user_version stays 1. An earlier copy of this file is recreated.
 CREATE TABLE preference (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
@@ -38,11 +42,19 @@ CREATE TABLE message (
     tools_checked INTEGER NOT NULL CHECK (tools_checked IN (0, 1)),
     fence_owner TEXT NOT NULL DEFAULT '',
     fence_until_ms INTEGER NOT NULL DEFAULT 0,
+    retry_at_ms INTEGER NOT NULL DEFAULT 0,
+    retry_failures INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (conversation, causal_execution)
 ) STRICT;
 
 CREATE UNIQUE INDEX message_one_open ON message (conversation)
     WHERE status IN ('scheduled', 'delivering', 'submitting');
+
+CREATE TABLE reconcile_retry (
+    conversation TEXT PRIMARY KEY,
+    failures INTEGER NOT NULL,
+    retry_at_ms INTEGER NOT NULL
+) STRICT;
 
 CREATE TABLE audit (
     id INTEGER PRIMARY KEY,

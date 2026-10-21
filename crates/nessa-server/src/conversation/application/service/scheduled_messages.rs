@@ -5,10 +5,13 @@
 //! with the causal turn's initiation, so Cedar and a deleted conversation are
 //! decided there. The compare-and-set from `delivering` to `submitting` is the
 //! only permission to submit, and it takes a lease the other processes on this
-//! file can see. Cancel, defer, and a model change lose to that transition and
-//! win against a claim that has not made it. An applied model change is not
-//! complete until that plan commits. Cedar's allow and deny of the preference
-//! are each one audit before the command result.
+//! file can see. A retryable submit failure keeps the row `submitting` until
+//! a bounded retry time. A settlement whose plan does not commit keeps the
+//! same kind of debt and is planned again at that time. Cancel, defer, and a
+//! model change lose to that transition and win against a claim that has not
+//! made it. An applied model change is not complete until that plan commits.
+//! Cedar's allow and deny of the preference are each one audit before the
+//! command result.
 
 /// How long a `submitting` lease lasts. The owner renews it while the submit runs.
 pub(crate) const FENCE_LEASE_MS: u64 = 30_000;
@@ -101,6 +104,21 @@ pub struct ScheduledMessage {
     pub grant_id: Option<String>,
     pub policy_revision: Option<u64>,
     pub tools_checked: bool,
+    /// How many retryable submit attempts have already failed. Zero is a
+    /// first attempt. The next defer waits the bounded backoff of this count
+    /// plus one, and the row stays `submitting` until that time.
+    pub retry_failures: u32,
+}
+
+/// A settlement whose continuation plan did not commit, and when to try it again.
+///
+/// Catch-up being complete does not drop this debt. The delivery loop retries
+/// the plan at `retry_at_ms`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReconcileRetry {
+    pub conversation: String,
+    pub failures: u32,
+    pub retry_at_ms: u64,
 }
 
 /// What accepting a row needs. `execution_id` is used only when no row exists
@@ -229,26 +247,42 @@ pub trait ScheduledMessageStore: Send + Sync {
         actor: ScheduleActor,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool>;
-    /// Claim due scheduled rows, then return those claims and rows already
-    /// delivering. Each execution id appears once. The claim is not itself
-    /// an audit row: the delivery or refusal audit follows admission, and a
-    /// released claim is audited as `reset_moved`.
+    /// Claim due scheduled rows, then return those claims, rows already
+    /// delivering, and `submitting` rows whose retry time has arrived. A
+    /// submitting row waiting for a later retry is not claimed. Each
+    /// execution id appears once. The claim is not itself an audit row: the
+    /// delivery or refusal audit follows admission, and a released claim is
+    /// audited as `reset_moved`.
     fn claim_due(&self, now_ms: u64, limit: usize)
         -> ConversationFuture<'_, Vec<ScheduledMessage>>;
     /// When the next pass should run. `Some(now_ms)` when a scheduled row is
-    /// already due, or a row is `delivering` or `submitting`, so a claim that
-    /// stopped at its limit, or a delivery audit that failed, is retried on
-    /// the next pass. Otherwise the soonest scheduled due time strictly after
-    /// `now_ms`.
+    /// already due, a row is `delivering`, or a `submitting` row's retry time
+    /// has arrived (`retry_at_ms` is 0 or at or before `now_ms`). A submitting
+    /// row whose retry time is still ahead waits until that time. Otherwise
+    /// the soonest of a later scheduled due time and a later submit retry.
     fn next_due(&self, now_ms: u64) -> ConversationFuture<'_, Option<u64>>;
     /// Move `delivering` to `submitting` under a lease that lasts
     /// [`FENCE_LEASE_MS`] from `now_ms`, or adopt a `submitting` row whose
-    /// lease has expired or that this process already owns and is not inside.
-    /// True is the only permission to submit. The in-memory arm is taken only
-    /// after the update commits, and only so this process does not enter twice.
-    /// Cancel, defer, and a model change match `scheduled` and `delivering`
-    /// only, so exactly one of those and this transition can win.
+    /// lease has expired or that this process already owns and is not inside,
+    /// and whose retry time has arrived. True is the only permission to
+    /// submit. The in-memory arm is taken only after the update commits, and
+    /// only so this process does not enter twice. Cancel, defer, and a model
+    /// change match `scheduled` and `delivering` only, so exactly one of
+    /// those and this transition can win.
     fn begin_submit(&self, execution_id: &str, now_ms: u64) -> ConversationFuture<'_, bool>;
+    /// Hold a `submitting` row this process owns until `retry_at_ms`.
+    /// `failures` is the count after this attempt and must be one more than
+    /// the count stored on the row. The status stays `submitting`. The audit
+    /// cause is `submission_retry`, written in the same transaction as the
+    /// timestamp. `Ok(false)` is a row this process does not own at that
+    /// count. `Err` rolls the timestamp and the audit back.
+    fn defer_submit(
+        &self,
+        execution_id: &str,
+        failures: u32,
+        retry_at_ms: u64,
+        at_ms: u64,
+    ) -> ConversationFuture<'_, bool>;
     /// Extend this process's lease on a `submitting` row. False when this
     /// process is not the owner, or the row is no longer `submitting`.
     fn renew_fence(&self, execution_id: &str, now_ms: u64) -> ConversationFuture<'_, bool>;
@@ -307,6 +341,19 @@ pub trait ScheduledMessageStore: Send + Sync {
     /// rows keep theirs. One new audit per row that still held a payload. A
     /// second call writes nothing. Older audit rows stay.
     fn erase_conversation(&self, conversation: &str, at_ms: u64) -> ConversationFuture<'_, ()>;
+    /// Remember that planning `conversation` failed. The next attempt is
+    /// `retry_at_ms`. `failures` counts attempts so far, including this one.
+    /// Replaces any earlier debt for that conversation.
+    fn note_reconcile_retry(
+        &self,
+        conversation: &str,
+        failures: u32,
+        retry_at_ms: u64,
+    ) -> ConversationFuture<'_, ()>;
+    /// Drop the reconcile debt after a plan commits.
+    fn clear_reconcile_retry(&self, conversation: &str) -> ConversationFuture<'_, ()>;
+    /// Every reconcile debt, due and still ahead.
+    fn reconcile_retries(&self) -> ConversationFuture<'_, Vec<ReconcileRetry>>;
 }
 
 impl ConversationService {
@@ -449,6 +496,11 @@ impl ConversationService {
     }
 
     /// Apply [`plan_continuation`] to one conversation's saved history.
+    ///
+    /// A plan that does not commit is a reconcile debt with a next attempt.
+    /// Catch-up being complete does not drop it. The delivery loop retries
+    /// the plan at that time. A debt the database refuses stays in this
+    /// process until a later pass writes it or the plan commits.
     pub(crate) async fn consider_usage_limit(
         &self,
         id: &ConversationId,
@@ -458,12 +510,191 @@ impl ConversationService {
         let Some(store) = self.scheduled_messages() else {
             return;
         };
+        let conversation = id.to_string();
         if let Err(error) = self
             .apply_usage_limit_plan(id, &store, enabled_by_person, actor)
             .await
         {
-            tracing::warn!(conversation_id = %id, %error, "a usage-limit continuation could not be scheduled");
+            let wait = self.note_reconcile_failure(&store, &conversation).await;
+            tracing::warn!(
+                conversation_id = %id,
+                %error,
+                retry_ms = wait,
+                "a usage-limit continuation could not be scheduled"
+            );
+        } else {
+            self.forget_reconcile_debt(&store, &conversation).await;
         }
+    }
+
+    async fn note_reconcile_failure(
+        &self,
+        store: &Arc<dyn ScheduledMessageStore>,
+        conversation: &str,
+    ) -> u64 {
+        let now = self.inner.clock.unix_milliseconds();
+        let previous = self.reconcile_failure_count(store, conversation).await;
+        let failures = previous.saturating_add(1);
+        let wait = attempt_backoff(failures);
+        let retry_at = now.saturating_add(wait);
+        if store
+            .note_reconcile_retry(conversation, failures, retry_at)
+            .await
+            .is_ok()
+        {
+            self.forget_memory_reconcile(conversation);
+        } else {
+            self.remember_reconcile_retry(conversation, failures, retry_at);
+        }
+        self.inner.schedule_wakeup.notify_waiters();
+        wait
+    }
+
+    async fn forget_reconcile_debt(
+        &self,
+        store: &Arc<dyn ScheduledMessageStore>,
+        conversation: &str,
+    ) {
+        if store.clear_reconcile_retry(conversation).await.is_err() {
+            tracing::warn!(
+                conversation,
+                "a committed usage-limit plan could not clear its retry"
+            );
+        }
+        self.forget_memory_reconcile(conversation);
+    }
+
+    async fn reconcile_failure_count(
+        &self,
+        store: &Arc<dyn ScheduledMessageStore>,
+        conversation: &str,
+    ) -> u32 {
+        if let Ok(rows) = store.reconcile_retries().await {
+            if let Some(row) = rows
+                .into_iter()
+                .find(|row| row.conversation == conversation)
+            {
+                return row.failures;
+            }
+        }
+        self.memory_reconcile(conversation)
+            .map(|(failures, _)| failures)
+            .unwrap_or(0)
+    }
+
+    fn memory_reconcile(&self, conversation: &str) -> Option<(u32, u64)> {
+        self.inner
+            .reconcile_retry_owed
+            .lock()
+            .expect("reconcile retry")
+            .get(conversation)
+            .copied()
+    }
+
+    fn memory_reconcile_debts(&self) -> Vec<ReconcileRetry> {
+        self.inner
+            .reconcile_retry_owed
+            .lock()
+            .expect("reconcile retry")
+            .iter()
+            .map(|(conversation, (failures, retry_at_ms))| ReconcileRetry {
+                conversation: conversation.clone(),
+                failures: *failures,
+                retry_at_ms: *retry_at_ms,
+            })
+            .collect()
+    }
+
+    fn remember_reconcile_retry(&self, conversation: &str, failures: u32, retry_at_ms: u64) {
+        self.inner
+            .reconcile_retry_owed
+            .lock()
+            .expect("reconcile retry")
+            .insert(conversation.to_owned(), (failures, retry_at_ms));
+    }
+
+    fn forget_memory_reconcile(&self, conversation: &str) {
+        self.inner
+            .reconcile_retry_owed
+            .lock()
+            .expect("reconcile retry")
+            .remove(conversation);
+    }
+
+    /// Retry reconcile debts whose time has arrived. The return is how long
+    /// until the soonest debt that is still ahead, or [`SCHEDULE_RETRY_MS`]
+    /// when the debt could not be read or written.
+    async fn retry_due_reconciles(&self) -> Option<u64> {
+        let store = self.scheduled_messages()?;
+        let now = self.inner.clock.unix_milliseconds();
+        let (mut debts, durable_failed) = match store.reconcile_retries().await {
+            Ok(rows) => (rows, false),
+            Err(error) => {
+                tracing::warn!(%error, "usage-limit reconcile debts could not be read");
+                (Vec::new(), true)
+            }
+        };
+        for owed in self.memory_reconcile_debts() {
+            if !debts
+                .iter()
+                .any(|row| row.conversation == owed.conversation)
+            {
+                debts.push(owed);
+            }
+        }
+        let mut soonest = durable_failed.then_some(SCHEDULE_RETRY_MS);
+        for debt in debts {
+            if debt.retry_at_ms > now {
+                let wait = debt.retry_at_ms - now;
+                soonest = Some(soonest.map_or(wait, |current| current.min(wait)));
+                continue;
+            }
+            let Ok(id) = ConversationId::new(&debt.conversation) else {
+                self.forget_reconcile_debt(&store, &debt.conversation).await;
+                continue;
+            };
+            match self
+                .apply_usage_limit_plan(&id, &store, false, ScheduleActor::system())
+                .await
+            {
+                Ok(()) => {
+                    if store
+                        .clear_reconcile_retry(&debt.conversation)
+                        .await
+                        .is_err()
+                    {
+                        soonest =
+                            Some(soonest.map_or(SCHEDULE_RETRY_MS, |current| {
+                                current.min(SCHEDULE_RETRY_MS)
+                            }));
+                    }
+                    self.forget_memory_reconcile(&debt.conversation);
+                }
+                Err(error) => {
+                    let failures = debt.failures.saturating_add(1);
+                    let wait = attempt_backoff(failures);
+                    let retry_at = now.saturating_add(wait);
+                    if store
+                        .note_reconcile_retry(&debt.conversation, failures, retry_at)
+                        .await
+                        .is_ok()
+                    {
+                        self.forget_memory_reconcile(&debt.conversation);
+                    } else {
+                        self.remember_reconcile_retry(&debt.conversation, failures, retry_at);
+                    }
+                    soonest = Some(soonest.map_or(wait, |current| current.min(wait)));
+                    tracing::warn!(
+                        conversation = %debt.conversation,
+                        %error,
+                        retry_ms = wait,
+                        failures,
+                        "a usage-limit continuation will be planned again"
+                    );
+                }
+            }
+        }
+        soonest
     }
 
     async fn apply_usage_limit_plan(
@@ -753,8 +984,14 @@ impl ConversationService {
             Ok(rows) => rows,
             Err(_) => return Some(SCHEDULE_RETRY_MS),
         };
+        let mut retry_unrecorded = false;
         for row in rows {
-            self.deliver_scheduled(store.clone(), row).await;
+            if self.deliver_scheduled(store.clone(), row).await {
+                retry_unrecorded = true;
+            }
+        }
+        if retry_unrecorded {
+            return Some(SCHEDULE_RETRY_MS);
         }
         let next = match store.next_due(self.inner.clock.unix_milliseconds()).await {
             Ok(next) => next,
@@ -771,8 +1008,9 @@ impl ConversationService {
     /// schedule read. Catch-up is complete only after every catalogue owner
     /// has been traversed while the preference is on, or when the preference
     /// is off. A failed scan leaves it pending. The next pass tries again
-    /// after [`catch_up_backoff`]. A preference read that fails leaves it
-    /// pending the same way.
+    /// after [`attempt_backoff`]. A preference read that fails leaves it
+    /// pending the same way. A reconcile debt whose plan did not commit is
+    /// retried at its own time, including when catch-up is already complete.
     pub async fn run_scheduled_messages(&self) {
         let mut caught_up = self.scheduled_messages().is_none();
         let mut catch_up_failures = 0_u32;
@@ -803,7 +1041,7 @@ impl ConversationService {
                                     }
                                     Err(error) => {
                                         catch_up_failures = catch_up_failures.saturating_add(1);
-                                        let retry = catch_up_backoff(catch_up_failures);
+                                        let retry = attempt_backoff(catch_up_failures);
                                         catch_up_wait = Some(retry);
                                         tracing::warn!(
                                             %error,
@@ -822,7 +1060,7 @@ impl ConversationService {
                         }
                         Err(error) => {
                             catch_up_failures = catch_up_failures.saturating_add(1);
-                            let retry = catch_up_backoff(catch_up_failures);
+                            let retry = attempt_backoff(catch_up_failures);
                             catch_up_wait = Some(retry);
                             tracing::warn!(
                                 %error,
@@ -833,7 +1071,12 @@ impl ConversationService {
                     }
                 }
             }
-            let wait = next_pass_wait(self.deliver_due_scheduled().await, catch_up_wait);
+            let reconcile_wait = self.retry_due_reconciles().await;
+            let wait = next_pass_wait(
+                self.deliver_due_scheduled().await,
+                catch_up_wait,
+                reconcile_wait,
+            );
             tokio::select! {
                 () = async {
                     match wait {
@@ -851,9 +1094,9 @@ impl ConversationService {
         &self,
         store: Arc<dyn ScheduledMessageStore>,
         row: ScheduledMessage,
-    ) {
+    ) -> bool {
         let Ok(id) = ConversationId::new(&row.conversation) else {
-            return;
+            return false;
         };
         // A plan that does not commit leaves the row where it is. Submitting
         // it would deliver a continuation the model change had not cancelled.
@@ -862,7 +1105,7 @@ impl ConversationService {
             .await
             .is_err()
         {
-            return;
+            return false;
         }
         // Reconciliation above may cancel or defer while the row is still
         // `delivering`. The transition below is the decision to submit: a
@@ -870,10 +1113,11 @@ impl ConversationService {
         // false, and one that arrives after cannot undo it.
         let now = self.inner.clock.unix_milliseconds();
         let Ok(true) = store.begin_submit(&row.execution_id, now).await else {
-            return;
+            return false;
         };
-        self.finish_fenced_submit(store.clone(), id, &row).await;
+        let unrecorded = self.finish_fenced_submit(store.clone(), id, &row).await;
         let _ = store.release_submit(&row.execution_id).await;
+        unrecorded
     }
 
     async fn finish_fenced_submit(
@@ -881,7 +1125,7 @@ impl ConversationService {
         store: Arc<dyn ScheduledMessageStore>,
         id: ConversationId,
         row: &ScheduledMessage,
-    ) {
+    ) -> bool {
         let lost = Arc::new(AtomicBool::new(false));
         let renew = {
             let store = store.clone();
@@ -903,10 +1147,10 @@ impl ConversationService {
                     now,
                 )
                 .await;
-            return;
+            return false;
         }
         let Some(commands) = self.commands() else {
-            return;
+            return !self.hold_submit_retry(&store, row).await;
         };
         // A stored caller or grant that cannot be rebuilt will never pass
         // submit. Refuse it once. The row stays out of `delivering`, so the
@@ -923,13 +1167,14 @@ impl ConversationService {
                         now,
                     )
                     .await;
-                return;
+                return false;
             }
         };
         // The store said this process no longer owns the row. Do not start a
-        // second effect. A submit that has already run still records below.
+        // second effect, and do not move a retry time on a row we do not own.
+        // A submit that has already run still records below.
         if lost.load(Ordering::SeqCst) {
-            return;
+            return false;
         }
         match self
             .submit_command(
@@ -957,6 +1202,7 @@ impl ConversationService {
                         now,
                     )
                     .await;
+                false
             }
             Err(error) => {
                 if let Some((outcome, cause)) = settled_outcome(&error) {
@@ -964,7 +1210,43 @@ impl ConversationService {
                     let _ = store
                         .record_outcome(&row.execution_id, outcome, cause, now)
                         .await;
+                    false
+                } else {
+                    !self.hold_submit_retry(&store, row).await
                 }
+            }
+        }
+    }
+
+    /// Write the next attempt on a submitting row this process owns.
+    /// True when that timestamp and its audit committed.
+    async fn hold_submit_retry(
+        &self,
+        store: &Arc<dyn ScheduledMessageStore>,
+        row: &ScheduledMessage,
+    ) -> bool {
+        let now = self.inner.clock.unix_milliseconds();
+        let failures = row.retry_failures.saturating_add(1);
+        let retry_at = now.saturating_add(attempt_backoff(failures));
+        match store
+            .defer_submit(&row.execution_id, failures, retry_at, now)
+            .await
+        {
+            Ok(true) => true,
+            Ok(false) => {
+                tracing::warn!(
+                    execution_id = %row.execution_id,
+                    "a retryable scheduled submission could not be deferred"
+                );
+                false
+            }
+            Err(error) => {
+                tracing::warn!(
+                    execution_id = %row.execution_id,
+                    %error,
+                    "a retryable scheduled submission could not be deferred"
+                );
+                false
             }
         }
     }
@@ -983,11 +1265,12 @@ impl ConversationService {
     }
 }
 
-/// How long to wait before the next catch-up attempt.
+/// How long to wait before the next failed attempt.
 ///
 /// The first failure waits [`SCHEDULE_RETRY_MS`]. Each later failure doubles
-/// that wait, up to [`CATCH_UP_RETRY_MAX_MS`].
-fn catch_up_backoff(failures: u32) -> u64 {
+/// that wait, up to [`CATCH_UP_RETRY_MAX_MS`]. Catch-up, a reconcile debt,
+/// and a retryable submit all use this curve.
+fn attempt_backoff(failures: u32) -> u64 {
     let mut wait = SCHEDULE_RETRY_MS;
     for _ in 0..failures.saturating_sub(1) {
         let doubled = wait.saturating_mul(2);
@@ -999,16 +1282,16 @@ fn catch_up_backoff(failures: u32) -> u64 {
     wait
 }
 
-/// The sooner of a delivery wait and a pending catch-up retry.
+/// The sooner of a delivery wait, a pending catch-up retry, and a reconcile debt.
 ///
-/// A catch-up that is still owed must not park on an empty schedule. A due
-/// row must not wait out the whole catch-up backoff.
-fn next_pass_wait(delivery: Option<u64>, catch_up: Option<u64>) -> Option<u64> {
-    match (delivery, catch_up) {
-        (Some(delivery), Some(retry)) => Some(delivery.min(retry)),
-        (None, Some(retry)) => Some(retry),
-        (delivery, None) => delivery,
-    }
+/// A catch-up or a failed settlement that is still owed must not park on an
+/// empty schedule. A due row must not wait out the whole backoff.
+fn next_pass_wait(
+    delivery: Option<u64>,
+    catch_up: Option<u64>,
+    reconcile: Option<u64>,
+) -> Option<u64> {
+    [delivery, catch_up, reconcile].into_iter().flatten().min()
 }
 
 /// Renew `execution_id` until the store says this process does not own it.
@@ -1249,15 +1532,18 @@ mod catalogue_pages {
         assert!(matches!(error, Err(ConversationError::Unavailable)));
     }
 
-    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use nessa_auth::application::ports::{AccessError, Clock};
     use nessa_auth::domain::{OrganizationId, PrincipalId};
     use nessa_sdk::application::agent_execution::commands::{
-        CreationFuture, CreationReceipt, CreationStorage, CreationStorageLease, MutationReceipt,
+        CreationFuture, CreationReceipt, CreationStorage, CreationStorageError,
+        CreationStorageLease, MutationReceipt,
     };
+    use nessa_sdk::application::agent_execution::sessions::StorageError;
 
     use super::{
         renew_while_held, PreferenceReading, PreferenceUpdate, RecordedPreference, ScheduleActor,
@@ -1392,6 +1678,16 @@ mod catalogue_pages {
         idle_delivery: AtomicBool,
         /// `preference` fails this many times, then returns the stored boolean.
         preference_failures: AtomicUsize,
+        /// When set, delivery claims `due_row` and a submit retry is held until `retry_at_ms`.
+        submit_attempts: AtomicBool,
+        due_row: Mutex<Option<ScheduledMessage>>,
+        retry_at_ms: AtomicU64,
+        retry_failures: AtomicU32,
+        /// `(execution id, failures, retry_at_ms)` for each committed submit hold.
+        defers: Mutex<Vec<(String, u32, u64)>>,
+        reconciles: Mutex<HashMap<String, (u32, u64)>>,
+        /// The next reconcile-debt write fails. The service keeps the debt in memory.
+        fail_reconcile_note: AtomicBool,
     }
 
     impl RecordingStore {
@@ -1410,6 +1706,13 @@ mod catalogue_pages {
                 fail_open: AtomicBool::new(true),
                 idle_delivery: AtomicBool::new(false),
                 preference_failures: AtomicUsize::new(0),
+                submit_attempts: AtomicBool::new(false),
+                due_row: Mutex::new(None),
+                retry_at_ms: AtomicU64::new(0),
+                retry_failures: AtomicU32::new(0),
+                defers: Mutex::new(Vec::new()),
+                reconciles: Mutex::new(HashMap::new()),
+                fail_reconcile_note: AtomicBool::new(false),
             }
         }
 
@@ -1485,21 +1788,53 @@ mod catalogue_pages {
         ) -> ConversationFuture<'_, bool> {
             refused()
         }
-        fn claim_due(&self, _: u64, _: usize) -> ConversationFuture<'_, Vec<ScheduledMessage>> {
+        fn claim_due(&self, now: u64, _: usize) -> ConversationFuture<'_, Vec<ScheduledMessage>> {
+            if self.submit_attempts.load(Ordering::SeqCst) {
+                let retry = self.retry_at_ms.load(Ordering::SeqCst);
+                if retry > now {
+                    return Box::pin(async { Ok(Vec::new()) });
+                }
+                let row = self.due_row.lock().unwrap().clone().map(|mut row| {
+                    row.retry_failures = self.retry_failures.load(Ordering::SeqCst);
+                    row
+                });
+                return Box::pin(async move { Ok(row.into_iter().collect()) });
+            }
             if self.idle_delivery.load(Ordering::SeqCst) {
                 Box::pin(async { Ok(Vec::new()) })
             } else {
                 refused()
             }
         }
-        fn next_due(&self, _: u64) -> ConversationFuture<'_, Option<u64>> {
+        fn next_due(&self, now: u64) -> ConversationFuture<'_, Option<u64>> {
+            if self.submit_attempts.load(Ordering::SeqCst) {
+                let retry = self.retry_at_ms.load(Ordering::SeqCst);
+                let waiting = self.due_row.lock().unwrap().is_some();
+                return Box::pin(async move {
+                    if retry > now {
+                        Ok(Some(retry))
+                    } else if waiting {
+                        Ok(Some(now))
+                    } else {
+                        Ok(None)
+                    }
+                });
+            }
             if self.idle_delivery.load(Ordering::SeqCst) {
                 Box::pin(async { Ok(None) })
             } else {
                 refused()
             }
         }
-        fn begin_submit(&self, _: &str, _: u64) -> ConversationFuture<'_, bool> {
+        fn begin_submit(&self, _: &str, now: u64) -> ConversationFuture<'_, bool> {
+            if self.submit_attempts.load(Ordering::SeqCst) {
+                let retry = self.retry_at_ms.load(Ordering::SeqCst);
+                if retry > now {
+                    return Box::pin(async { Ok(false) });
+                }
+                self.submits.fetch_add(1, Ordering::SeqCst);
+                return Box::pin(async { Ok(true) });
+            }
             self.submits.fetch_add(1, Ordering::SeqCst);
             refused()
         }
@@ -1596,6 +1931,56 @@ mod catalogue_pages {
         }
         fn erase_conversation(&self, _: &str, _: u64) -> ConversationFuture<'_, ()> {
             refused()
+        }
+        fn defer_submit(
+            &self,
+            execution_id: &str,
+            failures: u32,
+            retry_at_ms: u64,
+            _: u64,
+        ) -> ConversationFuture<'_, bool> {
+            self.retry_failures.store(failures, Ordering::SeqCst);
+            self.retry_at_ms.store(retry_at_ms, Ordering::SeqCst);
+            self.defers
+                .lock()
+                .unwrap()
+                .push((execution_id.to_owned(), failures, retry_at_ms));
+            Box::pin(async { Ok(true) })
+        }
+        fn note_reconcile_retry(
+            &self,
+            conversation: &str,
+            failures: u32,
+            retry_at_ms: u64,
+        ) -> ConversationFuture<'_, ()> {
+            if self.fail_reconcile_note.swap(false, Ordering::SeqCst) {
+                return refused();
+            }
+            self.reconciles
+                .lock()
+                .unwrap()
+                .insert(conversation.to_owned(), (failures, retry_at_ms));
+            Box::pin(async { Ok(()) })
+        }
+        fn clear_reconcile_retry(&self, conversation: &str) -> ConversationFuture<'_, ()> {
+            self.reconciles.lock().unwrap().remove(conversation);
+            Box::pin(async { Ok(()) })
+        }
+        fn reconcile_retries(&self) -> ConversationFuture<'_, Vec<super::ReconcileRetry>> {
+            let rows = self
+                .reconciles
+                .lock()
+                .unwrap()
+                .iter()
+                .map(
+                    |(conversation, (failures, retry_at_ms))| super::ReconcileRetry {
+                        conversation: conversation.clone(),
+                        failures: *failures,
+                        retry_at_ms: *retry_at_ms,
+                    },
+                )
+                .collect();
+            Box::pin(async move { Ok(rows) })
         }
     }
 
@@ -1765,6 +2150,18 @@ mod catalogue_pages {
         }
         fn erase_conversation(&self, _: &str, _: u64) -> ConversationFuture<'_, ()> {
             Box::pin(async { Err(ConversationError::Unavailable) })
+        }
+        fn defer_submit(&self, _: &str, _: u32, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+            Box::pin(async { Ok(false) })
+        }
+        fn note_reconcile_retry(&self, _: &str, _: u32, _: u64) -> ConversationFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn clear_reconcile_retry(&self, _: &str) -> ConversationFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn reconcile_retries(&self) -> ConversationFuture<'_, Vec<super::ReconcileRetry>> {
+            Box::pin(async { Ok(Vec::new()) })
         }
     }
 
@@ -1961,6 +2358,7 @@ mod catalogue_pages {
             grant_id: None,
             policy_revision: None,
             tools_checked: false,
+            retry_failures: 0,
         };
         service
             .finish_fenced_submit(
@@ -2095,6 +2493,7 @@ mod catalogue_pages {
             grant_id: None,
             policy_revision: None,
             tools_checked: false,
+            retry_failures: 0,
         };
         service.deliver_scheduled(store.clone(), row).await;
         assert_eq!(store.opens.load(Ordering::SeqCst), 1);
@@ -2504,6 +2903,18 @@ mod catalogue_pages {
         fn erase_conversation(&self, _: &str, _: u64) -> ConversationFuture<'_, ()> {
             Box::pin(async { Err(ConversationError::Metadata) })
         }
+        fn defer_submit(&self, _: &str, _: u32, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+            Box::pin(async { Ok(false) })
+        }
+        fn note_reconcile_retry(&self, _: &str, _: u32, _: u64) -> ConversationFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn clear_reconcile_retry(&self, _: &str) -> ConversationFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn reconcile_retries(&self) -> ConversationFuture<'_, Vec<super::ReconcileRetry>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
     }
 
     #[tokio::test]
@@ -2596,10 +3007,10 @@ mod catalogue_pages {
 
     #[test]
     fn catch_up_backoff_doubles_until_it_is_capped() {
-        assert_eq!(super::catch_up_backoff(1), SCHEDULE_RETRY_MS);
-        assert_eq!(super::catch_up_backoff(2), SCHEDULE_RETRY_MS * 2);
-        assert_eq!(super::catch_up_backoff(3), SCHEDULE_RETRY_MS * 4);
-        assert_eq!(super::catch_up_backoff(30), super::CATCH_UP_RETRY_MAX_MS);
+        assert_eq!(super::attempt_backoff(1), SCHEDULE_RETRY_MS);
+        assert_eq!(super::attempt_backoff(2), SCHEDULE_RETRY_MS * 2);
+        assert_eq!(super::attempt_backoff(3), SCHEDULE_RETRY_MS * 4);
+        assert_eq!(super::attempt_backoff(30), super::CATCH_UP_RETRY_MAX_MS);
     }
 
     /// The first page of `person-a` cannot say where to resume. `person-b`
@@ -2835,5 +3246,231 @@ mod catalogue_pages {
             .await
             .expect("the schedule loop did not stop")
             .unwrap();
+    }
+
+    struct PausingClock {
+        origin: tokio::time::Instant,
+        base: u64,
+    }
+
+    impl Clock for PausingClock {
+        fn unix_milliseconds(&self) -> u64 {
+            self.base
+                .saturating_add(u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(0))
+        }
+    }
+
+    fn blocked_conversation(id: &ConversationId) -> crate::conversation::domain::Conversation {
+        crate::conversation::domain::Conversation::restore(
+            id.clone(),
+            OrganizationId::new("org").unwrap(),
+            PrincipalId::new("person").unwrap(),
+            "desktop".into(),
+            "create".into(),
+            1,
+            None,
+            ConversationModelId::new("opus").unwrap(),
+            ConversationApprovalMode::Ask,
+        )
+        .unwrap()
+    }
+
+    /// Catch-up has finished. A settlement whose plan cannot be read is tried
+    /// again only after the backoff, and not on the tight loop that would
+    /// otherwise see nothing due.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_settlement_is_retried_after_the_backoff() {
+        let id = ConversationId::new("11111111-1111-4111-8111-111111111111").unwrap();
+        let repository = Arc::new(MemoryRepository::default());
+        repository
+            .records
+            .lock()
+            .unwrap()
+            .insert(id.clone(), blocked_conversation(&id));
+        let clock = Arc::new(PausingClock {
+            origin: tokio::time::Instant::now(),
+            base: 5_000,
+        });
+        let service = service_over(
+            repository,
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            clock.clone(),
+        );
+        let store = Arc::new(RecordingStore::new(true));
+        store.idle_delivery.store(true, Ordering::SeqCst);
+        service.bind_scheduled_messages(store.clone());
+        service
+            .consider_usage_limit(&id, false, ScheduleActor::system())
+            .await;
+        assert_eq!(store.opens.load(Ordering::SeqCst), 1);
+        let (failures, retry_at) = store
+            .reconciles
+            .lock()
+            .unwrap()
+            .get(&id.to_string())
+            .copied()
+            .expect("the settlement kept a retry");
+        assert_eq!(failures, 1);
+        assert_eq!(
+            retry_at.saturating_sub(clock.unix_milliseconds()),
+            SCHEDULE_RETRY_MS
+        );
+
+        let retired = service.inner.retired.clone();
+        let task = tokio::spawn(async move {
+            service.run_scheduled_messages().await;
+        });
+        tokio::time::sleep(Duration::from_millis(SCHEDULE_RETRY_MS - 1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(store.opens.load(Ordering::SeqCst), 1);
+
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        let retried = tokio::time::timeout(Duration::from_secs(5), async {
+            while store.opens.load(Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(retried.is_ok(), "the settlement was not retried");
+        assert_eq!(store.opens.load(Ordering::SeqCst), 2);
+
+        retired.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("the schedule loop did not stop")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_reconcile_debt_the_database_refuses_is_still_retried() {
+        let id = ConversationId::new("11111111-1111-4111-8111-111111111111").unwrap();
+        let repository = Arc::new(MemoryRepository::default());
+        repository
+            .records
+            .lock()
+            .unwrap()
+            .insert(id.clone(), blocked_conversation(&id));
+        let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+        let service = service_over(
+            repository,
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            clock.clone(),
+        );
+        let store = Arc::new(RecordingStore::new(true));
+        store.idle_delivery.store(true, Ordering::SeqCst);
+        store.fail_reconcile_note.store(true, Ordering::SeqCst);
+        service.bind_scheduled_messages(store.clone());
+        service
+            .consider_usage_limit(&id, false, ScheduleActor::system())
+            .await;
+        assert!(store.reconciles.lock().unwrap().is_empty());
+        assert_eq!(store.opens.load(Ordering::SeqCst), 1);
+        assert!(service.retry_due_reconciles().await.unwrap() >= SCHEDULE_RETRY_MS - 1);
+        assert_eq!(store.opens.load(Ordering::SeqCst), 1);
+        clock
+            .0
+            .store(5_000 + SCHEDULE_RETRY_MS - 1, Ordering::SeqCst);
+        service.retry_due_reconciles().await;
+        assert_eq!(store.opens.load(Ordering::SeqCst), 1);
+        clock.0.store(5_000 + SCHEDULE_RETRY_MS, Ordering::SeqCst);
+        service.retry_due_reconciles().await;
+        assert_eq!(store.opens.load(Ordering::SeqCst), 2);
+    }
+
+    struct BusyCommands;
+
+    impl CreationStorage for BusyCommands {
+        fn open_creation(
+            &self,
+            _: String,
+            _: String,
+            _: bool,
+        ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
+            Box::pin(async { Err(CreationStorageError::Storage(StorageError::Busy)) })
+        }
+    }
+
+    fn submitting_row(conversation: &str) -> ScheduledMessage {
+        ScheduledMessage {
+            conversation: conversation.into(),
+            causal_execution: "causal".into(),
+            execution_id: "exec-1".into(),
+            due_at_ms: 10,
+            delivering: true,
+            agent: "claude".into(),
+            model: "opus".into(),
+            prompt: "continue".into(),
+            organization_id: "org".into(),
+            principal_id: "person".into(),
+            surface_id: "desktop".into(),
+            action_id: "action".into(),
+            initiation: "owner".into(),
+            grant_id: None,
+            policy_revision: None,
+            tools_checked: false,
+            retry_failures: 0,
+        }
+    }
+
+    /// A retryable submit failure stays retryable, and the same process does
+    /// not acquire the row again before the backoff.
+    #[tokio::test]
+    async fn a_retryable_submit_does_not_spin() {
+        let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+        let service = service(
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            clock.clone(),
+        );
+        let store = Arc::new(RecordingStore::new(true));
+        store.submit_attempts.store(true, Ordering::SeqCst);
+        let conversation = "11111111-1111-4111-8111-111111111111";
+        store
+            .due_row
+            .lock()
+            .unwrap()
+            .replace(submitting_row(conversation));
+        service.bind_scheduled_messages(store.clone());
+        service.bind_commands(Arc::new(BusyCommands));
+
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            store.defers.lock().unwrap().as_slice(),
+            [("exec-1".into(), 1, 5_000 + SCHEDULE_RETRY_MS)]
+        );
+        for _ in 0..30 {
+            assert_eq!(
+                service.deliver_due_scheduled().await,
+                Some(SCHEDULE_RETRY_MS)
+            );
+        }
+        assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+        assert!(store.outcomes.lock().unwrap().is_empty());
+
+        clock.0.store(5_000 + SCHEDULE_RETRY_MS, Ordering::SeqCst);
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS * 2)
+        );
+        assert_eq!(store.submits.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            store.defers.lock().unwrap().as_slice(),
+            [
+                ("exec-1".into(), 1, 5_000 + SCHEDULE_RETRY_MS),
+                ("exec-1".into(), 2, 5_000 + SCHEDULE_RETRY_MS * 3),
+            ]
+        );
     }
 }

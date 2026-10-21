@@ -103,8 +103,8 @@ use nessa_sdk::domain::agent_execution::{
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 pub(crate) use scheduled_messages::FENCE_LEASE_MS;
 pub use scheduled_messages::{
-    PreferenceReading, PreferenceUpdate, RecordedPreference, ScheduleActor, ScheduleDraft,
-    ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
+    PreferenceReading, PreferenceUpdate, ReconcileRetry, RecordedPreference, ScheduleActor,
+    ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -861,6 +861,11 @@ struct Inner {
     /// [`ConversationService::commit_applied_model_plan`] is the only writer.
     /// A crash drops the set; catch-up runs the same plan while the preference is on.
     model_reconcile_owed: std::sync::Mutex<HashSet<ConversationId>>,
+    /// Settlement plans that did not commit. The schedule database holds the
+    /// same debt when it accepted the write. This map is the copy written
+    /// when that write failed, so this process still retries it. A crash
+    /// drops it; the next start's catch-up plans every owner.
+    reconcile_retry_owed: std::sync::Mutex<HashMap<String, (u32, u64)>>,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1384,6 +1389,7 @@ impl ConversationService {
                 preference_policy: OnceLock::new(),
                 schedule_wakeup: Arc::new(Notify::new()),
                 model_reconcile_owed: std::sync::Mutex::default(),
+                reconcile_retry_owed: std::sync::Mutex::default(),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),

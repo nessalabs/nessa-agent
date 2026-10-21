@@ -12,9 +12,9 @@
 //! each commit their own audit, with the policy ids, before the command result.
 
 use crate::conversation::application::{
-    ConversationError, ConversationFuture, PreferenceReading, PreferenceUpdate, RecordedPreference,
-    ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
-    FENCE_LEASE_MS,
+    ConversationError, ConversationFuture, PreferenceReading, PreferenceUpdate, ReconcileRetry,
+    RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage,
+    ScheduledMessageStore, FENCE_LEASE_MS,
 };
 use crate::conversation::domain::ContinuationCause;
 use nessa_local_database::{
@@ -51,6 +51,9 @@ pub struct LocalScheduledMessages {
     /// The next preference decision fails before its audit commits.
     #[cfg(test)]
     fail_decision_audit: AtomicBool,
+    /// The next submit-retry transaction fails before its audit commits.
+    #[cfg(test)]
+    fail_defer_audit: AtomicBool,
 }
 
 impl LocalScheduledMessages {
@@ -67,6 +70,8 @@ impl LocalScheduledMessages {
             fail_begin_commit: AtomicBool::new(false),
             #[cfg(test)]
             fail_decision_audit: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_defer_audit: AtomicBool::new(false),
         })
     }
 
@@ -87,6 +92,12 @@ impl LocalScheduledMessages {
     #[cfg(test)]
     pub fn fail_next_decision_audit(&self) {
         self.fail_decision_audit.store(true, Ordering::SeqCst);
+    }
+
+    /// The next [`ScheduledMessageStore::defer_submit`] fails and rolls back.
+    #[cfg(test)]
+    pub fn fail_next_defer_audit(&self) {
+        self.fail_defer_audit.store(true, Ordering::SeqCst);
     }
 
     /// Initiator of each preference audit, oldest first.
@@ -216,12 +227,13 @@ fn read_message(
         grant_id: row.get(13)?,
         policy_revision: row.get::<_, Option<i64>>(14)?.map(|value| value as u64),
         tools_checked: row.get::<_, i64>(15)? == 1,
+        retry_failures: u32::try_from(row.get::<_, i64>(16)?).unwrap_or(0),
     })
 }
 
 const MESSAGE_COLUMNS: &str = "conversation, causal_execution, execution_id, due_at_ms, status, \
      agent, model, prompt, organization_id, principal_id, surface_id, action_id, \
-     initiation, grant_id, policy_revision, tools_checked";
+     initiation, grant_id, policy_revision, tools_checked, retry_failures";
 
 fn load_open(
     connection: &Connection,
@@ -982,12 +994,13 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             let mut statement = connection
                 .prepare(&format!(
                     "SELECT {MESSAGE_COLUMNS} FROM message \
-                     WHERE status IN ('delivering', 'submitting') \
-                     ORDER BY due_at_ms LIMIT ?1"
+                     WHERE status = 'delivering' \
+                        OR (status = 'submitting' AND retry_at_ms <= ?1) \
+                     ORDER BY due_at_ms LIMIT ?2"
                 ))
                 .map_err(failed)?;
             let already = statement
-                .query_map(params![limit as i64], read_message)
+                .query_map(params![now, limit as i64], read_message)
                 .map_err(failed)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(failed)?;
@@ -1011,13 +1024,14 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         self.run(move |connection| {
             let now = millis(now_ms)?;
             // A claim stops at its limit, and a failed outcome audit leaves the
-            // row delivering. Either one is already due: wait until the clock
-            // so the loop passes again. Only a later scheduled row waits.
+            // row delivering. Either one is already due. A submitting row is
+            // due only once its retry time has arrived; a later retry waits.
             let pending: bool = connection
                 .query_row(
                     "SELECT EXISTS( \
                          SELECT 1 FROM message \
-                         WHERE status IN ('delivering', 'submitting') \
+                         WHERE status = 'delivering' \
+                            OR (status = 'submitting' AND retry_at_ms <= ?1) \
                             OR (status = 'scheduled' AND due_at_ms <= ?1) \
                      )",
                     params![now],
@@ -1029,8 +1043,13 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             }
             let due: Option<i64> = connection
                 .query_row(
-                    "SELECT MIN(due_at_ms) FROM message \
-                     WHERE status = 'scheduled' AND due_at_ms > ?1",
+                    "SELECT MIN(at_ms) FROM ( \
+                         SELECT due_at_ms AS at_ms FROM message \
+                          WHERE status = 'scheduled' AND due_at_ms > ?1 \
+                         UNION ALL \
+                         SELECT retry_at_ms AS at_ms FROM message \
+                          WHERE status = 'submitting' AND retry_at_ms > ?1 \
+                     )",
                     params![now],
                     |row| row.get(0),
                 )
@@ -1068,7 +1087,8 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                     .execute(
                         "UPDATE message SET fence_owner = ?2, fence_until_ms = ?3 \
                          WHERE execution_id = ?1 AND status = 'submitting' \
-                           AND (fence_until_ms <= ?4 OR fence_owner = ?2)",
+                           AND (fence_until_ms <= ?4 OR fence_owner = ?2) \
+                           AND retry_at_ms <= ?4",
                         params![execution_id, owner, until, now],
                     )
                     .map_err(failed)?
@@ -1083,6 +1103,74 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             }
             transaction.commit().map_err(failed)?;
             Ok(holds(&armed).insert(execution_id))
+        })
+    }
+
+    fn defer_submit(
+        &self,
+        execution_id: &str,
+        failures: u32,
+        retry_at_ms: u64,
+        at_ms: u64,
+    ) -> ConversationFuture<'_, bool> {
+        let execution_id = execution_id.to_owned();
+        let owner = self.owner.clone();
+        #[cfg(test)]
+        let fail_audit = self.fail_defer_audit.swap(false, Ordering::SeqCst);
+        self.run(move |connection| {
+            if failures == 0 {
+                return Err(ConversationError::InvalidInput);
+            }
+            let at_ms = millis(at_ms)?;
+            let retry_at = millis(retry_at_ms)?;
+            let failures_i = i64::from(failures);
+            let previous = failures_i - 1;
+            let transaction = connection.transaction().map_err(failed)?;
+            let existing: Option<(String, String)> = transaction
+                .query_row(
+                    "SELECT conversation, causal_execution FROM message \
+                     WHERE execution_id = ?1 AND status = 'submitting' AND fence_owner = ?2 \
+                       AND retry_failures = ?3",
+                    params![execution_id, owner, previous],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(failed)?;
+            let Some((conversation, causal)) = existing else {
+                transaction.commit().map_err(failed)?;
+                return Ok(false);
+            };
+            let changed = transaction
+                .execute(
+                    "UPDATE message SET retry_at_ms = ?2, retry_failures = ?3 \
+                     WHERE execution_id = ?1 AND status = 'submitting' AND fence_owner = ?4 \
+                       AND retry_failures = ?5",
+                    params![execution_id, retry_at, failures_i, owner, previous],
+                )
+                .map_err(failed)?;
+            if changed != 1 {
+                transaction.commit().map_err(failed)?;
+                return Ok(false);
+            }
+            #[cfg(test)]
+            if fail_audit {
+                return Err(ConversationError::Metadata);
+            }
+            audit(
+                &transaction,
+                &AuditChange {
+                    at_ms,
+                    conversation: &conversation,
+                    causal_execution: &causal,
+                    execution_id: &execution_id,
+                    before_status: Some("submitting"),
+                    after_status: "submitting",
+                    cause: "submission_retry",
+                    actor: &ScheduleActor::system(),
+                },
+            )?;
+            transaction.commit().map_err(failed)?;
+            Ok(true)
         })
     }
 
@@ -1305,6 +1393,65 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             }
             transaction.commit().map_err(failed)?;
             Ok(())
+        })
+    }
+
+    fn note_reconcile_retry(
+        &self,
+        conversation: &str,
+        failures: u32,
+        retry_at_ms: u64,
+    ) -> ConversationFuture<'_, ()> {
+        let conversation = conversation.to_owned();
+        self.run(move |connection| {
+            let retry_at = millis(retry_at_ms)?;
+            connection
+                .execute(
+                    "INSERT INTO reconcile_retry (conversation, failures, retry_at_ms) \
+                     VALUES (?1, ?2, ?3) \
+                     ON CONFLICT(conversation) DO UPDATE SET \
+                       failures = excluded.failures, \
+                       retry_at_ms = excluded.retry_at_ms",
+                    params![conversation, i64::from(failures), retry_at],
+                )
+                .map_err(failed)?;
+            Ok(())
+        })
+    }
+
+    fn clear_reconcile_retry(&self, conversation: &str) -> ConversationFuture<'_, ()> {
+        let conversation = conversation.to_owned();
+        self.run(move |connection| {
+            connection
+                .execute(
+                    "DELETE FROM reconcile_retry WHERE conversation = ?1",
+                    params![conversation],
+                )
+                .map_err(failed)?;
+            Ok(())
+        })
+    }
+
+    fn reconcile_retries(&self) -> ConversationFuture<'_, Vec<ReconcileRetry>> {
+        self.run(move |connection| {
+            let mut statement = connection
+                .prepare(
+                    "SELECT conversation, failures, retry_at_ms FROM reconcile_retry \
+                     ORDER BY retry_at_ms",
+                )
+                .map_err(failed)?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok(ReconcileRetry {
+                        conversation: row.get(0)?,
+                        failures: u32::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+                        retry_at_ms: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+                    })
+                })
+                .map_err(failed)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(failed)?;
+            Ok(rows)
         })
     }
 }
@@ -1819,6 +1966,110 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn a_retryable_submit_is_not_due_again_until_its_retry_time() {
+        let store = enabled_store().await;
+        store
+            .accept(draft("conversation", "causal", "exec-1", 10), 1)
+            .await
+            .unwrap();
+        store.claim_due(10, 4).await.unwrap();
+        assert!(store.begin_submit("exec-1", 10).await.unwrap());
+        let now = 10;
+        let retry_at = now + 1_000;
+        assert!(store
+            .defer_submit("exec-1", 1, retry_at, now)
+            .await
+            .unwrap());
+        store.release_submit("exec-1").await.unwrap();
+        assert_eq!(
+            store.status("exec-1").await.unwrap().as_deref(),
+            Some("submitting")
+        );
+        assert_eq!(store.next_due(now).await.unwrap(), Some(retry_at));
+        assert!(store.claim_due(now, 4).await.unwrap().is_empty());
+        for _ in 0..20 {
+            assert!(!store.begin_submit("exec-1", now).await.unwrap());
+        }
+        let due = store.claim_due(retry_at, 4).await.unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].retry_failures, 1);
+        assert!(store.begin_submit("exec-1", retry_at).await.unwrap());
+        let again = retry_at + 2_000;
+        assert!(store
+            .defer_submit("exec-1", 2, again, retry_at)
+            .await
+            .unwrap());
+        store.release_submit("exec-1").await.unwrap();
+        assert_eq!(store.next_due(retry_at).await.unwrap(), Some(again));
+        assert!(!store.begin_submit("exec-1", retry_at).await.unwrap());
+        let retries = audits(&store)
+            .into_iter()
+            .filter(|row| row.1 == "submission_retry")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            retries,
+            vec![
+                (
+                    "system".into(),
+                    "submission_retry".into(),
+                    "submitting".into(),
+                    "submitting".into(),
+                ),
+                (
+                    "system".into(),
+                    "submission_retry".into(),
+                    "submitting".into(),
+                    "submitting".into(),
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_submit_retry_audit_leaves_the_row_due() {
+        let store = enabled_store().await;
+        store
+            .accept(draft("conversation", "causal", "exec-1", 10), 1)
+            .await
+            .unwrap();
+        store.claim_due(10, 4).await.unwrap();
+        assert!(store.begin_submit("exec-1", 10).await.unwrap());
+        store.fail_next_defer_audit();
+        assert!(store.defer_submit("exec-1", 1, 1_010, 10).await.is_err());
+        assert_eq!(store.next_due(10).await.unwrap(), Some(10));
+        assert!(audits(&store)
+            .into_iter()
+            .all(|row| row.1 != "submission_retry"));
+        assert!(store.defer_submit("exec-1", 1, 1_010, 10).await.unwrap());
+        assert_eq!(store.next_due(10).await.unwrap(), Some(1_010));
+    }
+
+    #[tokio::test]
+    async fn a_reconcile_debt_is_kept_until_it_is_cleared() {
+        let store = store().await;
+        store
+            .note_reconcile_retry("conversation", 1, 5_000)
+            .await
+            .unwrap();
+        assert_eq!(store.next_due(1).await.unwrap(), None);
+        let debts = store.reconcile_retries().await.unwrap();
+        assert_eq!(debts.len(), 1);
+        assert_eq!(debts[0].conversation, "conversation");
+        assert_eq!(debts[0].failures, 1);
+        assert_eq!(debts[0].retry_at_ms, 5_000);
+        store
+            .note_reconcile_retry("conversation", 2, 9_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.reconcile_retries().await.unwrap()[0].retry_at_ms,
+            9_000
+        );
+        store.clear_reconcile_retry("conversation").await.unwrap();
+        assert!(store.reconcile_retries().await.unwrap().is_empty());
     }
 
     #[tokio::test]

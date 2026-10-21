@@ -525,4 +525,18 @@ impl ScheduledMessageStore for ScheduleReads {
     fn erase_conversation(&self, _: &str, _: u64) -> ConversationFuture<'_, ()> {
         schedule_unavailable()
     }
+    fn defer_submit(&self, _: &str, _: u32, _: u64, _: u64) -> ConversationFuture<'_, bool> {
+        schedule_unavailable()
+    }
+    fn note_reconcile_retry(&self, _: &str, _: u32, _: u64) -> ConversationFuture<'_, ()> {
+        schedule_unavailable()
+    }
+    fn clear_reconcile_retry(&self, _: &str) -> ConversationFuture<'_, ()> {
+        schedule_unavailable()
+    }
+    fn reconcile_retries(
+        &self,
+    ) -> ConversationFuture<'_, Vec<crate::conversation::application::ReconcileRetry>> {
+        schedule_unavailable()
+    }
 }

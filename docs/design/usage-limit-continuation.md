@@ -87,7 +87,7 @@ so a later causal turn can still be accepted after a terminal row.
 | --- | --- |
 | `scheduled` | Accepted. No submit has been claimed. Cancel, defer, and a model change match it |
 | `delivering` | `claim_due` won. Cancel, defer, and a model change can still win. It may not call `submit_command` |
-| `submitting` | `begin_submit` committed. Cancel and defer no longer match. `fence_owner` holds the lease until `fence_until_ms`. The in-memory `armed` set only stops this process entering twice |
+| `submitting` | `begin_submit` committed. Cancel and defer no longer match. `fence_owner` holds the lease until `fence_until_ms`. `retry_at_ms` is 0, or already past, when the row may be attempted. A later `retry_at_ms` is the next attempt, and the row is not due before it. The in-memory `armed` set only stops this process entering twice |
 | `delivered` | The execution was saved, or `submit_command` admitted it. Audit `delivered` |
 | `refused` | The submit ended for a reason that will not change on retry: deleted, not found, revoked, unavailable after save, or a caller that cannot be rebuilt |
 | `cancelled` | The row ended without a submit: preference off, a later turn, an agent or model change, or deletion of a row whose lease has expired |
@@ -109,6 +109,8 @@ so a later causal turn can still be accepted after a terminal row.
 | `submitting` | Execution already saved, or `submit_command` admits | `finish_fenced_submit`, then `record_outcome` | `delivered` | Status and audit, after the observation. The clock is read then |
 | `submitting` | `submit_command` returns a terminal refusal, or the caller cannot be rebuilt | `finish_fenced_submit` | `refused` | Status and audit, after the observation |
 | `submitting` | The mutation journal returns `Interrupted` | `finish_fenced_submit` | `unconfirmed` | Status and audit `submission_interrupted`. No second submit |
+| `submitting` | `submit_command` returns a retryable or unclassified failure, or the command store is absent | `finish_fenced_submit`, then `defer_submit` | `submitting` | `retry_at_ms`, `retry_failures`, and audit `submission_retry`, one transaction. The status stays `submitting`. `begin_submit` does not adopt the row before `retry_at_ms`. A lost lease does not write this retry |
+| none | Settlement's plan returns an error, and catch-up is already complete | `consider_usage_limit` | reconcile debt | One `reconcile_retry` row: the conversation, how many attempts have failed, and `retry_at_ms`. The loop retries that plan at that time. A debt the database refuses stays in this process until a later pass writes it or the plan commits. A plan that commits deletes the debt |
 | `submitting` | Preference off, and `fence_until_ms` is at or before the clock | `record_preference_decision`, `set_preference`, or `retire_unfenced_submissions` | `cancelled` | Status and audit. A later pass waits until a still-live lease and then cancels it |
 | `submitting` | Preference off, and the lease is still live | the owning process | `submitting` | The submit finishes into `delivered`, `refused`, or `unconfirmed` |
 | `scheduled` or `delivering` | An applied model change | `commit_applied_model_plan`, from `change_model` or from `recover_model_change` | `cancelled` or `scheduled` | An applied transition returns only after the plan commits, including one recovery finishes from a stopped request. A failed plan stays owed. The next open read or submit runs it again. A refusal is not reconciled. Delivery does not submit while the plan returns an error |
@@ -178,6 +180,9 @@ confirmed view catches up. Both follow this order.
 | `submit_command` has not recorded `Attempted` | the invocation is saved | `submitting`, same execution id | Retry `submit_command` with that id. The effect has not been recorded as attempted |
 | the journal records `Attempted` | the invocation is saved | `submitting`, journal `Attempted` | The retry returns `Interrupted` and does not run the effect. One audit moves the row to `unconfirmed`. `next_due` stops returning it |
 | the invocation is saved | `record_outcome` commits | `submitting`, execution present | The next pass records `delivered` from the saved execution and does not enqueue |
+| `defer_submit` commits | the process continues | `submitting`, `retry_at_ms` still ahead, audit `submission_retry` | The next pass waits until `retry_at_ms`. It does not submit before then. The same process does not reacquire the row in a tight loop |
+| `defer_submit`'s transaction fails | the audit | `submitting`, `retry_at_ms` unchanged | The pass waits one second and tries again. The timestamp and the audit roll back together |
+| a settlement plan fails | the reconcile row commits | no schedule change yet; `reconcile_retry` when the write commits | The loop retries that conversation at `retry_at_ms` even though catch-up is complete. A crash drops a debt the database never stored. The next start's catch-up plans every owner. A debt this process kept in memory is written on a later pass |
 | `record_outcome` fails | its commit | the previous status | The next pass records the same outcome. It does not mint an execution id |
 | preference turns on | the owner scan finishes | preference on at the revision this request installed, unsettled, and any rows the scan had accepted | A scan error reverts that revision only while it is still unsettled, as the system, which cancels those rows. A scan that finishes settles the revision. A request that did not install it does not turn it off. If the process dies during the scan, or the next start's scan fails, catch-up stays pending until a later pass traverses every owner |
 | preference turns off | a live lease expires | preference off; `scheduled`, `delivering`, and expired `submitting` cancelled | A live lease finishes its submit. The off path waits until that lease and then cancels it, so a later enable does not deliver it |
@@ -203,7 +208,9 @@ schedule with nothing due and no live lease. A store error is never that.
 | No open submit | Nobody. `fence_owner` is empty | `preference`, `retire_unfenced_submissions`, `next_live_fence`, `claim_due`, or `next_due` returns an error | The pass waits one second (`SCHEDULE_RETRY_MS`). It does not park until a notification storage recovery will not send | That one second, or sooner when a wakeup fires |
 | Preference off, lease still live | `fence_owner` until `fence_until_ms` | `retire_unfenced_submissions` or `next_live_fence` returns an error | Same one-second wait. A successful read waits until the live lease and then cancels it | `SCHEDULE_RETRY_MS`, or until `fence_until_ms` when the read succeeded |
 | `submitting`, this process inside `finish_fenced_submit` | This process, while `renew_fence` returns true | `renew_fence` returns an error, such as SQLite busy | Renewal continues. `lost` stays false. `submit_command` is not abandoned | `FENCE_RENEW_RETRY_MS` (one second) until a renew succeeds, then every ten seconds |
-| `submitting`, renew reports this process does not own the row | Whoever the store now names, or nobody | `renew_fence` returns false | `lost` is set and renewal stops. `submit_command` does not start. A submit that already ran still records its outcome | No further renew from this process. The next due pass, or the process that adopted the expired lease, continues the row |
+| `submitting`, renew reports this process does not own the row | Whoever the store now names, or nobody | `renew_fence` returns false | `lost` is set and renewal stops. `submit_command` does not start. A submit that already ran still records its outcome. This process does not write a retry time on a row it does not own | No further renew from this process. The next due pass, or the process that adopted the expired lease, continues the row |
+| `submitting`, retry time still ahead | This process until the lease, then whoever adopts it | A retryable submit failure already wrote `retry_at_ms` | The pass does not claim the row and does not call `submit_command` | `retry_at_ms`. The first failure waits one second. Each later failure doubles that wait, at most one minute. A shorter delivery or catch-up wait wins |
+| Reconcile debt, catch-up already complete | The delivery loop | The plan failed at settlement | The debt stays. The log line is not the end of the attempt | `retry_at_ms` on the debt, on the same curve. The loop wakes for that debt. A later successful plan deletes it |
 | Enable in progress, this request installed the revision | The decision transaction, then the scan | The catalogue scan fails | Revert that revision only while it is still enabled and unsettled. The audit cause is `preference` and the initiator is the system | The revert is one compare-and-set. A revision a later request already settled matches nothing and stays on |
 | Enable in progress, this request did not install the revision | The earlier installer until a scan settles it | This request's scan fails | This request does not turn the preference off. A scan that finishes settles the revision it observed, so the installer's later revert matches nothing | None for this request. The command returns the error. It does not record the scan as finished |
 | Catch-up pending, preference on | The delivery loop | `schedule_every_owner` fails, including a catalogue page that cannot be read | Catch-up stays pending. Owners and pages already planned stay planned. The pass does not park on an empty schedule | One second, then double, at most one minute (`CATCH_UP_RETRY_MAX_MS`). A shorter delivery wait wins. The next pass traverses every owner again |
@@ -218,9 +225,10 @@ one second and does not drop the lease. The lease is thirty seconds, renewed
 every ten while the renew succeeds.
 
 A pass claims at most eight due rows. A scheduled row still due at that
-clock, or a row left delivering or submitting, is due on the next pass. The
-loop is already waiting on the wakeup it registered before the scan, and a
-row due later also waits until that time. The usage limit on the schedule is the
+clock, a delivering row, or a submitting row whose retry time has arrived,
+is due on the next pass. A submitting row whose retry time is still ahead
+waits until that time. The loop is already waiting on the wakeup it
+registered before the scan, and a row due later also waits until that time. The usage limit on the schedule is the
 newest invocation, and only when that invocation is itself the limit. A later
 turn with no saved result clears it.
 
@@ -251,7 +259,10 @@ turn with no saved result clears it.
 6. Schedule and cancellation audits commit with the status change. The
    outcome audit commits after the observation, with the clock read at that
    observation. If that audit fails, the row stays `submitting` and the next
-   pass records the audit without a new execution id.
+   pass records the audit without a new execution id. A retryable submit
+   failure audits `submission_retry` in the same transaction as
+   `retry_at_ms`, with the status staying `submitting`. If that audit fails,
+   the timestamp rolls back and the pass waits one second.
 7. The card copies "Auto-resuming" only when the open row is `scheduled`,
    `delivering`, or `submitting` and the preference is on. `unconfirmed` does
    not say auto-resuming.
@@ -291,8 +302,17 @@ turn with no saved result clears it.
     is the owner of that choice. A later invocation clears it, and the plan
     cancels an open row.
 13. `next_due` is the owner of the loop's next wait. A scheduled row at or
-    before the clock, or any delivering or submitting row, is due now. Only a
-    later scheduled time waits. `unconfirmed` is not due.
+    before the clock is due now. A delivering row is due now. A submitting
+    row is due now only when its retry time has arrived (`retry_at_ms` is 0
+    or at or before the clock). A submitting row whose retry time is still
+    ahead waits until that time, and `begin_submit` does not adopt it before
+    then. The first failed attempt waits one second. Each later failure
+    doubles that wait, at most one minute. `unconfirmed` is not due. A
+    settlement whose plan did not commit is a reconcile debt with its own
+    retry time on that same curve. The loop retries that conversation when
+    the time arrives. Catch-up being complete does not erase the debt. A
+    debt the database refuses stays in this process until a later pass
+    writes it or the plan commits.
 14. `begin_submit` is the only permission to submit. It moves `delivering` to
     `submitting` under a new lease, or adopts a `submitting` row whose lease
     has expired, and arms the id only after the commit. Cancel, defer, and a
