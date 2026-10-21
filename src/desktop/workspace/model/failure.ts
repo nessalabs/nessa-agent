@@ -20,7 +20,8 @@
  * nothing until it is signed in again.
  *
  * `not-started`: this window was opened with no local server, so no chat
- * credential exists yet. `not-ready`: the server is still starting.
+ * credential exists yet. `not-ready`: the host's startup of the server failed, or
+ * was still running when the host stopped holding the window's read.
  * `not-listening`: the server is not answering. `wrong-stage`: this window
  * and the server were asked for different stages; the two values are
  * `StageMismatch`, beside the reason, because a reason cannot carry them.

@@ -42,6 +42,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// How often [`Gateway::settled_startup`] reads the startup again: one lock
+/// of the lifecycle, so a waiting reader sees `Ready` within this.
+const STARTUP_POLL: Duration = Duration::from_millis(50);
+
 struct Lifecycle {
     startup: GatewayStartup,
     retained_gateway: Option<ReconciledGateway>,
@@ -1161,6 +1165,25 @@ impl Gateway {
             .map_err(|_| GatewayError::Registration("gateway startup state is unavailable".into()))
     }
 
+    /// The startup once it is no longer running, or as it stands when `wait`
+    /// has passed on this gateway's clock while it still runs. Only reads:
+    /// it starts, joins and reconciles nothing (the desktop window's read,
+    /// `GatewayReader`).
+    pub async fn settled_startup(&self, wait: Duration) -> Result<GatewayStartup, GatewayError> {
+        let deadline = self.clock.now() + wait;
+        loop {
+            let startup = self.startup()?;
+            if !matches!(startup.phase(), GatewayStartupPhase::Starting(_)) {
+                return Ok(startup);
+            }
+            let remaining = deadline.saturating_duration_since(self.clock.now());
+            if remaining.is_zero() {
+                return Ok(startup);
+            }
+            self.clock.pause(remaining.min(STARTUP_POLL)).await;
+        }
+    }
+
     /// The latest private-runtime copy report, if the event adapter kept one.
     ///
     /// This is not startup. A window that subscribes after the report was
@@ -1171,11 +1194,21 @@ impl Gateway {
     }
 
     pub async fn start(&self) -> Result<(), GatewayError> {
-        let cause = catch_unwind(AssertUnwindSafe(|| self.host.startup_cause())).map_err(|_| {
-            GatewayError::Registration("gateway host startup classification panicked".into())
-        })?;
-        self.reconcile(evidence(cause, ReconciliationInitiator::DesktopHost)?)
-            .await
+        let admitted = catch_unwind(AssertUnwindSafe(|| self.host.startup_cause()))
+            .map_err(|_| {
+                GatewayError::Registration("gateway host startup classification panicked".into())
+            })
+            .and_then(|cause| evidence(cause, ReconciliationInitiator::DesktopHost));
+        match admitted {
+            Ok(evidence) => self.reconcile(evidence).await,
+            // Startup failed before any reconciliation: said, so nothing
+            // waiting on this startup (the desktop window's read) waits for
+            // one that never runs.
+            Err(error) => {
+                start_failed(&self.lifecycle, &self.startup_events, &error);
+                Err(error)
+            }
+        }
     }
 
     pub async fn wait_ready(&self, surface: BundledSurface) -> Result<(), GatewayError> {
@@ -1650,6 +1683,30 @@ fn admission_failed(
 ) {
     let failed = lifecycle.lock().ok().and_then(|mut current| {
         if current.running.is_some() {
+            return None;
+        }
+        current.startup = current
+            .startup
+            .next(GatewayStartupPhase::Failed(error.clone()));
+        Some(current.startup.clone())
+    });
+    if let Some(failed) = &failed {
+        publish(events, failed);
+    }
+}
+
+/// `Gateway::start` failed before admitting a reconciliation: Failed, but
+/// only over the startup no reconciliation has moved on from yet. A
+/// surface's reconciliation that ran first owns the phase, Ready included.
+fn start_failed(
+    lifecycle: &Arc<Mutex<Lifecycle>>,
+    events: &Arc<dyn GatewayStartupEvents>,
+    error: &GatewayError,
+) {
+    let failed = lifecycle.lock().ok().and_then(|mut current| {
+        let unstarted = current.running.is_none()
+            && current.startup.revision() == GatewayStartup::starting().revision();
+        if !unstarted {
             return None;
         }
         current.startup = current

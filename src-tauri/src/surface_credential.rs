@@ -1,9 +1,12 @@
 //! Native storage for the panel's surface credential, which the panel, setup and
 //! the desktop window read. Renderer input never selects a file.
 use crate::composition::HostDependencies;
-use crate::gateway::{application::Gateway, infrastructure::GatewayReader};
+use crate::gateway::{
+    application::Gateway,
+    infrastructure::{desktop_startup_wait, GatewayReader},
+};
 use crate::host_refusal::SurfaceCommandError;
-use std::{io::Read, path::PathBuf, sync::Arc};
+use std::{io::Read, path::PathBuf, sync::Arc, time::Duration};
 use tauri::State;
 
 /// Why there is no token to hand over.
@@ -244,11 +247,12 @@ async fn load_for(
     credential: &dyn SurfaceCredentials,
     stage: &str,
     url: &str,
+    startup_wait: Duration,
 ) -> Result<String, SurfaceCommandError> {
     let reader = GatewayReader::of_window(label).map_err(SurfaceCommandError::message)?;
     if let Some(gateway) = gateway {
         reader
-            .ready(gateway)
+            .ready(gateway, startup_wait)
             .await
             .map_err(SurfaceCommandError::from)?;
     }
@@ -280,6 +284,7 @@ pub async fn load_surface_credential(
         &*credential,
         &stage,
         &url,
+        desktop_startup_wait(),
     )
     .await
 }
@@ -289,8 +294,11 @@ mod tests {
     use super::*;
     use crate::desktop_window::DESKTOP_WINDOW;
     use crate::gateway::application::{
-        testing::{reconciled_registration, recording_gateway, recording_gateway_held},
-        GatewayError,
+        testing::{
+            reconciled_registration, recording_gateway, recording_gateway_held,
+            recording_gateway_held_on, recording_gateway_on, RecordingGatewayHost,
+        },
+        GatewayError, MonotonicClock, ReconciledGateway,
     };
     use crate::gateway::domain::value_objects::{BundledSurface, ReconciliationInitiator};
     use crate::panel;
@@ -301,7 +309,7 @@ mod tests {
     use std::{
         fs,
         io::Write,
-        sync::{mpsc::channel, Arc, Mutex},
+        sync::{mpsc::channel, Arc, Mutex, OnceLock},
         thread,
         time::Duration,
     };
@@ -357,10 +365,20 @@ mod tests {
         }
     }
 
+    /// A read that does not wait out a startup still running.
     fn load(
         label: &str,
         gateway: Option<&Gateway>,
         credential: &dyn SurfaceCredentials,
+    ) -> Result<String, SurfaceCommandError> {
+        load_waiting(label, gateway, credential, Duration::ZERO)
+    }
+
+    fn load_waiting(
+        label: &str,
+        gateway: Option<&Gateway>,
+        credential: &dyn SurfaceCredentials,
+        startup_wait: Duration,
     ) -> Result<String, SurfaceCommandError> {
         tauri::async_runtime::block_on(load_for(
             label,
@@ -369,6 +387,7 @@ mod tests {
             credential,
             "ci",
             "ws://127.0.0.1:7420",
+            startup_wait,
         ))
     }
 
@@ -425,11 +444,12 @@ mod tests {
         assert_eq!(credential.reads(), 2);
     }
 
-    /// Before the gateway is ready — never started, or failed — the desktop
-    /// window is refused, and its asking starts nothing: no registration, no
-    /// reconciliation, no token read (H2′).
+    /// Before the gateway is ready — never started, or failed — a desktop
+    /// window read that does not wait is refused, and its asking starts
+    /// nothing: no registration, no reconciliation, no token read (H2′).
     #[test]
-    fn the_desktop_window_is_refused_until_the_gateway_is_ready_and_starts_nothing() {
+    fn a_desktop_window_read_that_does_not_wait_is_refused_until_the_gateway_is_ready_and_starts_nothing(
+    ) {
         let credential = FakeCredentials::holding("fixture-only");
         let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
         for _ in 0..3 {
@@ -454,8 +474,8 @@ mod tests {
         assert_eq!(credential.reads(), 0);
     }
 
-    /// The host's own launch startup is in flight: the desktop window is
-    /// refused, starts no second reconciliation and reads nothing; once that
+    /// The host's own launch startup is in flight: a desktop window that does
+    /// not wait is refused, starts no second reconciliation and reads nothing; once that
     /// startup is ready the window is served, the panel never having asked
     /// (H2″, H9).
     #[test]
@@ -504,6 +524,212 @@ mod tests {
         );
     }
 
+    type Told = Result<String, SurfaceCommandError>;
+
+    /// What a desktop window waiting up to 10 s was told about a host startup
+    /// held until the window had asked: `None` while it was held, then its
+    /// answer once the startup ended as `registration` says.
+    fn told_across_a_held_startup(
+        registration: Result<ReconciledGateway, GatewayError>,
+    ) -> (Option<Told>, Told, Arc<RecordingGatewayHost>) {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (clock, paused) = PauseHeard::new();
+        let (gateway, host, entered, release) =
+            recording_gateway_held_on(registration, Arc::new(clock));
+        let (before_ended, told) = thread::scope(|scope| {
+            let starting = scope.spawn(|| tauri::async_runtime::block_on(gateway.start()));
+            entered.recv().unwrap();
+            let (told_tx, told_rx) = channel();
+            let (window_gateway, window_credential) = (&gateway, &credential);
+            let asking = scope.spawn(move || {
+                told_tx
+                    .send(load_waiting(
+                        DESKTOP_WINDOW,
+                        Some(window_gateway),
+                        window_credential,
+                        Duration::from_secs(10),
+                    ))
+                    .unwrap();
+            });
+            // The read pausing on the gateway's clock is the read holding:
+            // it saw startup still running and did not answer. Startup is
+            // released either way, so a read that never held fails below
+            // instead of hanging the test.
+            let held = paused.recv_timeout(Duration::from_secs(5)).is_ok();
+            let before_ended = told_rx.try_recv().ok();
+            release.send(()).unwrap();
+            let _ = starting.join().unwrap();
+            assert!(held, "the window's read never held for the startup");
+            let told = told_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the waiting window was not answered once startup ended");
+            asking.join().unwrap();
+            (before_ended, told)
+        });
+        (before_ended, told, host)
+    }
+
+    /// The system clock, telling the test each time a reader pauses on it.
+    struct PauseHeard(Mutex<std::sync::mpsc::Sender<()>>);
+
+    impl PauseHeard {
+        fn new() -> (Self, std::sync::mpsc::Receiver<()>) {
+            let (heard, paused) = channel();
+            (Self(Mutex::new(heard)), paused)
+        }
+    }
+
+    impl MonotonicClock for PauseHeard {
+        fn now(&self) -> std::time::Instant {
+            std::time::Instant::now()
+        }
+
+        fn pause(
+            &self,
+            duration: Duration,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+            let _ = self.0.lock().unwrap().send(());
+            Box::pin(tokio::time::sleep(duration))
+        }
+    }
+
+    /// A window opened at launch waits out the host's own startup, joining
+    /// nothing, and is served the moment it is ready: it never sees the
+    /// startup refusal a launch used to show for a few seconds.
+    #[test]
+    fn a_waiting_desktop_window_is_served_once_the_hosts_own_startup_is_ready() {
+        let (before_ready, told, host) = told_across_a_held_startup(Ok(reconciled_registration()));
+        assert_eq!(
+            before_ready, None,
+            "the window was answered before startup ended"
+        );
+        assert_eq!(told, Ok("fixture-only".into()));
+        assert_eq!(*host.registrations.lock().unwrap(), 1);
+        assert_eq!(
+            *host.initiators.lock().unwrap(),
+            vec![ReconciliationInitiator::DesktopHost]
+        );
+    }
+
+    /// A startup that fails while the window waits is refused when it fails,
+    /// not when the wait ends.
+    #[test]
+    fn a_waiting_desktop_window_is_refused_once_the_startup_it_waits_on_fails() {
+        let (before_failed, told, host) =
+            told_across_a_held_startup(Err(GatewayError::Registration("not installed".into())));
+        assert_eq!(
+            before_failed, None,
+            "the window was answered before startup ended"
+        );
+        assert_eq!(told, Err(SurfaceCommandError::not_ready()));
+        assert_eq!(*host.registrations.lock().unwrap(), 1);
+    }
+
+    /// A startup that failed is refused at once, however long the window
+    /// would wait: only a bundled surface starts it again. One that never
+    /// ends is refused when the wait does.
+    #[test]
+    fn a_waiting_desktop_window_is_refused_a_failed_startup_at_once_and_a_running_one_at_its_deadline(
+    ) {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (failed, _) =
+            recording_gateway(Err(GatewayError::Registration("not installed".into())));
+        let _ = load(panel::MAIN_WINDOW, Some(&failed), &credential);
+        let asked = std::time::Instant::now();
+        assert_eq!(
+            load_waiting(
+                DESKTOP_WINDOW,
+                Some(&failed),
+                &credential,
+                Duration::from_secs(30)
+            )
+            .err(),
+            Some(SurfaceCommandError::not_ready())
+        );
+        assert!(asked.elapsed() < Duration::from_secs(5));
+
+        // A host startup that failed before any reconciliation ran is a
+        // failed startup too, not one still starting.
+        let (unclassified, host) = recording_gateway(Ok(reconciled_registration()));
+        host.classify_panics
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(tauri::async_runtime::block_on(unclassified.start()).is_err());
+        let asked = std::time::Instant::now();
+        assert_eq!(
+            load_waiting(
+                DESKTOP_WINDOW,
+                Some(&unclassified),
+                &credential,
+                Duration::from_secs(30)
+            )
+            .err(),
+            Some(SurfaceCommandError::not_ready())
+        );
+        assert!(asked.elapsed() < Duration::from_secs(5));
+
+        // Never started: still starting when the whole wait has passed, on
+        // the gateway's clock, which here moves only as the read pauses.
+        let clock = Arc::new(VirtualClock::default());
+        let (starting, host) = recording_gateway_on(Ok(reconciled_registration()), clock.clone());
+        assert_eq!(
+            load_waiting(
+                DESKTOP_WINDOW,
+                Some(&starting),
+                &credential,
+                Duration::from_secs(15)
+            )
+            .err(),
+            Some(SurfaceCommandError::not_ready())
+        );
+        assert_eq!(clock.paused(), Duration::from_secs(15));
+        assert_eq!(*host.registrations.lock().unwrap(), 0);
+        assert_eq!(credential.reads(), 0);
+    }
+
+    /// A clock that stands still until a reader pauses on it, then moves on
+    /// by the pause at once.
+    #[derive(Default)]
+    struct VirtualClock {
+        start: OnceLock<std::time::Instant>,
+        paused: Mutex<Duration>,
+    }
+
+    impl VirtualClock {
+        fn paused(&self) -> Duration {
+            *self.paused.lock().unwrap()
+        }
+    }
+
+    impl MonotonicClock for VirtualClock {
+        fn now(&self) -> std::time::Instant {
+            *self.start.get_or_init(std::time::Instant::now) + self.paused()
+        }
+
+        fn pause(
+            &self,
+            duration: Duration,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+            *self.paused.lock().unwrap() += duration;
+            Box::pin(std::future::ready(()))
+        }
+    }
+
+    /// The host's own start failing after a surface's reconciliation already
+    /// brought the gateway up leaves it up: that reconciliation owns the phase.
+    #[test]
+    fn a_host_start_that_fails_after_a_surface_brought_the_gateway_up_leaves_it_ready() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
+        load(panel::MAIN_WINDOW, Some(&gateway), &credential).unwrap();
+        host.classify_panics
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(tauri::async_runtime::block_on(gateway.start()).is_err());
+        assert_eq!(
+            load(DESKTOP_WINDOW, Some(&gateway), &credential).unwrap(),
+            "fixture-only"
+        );
+    }
+
     /// A build without a managed gateway does not wait for one, for the
     /// desktop window either (H6).
     #[test]
@@ -534,6 +760,7 @@ mod tests {
                 &credential,
                 stage,
                 url,
+                Duration::ZERO,
             ));
             let expected = if stage == "dev" {
                 SurfaceCommandError::wrong_stage("ci", "dev")
@@ -596,6 +823,7 @@ mod tests {
             &credential,
             "ci",
             "ws://127.0.0.1:7420",
+            Duration::ZERO,
         ));
         assert!(result.is_err());
         assert_eq!(credential.reads(), 0);

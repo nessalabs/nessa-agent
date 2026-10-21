@@ -421,8 +421,9 @@ seeded in-memory workspace when a browser query names one, and the sample
 otherwise. The desktop app's own window
 connects to the local gateway under the panel's surface credential (#419):
 the host serves it the endpoint and the credential over IPC once the gateway
-the host started at launch is ready, and refuses it before then — it reads the
-gateway, never starts one (`GatewayReader`, `adapters/host-gateway.ts`) — and
+the host started at launch is ready, holding the read while that startup is
+still running (up to `DESKTOP_STARTUP_WAIT`) and refusing it when startup
+failed or ran past the hold — it reads the gateway, never starts one (`GatewayReader`, `adapters/host-gateway.ts`) — and
 after a failed connect it waits five poll rounds before it tries again, unless
 a person asks. A
 browser preview opened with `?gateway` connects over the session its origin

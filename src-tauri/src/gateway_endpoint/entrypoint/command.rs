@@ -1,10 +1,13 @@
 use crate::{
     composition::HostDependencies,
-    gateway::{application::Gateway, infrastructure::GatewayReader},
+    gateway::{
+        application::Gateway,
+        infrastructure::{desktop_startup_wait, GatewayReader},
+    },
     gateway_endpoint::application::GatewayEndpointAccess,
     host_refusal::SurfaceCommandError,
 };
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tauri::{State, WebviewWindow};
 
 async fn load_for(
@@ -12,11 +15,12 @@ async fn load_for(
     gateway: Option<&Gateway>,
     endpoint: Arc<GatewayEndpointAccess>,
     stage: &str,
+    startup_wait: Duration,
 ) -> Result<Option<String>, SurfaceCommandError> {
     let reader = GatewayReader::of_window(label).map_err(SurfaceCommandError::message)?;
     if let Some(gateway) = gateway {
         reader
-            .ready(gateway)
+            .ready(gateway, startup_wait)
             .await
             .map_err(SurfaceCommandError::from)?;
     }
@@ -35,7 +39,14 @@ pub async fn load_gateway_endpoint(
 ) -> Result<Option<String>, SurfaceCommandError> {
     let gateway = deps.gateway.clone();
     let endpoint = Arc::clone(&deps.endpoint);
-    load_for(window.label(), gateway.as_deref(), endpoint, &stage).await
+    load_for(
+        window.label(),
+        gateway.as_deref(),
+        endpoint,
+        &stage,
+        desktop_startup_wait(),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -76,17 +87,22 @@ mod tests {
                 panel::SETUP_WINDOW,
                 None,
                 endpoint.clone(),
-                "ci"
+                "ci",
+                Duration::ZERO,
             ))
             .unwrap(),
             Some("ws://127.0.0.1:9137".into())
         );
         assert_eq!(discovery.calls.load(Ordering::SeqCst), 1);
         for (label, stage) in [("untrusted", "ci"), (panel::SETUP_WINDOW, "dev")] {
-            assert!(
-                tauri::async_runtime::block_on(load_for(label, None, endpoint.clone(), stage))
-                    .is_err()
-            );
+            assert!(tauri::async_runtime::block_on(load_for(
+                label,
+                None,
+                endpoint.clone(),
+                stage,
+                Duration::ZERO
+            ))
+            .is_err());
             assert_eq!(discovery.calls.load(Ordering::SeqCst), 1);
         }
     }
@@ -106,6 +122,7 @@ mod tests {
             Some(&gateway),
             endpoint.clone(),
             "ci",
+            Duration::ZERO,
         ));
         assert_eq!(refused, Err(SurfaceCommandError::not_ready()));
         assert_eq!(discovery.calls.load(Ordering::SeqCst), 0);
@@ -116,6 +133,7 @@ mod tests {
             Some(&gateway),
             endpoint.clone(),
             "ci",
+            Duration::ZERO,
         ))
         .unwrap();
         let registered = *host.registrations.lock().unwrap();
@@ -124,7 +142,8 @@ mod tests {
                 DESKTOP_WINDOW,
                 Some(&gateway),
                 endpoint,
-                "ci"
+                "ci",
+                Duration::ZERO,
             ))
             .unwrap(),
             Some("ws://127.0.0.1:9137".into())

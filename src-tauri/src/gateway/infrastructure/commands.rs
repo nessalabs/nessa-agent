@@ -21,6 +21,7 @@ use serde::Serialize;
 use std::sync::Arc;
 #[cfg(any(target_os = "macos", test))]
 use std::sync::Mutex;
+use std::time::Duration;
 use std::{
     io::Error as IoError,
     panic::{catch_unwind, AssertUnwindSafe},
@@ -207,17 +208,41 @@ pub(crate) fn bundled_window(label: &str) -> Result<BundledSurface, String> {
         .ok_or_else(|| "Only a bundled Nessa surface can access the gateway".into())
 }
 
+/// How long one desktop window read of the gateway waits for a startup that
+/// is still running: `desktopStartupWaitMs` in `src/host/startup-timing.json`,
+/// the one number the window's tests and the stress check's fake host read
+/// too. A connect reads the endpoint and then the credential, and each may
+/// wait (startup can go back to starting between them, when a replacement
+/// begins), so twice this stays under the window's budget for that connect
+/// (`defaultGatewayTiming.callMs`, held by `startup-timing.test.ts`): a
+/// startup that takes longer is the window's refusal, and its retry clock
+/// asks again.
+pub(crate) fn desktop_startup_wait() -> Duration {
+    let timing: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../src/host/startup-timing.json"))
+            .expect("startup timing is JSON");
+    Duration::from_millis(
+        timing["desktopStartupWaitMs"]
+            .as_u64()
+            .expect("desktopStartupWaitMs is a whole number of milliseconds"),
+    )
+}
+
 /// Who may read the local gateway's endpoint and the surface credential, and
 /// how each waits for the gateway first (#419).
 ///
 /// The host starts the gateway at launch (`Gateway::start`), and each
 /// bundled surface waits for it to reconcile, which its load may start again,
 /// on record as the initiator. The desktop window only reads the gateway that
-/// startup brought up: it is served once startup is `Ready` and refused
-/// before that. Its arm of [`GatewayReader::ready`] reads the startup state
-/// and calls nothing that reconciles, so a window polling while it cannot
-/// connect causes no reconciliation (the desktop-window tests in
-/// `surface_credential.rs` and `gateway_endpoint`). It is no bundled surface
+/// startup brought up: it is served once startup is `Ready`. While startup is
+/// still running it waits for it, up to the wait it is given
+/// ([`desktop_startup_wait`] from the commands), so a window opened at launch
+/// connects the moment the gateway is up instead of covering itself with the
+/// startup screen; a startup that failed, or one still running when the wait
+/// ends, is refused. Its arm of [`GatewayReader::ready`] only reads the
+/// startup state and calls nothing that reconciles, so a window waiting, or
+/// asking again while it cannot connect, causes no reconciliation (the
+/// desktop-window tests in `surface_credential.rs` and `gateway_endpoint`). It is no bundled surface
 /// ([`bundled_window`]): the `gateway_startup` and `retry_gateway_startup`
 /// commands refuse it, and no startup event is published to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -240,16 +265,22 @@ impl GatewayReader {
     }
 
     /// Waits for the gateway as this reader may: a bundled surface until it
-    /// reconciles; the desktop window not at all — it is ready now, or the
-    /// read is refused.
-    pub(crate) async fn ready(self, gateway: &Gateway) -> Result<(), GatewayUnread> {
+    /// reconciles; the desktop window, without reconciling, while the startup
+    /// already running goes on, for at most `startup_wait`. A failed startup
+    /// is refused at once: only a bundled surface's retry starts it again.
+    pub(crate) async fn ready(
+        self,
+        gateway: &Gateway,
+        startup_wait: Duration,
+    ) -> Result<(), GatewayUnread> {
         match self {
             Self::Surface(surface) => gateway
                 .wait_ready(surface)
                 .await
                 .map_err(|error| GatewayUnread::Other(error.to_string())),
             Self::DesktopWindow => match gateway
-                .startup()
+                .settled_startup(startup_wait)
+                .await
                 .map_err(|error| GatewayUnread::Other(error.to_string()))?
                 .phase()
             {
