@@ -200,7 +200,8 @@ flowchart LR
 - A withdrawn grant removes the local row and writes no fence. Presence is Absent, so the chat can return with a later grant.
 - `LocalMatch` means the output file already had the named size and digest. No range was asked. It is not a new gateway hold.
 - `GatewayConfirmed` means this run's ranges were answered and the part, read back from disk, matched the digest. A partial part, a wrong range, or a digest mismatch is a fault. `reached` on that fault is not freshness.
-- The fetch reports the monotonic elapsed time of that fetch, including a local match that never dials and, when the file is not local, the status read that selects the gateway. That duration is the session clock, not model-generation latency. Busy-range retries wait on the injected pause; production composition uses `ThreadPause`.
+- The fetch reports the monotonic elapsed time of that fetch, including a local match that never dials and, when the file is not local, the status read that selects the gateway. That duration is the session clock, not model-generation latency. Busy-range retries wait on the injected pause; production composition uses `ThreadPause`. A stop during that wait returns within one stop slice and asks no later range.
+- Publication of a fetched part is one state. Waiting is the busy pause. Fetching is a range read or the part re-read; the next source read is cancelled. Linking is the part sync and then the hard link, and `stop` shares one gate with that link: the call that takes the gate first wins. Linked means the output exists; a later failure to remove the part or to sync the directory keeps that fact and names the step. Stopped means cancellation won before the link, so this keep created no output. A stop after the link does not unpublish and does not replace a cleanup failure. An integrity or file failure that settled before the link keeps its cause.
 - `conversation.subscribe` remains the live view. It still does not advance the checkpoint. Command recovery stays in the outbox.
 
 ### State
@@ -231,6 +232,10 @@ flowchart LR
 | Stale stamp | fetch or saved read | Fenced, connector not called | `a_replaced_receiver_stamp_reads_nothing_and_dials_nothing` |
 | Local file, stop already set or set while it is read | fetch | Stopped, not a local match | `a_stop_does_not_publish_a_local_match` |
 | Stop during the part re-read | fetch | Stopped, output not linked | `a_stop_during_the_part_reread_does_not_keep_the_file` |
+| Waiting: stop during a busy pause | fetch | Stopped within one stop slice; no later range; output absent | `a_stop_during_a_busy_pause_returns_within_one_slice`, `a_busy_pause_that_has_ended_asks_no_further_range` |
+| Linking: stop during the part sync | fetch | Stopped; the hard link is not created | `a_stop_during_sync_does_not_link` |
+| Linking: stop while the hard link holds the gate | fetch | The link finishes; the output stays published | `a_stop_during_the_link_waits_until_the_link_is_published` |
+| Linked: part removal or directory sync fails | fetch | Linked, naming that step; the output bytes remain; a later stop leaves it | `a_linked_output_keeps_its_cleanup_failure`, `a_part_that_cannot_be_removed_after_the_link_leaves_the_output` |
 | Integrity already settled, stop set later | fetch | Integrity, including a part left in place | `a_settled_integrity_failure_survives_a_stop_keep_did_not_see` |
 | Digest mismatch, part removal and emptying both fail | fetch | Integrity, and both failed steps | `an_integrity_fault_keeps_a_part_that_could_not_be_removed` |
 | Bound, file not on disk | fetch | The connector's typed failure, one dial | `a_missing_file_reports_the_connector_failure` |
@@ -243,5 +248,6 @@ flowchart LR
 - Minting a stamp from the published lease id and the next generation. That id is observable. The identity `accept` compares is not, and another lease that copies the id does not hold it.
 - Keeping an unstamped `catalogue_page` or `transcript` next to the stamped reads. Those methods select the current issued credential, so a delayed caller reads the replacement receiver without presenting a stamp.
 - Confirming a file because a part is already complete. The existing fetch asks the last range again so a part cannot stand in for the gateway. Reporting that part as fresh would undo that rule.
+- Sleeping a busy retry in one block, and reporting a cleanup failure after the hard link as though the output was never published. A stop during the wait would miss its slice, and a caller would retry a file that is already there.
 - Blocking the UI thread on the fetch. The session methods stay synchronous and the existing Swift worker admits them off the UI queue. This slice does not add a second queue.
 - Rebuilding #783, #785 and #789. Those pulls are merged. This slice starts from current main.

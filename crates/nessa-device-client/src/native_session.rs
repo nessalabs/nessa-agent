@@ -895,7 +895,9 @@ impl NativeArtifactFetch {
             _ => None,
         }
     }
-    /// Why the file was not kept. Empty when it was kept.
+    /// Why the file was not fully published. Empty when the fetch completed.
+    /// [`NativeArtifactFaultKind::Linked`] means the output file exists and a
+    /// later cleanup step failed.
     pub fn fault(&self) -> Option<NativeArtifactFaultKind> {
         let kind = self.value.outcome().err()?.kind();
         Some(match kind {
@@ -904,6 +906,7 @@ impl NativeArtifactFetch {
             ArtifactFaultKind::Integrity { .. } => NativeArtifactFaultKind::Integrity,
             ArtifactFaultKind::OutputExists => NativeArtifactFaultKind::OutputExists,
             ArtifactFaultKind::File(_) => NativeArtifactFaultKind::File,
+            ArtifactFaultKind::Linked { .. } => NativeArtifactFaultKind::Linked,
         })
     }
     /// Gateway refusal, when `fault` is gateway.
@@ -917,6 +920,14 @@ impl NativeArtifactFetch {
     pub fn file_step(&self) -> Option<NativeArtifactFileStep> {
         match self.value.outcome().err()?.kind() {
             ArtifactFaultKind::File(step) => Some(step.into()),
+            _ => None,
+        }
+    }
+    /// Cleanup step that failed after the output was linked. Present when
+    /// `fault` is linked.
+    pub fn linked_step(&self) -> Option<NativeArtifactFileStep> {
+        match self.value.outcome().err()?.kind() {
+            ArtifactFaultKind::Linked { step } => Some(step.into()),
             _ => None,
         }
     }
@@ -1003,8 +1014,10 @@ pub enum NativeArtifactFaultKind {
     Integrity,
     /// Something else is already at the output.
     OutputExists,
-    /// A local file step failed.
+    /// A local file step failed before the output was published.
     File,
+    /// The output was linked, and removing the part or syncing its directory failed.
+    Linked,
 }
 
 /// The generated native session handle. Blocking calls run on the caller's

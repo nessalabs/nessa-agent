@@ -4,7 +4,8 @@
 //! of the gateway. Gateway freshness is only the run whose ranges were
 //! answered and whose part, read back from disk, matched the named digest.
 //! Elapsed time is this fetch on the retained clock, not model generation.
-//! Busy retries wait on the injected pause.
+//! Busy retries wait on the injected pause. A stop during that wait, during
+//! the fetch, during the link, and after the link follows [`Publication`].
 
 use super::{failure, ReadFailure, ReadStop, ReaderAccess, RetainedCache, Stopping};
 use crate::read_only_sync::application::held_file::{
@@ -100,8 +101,36 @@ pub enum ArtifactFaultKind {
     },
     /// Something other than this file is already at the output.
     OutputExists,
-    /// A local file step failed.
+    /// A local file step failed before the output was published.
     File(ArtifactFileStep),
+    /// The output file exists. `step` is the cleanup that failed after the link.
+    Linked {
+        /// The cleanup step that failed.
+        step: ArtifactFileStep,
+    },
+}
+
+/// Where one phone fetch stands, and what [`ReadStop::stop`] does there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Publication {
+    /// Between busy retries. `stop` ends the wait within one stop slice.
+    /// The range is not asked again. The result is [`ReadFailure::Stopped`].
+    Waiting,
+    /// A range read or the part's re-read. The next source read is cancelled.
+    /// `keep` has not published the output.
+    Fetching,
+    /// The part is synced, then the hard link takes the publication gate
+    /// together with `stop`. The call that takes the gate first wins. A stop
+    /// that wins does not create the link. A link that returns has published
+    /// the output.
+    Linking,
+    /// The hard link exists. Removing the part or syncing the directory may
+    /// still fail. `stop` does not unpublish, and it does not replace that
+    /// failure.
+    Linked,
+    /// Cancellation won before the link. This keep created no output.
+    /// The result is [`ReadFailure::Stopped`].
+    Stopped,
 }
 
 /// A fetch that did not keep the file, with the part's progress.
@@ -136,13 +165,34 @@ impl ArtifactFault {
     }
 }
 
+/// Wait out `delay` in [`Publication::Waiting`]. Each slice is at most one
+/// stop slice. `ended` returns [`Publication::Stopped`] without a further
+/// slice; a finished wait returns [`Publication::Fetching`].
+fn wait_until(delay: Duration, ended: &dyn Fn() -> bool) -> Publication {
+    let mut left = delay;
+    let mut phase = Publication::Waiting;
+    while let Publication::Waiting = phase {
+        if ended() {
+            phase = Publication::Stopped;
+        } else if left.is_zero() {
+            phase = Publication::Fetching;
+        } else {
+            let slice = left.min(super::STOP_SLICE);
+            std::thread::sleep(slice);
+            left = left.saturating_sub(slice);
+        }
+    }
+    phase
+}
+
 /// Waits on the operating system's clock between retries of a busy range.
 /// Session composition injects this, or a test double, into the fetch.
+/// A stop during the wait returns within one stop slice.
 #[derive(Debug, Default)]
 pub struct ThreadPause;
 impl Pause for ThreadPause {
-    fn pause(&self, delay: Duration) {
-        std::thread::sleep(delay);
+    fn pause(&self, delay: Duration, ended: &dyn Fn() -> bool) {
+        let _ = wait_until(delay, ended);
     }
 }
 
@@ -239,6 +289,9 @@ fn fault_from(fetch_failure: FetchFailure) -> ArtifactFault {
         },
         FetchCause::OutputExists => ArtifactFaultKind::OutputExists,
         FetchCause::File(step) => ArtifactFaultKind::File(file_step(step)),
+        FetchCause::Published { step } => ArtifactFaultKind::Linked {
+            step: file_step(step),
+        },
     };
     ArtifactFault {
         kind,
@@ -331,8 +384,64 @@ pub fn local_held_outcome(
     outcome
 }
 
-/// Files whose `keep` refuses once `stop` is set, so a cancellation during
-/// the part's re-read does not link the output.
+/// The three disk steps of one publication. Sync and a refused link leave
+/// the output unpublished. Retirement runs only after the link exists.
+trait HeldPart {
+    fn sync_held(&mut self) -> Result<(), KeepRefusal>;
+    fn link_held(&mut self) -> Result<(), KeepRefusal>;
+    fn retire_held(&mut self) -> Result<(), KeepRefusal>;
+}
+impl HeldPart for DiskFiles {
+    fn sync_held(&mut self) -> Result<(), KeepRefusal> {
+        DiskFiles::sync_held(self)
+    }
+    fn link_held(&mut self) -> Result<(), KeepRefusal> {
+        DiskFiles::link_held(self)
+    }
+    fn retire_held(&mut self) -> Result<(), KeepRefusal> {
+        DiskFiles::retire_held(self)
+    }
+}
+
+struct PublishEnd {
+    /// `Stopped` is the only phase that replaces the fetch failure with a stop.
+    phase: Publication,
+    result: Result<(), KeepRefusal>,
+}
+
+/// Publish one kept part. The phase is the state `stop` is judged in.
+fn publish_part(stop: &ReadStop, part: &mut impl HeldPart) -> PublishEnd {
+    if stop.is_stopped() {
+        return PublishEnd {
+            phase: Publication::Stopped,
+            result: Err(KeepRefusal::Stopped),
+        };
+    }
+    let linking = Publication::Linking;
+    if let Err(refusal) = part.sync_held() {
+        return PublishEnd {
+            phase: linking,
+            result: Err(refusal),
+        };
+    }
+    match stop.admit(|| part.link_held()) {
+        Err(()) => PublishEnd {
+            phase: Publication::Stopped,
+            result: Err(KeepRefusal::Stopped),
+        },
+        Ok(Err(refusal)) => PublishEnd {
+            phase: linking,
+            result: Err(refusal),
+        },
+        Ok(Ok(())) => PublishEnd {
+            phase: Publication::Linked,
+            result: part.retire_held(),
+        },
+    }
+}
+
+/// Files whose publication follows [`Publication`], so a cancellation during
+/// the part's re-read or during the sync does not link the output.
 struct StopGate<'a> {
     files: DiskFiles,
     stop: &'a ReadStop,
@@ -364,13 +473,12 @@ impl FetchFiles for StopGate<'_> {
         self.files.append(bytes)
     }
     fn keep(&mut self) -> Result<(), KeepRefusal> {
-        if self.stop.is_stopped() {
-            self.keep_saw_stop = true;
-            // The step is not published. Only this refusal becomes
-            // `ReadFailure::Stopped`. A failure already returned does not.
-            return Err(KeepRefusal::File(FileStep::Link));
-        }
-        self.files.keep()
+        let end = publish_part(self.stop, &mut self.files);
+        // Only a gate that refused the link becomes `ReadFailure::Stopped`.
+        // A failure already returned, including a cleanup failure after the
+        // link, keeps its cause.
+        self.keep_saw_stop = end.phase == Publication::Stopped;
+        end.result
     }
     fn discard(&mut self) -> Result<(), FileStep> {
         self.files.discard()
@@ -432,7 +540,7 @@ pub(crate) fn confirmed_held_file(
             0,
         ))));
     }
-    match fetch_held_file(source, pause, &mut files, &file) {
+    match fetch_held_file(source, pause, &mut files, &file, &|| stop.is_stopped()) {
         Ok(progress) => Ok(Ok(ArtifactFreshness::GatewayConfirmed {
             ranges: progress.ranges,
             resumed_from: progress.resumed_from,

@@ -1,6 +1,6 @@
 //! Executable clock adapters. Authentication/cache wall time and socket elapsed time
 //! have separate ports and separate meanings. `ThreadPause` waits between
-//! retries of a busy held-file range.
+//! retries of a busy held-file range and returns when that wait has ended.
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_protocol::clock::Clock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};

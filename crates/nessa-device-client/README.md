@@ -59,7 +59,10 @@ gateway confirmation of the part on disk. Elapsed time is the session clock,
 including the status read when the file is not already local. A fault also
 reports the bytes the part had already resumed. A malformed digest, media type,
 or size is an invalid argument on the native call and does not dial. Busy-range
-retries wait on the pause the session was composed with. The native session and compound
+retries wait on the pause the session was composed with. A stop during that wait
+returns within one stop slice and does not ask the next range. A stop during the
+part sync does not link the output. Once the hard link exists, a failure to remove
+the part or to sync the directory reports that the output exists. The native session and compound
 refresh API have run against paired records through generated Swift on macOS.
 `swift/NativeSessionWorker.swift` supplies pre-queue admission, cancellation latches
 and a shared physical close task around generated calls. The release Apple package

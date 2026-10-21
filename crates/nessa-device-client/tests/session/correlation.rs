@@ -280,6 +280,26 @@ fn an_integrity_fault_reports_the_cleanup_that_failed() {
 }
 
 #[test]
+fn a_linked_fault_reports_the_output_cleanup_step() {
+    let fetch = NativeArtifactFetch {
+        value: ArtifactFetch::decided(
+            Err(ArtifactFault::progress(
+                ArtifactFaultKind::Linked {
+                    step: ArtifactFileStep::Remove,
+                },
+                2,
+                0,
+            )),
+            1,
+        ),
+    };
+    assert_eq!(fetch.fault(), Some(NativeArtifactFaultKind::Linked));
+    assert_eq!(fetch.linked_step(), Some(NativeArtifactFileStep::Remove));
+    assert_eq!(fetch.file_step(), None);
+    assert_eq!(fetch.reached(), Some(2));
+}
+
+#[test]
 fn a_malformed_artifact_name_is_an_invalid_argument_and_dials_nothing() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();

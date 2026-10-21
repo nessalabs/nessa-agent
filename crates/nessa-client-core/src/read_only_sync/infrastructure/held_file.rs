@@ -51,6 +51,50 @@ pub(crate) struct DiskFiles {
 }
 
 impl DiskFiles {
+    /// Sync the held part. A failure here means the output was not published.
+    pub(crate) fn sync_held(&mut self) -> Result<(), KeepRefusal> {
+        let file = self
+            .held
+            .as_ref()
+            .ok_or(KeepRefusal::File(FileStep::Link))?;
+        file.sync_all()
+            .map_err(|_| KeepRefusal::File(FileStep::Sync))
+    }
+
+    /// Hard-link the part at the output's name. `OutputExists` and `File(Link)`
+    /// both mean this call did not publish. On Unix the lock stays held for
+    /// the retirement that drops the part's name. On Windows the part's
+    /// sharing refuses a link while it is open, so it is closed first; a
+    /// fetch that opens it in between finds the same checked bytes, and only
+    /// one link can make the output.
+    pub(crate) fn link_held(&mut self) -> Result<(), KeepRefusal> {
+        #[cfg(not(unix))]
+        {
+            self.held.take();
+        }
+        if let Err(error) = fs::hard_link(&self.part, &self.out) {
+            // The part stays, for a later run.
+            return Err(if error.kind() == ErrorKind::AlreadyExists {
+                KeepRefusal::OutputExists
+            } else {
+                KeepRefusal::File(FileStep::Link)
+            });
+        }
+        Ok(())
+    }
+
+    /// Drop the part's name and sync the output's directory. The hard link
+    /// already exists, so either failure is [`KeepRefusal::Published`]. A
+    /// part name that cannot be removed names the output's bytes; the next
+    /// run finds the output is the file and removes it then, never writing
+    /// through it.
+    pub(crate) fn retire_held(&mut self) -> Result<(), KeepRefusal> {
+        let removed = fs::remove_file(&self.part);
+        self.held.take();
+        removed.map_err(|_| published(FileStep::Remove))?;
+        sync_directory(&self.out).map_err(|_| published(FileStep::SyncDirectory))
+    }
+
     /// The files for fetching `file` into `out`. Opens nothing. `Name` when
     /// `out` names no file (it ends in a separator or `..`), or names one
     /// too long to have a part beside it.
@@ -176,6 +220,10 @@ fn still_named(path: &Path, file: &File) -> bool {
     fs::symlink_metadata(path).is_ok_and(|named| is_same(&named, file))
 }
 
+fn published(step: FileStep) -> KeepRefusal {
+    KeepRefusal::Published { step }
+}
+
 /// Sync the directory a link or removal happened in, so it survives a
 /// crash. Windows has no directory sync; its changes are durable as the file
 /// system makes them.
@@ -276,35 +324,9 @@ impl FetchFiles for DiskFiles {
         file.write_all(bytes).map_err(|_| FileStep::Write)
     }
     fn keep(&mut self) -> Result<(), KeepRefusal> {
-        let file = self
-            .held
-            .as_ref()
-            .ok_or(KeepRefusal::File(FileStep::Link))?;
-        file.sync_all()
-            .map_err(|_| KeepRefusal::File(FileStep::Sync))?;
-        // On Unix the lock is held until the part's name is gone. On Windows
-        // the part's own sharing refuses a link or a removal while it is
-        // open, so it is closed first; a fetch that opens it in between finds
-        // the same checked bytes, and only one link can make the output.
-        #[cfg(not(unix))]
-        {
-            self.held.take();
-        }
-        if let Err(error) = fs::hard_link(&self.part, &self.out) {
-            // The part stays, for a later run.
-            return Err(if error.kind() == ErrorKind::AlreadyExists {
-                KeepRefusal::OutputExists
-            } else {
-                KeepRefusal::File(FileStep::Link)
-            });
-        }
-        // The output is in place. A part name that cannot be removed names
-        // the output's bytes; the next run finds the output is the file and
-        // removes it then, never writing through it.
-        let removed = fs::remove_file(&self.part);
-        self.held.take();
-        removed.map_err(|_| KeepRefusal::File(FileStep::Remove))?;
-        sync_directory(&self.out).map_err(|_| KeepRefusal::File(FileStep::SyncDirectory))
+        self.sync_held()?;
+        self.link_held()?;
+        self.retire_held()
     }
     fn discard(&mut self) -> Result<(), FileStep> {
         if self.held.is_none() {

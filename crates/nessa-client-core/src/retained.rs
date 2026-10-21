@@ -255,6 +255,9 @@ pub enum ReadFailure {
 pub struct ReadStop {
     stopped: AtomicBool,
     sockets: Mutex<Vec<TcpStream>>,
+    /// Held by `stop` while the flag is set, and by [`Self::admit`] while a
+    /// hard link publishes a held file. The call that takes it first wins.
+    publication: Mutex<()>,
 }
 impl ReadStop {
     /// A stop not yet asked for.
@@ -262,11 +265,35 @@ impl ReadStop {
         Arc::new(Self::default())
     }
     /// Stop every read using this, now and later.
+    ///
+    /// The flag is set while this holds the publication gate. A hard link
+    /// already inside that gate finishes and the output stays published. A
+    /// link that has not entered the gate does not start. Socket shutdown
+    /// follows the flag.
     pub fn stop(&self) {
-        self.stopped.store(true, Ordering::SeqCst);
+        {
+            let _gate = self.publication_lock();
+            self.stopped.store(true, Ordering::SeqCst);
+        }
         for socket in self.lock().drain(..) {
             let _ = socket.shutdown(Shutdown::Both);
         }
+    }
+    /// Run `link` while this holds the publication gate. `Err` when `stop`
+    /// already holds the gate, in which case `link` is not called. `link`
+    /// must not call `stop` on this same value from the thread that is
+    /// inside `link`: that waits on the gate `link` is holding.
+    pub(crate) fn admit<T>(&self, link: impl FnOnce() -> T) -> Result<T, ()> {
+        let _gate = self.publication_lock();
+        if self.is_stopped() {
+            return Err(());
+        }
+        Ok(link())
+    }
+    fn publication_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.publication
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
     /// Whether `stop` was called.
     pub fn is_stopped(&self) -> bool {

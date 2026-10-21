@@ -4,21 +4,25 @@ use super::{
     confirmed_held_file, local_held_file, ArtifactFault, ArtifactFaultKind, ArtifactFreshness,
     ArtifactRequest, Pause, ReadFailure, ReadStop, StoppedSource,
 };
-use crate::read_only_sync::application::held_file::{HeldFileSource, RangeAnswer};
-use crate::read_only_sync::application::GatewayError;
+use crate::read_only_sync::application::held_file::{
+    FetchCause, FetchFailure, FetchProgress, FileStep, HeldFileSource, KeepRefusal, RangeAnswer,
+};
+use crate::read_only_sync::application::{GatewayError, HeldFileRefusal};
 use crate::read_only_sync::domain::HeldRange;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 struct Still;
 impl Pause for Still {
-    fn pause(&self, _: Duration) {}
+    fn pause(&self, _: Duration, _: &dyn Fn() -> bool) {}
 }
 
 const CONVERSATION: &str = "00000000-0000-4000-8000-000000000001";
@@ -554,4 +558,248 @@ fn an_offline_relay_makes_the_artifact_fetch_away() {
     serving.join().unwrap();
     assert_eq!(failure, ReadFailure::Away);
     assert!(stop.sockets.lock().unwrap().is_empty());
+}
+
+struct BusyOnce {
+    bytes: &'static [u8],
+    reads: Arc<AtomicUsize>,
+    asked: Arc<AtomicBool>,
+}
+impl HeldFileSource for BusyOnce {
+    fn read(
+        &mut self,
+        _: &crate::read_only_sync::domain::HeldFile,
+        range: HeldRange,
+    ) -> Result<RangeAnswer, GatewayError> {
+        let n = self.reads.fetch_add(1, Ordering::SeqCst);
+        if n == 0 {
+            self.asked.store(true, Ordering::SeqCst);
+            return Err(GatewayError::HeldFile(HeldFileRefusal::Conversation(
+                ConversationErrorCode::TemporarilyUnavailable,
+            )));
+        }
+        let start = usize::try_from(range.offset()).unwrap();
+        let end = start + usize::try_from(range.length()).unwrap();
+        Ok(RangeAnswer {
+            offset: range.offset(),
+            bytes: self.bytes[start..end].to_vec(),
+        })
+    }
+}
+
+#[test]
+fn a_stop_during_a_busy_pause_returns_within_one_slice() {
+    let bytes = b"ab";
+    let conversation = conversation();
+    let digest = digest_of(bytes);
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("file.bin");
+    let reads = Arc::new(AtomicUsize::new(0));
+    let asked = Arc::new(AtomicBool::new(false));
+    let stop = ReadStop::new();
+    let mut source = BusyOnce {
+        bytes,
+        reads: reads.clone(),
+        asked: asked.clone(),
+    };
+    let stopping = stop.clone();
+    let stopper = thread::spawn(move || {
+        let started = Instant::now();
+        while !asked.load(Ordering::SeqCst) {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "the busy range was not asked"
+            );
+            thread::yield_now();
+        }
+        thread::sleep(Duration::from_millis(20));
+        stopping.stop();
+    });
+    let started = Instant::now();
+    let fault = confirmed_held_file(
+        &mut source,
+        &super::ThreadPause,
+        &request(&conversation, &digest, &output),
+        &stop,
+    )
+    .unwrap()
+    .unwrap_err();
+    let elapsed = started.elapsed();
+    stopper.join().unwrap();
+    assert_eq!(
+        fault.kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Stopped)
+    );
+    // The first busy delay is 250ms. One stop slice is 50ms, so a pause that
+    // observes the latch is back well before that delay.
+    assert!(
+        elapsed < Duration::from_millis(200),
+        "pause ignored the stop: {elapsed:?}"
+    );
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    assert!(!output.exists());
+}
+
+struct SyncStops {
+    stop: Arc<ReadStop>,
+    linked: bool,
+}
+impl super::HeldPart for SyncStops {
+    fn sync_held(&mut self) -> Result<(), KeepRefusal> {
+        self.stop.stop();
+        Ok(())
+    }
+    fn link_held(&mut self) -> Result<(), KeepRefusal> {
+        self.linked = true;
+        Ok(())
+    }
+    fn retire_held(&mut self) -> Result<(), KeepRefusal> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_stop_during_sync_does_not_link() {
+    let stop = ReadStop::new();
+    let mut part = SyncStops {
+        stop: stop.clone(),
+        linked: false,
+    };
+    let end = super::publish_part(&stop, &mut part);
+    assert!(!part.linked);
+    assert_eq!(end.phase, super::Publication::Stopped);
+    assert_eq!(end.result, Err(KeepRefusal::Stopped));
+    assert!(stop.is_stopped());
+}
+
+struct LinkHolds {
+    output: Arc<AtomicBool>,
+    in_link: Arc<AtomicBool>,
+    stopping: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
+}
+impl super::HeldPart for LinkHolds {
+    fn sync_held(&mut self) -> Result<(), KeepRefusal> {
+        Ok(())
+    }
+    fn link_held(&mut self) -> Result<(), KeepRefusal> {
+        self.output.store(true, Ordering::SeqCst);
+        self.in_link.store(true, Ordering::SeqCst);
+        let started = Instant::now();
+        while !self.stopping.load(Ordering::SeqCst) {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "stop was not asked during the link"
+            );
+            thread::yield_now();
+        }
+        thread::sleep(Duration::from_millis(50));
+        self.done.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    fn retire_held(&mut self) -> Result<(), KeepRefusal> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_stop_during_the_link_waits_until_the_link_is_published() {
+    let stop = ReadStop::new();
+    let output = Arc::new(AtomicBool::new(false));
+    let in_link = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
+    let mut part = LinkHolds {
+        output: output.clone(),
+        in_link: in_link.clone(),
+        stopping: stopping.clone(),
+        done: done.clone(),
+    };
+    let stopping_flag = stopping.clone();
+    let in_link_flag = in_link.clone();
+    let done_flag = done.clone();
+    let gate = stop.clone();
+    let stopper = thread::spawn(move || {
+        let started = Instant::now();
+        while !in_link_flag.load(Ordering::SeqCst) {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "the link did not take the gate"
+            );
+            thread::yield_now();
+        }
+        stopping_flag.store(true, Ordering::SeqCst);
+        let waited = Instant::now();
+        gate.stop();
+        assert!(
+            done_flag.load(Ordering::SeqCst),
+            "stop returned while the link was still inside the gate"
+        );
+        assert!(
+            waited.elapsed() >= Duration::from_millis(40),
+            "stop did not wait for the link"
+        );
+    });
+    let end = super::publish_part(&stop, &mut part);
+    stopper.join().unwrap();
+    assert!(output.load(Ordering::SeqCst));
+    assert_eq!(end.phase, super::Publication::Linked);
+    assert_eq!(end.result, Ok(()));
+    assert!(stop.is_stopped());
+}
+
+struct RetireFails {
+    step: FileStep,
+    linked: bool,
+}
+impl super::HeldPart for RetireFails {
+    fn sync_held(&mut self) -> Result<(), KeepRefusal> {
+        Ok(())
+    }
+    fn link_held(&mut self) -> Result<(), KeepRefusal> {
+        self.linked = true;
+        Ok(())
+    }
+    fn retire_held(&mut self) -> Result<(), KeepRefusal> {
+        Err(KeepRefusal::Published { step: self.step })
+    }
+}
+
+#[test]
+fn a_linked_output_keeps_its_cleanup_failure() {
+    for step in [FileStep::Remove, FileStep::SyncDirectory] {
+        let mut part = RetireFails {
+            step,
+            linked: false,
+        };
+        let stop = ReadStop::new();
+        let end = super::publish_part(&stop, &mut part);
+        assert!(part.linked);
+        assert_eq!(end.phase, super::Publication::Linked);
+        assert_eq!(end.result, Err(KeepRefusal::Published { step }));
+        let failure = FetchFailure {
+            cause: FetchCause::Published { step },
+            progress: FetchProgress {
+                reached: 2,
+                ..FetchProgress::default()
+            },
+        };
+        let linked = ArtifactFaultKind::Linked {
+            step: super::file_step(step),
+        };
+        let fault = super::fault_from(failure);
+        assert_eq!(fault.kind(), linked);
+        assert_eq!(fault.reached(), 2);
+        assert_eq!(super::publish_fetch(failure, false).kind(), linked);
+        stop.stop();
+        let ending = super::super::Stopping {
+            stop: stop.clone(),
+            clock: Arc::new(Held),
+            until: 0,
+        };
+        assert_eq!(
+            super::classify_artifact_fault(fault, &stop, &ending).kind(),
+            linked
+        );
+    }
 }
