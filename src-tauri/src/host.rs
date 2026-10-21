@@ -356,6 +356,9 @@ mod tests {
         );
     }
 
+    // `#[cfg(test)]` is what the platform-gate scan reads. A `}` in a string
+    // above these helpers makes them look top-level, outside `mod tests`.
+    #[cfg(test)]
     fn serde_attribute_before(source: &str, at: usize) -> &str {
         let prelude = &source[..at];
         let serde_at = prelude
@@ -364,12 +367,14 @@ mod tests {
         &prelude[serde_at..]
     }
 
+    #[cfg(test)]
     fn item_body(source: &str, at: usize) -> &str {
         let body = &source[at..];
         let close = body.find('}').expect("the item closes");
         &body[..close]
     }
 
+    #[cfg(test)]
     fn runtime_copy_states(host: &str) -> String {
         let enum_at = host
             .find("pub enum RuntimeCopyState {")
@@ -399,6 +404,7 @@ mod tests {
         states.join(" | ")
     }
 
+    #[cfg(test)]
     fn snake_to_camel(name: &str) -> String {
         let mut out = String::new();
         let mut upper = false;
@@ -415,6 +421,7 @@ mod tests {
         out
     }
 
+    #[cfg(test)]
     fn variant_to_kebab(variant: &str) -> String {
         let mut out = String::new();
         for (index, ch) in variant.chars().enumerate() {
