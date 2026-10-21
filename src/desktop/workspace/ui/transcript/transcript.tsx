@@ -86,9 +86,10 @@ export const Transcript = memo(function Transcript({
   const transcript = useRememberedTranscript(sessionId)
   const liveOutbox = useWorkspaceSelector((state) => selectOutbox(state, sessionId))
   const outbox = useRememberedValue(sessionId, liveOutbox)
-  const failure = useWorkspaceSelector((state) =>
+  const liveFailure = useWorkspaceSelector((state) =>
     selectTranscriptFailure(state, sessionId),
   )
+  const failure = useRememberedValue(sessionId, liveFailure)
   const model = useRememberedSession(sessionId)?.model
   const provider = signInProvider(transcript?.agent)
   const recoveryShown =

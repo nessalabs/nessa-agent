@@ -139,7 +139,9 @@ starts the measured row.
    after that paint, and the composer's blur the frame after the grain.
    A draft the close lets go keeps its home and its unsent text in the box
    until that box goes.    A session the source removes keeps the unsent reply
-   its composer was showing, and a message still on its way, until that box goes. A drag's copy does not paint the night scene. A pane change does not
+   its composer was showing, a message still on its way, and a transcript
+   read that failed, until that box goes. A pane preview stays until the
+   frame that paints the dropped arrangement. A drag's copy does not paint the night scene. A pane change does not
    render the shell, and it does not render the fitted window. A person's
    toggle still paints in the turn. The click does not render the
    sidebar unless the reveal itself changed, it does not render the
@@ -311,9 +313,11 @@ box frame.
   it happens, a draw the source leaves before that commit does not land,
   a removed session staying in its box until that box goes,
   a closing draft keeping its home and unsent text in that box until it goes,
-  a removed session keeping its unsent reply, and a message still on its way,
-  in that box until it goes
-  (`layouts.test.tsx`, `columns.mjs` `draft-held` and `reply-held`),
+  a removed session keeping its unsent reply, a message still on its way,
+  and a failed transcript read, in that box until it goes,
+  a pane preview staying until the frame that paints the dropped arrangement
+  (`layouts.test.tsx`, `columns.mjs` `draft-held` and `reply-held`,
+  `drag.test.tsx`),
   the workspace marked `data-spare-held`
   for that wait so a folded sidebar stays in the row, the side-column fit
   waiting one frame when the pane count changes,   the window painting the

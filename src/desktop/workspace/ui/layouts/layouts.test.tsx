@@ -26,6 +26,7 @@ import {
 import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
 import {
   controlledAnimationFrames,
+  fakeSource,
   flushAnimationFrames,
   settle,
   shownBy,
@@ -627,6 +628,59 @@ describe("a source removing a session", () => {
       await act(async () => frames.runFrame())
       expect(bubble()?.textContent).toContain("still sending")
       expect(failure()).not.toBeNull()
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+
+  it("keeps a failed read until the box goes", async () => {
+    // The note has to be on screen before the source removes the session,
+    // or the box has nothing to keep. The read never arrived, so the note
+    // is the conversation.
+    const frames = controlledAnimationFrames()
+    try {
+      const source = fakeSource()
+      source.refuse("transcript", "unavailable")
+      const store = testStore(source)
+      await store.dispatch(loadWorkspace())
+      await settle()
+      store.dispatch(openBeside({ sessionId: "b" }))
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      const note = () => pane()?.querySelector(".workspace-transcript-note")
+      for (let step = 0; step < 8 && !note(); step++)
+        await act(async () => frames.runFrame())
+      expect(note()?.textContent).toContain("Try Again")
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.transcriptFailures).not.toHaveProperty("b")
+      expect(note()?.textContent).toContain("Try Again")
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(note()?.textContent).toContain("Try Again")
       await act(async () => frames.runFrame())
       expect(pane()).toBeUndefined()
       await act(async () => root.unmount())

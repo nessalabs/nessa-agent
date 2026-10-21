@@ -894,6 +894,15 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   the box itself goes. The sample source takes a send before the next
   paint, so this is the layout test that puts the message on screen and
   then removes the session.
+- [ ] **A failed read stays until that box goes.** The source removing the
+  session drops the failure at once. The box still shows the read error
+  and Try Again until the box itself goes. A transcript that never arrived
+  is what the layout test removes.
+- [ ] **A pane preview stays until the dropped arrangement paints.** An
+  accepted swap keeps the preview on the panes the grid has not replaced
+  yet. The next two frames still show it. It lets go on the frame the new
+  boxes paint. The workspace leaves chats still, so this is the drag test
+  that mounts the grid with previews on.
 - [ ] **First-message handoff has one composer.** Sending from a new-session
   home replaces it without overlapping composer instances; the reply receives
   the caret and keeps the next draft. The composer glides into its dock and
