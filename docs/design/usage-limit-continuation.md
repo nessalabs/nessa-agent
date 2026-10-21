@@ -114,7 +114,7 @@ so a later causal turn can still be accepted after a terminal row.
 | `submitting` | Preference off, and `fence_until_ms` is at or before the clock | `record_preference_decision`, `set_preference`, or `retire_unfenced_submissions` | `cancelled` | Status and audit. A later pass waits until a still-live lease and then cancels it |
 | `submitting` | Preference off, and the lease is still live | the owning process | `submitting` | The submit finishes into `delivered`, `refused`, or `unconfirmed` |
 | `scheduled` or `delivering` | An applied model change | `commit_applied_model_plan`, from `change_model` or from `recover_model_change` | `cancelled` or `scheduled` | An applied transition returns only after the plan commits, including one recovery finishes from a stopped request. A failed plan stays owed. The next open read or submit runs it again. A refusal is not reconciled. Delivery does not submit while the plan returns an error |
-| preference | Cedar allow or deny | `record_preference_decision` | the stored boolean, unchanged on a deny | One audit with the policy ids, in the same transaction as any preference write. A failed audit is an error and leaves the preference as it was. An allow publishes every followed conversation. A deny does not |
+| preference | Cedar allow or deny | `record_preference_decision` | the stored boolean, unchanged on a deny | One audit with the policy ids, and the request's receipt, in the same transaction as any preference write. A failed audit leaves the preference and writes no receipt. A retry of that request returns the receipt and does not apply again. A different input for the same request is a conflict and writes nothing. An allow publishes every followed conversation. A deny does not |
 | any row that still holds a prompt | Conversation deletion | `erase_conversation` | `cancelled` for `scheduled`, `delivering`, and a `submitting` row whose lease has expired; the same status otherwise | Payload blanked and one new audit, one transaction |
 
 The gateway preference is a separate row. `UsageLimitPreferencePolicyEvaluator`
@@ -127,12 +127,15 @@ this decision.
 
 Every allow and every deny is one audit row before the command result: the
 person, the preference before and after, the policy ids, and the clock.
-Allow writes that audit in the same transaction as the preference and the
-cancellations it causes. Deny writes only the audit. If the audit does not
-commit, the command is an error and the preference is unchanged. An allow
-whose stored value did not change is still audited. The system remains the
-initiator of a failed-scan rollback and of provider-limit rows; those audits
-carry no Cedar policy ids.
+Allow writes that audit in the same transaction as the preference, the
+request receipt, and the cancellations it causes. Deny writes the audit and
+the receipt. If the audit does not commit, the command is an error, the
+preference is unchanged, and there is no receipt. An allow whose stored
+value did not change is still audited. The caller's action is checked before
+Cedar or any of that write: a blank, oversized, or control-character
+request id is rejected. The system remains the initiator of a failed-scan
+rollback and of provider-limit rows; those audits carry no Cedar policy ids.
+The rollback marks that request's receipt failed in the same transaction.
 
 An allow publishes every followed conversation, including when the caller
 turns the preference off and when a failed scan rolls it back. A deny does
@@ -166,6 +169,8 @@ confirmed view catches up. Both follow this order.
 | The person turned the preference on and the command has not finished | The checkbox is pending. The confirmed preference is still off. No row is auto-resuming | The checkbox shows on. The line under the title follows the confirmed preference and says when the limit resets |
 | The command has settled | The confirmed preference is not the pending choice, including when another client left it unchanged | The checkbox releases and shows the confirmed value. A later click is accepted. The line still follows the confirmed preference |
 | A conversation view is assembled | The schedule store's preference or open read fails | The view is an error. It does not say the preference is off, and it does not drop auto-resuming. No schedule database stays off and has no row |
+| A conversation view is assembled | The preference could change between two reads | The view reads the boolean and the open row from one snapshot. Off has no auto-resuming row in that snapshot |
+| An enable with request A has committed | A later disable with request B has committed, and A is retried | A is one command. The retry returns A's result and does not turn the preference back on. The same request with a different enabled value, or a different person, is a conflict and writes nothing |
 | The confirmed preference is on, the reset is still ahead, and no row is auto-resuming | Nothing | The line says scheduling failed |
 
 ### Crash between durable writes
@@ -184,7 +189,7 @@ confirmed view catches up. Both follow this order.
 | `defer_submit`'s transaction fails | the audit | `submitting`, `retry_at_ms` unchanged | The pass waits one second and tries again. The timestamp and the audit roll back together |
 | a settlement plan fails | the reconcile row commits | no schedule change yet; `reconcile_retry` when the write commits | The loop retries that conversation at `retry_at_ms` even though catch-up is complete. A crash drops a debt the database never stored. The next start's catch-up plans every owner. A debt this process kept in memory is written on a later pass |
 | `record_outcome` fails | its commit | the previous status | The next pass records the same outcome. It does not mint an execution id |
-| preference turns on | the owner scan finishes | preference on at the revision this request installed, unsettled, and any rows the scan had accepted | A scan error reverts that revision only while it is still unsettled, as the system, which cancels those rows. A scan that finishes settles the revision. A request that did not install it does not turn it off. If the process dies during the scan, or the next start's scan fails, catch-up stays pending until a later pass traverses every owner |
+| preference turns on | the owner scan finishes | preference on at the revision this request installed, unsettled, the decision audit, and the request receipt | A retry returns that receipt and does not apply a second change. A scan error reverts that revision only while it is still unsettled, as the system, which cancels those rows, and marks the receipt failed in that same transaction. A scan that finishes settles the revision. A request that did not install it does not turn it off. If the process dies during the scan, or the next start's scan fails, catch-up stays pending until a later pass traverses every owner |
 | preference turns off | a live lease expires | preference off; `scheduled`, `delivering`, and expired `submitting` cancelled | A live lease finishes its submit. The off path waits until that lease and then cancels it, so a later enable does not deliver it |
 | `erase_conversation` commits | the tombstone is marked erased | prompt and identifying fields blank, one new audit per row that still held them | A crash before the commit leaves the payload. Deletion stays unfinished and the next attempt scrubs again. A second scrub writes no audit. Older audit rows stay |
 | the outcome is observed | the audit timestamp is chosen | the clock is read when the saved execution or the `submit_command` result is in hand | The audit names that observation. A reading taken before the submit is not reused |
@@ -352,7 +357,16 @@ turn with no saved result clears it.
     refusal is rejected.
 21. A conversation view that cannot read the schedule store is an error.
     Unbound storage, with no schedule database, is preference off and no open
-    row. A failed preference or open read is neither of those.
+    row. A failed preference or open read is neither of those. The view reads
+    the boolean and the open row from one snapshot. Off has no auto-resuming
+    row in that snapshot.
+22. A preference request is one transition. Its receipt commits in the same
+    transaction as the decision audit. A retry of that request returns the
+    receipt and does not apply the change again, including an enable retried
+    after a later disable. A different input for the same request writes
+    nothing. A blank, oversized, or control-character request id is rejected
+    before Cedar and before any write. A scan that reverts the enable marks
+    that receipt failed in the revert's transaction.
 
 ## Card
 

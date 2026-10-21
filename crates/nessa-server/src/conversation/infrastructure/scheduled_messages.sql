@@ -5,12 +5,27 @@
 -- retry_at_ms is 0 when a submitting row may be attempted now. A later
 -- instant is the next attempt. retry_failures counts attempts already
 -- deferred. reconcile_retry is a settlement whose plan did not commit.
--- user_version stays 1. An earlier copy of this file is recreated.
+-- preference_command is one request's receipt. It commits with that
+-- request's decision audit. installed_request names the enable a revert
+-- marks failed. user_version stays 1. An earlier copy of this file is
+-- recreated.
 CREATE TABLE preference (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
     revision INTEGER NOT NULL DEFAULT 0,
-    settled INTEGER NOT NULL DEFAULT 1 CHECK (settled IN (0, 1))
+    settled INTEGER NOT NULL DEFAULT 1 CHECK (settled IN (0, 1)),
+    installed_request TEXT NOT NULL DEFAULT ''
+) STRICT;
+
+CREATE TABLE preference_command (
+    request_id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    principal_id TEXT NOT NULL,
+    surface_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    outcome TEXT NOT NULL CHECK (outcome IN ('stored', 'refused', 'failed')),
+    result_enabled INTEGER NOT NULL CHECK (result_enabled IN (0, 1)),
+    policies TEXT NOT NULL DEFAULT ''
 ) STRICT;
 
 CREATE TABLE message (

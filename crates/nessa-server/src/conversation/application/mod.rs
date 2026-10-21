@@ -325,10 +325,11 @@ pub use service::{
     ConversationAgents, ConversationCaller, ConversationDeletionBudgets, ConversationDependencies,
     ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, McpAppCall,
     McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, PendingReport,
-    PreferenceReading, PreferenceUpdate, QuestionChoiceInput, ReadOpening, ReconcileRetry,
-    RecordedPreference, ReportRegistration, RequestedAgent, RequestedConversation, ScheduleActor,
-    ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore, SubmissionMode,
-    ThreadReport, ThreadReportStore, ThreadTurn, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS,
+    PreferenceCommandOutcome, PreferenceCommandReceipt, PreferenceReading, PreferenceUpdate,
+    QuestionChoiceInput, ReadOpening, ReconcileRetry, RecordedPreference, ReportRegistration,
+    RequestedAgent, RequestedConversation, ScheduleActor, ScheduleDraft, ScheduleSettlement,
+    ScheduledMessage, ScheduledMessageStore, SubmissionMode, ThreadReport, ThreadReportStore,
+    ThreadTurn, UsageLimitSnapshot, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS,
     MAX_RESOURCE_META_BYTES,
 };
 pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};

@@ -25,13 +25,15 @@ use nessa_protocol::conversation::projection::{
 use nessa_protocol::conversation::view::{
     ConversationCapabilities, ConversationMessage, ConversationMessageStatus,
     ConversationModelChangeStatus, ConversationModelChangeView, ConversationReviewKind,
-    ConversationRuntime, ConversationSelectionView,
+    ConversationRuntime, ConversationSelectionView, ConversationUsageLimit,
+    ConversationUsageLimitProvider, ConversationUsageLimitRecovery,
 };
 use nessa_protocol::product::generated::AgentsListResult;
 use nessa_protocol::protocol::{OutgoingMessage, ResponseFrame, MAX_PAYLOAD_BYTES};
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::domain::agent_execution::questions::MAX_OPEN_QUESTIONS;
 use serde_json::json;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[tokio::test]
@@ -310,11 +312,7 @@ async fn a_schedule_store_failure_fails_the_conversation_view() {
         .unwrap();
 
     let (off, _, _, _, _) = mode_fixture();
-    off.bind_scheduled_messages(Arc::new(ScheduleReads {
-        fail_preference: false,
-        fail_open: false,
-        enabled: false,
-    }));
+    off.bind_scheduled_messages(Arc::new(ScheduleReads::new(false, false, false)));
     state.conversations = Some(Arc::new(off));
     let wire = wire_view(&state, projection.read())
         .await
@@ -332,11 +330,7 @@ async fn a_schedule_store_failure_fails_the_conversation_view() {
         .unwrap();
 
     let (preference, _, _, _, _) = mode_fixture();
-    preference.bind_scheduled_messages(Arc::new(ScheduleReads {
-        fail_preference: true,
-        fail_open: false,
-        enabled: true,
-    }));
+    preference.bind_scheduled_messages(Arc::new(ScheduleReads::new(true, false, true)));
     state.conversations = Some(Arc::new(preference));
     assert!(
         wire_view(&state, projection.read()).await.is_err(),
@@ -351,11 +345,7 @@ async fn a_schedule_store_failure_fails_the_conversation_view() {
         .unwrap();
 
     let (open, _, _, _, _) = mode_fixture();
-    open.bind_scheduled_messages(Arc::new(ScheduleReads {
-        fail_preference: false,
-        fail_open: true,
-        enabled: true,
-    }));
+    open.bind_scheduled_messages(Arc::new(ScheduleReads::new(false, true, true)));
     state.conversations = Some(Arc::new(open));
     assert!(
         wire_view(&state, projection.read()).await.is_err(),
@@ -368,6 +358,93 @@ async fn a_schedule_store_failure_fails_the_conversation_view() {
         .shutdown()
         .await
         .unwrap();
+}
+
+/// Two separate reads would disagree. The first preference read is `first`.
+/// The next preference read is the opposite, and an open row is waiting.
+/// The view follows the one snapshot: off publishes no auto-resuming row,
+/// and on publishes the row from that same read.
+#[tokio::test]
+async fn a_conversation_view_reads_the_preference_and_the_schedule_from_one_snapshot() {
+    view_snapshot(false, false, false).await;
+    view_snapshot(true, true, true).await;
+}
+
+async fn view_snapshot(first: bool, expect_enabled: bool, expect_resuming: bool) {
+    let mut state = reading_state();
+    let mut view = reading_projection().read();
+    view.messages.push(limit_message("turn-1"));
+    let (service, _, _, _, _) = mode_fixture();
+    let mut reads = ScheduleReads::new(false, false, !first);
+    reads.flip_first = Some(first);
+    reads.open_row = Some(open_row("turn-1"));
+    service.bind_scheduled_messages(Arc::new(reads));
+    state.conversations = Some(Arc::new(service));
+    let wire = wire_view(&state, view)
+        .await
+        .expect("one snapshot is readable");
+    let json = serde_json::to_value(&wire).unwrap();
+    assert_eq!(json["usageLimitAutoContinue"], expect_enabled);
+    let resuming = json["messages"][0]["usageLimit"].get("autoResuming");
+    if expect_resuming {
+        assert_eq!(resuming, Some(&json!(true)));
+    } else {
+        assert!(resuming.is_none(), "{resuming:?}");
+    }
+    state
+        .conversations
+        .take()
+        .unwrap()
+        .shutdown()
+        .await
+        .unwrap();
+}
+
+fn limit_message(execution_id: &str) -> ConversationMessage {
+    ConversationMessage {
+        authentication_required: None,
+        required_work_failed: None,
+        usage_limit: Some(ConversationUsageLimit {
+            provider: ConversationUsageLimitProvider::Claude,
+            recovery: ConversationUsageLimitRecovery::TimedReset,
+            resets_at_ms: Some(1_700_000_000_000),
+            auto_resuming: None,
+        }),
+        parts: Vec::new(),
+        steering_offset: None,
+        event_count: 0,
+        retained_text: 0,
+        execution_id: execution_id.into(),
+        user_text: String::new(),
+        attachments: Vec::new(),
+        files: Vec::new(),
+        app: None,
+        steering_target: None,
+        status: ConversationMessageStatus::Failed,
+        error: None,
+    }
+}
+
+fn open_row(causal: &str) -> ScheduledMessage {
+    ScheduledMessage {
+        conversation: "11111111-1111-4111-8111-111111111111".into(),
+        causal_execution: causal.into(),
+        execution_id: "sched-1".into(),
+        due_at_ms: 50,
+        delivering: false,
+        agent: "claude".into(),
+        model: "opus".into(),
+        prompt: "continue".into(),
+        organization_id: "org".into(),
+        principal_id: "person".into(),
+        surface_id: "desktop".into(),
+        action_id: "action".into(),
+        initiation: "owner".into(),
+        grant_id: None,
+        policy_revision: None,
+        tools_checked: false,
+        retry_failures: 0,
+    }
 }
 
 fn reading_state() -> ProductRouteState {
@@ -418,10 +495,30 @@ fn reading_projection() -> Projection {
 }
 
 /// A schedule store whose reads fail, or return a stored preference.
+///
+/// `flip_first` makes successive preference reads disagree. The open row is
+/// still there. A view that reads both through one snapshot does not publish
+/// that disagreement.
 struct ScheduleReads {
     fail_preference: bool,
     fail_open: bool,
     enabled: bool,
+    flip_first: Option<bool>,
+    open_row: Option<ScheduledMessage>,
+    reads: AtomicUsize,
+}
+
+impl ScheduleReads {
+    fn new(fail_preference: bool, fail_open: bool, enabled: bool) -> Self {
+        Self {
+            fail_preference,
+            fail_open,
+            enabled,
+            flip_first: None,
+            open_row: None,
+            reads: AtomicUsize::new(0),
+        }
+    }
 }
 
 fn schedule_unavailable<'a, T: Send + 'static>() -> ConversationFuture<'a, T> {
@@ -433,7 +530,16 @@ impl ScheduledMessageStore for ScheduleReads {
         if self.fail_preference {
             return schedule_unavailable();
         }
-        let enabled = self.enabled;
+        let enabled = if let Some(first) = self.flip_first {
+            let read = self.reads.fetch_add(1, Ordering::SeqCst);
+            if read == 0 {
+                first
+            } else {
+                !first
+            }
+        } else {
+            self.enabled
+        };
         Box::pin(async move {
             Ok(PreferenceReading {
                 enabled,
@@ -448,7 +554,8 @@ impl ScheduledMessageStore for ScheduleReads {
         if self.fail_open {
             return schedule_unavailable();
         }
-        Box::pin(async { Ok(None) })
+        let row = self.open_row.clone();
+        Box::pin(async move { Ok(row) })
     }
     fn accept(&self, _: ScheduleDraft, _: u64) -> ConversationFuture<'_, Option<ScheduledMessage>> {
         schedule_unavailable()

@@ -3926,7 +3926,13 @@ async fn a_publish_is_answered_only_after_the_hosts_answer_is_queued() {
                 .await
         })
     };
-    tokio::time::timeout(Duration::from_secs(5), host.asked.answering.notified())
+    // `notify_one` stores a permit, so this wait cannot miss an answer that
+    // already started. The host notifies before it waits on the gate. Five
+    // seconds was not enough on the Windows runner: the library suite took
+    // about fifteen minutes, and another lease test was still running when
+    // this one gave up. The ordering proof is the wait below, after the
+    // signal. A host that never starts answering still fails this bound.
+    tokio::time::timeout(Duration::from_secs(60), host.asked.answering.notified())
         .await
         .expect("the host is being answered");
     // Kept, but the host's answer is not queued: the call still waits.
@@ -3937,7 +3943,7 @@ async fn a_publish_is_answered_only_after_the_hosts_answer_is_queued() {
     );
     queue.send(()).unwrap();
     assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(5), publishing)
+        tokio::time::timeout(Duration::from_secs(60), publishing)
             .await
             .unwrap()
             .unwrap(),

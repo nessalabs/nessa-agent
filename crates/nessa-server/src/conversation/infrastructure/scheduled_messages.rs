@@ -12,13 +12,14 @@
 //! each commit their own audit, with the policy ids, before the command result.
 
 use crate::conversation::application::{
-    ConversationError, ConversationFuture, PreferenceReading, PreferenceUpdate, ReconcileRetry,
-    RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage,
-    ScheduledMessageStore, FENCE_LEASE_MS,
+    ConversationError, ConversationFuture, PreferenceCommandOutcome, PreferenceCommandReceipt,
+    PreferenceReading, PreferenceUpdate, ReconcileRetry, RecordedPreference, ScheduleActor,
+    ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore, UsageLimitSnapshot,
+    FENCE_LEASE_MS,
 };
 use crate::conversation::domain::ContinuationCause;
 use nessa_local_database::{
-    rusqlite::{params, Connection, OptionalExtension, Transaction},
+    rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior},
     OpenError, Schema,
 };
 #[cfg(test)]
@@ -429,6 +430,142 @@ fn standing(connection: &Connection) -> Result<PreferenceStanding, ConversationE
     })
 }
 
+fn installed_request(connection: &Connection) -> Result<String, ConversationError> {
+    let row: Option<String> = connection
+        .query_row(
+            "SELECT installed_request FROM preference WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(failed)?;
+    Ok(row.unwrap_or_default())
+}
+
+fn split_policies(text: &str) -> Vec<String> {
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        text.split('\n').map(str::to_owned).collect()
+    }
+}
+
+struct StoredPreferenceCommand {
+    organization_id: String,
+    principal_id: String,
+    surface_id: String,
+    enabled: bool,
+    outcome: String,
+    result_enabled: bool,
+    policies: String,
+}
+
+fn load_preference_command(
+    connection: &Connection,
+    request_id: &str,
+) -> Result<Option<PreferenceCommandReceipt>, ConversationError> {
+    let row: Option<StoredPreferenceCommand> = connection
+        .query_row(
+            "SELECT organization_id, principal_id, surface_id, enabled, outcome, \
+             result_enabled, policies FROM preference_command WHERE request_id = ?1",
+            params![request_id],
+            |row| {
+                Ok(StoredPreferenceCommand {
+                    organization_id: row.get(0)?,
+                    principal_id: row.get(1)?,
+                    surface_id: row.get(2)?,
+                    enabled: row.get::<_, i64>(3)? == 1,
+                    outcome: row.get(4)?,
+                    result_enabled: row.get::<_, i64>(5)? == 1,
+                    policies: row.get(6)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(failed)?;
+    row.map(preference_receipt).transpose()
+}
+
+fn preference_receipt(
+    row: StoredPreferenceCommand,
+) -> Result<PreferenceCommandReceipt, ConversationError> {
+    let outcome = match row.outcome.as_str() {
+        "stored" => PreferenceCommandOutcome::Stored(row.result_enabled),
+        "refused" => PreferenceCommandOutcome::Refused {
+            policies: split_policies(&row.policies),
+        },
+        "failed" => PreferenceCommandOutcome::Failed,
+        _ => return Err(ConversationError::Metadata),
+    };
+    Ok(PreferenceCommandReceipt {
+        organization_id: row.organization_id,
+        principal_id: row.principal_id,
+        surface_id: row.surface_id,
+        enabled: row.enabled,
+        outcome,
+    })
+}
+
+fn same_preference_command(
+    saved: &PreferenceCommandReceipt,
+    enabled: bool,
+    actor: &ScheduleActor,
+) -> bool {
+    actor.organization_id.as_deref() == Some(saved.organization_id.as_str())
+        && actor.principal_id.as_deref() == Some(saved.principal_id.as_str())
+        && actor.surface_id.as_deref() == Some(saved.surface_id.as_str())
+        && saved.enabled == enabled
+}
+
+fn recorded_replay(
+    saved: &PreferenceCommandReceipt,
+    revision: u64,
+) -> Result<RecordedPreference, ConversationError> {
+    let update = match &saved.outcome {
+        PreferenceCommandOutcome::Stored(value) => PreferenceUpdate::Stored(*value),
+        PreferenceCommandOutcome::Refused { policies } => PreferenceUpdate::Refused {
+            policies: policies.clone(),
+        },
+        PreferenceCommandOutcome::Failed => return Err(ConversationError::Unavailable),
+    };
+    Ok(RecordedPreference {
+        update,
+        revision,
+        installed_enable: false,
+        replayed: true,
+    })
+}
+
+fn save_preference_command(
+    transaction: &Transaction<'_>,
+    request_id: &str,
+    actor: &ScheduleActor,
+    enabled: bool,
+    outcome: &str,
+    result_enabled: bool,
+    policies: &str,
+) -> Result<(), ConversationError> {
+    transaction
+        .execute(
+            "INSERT INTO preference_command (
+                request_id, organization_id, principal_id, surface_id,
+                enabled, outcome, result_enabled, policies
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                request_id,
+                actor.organization_id.as_deref().unwrap_or(""),
+                actor.principal_id.as_deref().unwrap_or(""),
+                actor.surface_id.as_deref().unwrap_or(""),
+                i64::from(enabled),
+                outcome,
+                i64::from(result_enabled),
+                policies,
+            ],
+        )
+        .map_err(failed)?;
+    Ok(())
+}
+
 impl ScheduledMessageStore for LocalScheduledMessages {
     fn preference(&self) -> ConversationFuture<'_, PreferenceReading> {
         self.run(|connection| {
@@ -461,7 +598,8 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                      ON CONFLICT (id) DO UPDATE SET \
                        enabled = excluded.enabled, \
                        revision = preference.revision + 1, \
-                       settled = 1 \
+                       settled = 1, \
+                       installed_request = '' \
                      WHERE preference.enabled != excluded.enabled",
                     params![i64::from(enabled)],
                 )
@@ -505,8 +643,31 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         #[cfg(test)]
         let fail = self.fail_decision_audit.swap(false, Ordering::SeqCst);
         self.run(move |connection| {
+            // A person command carries its request id. A direct system write
+            // has none, so it has no receipt to replay.
+            let request_id = actor.action_id.clone().filter(|value| !value.is_empty());
+            if request_id.is_some()
+                && (actor.organization_id.as_deref().unwrap_or("").is_empty()
+                    || actor.principal_id.as_deref().unwrap_or("").is_empty()
+                    || actor.surface_id.as_deref().unwrap_or("").is_empty())
+            {
+                return Err(ConversationError::InvalidInput);
+            }
             let at_ms = millis(at_ms)?;
-            let transaction = connection.transaction().map_err(failed)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            if let Some(id) = request_id.as_deref() {
+                if let Some(saved) = load_preference_command(&transaction, id)? {
+                    if !same_preference_command(&saved, enabled, &actor) {
+                        return Err(ConversationError::RequestConflict);
+                    }
+                    let revision = standing(&transaction)?.revision;
+                    let replay = recorded_replay(&saved, revision)?;
+                    transaction.commit().map_err(failed)?;
+                    return Ok(replay);
+                }
+            }
             let previous = standing(&transaction)?;
             let mut stored = if allowed { enabled } else { previous.enabled };
             let mut installed_enable = false;
@@ -515,21 +676,22 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 let changed = if enabled {
                     transaction
                         .execute(
-                            "INSERT INTO preference (id, enabled, revision, settled) \
-                             VALUES (1, 1, 1, 0) \
+                            "INSERT INTO preference (id, enabled, revision, settled, installed_request) \
+                             VALUES (1, 1, 1, 0, ?1) \
                              ON CONFLICT (id) DO UPDATE SET \
                                enabled = 1, \
                                revision = preference.revision + 1, \
-                               settled = 0 \
+                               settled = 0, \
+                               installed_request = excluded.installed_request \
                              WHERE preference.enabled = 0",
-                            [],
+                            params![request_id.as_deref().unwrap_or("")],
                         )
                         .map_err(failed)?
                 } else {
                     transaction
                         .execute(
                             "UPDATE preference SET enabled = 0, revision = revision + 1, \
-                             settled = 1 \
+                             settled = 1, installed_request = '' \
                              WHERE id = 1 AND enabled = 1",
                             [],
                         )
@@ -576,6 +738,17 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 },
                 &policies_text,
             )?;
+            if let Some(id) = request_id.as_deref() {
+                save_preference_command(
+                    &transaction,
+                    id,
+                    &actor,
+                    enabled,
+                    if allowed { "stored" } else { "refused" },
+                    stored,
+                    if allowed { "" } else { &policies_text },
+                )?;
+            }
             #[cfg(test)]
             if fail {
                 return Err(ConversationError::Metadata);
@@ -590,6 +763,7 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 update,
                 revision,
                 installed_enable,
+                replayed: false,
             })
         })
     }
@@ -626,10 +800,14 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         self.run(move |connection| {
             let revision = i64::try_from(revision).map_err(|_| ConversationError::InvalidInput)?;
             let at_ms = millis(at_ms)?;
-            let transaction = connection.transaction().map_err(failed)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            let request = installed_request(&transaction)?;
             let changed = transaction
                 .execute(
-                    "UPDATE preference SET enabled = 0, revision = revision + 1, settled = 1 \
+                    "UPDATE preference SET enabled = 0, revision = revision + 1, settled = 1, \
+                     installed_request = '' \
                      WHERE id = 1 AND revision = ?1 AND enabled = 1 AND settled = 0",
                     params![revision],
                 )
@@ -652,8 +830,45 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 },
             )?;
             cancel_open_preference(&transaction, &actor, at_ms)?;
+            if !request.is_empty() {
+                transaction
+                    .execute(
+                        "UPDATE preference_command SET outcome = 'failed' \
+                         WHERE request_id = ?1 AND outcome = 'stored'",
+                        params![request],
+                    )
+                    .map_err(failed)?;
+            }
             transaction.commit().map_err(failed)?;
             Ok(true)
+        })
+    }
+
+    fn preference_command(
+        &self,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<PreferenceCommandReceipt>> {
+        let request_id = request_id.to_owned();
+        self.run(move |connection| load_preference_command(connection, &request_id))
+    }
+
+    fn usage_limit_snapshot(
+        &self,
+        conversation: &str,
+    ) -> ConversationFuture<'_, UsageLimitSnapshot> {
+        let conversation = conversation.to_owned();
+        self.run(move |connection| {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            let enabled = standing(&transaction)?.enabled;
+            let open = if enabled {
+                load_open(&transaction, &conversation)?
+            } else {
+                None
+            };
+            transaction.commit().map_err(failed)?;
+            Ok(UsageLimitSnapshot { enabled, open })
         })
     }
 
@@ -1527,14 +1742,18 @@ mod tests {
         store
     }
 
-    fn person() -> ScheduleActor {
+    fn person_as(action: &str) -> ScheduleActor {
         ScheduleActor {
             person: true,
             organization_id: Some("org".into()),
             principal_id: Some("person".into()),
             surface_id: Some("desktop".into()),
-            action_id: Some("toggle".into()),
+            action_id: Some(action.into()),
         }
+    }
+
+    fn person() -> ScheduleActor {
+        person_as("toggle")
     }
 
     async fn open_messages() -> LocalScheduledMessages {
@@ -2267,7 +2486,7 @@ mod tests {
         let store = store().await;
         let policies = vec!["usage-limit-preference.member".to_owned()];
         let denied = store
-            .record_preference_decision(false, true, &policies, person(), 5)
+            .record_preference_decision(false, true, &policies, person_as("deny"), 5)
             .await
             .unwrap();
         assert!(matches!(denied.update, PreferenceUpdate::Refused { .. }));
@@ -2289,17 +2508,22 @@ mod tests {
                 true,
                 true,
                 &["usage-limit-preference.admin-grant".into()],
-                person(),
+                person_as("allow-fail"),
                 6,
             )
             .await;
         assert!(failed.is_err());
         assert!(!store.preference().await.unwrap().enabled);
         assert_eq!(decision_audits(&store).len(), 1);
+        assert!(store
+            .preference_command("allow-fail")
+            .await
+            .unwrap()
+            .is_none());
 
         store.fail_next_decision_audit();
         let failed_deny = store
-            .record_preference_decision(false, true, &policies, person(), 6)
+            .record_preference_decision(false, true, &policies, person_as("deny-fail"), 6)
             .await;
         assert!(failed_deny.is_err());
         assert_eq!(decision_audits(&store).len(), 1);
@@ -2312,7 +2536,7 @@ mod tests {
                     "usage-limit-preference.admin-grant".into(),
                     "usage-limit-preference.member".into(),
                 ],
-                person(),
+                person_as("allow"),
                 7,
             )
             .await
@@ -2331,7 +2555,7 @@ mod tests {
                 true,
                 true,
                 &["usage-limit-preference.admin-grant".into()],
-                person(),
+                person_as("allow-again"),
                 8,
             )
             .await
@@ -2354,7 +2578,7 @@ mod tests {
                 true,
                 true,
                 &["usage-limit-preference.admin-grant".into()],
-                person(),
+                person_as("install"),
                 5,
             )
             .await
@@ -2369,7 +2593,7 @@ mod tests {
                 true,
                 true,
                 &["usage-limit-preference.admin-grant".into()],
-                person(),
+                person_as("again"),
                 6,
             )
             .await
@@ -2396,7 +2620,7 @@ mod tests {
                 true,
                 true,
                 &["usage-limit-preference.admin-grant".into()],
-                person(),
+                person_as("reinstall"),
                 9,
             )
             .await
@@ -2456,5 +2680,124 @@ mod tests {
         current.preference_revision = again.revision;
         let fresh = store.accept(current, 7).await.unwrap().unwrap();
         assert_eq!(fresh.execution_id, "exec-4");
+    }
+
+    #[tokio::test]
+    async fn a_retried_preference_command_does_not_reapply_after_a_later_change() {
+        let store = store().await;
+        let first = store
+            .record_preference_decision(true, true, &["admin".into()], person_as("enable"), 1)
+            .await
+            .unwrap();
+        assert_eq!(first.update, PreferenceUpdate::Stored(true));
+        assert!(!first.replayed);
+        let disabled = store
+            .record_preference_decision(true, false, &["admin".into()], person_as("disable"), 2)
+            .await
+            .unwrap();
+        assert_eq!(disabled.update, PreferenceUpdate::Stored(false));
+        assert!(!store.preference().await.unwrap().enabled);
+        let audits = decision_audits(&store).len();
+        let replay = store
+            .record_preference_decision(true, true, &["other".into()], person_as("enable"), 3)
+            .await
+            .unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.update, PreferenceUpdate::Stored(true));
+        assert!(!replay.installed_enable);
+        assert!(!store.preference().await.unwrap().enabled);
+        assert_eq!(decision_audits(&store).len(), audits);
+        let commands: i64 = store
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM preference_command", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(commands, 2);
+    }
+
+    #[tokio::test]
+    async fn a_preference_command_rejects_a_different_input_for_its_request() {
+        let store = store().await;
+        store
+            .record_preference_decision(true, true, &["admin".into()], person_as("one"), 1)
+            .await
+            .unwrap();
+        let conflict = store
+            .record_preference_decision(true, false, &["admin".into()], person_as("one"), 2)
+            .await;
+        assert!(matches!(conflict, Err(ConversationError::RequestConflict)));
+        assert!(store.preference().await.unwrap().enabled);
+        let mut other = person_as("one");
+        other.principal_id = Some("other".into());
+        let conflict = store
+            .record_preference_decision(true, true, &["admin".into()], other, 3)
+            .await;
+        assert!(matches!(conflict, Err(ConversationError::RequestConflict)));
+        assert!(store.preference().await.unwrap().enabled);
+        assert_eq!(decision_audits(&store).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_reverted_enable_is_the_same_failed_command() {
+        let store = store().await;
+        let installed = store
+            .record_preference_decision(true, true, &["admin".into()], person_as("enable"), 1)
+            .await
+            .unwrap();
+        assert!(store
+            .revert_installed_preference(installed.revision, ScheduleActor::system(), 2)
+            .await
+            .unwrap());
+        assert!(!store.preference().await.unwrap().enabled);
+        let outcome: String = store
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT outcome FROM preference_command WHERE request_id = 'enable'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(outcome, "failed");
+        let retry = store
+            .record_preference_decision(true, true, &["admin".into()], person_as("enable"), 3)
+            .await;
+        assert!(matches!(retry, Err(ConversationError::Unavailable)));
+        assert!(!store.preference().await.unwrap().enabled);
+        assert_eq!(decision_audits(&store).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn one_snapshot_reports_the_preference_and_the_open_row_together() {
+        let store = enabled_store().await;
+        store
+            .accept(draft("kept", "causal", "exec-1", 50), 2)
+            .await
+            .unwrap();
+        let together = store.usage_limit_snapshot("kept").await.unwrap();
+        assert!(together.enabled);
+        assert_eq!(together.open.unwrap().execution_id, "exec-1");
+        assert!(!store
+            .set_preference(false, person_as("off"), 3)
+            .await
+            .unwrap());
+        store
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE message SET status = 'scheduled' WHERE conversation = 'kept'",
+                [],
+            )
+            .unwrap();
+        assert!(store.open("kept").await.unwrap().is_some());
+        assert!(!store.preference().await.unwrap().enabled);
+        let snapshot = store.usage_limit_snapshot("kept").await.unwrap();
+        assert!(!snapshot.enabled);
+        assert!(snapshot.open.is_none());
     }
 }

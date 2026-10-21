@@ -11,7 +11,8 @@
 //! model change lose to that transition and win against a claim that has not
 //! made it. An applied model change is not complete until that plan commits.
 //! Cedar's allow and deny of the preference are each one audit before the
-//! command result.
+//! command result. That audit and the request's receipt commit together.
+//! A retry returns the receipt and does not apply the change again.
 
 /// How long a `submitting` lease lasts. The owner renews it while the submit runs.
 pub(crate) const FENCE_LEASE_MS: u64 = 30_000;
@@ -177,6 +178,16 @@ pub struct PreferenceReading {
     pub revision: u64,
 }
 
+/// The preference and the open continuation from one store read.
+///
+/// `open` is absent when `enabled` is false, including when a row is still
+/// stored. The view publishes both from this value, so they cannot disagree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UsageLimitSnapshot {
+    pub enabled: bool,
+    pub open: Option<ScheduledMessage>,
+}
+
 /// The preference write, or Cedar's refusal. A refusal leaves the store unchanged.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PreferenceUpdate {
@@ -198,6 +209,33 @@ pub struct RecordedPreference {
     pub revision: u64,
     /// This decision moved the preference from off to on and left it unsettled.
     pub installed_enable: bool,
+    /// This request had already committed. `update` is that result. Nothing
+    /// was written, and the caller does not scan again.
+    pub replayed: bool,
+}
+
+/// What one preference request committed. A retry with the same input returns
+/// it. A different input under the same request is a conflict.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreferenceCommandReceipt {
+    pub organization_id: String,
+    pub principal_id: String,
+    pub surface_id: String,
+    /// The enabled value the request asked for.
+    pub enabled: bool,
+    pub outcome: PreferenceCommandOutcome,
+}
+
+/// The result stored with a preference request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PreferenceCommandOutcome {
+    /// The decision committed this value.
+    Stored(bool),
+    /// Cedar refused. The preference was not changed.
+    Refused { policies: Vec<String> },
+    /// This request's enable was reverted, in the same transaction as that
+    /// rollback's audit. A retry is the same error and does not enable again.
+    Failed,
 }
 
 /// The private dataset of scheduled continuations.
@@ -296,12 +334,44 @@ pub trait ScheduledMessageStore: Send + Sync {
     /// The earliest still-live `submitting` lease, so the off path can wake
     /// and cancel it when it expires.
     fn next_live_fence(&self, now_ms: u64) -> ConversationFuture<'_, Option<u64>>;
-    /// Record Cedar's decision. Allow writes the preference, the audit, and
-    /// any cancellations in one transaction. Deny writes only the audit.
-    /// `Err` means the audit did not commit and the preference is unchanged.
+    /// The receipt for `request_id`, when this store has committed one.
+    /// The default is none, for a double that does not record commands.
+    fn preference_command(
+        &self,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<PreferenceCommandReceipt>> {
+        let _ = request_id;
+        Box::pin(async { Ok(None) })
+    }
+    /// The preference and the open row from one read. A durable store reads
+    /// both in one transaction. Off reports no open row.
+    fn usage_limit_snapshot(
+        &self,
+        conversation: &str,
+    ) -> ConversationFuture<'_, UsageLimitSnapshot> {
+        let conversation = conversation.to_owned();
+        Box::pin(async move {
+            let reading = self.preference().await?;
+            if !reading.enabled {
+                return Ok(UsageLimitSnapshot {
+                    enabled: false,
+                    open: None,
+                });
+            }
+            Ok(UsageLimitSnapshot {
+                enabled: true,
+                open: self.open(&conversation).await?,
+            })
+        })
+    }
+    /// Record Cedar's decision. Allow writes the preference, the audit, the
+    /// request receipt, and any cancellations in one transaction. Deny writes
+    /// the audit and the receipt. `Err` means that transaction did not commit.
     /// An unchanged allow is still audited. An allow that changes off to on
     /// installs one unsettled revision; any other allow leaves the revision
-    /// where it was, or settles a disable.
+    /// where it was, or settles a disable. A request that already has a
+    /// receipt returns it and writes nothing. A different input for that
+    /// request is a conflict.
     fn record_preference_decision(
         &self,
         allowed: bool,
@@ -356,6 +426,29 @@ pub trait ScheduledMessageStore: Send + Sync {
     fn reconcile_retries(&self) -> ConversationFuture<'_, Vec<ReconcileRetry>>;
 }
 
+/// The result a preference request already committed, or a conflict when this
+/// call is not that request.
+fn replay_preference_command(
+    saved: &PreferenceCommandReceipt,
+    enabled: bool,
+    caller: &ConversationCaller,
+) -> Result<PreferenceUpdate, ConversationError> {
+    if saved.organization_id != caller.organization_id.as_str()
+        || saved.principal_id != caller.principal_id.as_str()
+        || saved.surface_id != caller.surface_id
+        || saved.enabled != enabled
+    {
+        return Err(ConversationError::RequestConflict);
+    }
+    match &saved.outcome {
+        PreferenceCommandOutcome::Stored(value) => Ok(PreferenceUpdate::Stored(*value)),
+        PreferenceCommandOutcome::Refused { policies } => Ok(PreferenceUpdate::Refused {
+            policies: policies.clone(),
+        }),
+        PreferenceCommandOutcome::Failed => Err(ConversationError::Unavailable),
+    }
+}
+
 impl ConversationService {
     /// Bind the continuation store. A second bind is ignored.
     pub fn bind_scheduled_messages(&self, store: Arc<dyn ScheduledMessageStore>) {
@@ -388,19 +481,31 @@ impl ConversationService {
         &self,
         conversation: &ConversationId,
     ) -> Result<Option<ScheduledMessage>, ConversationError> {
-        let Some(store) = self.scheduled_messages() else {
-            return Ok(None);
-        };
-        if !store.preference().await?.enabled {
-            return Ok(None);
-        }
-        store.open(&conversation.to_string()).await
+        Ok(self.usage_limit_snapshot(conversation).await?.open)
     }
 
-    /// Turn the preference on or off. Cedar decides first. Off cancels open
-    /// rows as this person. On scans every catalogue owner and schedules each
-    /// currently blocked eligible turn. A failed scan reverts only the
-    /// unsettled revision this call installed. A finished scan settles the
+    /// The preference and the open continuation from one store read.
+    /// Unbound storage is off and has no row.
+    pub async fn usage_limit_snapshot(
+        &self,
+        conversation: &ConversationId,
+    ) -> Result<UsageLimitSnapshot, ConversationError> {
+        let Some(store) = self.scheduled_messages() else {
+            return Ok(UsageLimitSnapshot {
+                enabled: false,
+                open: None,
+            });
+        };
+        store.usage_limit_snapshot(&conversation.to_string()).await
+    }
+
+    /// Turn the preference on or off. The caller's action is checked before
+    /// Cedar or any write. A request that already committed returns that
+    /// result and does not apply again. Otherwise Cedar decides. Off cancels
+    /// open rows as this person. On scans every catalogue owner and schedules
+    /// each currently blocked eligible turn. A failed scan reverts only the
+    /// unsettled revision this call installed, and that revert marks this
+    /// request failed in the same transaction. A finished scan settles the
     /// revision it observed.
     pub async fn set_usage_limit_auto_continue(
         &self,
@@ -408,6 +513,7 @@ impl ConversationService {
         caller: ConversationCaller,
         facts: UsageLimitPreferenceFacts,
     ) -> Result<PreferenceUpdate, ConversationError> {
+        caller.actor()?;
         if caller.organization_id.as_str() != facts.organization_id
             || caller.principal_id.as_str() != facts.principal_id
         {
@@ -419,6 +525,9 @@ impl ConversationService {
         let Some(policy) = self.inner.preference_policy.get().cloned() else {
             return Err(ConversationError::Unavailable);
         };
+        if let Some(saved) = store.preference_command(&caller.action_id).await? {
+            return replay_preference_command(&saved, enabled, &caller);
+        }
         let decision = policy
             .evaluate(&facts)
             .map_err(|_| ConversationError::Unavailable)?;
@@ -437,8 +546,11 @@ impl ConversationService {
             )
             .await?;
         let PreferenceUpdate::Stored(stored) = recorded.update else {
-            return Ok(PreferenceUpdate::Refused { policies });
+            return Ok(recorded.update);
         };
+        if recorded.replayed {
+            return Ok(PreferenceUpdate::Stored(stored));
+        }
         if stored {
             let mut visited = Vec::new();
             if let Err(error) = self
@@ -1546,9 +1658,10 @@ mod catalogue_pages {
     use nessa_sdk::application::agent_execution::sessions::StorageError;
 
     use super::{
-        renew_while_held, PreferenceReading, PreferenceUpdate, RecordedPreference, ScheduleActor,
-        ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
-        FENCE_RENEW_EVERY_MS, FENCE_RENEW_RETRY_MS, SCHEDULE_RETRY_MS,
+        renew_while_held, PreferenceCommandOutcome, PreferenceCommandReceipt, PreferenceReading,
+        PreferenceUpdate, RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement,
+        ScheduledMessage, ScheduledMessageStore, FENCE_RENEW_EVERY_MS, FENCE_RENEW_RETRY_MS,
+        SCHEDULE_RETRY_MS,
     };
     use crate::conversation::application::{
         ConversationCaller, ConversationDependencies, ConversationFuture, ConversationLimits,
@@ -1571,13 +1684,17 @@ mod catalogue_pages {
     use nessa_protocol::conversation::view::ConversationModelChangeEffect;
     use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 
-    fn caller() -> ConversationCaller {
+    fn caller_as(action: &str) -> ConversationCaller {
         ConversationCaller {
             organization_id: OrganizationId::new("org").unwrap(),
             principal_id: PrincipalId::new("person").unwrap(),
             surface_id: "desktop".into(),
-            action_id: "toggle".into(),
+            action_id: action.into(),
         }
+    }
+
+    fn caller() -> ConversationCaller {
+        caller_as("toggle")
     }
 
     fn facts(role: &str) -> UsageLimitPreferenceFacts {
@@ -1688,6 +1805,10 @@ mod catalogue_pages {
         reconciles: Mutex<HashMap<String, (u32, u64)>>,
         /// The next reconcile-debt write fails. The service keeps the debt in memory.
         fail_reconcile_note: AtomicBool,
+        /// Receipts that committed, keyed by request id.
+        commands: Mutex<HashMap<String, PreferenceCommandReceipt>>,
+        /// The request that installed the current unsettled enable.
+        installed_request: Mutex<String>,
     }
 
     impl RecordingStore {
@@ -1713,6 +1834,8 @@ mod catalogue_pages {
                 defers: Mutex::new(Vec::new()),
                 reconciles: Mutex::new(HashMap::new()),
                 fail_reconcile_note: AtomicBool::new(false),
+                commands: Mutex::new(HashMap::new()),
+                installed_request: Mutex::new(String::new()),
             }
         }
 
@@ -1850,6 +1973,13 @@ mod catalogue_pages {
         fn next_live_fence(&self, _: u64) -> ConversationFuture<'_, Option<u64>> {
             Box::pin(async { Ok(None) })
         }
+        fn preference_command(
+            &self,
+            request_id: &str,
+        ) -> ConversationFuture<'_, Option<PreferenceCommandReceipt>> {
+            let saved = self.commands.lock().unwrap().get(request_id).cloned();
+            Box::pin(async move { Ok(saved) })
+        }
         fn record_preference_decision(
             &self,
             allowed: bool,
@@ -1861,34 +1991,99 @@ mod catalogue_pages {
             if self.fail_decision.swap(false, Ordering::SeqCst) {
                 return Box::pin(async { Err(ConversationError::Metadata) });
             }
+            let Some(request_id) = actor.action_id.clone().filter(|value| !value.is_empty()) else {
+                return Box::pin(async { Err(ConversationError::InvalidInput) });
+            };
+            let organization_id = actor.organization_id.clone().unwrap_or_default();
+            let principal_id = actor.principal_id.clone().unwrap_or_default();
+            let surface_id = actor.surface_id.clone().unwrap_or_default();
+            if organization_id.is_empty() || principal_id.is_empty() || surface_id.is_empty() {
+                return Box::pin(async { Err(ConversationError::InvalidInput) });
+            }
+            if let Some(saved) = self.commands.lock().unwrap().get(&request_id).cloned() {
+                if saved.organization_id != organization_id
+                    || saved.principal_id != principal_id
+                    || saved.surface_id != surface_id
+                    || saved.enabled != enabled
+                {
+                    return Box::pin(async { Err(ConversationError::RequestConflict) });
+                }
+                let revision = self.revision.load(Ordering::SeqCst);
+                let update = match saved.outcome {
+                    PreferenceCommandOutcome::Stored(value) => PreferenceUpdate::Stored(value),
+                    PreferenceCommandOutcome::Refused { policies } => {
+                        PreferenceUpdate::Refused { policies }
+                    }
+                    PreferenceCommandOutcome::Failed => {
+                        return Box::pin(async { Err(ConversationError::Unavailable) });
+                    }
+                };
+                return Box::pin(async move {
+                    Ok(RecordedPreference {
+                        update,
+                        revision,
+                        installed_enable: false,
+                        replayed: true,
+                    })
+                });
+            }
             self.decisions
                 .lock()
                 .unwrap()
                 .push((allowed, policies.to_vec()));
-            if !allowed {
-                let policies = policies.to_vec();
+            let (update, installed_enable) = if !allowed {
                 let revision = self.revision.load(Ordering::SeqCst);
+                let refused = policies.to_vec();
+                self.commands.lock().unwrap().insert(
+                    request_id,
+                    PreferenceCommandReceipt {
+                        organization_id,
+                        principal_id,
+                        surface_id,
+                        enabled,
+                        outcome: PreferenceCommandOutcome::Refused {
+                            policies: refused.clone(),
+                        },
+                    },
+                );
                 return Box::pin(async move {
                     Ok(RecordedPreference {
-                        update: PreferenceUpdate::Refused { policies },
+                        update: PreferenceUpdate::Refused { policies: refused },
                         revision,
                         installed_enable: false,
+                        replayed: false,
                     })
                 });
-            }
-            let was = self.enabled.swap(enabled, Ordering::SeqCst);
-            let installed_enable = !was && enabled;
-            if was != enabled {
-                self.revision.fetch_add(1, Ordering::SeqCst);
-                self.settled.store(!installed_enable, Ordering::SeqCst);
-                self.changes.lock().unwrap().push((enabled, actor.person));
-            }
+            } else {
+                let was = self.enabled.swap(enabled, Ordering::SeqCst);
+                let installed_enable = !was && enabled;
+                if was != enabled {
+                    self.revision.fetch_add(1, Ordering::SeqCst);
+                    self.settled.store(!installed_enable, Ordering::SeqCst);
+                    self.changes.lock().unwrap().push((enabled, actor.person));
+                }
+                if installed_enable {
+                    *self.installed_request.lock().unwrap() = request_id.clone();
+                }
+                self.commands.lock().unwrap().insert(
+                    request_id,
+                    PreferenceCommandReceipt {
+                        organization_id,
+                        principal_id,
+                        surface_id,
+                        enabled,
+                        outcome: PreferenceCommandOutcome::Stored(enabled),
+                    },
+                );
+                (PreferenceUpdate::Stored(enabled), installed_enable)
+            };
             let revision = self.revision.load(Ordering::SeqCst);
             Box::pin(async move {
                 Ok(RecordedPreference {
-                    update: PreferenceUpdate::Stored(enabled),
+                    update,
                     revision,
                     installed_enable,
+                    replayed: false,
                 })
             })
         }
@@ -1910,6 +2105,17 @@ mod catalogue_pages {
                 self.revision.fetch_add(1, Ordering::SeqCst);
                 self.settled.store(true, Ordering::SeqCst);
                 self.changes.lock().unwrap().push((false, actor.person));
+                let request = std::mem::take(&mut *self.installed_request.lock().unwrap());
+                let saved = self.commands.lock().unwrap().get(&request).cloned();
+                if let Some(saved) = saved {
+                    self.commands.lock().unwrap().insert(
+                        request,
+                        PreferenceCommandReceipt {
+                            outcome: PreferenceCommandOutcome::Failed,
+                            ..saved
+                        },
+                    );
+                }
             }
             Box::pin(async move { Ok(matches) })
         }
@@ -2416,6 +2622,146 @@ mod catalogue_pages {
             .unwrap();
         assert!(matches!(update, PreferenceUpdate::Refused { .. }));
         assert!(!followed.has_changed().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_retried_enable_after_a_later_disable_does_not_turn_the_preference_back_on() {
+        let listing = Arc::new(TwoOwners {
+            seen: Mutex::new(Vec::new()),
+            fail: false,
+        });
+        let service = service(listing.clone(), Arc::new(TestClock));
+        let store = Arc::new(RecordingStore::new(false));
+        bind(&service, store.clone());
+        let enabled = service
+            .set_usage_limit_auto_continue(true, caller_as("enable"), facts("admin"))
+            .await
+            .unwrap();
+        assert_eq!(enabled, PreferenceUpdate::Stored(true));
+        let seen = listing.seen.lock().unwrap().clone();
+        assert_eq!(seen.as_slice(), ["person-a", "person-b"]);
+        let disabled = service
+            .set_usage_limit_auto_continue(false, caller_as("disable"), facts("admin"))
+            .await
+            .unwrap();
+        assert_eq!(disabled, PreferenceUpdate::Stored(false));
+        assert!(!store.preference().await.unwrap().enabled);
+        let decisions = store.decisions.lock().unwrap().len();
+        let replay = service
+            .set_usage_limit_auto_continue(true, caller_as("enable"), facts("admin"))
+            .await
+            .unwrap();
+        assert_eq!(replay, PreferenceUpdate::Stored(true));
+        assert!(!store.preference().await.unwrap().enabled);
+        assert_eq!(store.decisions.lock().unwrap().len(), decisions);
+        assert_eq!(listing.seen.lock().unwrap().as_slice(), seen.as_slice());
+        assert_eq!(
+            store.changes.lock().unwrap().as_slice(),
+            &[(true, true), (false, true)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_preference_request_with_a_different_value_conflicts_and_writes_nothing() {
+        let service = service(
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            Arc::new(TestClock),
+        );
+        let store = Arc::new(RecordingStore::new(false));
+        bind(&service, store.clone());
+        service
+            .set_usage_limit_auto_continue(true, caller_as("one"), facts("admin"))
+            .await
+            .unwrap();
+        let conflict = service
+            .set_usage_limit_auto_continue(false, caller_as("one"), facts("admin"))
+            .await;
+        assert!(matches!(conflict, Err(ConversationError::RequestConflict)));
+        assert!(store.preference().await.unwrap().enabled);
+        assert_eq!(store.decisions.lock().unwrap().len(), 1);
+        let mut other = caller_as("one");
+        other.principal_id = PrincipalId::new("other").unwrap();
+        let mut other_facts = facts("admin");
+        other_facts.principal_id = "other".into();
+        let conflict = service
+            .set_usage_limit_auto_continue(true, other, other_facts)
+            .await;
+        assert!(matches!(conflict, Err(ConversationError::RequestConflict)));
+        assert!(store.preference().await.unwrap().enabled);
+        assert_eq!(store.decisions.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_blank_or_unreadable_preference_request_is_rejected_before_the_decision() {
+        let evaluations = Arc::new(AtomicUsize::new(0));
+        struct Counting {
+            evaluations: Arc<AtomicUsize>,
+        }
+        impl UsageLimitPreferencePolicyEvaluator for Counting {
+            fn evaluate(
+                &self,
+                _: &UsageLimitPreferenceFacts,
+            ) -> Result<UsageLimitPreferenceDecision, AccessError> {
+                self.evaluations.fetch_add(1, Ordering::SeqCst);
+                Ok(UsageLimitPreferenceDecision::Allow {
+                    policies: vec!["admin".into()],
+                })
+            }
+        }
+        let service = service(
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            Arc::new(TestClock),
+        );
+        let store = Arc::new(RecordingStore::new(false));
+        service.bind_scheduled_messages(store.clone());
+        service.bind_usage_limit_preference_policy(Arc::new(Counting {
+            evaluations: evaluations.clone(),
+        }));
+        let oversized = "x".repeat(257);
+        for action in ["", " ", "toggle\n", "toggle\u{0001}", oversized.as_str()] {
+            let error = service
+                .set_usage_limit_auto_continue(true, caller_as(action), facts("admin"))
+                .await;
+            assert!(
+                matches!(error, Err(ConversationError::InvalidInput)),
+                "{action:?} {error:?}"
+            );
+        }
+        assert_eq!(evaluations.load(Ordering::SeqCst), 0);
+        assert!(store.decisions.lock().unwrap().is_empty());
+        assert!(store.commands.lock().unwrap().is_empty());
+        assert!(!store.preference().await.unwrap().enabled);
+    }
+
+    #[tokio::test]
+    async fn a_reverted_enable_retries_as_the_same_failure() {
+        let listing = Arc::new(TwoOwners {
+            seen: Mutex::new(Vec::new()),
+            fail: true,
+        });
+        let service = service(listing.clone(), Arc::new(TestClock));
+        let store = Arc::new(RecordingStore::new(false));
+        bind(&service, store.clone());
+        let error = service
+            .set_usage_limit_auto_continue(true, caller_as("enable"), facts("admin"))
+            .await;
+        assert!(error.is_err());
+        assert!(!store.preference().await.unwrap().enabled);
+        let seen = listing.seen.lock().unwrap().len();
+        let decisions = store.decisions.lock().unwrap().len();
+        let retry = service
+            .set_usage_limit_auto_continue(true, caller_as("enable"), facts("admin"))
+            .await;
+        assert!(matches!(retry, Err(ConversationError::Unavailable)));
+        assert!(!store.preference().await.unwrap().enabled);
+        assert_eq!(listing.seen.lock().unwrap().len(), seen);
+        assert_eq!(store.decisions.lock().unwrap().len(), decisions);
     }
 
     #[tokio::test]
