@@ -1399,6 +1399,9 @@ async fn report_retains_failed_pending_cancellation_separately_from_cleanup() {
     let report = closing.await.unwrap().unwrap();
     assert!(report.cleanup().is_confirmed());
     assert!(report.scheduling().is_err());
+    let derived = report.clone().with_cleanup(report.cleanup().clone());
+    assert_eq!(derived.scheduling(), report.scheduling());
+    assert!(derived.into_result().is_err());
     assert!(report.into_result().is_err());
     assert_eq!(audit.attempts.lock().unwrap().len(), 2);
     assert!(first.wait().await.is_err());
