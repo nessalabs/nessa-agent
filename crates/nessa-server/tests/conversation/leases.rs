@@ -55,7 +55,7 @@ use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     executions::ExecutionUpdate,
     permissions::ActionContext,
-    providers::{AgentProvider, CleanupReport},
+    providers::{AgentProvider, CleanupReport, CloseOutcome},
     sessions::{
         CommittedSession, CurrentLease, LeaseRecord, SessionChange, SessionLoad,
         SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionSnapshot,
