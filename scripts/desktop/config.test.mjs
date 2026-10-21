@@ -488,3 +488,47 @@ test("a macOS build that would not keep the .app is refused before it starts", (
     assert.equal(status, 0, bundles)
   }
 })
+
+/**
+ * `just release` picks its macOS bundles only on a Mac, and no pull request job
+ * runs the recipe there, so the choice is held to the macOS build's own refusal
+ * here, where every platform runs it.
+ */
+test("the justfile's macOS bundle choices pass the macOS build's own check", () => {
+  const recipe = readFileSync("justfile", "utf8")
+  for (const name of ["release-bundles", "fast-bundles"]) {
+    const [, choice] =
+      new RegExp(`^${name} := if os\\(\\) == "macos" \\{ "([^"]*)" \\}`, "m").exec(
+        recipe,
+      ) ?? []
+    assert.ok(choice, `${name} names no macOS choice`)
+    const status = runDesktopBuild({
+      args: choice.split(" "),
+      environment: { APPLE_SIGNING_IDENTITY: "-" },
+      platform: "darwin",
+      spawn: () => ({ status: 0 }),
+    })
+    assert.equal(status, 0, `${name}: ${choice}`)
+  }
+  // The checked choices only matter if every build the recipes run takes
+  // them, and no recipe names its own bundles.
+  const builds = recipe
+    .split("\n")
+    .filter((line) => line.includes("scripts/desktop/build.mjs"))
+  assert.ok(builds.length > 0, "no recipe runs scripts/desktop/build.mjs")
+  for (const line of builds) {
+    assert.ok(
+      line.includes('{{if mode == "fast" { fast-bundles } else { release-bundles }}}'),
+      `build without the checked bundles: ${line.trim()}`,
+    )
+  }
+  const stray = recipe
+    .split("\n")
+    .filter(
+      (line) =>
+        line.includes("--bundles") &&
+        !line.trimStart().startsWith("#") &&
+        !/^(fast|release)-bundles := /.test(line),
+    )
+  assert.deepEqual(stray, [], "--bundles named outside the checked choices")
+})

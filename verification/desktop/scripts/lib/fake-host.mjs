@@ -4,6 +4,19 @@
  * native and `main.tsx` composes `hostGateway` over IPC.
  */
 
+import timing from "../../../../src/host/startup-timing.json" with { type: "json" }
+
+/**
+ * A host that can be held in startup: the session storage key that holds it
+ * (`gatewayHost`'s `starting`), and how long it holds the desktop window's
+ * read meanwhile — the real host's own number (`desktop_startup_wait` in
+ * `src-tauri`), from the file both read.
+ */
+export const STARTING = {
+  key: "nessa-fake-host-starting",
+  waitMs: timing.desktopStartupWaitMs,
+}
+
 /**
  * Installed before the page's own scripts, as Tauri installs its IPC. The
  * endpoint and credential commands answer as the scenario says, and are
@@ -17,8 +30,15 @@
  * is the person clicking one, sent to the window as the host's event. What
  * is up is kept in session storage, so a reloaded window must take back
  * what it no longer waits on, as it must from the real host.
+ *
+ * Given `starting` (`STARTING`), while its key is set in session storage the
+ * host is still starting the gateway: the endpoint is answered once the key
+ * is removed, as the real host holds the desktop window's read through a
+ * startup still running (`GatewayReader`), and refused as not ready if it is
+ * still set after `waitMs`. A scenario sets it before a reload and removes it
+ * once the gateway is "up": a launch.
  */
-export function gatewayHost({ endpoint, credential, notices = false }) {
+export function gatewayHost({ endpoint, credential, notices = false, starting = null }) {
   // The host's typed refusals (`SurfaceCommandError`). The page maps the
   // reason; a sentence here would be an untyped failure.
   const notReady = { reason: "not-ready" }
@@ -43,7 +63,9 @@ export function gatewayHost({ endpoint, credential, notices = false }) {
       if (command === "load_gateway_endpoint") {
         asked[command]++
         window.__fakeHostAskTimes.push(performance.now())
-        return endpoint === null ? Promise.reject(notReady) : Promise.resolve(endpoint)
+        if (endpoint === null) return Promise.reject(notReady)
+        if (!starting) return Promise.resolve(endpoint)
+        return startedBy(performance.now() + starting.waitMs).then(() => endpoint)
       }
       if (command === "load_surface_credential") {
         asked[command]++
@@ -54,6 +76,26 @@ export function gatewayHost({ endpoint, credential, notices = false }) {
       return new Promise(() => {})
     },
   }
+  function stillStarting() {
+    try {
+      return sessionStorage.getItem(starting.key) !== null
+    } catch {
+      return false
+    }
+  }
+
+  // Answers once startup is over, or refuses as not ready at `deadline`.
+  function startedBy(deadline) {
+    return new Promise((resolve, reject) => {
+      const check = () => {
+        if (!stillStarting()) resolve()
+        else if (performance.now() >= deadline) reject(notReady)
+        else setTimeout(check, 50)
+      }
+      check()
+    })
+  }
+
   // Up from the start, so a window that never sends a set is seen to.
   if (notices) noticeHost(null, null)
 
