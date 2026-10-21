@@ -440,3 +440,176 @@ fn malformed_oversized_or_duplicate_decline_receipts_are_never_replaced() {
         assert_eq!(fs::read(&path).unwrap(), invalid);
     }
 }
+
+fn prepared_cancellation(
+    actor: &str,
+) -> nessa_sdk::application::agent_execution::executions::ExecutionAuditRecord {
+    use nessa_sdk::application::agent_execution::{
+        executions::{ExecutionAuditRecord, QueueSettlementRecord},
+        permissions::ActionContext,
+    };
+    use nessa_sdk::domain::agent_execution::{
+        executions::{ExecutionId, InvocationKind, SchedulingCause},
+        sessions::SessionId,
+    };
+    ExecutionAuditRecord::QueueSettled(
+        QueueSettlementRecord::cancelled(
+            SessionId::new("cancellation-session").unwrap(),
+            ExecutionId::new("cancelled-input").unwrap(),
+            InvocationKind::Queued,
+            None,
+            SchedulingCause::SessionClosed,
+            ActionContext::new("person", "panel", "original-submit").unwrap(),
+            Some(ActionContext::new("person", "panel", actor).unwrap()),
+        )
+        .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn prepared_cancellation_rejection_and_lost_ack_rejoin_one_exact_durable_input_after_restart()
+{
+    use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
+    struct FaultOnce {
+        calls: AtomicUsize,
+        commit: bool,
+    }
+    impl ExecutionAuditFileWriter for FaultOnce {
+        fn write(&self, _: &Path, _: &[u8]) -> Result<(), AgentError> {
+            unreachable!("prepared cancellation uses stable publication")
+        }
+        fn write_once(&self, path: &Path, bytes: &[u8]) -> Result<(), AgentError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                if self.commit {
+                    PrivateExecutionAuditFileWriter.write_once(path, bytes)?;
+                }
+                return Err(AgentError::AuditFailure);
+            }
+            PrivateExecutionAuditFileWriter.write_once(path, bytes)
+        }
+    }
+    for commit in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let sink = DurableExecutionAudit::with_writer(
+            root.path().into(),
+            Arc::new(TestClock),
+            Arc::new(FaultOnce {
+                calls: AtomicUsize::new(0),
+                commit,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            sink.record(prepared_cancellation("first-close")).await,
+            Err(AgentError::AuditFailure)
+        );
+        let first = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(first.len(), usize::from(commit));
+        drop(sink);
+        let restored =
+            DurableExecutionAudit::new(root.path().into(), Arc::new(CountingClock::default()))
+                .unwrap();
+        restored
+            .record(prepared_cancellation("first-close"))
+            .await
+            .unwrap();
+        let records = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 1);
+        if commit {
+            assert_eq!(
+                records, first,
+                "retry preserves the original winner's metadata"
+            );
+        }
+        assert_eq!(
+            restored
+                .record(prepared_cancellation("different-close"))
+                .await,
+            Err(AgentError::AuditFailure)
+        );
+        let after = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            after, records,
+            "conflicting initiator cannot overwrite the original decision"
+        );
+    }
+}
+
+#[tokio::test]
+async fn prepared_cancellation_late_physical_ack_keeps_one_winner_and_releases_its_worker() {
+    use crate::conversation::infrastructure::audit::PrivateExecutionAuditFileWriter;
+    struct LateAck {
+        gate: Arc<Gate>,
+        entered: Mutex<Option<Sender<()>>>,
+    }
+    impl ExecutionAuditFileWriter for LateAck {
+        fn write(&self, _: &Path, _: &[u8]) -> Result<(), AgentError> {
+            unreachable!()
+        }
+        fn write_once(&self, path: &Path, bytes: &[u8]) -> Result<(), AgentError> {
+            PrivateExecutionAuditFileWriter.write_once(path, bytes)?;
+            if let Some(entered) = self.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+                self.gate.wait();
+            }
+            Ok(())
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let gate = Arc::new(Gate::default());
+    let release = ReleaseOnDrop(gate.clone());
+    let (entered, waiting) = oneshot::channel();
+    let sink = Arc::new(
+        DurableExecutionAudit::with_writer(
+            root.path().into(),
+            Arc::new(TestClock),
+            Arc::new(LateAck {
+                gate,
+                entered: Mutex::new(Some(entered)),
+            }),
+        )
+        .unwrap(),
+    );
+    let observer = tokio::spawn({
+        let sink = sink.clone();
+        async move { sink.record(prepared_cancellation("first-close")).await }
+    });
+    tokio::time::timeout(WATCHDOG, waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    observer.abort();
+    assert!(observer.await.unwrap_err().is_cancelled());
+    let original = fs::read_dir(root.path())
+        .unwrap()
+        .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+        .collect::<Vec<_>>();
+    let restored = DurableExecutionAudit::new(root.path().into(), Arc::new(TestClock)).unwrap();
+    tokio::time::timeout(
+        WATCHDOG,
+        restored.record(prepared_cancellation("first-close")),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    drop(release);
+    tokio::time::timeout(WATCHDOG, sink.record(prepared_cancellation("first-close")))
+        .await
+        .unwrap()
+        .unwrap();
+    let after = fs::read_dir(root.path())
+        .unwrap()
+        .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(after, original);
+    assert_eq!(after.len(), 1);
+}

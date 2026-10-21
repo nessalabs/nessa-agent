@@ -1789,7 +1789,7 @@ restored an independent SDK audit failure as Closed. Prior caps and source-speci
 failures remain recorded. Physical End and a successful decline are insufficient
 acknowledgements of the SDK's separate cleanup/cancellation obligations.
 
-The actual SDK close owner now publishes `SdkCloseAcknowledged` through its
+The actual SDK close owner now publishes `SdkCleanupAcknowledged` through its
 existing session/lease writer, scoped to the exact current lease, target lifetime
 and first `CloseOperationId`. The current gate supplies that immutable scope;
 actors and process-local generation counters are not identities. A newly prepared
@@ -1816,3 +1816,24 @@ terminal-save pause holding the writer needed by an earlier independent proof.
 `AgentCloseReport` retains decline evidence separately from scheduling and cleanup;
 its public result preserves the combined failures. The native process-loss matrix
 adds the independent SDK-audit-plus-decline case and real lost-End-ACK control.
+
+## Explicit cycle8: acknowledged cancellation delivery
+
+Parent explicitly approved the cancellation acknowledged/idempotent receipt contract correction after the cdcc0c38 regression. This is owner direction, not a review-cap reset; all cycle1-7 findings and source-specific evidence remain. No push, merge, upload or denied browser retry.
+
+Existing SDK session/history writer owns prepared cancellation delivery and its ACK; existing execution audit owns idempotent publication. No independent cleanup owner or blanket replay. The original successor audit-failure final close success assertion remains unchanged. Only cancellation receipts explicitly prepared in current history may be retried; legacy arbitrary audit events are not replayed. Audit identities use local session plus accepted execution identity, and exact semantic payload equality; new attempts acknowledge the existing winner and preserve its first metadata.
+
+| Event/order | Authority and result | Required control |
+| --- | --- | --- |
+| First queued cancellation | Save exact original event before audit; necessary cancellation/receipt cleanup still proceeds on failed preparation | preparation reject, no early audit |
+| Preparation saved; sink rejects | Receipt remains unacknowledged after Pending removal; independent physical cleanup continues | rejected cancellation then close |
+| Sink commits; ACK lost | Same prepared input retries idempotently; ACK only after winner sync | late ACK and exact payload |
+| Audit ACK, ACK-history save rejects | Same manager retains ACK; flush retry does not redeliver | writer failure and retry |
+| Process loss after preparation or publication | Restore same session/execution decision and original initiator; only existing owner publishes/ACKs | cold restart |
+| New close after earlier failure | Explicit receipt join attempts original input; success discharges that obligation; failure remains visible | unchanged successor test; repeated rejection |
+| Unprepared historical event or conflicting payload | No replay or overwrite; fail typed validation | conflict/unknown control |
+| SDK resource cleanup ACK, cancellation audit missing | Persist resource owner's real proof; whole close still requires independent cancellation ACK and decline ACK | combined failure/restart |
+| Cancellation ACK succeeds, SDK cleanup proof missing | Whole close remains Closing | original SDK audit-failure assertion |
+| Physical unknown, all evidence ACKs | Whole close remains Closing | native lost-End-ACK matrix |
+
+Retain real provider cleanup proof independently of cancellation proof so a cold receipt join cannot fabricate SDK resource release or permanently lose a genuine resource ACK. Whole-close consumers require both. Preparation/application/ACK validation and exact roundtrip/atomic rollback belong to session records; orchestration consumes those facts and the audit port, never recreates a policy.

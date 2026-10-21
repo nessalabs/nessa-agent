@@ -805,7 +805,7 @@ impl ChildResources for Resources {
     }
 }
 impl Resources {
-    async fn sdk_close_acknowledged(
+    async fn sdk_cleanup_acknowledged(
         &self,
         service: &ConversationService,
     ) -> Result<bool, ConversationError> {
@@ -829,10 +829,17 @@ impl Resources {
             matches!(
                 session.state(),
                 CommittedViewState::Complete | CommittedViewState::CompleteEmpty
-            ) && session
+            ) && session.snapshot().is_some_and(|snapshot| {
+                snapshot.invocations.iter().all(|record| {
+                    record
+                        .cancellation_delivery
+                        .as_ref()
+                        .is_none_or(|receipt| receipt.acknowledged())
+                })
+            }) && session
                 .snapshot()
                 .and_then(|snapshot| snapshot.lease.as_ref())
-                .is_some_and(|lease| lease.sdk_close_acknowledged(&scope))
+                .is_some_and(|lease| lease.sdk_cleanup_acknowledged(&scope))
         }))
     }
 
@@ -882,7 +889,7 @@ impl Resources {
                     }) || !owed_turn_ids(&snapshot.invocations).is_empty()
                 });
             if !has_decline {
-                let acknowledged = self.sdk_close_acknowledged(service).await?;
+                let acknowledged = self.sdk_cleanup_acknowledged(service).await?;
                 if acknowledged {
                     service.clear_mark(&self.id).await?;
                 }
@@ -935,7 +942,7 @@ impl Resources {
         // This writer has acknowledged its own history. The existing Resources
         // adapter, not a redundant storage lease, retains the other obligations.
         *history = None;
-        if !self.sdk_close_acknowledged(service).await? {
+        if !self.sdk_cleanup_acknowledged(service).await? {
             return Ok(false);
         }
         service.clear_mark(&self.id).await?;

@@ -2544,33 +2544,36 @@ impl Agent {
     }
 
     async fn deliver_cancellation_receipt(&self, index: usize) -> Result<(), AgentError> {
-        let snapshot = self.inner.manager.snapshot().await.ok_or_else(|| {
-            AgentError::Storage(StorageError::Corrupt(
-                "cancellation session is absent".into(),
-            ))
-        })?;
-        let record = snapshot.invocations.get(index).ok_or_else(|| {
-            AgentError::Storage(StorageError::Corrupt("cancellation input is absent".into()))
-        })?;
-        let decision = record.cancellation_delivery.as_ref().ok_or_else(|| {
-            AgentError::Storage(StorageError::Corrupt(
-                "cancellation preparation is absent".into(),
-            ))
-        })?;
-        if decision.acknowledged() {
+        let audit = self
+            .inner
+            .manager
+            .with_invocation(index, |record| {
+                let decision = record.cancellation_delivery.as_ref().ok_or_else(|| {
+                    AgentError::Storage(StorageError::Corrupt(
+                        "cancellation preparation is absent".into(),
+                    ))
+                })?;
+                if decision.acknowledged() {
+                    return Ok(None);
+                }
+                let event = decision.event();
+                QueueSettlementRecord::cancelled(
+                    self.inner.manager.id().clone(),
+                    record.request.execution_id.clone(),
+                    event.kind,
+                    event.target.clone(),
+                    event.cause,
+                    record.actor.clone(),
+                    event.actor.clone(),
+                )
+                .map(Some)
+                .map_err(|error| AgentError::InvalidInput(error.to_string()))
+            })
+            .await
+            .map_err(AgentError::Storage)??;
+        let Some(audit) = audit else {
             return Ok(());
-        }
-        let event = decision.event();
-        let audit = QueueSettlementRecord::cancelled(
-            self.inner.manager.id().clone(),
-            record.request.execution_id.clone(),
-            event.kind,
-            event.target.clone(),
-            event.cause,
-            record.actor.clone(),
-            event.actor.clone(),
-        )
-        .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
+        };
         self.record_scheduling_audit(
             ExecutionAuditRecord::QueueSettled(audit),
             "prepared_cancelled_queue_settlement",
@@ -2595,14 +2598,31 @@ impl Agent {
             .flush_cancellation_receipts()
             .await
             .map_err(AgentError::Storage)?;
-        let Some(snapshot) = self.inner.manager.snapshot().await else {
-            return Ok(());
-        };
+        let receipts = self
+            .inner
+            .manager
+            .read_invocations(|records| {
+                records
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, record)| {
+                        record.cancellation_delivery.as_ref().map(|decision| {
+                            (
+                                index,
+                                record.request.execution_id.clone(),
+                                decision.clone(),
+                                record
+                                    .scheduling
+                                    .iter()
+                                    .any(|edge| edge == decision.event()),
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await;
         let mut failure = None;
-        for (index, record) in snapshot.invocations.iter().enumerate() {
-            let Some(decision) = &record.cancellation_delivery else {
-                continue;
-            };
+        for (index, id, decision, applied) in receipts {
             let attempt = async {
                 if !decision.acknowledged() {
                     self.inner
@@ -2614,18 +2634,14 @@ impl Agent {
                 }
                 // Process loss can leave an acknowledged preparation before its
                 // local edge. Apply that same decision, without selecting again.
-                if !record
-                    .scheduling
-                    .iter()
-                    .any(|edge| edge == decision.event())
-                {
+                if !applied {
                     self.inner
                         .manager
                         .record_scheduling_with_queue(
                             index,
                             decision.event().clone(),
                             Some(QueueMutation::Removed {
-                                id: record.request.execution_id.clone(),
+                                id,
                                 cause: match decision.event().cause {
                                     SchedulingCause::SessionClosed => {
                                         QueueRemovalCause::SessionClosed
@@ -2684,21 +2700,10 @@ impl Agent {
                 agent.inner.lifecycle.wait_for_work().await;
                 let cleanup = agent.inner.lifecycle.complete_stop(&attempt).await;
                 drop(_invocation);
-                // A later empty pending map cannot acknowledge a failed cancelled-input audit.
-                let cancellation_acknowledged =
-                    agent.inner.manager.snapshot().await.is_none_or(|snapshot| {
-                        snapshot.invocations.iter().all(|record| {
-                            record
-                                .cancellation_delivery
-                                .as_ref()
-                                .is_none_or(|decision| decision.acknowledged())
-                        })
-                    });
                 let mut scheduling = saved;
                 if cleanup.is_confirmed()
                     && cleanup.audit().is_ok()
                     && cleanup.completion_failure().is_none()
-                    && cancellation_acknowledged
                     && agent.inner.lifecycle.acquired_provider_resources()
                 {
                     if let Some(scope) = agent
@@ -2712,7 +2717,7 @@ impl Agent {
                         let proof = agent
                             .inner
                             .manager
-                            .acknowledge_sdk_close(&scope)
+                            .acknowledge_sdk_cleanup(&scope)
                             .await
                             .map_err(AgentError::Storage);
                         scheduling = super::closing::join_acknowledgements(scheduling, proof);

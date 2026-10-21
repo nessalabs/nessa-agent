@@ -650,6 +650,19 @@ impl continuation::Continuation {
                 {
                     return Err(corrupt("scheduling contradicts the prepared decline"));
                 }
+                if record
+                    .cancellation_delivery
+                    .as_ref()
+                    .is_some_and(|decision| {
+                        !record
+                            .scheduling
+                            .iter()
+                            .any(|edge| edge == decision.event())
+                            && decision.event() != event
+                    })
+                {
+                    return Err(corrupt("scheduling contradicts the prepared cancellation"));
+                }
                 if record.scheduling.is_empty() {
                     super::validation::validate_admission_actor(record, event)?;
                 }

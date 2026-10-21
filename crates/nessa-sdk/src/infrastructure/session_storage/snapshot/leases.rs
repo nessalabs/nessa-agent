@@ -127,7 +127,7 @@ struct Issuance {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SdkCloseAcknowledged {
+struct SdkCleanupAcknowledged {
     lease: String,
     lifetime: String,
     operation: String,
@@ -783,13 +783,13 @@ impl From<&LeaseRecord> for WireLease {
                     actor: actor.as_ref().map(Actor::from),
                 },
             ),
-            LeaseRecord::SdkCloseAcknowledged {
+            LeaseRecord::SdkCleanupAcknowledged {
                 lease,
                 lifetime,
                 operation,
             } => text(
-                "sdk_close_acknowledged",
-                &SdkCloseAcknowledged {
+                "sdk_cleanup_acknowledged",
+                &SdkCleanupAcknowledged {
                     lease: lease.as_str().into(),
                     lifetime: lifetime.as_str().into(),
                     operation: operation.as_str().into(),
@@ -951,9 +951,9 @@ impl WireLease {
                     _ => return Err(corrupt("a lease issuance and its refusal disagree")),
                 }
             }
-            "sdk_close_acknowledged" => {
-                let saved: SdkCloseAcknowledged = body(&self.body)?;
-                LeaseRecord::SdkCloseAcknowledged {
+            "sdk_cleanup_acknowledged" => {
+                let saved: SdkCleanupAcknowledged = body(&self.body)?;
+                LeaseRecord::SdkCleanupAcknowledged {
                     lease: lease(saved.lease)?,
                     lifetime: AgentLifetimeId::new(saved.lifetime).map_err(corrupt)?,
                     operation: CloseOperationId::new(saved.operation).map_err(corrupt)?,

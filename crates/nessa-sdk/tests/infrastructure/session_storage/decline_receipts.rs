@@ -142,14 +142,16 @@ fn sdk_close_acknowledgement_requires_exact_lease_operation_target_and_atomic_hi
         operation.clone(),
         SessionId::new("conversation").unwrap(),
     );
-    let proof = LeaseRecord::SdkCloseAcknowledged {
+    let proof = LeaseRecord::SdkCleanupAcknowledged {
         lease: id("lease-1"),
         lifetime,
         operation,
     };
     assert!(
-        fold(&[issued("lease-1", 1), proof.clone()]).is_err(),
-        "a live lease has no close acknowledgement"
+        fold(&[issued("lease-1", 1), proof.clone()])
+            .unwrap()
+            .sdk_cleanup_acknowledged(&scope),
+        "SDK cleanup proof is independent of a later remote End"
     );
     let before = fold(&[
         issued("lease-1", 1),
@@ -160,7 +162,7 @@ fn sdk_close_acknowledgement_requires_exact_lease_operation_target_and_atomic_hi
     snapshot.lease = Some(before);
     let mut continuation = Continuation::restore(Some(snapshot.clone())).unwrap();
     let bytes = continuation.snapshot_bytes;
-    let bad = LeaseRecord::SdkCloseAcknowledged {
+    let bad = LeaseRecord::SdkCleanupAcknowledged {
         lease: id("another-lease"),
         lifetime: scope.lifetime().clone(),
         operation: scope.operation().clone(),
@@ -180,7 +182,7 @@ fn sdk_close_acknowledgement_requires_exact_lease_operation_target_and_atomic_hi
     continuation.apply_unit(&decoded).unwrap();
     let acknowledged = continuation.snapshot.as_ref().unwrap();
     let current = acknowledged.lease.as_ref().unwrap();
-    assert!(current.sdk_close_acknowledged(&scope));
+    assert!(current.sdk_cleanup_acknowledged(&scope));
     for wrong in [
         OwnedCloseScope::new(
             scope.lifetime().clone(),
@@ -193,7 +195,7 @@ fn sdk_close_acknowledgement_requires_exact_lease_operation_target_and_atomic_hi
             scope.session().clone(),
         ),
     ] {
-        assert!(!current.sdk_close_acknowledged(&wrong));
+        assert!(!current.sdk_cleanup_acknowledged(&wrong));
     }
     let encoded = serde_json::to_vec(&SnapshotRef(acknowledged)).unwrap();
     let decoded: Snapshot = serde_json::from_slice(&encoded).unwrap();

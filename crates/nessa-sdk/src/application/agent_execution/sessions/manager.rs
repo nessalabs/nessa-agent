@@ -1694,7 +1694,7 @@ impl SessionManager {
     /// Other pending facts keep their existing close/lease persistence owner.
     /// Actual SDK close producer only: record its non-decline ACK under the
     /// durable graph operation and exact lease, then join the real writer ACK.
-    pub(crate) async fn acknowledge_sdk_close(
+    pub(crate) async fn acknowledge_sdk_cleanup(
         &self,
         scope: &OwnedCloseScope,
     ) -> Result<(), StorageError> {
@@ -1715,8 +1715,8 @@ impl SessionManager {
                 "SDK close has no readable issued lease".into(),
             ));
         };
-        if !current.sdk_close_acknowledged(scope) {
-            let record = LeaseRecord::SdkCloseAcknowledged {
+        if !current.sdk_cleanup_acknowledged(scope) {
+            let record = LeaseRecord::SdkCleanupAcknowledged {
                 lease: held.id().clone(),
                 lifetime: scope.lifetime().clone(),
                 operation: scope.operation().clone(),

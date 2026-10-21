@@ -66,9 +66,9 @@ pub enum LeaseRecord {
         /// Who asked, when somebody did.
         actor: Option<ActionContext>,
     },
-    /// The actual SDK close owner acknowledged its non-decline evidence for
+    /// The actual SDK resource owner acknowledged its cleanup evidence for
     /// this exact ownership operation. Physical End and decline audit stay separate.
-    SdkCloseAcknowledged {
+    SdkCleanupAcknowledged {
         /// The exact current lease whose SDK resources were owned.
         lease: LeaseId,
         /// Target lifetime publishing this acknowledgement.
@@ -250,9 +250,9 @@ impl CurrentLease {
         }
     }
     /// Whether the actual SDK owner acknowledged this exact lease/close scope.
-    pub fn sdk_close_acknowledged(&self, scope: &OwnedCloseScope) -> bool {
+    pub fn sdk_cleanup_acknowledged(&self, scope: &OwnedCloseScope) -> bool {
         self.held().is_some_and(|held| self.records.iter().any(|record| matches!(record,
-            LeaseRecord::SdkCloseAcknowledged { lease, lifetime, operation }
+            LeaseRecord::SdkCleanupAcknowledged { lease, lifetime, operation }
                 if lease == held.id() && lifetime == scope.lifetime() && operation == scope.operation())))
     }
     /// The newest revision known to have been issued or refused.
@@ -343,7 +343,7 @@ impl CurrentLease {
     /// else is corrupt.
     fn keep(&mut self, record: &LeaseRecord) -> Result<(), StorageError> {
         match record {
-            LeaseRecord::SdkCloseAcknowledged { .. } if self.records.contains(record) => {
+            LeaseRecord::SdkCleanupAcknowledged { .. } if self.records.contains(record) => {
                 Err(corrupt("SDK close acknowledgement is repeated"))
             }
             LeaseRecord::CommandRefused { .. } => Ok(()),
@@ -475,7 +475,7 @@ impl CurrentLease {
     fn transition(lease: &mut Lease, record: &LeaseRecord) -> Result<(), StorageError> {
         let named = match record {
             LeaseRecord::Ending { lease, .. }
-            | LeaseRecord::SdkCloseAcknowledged { lease, .. }
+            | LeaseRecord::SdkCleanupAcknowledged { lease, .. }
             | LeaseRecord::Ended { lease, .. }
             | LeaseRecord::Interrupted { lease }
             | LeaseRecord::CleanupReported { lease, .. }
@@ -495,10 +495,7 @@ impl CurrentLease {
             return Err(corrupt("a lease record names another lease"));
         }
         match record {
-            LeaseRecord::SdkCloseAcknowledged { .. } if lease.phase() == LeasePhase::Live => {
-                Err(corrupt("SDK close acknowledgement precedes lease ending"))
-            }
-            LeaseRecord::SdkCloseAcknowledged { .. } => Ok(()),
+            LeaseRecord::SdkCleanupAcknowledged { .. } => Ok(()),
             LeaseRecord::Ending { cause, .. } => match lease.end(*cause) {
                 EndDecision::Began => Ok(()),
                 EndDecision::Joined { .. } => Err(corrupt("a lease records a second end")),
