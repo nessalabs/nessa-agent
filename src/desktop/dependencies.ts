@@ -145,6 +145,11 @@ export function createDesktopDependencies(
     now?: () => number
     newId?: () => string
     measure?: WorkspaceDependencies["measure"]
+    /**
+     * The room last laid out, without reading the page. A test that passes
+     * its own `measure` gets none, unless it passes this too.
+     */
+    paintedRoom?: WorkspaceDependencies["paintedRoom"]
     overviewFilter?: WorkspaceDependencies["overviewFilter"]
     /**
      * Where a session is shared with linked devices, beside a given
