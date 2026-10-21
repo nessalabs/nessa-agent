@@ -186,6 +186,7 @@ export class Follower {
           await subscription.close().catch(() => {})
           return null
         }
+        held.lost = false
         held.subscription = subscription
         return subscription
       },

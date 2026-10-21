@@ -360,3 +360,49 @@ test("settlement reopens the list as well as the view and events, then agrees wi
   })
   assert.deepEqual(failures, [])
 })
+
+for (const kind of ["view", "list", "events"]) {
+  test(`${kind}: transient refusal then success retires lost state without duplicate admission`, async () => {
+    const f = streams(kind)
+    await f.open()
+    f.deliver(0)
+    f.calls[0].handlers.ended({ reason: "source_closed" })
+    let attempts = 0
+    let accepted = false
+    const subscribe = f.subject.client.subscriptions[kind]
+    f.subject.client.subscriptions[kind] = async (...args) => {
+      attempts += 1
+      if (attempts === 1)
+        throw Object.assign(new Error("temporarily_unavailable"), {
+          code: "temporarily_unavailable",
+        })
+      if (accepted)
+        throw Object.assign(new Error("subscription_duplicate"), {
+          code: "subscription_duplicate",
+        })
+      const handle = await subscribe(...args)
+      accepted = true
+      return handle
+    }
+    await f.open()
+    assert.equal(f.held().subscription, f.calls[1].handle)
+    assert.equal(f.held().lost, false)
+    if (kind === "view")
+      assert.deepEqual(f.calls[1].options, {
+        after: { incarnation: "history", position: "1" },
+      })
+    if (kind === "events") assert.deepEqual(f.calls[1].options, { after: "event-cursor" })
+    f.subject.list.conversations = []
+    f.subject.random = () => 0.95
+    const stop = setTimeout(() => {
+      f.subject.stopping = true
+    }, 20)
+    try {
+      await f.subject.run()
+    } finally {
+      clearTimeout(stop)
+    }
+    assert.equal(attempts, 2, "a live replacement is not subscribed again")
+    assert.deepEqual(f.subject.failures, [])
+  })
+}

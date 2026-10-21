@@ -876,18 +876,16 @@ impl SessionLifecycle {
     where
         E: From<AgentError>,
     {
-        self.run_attachment_transition(generation, async {
-            #[cfg(test)]
-            {
-                let pause = self.preparation_pause.lock().unwrap().take();
-                if let Some((entered, release)) = pause {
-                    let _ = entered.send(());
-                    let _ = release.await;
-                }
+        #[cfg(test)]
+        let operation = async {
+            let pause = self.preparation_pause.lock().unwrap().take();
+            if let Some((entered, release)) = pause {
+                let _ = entered.send(());
+                let _ = release.await;
             }
             operation.await
-        })
-        .await
+        };
+        self.run_attachment_transition(generation, operation).await
     }
     // The same resource fence orders durable proof publication against a
     // replacement's acknowledged retirement before its first external effect.

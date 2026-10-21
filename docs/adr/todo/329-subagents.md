@@ -1927,3 +1927,22 @@ still at the actual provider I/O boundary. `close_during_restore_cleans_the_rear
 keeps its original close-count, cause, uncertainty and two-second assertions.
 Close between acknowledged proof retirement and provider preparation may refuse
 startup; close after preparation's admitted boundary joins its actual rearmed owner.
+
+### Cycle9 CI follower retry ordering
+
+The unchanged follower reproduced subscription_duplicate for views, lists and
+committed events after a transient first admission failure, then a successful
+retry: catch marked the handle lost, but success did not retire that flag. The
+next loop asked for the same still-live target again. This is a confirmed harness
+bookkeeping defect matching CI's signature, not proof it is the sole stress cause.
+
+| Ordering | Required result |
+| --- | --- |
+| Transient refusal then current successful open | Publish the actual handle and clear lost together; no duplicate next-loop admission |
+| End before subscribe answer | Preserve end classification and close returned stale handle; no success flag overwrites its end |
+| Stale end after replacement | Original attempt token cannot retire the replacement or its applied cursor |
+
+The existing Follower.open owns this classification for all three stream kinds;
+no refusal exemption, retry budget or server capacity change is introduced. The
+CI audit fixtures separately construct private parents through the existing
+local-storage owner; production directory checks and canonical umask022 stay.
