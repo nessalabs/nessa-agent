@@ -514,8 +514,8 @@ impl OwnershipCoordinator {
     /// A successful transfer is retained for close even if later audit/storage fails.
     /// Binding and never-bound absence claims serialize under the admission scope.
     /// An existing owner is not replaced; Closing recovery may accept a vacant
-    /// owner slot while the graph still requires that owner's cleanup or evidence.
-    /// Confirmed absence and fully acknowledged resource release exclude transfer.
+    /// owner slot only before physical release or an absence claim.
+    /// Restored evidence debt uses [`Self::restore_closing_resources`] instead.
     ///
     /// # Errors
     /// Returns [`BindResourcesFailure`] with the exact rejected owner for an
@@ -526,13 +526,43 @@ impl OwnershipCoordinator {
         lifetime: AgentLifetimeId,
         resources: Arc<dyn ChildResources>,
     ) -> Result<(), BindResourcesFailure> {
+        self.transfer_resources(lifetime, resources, false)
+    }
+
+    /// Restore the resource owner a Closing graph still requires for cleanup or
+    /// its own unacknowledged evidence. This uses the existing resource slot;
+    /// it does not admit attachment, replace a live owner, or reserve capacity.
+    /// The graph's exact cleanup targets, including released resources with
+    /// evidence debt, own eligibility. Ordinary [`Self::bind_resources`] still
+    /// refuses every acknowledged physical release.
+    ///
+    /// # Errors
+    /// Returns the exact rejected owner for ordinary transfer refusals or when
+    /// the graph no longer requires that lifetime's resource owner.
+    pub fn restore_closing_resources(
+        &self,
+        lifetime: AgentLifetimeId,
+        resources: Arc<dyn ChildResources>,
+    ) -> Result<(), BindResourcesFailure> {
+        self.transfer_resources(lifetime, resources, true)
+    }
+
+    fn transfer_resources(
+        &self,
+        lifetime: AgentLifetimeId,
+        resources: Arc<dyn ChildResources>,
+        restoring: bool,
+    ) -> Result<(), BindResourcesFailure> {
         let result = self.inner.with_graph(|graph| {
             let mut owned = self.inner.resources.lock().expect("child resources");
-            let refusal = self.inner.transfer_refusal(graph, &lifetime).or_else(|| {
-                owned
-                    .contains_key(&lifetime)
-                    .then_some(BindResourcesRefusal::AlreadyBound)
-            });
+            let refusal = self
+                .inner
+                .transfer_refusal(graph, &lifetime, restoring)
+                .or_else(|| {
+                    owned
+                        .contains_key(&lifetime)
+                        .then_some(BindResourcesRefusal::AlreadyBound)
+                });
             if let Some(reason) = refusal {
                 return Err(BindResourcesFailure { reason, resources });
             }
@@ -581,7 +611,11 @@ impl OwnershipCoordinator {
                     .load(Ordering::Acquire)
                     .then_some(gate as Arc<dyn OwnedLifetime>);
             }
-            if self.inner.transfer_refusal(graph, lifetime).is_some() {
+            if self
+                .inner
+                .transfer_refusal(graph, lifetime, false)
+                .is_some()
+            {
                 return None;
             }
             let gate = self
@@ -821,6 +855,7 @@ impl Shared {
         &self,
         graph: &OwnershipGraph,
         lifetime: &AgentLifetimeId,
+        restoring: bool,
     ) -> Option<BindResourcesRefusal> {
         match graph.lifetime_state(lifetime) {
             None => Some(BindResourcesRefusal::UnknownLifetime),
@@ -855,6 +890,13 @@ impl Shared {
             {
                 Some(BindResourcesRefusal::FactoryInFlight)
             }
+            _ if restoring
+                && !graph
+                    .close_owner(lifetime)
+                    .is_some_and(|root| graph.cleanup_targets(&root).contains(lifetime)) =>
+            {
+                Some(BindResourcesRefusal::Released)
+            }
             _ if graph.has_absence(lifetime)
                 || self
                     .absence_claimed
@@ -863,9 +905,7 @@ impl Shared {
                     .contains(lifetime)
                 || (graph.snapshot().settlements.iter().any(|row| {
                     row.target == *lifetime && row.physical == PhysicalFact::Released
-                }) && !graph
-                    .close_owner(lifetime)
-                    .is_some_and(|root| graph.cleanup_targets(&root).contains(lifetime))) =>
+                }) && !restoring) =>
             {
                 Some(BindResourcesRefusal::Released)
             }

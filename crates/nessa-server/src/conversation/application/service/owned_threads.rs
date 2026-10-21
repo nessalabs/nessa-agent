@@ -296,15 +296,21 @@ impl ConversationService {
                 }
                 Err(error) => return Err(error),
             }
-            let _ = ownership.coordinator.bind_resources(
-                row.lifetime_id.clone(),
-                Arc::new(Resources {
-                    service: Arc::downgrade(&self.inner),
-                    id,
-                    acquisition: None,
-                    history: tokio::sync::Mutex::new(None),
-                }),
-            );
+            let resources = Arc::new(Resources {
+                service: Arc::downgrade(&self.inner),
+                id,
+                acquisition: None,
+                history: tokio::sync::Mutex::new(None),
+            });
+            let _ = if row.state == LifetimeState::Closing {
+                ownership
+                    .coordinator
+                    .restore_closing_resources(row.lifetime_id.clone(), resources)
+            } else {
+                ownership
+                    .coordinator
+                    .bind_resources(row.lifetime_id.clone(), resources)
+            };
         }
         let mut attempted = 0;
         for row in &snapshot.lifetimes {

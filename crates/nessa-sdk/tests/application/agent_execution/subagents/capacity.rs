@@ -472,3 +472,77 @@ async fn obsolete_reservation_release_fault_installs_validated_history_but_retur
         );
     }
 }
+
+#[tokio::test]
+async fn restored_evidence_owner_uses_existing_slot_without_reopening_admission_or_capacity() {
+    let original = World::new(1);
+    let root = original.root().await;
+    original
+        .factory
+        .reports
+        .lock()
+        .unwrap()
+        .push_back(ResourceReport {
+            physical: PhysicalFact::Released,
+            evidence: EvidenceFact::Failed,
+        });
+    let retained = child(&original, &root, "released-with-evidence").await;
+    assert!(original.close(&retained).await.is_err());
+    let store = original.store.clone();
+    drop(original);
+    let room = CountedRoom::new(1);
+    let restored = restore_with(store, room.clone());
+    restored.coordinator.resume().await.unwrap();
+    let owner = Arc::new(ScriptResources {
+        closes: AtomicUsize::new(0),
+        report: released(),
+        hold: None,
+    });
+    assert!(restored
+        .coordinator
+        .bind_resources(retained.clone(), owner.clone())
+        .is_err());
+    assert!(restored.coordinator.participation(&retained).is_none());
+    restored
+        .coordinator
+        .restore_closing_resources(retained.clone(), owner.clone())
+        .unwrap();
+    assert!(
+        restored.coordinator.participation(&retained).is_none(),
+        "evidence restoration gives no attachment authority"
+    );
+    assert!(
+        restored
+            .coordinator
+            .restore_closing_resources(retained.clone(), owner.clone())
+            .is_err(),
+        "the exact registered owner is not replaced"
+    );
+    assert_eq!(room.calls.load(Ordering::SeqCst), 0);
+    restored.close(&retained).await.unwrap();
+    assert_eq!(owner.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        restored.coordinator.lifetime_state(&retained),
+        Some(LifetimeState::Closed)
+    );
+    assert!(restored
+        .coordinator
+        .restore_closing_resources(retained, owner)
+        .is_err());
+    assert!(
+        restored
+            .coordinator
+            .restore_closing_resources(
+                root.clone(),
+                Arc::new(ScriptResources {
+                    closes: AtomicUsize::new(0),
+                    report: released(),
+                    hold: None
+                })
+            )
+            .is_err(),
+        "an Open lifetime has no closing evidence authority"
+    );
+    child(&restored, &root, "replacement").await;
+    assert_eq!(room.held.load(Ordering::SeqCst), 1);
+}

@@ -1773,3 +1773,11 @@ rejection and committed/lost ACK; independent rejected/lost mark-clear ACKs;
 and an unconfirmed old lease that stays Closing despite acknowledged decline.
 A positive whole-close case requires an actual pre-crash End receipt. Process
 loss or `NotHeld` is insufficient.
+
+Restoration uses `OwnershipCoordinator::restore_closing_resources`, explicitly
+scoped to graph-selected Closing cleanup targets and the existing resource slot.
+Ordinary `bind_resources` and `participation` continue refusing physical release;
+the two original refusal regressions stay unchanged. The explicit route grants
+no attachment authority or capacity reservation and refuses an occupied owner.
+`restored_evidence_owner_uses_existing_slot_without_reopening_admission_or_capacity`
+checks that boundary and acknowledged close, alongside the native crash matrix.

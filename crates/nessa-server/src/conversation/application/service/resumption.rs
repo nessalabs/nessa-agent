@@ -754,7 +754,7 @@ impl ConversationService {
         self.clear_mark(id).await
     }
 
-    async fn clear_mark(&self, id: &ConversationId) -> Result<(), ConversationError> {
+    pub(super) async fn clear_mark(&self, id: &ConversationId) -> Result<(), ConversationError> {
         let Some(marks) = self.inner.unfinished_turns.get() else {
             return Ok(());
         };
