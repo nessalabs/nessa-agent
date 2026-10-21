@@ -6,8 +6,10 @@
  * same id reads the store, and finds nothing once the box has gone.
  *
  * A new session's draft goes the same way. `withPanes` lets it go in the
- * close, and the home would go with it while the box is still there. The
- * home and what its composer was showing stay with the component.
+ * close, and the home would go with it while the box is still there. An
+ * established session the source removes does too: `forgetSession` drops
+ * its unsent reply, and the composer would clear while the box stays.
+ * What the composer was showing stays with the component.
  */
 import { useRef } from "react"
 import type { Transcript } from "../../model/transcript"
@@ -58,16 +60,18 @@ export function useShownDraft(
 }
 
 /**
- * The value last read while `sessionId` was a draft, for the frames after
- * the close drops that draft and the box is still on screen. A session
- * this component never read as a draft keeps the live value.
+ * The value last read while `sessionId` was a draft or a listed session,
+ * for the frames after that record is gone and the box is still on screen.
+ * A session this component has not shown keeps the live value.
  */
-export function useHeldDraftValue<T>(sessionId: string, live: T): T {
-  const draft = useWorkspaceSelector(
-    (state) => selectDraft(state, sessionId) !== undefined,
+export function useRememberedValue<T>(sessionId: string, live: T): T {
+  const present = useWorkspaceSelector(
+    (state) =>
+      selectDraft(state, sessionId) !== undefined ||
+      selectSession(state, sessionId) !== undefined,
   )
   const remembered = useRef<{ id: string; value: T } | null>(null)
-  if (draft) remembered.current = { id: sessionId, value: live }
-  if (draft || remembered.current?.id !== sessionId) return live
+  if (present) remembered.current = { id: sessionId, value: live }
+  if (present || remembered.current?.id !== sessionId) return live
   return remembered.current.value
 }

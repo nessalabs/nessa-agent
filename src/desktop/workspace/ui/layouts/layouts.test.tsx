@@ -515,6 +515,60 @@ describe("a source removing a session", () => {
       frames.restore()
     }
   })
+
+  it("keeps an unsent reply in the box until the box goes", async () => {
+    // The composer fills on a frame. Stepping that frame, and the ones
+    // after the source removes the session, keeps the box from leaving
+    // before the reply is read.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      await act(async () => {
+        store.dispatch(setComposerText({ sessionId: "b", text: "unsent reply" }))
+      })
+      const reply = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (pane) => pane.getAttribute("aria-label") === "Session b",
+        )
+      const textOf = (pane: Element | undefined) =>
+        pane?.querySelector("textarea")?.value ?? ""
+      const modelOf = (pane: Element | undefined) =>
+        pane?.querySelector('[data-slot="model-picker-trigger"]')?.textContent ?? ""
+      const accessOf = (pane: Element | undefined) =>
+        pane?.querySelector("[data-access-mode]")?.getAttribute("data-access-mode") ?? ""
+      for (let step = 0; step < 8 && textOf(reply()) !== "unsent reply"; step++)
+        await act(async () => frames.runFrame())
+      const model = modelOf(reply())
+      const access = accessOf(reply())
+      expect(textOf(reply())).toBe("unsent reply")
+      expect(model.length).toBeGreaterThan(0)
+      expect(access.length).toBeGreaterThan(0)
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(selectSession(store.getState(), "b")).toBeUndefined()
+      expect(store.getState().workspace.composerText).not.toHaveProperty("b")
+      expect(textOf(reply())).toBe("unsent reply")
+      expect(modelOf(reply())).toBe(model)
+      expect(accessOf(reply())).toBe(access)
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(textOf(reply())).toBe("unsent reply")
+      expect(modelOf(reply())).toBe(model)
+      expect(accessOf(reply())).toBe(access)
+      await act(async () => frames.runFrame())
+      expect(reply()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
 })
 
 describe("a draft's close", () => {

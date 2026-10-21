@@ -1,5 +1,5 @@
 import { modelChanging, modelRequesting } from "../../adapters/store/model-commands"
-import { useHeldDraftValue } from "../../adapters/store/remembered-session"
+import { useRememberedValue } from "../../adapters/store/remembered-session"
 import { draftOf, entry } from "../../application/workspace-state"
 import { WorkspaceSendFailure } from "../send-failure"
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
@@ -35,14 +35,14 @@ const stayCard = () => {}
  */
 function useNextModel(sessionId: string): ModelRef | undefined {
   const live = useWorkspaceSelector((state) => selectNextModel(state, sessionId))
-  return useHeldDraftValue(sessionId, live)
+  return useRememberedValue(sessionId, live)
 }
 
 /** A session's unsent text, held in the workspace so it outlives a change of layout. */
 function useComposerText(sessionId: string) {
   const dispatch = useWorkspaceDispatch()
   const live = useWorkspaceSelector((state) => selectComposerText(state, sessionId))
-  const text = useHeldDraftValue(sessionId, live)
+  const text = useRememberedValue(sessionId, live)
   const onTextChange = useCallback(
     (next: string) => dispatch(setComposerText({ sessionId, text: next })),
     [dispatch, sessionId],
@@ -55,7 +55,7 @@ function useComposerActions(sessionId: string) {
   const canChangeLive = useWorkspaceSelector((state) =>
     selectCanChooseModel(state, sessionId),
   )
-  const canChangeModel = useHeldDraftValue(sessionId, canChangeLive)
+  const canChangeModel = useRememberedValue(sessionId, canChangeLive)
   const send = useCallback(
     (text: string) =>
       void dispatch(sendMessage({ sessionId, text, initiator: "person" })),

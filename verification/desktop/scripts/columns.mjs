@@ -52,6 +52,7 @@ const checks = [
   "overview-covers",
   "rail-fold-focus",
   "draft-held",
+  "reply-held",
 ]
 
 const meta = {
@@ -90,7 +91,9 @@ Checks, per engine, layout and size:
   rail-fold-focus  a rail button with the keyboard on it, folded away for
                    room, hands the keyboard to the toggle
   draft-held       closing a new session that is not the last pane keeps its
-                   home and unsent text on the next frame, until the box goes`,
+                   home and unsent text on the next frame, until the box goes
+  reply-held       the source removing an established session that is not the
+                   last pane keeps its unsent reply on the next frame`,
 }
 
 /** The columns in the order they stand; the chat area and the overview share the last place. */
@@ -908,6 +911,91 @@ const body = {
     if (after !== before)
       failures.push(`after the box goes, ${after} panes remain; started from ${before}`)
     return { sample, before, after, failures }
+  },
+
+  /**
+   * The source removes an established session while another pane stays.
+   * The box keeps the unsent reply on the next frame.
+   *
+   * The reply goes in the pane that was already open. The session the
+   * switcher opens beside it can belong to another channel, and the list
+   * shows only the channel in view.
+   */
+  "reply-held": async ({ page }) => {
+    const text = "unsent reply"
+    const before = await page.locator(css.pane).count()
+    const open = page.locator(css.focusedPane).first()
+    const label = await open.getAttribute("aria-label")
+    const key = await open.getAttribute("data-pane-key")
+    if (!label || !key) throw new CannotRun("the open pane has no label")
+    await openPanes(page, before + 1)
+    const opened = await page.locator(css.pane).count()
+    const field = page.locator(`[data-pane-key="${key}"] textarea`).first()
+    await field.click()
+    await field.fill(text)
+    await frames(page, 2)
+    const typed = await field.inputValue()
+    if (typed !== text) throw new CannotRun(`the composer reads "${typed}"`)
+    await settled(page)
+    await frames(page, 2)
+    const place = await page.evaluate((title) => {
+      const titled = (item) =>
+        item.querySelector(".desktop-list-row-label")?.textContent === title
+      const rows = [...document.querySelectorAll("[data-session-row]")]
+      const listed = rows.find((item) => item.closest(".workspace-list") && titled(item))
+      const row = listed ?? rows.find(titled)
+      const id = row?.getAttribute("data-session-row")
+      return id ? { id, list: listed === row } : null
+    }, label)
+    if (!place) throw new CannotRun(`no session row titled ${label}`)
+    await page.evaluate((pane) => {
+      window.__heldReply = null
+      window.addEventListener(
+        "click",
+        (event) => {
+          const target = event.target instanceof Element ? event.target : null
+          const removal = target?.closest(
+            "[data-session-action='archive'], [data-delete-action='confirm']",
+          )
+          if (!removal) return
+          requestAnimationFrame(() => {
+            window.__heldReply = [...document.querySelectorAll(pane)].map((item) => ({
+              label: item.getAttribute("aria-label"),
+              text: item.querySelector("textarea")?.value ?? "",
+            }))
+          })
+        },
+        true,
+      )
+    }, css.pane)
+    const row = place.list
+      ? page.locator(`.workspace-list [data-session-row="${place.id}"]`)
+      : page.locator(`[data-session-row="${place.id}"]`).first()
+    await row.hover()
+    const archive = row.locator('[data-session-action="archive"]')
+    if ((await archive.count()) > 0) await archive.click()
+    else {
+      await row.click({ button: "right" })
+      await page.getByRole("menuitem", { name: "Delete…" }).click()
+      await page.locator('[data-delete-action="confirm"]').click()
+    }
+    await page.waitForFunction(() => window.__heldReply !== null)
+    const sample = await page.evaluate(() => window.__heldReply)
+    await settled(page)
+    await frames(page, 4)
+    const after = await page.locator(css.pane).count()
+    const failures = []
+    const kept = sample?.find((item) => item.text === text)
+    if (!sample) failures.push("the removal did not sample the next frame")
+    else if (!kept)
+      failures.push(`the next frame has no unsent reply: ${JSON.stringify(sample)}`)
+    else if (kept.label !== label)
+      failures.push(`the held box is labelled ${kept.label}, was ${label}`)
+    if (after !== opened - 1)
+      failures.push(
+        `after the box goes, ${after} panes remain; the removal started from ${opened}`,
+      )
+    return { sample, label, before, opened, after, failures }
   },
 }
 

@@ -883,6 +883,11 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   home, labelled New session, with the unsent text. After the box goes,
   the pane count is what it was before the split.
   _Check:_ `columns.mjs --only draft-held`.
+- [ ] **A removed session keeps its unsent reply until the box goes.** The
+  source taking an established session out of two panes drops its composer
+  text at once and keeps the box. On the next frame that box still shows
+  the reply. After the box goes, the pane count is what it was before the
+  split. _Check:_ `columns.mjs --only reply-held`.
 - [ ] **First-message handoff has one composer.** Sending from a new-session
   home replaces it without overlapping composer instances; the reply receives
   the caret and keeps the next draft. The composer glides into its dock and

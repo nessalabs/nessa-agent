@@ -10,7 +10,7 @@ import type { ComposerAccessModeValue } from "@nessa-ui/react/composer-access-mo
 import type { AccessMode } from "../../model/access"
 import { chooseAccess } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
-import { useHeldDraftValue } from "../../adapters/store/remembered-session"
+import { useRememberedValue } from "../../adapters/store/remembered-session"
 import { selectAccess, selectAccessNotice } from "../../adapters/store/selectors"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import type { ComposerAccess } from "../../../ui/composer"
@@ -60,8 +60,8 @@ export function useComposerAccess(sessionId: string): ComposerAccess {
   const dispatch = useWorkspaceDispatch()
   const modeLive = useWorkspaceSelector((state) => selectAccess(state, sessionId))
   const saidLive = useWorkspaceSelector((state) => selectAccessNotice(state, sessionId))
-  const mode = useHeldDraftValue(sessionId, modeLive)
-  const said = useHeldDraftValue(sessionId, saidLive)
+  const mode = useRememberedValue(sessionId, modeLive)
+  const said = useRememberedValue(sessionId, saidLive)
   const onChange = useCallback(
     (value: ComposerAccessModeValue) =>
       void dispatch(
