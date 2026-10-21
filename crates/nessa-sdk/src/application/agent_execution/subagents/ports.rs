@@ -58,6 +58,8 @@ pub enum BindResourcesRefusal {
     FactoryInFlight,
     /// A cleanup owner is already retained; it cannot be replaced.
     AlreadyBound,
+    /// Evidence restoration was requested for an identity outside Closing.
+    NotClosing,
     /// Physical absence or release was confirmed before this binding.
     Released,
 }

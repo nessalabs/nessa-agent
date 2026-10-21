@@ -89,3 +89,125 @@ fn decline_receipt_checkpoint_semantic_and_atomic_rollback_preserve_original_own
         assert_eq!(continuation.snapshot_bytes, retained);
     }
 }
+
+#[test]
+fn sdk_close_acknowledgement_requires_exact_lease_operation_target_and_atomic_history() {
+    use crate::application::agent_execution::agents::OwnedCloseScope;
+    use crate::application::agent_execution::sessions::{CurrentLease, LeaseRecord};
+    use crate::domain::agent_execution::leases::{
+        AgentWork, EnvironmentRef, LeaseDeadline, LeaseEndCause, LeaseGrants, LeaseId,
+        LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile,
+    };
+    let id = |value: &str| LeaseId::new(value).unwrap();
+    let issued = |lease: &str, revision: u64| LeaseRecord::Issued {
+        lease: id(lease),
+        revision: LeaseRevision::new(revision).unwrap(),
+        terms: LeaseTerms {
+            environment: EnvironmentRef::Here,
+            work: LeaseWork::Agent(AgentWork::new("claude", "sonnet").unwrap()),
+            sandbox: SandboxProfile::HarnessDefault,
+            grants: LeaseGrants::Opening,
+            deadline: LeaseDeadline::UntilEnded,
+        },
+        actor: ActionContext::new("person", "panel", "open").unwrap(),
+    };
+    let ending = |lease: &str, cause| LeaseRecord::Ending {
+        lease: id(lease),
+        cause,
+        actor: None,
+    };
+    let fold = |records: &[LeaseRecord]| {
+        records
+            .iter()
+            .try_fold(None, |current, record| {
+                CurrentLease::apply(current.as_ref(), record).map(Some)
+            })
+            .map(|current| current.unwrap())
+    };
+    use crate::application::agent_execution::sessions::{
+        records::continuation::Continuation, SessionChange,
+    };
+    use crate::domain::agent_execution::{
+        sessions::SessionId,
+        subagents::{AgentLifetimeId, CloseOperationId},
+    };
+    use crate::infrastructure::session_storage::snapshot::{
+        checkpoint::{history_fixture, Snapshot, SnapshotRef},
+        decode_semantic_batch, encode_semantic_batch,
+    };
+    let lifetime = AgentLifetimeId::new("target").unwrap();
+    let operation = CloseOperationId::new("first-close").unwrap();
+    let scope = OwnedCloseScope::new(
+        lifetime.clone(),
+        operation.clone(),
+        SessionId::new("conversation").unwrap(),
+    );
+    let proof = LeaseRecord::SdkCloseAcknowledged {
+        lease: id("lease-1"),
+        lifetime,
+        operation,
+    };
+    assert!(
+        fold(&[issued("lease-1", 1), proof.clone()]).is_err(),
+        "a live lease has no close acknowledgement"
+    );
+    let before = fold(&[
+        issued("lease-1", 1),
+        ending("lease-1", LeaseEndCause::Closed),
+    ])
+    .unwrap();
+    let mut snapshot = history_fixture(0);
+    snapshot.lease = Some(before);
+    let mut continuation = Continuation::restore(Some(snapshot.clone())).unwrap();
+    let bytes = continuation.snapshot_bytes;
+    let bad = LeaseRecord::SdkCloseAcknowledged {
+        lease: id("another-lease"),
+        lifetime: scope.lifetime().clone(),
+        operation: scope.operation().clone(),
+    };
+    assert!(continuation
+        .apply_unit(&[
+            SessionChange::Lease(proof.clone()),
+            SessionChange::Lease(bad)
+        ])
+        .is_err());
+    assert_eq!(continuation.snapshot.as_ref(), Some(&snapshot));
+    assert_eq!(continuation.snapshot_bytes, bytes);
+    let change = SessionChange::Lease(proof);
+    let encoded = encode_semantic_batch(std::slice::from_ref(&change)).unwrap();
+    let decoded = decode_semantic_batch(&encoded, &snapshot.provider_context).unwrap();
+    assert_eq!(decoded, vec![change]);
+    continuation.apply_unit(&decoded).unwrap();
+    let acknowledged = continuation.snapshot.as_ref().unwrap();
+    let current = acknowledged.lease.as_ref().unwrap();
+    assert!(current.sdk_close_acknowledged(&scope));
+    for wrong in [
+        OwnedCloseScope::new(
+            scope.lifetime().clone(),
+            CloseOperationId::new("later-close").unwrap(),
+            scope.session().clone(),
+        ),
+        OwnedCloseScope::new(
+            AgentLifetimeId::new("other-target").unwrap(),
+            scope.operation().clone(),
+            scope.session().clone(),
+        ),
+    ] {
+        assert!(!current.sdk_close_acknowledged(&wrong));
+    }
+    let encoded = serde_json::to_vec(&SnapshotRef(acknowledged)).unwrap();
+    let decoded: Snapshot = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(&decoded.decode().unwrap(), acknowledged);
+    assert!(continuation
+        .apply_unit(&[SessionChange::Lease(
+            acknowledged
+                .lease
+                .as_ref()
+                .unwrap()
+                .records()
+                .last()
+                .unwrap()
+                .clone()
+        )])
+        .is_err());
+}

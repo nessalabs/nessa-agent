@@ -718,6 +718,54 @@ impl SessionStorageLease for PreparedDeclineLease {
     }
 }
 
+/// Lose the reply after asking the real underlying End. This fault supplies
+/// no cleanup acknowledgement; a later process's NotHeld still proves no release.
+struct LostEndAckEnvironment(Arc<dyn Environment>);
+struct LostEndAckHold(Arc<dyn crate::conversation::application::LeaseHold>);
+impl Environment for LostEndAckEnvironment {
+    fn declaration(&self) -> EnvironmentDeclaration {
+        self.0.declaration()
+    }
+    fn open<'a>(
+        &'a self,
+        lease: &'a LeaseId,
+        terms: &'a LeaseTerms,
+        provider: Arc<dyn AgentProvider>,
+    ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
+        Box::pin(async move {
+            let mut opened = self.0.open(lease, terms, provider).await?;
+            opened.hold = Arc::new(LostEndAckHold(opened.hold));
+            Ok(opened)
+        })
+    }
+    fn account<'a>(&'a self, lease: &'a LeaseId) -> EnvironmentFuture<'a, Option<LeaseCleanup>> {
+        self.0.account(lease)
+    }
+}
+impl crate::conversation::application::LeaseHold for LostEndAckHold {
+    fn ends(
+        &self,
+    ) -> Option<EnvironmentFuture<'static, nessa_sdk::domain::agent_execution::leases::LeaseEndCause>>
+    {
+        self.0.ends()
+    }
+    fn model_provider(
+        &self,
+        binding: Arc<dyn AgentProvider>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        self.0.model_provider(binding)
+    }
+    fn end(
+        &self,
+        cause: nessa_sdk::domain::agent_execution::leases::LeaseEndCause,
+    ) -> EnvironmentFuture<'_, crate::conversation::application::LeaseRelease> {
+        Box::pin(async move {
+            let _actual_reply = self.0.end(cause).await;
+            crate::conversation::application::LeaseRelease::Unanswered
+        })
+    }
+}
+
 #[test]
 #[ignore = "invoked only by the historical decline crash parent"]
 fn historical_decline_crash_child() {
@@ -744,7 +792,19 @@ fn historical_decline_crash_child() {
                 attempts: Mutex::new(Vec::new()),
             });
             let inner = Arc::get_mut(&mut service.inner).unwrap();
-            inner.agents = crate::conversation_test_support::mode_agents(provider, audit);
+            inner.agents = crate::conversation_test_support::mode_agents(provider.clone(), audit);
+            if std::env::var("NESSA_DECLINE_PHYSICAL").as_deref() == Ok("unknown") {
+                inner.environment = (Arc::new(LostEndAckEnvironment(
+                    crate::conversation::infrastructure::in_process_environment(),
+                )) as Arc<dyn Environment>)
+                    .into();
+            }
+            if stage == "sdk-and-decline" {
+                provider.close_reports.lock().unwrap().push_back(
+                    CleanupReport::confirmed(CloseOutcome { forced: false })
+                        .with_audit(Err(AgentError::AuditFailure)),
+                );
+            }
             if stage == "prepared" {
                 inner.storage = Arc::new(PreparedDeclineStorage {
                     storage: storage.clone(),
@@ -762,19 +822,15 @@ fn historical_decline_crash_child() {
                 .active_lifetime_for_session(&conversation_session(&target))
                 .unwrap();
             std::fs::write(root.join("decline-lifetime"), lifetime.as_str()).unwrap();
-            // This positive recovery case has a real pre-crash physical receipt.
-            // Process death alone cannot acknowledge an in-process lease.
-            if std::env::var("NESSA_DECLINE_PHYSICAL").as_deref() != Ok("unknown") {
-                service
-                    .close_leased(
-                        &live,
-                        nessa_sdk::domain::agent_execution::leases::LeaseEndCause::Closed,
-                        caller("physical-before-decline").actor().unwrap(),
-                        crate::conversation::application::environment::AgentEnd::Suspend,
-                    )
-                    .await
-                    .unwrap();
-            }
+            tokio::time::timeout(Duration::from_secs(5), live.join_attachment_owner())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                provider.open_calls.load(Ordering::SeqCst),
+                1,
+                "proof comes from the actual acquired SDK attachment"
+            );
             let close = coordinator.end_lifetime(CloseCommand {
                 lifetime,
                 cause: LifetimeCause::HostClose,
@@ -816,6 +872,7 @@ async fn original_decline_preparation_and_audit_receipt_survive_actual_process_l
         ("audit-rejected", "confirmed"),
         ("audit-lost-ack", "confirmed"),
         ("prepared", "unknown"),
+        ("sdk-and-decline", "confirmed"),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("data");
@@ -913,6 +970,13 @@ async fn original_decline_preparation_and_audit_receipt_survive_actual_process_l
             .as_ref()
             .unwrap()
             .acknowledged());
+        if stage == "sdk-and-decline" {
+            assert!(UnfinishedTurns::marked(metadata.as_ref())
+                .await
+                .unwrap()
+                .iter()
+                .any(|mark| mark.conversation_id == target));
+        }
         let attempts_after_ack = audit.attempts.lock().unwrap().len();
         marks.reject.store(false, Ordering::SeqCst);
         let recovered = tokio::time::timeout(
@@ -929,7 +993,7 @@ async fn original_decline_preparation_and_audit_receipt_survive_actual_process_l
         )
         .await
         .unwrap();
-        if physical == "confirmed" {
+        if physical == "confirmed" && stage != "sdk-and-decline" {
             assert!(
                 recovered.is_ok(),
                 "stage={stage} physical={physical}: {recovered:?}; audit={:?}; history={:?}",
@@ -946,7 +1010,7 @@ async fn original_decline_preparation_and_audit_receipt_survive_actual_process_l
         } else {
             assert!(
                 recovered.is_err(),
-                "NotHeld cannot acknowledge an earlier process tree"
+                "neither an unknown physical result nor a separate SDK audit failure is acknowledged by successful decline evidence"
             );
             assert_eq!(
                 coordinator.lifetime_state(&lifetime),

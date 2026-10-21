@@ -11,6 +11,9 @@
 //! [`Agent::end_owned_lifetime`](super::Agent::end_owned_lifetime).
 #![deny(missing_docs)]
 
+use crate::domain::agent_execution::sessions::SessionId;
+use crate::domain::agent_execution::subagents::AgentLifetimeId;
+use crate::domain::agent_execution::subagents::CloseOperationId;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -22,6 +25,39 @@ use super::AgentError;
 use crate::application::agent_execution::{
     permissions::ActionContext, providers::SessionCloseRequest,
 };
+
+/// Exact durable ownership close that may receive SDK cleanup evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnedCloseScope {
+    lifetime: AgentLifetimeId,
+    operation: CloseOperationId,
+    session: SessionId,
+}
+impl OwnedCloseScope {
+    pub(crate) fn new(
+        lifetime: AgentLifetimeId,
+        operation: CloseOperationId,
+        session: SessionId,
+    ) -> Self {
+        Self {
+            lifetime,
+            operation,
+            session,
+        }
+    }
+    /// Exact target lifetime, including a cascaded child's own identity.
+    pub fn lifetime(&self) -> &AgentLifetimeId {
+        &self.lifetime
+    }
+    /// First close operation that sealed this target.
+    pub fn operation(&self) -> &CloseOperationId {
+        &self.operation
+    }
+    /// Session owned by that target.
+    pub fn session(&self) -> &SessionId {
+        &self.session
+    }
+}
 
 /// Whether a provider-attachment stop also ends the ownership lifetime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +99,11 @@ pub trait OwnedLifetime: Send + Sync {
     fn admission_scope(&self) -> Arc<Mutex<()>>;
     /// Published seal. The lifecycle loads it without taking the tree scope.
     fn seal(&self) -> Arc<AtomicBool>;
+    /// Published current close identity. A custom gate without durable evidence
+    /// support grants no authority to certify a restored SDK close.
+    fn closing_scope(&self) -> Option<OwnedCloseScope> {
+        None
+    }
     /// Whether descendants may still be admitted. `Acquire` pairs with the seal store.
     fn is_sealed(&self) -> bool {
         self.seal().load(Ordering::Acquire)

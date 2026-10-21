@@ -11,6 +11,7 @@ use super::{
     SessionSaveGeneration, SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease,
     StorageError, StorageFuture, SubmissionAcknowledgement,
 };
+use crate::application::agent_execution::agents::OwnedCloseScope;
 use crate::application::agent_execution::{
     agents::AgentError,
     caller_wake::{contain_caller_wake, CallerWaiter},
@@ -1690,6 +1691,40 @@ impl SessionManager {
     /// Validation failure returns no commit and grants no decision authority.
     /// Flush only when a decline receipt itself still awaits storage ACK.
     /// Other pending facts keep their existing close/lease persistence owner.
+    /// Actual SDK close producer only: record its non-decline ACK under the
+    /// durable graph operation and exact lease, then join the real writer ACK.
+    pub(crate) async fn acknowledge_sdk_close(
+        &self,
+        scope: &OwnedCloseScope,
+    ) -> Result<(), StorageError> {
+        if scope.session() != &self.id {
+            return Err(StorageError::Corrupt(
+                "SDK close scope names another session".into(),
+            ));
+        }
+        let mut evidence = self.evidence.lock().await;
+        let current = evidence
+            .observed()
+            .and_then(|snapshot| snapshot.lease.as_ref());
+        let Some(current) = current else {
+            return Ok(());
+        };
+        let Some(held) = current.held() else {
+            return Err(StorageError::Corrupt(
+                "SDK close has no readable issued lease".into(),
+            ));
+        };
+        if !current.sdk_close_acknowledged(scope) {
+            let record = LeaseRecord::SdkCloseAcknowledged {
+                lease: held.id().clone(),
+                lifetime: scope.lifetime().clone(),
+                operation: scope.operation().clone(),
+            };
+            evidence.record(vec![SessionChange::Lease(record)])?;
+        }
+        self.save_observed(&mut evidence).await
+    }
+
     pub(crate) async fn flush_decline_receipts(&self) -> Result<(), StorageError> {
         let mut evidence = self.evidence.lock().await;
         let pending = evidence

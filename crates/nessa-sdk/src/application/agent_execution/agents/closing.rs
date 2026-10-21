@@ -14,6 +14,7 @@ use crate::application::agent_execution::providers::{CleanupReport, CloseOutcome
 pub struct AgentCloseReport {
     cleanup: CleanupReport,
     scheduling: Result<(), AgentError>,
+    decline: Result<(), AgentError>,
 }
 
 impl AgentCloseReport {
@@ -21,7 +22,19 @@ impl AgentCloseReport {
         Self {
             cleanup,
             scheduling: scheduling.map_err(AgentError::bounded),
+            decline: Ok(()),
         }
+    }
+
+    pub(super) fn with_decline(self, decline: Result<(), AgentError>) -> Self {
+        Self {
+            decline: decline.map_err(AgentError::bounded),
+            ..self
+        }
+    }
+    /// Historical decline evidence, independent of provider cleanup and pending cancellation.
+    pub fn decline(&self) -> &Result<(), AgentError> {
+        &self.decline
     }
 
     /// This transaction's actual provider cleanup and independent evidence.
@@ -43,7 +56,7 @@ impl AgentCloseReport {
     /// report's historical operation diagnostic keeps its existing meaning.
     pub fn into_result(self) -> Result<CloseOutcome, AgentError> {
         let cleanup = self.cleanup.into_result();
-        match self.scheduling {
+        match join_acknowledgements(self.scheduling, self.decline) {
             Ok(()) => cleanup,
             Err(AgentError::Storage(error)) => Err(AgentError::StorageDuringClose {
                 error,
@@ -92,6 +105,7 @@ impl AgentCloseReport {
             cleanup,
             join_acknowledgements(self.scheduling, retry.scheduling),
         )
+        .with_decline(join_acknowledgements(self.decline, retry.decline))
     }
 }
 

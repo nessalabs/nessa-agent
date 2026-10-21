@@ -529,20 +529,18 @@ async fn restored_evidence_owner_uses_existing_slot_without_reopening_admission_
         .coordinator
         .restore_closing_resources(retained, owner)
         .is_err());
-    assert!(
-        restored
-            .coordinator
-            .restore_closing_resources(
-                root.clone(),
-                Arc::new(ScriptResources {
-                    closes: AtomicUsize::new(0),
-                    report: released(),
-                    hold: None
-                })
-            )
-            .is_err(),
-        "an Open lifetime has no closing evidence authority"
-    );
+    let refusal = restored
+        .coordinator
+        .restore_closing_resources(
+            root.clone(),
+            Arc::new(ScriptResources {
+                closes: AtomicUsize::new(0),
+                report: released(),
+                hold: None,
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(refusal.reason, BindResourcesRefusal::NotClosing);
     child(&restored, &root, "replacement").await;
     assert_eq!(room.held.load(Ordering::SeqCst), 1);
 }

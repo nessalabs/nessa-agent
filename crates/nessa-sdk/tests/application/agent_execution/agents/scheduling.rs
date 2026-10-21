@@ -1405,10 +1405,22 @@ async fn report_retains_failed_pending_cancellation_separately_from_cleanup() {
     let derived = report.clone().with_cleanup(report.cleanup().clone());
     assert_eq!(derived.scheduling(), report.scheduling());
     assert!(derived.into_result().is_err());
+    let failed = report.scheduling().clone();
     assert!(report.into_result().is_err());
     assert_eq!(audit.attempts.lock().unwrap().len(), 2);
     assert!(first.wait().await.is_err());
     assert_eq!(second.wait().await, Err(AgentError::Closed));
+    let retried = agent.close_report(actor()).await.unwrap();
+    assert_eq!(
+        retried.scheduling(),
+        &failed,
+        "empty pending work retains the same actual cancelled-input audit obligation"
+    );
+    assert_eq!(
+        audit.attempts.lock().unwrap().len(),
+        2,
+        "no blind audit redelivery"
+    );
 }
 
 #[tokio::test]
@@ -1557,4 +1569,29 @@ fn close_report_retry_keeps_cached_failures_once_and_independent_equal_failures_
     let bounded = AgentError::Configuration("x".repeat(1024 * 1024 + 16))
         .with_independent_failure(AgentError::AuditFailure);
     assert!(bounded.validate_retained_size().is_ok());
+}
+
+#[test]
+fn close_report_decline_and_sdk_evidence_are_independent_and_retry_keeps_both() {
+    use crate::application::agent_execution::providers::CleanupReport;
+    let report = AgentCloseReport::new(
+        CleanupReport::confirmed(CloseOutcome { forced: false }),
+        Ok(()),
+    )
+    .with_decline(Err(AgentError::AuditFailure));
+    assert_eq!(report.scheduling(), &Ok(()));
+    assert_eq!(report.cleanup().audit(), &Ok(()));
+    assert_eq!(report.decline(), &Err(AgentError::AuditFailure));
+    let retry = AgentCloseReport::new(
+        CleanupReport::confirmed(CloseOutcome { forced: false })
+            .with_audit(Err(AgentError::Deadline)),
+        Ok(()),
+    );
+    let joined = report.after_retry(retry);
+    assert_eq!(joined.decline(), &Err(AgentError::AuditFailure));
+    assert_eq!(joined.cleanup().audit(), &Err(AgentError::Deadline));
+    assert!(matches!(
+        joined.into_result(),
+        Err(AgentError::MultipleOperationFailures { .. })
+    ));
 }

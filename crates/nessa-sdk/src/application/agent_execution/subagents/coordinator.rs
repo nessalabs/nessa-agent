@@ -5,6 +5,7 @@
 //! written. The store still replaces one body; this fence is the coordinator's.
 #![deny(missing_docs)]
 
+use crate::application::agent_execution::agents::OwnedCloseScope;
 use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
@@ -509,6 +510,12 @@ impl OwnershipCoordinator {
         }
     }
 
+    /// Exact Closing target and first operation, for reading scope-correlated evidence.
+    pub fn closing_scope(&self, lifetime: &AgentLifetimeId) -> Option<OwnedCloseScope> {
+        self.inner
+            .with_graph(|graph| closing_scope(graph, lifetime))
+    }
+
     /// Transfer a cleanup owner for an admitted lifetime, such as the root.
     /// `resources` remains the caller's responsibility until this returns success.
     /// A successful transfer is retained for close even if later audit/storage fails.
@@ -890,6 +897,7 @@ impl Shared {
             {
                 Some(BindResourcesRefusal::FactoryInFlight)
             }
+            Some(LifetimeState::Open) if restoring => Some(BindResourcesRefusal::NotClosing),
             _ if restoring
                 && !graph
                     .close_owner(lifetime)
@@ -2465,6 +2473,18 @@ struct Admitted {
     policy: ApprovalPolicy,
 }
 
+fn closing_scope(graph: &OwnershipGraph, target: &AgentLifetimeId) -> Option<OwnedCloseScope> {
+    if graph.refusal().is_some() || graph.lifetime_state(target) != Some(LifetimeState::Closing) {
+        return None;
+    }
+    let root = graph.close_owner(target)?;
+    Some(OwnedCloseScope::new(
+        target.clone(),
+        graph.close_operation(&root)?.clone(),
+        graph.session_id(target)?.clone(),
+    ))
+}
+
 fn closing_ids(graph: &OwnershipGraph, root: &AgentLifetimeId) -> Vec<AgentLifetimeId> {
     let mut pending = Vec::new();
     let mut seen = HashSet::new();
@@ -2566,6 +2586,21 @@ fn host_actor(actor: &ActionContext) -> Result<HostActor, AgentError> {
 
 #[async_trait]
 impl OwnedLifetime for LifetimeGate {
+    fn closing_scope(&self) -> Option<OwnedCloseScope> {
+        let shared = self.inner.upgrade()?;
+        shared.with_graph(|graph| {
+            if !shared
+                .gates
+                .lock()
+                .expect("lifetime gates")
+                .get(&self.lifetime)
+                .is_some_and(|gate| std::ptr::eq(gate.as_ref(), self))
+            {
+                return None;
+            }
+            closing_scope(graph, &self.lifetime)
+        })
+    }
     fn admission_scope(&self) -> Arc<Mutex<()>> {
         Arc::clone(&self.scope)
     }

@@ -301,6 +301,7 @@ impl ConversationService {
                 id,
                 acquisition: None,
                 history: tokio::sync::Mutex::new(None),
+                lifetime: row.lifetime_id.clone(),
             });
             let _ = if row.state == LifetimeState::Closing {
                 ownership
@@ -374,6 +375,7 @@ impl ConversationService {
             id: id.clone(),
             acquisition: None,
             history: tokio::sync::Mutex::new(None),
+            lifetime: lifetime.clone(),
         });
         let _ = ownership
             .coordinator
@@ -539,6 +541,7 @@ impl ConversationService {
             id: id.clone(),
             acquisition,
             history: tokio::sync::Mutex::new(None),
+            lifetime: lifetime.clone(),
         });
         match coordinator.bind_resources(lifetime.clone(), resources) {
             Ok(()) => {}
@@ -592,6 +595,7 @@ impl ConversationService {
                 id: id.clone(),
                 acquisition: Some(opening.acquisition.clone()),
                 history: tokio::sync::Mutex::new(None),
+                lifetime: lifetime.clone(),
             }),
             opening,
         });
@@ -759,6 +763,7 @@ struct Resources {
     acquisition: Option<Arc<super::OpeningResources>>,
     // The existing resource adapter retains the SDK writer across failed receipts.
     history: tokio::sync::Mutex<Option<Agent>>,
+    lifetime: AgentLifetimeId,
 }
 #[async_trait]
 impl ChildResources for Resources {
@@ -800,10 +805,58 @@ impl ChildResources for Resources {
     }
 }
 impl Resources {
-    async fn join_cold_decline(
+    async fn sdk_close_acknowledged(
         &self,
         service: &ConversationService,
-    ) -> Result<(), ConversationError> {
+    ) -> Result<bool, ConversationError> {
+        let Some(scope) = service
+            .inner
+            .ownership
+            .get()
+            .and_then(|ownership| ownership.coordinator.closing_scope(&self.lifetime))
+        else {
+            return Ok(false);
+        };
+        if scope.session() != &conversation_session(&self.id) {
+            return Ok(false);
+        }
+        let committed = service
+            .inner
+            .storage
+            .read_committed(conversation_session(&self.id))
+            .await?;
+        Ok(committed.as_ref().is_some_and(|session| {
+            matches!(
+                session.state(),
+                CommittedViewState::Complete | CommittedViewState::CompleteEmpty
+            ) && session
+                .snapshot()
+                .and_then(|snapshot| snapshot.lease.as_ref())
+                .is_some_and(|lease| lease.sdk_close_acknowledged(&scope))
+        }))
+    }
+
+    async fn close_cold(
+        &self,
+        service: &ConversationService,
+        acquisition: Option<&super::OpeningResources>,
+    ) -> ResourceReport {
+        let mut report = service.cold_owned_resources(&self.id, acquisition).await;
+        match self.join_cold_evidence(service).await {
+            Ok(true) => {}
+            Ok(false) => report.evidence = EvidenceFact::Pending,
+            Err(error) => {
+                tracing::warn!(conversation_id = %self.id, %error, "restored resource evidence remains unacknowledged");
+                report.evidence = EvidenceFact::Failed;
+            }
+        }
+        report
+    }
+
+    async fn join_cold_evidence(
+        &self,
+        service: &ConversationService,
+    ) -> Result<bool, ConversationError> {
         let mut history = self.history.lock().await;
         if history.is_none() {
             let committed = service
@@ -821,7 +874,11 @@ impl Resources {
                         .any(|record| record.decline.is_some())
                 });
             if !has_decline {
-                return Ok(());
+                let acknowledged = self.sdk_close_acknowledged(service).await?;
+                if acknowledged {
+                    service.clear_mark(&self.id).await?;
+                }
+                return Ok(acknowledged);
             }
             let record = super::load_conversation(service.inner.metadata.as_ref(), &self.id)
                 .await?
@@ -857,10 +914,13 @@ impl Resources {
             .save_retained_lease_records()
             .await?;
         // Startup may not have loaded the live retry index yet. Join the durable mark owner.
+        if !self.sdk_close_acknowledged(service).await? {
+            return Ok(false);
+        }
         service.clear_mark(&self.id).await?;
         // The actual writer has acknowledged both persisted history and its recovery mark.
         *history = None;
-        Ok(())
+        Ok(true)
     }
 
     async fn close_acquired(
@@ -891,14 +951,7 @@ impl Resources {
             .get(&self.id)
             .cloned();
         let Some(slot) = slot else {
-            let mut report = service
-                .cold_owned_resources(&self.id, self.acquisition.as_deref())
-                .await;
-            if let Err(error) = self.join_cold_decline(service).await {
-                tracing::warn!(conversation_id = %self.id, %error, "restored decline evidence remains unacknowledged");
-                report.evidence = EvidenceFact::Failed;
-            }
-            return report;
+            return self.close_cold(service, self.acquisition.as_deref()).await;
         };
         // A pending or failed opening may retain a newer physical hold before
         // its lease is published. Historical cleanup cannot release that owner.
@@ -915,10 +968,10 @@ impl Resources {
                 {
                     return failed;
                 }
-                let report = service
-                    .cold_owned_resources(&self.id, Some(&slot.acquisition))
-                    .await;
-                if report.physical == PhysicalFact::Released {
+                let report = self.close_cold(service, Some(&slot.acquisition)).await;
+                if report.physical == PhysicalFact::Released
+                    && report.evidence == EvidenceFact::Acknowledged
+                {
                     let mut slots = service.inner.conversations.lock().await;
                     if slots
                         .get(&self.id)

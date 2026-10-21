@@ -6478,9 +6478,18 @@ impl ConversationService {
                         // rather than waiting unresolved for a resume that
                         // will not come
                         // (`a_close_ends_the_turns_a_restart_cut_off`).
+                        let owed = if end == AgentEnd::Close {
+                            live.agent.owed_turns().await
+                        } else {
+                            Vec::new()
+                        };
+                        let closed = self
+                            .close_leased(live, cause, actor.clone(), end)
+                            .await
+                            .map(|_| ());
                         let mut decline_failure: Option<AgentError> = None;
                         if end == AgentEnd::Close {
-                            for turn in live.agent.owed_turns().await {
+                            for turn in owed {
                                 if let Err(error) =
                                     live.agent.decline_turn(&turn, actor.clone()).await
                                 {
@@ -6494,10 +6503,6 @@ impl ConversationService {
                                 }
                             }
                         }
-                        let closed = self
-                            .close_leased(live, cause, actor.clone(), end)
-                            .await
-                            .map(|_| ());
                         // Physical cleanup continues despite a historical settlement failure.
                         // Neither a successful close nor an empty owed list acknowledges it.
                         let closed = match (decline_failure, closed) {

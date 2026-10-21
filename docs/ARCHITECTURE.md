@@ -1102,3 +1102,11 @@ bootstraps first access, and local recovery/provisioning retain their exclusive
 registry lock. Cloud selection fails explicitly until its implementation exists.
 See the [CLI module map](../crates/nessa-server/src/cli/mod.rs) and
 [local auth guide](guides/local-auth.md).
+
+Owned cold-close recovery consumes SDK cleanup proof from the existing session
+lease stream (`SdkCloseAcknowledged`), independently of decline audit and physical
+End. The actual acquired SDK close owner publishes proof under the current gate's
+first close-operation/target/lease scope. The gateway's two cold paths share one
+join; an unattached restored Agent can replay a prepared decline but cannot certify
+that old SDK cleanup. See the cycle7 ordering table in
+[Parent Stop ownership](adr/todo/329-subagents.md#explicit-cycle7-independent-cold-evidence).

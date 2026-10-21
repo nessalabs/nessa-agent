@@ -1781,3 +1781,38 @@ the two original refusal regressions stay unchanged. The explicit route grants
 no attachment authority or capacity reservation and refuses an occupied owner.
 `restored_evidence_owner_uses_existing_slot_without_reopening_admission_or_capacity`
 checks that boundary and acknowledged close, alongside the native crash matrix.
+
+## Explicit cycle7: independent cold evidence
+
+The owner approved the correction after f70aaa80's unchanged native regression
+restored an independent SDK audit failure as Closed. Prior caps and source-specific
+failures remain recorded. Physical End and a successful decline are insufficient
+acknowledgements of the SDK's separate cleanup/cancellation obligations.
+
+The actual SDK close owner now publishes `SdkCloseAcknowledged` through its
+existing session/lease writer, scoped to the exact current lease, target lifetime
+and first `CloseOperationId`. The current gate supplies that immutable scope;
+actors and process-local generation counters are not identities. A newly prepared
+unattached Agent cannot produce this fact: only actual acquired cleanup ownership,
+confirmed resources, acknowledged cleanup audit/completion, and retained cancelled
+input audit acknowledgements qualify. The proof and pending cancellation history
+publish through the same atomic writer; rejected or lost write ACK stays owned.
+Cold recovery consumes only certified committed proof for its exact scope.
+
+| Ordering | Required result |
+| --- | --- |
+| SDK audit/completion/cancelled-input audit fails | No SDK proof; retained real report remains observable even when pending work is empty. |
+| SDK proof write rejects or commits/lost ACK | Retain the fact under the same writer; only actual publication ACK/certified committed read establishes it. |
+| SDK ACK succeeds, decline blocks or rejects | SDK phase stays independent; retain original decline preparation/audit actor. |
+| Decline ACK succeeds, SDK ACK is absent | Remain Closing, including after restart; do not clear its unfinished mark. |
+| Wrong lease/target/operation or stale gate | No matching SDK acknowledgement. |
+| Both evidence ACKs exist, physical End is unknown | Remain Closing. |
+| Missing Slot or definitively failed opening | Use the same cold evidence join; physical release alone cannot retire a pending evidence owner. |
+
+Gateway stopping captures owed identities before SDK cleanup, joins SDK cleanup,
+then declines those exact identities even after an SDK error. SDK close publishes
+its actual non-decline proof before joining prepared declines. This avoids a
+terminal-save pause holding the writer needed by an earlier independent proof.
+`AgentCloseReport` retains decline evidence separately from scheduling and cleanup;
+its public result preserves the combined failures. The native process-loss matrix
+adds the independent SDK-audit-plus-decline case and real lost-End-ACK control.

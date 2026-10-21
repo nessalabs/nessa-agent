@@ -670,6 +670,7 @@ fn kinds(lease: &CurrentLease) -> Vec<&'static str> {
             LeaseRecord::Issued { .. } => "issued",
             LeaseRecord::Refused { .. } => "refused",
             LeaseRecord::Ending { .. } => "ending",
+            LeaseRecord::SdkCloseAcknowledged { .. } => "sdk_close_acknowledged",
             LeaseRecord::Ended { .. } => "ended",
             LeaseRecord::Interrupted { .. } => "interrupted",
             LeaseRecord::CleanupReported { .. } => "cleanup_reported",

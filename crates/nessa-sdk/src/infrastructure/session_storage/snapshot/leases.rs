@@ -11,6 +11,8 @@
 //! decode is corrupt: a later build that changes a body's shape writes a new
 //! kind instead.
 use super::{permissions::Actor, tools::corrupt};
+use crate::domain::agent_execution::subagents::AgentLifetimeId;
+use crate::domain::agent_execution::subagents::CloseOperationId;
 use crate::{
     application::agent_execution::sessions::{
         CurrentLease, EnvironmentFetchRefusal, EnvironmentPath, FetchOutcome, FetchRefusalReason,
@@ -122,6 +124,13 @@ struct Issuance {
     actor: Actor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     refusal: Option<Refusal>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SdkCloseAcknowledged {
+    lease: String,
+    lifetime: String,
+    operation: String,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -774,6 +783,18 @@ impl From<&LeaseRecord> for WireLease {
                     actor: actor.as_ref().map(Actor::from),
                 },
             ),
+            LeaseRecord::SdkCloseAcknowledged {
+                lease,
+                lifetime,
+                operation,
+            } => text(
+                "sdk_close_acknowledged",
+                &SdkCloseAcknowledged {
+                    lease: lease.as_str().into(),
+                    lifetime: lifetime.as_str().into(),
+                    operation: operation.as_str().into(),
+                },
+            ),
             LeaseRecord::Ended { lease, cleanup } => text(
                 ENDED,
                 &Cleaned {
@@ -928,6 +949,14 @@ impl WireLease {
                         actor,
                     },
                     _ => return Err(corrupt("a lease issuance and its refusal disagree")),
+                }
+            }
+            "sdk_close_acknowledged" => {
+                let saved: SdkCloseAcknowledged = body(&self.body)?;
+                LeaseRecord::SdkCloseAcknowledged {
+                    lease: lease(saved.lease)?,
+                    lifetime: AgentLifetimeId::new(saved.lifetime).map_err(corrupt)?,
+                    operation: CloseOperationId::new(saved.operation).map_err(corrupt)?,
                 }
             }
             ENDING => {

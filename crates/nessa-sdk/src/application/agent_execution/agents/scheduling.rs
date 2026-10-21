@@ -230,6 +230,7 @@ pub(super) struct Scheduler {
     pending: HashMap<ExecutionId, Pending>,
     running: bool,
     receipts: HashMap<ExecutionId, SubmissionReceipt>,
+    cancelled_evidence: Vec<(ExecutionId, AgentError)>,
 }
 struct Pending {
     input: ExecutionRequest,
@@ -276,6 +277,7 @@ impl Scheduler {
             pending: HashMap::new(),
             running: false,
             receipts: HashMap::new(),
+            cancelled_evidence: Vec::new(),
         }
     }
 }
@@ -2328,8 +2330,18 @@ impl Agent {
         cause: SchedulingCause,
         actor: Option<ActionContext>,
     ) -> Result<(), AgentError> {
-        let mut failure = None;
+        let processed: HashSet<_> = ids.iter().cloned().collect();
+        let mut aggregate: Option<AgentError> = None;
+        for (id, failure) in &scheduler.cancelled_evidence {
+            if !processed.contains(id) {
+                aggregate = Some(match aggregate {
+                    None => failure.clone(),
+                    Some(first) => first.with_independent_failure(failure.clone()),
+                });
+            }
+        }
         for id in ids {
+            let mut failure = None;
             let pending = scheduler.pending.get(&id).expect("admitted queue input");
             // Each waiting owner may have stopped earlier than this drain.
             let first_stop = pending._work.cancellation();
@@ -2353,6 +2365,7 @@ impl Agent {
                 .record_scheduling_audit(audit_record, "cancelled_queue_settlement")
                 .await
                 .map_err(AuditObservationFailure::into_agent_error);
+            let audit_failed = audit.is_err();
             if let Err(error) = &audit {
                 failure = Some(match failure.take() {
                     Some(first) => AgentError::MultipleOperationFailures {
@@ -2487,13 +2500,35 @@ impl Agent {
                     None => aggregate,
                 });
             }
+            if audit_failed {
+                let error = failure.clone().expect("failed cancellation audit");
+                if let Some((_, previous)) = scheduler
+                    .cancelled_evidence
+                    .iter_mut()
+                    .find(|(cached, _)| cached == &id)
+                {
+                    *previous = error;
+                } else {
+                    scheduler.cancelled_evidence.push((id.clone(), error));
+                }
+            } else {
+                scheduler
+                    .cancelled_evidence
+                    .retain(|(cached, _)| cached != &id);
+            }
+            if let Some(error) = failure {
+                aggregate = Some(match aggregate {
+                    None => error,
+                    Some(first) => first.with_independent_failure(error),
+                });
+            }
             scheduler
                 .pending
                 .remove(&id)
                 .expect("admitted queue input")
                 .publish(result);
         }
-        failure.map_or(Ok(()), Err)
+        aggregate.map_or(Ok(()), Err)
     }
 
     async fn retain_receipt_after_failed_save(
@@ -2557,15 +2592,48 @@ impl Agent {
                 let mut scheduler = agent.inner.scheduler.lock().await;
                 let saved = agent.cancel_pending(&mut scheduler, cause, actor).await;
                 drop(scheduler);
-                let saved = super::closing::join_acknowledgements(
-                    saved,
-                    agent.retry_declined_turns().await,
-                );
                 let _invocation = agent.inner.invocation.lock().await;
                 agent.inner.manager.await_admission_writes().await;
                 agent.inner.lifecycle.wait_for_work().await;
                 let cleanup = agent.inner.lifecycle.complete_stop(&attempt).await;
-                Ok::<_, AgentError>(AgentCloseReport::new(cleanup, saved))
+                drop(_invocation);
+                // A later empty pending map cannot acknowledge a failed cancelled-input audit.
+                let cancellation_acknowledged = agent
+                    .inner
+                    .scheduler
+                    .lock()
+                    .await
+                    .cancelled_evidence
+                    .is_empty();
+                let mut scheduling = saved;
+                if cleanup.is_confirmed()
+                    && cleanup.audit().is_ok()
+                    && cleanup.completion_failure().is_none()
+                    && cancellation_acknowledged
+                    && agent.inner.lifecycle.acquired_provider_resources()
+                {
+                    if let Some(scope) = agent
+                        .inner
+                        .lifecycle
+                        .owned_gate()
+                        .and_then(|gate| gate.closing_scope())
+                    {
+                        // The same atomic writer publishes cancellation writes and
+                        // this actual owner's proof together; failed ACK stays retained.
+                        let proof = agent
+                            .inner
+                            .manager
+                            .acknowledge_sdk_close(&scope)
+                            .await
+                            .map_err(AgentError::Storage);
+                        scheduling = super::closing::join_acknowledgements(scheduling, proof);
+                    }
+                }
+                // This separate phase cannot block or acknowledge the SDK receipt above.
+                let decline = agent.retry_declined_turns().await;
+                Ok::<_, AgentError>(
+                    AgentCloseReport::new(cleanup, scheduling).with_decline(decline),
+                )
             }),
         )
         .await

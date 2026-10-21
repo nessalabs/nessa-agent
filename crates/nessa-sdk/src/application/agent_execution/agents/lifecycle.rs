@@ -452,6 +452,9 @@ impl SessionLifecycle {
         }
         Ok(Some(guard))
     }
+    pub(super) fn acquired_provider_resources(&self) -> bool {
+        self.attachment.acquired_resources()
+    }
     pub(super) fn owned_gate(&self) -> Option<Arc<dyn OwnedLifetime>> {
         self.owned.get().map(|slot| Arc::clone(&slot.gate))
     }

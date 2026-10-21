@@ -14,7 +14,10 @@
 //! [`CurrentLeaseState::Unreadable`] until the next lease is issued: a reader
 //! says it cannot show that lease rather than refusing the whole history.
 use super::{EnvironmentPath, FetchOutcome, PublishedFile, StorageError};
+use crate::application::agent_execution::agents::OwnedCloseScope;
 use crate::application::agent_execution::permissions::ActionContext;
+use crate::domain::agent_execution::subagents::AgentLifetimeId;
+use crate::domain::agent_execution::subagents::CloseOperationId;
 use crate::domain::agent_execution::{
     executions::ExecutionId,
     leases::{
@@ -62,6 +65,16 @@ pub enum LeaseRecord {
         cause: LeaseEndCause,
         /// Who asked, when somebody did.
         actor: Option<ActionContext>,
+    },
+    /// The actual SDK close owner acknowledged its non-decline evidence for
+    /// this exact ownership operation. Physical End and decline audit stay separate.
+    SdkCloseAcknowledged {
+        /// The exact current lease whose SDK resources were owned.
+        lease: LeaseId,
+        /// Target lifetime publishing this acknowledgement.
+        lifetime: AgentLifetimeId,
+        /// Durable first-close identity; process-local generations are not identities.
+        operation: CloseOperationId,
     },
     /// The environment reported its cleanup within the deadline (row L7).
     Ended {
@@ -236,6 +249,12 @@ impl CurrentLease {
             _ => None,
         }
     }
+    /// Whether the actual SDK owner acknowledged this exact lease/close scope.
+    pub fn sdk_close_acknowledged(&self, scope: &OwnedCloseScope) -> bool {
+        self.held().is_some_and(|held| self.records.iter().any(|record| matches!(record,
+            LeaseRecord::SdkCloseAcknowledged { lease, lifetime, operation }
+                if lease == held.id() && lifetime == scope.lifetime() && operation == scope.operation())))
+    }
     /// The newest revision known to have been issued or refused.
     pub fn revision(&self) -> Option<LeaseRevision> {
         self.revision
@@ -324,6 +343,9 @@ impl CurrentLease {
     /// else is corrupt.
     fn keep(&mut self, record: &LeaseRecord) -> Result<(), StorageError> {
         match record {
+            LeaseRecord::SdkCloseAcknowledged { .. } if self.records.contains(record) => {
+                Err(corrupt("SDK close acknowledgement is repeated"))
+            }
             LeaseRecord::CommandRefused { .. } => Ok(()),
             LeaseRecord::CommandEnded { lease: ended, .. } => {
                 self.records.retain(|kept| {
@@ -453,6 +475,7 @@ impl CurrentLease {
     fn transition(lease: &mut Lease, record: &LeaseRecord) -> Result<(), StorageError> {
         let named = match record {
             LeaseRecord::Ending { lease, .. }
+            | LeaseRecord::SdkCloseAcknowledged { lease, .. }
             | LeaseRecord::Ended { lease, .. }
             | LeaseRecord::Interrupted { lease }
             | LeaseRecord::CleanupReported { lease, .. }
@@ -472,6 +495,10 @@ impl CurrentLease {
             return Err(corrupt("a lease record names another lease"));
         }
         match record {
+            LeaseRecord::SdkCloseAcknowledged { .. } if lease.phase() == LeasePhase::Live => {
+                Err(corrupt("SDK close acknowledgement precedes lease ending"))
+            }
+            LeaseRecord::SdkCloseAcknowledged { .. } => Ok(()),
             LeaseRecord::Ending { cause, .. } => match lease.end(*cause) {
                 EndDecision::Began => Ok(()),
                 EndDecision::Joined { .. } => Err(corrupt("a lease records a second end")),
