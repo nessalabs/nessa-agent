@@ -1329,3 +1329,78 @@ async fn close_while_a_runner_waits_leaves_it_nothing_to_run_and_both_finish() {
         .expect("close task panicked");
     assert!(outcome.is_ok(), "{outcome:?}");
 }
+
+#[tokio::test]
+async fn report_modes_keep_final_and_suspend_pending_work_semantics() {
+    for suspend in [false, true] {
+        let agent = prepared(
+            Arc::new(InMemoryStorage::new()),
+            Arc::new(SettlementPanickingAudit::default()),
+        )
+        .await;
+        let invocation = agent.inner.invocation.lock().await;
+        let receipt = agent
+            .enqueue(request("report-pending"), Submitter::owner(actor()))
+            .await
+            .unwrap();
+        let closing = tokio::spawn({
+            let agent = agent.clone();
+            async move {
+                if suspend {
+                    agent.suspend_report(actor()).await
+                } else {
+                    agent.close_report(actor()).await
+                }
+            }
+        });
+        assert_eq!(receipt.wait().await, Err(AgentError::Closed));
+        drop(invocation);
+        let report = closing.await.unwrap().unwrap();
+        assert!(report.cleanup().is_confirmed());
+        assert_eq!(report.scheduling(), &Ok(()));
+        let history = agent.session_manager().snapshot().await.unwrap();
+        assert_eq!(
+            history.invocations[0].scheduling.last().unwrap().cause,
+            if suspend {
+                SchedulingCause::Suspended
+            } else {
+                SchedulingCause::SessionClosed
+            }
+        );
+        assert_eq!(agent.owed_turns().await.len(), usize::from(suspend));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn report_retains_failed_pending_cancellation_separately_from_cleanup() {
+    let (entered, waiting) = oneshot::channel();
+    let audit = Arc::new(FirstSettlementStalls {
+        entered: Mutex::new(Some(entered)),
+        attempts: Mutex::new(Vec::new()),
+        stalls: 1,
+    });
+    let agent = prepared(Arc::new(InMemoryStorage::new()), audit.clone()).await;
+    let invocation = agent.inner.invocation.lock().await;
+    let first = agent
+        .enqueue(request("report-first"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let second = agent
+        .enqueue(request("report-second"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close_report(actor()).await }
+    });
+    waiting.await.unwrap();
+    drop(invocation);
+    tokio::time::advance(AUDIT_OBSERVATION_TIMEOUT).await;
+    let report = closing.await.unwrap().unwrap();
+    assert!(report.cleanup().is_confirmed());
+    assert!(report.scheduling().is_err());
+    assert!(report.into_result().is_err());
+    assert_eq!(audit.attempts.lock().unwrap().len(), 2);
+    assert!(first.wait().await.is_err());
+    assert_eq!(second.wait().await, Err(AgentError::Closed));
+}
