@@ -75,6 +75,11 @@
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
  *               message sent after it is answered
+ *   drift       the gateway is stopped and started again with its staged
+ *               runtime directory moved and a different agent PATH and
+ *               TMPDIR, the way an app update stages a new tree and
+ *               re-registers the launchd job; the next message sent in the
+ *               window to the existing conversation is answered
  *   pool        native linking is turned on in Settings and two real
  *               `nessa env dial` workers pair with the gateway; a
  *               conversation created on `peer:any` is bound to one of them
@@ -83,6 +88,12 @@
  *               window binds the conversation to the other, with new provider
  *               context, as the window's heading and the binding both say;
  *               both workers stop and linking is turned off again
+ *   upgrade     the gateway is stopped, its conversation metadata turned
+ *               back into the file an older build wrote (version 6, or 7
+ *               when a newer table holds rows), and started again: it
+ *               upgrades the file to the current version, lists every
+ *               conversation it listed before, and the message sent in the
+ *               window after it is answered
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -105,9 +116,19 @@
  */
 import catalog from "../../../crates/nessa-sdk/data/models.json" with { type: "json" }
 import { randomUUID } from "node:crypto"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
@@ -141,6 +162,7 @@ import {
 } from "./lib/selectors.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
+import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
 import {
   openStressConversation,
   selectedStressConversation,
@@ -150,6 +172,18 @@ import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
 
 const INSTANCE = "conversation-stress"
+/** The conversation metadata version this build writes (`schema.sql`'s last line). */
+const CURRENT_METADATA_VERSION = Number(
+  /PRAGMA user_version = (\d+);\s*$/.exec(
+    readFileSync(
+      new URL(
+        "../../../crates/nessa-server/src/conversation/infrastructure/schema.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  )[1],
+)
 /**
  * The environment that places a conversation on any of the gateway's paired
  * workers (`POOL` in crates/nessa-server/src/conversation/application/placement.rs).
@@ -492,12 +526,24 @@ const sessionRow = (page, conversationId) =>
 
 /**
  * Chooses `label` in the More menu of `conversationId`'s row: the pointer
- * over the row shows its buttons, as a person sees them.
+ * over the row shows its buttons, as a person sees them. The list re-sorts
+ * as other conversations change, which can move the row out from under the
+ * pointer and hide the button again; a person points at the row again, and
+ * so does this, until the button takes the click.
  */
 async function choose(page, conversationId, label) {
   const row = sessionRow(page, conversationId)
-  await row.hover({ timeout: 15_000 })
-  await row.locator('[data-session-action="more"]').click({ timeout: 10_000 })
+  const more = row.locator('[data-session-action="more"]')
+  const end = Date.now() + 20_000
+  for (;;) {
+    await row.hover({ timeout: 15_000 })
+    try {
+      await more.click({ timeout: 2_000 })
+      break
+    } catch (error) {
+      if (Date.now() > end) throw error
+    }
+  }
   await page
     .getByRole("menuitem", { name: label, exact: true })
     .click({ timeout: 10_000 })
@@ -744,10 +790,55 @@ async function startedBeside(run, client, step, n, failures) {
   )
 }
 
+/**
+ * Points the selected agent's command and its absolute file arguments at a
+ * new directory. A script becomes a wrapper there that runs the real file:
+ * a symlink would make `process.argv[1]` differ from the path the script
+ * records, so it would never start, and a copy would break a root it
+ * derives from its own path. The node binary and every other file are
+ * symlinks, so the bytes stay where they are.
+ */
+function moveStagedRuntime(directory) {
+  const configPath = join(directory, "ci", "instances", INSTANCE, "config.json")
+  const config = JSON.parse(readFileSync(configPath, "utf8"))
+  const runtime = config.agents.runtimes[config.agents.selected]
+  const staged = mkdtempSync(join(tmpdir(), "nessa-stress-runtime-"))
+  let n = 0
+  const wrapScript = (path) => {
+    const dest = join(staged, `${n++}-${basename(path)}`)
+    writeFileSync(
+      dest,
+      `import { spawnSync } from "node:child_process"
+import { realpathSync } from "node:fs"
+const result = spawnSync(realpathSync(process.execPath), [${JSON.stringify(path)}, ...process.argv.slice(2)], { stdio: "inherit" })
+process.exit(result.status ?? 1)
+`,
+    )
+    return dest
+  }
+  const relocate = (path) => {
+    if (typeof path !== "string" || !isAbsolute(path) || !existsSync(path)) return path
+    if (lstatSync(path).isDirectory()) return path
+    if (/\.(?:mjs|cjs|js)$/.test(path)) return wrapScript(path)
+    const dest = join(staged, `${n++}-${basename(path)}`)
+    symlinkSync(path, dest)
+    return dest
+  }
+  runtime.command = relocate(runtime.command)
+  // Only the staged runtime moves. An absolute argument such as
+  // `--config /profiles/staging.toml` is the restoration identity.
+  runtime.stagedRuntime = (runtime.stagedRuntime ?? []).map(relocate)
+  writeFileSync(configPath, JSON.stringify(config))
+  chmodSync(configPath, 0o600)
+}
+
 const steps = {
   async model(run, step, failures) {
     const picker = dock(run.page).locator(css.modelChip)
-    if (await picker.isDisabled()) {
+    // A mode switch just before this step can still be settling. The picker
+    // is disabled only while that change is in flight.
+    const enabled = await waitFor(async () => !(await picker.isDisabled()), 10_000)
+    if (!enabled) {
       failures.push("the established conversation's model picker is disabled")
       return
     }
@@ -849,7 +940,7 @@ const steps = {
       )
   },
   async reply(run, step, failures) {
-    const text = prompt(run, STRESS.reply, step)
+    const text = prompt(run, STRESS.reply, step, step.extra ?? "")
     const seen = await send(run, run.main.id, text, failures)
     const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
     // A reply carried on behind a failure echoes its notice first.
@@ -1032,6 +1123,54 @@ const steps = {
     })
   },
 
+  async drift(run, step, failures) {
+    await run.exclusive(async () => {
+      await run.restartConsole.during(run.opened, async () => {
+        const before = failures.length
+        // The composer is already on screen. The window has come back only
+        // once its new session socket has received a frame.
+        let stop = () => {}
+        const recovered = new Promise((resolve) => {
+          const onSocket = (socket) => {
+            if (!socket.url().endsWith("/session")) return
+            const received = () => resolve(true)
+            stop = () => {
+              socket.off("framereceived", received)
+              run.page.off("websocket", onSocket)
+            }
+            socket.once("framereceived", received)
+          }
+          run.page.on("websocket", onSocket)
+          stop = () => run.page.off("websocket", onSocket)
+        })
+        const old = run.client
+        run.restarts += 1
+        const drifted = mkdtempSync(join(tmpdir(), "nessa-stress-drift-"))
+        const path = `/opt/homebrew/bin:${process.env.PATH ?? ""}`
+        try {
+          await run.stack.gateway.restart("SIGTERM", {
+            overlay: {
+              NESSA_AGENT_PATH: path,
+              PATH: path,
+              TMPDIR: drifted,
+            },
+            whileStopped: async () => moveStagedRuntime(run.stack.gateway.directory),
+          })
+          old.close()
+          run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+          const back = await Promise.race([recovered, sleep(60_000).then(() => false)])
+          if (!back)
+            failures.push("the window did not come back after the agent path changed")
+        } finally {
+          stop()
+        }
+        return failures.length === before
+      })
+    })
+    // The existing conversation still takes a message, in the window.
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
   async linking(run, step, failures) {
     await run.exclusive(async () => {
       await openLinkedDevices(run.page)
@@ -1043,6 +1182,44 @@ const steps = {
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
+  async upgrade(run, step, failures) {
+    const listed = async () =>
+      (await run.client.conversation.list({})).conversations
+        .map((each) => each.conversationId)
+        .sort()
+    await run.exclusive(async () => {
+      const before = await listed()
+      const path = metadataFile(run.stack.gateway.directory)
+      let older
+      await run.restartConsole.during(run.opened, async () => {
+        const count = failures.length
+        const old = run.client
+        run.restarts += 1
+        await run.stack.gateway.restart("SIGTERM", async () => {
+          older = asOlderBuild(path)
+        })
+        old.close()
+        run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+        log(`upgrade: restarted on a version ${older} file`)
+        const version = schemaVersion(path)
+        if (version !== CURRENT_METADATA_VERSION)
+          failures.push(
+            `the gateway left the version ${older} file at ${version}, not ${CURRENT_METADATA_VERSION}`,
+          )
+        const after = await listed()
+        if (JSON.stringify(after) !== JSON.stringify(before))
+          failures.push(
+            `the upgraded gateway lists ${after.length} conversations, not the ${before.length} it did`,
+          )
+        // The upgraded gateway still answers the conversation, in the
+        // window: that answer comes over the window's new connection, so
+        // the refused connections while it was down are the restart's.
+        if (failures.length === count) await steps.reply(run, step, failures)
+        return failures.length === count
+      })
+    })
+  },
+
   async rail(run, step, failures) {
     await run.exclusive(async () => {
       await setSideRail(run.page, true, failures)
@@ -1052,12 +1229,22 @@ const steps = {
         failures.push("the window had no room for the side rail")
         return
       }
+      // Open, closed, open again. Each open sends its own phrase: settled
+      // counts copies of one phrase, and the first send is already there.
+      let opened = 0
       for (const open of [true, false, true]) {
         if ((await toggle.getAttribute("aria-expanded")) !== String(open))
           await toggle.click()
         if (!(await aroundTheLights(run.page, open ? "open" : "closed", failures))) return
         // The workspace still takes a message with the rail beside it.
-        if (open && failures.length === 0) await steps.reply(run, step, failures)
+        if (open && failures.length === 0) {
+          opened += 1
+          await steps.reply(
+            run,
+            opened === 1 ? step : { ...step, extra: " again" },
+            failures,
+          )
+        }
       }
       // Turned off with the rail open: the rail goes, and back from Settings
       // the titlebar's controls start where the lights end again.

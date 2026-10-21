@@ -640,26 +640,88 @@ impl GatewayStartup {
 /// reported by its adapter and never changes the authoritative startup state.
 pub trait GatewayStartupEvents: Send + Sync {
     fn publish(&self, startup: &GatewayStartup);
+
+    /// Sync progress for a deferred runtime copy.
+    ///
+    /// The default ignores it. Publishing it must not write
+    /// [`GatewayStartup`]: that projection is what setup treats as readiness.
+    /// The adapter retains the report before it emits, and
+    /// [`Self::latest_runtime_copy`] is what a later subscriber reads.
+    #[cfg(any(target_os = "macos", test))]
+    fn runtime_copy(&self, _progress: &RuntimeCopyProgress) {}
+
+    /// The latest [`Self::runtime_copy`] report, if the adapter kept one.
+    #[cfg(any(target_os = "macos", test))]
+    fn latest_runtime_copy(&self) -> Option<RuntimeCopyProgress> {
+        None
+    }
+}
+
+/// How much of the private runtime has finished `sync_all`.
+///
+/// This is a report. It is not [`GatewayStartup`] and it does not decide
+/// readiness. `Settled` means the attempt stopped reporting, whether the
+/// generation was renamed or the attempt failed before the rename.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(target_os = "macos", test))]
+pub struct RuntimeCopyProgress {
+    pub state: RuntimeCopyPhase,
+    pub files_completed: u64,
+    pub files_total: u64,
+    pub bytes_completed: u64,
+    pub bytes_total: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(target_os = "macos", test))]
+pub enum RuntimeCopyPhase {
+    Copying,
+    Settled,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl RuntimeCopyProgress {
+    pub(crate) fn settled() -> Self {
+        Self {
+            state: RuntimeCopyPhase::Settled,
+            files_completed: 0,
+            files_total: 0,
+            bytes_completed: 0,
+            bytes_total: 0,
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) enum StageMessage {
+    Progress(RuntimeCopyProgress),
+    Finished(Result<(), String>),
 }
 
 /// The staging thread's report of one deferred publication.
 ///
 /// Dropping it without [`Self::finish`] is a missing result. The attempt
 /// records that as a failed publication rather than waiting forever.
+/// [`Self::report`] is the sync progress. A missing report does not change
+/// the publication result.
 #[cfg(any(target_os = "macos", test))]
 pub struct DeferredStageReporter {
-    result: mpsc::Sender<Result<(), String>>,
+    messages: mpsc::Sender<StageMessage>,
 }
 
 #[cfg(any(target_os = "macos", test))]
 impl DeferredStageReporter {
-    pub(crate) fn pair() -> (Self, mpsc::Receiver<Result<(), String>>) {
-        let (result, receiver) = mpsc::channel();
-        (Self { result }, receiver)
+    pub(crate) fn pair() -> (Self, mpsc::Receiver<StageMessage>) {
+        let (messages, receiver) = mpsc::channel();
+        (Self { messages }, receiver)
+    }
+
+    pub fn report(&self, progress: RuntimeCopyProgress) {
+        let _ = self.messages.send(StageMessage::Progress(progress));
     }
 
     pub fn finish(self, result: Result<(), String>) {
-        let _ = self.result.send(result);
+        let _ = self.messages.send(StageMessage::Finished(result));
     }
 }
 

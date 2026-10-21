@@ -26,6 +26,7 @@ import { conversationImportAllowed } from "./architecture/conversation-boundary.
 import { importedPaths } from "./architecture/imported-paths.mjs"
 import { splitPanesBoundaryViolations } from "./architecture/split-panes-boundary.mjs"
 import { desktopVerticalViolations } from "./architecture/desktop-verticals.mjs"
+import { workspaceShellSplitViolations } from "./architecture/workspace-shell-split.mjs"
 import {
   normalizedPath,
   rustBoundaryViolations,
@@ -265,6 +266,10 @@ for (const file of walk(src)) {
   }
 
   for (const violation of desktopVerticalViolations(path, imports)) {
+    fail(file, violation)
+  }
+
+  for (const violation of workspaceShellSplitViolations(path, imports)) {
     fail(file, violation)
   }
 

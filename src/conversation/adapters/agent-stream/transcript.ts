@@ -145,8 +145,12 @@ export function agentTranscript(
         flush()
         const noticeId = part.noticeId
         if (!noticeId) throw new Error("Local notice has no identity")
+        const noticeKind =
+          part.noticeKind === "hook" || part.noticeKind === "deadline"
+            ? part.noticeKind
+            : "review"
         push(
-          `${turn.id}:notice:${noticeId}`,
+          `${turn.id}:notice:${noticeKind}:${noticeId}`,
           {
             type: "unknown",
             wireType: "nessa.local_review_declined",
@@ -154,7 +158,7 @@ export function agentTranscript(
           },
           {
             ...execution,
-            localNotice: { id: noticeId, text: part.text },
+            localNotice: { id: noticeId, kind: noticeKind, text: part.text },
           },
         )
         continue

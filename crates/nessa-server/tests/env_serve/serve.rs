@@ -126,10 +126,13 @@ impl HarnessLauncher for EchoLauncher {
 }
 
 /// Commands that answer at once (`echo`, with its arguments as output) or
-/// run until they are stopped (anything else), and remember what ran.
+/// run until they are stopped (anything else), and remember what ran and
+/// which publish point each was given.
 #[derive(Default)]
 struct FakeCommands {
     ran: Mutex<Vec<CommandWork>>,
+    /// The publish point of each command, in order; `None` when it had none.
+    points: Mutex<Vec<Option<String>>>,
 }
 
 impl CommandRunner for FakeCommands {
@@ -137,8 +140,10 @@ impl CommandRunner for FakeCommands {
         &self,
         command: CommandWork,
         mut stop: watch::Receiver<Option<CommandStop>>,
+        publish_point: Option<String>,
     ) -> Pin<Box<dyn Future<Output = CommandRan> + Send + 'static>> {
         self.ran.lock().unwrap().push(command.clone());
+        self.points.lock().unwrap().push(publish_point);
         Box::pin(async move {
             if command.program() == "echo" {
                 let said: Vec<&str> = command.argv()[1..].iter().map(|a| &**a).collect();
@@ -3150,6 +3155,8 @@ async fn a_command_lease_runs_its_command_once_and_its_ran_ends_it() {
         }
     );
     assert_eq!(gateway.commands.ran.lock().unwrap().len(), 1);
+    // No outbox on this host: the command ran without a publish point.
+    assert_eq!(gateway.commands.points.lock().unwrap().as_slice(), &[None]);
     let entries = gateway.ledger.entries();
     assert_eq!(
         entries[..4],
@@ -3178,6 +3185,178 @@ async fn a_command_lease_runs_its_command_once_and_its_ran_ends_it() {
             },
         ]
     );
+}
+
+/// Row C12: a command lease publishes on its own point while it runs, and
+/// the point stays open until the gateway ends the lease.
+#[tokio::test]
+async fn a_command_lease_publishes_on_its_own_point_until_it_ends() {
+    let (mut gateway, outbox) = Gateway::publishing();
+    assert_eq!(gateway.next().await, hello());
+    gateway.send(grant_command(COMMAND, &["hold"], None)).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Granted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    let point = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(point) = gateway.commands.points.lock().unwrap().last().cloned() {
+                return point;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the command was started");
+    let expected = format!("/outbox/{COMMAND}.sock");
+    assert_eq!(point.as_deref(), Some(expected.as_str()));
+    let answered = publish(&outbox, COMMAND).await;
+    assert_eq!(
+        gateway.said().await,
+        FromEnvironment::Published {
+            lease: COMMAND.into(),
+            artifact: 0,
+            request: None,
+            file: RecordingOutbox::staged(0),
+        }
+    );
+    gateway
+        .send(ToEnvironment::Collected {
+            lease: COMMAND.into(),
+            artifact: 0,
+            outcome: Collection::Held,
+        })
+        .await;
+    assert_eq!(
+        answer_of(answered).await,
+        crate::env_serve::application::PublishAnswer::Held {
+            digest: "ab".repeat(32),
+            size: 20,
+        }
+    );
+    gateway
+        .send(ToEnvironment::End {
+            lease: COMMAND.into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Ran {
+            end: CommandEnd::Stopped,
+            ..
+        }
+    ));
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Ended { .. }
+    ));
+    assert_eq!(outbox.closed.lock().unwrap().as_slice(), &[COMMAND]);
+}
+
+/// Row C13: a file still unanswered when the gateway ends the command is
+/// answered `leaseEnded`, and that is recorded before the lease's end.
+#[tokio::test]
+async fn a_command_lease_ends_a_file_still_unanswered() {
+    let (mut gateway, outbox) = Gateway::publishing();
+    assert_eq!(gateway.next().await, hello());
+    gateway.send(grant_command(COMMAND, &["hold"], None)).await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Granted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if gateway.commands.points.lock().unwrap().last().is_some() {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let answered = publish(&outbox, COMMAND).await;
+    assert!(matches!(
+        gateway.said().await,
+        FromEnvironment::Published { artifact: 0, .. }
+    ));
+    gateway
+        .send(ToEnvironment::End {
+            lease: COMMAND.into(),
+        })
+        .await;
+    assert_eq!(
+        answer_of(answered).await,
+        crate::env_serve::application::PublishAnswer::Refused {
+            reason: nessa_protocol::lease::CollectionRefusal::LeaseEnded,
+        }
+    );
+    assert!(matches!(gateway.next().await, FromEnvironment::Ran { .. }));
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Ended { .. }
+    ));
+    assert!(gateway.ledger.entries().iter().any(|entry| matches!(
+        entry,
+        LedgerEntry::Collected {
+            lease,
+            outcome: Collection::Refused {
+                reason: nessa_protocol::lease::CollectionRefusal::LeaseEnded,
+            },
+            ..
+        } if lease == COMMAND
+    )));
+}
+
+/// Row C18: granting another command does not close a finished command's
+/// publish point. That point stays until the finished command's own End.
+#[tokio::test]
+async fn a_later_grant_leaves_a_finished_commands_publish_point_open() {
+    let (mut gateway, outbox) = Gateway::publishing();
+    assert_eq!(gateway.next().await, hello());
+    gateway
+        .send(grant_command(COMMAND, &["echo", "a"], None))
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Granted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    assert!(matches!(gateway.next().await, FromEnvironment::Ran { .. }));
+    let other = "0b7d3a1e-0000-4000-8000-0000000000c2";
+    gateway
+        .send(grant_command(other, &["echo", "b"], None))
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Granted { lease, .. } if lease == other
+    ));
+    assert!(
+        outbox.closed.lock().unwrap().is_empty(),
+        "the finished command's point was closed by the later grant"
+    );
+    gateway
+        .send(ToEnvironment::End {
+            lease: COMMAND.into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Ended { lease, .. } if lease == COMMAND
+    ));
+    assert_eq!(outbox.closed.lock().unwrap().as_slice(), &[COMMAND]);
 }
 
 /// Each command lease refusal is typed and recorded: a host not configured
@@ -5688,10 +5867,11 @@ async fn a_command_stopped_for_a_revocation_never_holds_serving_open_once_the_ga
 
 /// A drain ends every lease held, each recorded `draining` before its end:
 /// a harness's lease is said `Ending{drained}` and its `End` answered with
-/// what that took, a running command is stopped and answers its `Ran`, one
-/// never run ends holding nothing, and a grant crossing it is refused
-/// `draining`. Serving stays open until the gateway has asked the `End` of
-/// every lease drained, then ends by itself.
+/// what that took, a running command is stopped and answers its `Ran` and
+/// stays held until its `End`, one never run ends holding nothing, and a
+/// grant crossing it is refused `draining`. Serving stays open until the
+/// gateway has asked the `End` of every lease drained, the running command
+/// included, then ends by itself.
 #[tokio::test]
 async fn k1_a_drain_ends_every_lease_recorded_then_serving_ends_once_answered() {
     let mut gateway = revocable(Arc::new(MemoryLedger::default()));
@@ -5734,6 +5914,15 @@ async fn k1_a_drain_ends_every_lease_recorded_then_serving_ends_once_answered() 
             ..
         })
     ));
+    // Its `Ran` leaves it held. Serving waits for its `End`, which closes
+    // the publish point the gateway asked for.
+    assert_eq!(
+        gateway.ended(COMMAND).await,
+        FromEnvironment::Ended {
+            lease: COMMAND.into(),
+            cleanup: Cleanup::Confirmed { forced: true },
+        }
+    );
     // Asked once the drain is said, a grant crosses it.
     gateway
         .send(ToEnvironment::Grant {
@@ -5946,10 +6135,12 @@ async fn k1_a_revocation_after_a_drain_ends_the_lease_once_as_drained() {
         .any(|entry| matches!(entry, LedgerEntry::Revoking { .. })));
 }
 
-/// A drain that leaves only a running command ends serving once that
-/// command's `Ran` is said, with no `End` to wait for: the gateway asks none.
+/// Row C21: a drain that leaves only a running command keeps serving open
+/// after that command's `Ran`, until the gateway's `End`. Closing on the
+/// answer would shut the publish point as a loss while that `End` was still
+/// coming.
 #[tokio::test]
-async fn k1_a_drain_ends_serving_once_its_last_command_answers() {
+async fn k1_a_drain_waits_for_the_end_of_a_command_that_already_answered() {
     let mut gateway = revocable(Arc::new(MemoryLedger::default()));
     assert_eq!(gateway.next().await, hello());
     gateway.send(grant_command(COMMAND, &["wait"], None)).await;
@@ -5970,9 +6161,18 @@ async fn k1_a_drain_ends_serving_once_its_last_command_answers() {
             ..
         }
     ));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!gateway.served.is_finished());
+    assert_eq!(
+        gateway.ended(COMMAND).await,
+        FromEnvironment::Ended {
+            lease: COMMAND.into(),
+            cleanup: Cleanup::Confirmed { forced: true },
+        }
+    );
     tokio::time::timeout(Duration::from_secs(5), &mut gateway.served)
         .await
-        .expect("serving ends once the command answered, with nothing more asked")
+        .expect("serving ends once the command's End is answered")
         .unwrap();
     assert!(gateway.ledger.entries().contains(&LedgerEntry::Ended {
         lease: COMMAND.into(),

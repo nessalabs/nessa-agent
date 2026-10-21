@@ -18,6 +18,7 @@ import {
   openSession,
   sendMessage,
 } from "../../adapters/store/commands"
+import { workspaceActions } from "../../adapters/store/slice"
 import { emptyTranscript, type Transcript } from "../../model/transcript"
 import { ClockProvider } from "../../../../clock"
 import type { ModelRef } from "../../model/workspace-index"
@@ -139,6 +140,60 @@ describe("a pane's composer shows the model the next message is sent with", () =
     })
     expect(shownModel()).toContain("GPT-6 Astra")
     expect(await sentWith(store, source, draftId)).toEqual(astra)
+  })
+
+  it("says the chat cannot be reopened when the model change was refused as a configuration change", async () => {
+    const { store } = await conversation()
+    const choice = { requestId: "r", model: astra }
+    await act(async () => {
+      store.dispatch(
+        workspaceActions.modelChoiceAsked({
+          sessionId: "a",
+          choice: { ...choice, state: "asking" },
+        }),
+      )
+      store.dispatch(
+        workspaceActions.modelChoiceSettled({
+          sessionId: "a",
+          choice: {
+            ...choice,
+            state: "recovery_required",
+            reason: "unavailable",
+            code: "conversation_configuration_changed",
+          },
+        }),
+      )
+    })
+    expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
+      "This chat can't be reopened.",
+    )
+    await act(async () => {
+      store.dispatch(
+        workspaceActions.modelChoiceSettled({
+          sessionId: "a",
+          choice: {
+            ...choice,
+            state: "refused",
+            reason: "not-supported",
+            code: "conversation_configuration_changed",
+          },
+        }),
+      )
+    })
+    expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
+      "This chat can't be reopened.",
+    )
+    await act(async () => {
+      store.dispatch(
+        workspaceActions.modelChoiceSettled({
+          sessionId: "a",
+          choice: { ...choice, state: "recovery_required", reason: "unavailable" },
+        }),
+      )
+    })
+    expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
+      "The model change is not confirmed. Choose again to check and try.",
+    )
   })
 })
 

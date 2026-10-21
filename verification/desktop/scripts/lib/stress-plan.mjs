@@ -101,6 +101,14 @@ export const KNOBS = {
     default: 1,
     what: "times a conversation placed on any worker moves to another when its worker drains",
   },
+  drifts: {
+    default: 1,
+    what: "gateway restarts with a changed agent PATH and TMPDIR, then a send to the existing conversation completes",
+  },
+  upgrades: {
+    default: 1,
+    what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps",
+  },
   long: {
     default: 30,
     what: "turns of long streamed answers one conversation takes before it is talked to in the window",
@@ -172,6 +180,8 @@ export function plan(knobs) {
   add(knobs.tables, () => ({ kind: "table" }))
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
+  add(knobs.drifts, () => ({ kind: "drift" }))
+  add(knobs.upgrades, () => ({ kind: "upgrade" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

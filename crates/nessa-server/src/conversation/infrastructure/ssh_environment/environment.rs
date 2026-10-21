@@ -30,9 +30,11 @@
 //!   | FetchRefused{reason}; given up before Delivered ──▶ Undelivered
 //! LeaseHold::publish / fetch on a connection that carries no files (a
 //!   paired one) ──▶ None, before any frame
-//! a command: grant ──▶ link.grant_command ──▶ SshCommand, the terms the host granted
+//! a command: grant ──▶ link.grant_command ──▶ SshCommand, the terms the host granted,
+//!   and the files it publishes
+//!   SshCommand::publications ──▶ ArtifactOffer, while it runs
 //!   SshCommand::run ──▶ Run ──▶ Ran{end, output, cleanup}
-//!   stop said ──▶ End (not waited for) ──▶ Ran{Stopped} ──▶ Ended
+//!   stop said, or the hold dropped ──▶ End (not waited for) ──▶ Ran{Stopped} ──▶ Ended
 //!   no Ran within its timeout and COMMAND_STOP_WAIT ──▶ unanswered
 //! ```
 //!
@@ -630,7 +632,7 @@ impl CommandEnvironment for SshEnvironment {
                 .link(Install::IfAbsent(lease.as_str()))
                 .await
                 .map_err(CommandRefusal::Environment)?;
-            let terms = link
+            let admitted = link
                 .grant_command(
                     lease.as_str(),
                     command
@@ -652,8 +654,10 @@ impl CommandEnvironment for SshEnvironment {
                     inner: self.inner.clone(),
                     link,
                     lease: lease.as_str().into(),
+                    published: std::sync::Mutex::new(Some(admitted.published)),
+                    gone: admitted.gone,
                 }),
-                granted: granted(terms),
+                granted: granted(admitted.terms),
             })
         })
     }
@@ -702,14 +706,34 @@ fn command_refusal(host: &str, refused: AdmissionRefused) -> CommandRefusal {
 }
 
 /// The gateway's side of one command lease on a host. Dropped, it ends the
-/// lease there unless its run already did.
+/// lease there unless an End is already queued: a command that finished
+/// queues its own from its `Ran`, and the route stays until `Ended`.
 struct SshCommand {
     inner: Arc<Inner>,
     link: Arc<HostLink>,
     lease: String,
+    /// The files published under it, until [`CommandHold::publications`]
+    /// takes them.
+    published: std::sync::Mutex<Option<mpsc::Receiver<Published>>>,
+    /// Closed once the lease is no longer routed on its connection.
+    gone: watch::Receiver<()>,
 }
 
 impl CommandHold for SshCommand {
+    fn publications(&mut self) -> Option<mpsc::Receiver<ArtifactOffer>> {
+        let published = self
+            .published
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()?;
+        Some(offer_artifacts(
+            self.link.clone(),
+            self.lease.clone(),
+            published,
+            self.gone.clone(),
+        ))
+    }
+
     fn run(
         self: Box<Self>,
         timeout_ms: u64,
@@ -801,7 +825,58 @@ fn command_result(answer: CommandAnswer, stopped: Option<LeaseEndCause>) -> Comm
         stderr: answer.stderr,
         dropped_bytes: answer.dropped_bytes,
         cleanup: evidence(answer.cleanup),
+        published: Vec::new(),
     }
+}
+
+/// Offer each file `published` carries as an [`ArtifactOffer`], until the
+/// lease is no longer routed. The same pump a harness lease and a command
+/// lease use.
+fn offer_artifacts(
+    link: Arc<HostLink>,
+    lease: String,
+    mut published: mpsc::Receiver<Published>,
+    gone: watch::Receiver<()>,
+) -> mpsc::Receiver<ArtifactOffer> {
+    let (offers, taken) = mpsc::channel(1);
+    tokio::spawn(async move {
+        while let Some(Published {
+            artifact,
+            file,
+            request,
+            unanswered,
+        }) = published.recv().await
+        {
+            let answering = link.clone();
+            let answered = lease.clone();
+            let bytes: Box<dyn ArtifactBytes> = match link.artifact_transport() {
+                ArtifactTransport::Channels(channels) => Box::new(SftpBytes::new(
+                    channels,
+                    file.path.clone(),
+                    file.size,
+                    gone.clone(),
+                )),
+                ArtifactTransport::Frames => Box::new(FrameBytes::new(
+                    link.clone(),
+                    lease.clone(),
+                    artifact,
+                    file.size,
+                )),
+            };
+            let offer = ArtifactOffer {
+                bytes,
+                file,
+                answer: ArtifactAnswer::new(move |outcome| {
+                    answering.collected(&answered, artifact, outcome, unanswered)
+                }),
+                request,
+            };
+            if offers.send(offer).await.is_err() {
+                break;
+            }
+        }
+    });
+    taken
 }
 
 /// The gateway's side of one lease on a host.
@@ -843,55 +918,17 @@ impl LeaseHold for SshHold {
     }
 
     fn artifacts(&self) -> Option<mpsc::Receiver<ArtifactOffer>> {
-        let mut published = self
+        let published = self
             .published
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()?;
-        let (offers, taken) = mpsc::channel(1);
-        let link = self.link.clone();
-        let lease = self.lease.clone();
-        let gone = self.gone.clone();
-        // Ends with the lease's route: its offers' sender goes with it.
-        tokio::spawn(async move {
-            while let Some(Published {
-                artifact,
-                file,
-                request,
-                unanswered,
-            }) = published.recv().await
-            {
-                let answering = link.clone();
-                let answered = lease.clone();
-                let bytes: Box<dyn ArtifactBytes> = match link.artifact_transport() {
-                    ArtifactTransport::Channels(channels) => Box::new(SftpBytes::new(
-                        channels,
-                        file.path.clone(),
-                        file.size,
-                        gone.clone(),
-                    )),
-                    ArtifactTransport::Frames => Box::new(FrameBytes::new(
-                        link.clone(),
-                        lease.clone(),
-                        artifact,
-                        file.size,
-                    )),
-                };
-                let offer = ArtifactOffer {
-                    bytes,
-                    file,
-                    answer: ArtifactAnswer::new(move |outcome| {
-                        answering.collected(&answered, artifact, outcome, unanswered)
-                    }),
-                    request,
-                };
-                // Nobody takes them any more: its answer's drop says so.
-                if offers.send(offer).await.is_err() {
-                    break;
-                }
-            }
-        });
-        Some(taken)
+        Some(offer_artifacts(
+            self.link.clone(),
+            self.lease.clone(),
+            published,
+            self.gone.clone(),
+        ))
     }
 
     /// Asked over the lease's own connection; its file is offered on the

@@ -264,7 +264,7 @@ so typing it once at pairing is enough for the first relay.
 | RL11b | `Connect{K}` asked repeatedly, faster than the gateway takes them | Past the gateway's few in-flight `Accept`s and its relay pool, readers get `NoAnswer`; a reader dialing directly is admitted as before | R2a (the pool), R2c (end to end) |
 | RL12 | Direct fails and the relay answers `Offline` | `away`; the cache unchanged and readable | R3 |
 | RL13 | Direct fails and the relay answers `NoAnswer`, cannot be reached, or no relay is set | `unreachable`, as today | R3 |
-| RL14 | A paired environment with only a relay path | Dials through it and serves leases as over a direct connection | R4 |
+| RL14 | A paired environment with only a relay path | Dials through it and serves leases as over a direct connection. A command run each way leaves the same command-ledger checkpoint: granted, started, ran exited, ended asked | R4 |
 | RL15 | The gateway's registration ends, or hears nothing for two ping intervals | Dropped and made again after a wait that doubles from 1 s to 60 s, starting over after a registration that lasted a minute; direct readers are served throughout | R2a |
 | RL16 | The relay announces a reader while the gateway's four relay permits are held | Nothing is dialed; the relay answers that reader `NoAnswer` at its join deadline; direct readers are admitted as before | R2a |
 | RL17 | The gateway key cannot make its relay proof | The gateway stops registering and logs it; it serves directly as before | R2a |

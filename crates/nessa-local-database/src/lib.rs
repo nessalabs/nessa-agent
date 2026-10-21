@@ -38,9 +38,17 @@
 //! `quick_check` finds damaged is [`OpenError::Damaged`]. Those are what
 //! the file holds, so opening again cannot change them, and a caller can tell
 //! them from a failure that can clear (docs/adr/todo/202-versioned-local-datasets.md).
-//! There are no in-place migrations: during alpha a schema change bumps the
-//! version and nothing moves the old file, because a reader for an older shape
-//! is what "One current contract" forbids.
+//!
+//! A schema may carry [`Upgrade`]s: forward-only steps, each from one older
+//! version to the next. A file at a version some step starts from is
+//! checked as above, then brought to the schema's version by every step from
+//! there on, in the same transaction that would have created it, so a crash
+//! or a failed step leaves it at the version it had
+//! (`an_older_file_is_upgraded_in_one_transaction_and_keeps_its_rows`). A
+//! step that fails is [`OpenError::Upgrade`], naming that step and its own
+//! cause. A version no step starts from is refused as above. Nothing reads
+//! an older shape: an upgrade brings the file to the current one first
+//! (docs/adr/todo/202-versioned-local-datasets.md, "Migrations").
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{fmt, io, path::Path};
 
@@ -51,35 +59,82 @@ pub use rusqlite;
 pub struct Schema {
     version: u32,
     definition: &'static str,
+    upgrades: &'static [Upgrade],
 }
 impl Schema {
     /// `definition` holds the statements that create every table and index,
     /// run once on an empty file, and exactly one `PRAGMA user_version = N;`
     /// on a line of its own, with N above 0 — 0 is an empty file's.
     pub fn new(definition: &'static str) -> Result<Self, OpenError> {
-        let mut versions = definition.lines().filter_map(|line| {
-            line.trim_matches(|character: char| character.is_ascii_whitespace())
-                .strip_prefix("PRAGMA user_version = ")?
-                .strip_suffix(';')
-        });
-        let digits = |version: &str| version.bytes().all(|byte| byte.is_ascii_digit());
-        match (
-            versions
-                .next()
-                .filter(|version| digits(version))
-                .map(str::parse::<u32>),
-            versions.next(),
-        ) {
-            (Some(Ok(version)), None) if version > 0 => Ok(Self {
-                version,
-                definition,
-            }),
-            _ => Err(OpenError::UnversionedSchema),
+        Ok(Self {
+            version: stated_version(definition).ok_or(OpenError::UnversionedSchema)?,
+            definition,
+            upgrades: &[],
+        })
+    }
+    /// The steps that bring an older file to this version, oldest first. Each
+    /// states the version it sets, one above the one before it, and the last
+    /// sets this schema's own (`upgrades_must_chain_to_the_schemas_version`).
+    pub fn with_upgrades(self, upgrades: &'static [Upgrade]) -> Result<Self, OpenError> {
+        let mut next = upgrades.first().map(|upgrade| upgrade.from);
+        for upgrade in upgrades {
+            let reached = stated_version(upgrade.statements);
+            if Some(upgrade.from) != next || reached != upgrade.from.checked_add(1) {
+                return Err(OpenError::UnversionedSchema);
+            }
+            next = reached;
         }
+        if next.is_some_and(|reached| reached != self.version) {
+            return Err(OpenError::UnversionedSchema);
+        }
+        Ok(Self { upgrades, ..self })
     }
     /// The version the definition states.
     pub fn version(&self) -> u32 {
         self.version
+    }
+    /// The steps from `found` on, when some step starts there.
+    fn upgrades_from(&self, found: i64) -> Option<&'static [Upgrade]> {
+        let first = self
+            .upgrades
+            .iter()
+            .position(|upgrade| i64::from(upgrade.from) == found)?;
+        Some(&self.upgrades[first..])
+    }
+}
+
+/// One forward step: the statements that bring a file at `from` to the next
+/// version, ending with `PRAGMA user_version = from + 1;` on a line of its
+/// own. A step only adds; what it adds is exactly what the current
+/// definition creates, so an upgraded file and a new one are the same shape.
+#[derive(Clone, Copy, Debug)]
+pub struct Upgrade {
+    from: u32,
+    statements: &'static str,
+}
+impl Upgrade {
+    pub const fn new(from: u32, statements: &'static str) -> Self {
+        Self { from, statements }
+    }
+}
+
+/// The one `PRAGMA user_version = N;` line in `statements`, N above 0.
+fn stated_version(statements: &str) -> Option<u32> {
+    let mut versions = statements.lines().filter_map(|line| {
+        line.trim_matches(|character: char| character.is_ascii_whitespace())
+            .strip_prefix("PRAGMA user_version = ")?
+            .strip_suffix(';')
+    });
+    let digits = |version: &str| version.bytes().all(|byte| byte.is_ascii_digit());
+    match (
+        versions
+            .next()
+            .filter(|version| digits(version))
+            .map(str::parse::<u32>),
+        versions.next(),
+    ) {
+        (Some(Ok(version)), None) if version > 0 => Some(version),
+        _ => None,
     }
 }
 
@@ -105,8 +160,14 @@ pub enum OpenError {
     /// `found` is 0 when it has tables and no version at all, and may be any
     /// integer SQLite holds, negative ones included.
     Version { found: i64, expected: u32 },
+    /// A step that brings an older file forward failed; `from` is the
+    /// version that step starts at, and the file is left at the version it
+    /// had. `cause` is SQLite's own: a busy or I/O failure can clear, and a
+    /// file the step cannot apply to (a table already there) cannot.
+    Upgrade { from: u32, cause: rusqlite::Error },
     /// A definition that does not state one version above 0, which could not
-    /// be told from an empty file.
+    /// be told from an empty file, or upgrades that do not step one version
+    /// at a time up to it.
     UnversionedSchema,
 }
 impl fmt::Display for OpenError {
@@ -121,8 +182,13 @@ impl fmt::Display for OpenError {
                 output,
                 "database is at schema version {found}, and this build reads only {expected}"
             ),
+            Self::Upgrade { from, cause } => write!(
+                output,
+                "database could not be upgraded from schema version {from}: {cause}"
+            ),
             Self::UnversionedSchema => output.write_str(
-                "a schema must state one version above 0, as `PRAGMA user_version = N;`",
+                "a schema must state one version above 0, as `PRAGMA user_version = N;`, \
+                 and its upgrades must step one version at a time up to it",
             ),
         }
     }
@@ -139,10 +205,11 @@ impl From<rusqlite::Error> for OpenError {
     }
 }
 
-#[derive(PartialEq)]
 enum Accepted {
     /// At the schema's version.
     Current,
+    /// At an older version these steps bring to the schema's.
+    Older(&'static [Upgrade]),
     /// No version and no tables: the schema is still to be given.
     Empty,
 }
@@ -154,6 +221,9 @@ fn accepted(connection: &Connection, schema: &Schema) -> Result<Accepted, OpenEr
     let found: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if found == i64::from(schema.version) {
         return Ok(Accepted::Current);
+    }
+    if let Some(upgrades) = schema.upgrades_from(found) {
+        return Ok(Accepted::Older(upgrades));
     }
     let tables: u32 =
         connection.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
@@ -214,17 +284,49 @@ fn open_mode(
     connection.pragma_update_and_check(None, "journal_mode", "DELETE", |_| Ok(()))?;
     // Asked again, and when empty given its schema, under one write lock, so
     // two openers of an empty file cannot both set about creating it.
+    // An older file is upgraded under the same lock, so a second opener
+    // waits and then finds it current.
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if accepted(&transaction, schema)? == Accepted::Current {
+    let upgrades = match accepted(&transaction, schema)? {
+        Accepted::Empty => None,
+        Accepted::Current => Some(&[][..]),
+        Accepted::Older(upgrades) => Some(upgrades),
+    };
+    if let Some(upgrades) = upgrades {
         // A header can be whole over a damaged page that nothing above
         // reads. Every page is read once here, so such a file is refused at
-        // open rather than on the first question that reaches it.
+        // open rather than on the first question that reaches it, and an
+        // older one before any step writes to it.
         let problem: String =
             transaction.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
         if problem != "ok" {
             return Err(OpenError::Damaged(problem));
         }
-        drop(transaction);
+        if upgrades.is_empty() {
+            drop(transaction);
+            return Ok(connection);
+        }
+        // Every step or none: dropping the transaction on an error rolls
+        // back the steps already run, and the file keeps the version it had.
+        for upgrade in upgrades {
+            let failed = |cause| OpenError::Upgrade {
+                from: upgrade.from,
+                cause,
+            };
+            transaction
+                .execute_batch(upgrade.statements)
+                .map_err(failed)?;
+            let reached: i64 = transaction
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .map_err(failed)?;
+            if reached != i64::from(upgrade.from) + 1 {
+                return Err(OpenError::Version {
+                    found: reached,
+                    expected: schema.version,
+                });
+            }
+        }
+        transaction.commit()?;
         return Ok(connection);
     }
     // The definition sets its own version, inside the same transaction, and

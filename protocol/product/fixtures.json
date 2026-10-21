@@ -168,6 +168,7 @@
         "description": "The provider requests approval where its native policy requires it."
       }
     ],
+    "model": "claude-sonnet-5",
     "runtime": {
       "agent": "claude",
       "model": "claude-sonnet-5",

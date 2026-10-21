@@ -6,6 +6,7 @@ use std::os::unix::fs::{symlink, PermissionsExt};
 fn opencode_runtime(model: &str) -> AgentRuntime {
     AgentRuntime {
         command: ExecutableUseSnapshot::unmanaged(PathBuf::from("/unverified/opencode")),
+        staged_runtime: Vec::new(),
         args: vec!["old-argument".into()],
         model: model.into(),
         tools_enabled: false,
@@ -161,6 +162,7 @@ fn an_installation_that_only_knew_one_agent_keeps_starting_on_it() {
                 "codex".into(),
                 AgentRuntime {
                     command: ExecutableUseSnapshot::unmanaged(root.path().join("old-node")),
+                    staged_runtime: Vec::new(),
                     args: vec![root.path().join("old-codex.js").to_string_lossy().into()],
                     model: "chosen-model".into(),
                     tools_enabled: true,
@@ -214,6 +216,7 @@ fn default_workspace_rejects_a_symlinked_ancestor() {
                 "claude".into(),
                 AgentRuntime {
                     command: ExecutableUseSnapshot::unmanaged(root.path().join("old-node")),
+                    staged_runtime: Vec::new(),
                     args: vec![root.path().join("old-entry.js").to_string_lossy().into()],
                     model: "chosen-model".into(),
                     tools_enabled: true,
@@ -344,6 +347,7 @@ fn several_configured_agents_with_no_choice_between_them_is_not_the_desktops_to_
     nessa_local_storage::create_directory(&data).unwrap();
     let runtime = || AgentRuntime {
         command: ExecutableUseSnapshot::unmanaged(root.path().join("old-node")),
+        staged_runtime: Vec::new(),
         args: vec![root.path().join("old-entry.js").to_string_lossy().into()],
         model: "chosen-model".into(),
         tools_enabled: true,

@@ -41,6 +41,53 @@ fn next_turn_model_effect_survives_the_product_wire_view() {
     confirmed_effect(ConversationModelChangeEffect::NextTurn, "nextTurn");
 }
 
+#[test]
+fn an_unopened_view_carries_the_conversations_model() {
+    let unused = Arc::new(UnusedAuthority);
+    let mut state = ProductRouteState::new(
+        ResourceId::new("gateway").unwrap(),
+        OrganizationId::new("organization").unwrap(),
+        AudienceId::new("gateway").unwrap(),
+        ProductDependencies {
+            verifier: unused.clone(),
+            owner_phone_purpose: unused.clone(),
+            owner_phone_policy: Arc::new(
+                crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+            ),
+            owner_phone_receivers: None,
+            access: unused.clone(),
+            clock: unused.clone(),
+            policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
+            uptime_clock: unused,
+            agent_probe: Arc::new(StubAgentProbe::answering(false, false)),
+        },
+    );
+    let catalog: AgentsListResult = serde_json::from_value(json!({
+        "agents":[{"agent":"claude","defaultModel":"selected-model","models":[{
+            "modelId":"selected-model","displayName":"Selected model",
+            "maxContextWindowTokens":100000,"reasoning":false,"imageInput":false,
+            "approvalModes":[{"id":"ask","name":"Ask","description":"Ask first"}]
+        }]}],"environments":[],"commandHosts":[],
+        "nativeHooks":{"claude":"off","codex":"off"}
+    }))
+    .unwrap();
+    state.agents_catalog = Some(Arc::new(catalog));
+    let mut projection = Projection::new(
+        "11111111-1111-4111-8111-111111111111".into(),
+        ConversationCapabilities::read_only(),
+        None,
+    );
+    projection.selection(ConversationSelectionView {
+        agent: AgentId::Claude,
+        model: "selected-model".into(),
+        approval_mode: ConversationApprovalMode::Ask,
+    });
+    let wire = wire_view(&state, projection.read()).expect("selection is enough for a wire view");
+    let value = serde_json::to_value(wire).unwrap();
+    assert!(value.get("runtime").is_none());
+    assert_eq!(value["model"], "selected-model");
+}
+
 fn confirmed_effect(effect: ConversationModelChangeEffect, expected: &str) {
     let unused = Arc::new(UnusedAuthority);
     let mut state = ProductRouteState::new(
@@ -95,6 +142,7 @@ fn confirmed_effect(effect: ConversationModelChangeEffect, expected: &str) {
     let value = serde_json::to_value(wire).unwrap();
     assert_eq!(value["modelChangeEffect"], expected);
     assert_eq!(value["approvalMode"], "ask");
+    assert_eq!(value["model"], "selected-model");
     assert_eq!(value["runtime"]["model"], "selected-model");
     assert_eq!(value["runtime"]["modelName"], "Selected model");
     assert!(value.get("modelChange").is_none());

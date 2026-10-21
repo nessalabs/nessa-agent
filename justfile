@@ -17,11 +17,14 @@
 # cmd so Windows does not need Git's sh. Unix still uses sh.
 set windows-shell := ["cmd.exe", "/c"]
 
-# Tauri --bundles is per OS. `app` / `dmg` are macOS-only. Linux names none:
+# Tauri --bundles is per OS. `app` / `dmg` are macOS-only, and a shipping
+# build names both, as the release workflow does: the bundler removes a .app
+# it was not asked for, and the .app is what the build's check verifies.
+# Linux names none:
 # a Linux build makes exactly the release's .deb and refuses a choice
 # (scripts/desktop/build-command.mjs).
 fast-bundles := if os() == "macos" { "--bundles app" } else if os() == "windows" { "--bundles nsis" } else { "" }
-release-bundles := if os() == "macos" { "--bundles dmg" } else if os() == "windows" { "--bundles nsis" } else { "" }
+release-bundles := if os() == "macos" { "--bundles app,dmg" } else if os() == "windows" { "--bundles nsis" } else { "" }
 
 # List recipes. Bare `just` is not `just dev`.
 [private]

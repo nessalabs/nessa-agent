@@ -83,6 +83,63 @@ describe("gateway startup", () => {
     expect(listen).not.toHaveBeenCalled()
     expect(received).not.toHaveBeenCalled()
   })
+
+  it("subscribes to runtime copy progress without reading gateway startup", async () => {
+    const progress = {
+      state: "copying",
+      filesCompleted: 1,
+      filesTotal: 4,
+      bytesCompleted: 10,
+      bytesTotal: 40,
+    } as const
+    const stop = vi.fn()
+    let publish!: (event: { payload: typeof progress }) => void
+    listen.mockImplementation(async (_name, handler) => {
+      publish = handler
+      return stop
+    })
+    const { onRuntimeCopy } = await import("./window")
+    const received = vi.fn()
+
+    const unlisten = await onRuntimeCopy(received)
+    publish({ payload: progress })
+    unlisten()
+
+    expect(listen).toHaveBeenCalledWith("nessa://runtime-copy", expect.any(Function))
+    expect(received).toHaveBeenCalledWith(progress)
+    expect(invoke).not.toHaveBeenCalled()
+    expect(stop).toHaveBeenCalledOnce()
+  })
+
+  it("reads the retained runtime copy without treating it as gateway startup", async () => {
+    const progress = {
+      state: "settled",
+      filesCompleted: 0,
+      filesTotal: 0,
+      bytesCompleted: 0,
+      bytesTotal: 0,
+    } as const
+    invoke.mockResolvedValueOnce(progress)
+    const { runtimeCopy } = await import("./window")
+
+    await expect(runtimeCopy()).resolves.toEqual(progress)
+
+    expect(invoke).toHaveBeenCalledExactlyOnceWith("runtime_copy")
+    expect(listen).not.toHaveBeenCalled()
+  })
+
+  it("has no retained runtime copy in the browser", async () => {
+    vi.stubGlobal("window", {})
+    vi.resetModules()
+    const { onRuntimeCopy, runtimeCopy } = await import("./window")
+
+    await expect(runtimeCopy()).resolves.toBeNull()
+    const unlisten = await onRuntimeCopy(() => undefined)
+    unlisten()
+
+    expect(invoke).not.toHaveBeenCalled()
+    expect(listen).not.toHaveBeenCalled()
+  })
 })
 
 describe("native attachment picker", () => {
