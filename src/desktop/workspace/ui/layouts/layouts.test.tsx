@@ -480,33 +480,36 @@ describe("a pane's close is offered where closing it does something", () => {
 
 describe("a source removing a session", () => {
   it("keeps that session in its box until the box goes", async () => {
-    const { store, root } = await render(ThreeColumns)
-    const labels = () =>
-      [...host.querySelectorAll("article.workspace-pane")].map((pane) =>
-        pane.getAttribute("aria-label"),
-      )
-    expect(labels()).toEqual(["Session a", "Session b"])
-    await act(async () => {
-      store.dispatch(
-        workspaceActions.sessionRemoved({
-          sessionId: "b",
-          revision: 2,
-          draftId: "fresh",
-        }),
-      )
-    })
-    expect(selectSession(store.getState(), "b")).toBeUndefined()
-    expect(labels()).toEqual(["Session a", "Session b"])
-    await act(
-      async () =>
-        new Promise<void>((resolve) =>
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-          ),
-        ),
-    )
-    expect(labels()).toEqual(["Session a"])
-    await act(async () => root.unmount())
+    // jsdom runs animation frames on a timer. Stepping them keeps a busy
+    // event loop from painting the box away before the assertion.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const labels = () =>
+        [...host.querySelectorAll("article.workspace-pane")].map((pane) =>
+          pane.getAttribute("aria-label"),
+        )
+      expect(labels()).toEqual(["Session a", "Session b"])
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(selectSession(store.getState(), "b")).toBeUndefined()
+      expect(labels()).toEqual(["Session a", "Session b"])
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(labels()).toEqual(["Session a", "Session b"])
+      await act(async () => frames.runFrame())
+      expect(labels()).toEqual(["Session a"])
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
   })
 })
 
