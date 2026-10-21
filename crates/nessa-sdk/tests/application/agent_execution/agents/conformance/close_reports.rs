@@ -1,6 +1,7 @@
 //! Public close/suspend preserve the same transaction's resource and evidence facts.
 use super::*;
 
+#[path = "close_reports/owned_root.rs"]
 mod owned_root;
 
 #[tokio::test]

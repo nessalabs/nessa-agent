@@ -68,12 +68,26 @@ async fn owned_root() -> RootFixture {
     bounded(agent.start_attachment(authorization).unwrap().wait())
         .await
         .unwrap();
-    RootFixture { agent, backend, coordinator, root, gate, room }
+    RootFixture {
+        agent,
+        backend,
+        coordinator,
+        root,
+        gate,
+        room,
+    }
 }
 
 #[tokio::test]
 async fn bare_owned_root_cannot_acknowledge_pending_executable_use_release() {
-    let RootFixture { agent, backend, coordinator, root, gate, room } = owned_root().await;
+    let RootFixture {
+        agent,
+        backend,
+        coordinator,
+        root,
+        gate,
+        room,
+    } = owned_root().await;
     assert!(agent.may_hold_provider_resources());
     assert_eq!(backend.shutdowns.lock().unwrap().len(), 0);
     *backend.cleanup.lock().unwrap() = CleanupReport::new(
@@ -97,17 +111,35 @@ async fn bare_owned_root_cannot_acknowledge_pending_executable_use_release() {
     let retry = bounded(agent.end_owned_lifetime(close_action())).await;
     let final_state = coordinator.lifetime_state(&root);
     eprintln!("bare-root actual retry: result={retry:?}, graph={final_state:?}");
-    assert!(first.is_err(), "pending executable-use release is not a successful close");
-    assert!(pending_resources, "the real provider owner remains retained");
-    assert!(!pending_backend_closed, "the fixture has not acknowledged complete backend release");
-    assert_eq!(pending_calls, 1, "the first close polls this backend exactly once");
+    assert!(
+        first.is_err(),
+        "pending executable-use release is not a successful close"
+    );
+    assert!(
+        pending_resources,
+        "the real provider owner remains retained"
+    );
+    assert!(
+        !pending_backend_closed,
+        "the fixture has not acknowledged complete backend release"
+    );
+    assert_eq!(
+        pending_calls, 1,
+        "the first close polls this backend exactly once"
+    );
     assert_eq!(
         pending_state,
         Some(LifetimeState::Closing),
         "physical process cleanup cannot close an owned root while executable-use release is pending"
     );
-    assert!(pending_scope, "pending ownership retains its exact cleanup scope");
-    assert!(retry.is_ok(), "actual acknowledged release completes the original owner: {retry:?}");
+    assert!(
+        pending_scope,
+        "pending ownership retains its exact cleanup scope"
+    );
+    assert!(
+        retry.is_ok(),
+        "actual acknowledged release completes the original owner: {retry:?}"
+    );
     assert_eq!(final_state, Some(LifetimeState::Closed));
     assert!(!agent.may_hold_provider_resources());
     assert!(*backend.closed.borrow());
@@ -122,13 +154,26 @@ async fn bare_root_pending_release_waits_for_real_receipt_in_both_close_modes() 
     for suspend in [false, true] {
         for forced in [false, true] {
             for audit_failed in [false, true] {
-                let RootFixture { agent, backend, coordinator, root, gate, room } = owned_root().await;
+                let RootFixture {
+                    agent,
+                    backend,
+                    coordinator,
+                    root,
+                    gate,
+                    room,
+                } = owned_root().await;
                 bounded(gate.seal_for_host(&close_action())).await.unwrap();
-                let audit = if audit_failed { Err(AgentError::AuditFailure) } else { Ok(()) };
+                let audit = if audit_failed {
+                    Err(AgentError::AuditFailure)
+                } else {
+                    Ok(())
+                };
                 let pending = CleanupReport::new(
                     ResourceCleanup::ReleasePending {
                         physical: CloseOutcome { forced },
-                        failure: AgentError::Configuration("executable-use release remains pending".into()),
+                        failure: AgentError::Configuration(
+                            "executable-use release remains pending".into(),
+                        ),
                     },
                     audit.clone(),
                 );
@@ -141,7 +186,10 @@ async fn bare_root_pending_release_waits_for_real_receipt_in_both_close_modes() 
                 assert_eq!(first.cleanup(), &pending);
                 assert!(first.cleanup().physical_outcome().is_some());
                 assert!(!first.cleanup().is_confirmed());
-                assert_eq!(coordinator.lifetime_state(&root), Some(LifetimeState::Closing));
+                assert_eq!(
+                    coordinator.lifetime_state(&root),
+                    Some(LifetimeState::Closing)
+                );
                 assert!(gate.cleanup_scope().is_some());
                 assert!(agent.may_hold_provider_resources());
                 assert!(!*backend.closed.borrow());
@@ -150,11 +198,16 @@ async fn bare_root_pending_release_waits_for_real_receipt_in_both_close_modes() 
                 // requesting its retry does not release the graph or SDK owner.
                 let (acknowledge, held) = oneshot::channel();
                 *backend.cleanup_gate.lock().unwrap() = Some(held);
-                *backend.cleanup.lock().unwrap() =
-                    CleanupReport::new(ResourceCleanup::Confirmed(CloseOutcome { forced }), audit.clone());
+                *backend.cleanup.lock().unwrap() = CleanupReport::new(
+                    ResourceCleanup::Confirmed(CloseOutcome { forced }),
+                    audit.clone(),
+                );
                 let mut retry = Box::pin(async {
-                    if suspend { agent.suspend_report(close_action()).await }
-                    else { agent.close_report(close_action()).await }
+                    if suspend {
+                        agent.suspend_report(close_action()).await
+                    } else {
+                        agent.close_report(close_action()).await
+                    }
                 });
                 bounded(async {
                     tokio::select! {
@@ -162,20 +215,30 @@ async fn bare_root_pending_release_waits_for_real_receipt_in_both_close_modes() 
                         _ = retry.as_mut() => panic!("cleanup cannot finish before its actual receipt"),
                     }
                 }).await;
-                assert_eq!(coordinator.lifetime_state(&root), Some(LifetimeState::Closing));
+                assert_eq!(
+                    coordinator.lifetime_state(&root),
+                    Some(LifetimeState::Closing)
+                );
                 assert!(gate.cleanup_scope().is_some());
                 assert!(agent.may_hold_provider_resources());
                 assert!(!*backend.closed.borrow());
                 assert_eq!(backend.shutdowns.lock().unwrap().len(), 2);
                 acknowledge.send(()).unwrap();
                 let retry = bounded(retry).await.unwrap();
-                assert_eq!(retry.cleanup().resources(), &ResourceCleanup::Confirmed(CloseOutcome { forced }));
+                assert_eq!(
+                    retry.cleanup().resources(),
+                    &ResourceCleanup::Confirmed(CloseOutcome { forced })
+                );
                 assert_eq!(retry.cleanup().audit(), &audit);
                 assert!(!agent.may_hold_provider_resources());
                 assert!(*backend.closed.borrow());
                 assert_eq!(
                     coordinator.lifetime_state(&root),
-                    Some(if audit_failed { LifetimeState::Closing } else { LifetimeState::Closed }),
+                    Some(if audit_failed {
+                        LifetimeState::Closing
+                    } else {
+                        LifetimeState::Closed
+                    }),
                     "a true release ACK cannot erase independent audit failure"
                 );
                 assert_eq!(gate.cleanup_scope().is_some(), audit_failed);
@@ -190,23 +253,38 @@ async fn bare_root_pending_release_waits_for_real_receipt_in_both_close_modes() 
 #[tokio::test]
 async fn bare_root_unconfirmed_cleanup_does_not_gain_release_from_diagnostics() {
     for forced in [false, true] {
-        let RootFixture { agent, backend, coordinator, root, gate, .. } = owned_root().await;
+        let RootFixture {
+            agent,
+            backend,
+            coordinator,
+            root,
+            gate,
+            ..
+        } = owned_root().await;
         bounded(gate.seal_for_host(&close_action())).await.unwrap();
         let diagnostic = AgentError::StorageDuringClose {
-            error: nessa_sdk::application::agent_execution::sessions::StorageError::Io("missing ACK".into()),
+            error: nessa_sdk::application::agent_execution::sessions::StorageError::Io(
+                "missing ACK".into(),
+            ),
             cleanup_result: Box::new(Ok(CloseOutcome { forced })),
         };
         *backend.cleanup.lock().unwrap() =
             CleanupReport::new(ResourceCleanup::Unconfirmed(diagnostic), Ok(()));
         let first = bounded(agent.close_report(close_action())).await.unwrap();
         assert!(!first.cleanup().is_confirmed());
-        assert_eq!(coordinator.lifetime_state(&root), Some(LifetimeState::Closing));
+        assert_eq!(
+            coordinator.lifetime_state(&root),
+            Some(LifetimeState::Closing)
+        );
         assert!(gate.cleanup_scope().is_some());
         assert!(agent.may_hold_provider_resources());
         *backend.cleanup.lock().unwrap() = CleanupReport::confirmed(CloseOutcome { forced });
         let retry = bounded(agent.close_report(close_action())).await.unwrap();
         assert!(retry.cleanup().is_confirmed());
-        assert_eq!(coordinator.lifetime_state(&root), Some(LifetimeState::Closed));
+        assert_eq!(
+            coordinator.lifetime_state(&root),
+            Some(LifetimeState::Closed)
+        );
         assert!(!agent.may_hold_provider_resources());
         assert_eq!(backend.shutdowns.lock().unwrap().len(), 2);
     }
@@ -214,7 +292,14 @@ async fn bare_root_unconfirmed_cleanup_does_not_gain_release_from_diagnostics() 
 
 #[tokio::test]
 async fn ordinary_suspend_does_not_implicitly_seal_a_bare_owned_root() {
-    let RootFixture { agent, backend, coordinator, root, gate, .. } = owned_root().await;
+    let RootFixture {
+        agent,
+        backend,
+        coordinator,
+        root,
+        gate,
+        ..
+    } = owned_root().await;
     *backend.cleanup.lock().unwrap() = CleanupReport::new(
         ResourceCleanup::ReleasePending {
             physical: CloseOutcome { forced: false },
@@ -232,6 +317,11 @@ async fn ordinary_suspend_does_not_implicitly_seal_a_bare_owned_root() {
     assert!(retry.cleanup().is_confirmed());
     assert_eq!(coordinator.lifetime_state(&root), Some(LifetimeState::Open));
     assert!(!agent.may_hold_provider_resources());
-    bounded(agent.end_owned_lifetime(close_action())).await.unwrap();
-    assert_eq!(coordinator.lifetime_state(&root), Some(LifetimeState::Closed));
+    bounded(agent.end_owned_lifetime(close_action()))
+        .await
+        .unwrap();
+    assert_eq!(
+        coordinator.lifetime_state(&root),
+        Some(LifetimeState::Closed)
+    );
 }
