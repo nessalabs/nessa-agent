@@ -244,6 +244,197 @@ fn refused_tree_clone_still_publishes_a_private_runtime() {
     );
 }
 
+fn reproduce_tree(source: &Path, destination: &Path) {
+    let metadata = fs::symlink_metadata(source).unwrap();
+    if metadata.file_type().is_symlink() {
+        symlink(fs::read_link(source).unwrap(), destination).unwrap();
+    } else if metadata.is_dir() {
+        fs::create_dir(destination).unwrap();
+        for entry in fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            reproduce_tree(&entry.path(), &destination.join(entry.file_name()));
+        }
+    } else {
+        fs::copy(source, destination).unwrap();
+        fs::set_permissions(destination, metadata.permissions()).unwrap();
+    }
+}
+
+#[test]
+fn a_cloned_tree_that_matches_the_survey_is_sealed() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    fs::create_dir(source.join("pkg")).unwrap();
+    fs::write(source.join("pkg/lib"), b"library").unwrap();
+    symlink("nessa", source.join("gateway-link")).unwrap();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+
+    let staged = stage_runtime_tree(
+        &source,
+        &versions,
+        &fingerprint,
+        None,
+        &|source, destination| {
+            reproduce_tree(source, destination);
+            set_test_attribute(&destination.join("nessa"));
+            Ok(true)
+        },
+    )
+    .unwrap();
+
+    assert_eq!(tree_fingerprint(&staged).unwrap(), fingerprint);
+    assert_eq!(
+        fs::metadata(staged.join("nessa"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o711
+    );
+    assert!(!has_test_attribute(&staged.join("nessa")));
+    assert_eq!(
+        fs::metadata(staged.join("pkg"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::read_link(staged.join("gateway-link")).unwrap(),
+        Path::new("nessa")
+    );
+}
+
+#[test]
+fn a_directory_replaced_by_a_symlink_is_refused_before_sealing() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    fs::create_dir(source.join("pkg")).unwrap();
+    fs::write(source.join("pkg/lib"), b"library").unwrap();
+    symlink("nessa", source.join("gateway-link")).unwrap();
+    let fingerprint = Fixture::manifest(&source);
+
+    let outside = fixture.0.join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::set_permissions(&outside, Permissions::from_mode(0o755)).unwrap();
+    let secret = outside.join("lib");
+    fs::write(&secret, b"secret").unwrap();
+    fs::set_permissions(&secret, Permissions::from_mode(0o644)).unwrap();
+    set_test_attribute(&secret);
+
+    let versions = fixture.0.join("versions");
+    let sealed = Arc::new(AtomicBool::new(false));
+    let started = sealed.clone();
+    let _hook = CopyHookGuard::set(move |_| {
+        started.store(true, Ordering::SeqCst);
+        Ok(())
+    });
+    let error = stage_runtime_tree(
+        &source,
+        &versions,
+        &fingerprint,
+        None,
+        &|source, destination| {
+            let pkg = source.join("pkg");
+            fs::remove_dir_all(&pkg).unwrap();
+            symlink(&outside, &pkg).unwrap();
+            reproduce_tree(source, destination);
+            Ok(true)
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.contains("substituted a symlink"), "{error}");
+    assert!(!sealed.load(Ordering::SeqCst));
+    assert_eq!(
+        fs::symlink_metadata(&outside).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(
+        fs::symlink_metadata(&secret).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert!(has_test_attribute(&secret));
+    assert_eq!(fs::read(secret).unwrap(), b"secret");
+    assert_eq!(fs::read_dir(&versions).unwrap().count(), 0);
+}
+
+#[test]
+fn an_unsurveyed_symlink_is_refused_before_sealing() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let outside = fixture.0.join("outside-file");
+    fs::write(&outside, b"outside").unwrap();
+    fs::set_permissions(&outside, Permissions::from_mode(0o644)).unwrap();
+    set_test_attribute(&outside);
+
+    let versions = fixture.0.join("versions");
+    let sealed = Arc::new(AtomicBool::new(false));
+    let started = sealed.clone();
+    let _hook = CopyHookGuard::set(move |_| {
+        started.store(true, Ordering::SeqCst);
+        Ok(())
+    });
+    let error = stage_runtime_tree(
+        &source,
+        &versions,
+        &fingerprint,
+        None,
+        &|source, destination| {
+            reproduce_tree(source, destination);
+            symlink(&outside, destination.join("extra")).unwrap();
+            Ok(true)
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.contains("substituted a symlink"), "{error}");
+    assert!(!sealed.load(Ordering::SeqCst));
+    assert!(has_test_attribute(&outside));
+    assert_eq!(
+        fs::symlink_metadata(&outside).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert_eq!(fs::read_dir(&versions).unwrap().count(), 0);
+}
+
+#[test]
+fn a_clone_missing_a_surveyed_file_is_refused_before_sealing() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    let sealed = Arc::new(AtomicBool::new(false));
+    let started = sealed.clone();
+    let _hook = CopyHookGuard::set(move |_| {
+        started.store(true, Ordering::SeqCst);
+        Ok(())
+    });
+
+    let error = stage_runtime_tree(
+        &source,
+        &versions,
+        &fingerprint,
+        None,
+        &|source, destination| {
+            reproduce_tree(source, destination);
+            fs::remove_file(destination.join("node")).unwrap();
+            Ok(true)
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error.contains("does not match the surveyed tree"),
+        "{error}"
+    );
+    assert!(!sealed.load(Ordering::SeqCst));
+    assert_eq!(fs::read_dir(&versions).unwrap().count(), 0);
+}
+
 #[test]
 fn tree_clone_error_removes_the_unpublished_runtime() {
     let fixture = Fixture::new();

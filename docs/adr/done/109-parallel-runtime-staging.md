@@ -68,10 +68,14 @@ Mac got faster.
 ## Decision
 
 Survey the tree, send the zero progress report, then `clonefile` the source
-directory onto `.staging-<id>` in one call. One thread then sets every
-directory to `0700`, and for each file opens it, seals the mode and extended
-attributes, and runs `sync_all`. Progress counts a file only after that
-`sync_all` returns. The digest runs after that loop: the fingerprint includes
+directory onto `.staging-<id>` in one call. The clone is then compared with
+that survey without following links. A path whose type is not the surveyed
+one, including a directory or file replaced by a symlink and a symlink the
+survey did not record, refuses the attempt before any mode, attribute, or
+sync call. One thread then sets every directory to `0700`, and for each file
+opens it, seals the mode and extended attributes, and runs `sync_all`.
+Progress counts a file only after that `sync_all` returns. The digest runs
+after that loop: the fingerprint includes
 execute bits, and on one thread a hash started earlier would read a file
 that is not sealed yet. Directory sync, the publication checks, and one
 `renamex_np` follow, unchanged. The per-file fallback still overlaps the

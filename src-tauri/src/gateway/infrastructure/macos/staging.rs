@@ -1,9 +1,13 @@
 //! Immutable runtime installations. Copy and verify in a private sibling directory,
 //! then publish once; old and already-published generations are never rewritten.
 //!
-//! The shipping copy clones the whole source tree with one `clonefile`, then
-//! one thread seals each file and runs `sync_all`. The digest follows that
-//! loop: it reads execute bits, and those bits have to be the sealed mode.
+//! The shipping copy clones the whole source tree with one `clonefile`, checks
+//! that clone against the survey, then one thread seals each file and runs
+//! `sync_all`. A path that is not the surveyed type — a directory or file
+//! replaced by a symlink, or a symlink the survey did not record — refuses
+//! the attempt before any permission, attribute, or sync call. The digest
+//! follows the seal: it reads execute bits, and those bits have to be the
+//! sealed mode.
 //! `ENOTSUP` and `EXDEV` fall back to per-file work on one thread, and that
 //! path's digest overlaps the syncs after every seal has returned. Progress
 //! counts a file only after that `sync_all` returns, and the zero report is
@@ -621,6 +625,94 @@ struct PlannedCopy {
     links: Vec<PlannedLink>,
 }
 
+/// What the survey recorded at one path. The clone is accepted only when every
+/// path still has this type, read with `symlink_metadata`.
+enum SurveyedEntry {
+    Directory,
+    File,
+    Link(PathBuf),
+}
+
+/// The clone must still be the surveyed tree. Nothing is followed.
+///
+/// A directory that became a symlink after the survey would be chmod'd through
+/// that link, and a file open only passes `O_NOFOLLOW` on its last component.
+/// This is the check before any of those calls.
+fn cloned_tree_matches(staged: &Path, plan: &PlannedCopy) -> Result<(), String> {
+    let mut surveyed = HashMap::new();
+    for directory in &plan.directories {
+        surveyed.insert(directory.clone(), SurveyedEntry::Directory);
+    }
+    for file in &plan.files {
+        surveyed.insert(file.destination.clone(), SurveyedEntry::File);
+    }
+    for link in &plan.links {
+        surveyed.insert(
+            link.destination.clone(),
+            SurveyedEntry::Link(link.target.clone()),
+        );
+    }
+    let mut seen = HashSet::new();
+    match_cloned_entry(staged, &surveyed, &mut seen)?;
+    if seen.len() != surveyed.len() {
+        return Err("Cloned runtime does not match the surveyed tree".into());
+    }
+    Ok(())
+}
+
+fn match_cloned_entry(
+    path: &Path,
+    surveyed: &HashMap<PathBuf, SurveyedEntry>,
+    seen: &mut HashSet<PathBuf>,
+) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    let kind = metadata.file_type();
+    let Some(expected) = surveyed.get(path) else {
+        if kind.is_symlink() {
+            return Err(substituted_symlink(path));
+        }
+        return Err("Cloned runtime does not match the surveyed tree".into());
+    };
+    match expected {
+        SurveyedEntry::Directory => {
+            if kind.is_symlink() {
+                return Err(substituted_symlink(path));
+            }
+            if !metadata.is_dir() {
+                return Err("Cloned runtime does not match the surveyed tree".into());
+            }
+            seen.insert(path.to_path_buf());
+            for (_, child) in children(path)? {
+                match_cloned_entry(&child, surveyed, seen)?;
+            }
+        }
+        SurveyedEntry::File => {
+            if kind.is_symlink() {
+                return Err(substituted_symlink(path));
+            }
+            if !metadata.is_file() {
+                return Err("Cloned runtime does not match the surveyed tree".into());
+            }
+            seen.insert(path.to_path_buf());
+        }
+        SurveyedEntry::Link(target) => {
+            if !kind.is_symlink() {
+                return Err("Cloned runtime does not match the surveyed tree".into());
+            }
+            let actual = fs::read_link(path).map_err(|error| error.to_string())?;
+            if &actual != target {
+                return Err(substituted_symlink(path));
+            }
+            seen.insert(path.to_path_buf());
+        }
+    }
+    Ok(())
+}
+
+fn substituted_symlink(path: &Path) -> String {
+    format!("Cloned runtime substituted a symlink at {}", path.display())
+}
+
 /// How far `sync_all` has got. A file is counted after its own sync returns.
 /// The count and the callback share one lock, so a slower report cannot move
 /// the percent backwards and cannot land after the final file. The callback
@@ -989,6 +1081,7 @@ fn seal_cloned_tree(
     progress: &CopyProgress<'_>,
     hooks: &AttemptHooks,
 ) -> Result<(), String> {
+    cloned_tree_matches(staged, plan)?;
     for directory in &plan.directories {
         phase!(
             Phase::Permissions,
@@ -1386,9 +1479,11 @@ const CLONE_NOFOLLOW: u32 = 0x0001;
 /// directory, and it rejects `COPYFILE_CLONE_FORCE`. One `clonefile` of the
 /// directory is the call that is not a per-file metadata transaction. The
 /// kernel clones each item; this process then rewrites modes and extended
-/// attributes, which a faithful recursive copy would have kept. `ENOTSUP` and
-/// `EXDEV` return `Ok(false)` so the caller can copy one file at a time. The
-/// syscall is all-or-nothing: a failure leaves no destination tree.
+/// attributes, which a faithful recursive copy would have kept. The caller
+/// matches that clone against the survey before any of those writes.
+/// `ENOTSUP` and `EXDEV` return `Ok(false)` so the caller can copy one file at
+/// a time. The syscall is all-or-nothing: a failure leaves no destination
+/// tree.
 fn clone_directory(source: &Path, destination: &Path) -> Result<bool, String> {
     let source = CString::new(utf8(source)?).map_err(|error| error.to_string())?;
     let destination = CString::new(utf8(destination)?).map_err(|error| error.to_string())?;

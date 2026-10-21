@@ -22,9 +22,11 @@
 //! and keeps the bundle path for
 //! the rest of this process while the installed definition still names it. A
 //! failure after the early ready publish carries a strictly newer startup
-//! revision. The copy clones the source tree with one `clonefile`, then one
-//! thread seals each file and runs `sync_all`. A filesystem that cannot clone
-//! copies one file at a time on that same single thread. Progress counts a
+//! revision. The copy clones the source tree with one `clonefile`, checks that
+//! clone against the survey, then one thread seals each file and runs
+//! `sync_all`. A substituted symlink refuses the attempt before that seal. A
+//! filesystem that cannot clone copies one file at a time on that same single
+//! thread. Progress counts a
 //! file only after that sync returns, and the zero report is sent once the
 //! file count is known, before `clonefile`. The host retains the latest
 //! report and answers it to a bundled window that subscribes afterwards. The
