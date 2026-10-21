@@ -1,9 +1,9 @@
 //! New mandatory evidence waits behind the lifecycle's admitted proof writer.
 use super::*;
 use crate::application::agent_execution::{
+    agents::AgentFuture,
     executions::{ExecutionAudit, ExecutionAuditRecord},
     providers::CloseOutcome,
-    AgentFuture,
 };
 use crate::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
 use std::sync::atomic::AtomicUsize;
