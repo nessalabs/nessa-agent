@@ -911,16 +911,22 @@ fn confirmed_cleanup(report: &CleanupReport) -> Option<CloseOutcome> {
 }
 
 /// The cleanup a close that failed with `error` still confirmed: only saving
-/// the evidence of it failed. Its agent holds nothing then, whatever the
-/// close answers.
-pub(crate) fn confirmed_despite(error: &AgentError) -> Option<CloseOutcome> {
+/// the evidence of it failed. The exact lease owner must independently confirm
+/// whole SDK/environment resource release; a diagnostic cannot provide that fact.
+pub(crate) fn confirmed_despite(
+    error: &AgentError,
+    resources: Option<LeaseCleanup>,
+) -> Option<CloseOutcome> {
+    let Some(LeaseCleanup::Confirmed { forced }) = resources else {
+        return None;
+    };
     // Each storage wrapper retains the independently observed cleanup result.
     // Following that typed result acknowledges no write and discards no error;
     // SDK proof and lease-finalization writes can both fail around one cleanup.
     let mut current = error;
     while let AgentError::StorageDuringClose { cleanup_result, .. } = current {
         match cleanup_result.as_ref() {
-            Ok(outcome) => return Some(*outcome),
+            Ok(_) => return Some(CloseOutcome { forced }),
             Err(error) => current = error,
         }
     }

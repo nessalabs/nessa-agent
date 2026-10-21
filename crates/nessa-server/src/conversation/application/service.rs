@@ -95,7 +95,7 @@ use nessa_sdk::domain::agent_execution::{
         ExecutionId, ExecutionOutcome, GrantInitiator, Initiation, Initiator, InvocationStage,
         MessageKind,
     },
-    leases::{AgentWork, LeaseEndCause, SandboxProfile, SandboxProfiles},
+    leases::{AgentWork, LeaseCleanup, LeaseEndCause, SandboxProfile, SandboxProfiles},
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
@@ -788,6 +788,15 @@ struct Slot {
     touched: AtomicU64,
 }
 impl Slot {
+    // Read the actual SDK/lease owner's resource receipt for this exact Slot,
+    // independent of the close diagnostic and any replacement conversation.
+    fn resource_cleanup(&self) -> Option<LeaseCleanup> {
+        self.value
+            .get()
+            .and_then(|live| live.as_ref().ok())
+            .and_then(|live| live.lease.cleanup())
+    }
+
     fn new(now_ms: u64) -> Self {
         Self {
             acquisition: Arc::new(OpeningResources::default()),
@@ -2523,7 +2532,7 @@ impl ConversationService {
     ) -> Result<(), ConversationError> {
         self.stop_and_release(
             id,
-            slot,
+            slot.clone(),
             actor,
             &McpAppInitiator::System,
             LeaseEndCause::Stopped,
@@ -2531,7 +2540,9 @@ impl ConversationService {
         )
         .await
         .map_err(|stop| match stop {
-            StopFailure::Failed(error) if confirmed_despite(&error).is_some() => {
+            StopFailure::Failed(error)
+                if confirmed_despite(&error, slot.resource_cleanup()).is_some() =>
+            {
                 ConversationError::Agent(error)
             }
             _ => ConversationError::ApprovalModeUncertain,
@@ -4832,7 +4843,13 @@ impl ConversationService {
                 let slot = service.inner.conversations.lock().await.get(&id).cloned();
                 match slot {
                     Some(slot) => match service
-                        .finish_pending_close(&id, slot, &actor, &initiator_of(&actor), &caller)
+                        .finish_pending_close(
+                            &id,
+                            slot.clone(),
+                            &actor,
+                            &initiator_of(&actor),
+                            &caller,
+                        )
                         .await
                     {
                         // Uploads were let go before the slot, inside the close.
@@ -4846,7 +4863,7 @@ impl ConversationService {
                         // not saved: the carry-on lets the uploads go, then
                         // the slot, and the close answers the failure.
                         PendingClose::Stopped(StopFailure::Failed(error))
-                            if confirmed_despite(&error).is_some() =>
+                            if confirmed_despite(&error, slot.resource_cleanup()).is_some() =>
                         {
                             (Err(ConversationError::Agent(error)), Ok(()))
                         }
@@ -4886,7 +4903,7 @@ impl ConversationService {
                         // (`l7_a_close_whose_cleanup_record_cannot_be_saved_says_so_and_the_next_opening_accounts_for_it`).
                         let closed = match &result {
                             Ok(_) => true,
-                            Err(error) => confirmed_despite(error).is_some(),
+                            Err(error) => confirmed_despite(error, live.lease.cleanup()).is_some(),
                         };
                         let snapshot = live.agent.session_manager().snapshot().await;
                         // A closed agent runs nothing more, so nothing can still
@@ -5456,7 +5473,7 @@ impl ConversationService {
             let stopped = tokio::select! {
                 stopped = self.stop_slot(
                     &id,
-                    slot,
+                    slot.clone(),
                     StopBy {
                         actor: &actor,
                         ended_by: deleted_by,
@@ -5473,7 +5490,9 @@ impl ConversationService {
                 // saved. That record is in the history this erases, so it is
                 // not what the delete waits for
                 // (`l7_a_delete_whose_cleanup_record_cannot_be_saved_still_erases_the_history`).
-                Err(StopFailure::Failed(error)) if confirmed_despite(&error).is_some() => {
+                Err(StopFailure::Failed(error))
+                    if confirmed_despite(&error, slot.resource_cleanup()).is_some() =>
+                {
                     tracing::warn!(conversation_id = %id, %error, "a deletion's stop confirmed cleanup whose record was not saved");
                 }
                 Err(stop) => {
@@ -6338,8 +6357,12 @@ impl ConversationService {
                     ConfirmedClose::HoldSlot,
                 )
                 .await;
-            let confirmed =
-                stopping_service.close_releases_owner(&stop_id, &stopped, ConfirmedClose::HoldSlot);
+            let confirmed = stopping_service.close_releases_owner(
+                &stop_id,
+                &stopped,
+                ConfirmedClose::HoldSlot,
+                slot_for_release.resource_cleanup(),
+            );
             let _ = confirmed_tx.send(stopped);
             if !confirmed {
                 return;
@@ -6420,9 +6443,10 @@ impl ConversationService {
         id: &ConversationId,
         closed: &Result<(), AgentError>,
         on_confirm: ConfirmedClose,
+        resources: Option<LeaseCleanup>,
     ) -> bool {
         closed.is_ok()
-            || (let_go(closed)
+            || (let_go(closed, resources)
                 && (on_confirm == ConfirmedClose::EraseHistory
                     || !self.inner.ownership.get().is_some_and(|ownership| {
                         ownership
@@ -6530,7 +6554,8 @@ impl ConversationService {
                         // acknowledgement. Unowned reopening, or the durable
                         // deletion's explicit erasure handoff, can relinquish
                         // an attachment after physical confirmation alone.
-                        if self.close_releases_owner(id, &closed, on_confirm) {
+                        if self.close_releases_owner(id, &closed, on_confirm, live.lease.cleanup())
+                        {
                             // Closed for good: whatever it was doing ended
                             // with it, so a restart has nothing to resume.
                             let _ = live.join_attachment_owner().await;
@@ -6664,10 +6689,10 @@ struct StopBy<'a> {
 
 /// Whether a stop let its agent go: it closed, or it confirmed the cleanup
 /// and only saving the record of it failed.
-fn let_go(stopped: &Result<(), AgentError>) -> bool {
+fn let_go(stopped: &Result<(), AgentError>, resources: Option<LeaseCleanup>) -> bool {
     match stopped {
         Ok(()) => true,
-        Err(error) => confirmed_despite(error).is_some(),
+        Err(error) => confirmed_despite(error, resources).is_some(),
     }
 }
 

@@ -1861,3 +1861,19 @@ no assertion, deadline, concurrency or review cap is relaxed.
 
 The opening records attachment ownership before SDK authorization can produce
 an independent audit obligation, including when provider startup is delayed.
+
+### Actual cleanup receipt required at diagnostic projections
+
+The unchanged-production counterfactual at dc40e7f8 returned confirmed cleanup
+from a StorageDuringClose diagnostic stored inside ReleasePending or Unconfirmed.
+The SDK report itself correctly retained ownership. The gateway projection must
+therefore consume the exact Slot/LiveLease owner's independent resource receipt.
+Neither an inner Ok diagnostic nor several storage wrappers can provide it.
+Normal owned close still retains evidence writers, and explicit erasure still
+waits for its own acknowledgement. All original error objects remain returned.
+
+| Ordering | Required result |
+| --- | --- |
+| Actual SDK/environment resources confirmed; only record writes failed | Preserve nested storage errors and their ordinary typed result; permit only the existing handoff rules. |
+| ReleasePending/Unconfirmed carries a storage-close diagnostic with an inner Ok | No resource confirmation, upload handoff or mode/deletion release from that diagnostic. |
+| Slot replaced while a close waits | Read only the captured original Slot's lease receipt. |

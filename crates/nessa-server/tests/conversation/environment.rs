@@ -280,20 +280,38 @@ fn l7_l8_a_close_that_confirmed_cleanup_but_could_not_save_it_still_ends_the_lea
         Some(confirmed)
     );
     assert_eq!(
-        confirmed_despite(&AgentError::StorageDuringClose {
-            error: StorageError::Io("the disk went away".into()),
-            cleanup_result: Box::new(Ok(confirmed)),
-        }),
+        confirmed_despite(
+            &AgentError::StorageDuringClose {
+                error: StorageError::Io("the disk went away".into()),
+                cleanup_result: Box::new(Ok(confirmed)),
+            },
+            Some(LeaseCleanup::Confirmed {
+                forced: confirmed.forced
+            })
+        ),
         Some(confirmed)
     );
     assert_eq!(
-        confirmed_despite(&AgentError::StorageDuringClose {
-            error: StorageError::Io("the disk went away".into()),
-            cleanup_result: Box::new(Err(AgentError::CleanupUncertain)),
-        }),
+        confirmed_despite(
+            &AgentError::StorageDuringClose {
+                error: StorageError::Io("the disk went away".into()),
+                cleanup_result: Box::new(Err(AgentError::CleanupUncertain)),
+            },
+            Some(LeaseCleanup::Confirmed {
+                forced: confirmed.forced
+            })
+        ),
         None
     );
-    assert_eq!(confirmed_despite(&AgentError::CleanupUncertain), None);
+    assert_eq!(
+        confirmed_despite(
+            &AgentError::CleanupUncertain,
+            Some(LeaseCleanup::Confirmed {
+                forced: confirmed.forced
+            })
+        ),
+        None
+    );
 }
 
 fn held(records: &[LeaseRecord]) -> CurrentLease {
@@ -813,7 +831,20 @@ fn nested_close_storage_failures_preserve_cleanup_without_acknowledging_other_ob
         Err(wrap(StorageError::Io("SDK proof".into()), Ok(outcome))),
     );
     let original = nested.clone();
-    assert_eq!(confirmed_despite(&nested), Some(outcome));
+    assert_eq!(confirmed_despite(&nested, None), None);
+    assert_eq!(
+        confirmed_despite(&nested, Some(LeaseCleanup::NotHeld)),
+        None
+    );
+    assert_eq!(
+        confirmed_despite(
+            &nested,
+            Some(LeaseCleanup::Confirmed {
+                forced: outcome.forced
+            })
+        ),
+        Some(outcome)
+    );
     assert_eq!(
         nested, original,
         "both independent storage causes remain unchanged"
@@ -827,7 +858,15 @@ fn nested_close_storage_failures_preserve_cleanup_without_acknowledging_other_ob
             StorageError::Io("lease finalization".into()),
             Err(wrap(StorageError::Io("SDK proof".into()), Err(failure))),
         );
-        assert_eq!(confirmed_despite(&nested), None);
+        assert_eq!(
+            confirmed_despite(
+                &nested,
+                Some(LeaseCleanup::Confirmed {
+                    forced: outcome.forced
+                })
+            ),
+            None
+        );
     }
 }
 
@@ -848,9 +887,12 @@ fn pending_sdk_release_diagnostic_cannot_become_whole_cleanup_confirmation() {
     ] {
         let report = CleanupReport::new(resources, Ok(()));
         assert_eq!(confirmed_cleanup(&report), None);
+        let resources = confirmed_cleanup(&report).map(|outcome| LeaseCleanup::Confirmed {
+            forced: outcome.forced,
+        });
         let diagnostic = report.into_result().unwrap_err();
         assert_eq!(
-            confirmed_despite(&diagnostic),
+            confirmed_despite(&diagnostic, resources),
             None,
             "a nested diagnostic about cleanup cannot release the actual SDK resource owner"
         );
