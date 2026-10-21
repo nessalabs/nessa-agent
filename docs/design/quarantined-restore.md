@@ -63,6 +63,9 @@ its target.
 | Available line not stored, and the file was removed or emptied | No readable publication | The available line is absent | Audit |
 | Available line not stored, and the file is still readable | The file. Not a publication the audit named | No available line for this publication | Retained. A later open does not serve it |
 | Open through another spelling of the same root | The publication already stored for that anchored root | The same target as the first open | Already present |
+| Fetched in quarantine, then the folder is renamed to live | The same publication, now at the live path | The available line still names that publication and conversation. The root on the line is where the fetch ran | Already present. The file is not fetched again |
+| A session extra whose publication has no available line | The quarantine. Accept does not rename | `unchanged → unchanged` | The error. The live path is not created |
+| Two roots that differ only by ASCII case on Windows | One filesystem object | Refused before either lock is taken | Paths |
 
 ## Invariants
 
@@ -182,6 +185,13 @@ its target.
   `a_matching_session_is_not_fetched_again`,
   `a_different_session_file_is_not_replaced`,
   `an_alias_of_the_live_root_reuses_the_fetched_session`
+- A fetch recorded against the quarantine folder is still that publication
+  after accept renames the folder onto the live path. Accept refuses a
+  session extra whose publication has no available line, and does not rename.
+  `a_fetch_in_quarantine_stays_available_after_accept`,
+  `an_unaudited_session_is_not_promoted`
+- On Windows, `Restore` and `restore` are one root. The refusal happens
+  before either lock is taken. `paths_and_receipts_are_constrained`
 - A realistic session whose database is over 64 MiB is deferred by the
   export, then recovered by this open. `a_session_over_64_mib_is_restored_when_opened`
 

@@ -92,6 +92,10 @@ already occupied does not delete that tree. A failed readiness mark
 records whether the tree was removed or left unready. Each restore
 entry point evaluates its own Cedar action. A rename whose parent sync
 fails is live, recorded as `unsynced`, and is not rolled back. A fetch is
-available only for the publication stored beside that file, and the audit
+available only for the publication stored beside that file. That publication
+and its conversation stay available after the quarantine folder is renamed
+onto the live path. Accept refuses a session whose publication was never
+recorded available. On Windows, two roots that differ only by ASCII case are
+the same path and are refused before either lock is taken. The audit
 names the anchored root rather than the caller's spelling. A canonical session image that cannot be read is not
 sealed while a conversation fence applies.

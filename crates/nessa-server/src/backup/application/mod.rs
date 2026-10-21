@@ -24,13 +24,14 @@ pub use verification::{
 pub use deletion_inventory::{capture_fences, capture_inventory, CaptureError, InventoryFailure};
 pub use export::{capture_export, ExportFailure, ExportRequest};
 pub use ports::{
-    AdmissionFailure, AdmissionLease, Authenticator, CopiedStore, DecisionAuditError,
-    DeferredSessionSource, DeletionLogStore, ExportClock, ExportSource, FenceSource, FetchProgress,
-    InventoryAction, InventoryCapturePolicyEvaluator, InventoryCause, InventoryDecision,
-    InventoryDecisionAudit, InventoryDenial, InventoryFacts, InventoryReconciliationLease,
-    LeaseReceipts, LogStoreError, MacError, MacKey, ManifestPublisher, MutationAdmission,
-    PinnedStore, PublishedRecord, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
-    RestorePolicyEvaluator, SessionCut, SessionSourceError,
+    fetch_names_conversation, AdmissionFailure, AdmissionLease, Authenticator, CopiedStore,
+    DecisionAuditError, DeferredSessionSource, DeletionLogStore, ExportClock, ExportSource,
+    FenceSource, FetchProgress, InventoryAction, InventoryCapturePolicyEvaluator, InventoryCause,
+    InventoryDecision, InventoryDecisionAudit, InventoryDenial, InventoryFacts,
+    InventoryReconciliationLease, LeaseReceipts, LogStoreError, MacError, MacKey,
+    ManifestPublisher, MutationAdmission, PinnedStore, PublishedRecord, RestoreAction,
+    RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SessionCut,
+    SessionSourceError,
 };
 pub use restore::{
     accept_quarantine, open_deferred_conversation, root_posture, stage_quarantine, AcceptReport,

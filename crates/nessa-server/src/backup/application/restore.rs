@@ -352,6 +352,11 @@ pub fn accept_quarantine(
     if let Err(error) = sessions_match(layout, &quarantine, &deferred, &loaded.extras) {
         return Err(recorded.stop(error));
     }
+    match publications_are_available(layout, audit, &quarantine, &deferred, &loaded.extras) {
+        Ok(()) => {}
+        Err(RestoreFault::Audit) => return Err(RestoreFault::Audit),
+        Err(error) => return Err(recorded.stop(error)),
+    }
     match layout.ready(&quarantine) {
         Ok(true) => {}
         Ok(false) => return Err(recorded.stop(RestoreFault::Tamper)),
@@ -420,7 +425,7 @@ pub fn open_deferred_conversation(
         "deferred",
         "deferred",
     )?;
-    let label = format!("{} {}", root.display(), request.conversation_id);
+    let label = fetch_target(&root, request.conversation_id);
     let kind = facts.kind;
     let policies = decide(policy, &facts, audit, &label, "deferred", "deferred")?;
     let recorded = Recorded {
@@ -470,7 +475,7 @@ pub fn open_deferred_conversation(
             Err(error) => return Err(recorded.stop(error)),
         };
         let audited = match current.as_deref() {
-            Some(publication) => match audit.available(&label, publication) {
+            Some(publication) => match audit.available(request.conversation_id, publication) {
                 Ok(audited) => audited,
                 Err(_) => return Err(RestoreFault::Audit),
             },
@@ -626,6 +631,38 @@ fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
         path.push(part);
     }
     Ok(path)
+}
+
+/// A fetched session stays available for its publication after the root is renamed.
+fn fetch_target(root: &Path, conversation_id: &str) -> String {
+    format!("{conversation_id}\n{}", root.display())
+}
+
+/// An extra session is promotable only when its publication was recorded available.
+fn publications_are_available(
+    layout: &dyn QuarantineLayout,
+    audit: &dyn RestoreAudit,
+    root: &Path,
+    deferred: &[DeferredLine],
+    extras: &[String],
+) -> Result<(), RestoreFault> {
+    for extra in extras {
+        let Some(line) = deferred.iter().find(|line| {
+            deferred_session_name(&line.conversation_id).is_ok_and(|name| name == *extra)
+        }) else {
+            return Err(RestoreFault::Tamper);
+        };
+        let path = join_relative(root, extra)?;
+        let Some(publication) = layout.publication(&path)? else {
+            return Err(RestoreFault::Tamper);
+        };
+        match audit.available(&line.conversation_id, &publication) {
+            Ok(true) => {}
+            Ok(false) => return Err(RestoreFault::Tamper),
+            Err(_) => return Err(RestoreFault::Audit),
+        }
+    }
+    Ok(())
 }
 
 fn sessions_match(

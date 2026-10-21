@@ -287,10 +287,24 @@ pub struct RestoreEvidence<'a> {
 pub trait RestoreAudit: Send + Sync {
     fn append(&self, evidence: &RestoreEvidence<'_>) -> Result<(), DecisionAuditError>;
 
-    /// Whether an effect line records this publication of `target` as available.
+    /// Whether an effect line records this publication of `conversation_id` as available.
     ///
-    /// An earlier publication's line does not count.
-    fn available(&self, target: &str, publication: &str) -> Result<bool, DecisionAuditError>;
+    /// The line's target is `{conversation_id}` then the anchored root. The root
+    /// is evidence of where the fetch ran. The publication and the conversation
+    /// are the identity, so a later rename of that root still matches. An
+    /// earlier publication's line does not count.
+    fn available(
+        &self,
+        conversation_id: &str,
+        publication: &str,
+    ) -> Result<bool, DecisionAuditError>;
+}
+
+/// `target` is the conversation id, a newline, then the anchored root.
+pub fn fetch_names_conversation(target: &str, conversation_id: &str) -> bool {
+    target
+        .split_once('\n')
+        .is_some_and(|(id, _root)| id == conversation_id)
 }
 
 /// Bytes copied while a deferred conversation is fetched.

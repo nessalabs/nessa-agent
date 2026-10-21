@@ -953,7 +953,11 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
         persist(&self.directory, &self.path, &text).map_err(|_| DecisionAuditError::NotStored)
     }
 
-    fn available(&self, target: &str, publication: &str) -> Result<bool, DecisionAuditError> {
+    fn available(
+        &self,
+        conversation_id: &str,
+        publication: &str,
+    ) -> Result<bool, DecisionAuditError> {
         let _gate = self
             .gate
             .lock()
@@ -966,10 +970,18 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
         for line in text.lines().filter(|line| !line.is_empty()) {
             let value: Value =
                 serde_json::from_str(line).map_err(|_| DecisionAuditError::NotStored)?;
-            if value.get("target").and_then(Value::as_str) == Some(target)
-                && value.get("after").and_then(Value::as_str) == Some("available")
+            if value.get("after").and_then(Value::as_str) == Some("available")
                 && value.get("decision").and_then(Value::as_str) == Some("effect")
                 && value.get("attestations").and_then(Value::as_str) == Some(publication)
+                && value
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .is_some_and(|target| {
+                        crate::backup::application::fetch_names_conversation(
+                            target,
+                            conversation_id,
+                        )
+                    })
             {
                 return Ok(true);
             }

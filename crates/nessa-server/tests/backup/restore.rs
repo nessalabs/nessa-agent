@@ -144,16 +144,23 @@ impl RestoreAudit for MemoryAudit {
         Ok(())
     }
 
-    fn available(&self, target: &str, publication: &str) -> Result<bool, DecisionAuditError> {
+    fn available(
+        &self,
+        conversation_id: &str,
+        publication: &str,
+    ) -> Result<bool, DecisionAuditError> {
         let lines = self
             .lines
             .lock()
             .map_err(|_| DecisionAuditError::NotStored)?;
         Ok(lines.iter().any(|line| {
-            line.target == target
-                && line.after == "available"
+            line.after == "available"
                 && line.decision == "effect"
                 && line.attestations == publication
+                && crate::backup::application::fetch_names_conversation(
+                    &line.target,
+                    conversation_id,
+                )
         }))
     }
 }
@@ -1861,7 +1868,7 @@ async fn deferred_bundle(lines: Vec<DeferredEntry>) -> (Bundle, Roots) {
 
 fn mark_available(audit: &MemoryAudit, root: &Path, conversation_id: &str) {
     let anchored = DirectoryQuarantine.anchor(root).unwrap();
-    let target = format!("{} {conversation_id}", anchored.display());
+    let target = format!("{conversation_id}\n{}", anchored.display());
     let publication = "pub-current";
     let session = anchored.join(format!("sessions/{conversation_id}.sqlite3"));
     DirectoryQuarantine
@@ -1924,7 +1931,7 @@ async fn an_opened_deferred_conversation_matches_the_recorded_fingerprint() {
     assert_eq!(fetched.initiator, "person");
     assert_eq!(fetched.decision, "effect");
     let anchored = DirectoryQuarantine.anchor(&place.live).unwrap();
-    let target = format!("{} conv-bulk", anchored.display());
+    let target = format!("conv-bulk\n{}", anchored.display());
     assert_eq!(fetched.target, target);
     assert_eq!(matched.target, target);
     assert!(fetched.attestations.starts_with("pub-"));
@@ -2847,7 +2854,7 @@ async fn a_failed_fetch_that_cannot_be_retired_is_not_served() {
     assert!(fs::metadata(&path).unwrap().len() > 0);
     assert_eq!(*source.writes.lock().unwrap(), 1);
     let anchored = DirectoryQuarantine.anchor(&place.live).unwrap();
-    let target = format!("{} conv-bulk", anchored.display());
+    let target = format!("conv-bulk\n{}", anchored.display());
     let publication = DirectoryQuarantine
         .publication(&path)
         .unwrap()
@@ -2881,8 +2888,8 @@ async fn a_failed_fetch_that_cannot_be_retired_is_not_served() {
     .unwrap_err();
     assert_eq!(later, RestoreFault::Retained);
     assert!(fs::metadata(&path).unwrap().len() > 0);
-    assert!(!earlier.available(&target, &publication).unwrap());
-    assert!(earlier.available(&target, "pub-earlier").unwrap());
+    assert!(!earlier.available("conv-bulk", &publication).unwrap());
+    assert!(earlier.available("conv-bulk", "pub-earlier").unwrap());
     assert_eq!(*source.writes.lock().unwrap(), 1);
 }
 
@@ -3040,8 +3047,113 @@ async fn an_alias_of_the_live_root_reuses_the_fetched_session() {
     assert!(path.is_file());
     assert_eq!(*source.writes.lock().unwrap(), 1);
     let anchored = DirectoryQuarantine.anchor(&place.live).unwrap();
-    let target = format!("{} conv-bulk", anchored.display());
+    let target = format!("conv-bulk\n{}", anchored.display());
     assert!(audit.lines().iter().all(|line| line.target == target));
+}
+
+#[tokio::test]
+async fn a_fetch_in_quarantine_stays_available_after_accept() {
+    let session = sealed_session(b"session-v1");
+    let bundle = publish(
+        note_bundle_rows(),
+        deferred_rows("conv-bulk", session.size, session.digest),
+        None,
+    )
+    .await;
+    let place = roots();
+    let audit = MemoryAudit::open();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &audit,
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap();
+    let mut source = FakeSource::matching(&session);
+    let fetched = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.quarantine,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &audit,
+        &DirectoryQuarantine,
+        &source,
+        &mut Quiet,
+    )
+    .unwrap();
+    assert!(!fetched.already_present);
+    accept(&place, &audit, &NoReceipts).unwrap();
+    source.mode = "missing";
+    let again = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.live,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &audit,
+        &DirectoryQuarantine,
+        &source,
+        &mut Quiet,
+    )
+    .unwrap();
+    assert!(again.already_present);
+    assert_eq!(*source.writes.lock().unwrap(), 1);
+    assert_eq!(
+        fs::read(place.live.join("sessions/conv-bulk.sqlite3")).unwrap(),
+        session.bytes
+    );
+}
+
+#[tokio::test]
+async fn an_unaudited_session_is_not_promoted() {
+    let session = sealed_session(b"session-v1");
+    let bundle = publish(
+        note_bundle_rows(),
+        deferred_rows("conv-bulk", session.size, session.digest),
+        None,
+    )
+    .await;
+    let place = roots();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &MemoryAudit::open(),
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap();
+    let source = FakeSource::matching(&session);
+    let error = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.quarantine,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &MemoryAudit::fail_after(2),
+        &KeepsBytes,
+        &source,
+        &mut Quiet,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Retained);
+    assert!(place
+        .quarantine
+        .join("sessions/conv-bulk.sqlite3")
+        .is_file());
+    let accepted = accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap_err();
+    assert_eq!(accepted, RestoreFault::Tamper);
+    assert!(!place.live.exists());
+    assert!(place
+        .quarantine
+        .join("sessions/conv-bulk.sqlite3")
+        .is_file());
 }
 
 #[tokio::test]
