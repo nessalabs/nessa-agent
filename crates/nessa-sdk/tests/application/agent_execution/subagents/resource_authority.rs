@@ -170,10 +170,14 @@ async fn factory_callback_waits_for_actual_resource_transfer_before_capacity_rel
     );
     assert!(!closing.is_finished());
     assert_eq!(
-        world
-            .coordinator
-            .spawn(world.command(&root, "still-full", "second"))
-            .await,
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            world
+                .coordinator
+                .spawn(world.command(&root, "still-full", "second")),
+        )
+        .await
+        .expect("capacity refusal must not enter the held factory"),
         Err(OwnershipFailure::Domain(OwnershipError::NoRoom))
     );
     assert_eq!(world.factory.prepares(), 1);
