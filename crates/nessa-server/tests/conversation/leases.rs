@@ -652,7 +652,7 @@ impl Harness {
                 "a later public close opens its own lease, not the retired owner"
             );
             assert_eq!(host.opened.load(Ordering::SeqCst), 2);
-            assert_eq!(self.provider.close_calls.load(Ordering::SeqCst), 2);
+            assert_eq!(self.provider.close_calls.load(Ordering::SeqCst), 1);
         }
         assert!(!self.service.owns_unreleased_resources().await);
     }

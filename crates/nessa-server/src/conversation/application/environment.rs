@@ -996,8 +996,9 @@ impl LiveLease {
         }
         released
     }
-    /// The environment/agent cleanup owner publishes physical evidence apart
-    /// from the close's independent storage or audit result.
+    /// The environment/agent resource owners acknowledged release. Pending SDK
+    /// executable-use release remains a hold despite process cleanup; independent
+    /// audit/storage failures do not erase an actual resource acknowledgement.
     pub(crate) fn cleanup(&self) -> Option<LeaseCleanup> {
         *self.cleanup.lock().unwrap()
     }
@@ -1197,7 +1198,15 @@ impl LiveLease {
             }),
             LeaseRelease::Unanswered => None,
         };
-        *self.cleanup.lock().unwrap() = evidence;
+        // The environment acknowledges its process tree. An SDK executable-use
+        // release is a separate retained owner, even with that physical answer.
+        let sdk_release_pending = result.as_ref().is_ok_and(|report| {
+            matches!(
+                report.cleanup().resources(),
+                ResourceCleanup::ReleasePending { .. }
+            )
+        });
+        *self.cleanup.lock().unwrap() = if sdk_release_pending { None } else { evidence };
         match evidence {
             Some(cleanup) => self.cleaned(manager, cleanup).await,
             None => self.interrupt(manager).await,

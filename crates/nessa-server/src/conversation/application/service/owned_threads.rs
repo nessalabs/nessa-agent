@@ -8,9 +8,9 @@ use super::super::environment::AgentEnd;
 use super::super::AgentToolSource;
 use super::mutation::SubmittedCommand;
 use super::{
-    conversation_session, ConversationCaller, ConversationError, ConversationId,
-    ConversationService, Inner, RequestedAgent, RequestedConversation, SubmissionMode,
-    SubmittedMessage,
+    conversation_session, initiator_of, ConfirmedClose, ConversationCaller, ConversationError,
+    ConversationId, ConversationService, Inner, RequestedAgent, RequestedConversation, StopBy,
+    SubmissionMode, SubmittedMessage,
 };
 use async_trait::async_trait;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -851,14 +851,22 @@ impl Resources {
             }
             return failed;
         };
-        let close = live
-            .lease
-            .close(
-                &live.agent,
-                LeaseEndCause::Closed,
-                actor,
-                service.inner.deletion_budgets.stop,
-                AgentEnd::Close,
+        // Use the same stop owner as conversation Close: it declines historical
+        // owed work and retires the unfinished mark only after acknowledgement.
+        // Hold this exact Slot for the resource report's retirement below.
+        let ended_by = initiator_of(&actor);
+        let close = service
+            .stopping(
+                &self.id,
+                slot.clone(),
+                None,
+                StopBy {
+                    actor: &actor,
+                    ended_by: &ended_by,
+                    cause: LeaseEndCause::Closed,
+                    end: AgentEnd::Close,
+                },
+                ConfirmedClose::HoldSlot,
             )
             .await;
         match (live.lease.cleanup(), close) {
