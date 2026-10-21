@@ -183,13 +183,18 @@ function readinessNote(
 }
 
 /** How far the private runtime copy has got, as a percent of bytes when the
- * host reported a size, otherwise of files. An empty total stays at zero. */
+ * host reported a size, otherwise of files. An empty total stays at zero.
+ * While the host is still copying, 100 is held back: rounding a nearly
+ * finished byte count, or a byte total that ignores a zero-length file still
+ * syncing, would otherwise read as done. */
 function runtimeCopyValue(progress: RuntimeCopy): number {
   const total = progress.bytesTotal > 0 ? progress.bytesTotal : progress.filesTotal
   const completed =
     progress.bytesTotal > 0 ? progress.bytesCompleted : progress.filesCompleted
   if (total === 0) return 0
-  return Math.min(100, Math.round((completed / total) * 100))
+  const percent = Math.min(100, Math.round((completed / total) * 100))
+  if (progress.state === "copying" && percent === 100) return 99
+  return percent
 }
 
 /** Shown while files are still finishing `sync_all`. Settled and a missing

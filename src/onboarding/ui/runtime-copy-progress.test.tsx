@@ -117,6 +117,36 @@ it("draws nothing when the host has not reported a copy", async () => {
   expect(claude().getAttribute("aria-disabled")).toBeNull()
 })
 
+it("keeps a nearly finished copy below 100 while a file is still syncing", async () => {
+  await React.act(async () =>
+    root.render(
+      view({
+        state: "copying",
+        filesCompleted: 1,
+        filesTotal: 2,
+        bytesCompleted: 399,
+        bytesTotal: 400,
+      }),
+    ),
+  )
+  expect(bar()?.getAttribute("aria-valuenow")).toBe("99")
+})
+
+it("keeps a byte-complete copy below 100 while a zero-length file remains", async () => {
+  await React.act(async () =>
+    root.render(
+      view({
+        state: "copying",
+        filesCompleted: 1,
+        filesTotal: 2,
+        bytesCompleted: 400,
+        bytesTotal: 400,
+      }),
+    ),
+  )
+  expect(bar()?.getAttribute("aria-valuenow")).toBe("99")
+})
+
 it("uses the file count when the copy has no byte total", async () => {
   await React.act(async () =>
     root.render(
