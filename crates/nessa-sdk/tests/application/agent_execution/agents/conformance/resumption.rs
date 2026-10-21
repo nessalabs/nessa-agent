@@ -1385,7 +1385,8 @@ async fn prepared_cancellation_receipt_restarts_under_its_original_decision_and_
 // Append to tests/application/agent_execution/agents/conformance/resumption.rs.
 #[tokio::test]
 async fn cycle8_same_lease_sdk_proof_is_retired_before_reacquisition() {
-    for lose_ack in [false, true] {
+    for mode in [0, 1, 2] {
+        let lose_ack = mode == 1;
         use nessa_sdk::application::agent_execution::{sessions::LeaseRecord, subagents::*};
         use nessa_sdk::domain::agent_execution::{leases::*, subagents::*};
         struct NoFactory;
@@ -1485,6 +1486,31 @@ async fn cycle8_same_lease_sdk_proof_is_retired_before_reacquisition() {
                 .sdk_cleanup_acknowledged(&scope),
             "the actual second cleanup may acknowledge the new acquisition"
         );
+        if mode == 2 {
+            // Observe the producer's durable fact directly: another gateway
+            // obligation must not mask an SDK proof issued without its audit ACK.
+            reattach_after_explicit_close(&agent).await;
+            *backend.cleanup.lock().unwrap() =
+                nessa_sdk::application::agent_execution::providers::CleanupReport::confirmed(
+                    nessa_sdk::application::agent_execution::providers::CloseOutcome {
+                        forced: false,
+                    },
+                )
+                .with_audit(Err(AgentError::AuditFailure));
+            let report = bounded(agent.close_report(actor())).await.unwrap();
+            assert!(report.cleanup().is_confirmed());
+            assert!(report.cleanup().audit().is_err());
+            assert!(
+                !storage
+                    .snapshot()
+                    .lease
+                    .as_ref()
+                    .unwrap()
+                    .sdk_cleanup_acknowledged(&scope),
+                "SDK cleanup audit failure cannot publish a durable cleanup ACK"
+            );
+            continue;
+        }
         if lose_ack {
             storage.lose_next_ack();
         } else {

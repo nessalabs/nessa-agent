@@ -1952,3 +1952,11 @@ proof write, starts the actual replacement and directly polls the current
 resource transition before releasing the first writer. Both owners settle before
 the captured pending result is asserted. It enforces the resource-fence ordering
 independently of the stale-ticket generation check, without scheduling sleeps.
+
+Cycle9 retained a surviving removal of the SDK audit-ACK condition: the historical
+gateway restart test stayed Closing and therefore did not distinguish that
+producer condition from other independent obligations in its path. It is not
+mutation credit and is not a clean qualification. The SDK same-lease control now
+also observes the actual durable SDK fact directly after a real confirmed
+provider cleanup with a failed audit ACK. The original gateway assertions remain
+unchanged; no stock gateway false-Closed execution is inferred from the survivor.
