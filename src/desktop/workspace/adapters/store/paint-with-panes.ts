@@ -60,6 +60,13 @@ interface Gate {
   waitingShape: string | null
   /** How far that wait has run. A listener at or before this has already painted it. */
   at: number
+  /**
+   * The column count the session list has measured. The box frame does not
+   * move it; the list frame of a wait does.
+   */
+  settled: number
+  /** Bumps when a wait reaches its last frame, including one that returns to `settled`. */
+  epoch: number
   frames: number[]
   listeners: Set<Listener>
   unsubscribe: () => void
@@ -107,22 +114,25 @@ function arm(gate: Gate, store: DesktopStore) {
   for (const listener of gate.listeners) span = Math.max(span, listener.frames)
   const queue = (left: number) => {
     const id = requestAnimationFrame(() => {
+      // A newer wait replaced this one. Its own frames notify.
+      if (gate.waiting !== paint.columns || gate.waitingShape !== paint.shape) return
       const at = span - left + 1
       gate.at = at
       if (left > 1) queue(left - 1)
-      for (const listener of gate.listeners) {
-        if (listener.frames === at) listener.notify()
-      }
-      // A listener can dispatch a new arrangement and replace this wait.
-      if (gate.waiting !== paint.columns || gate.waitingShape !== paint.shape) return
       // The boxes paint on this frame. A later command that restores the
       // previous count has to wait again, with the grid.
       if (at === paneBoxFrame) recordPainted(gate, paint)
-      if (left > 1) return
-      gate.frames = []
-      gate.waiting = null
-      gate.waitingShape = null
-      recordPainted(gate, paint)
+      if (left === 1) {
+        gate.frames = []
+        gate.waiting = null
+        gate.waitingShape = null
+        gate.settled = paint.columns
+        gate.epoch += 1
+        recordPainted(gate, paint)
+      }
+      for (const listener of gate.listeners) {
+        if (listener.frames === at) listener.notify()
+      }
     })
     gate.frames.push(id)
   }
@@ -139,6 +149,8 @@ function gateFor(store: DesktopStore): Gate {
     waiting: null,
     waitingShape: null,
     at: 0,
+    settled: now.columns,
+    epoch: 0,
     frames: [],
     listeners: new Set<Listener>(),
     unsubscribe: () => {},
@@ -165,6 +177,24 @@ function gateFor(store: DesktopStore): Gate {
   })
   gates.set(store, gate)
   return gate
+}
+
+/**
+ * Whether the session list keeps the measure it had. True through a column
+ * transition's list frame, including a command that puts the previous count
+ * back after the boxes have painted: the list's own value never left that
+ * count, and the boxes are still the ones just painted.
+ */
+export function listMeasureHeld(store: DesktopStore): boolean {
+  const gate = gates.get(store)
+  if (!gate) return false
+  if (gate.waiting !== null) return true
+  return selectColumnCount(store.getState()) !== gate.settled
+}
+
+/** Changes when a column transition reaches the frame that releases the list measure. */
+export function listMeasureEpoch(store: DesktopStore): number {
+  return gates.get(store)?.epoch ?? 0
 }
 
 function release(store: DesktopStore, gate: Gate) {

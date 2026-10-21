@@ -8,6 +8,8 @@ import {
   useWorkspaceStore,
 } from "../../adapters/store/hooks"
 import {
+  listMeasureEpoch,
+  listMeasureHeld,
   listPaintFrame,
   spareFoldFrame,
   usePaintedWithPanes,
@@ -36,24 +38,26 @@ export function FoldMark({ root }: { root: RefObject<HTMLElement | null> }) {
  * Holds the session list's measure through the fold and the frame that
  * shows the scene text again. The list takes its closed measure on the
  * frame after that (`listPaintFrame`), so that commit does not restyle
- * the rows on the scene's frame.
+ * the rows on the scene's frame. A column change that puts the previous
+ * count back before that frame keeps the hold until the new list frame:
+ * the boxes on screen are still the ones just painted.
  */
 export function ListMeasureHold({ root }: { root: RefObject<HTMLElement | null> }) {
   const store = useWorkspaceStore()
-  const painted = usePaintedWithPanes(selectColumnCount, listPaintFrame)
-  const paintedRef = useRef(painted)
-  paintedRef.current = painted
+  // The epoch changes on the list frame even when the count returns to the
+  // one the list already measured, which is what releases the hold.
+  const epoch = usePaintedWithPanes(() => listMeasureEpoch(store), listPaintFrame)
+  const held = useRef(false)
   useEffect(() => {
     let frame = 0
-    let held = false
     const apply = (on: boolean) => {
+      held.current = on
       root.current?.toggleAttribute("data-list-held", on)
     }
-    apply(selectColumnCount(store.getState()) !== paintedRef.current)
+    apply(listMeasureHeld(store))
     const unsubscribe = store.subscribe(() => {
-      const on = selectColumnCount(store.getState()) !== paintedRef.current
-      if (on === held) return
-      held = on
+      const on = listMeasureHeld(store)
+      if (on === held.current) return
       cancelAnimationFrame(frame)
       // The click does not write the attribute. The next frame does, which
       // is before the fold paints.
@@ -65,11 +69,10 @@ export function ListMeasureHold({ root }: { root: RefObject<HTMLElement | null> 
     }
   }, [store, root])
   useEffect(() => {
-    root.current?.toggleAttribute(
-      "data-list-held",
-      selectColumnCount(store.getState()) !== painted,
-    )
-  }, [painted, store, root])
+    const on = listMeasureHeld(store)
+    held.current = on
+    root.current?.toggleAttribute("data-list-held", on)
+  }, [epoch, store, root])
   return null
 }
 

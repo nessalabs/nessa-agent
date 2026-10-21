@@ -618,6 +618,57 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
     }
   })
 
+  it("keeps the list measure when a column change reverses after the boxes paint", async () => {
+    const frames = controlledAnimationFrames()
+    const width = window.innerWidth
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 })
+    const store = testStore(undefined, () => narrow)
+    try {
+      await store.dispatch(loadWorkspace())
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
+        await act(async () => frames.runFrame())
+      const sidebar = () => host.querySelector<HTMLElement>(".workspace")
+      await act(async () => {
+        store.dispatch(openBeside({ sessionId: "c" }))
+      })
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
+      await act(async () => {
+        store.dispatch(closePane())
+      })
+      // The next frame is the one that used to drop the hold, because the
+      // list's painted count was still the original one.
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: width })
+    }
+  })
+
   it("folds a sidebar the person closes before paint", async () => {
     const frames = controlledAnimationFrames()
     const store = testStore()
