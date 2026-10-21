@@ -16,7 +16,7 @@ use crate::read_only_sync::infrastructure::held_file::DiskFiles;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -311,6 +311,11 @@ impl RetainedCache {
     /// Fetch one held file for `access` into `output`. A local match returns
     /// before a connection. Gateway confirmation uses the existing range fetch.
     /// `elapsed_ms` is this call on the cache clock.
+    ///
+    /// A socket registered on `stop` is released on every exit after the dial,
+    /// including a handshake that fails. A budget that cancels a range is
+    /// `Unreachable`. `ReadStop::stop` stays `Stopped`. A relay that says the
+    /// gateway is offline, when the direct dial did not connect, is `Away`.
     pub fn fetch_artifact(
         &mut self,
         access: ReaderAccess<'_>,
@@ -333,17 +338,72 @@ impl RetainedCache {
             until: started.saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
         });
         let offline = Arc::new(AtomicBool::new(false));
-        let session = self.open_session(&access, &ending, &offline)?;
-        let mut source = StoppedSource {
-            source: GatewayConnection::new(session),
-            stop: stop.clone(),
+        let session = match self.open_session(&access, &ending, &offline) {
+            Ok(session) => session,
+            Err(failure) => {
+                stop.release();
+                return Err(dial_failure(
+                    failure,
+                    stop,
+                    &ending,
+                    offline.load(Ordering::SeqCst),
+                ));
+            }
         };
-        let outcome = confirmed_held_file(&mut source, pause, request)?;
+        let fetched = {
+            let mut source = StoppedSource {
+                source: GatewayConnection::new(session),
+                stop: stop.clone(),
+            };
+            confirmed_held_file(&mut source, pause, request)
+        };
+        stop.release();
+        let outcome = match fetched? {
+            Ok(fresh) => Ok(fresh),
+            Err(fault) => Err(classify_artifact_fault(fault, stop, &ending)),
+        };
         Ok(ArtifactFetch {
             outcome,
             elapsed_ms: elapsed(self),
         })
     }
+}
+
+/// A dial that never reached the gateway. A caller stop stays a stop. A
+/// relay `Offline` is `Away`. A spent budget is `Unreachable`.
+fn dial_failure(
+    failure: ReadFailure,
+    stop: &ReadStop,
+    ending: &Stopping,
+    offline: bool,
+) -> ReadFailure {
+    if stop.is_stopped() {
+        ReadFailure::Stopped
+    } else if offline && matches!(failure, ReadFailure::Unreachable) {
+        ReadFailure::Away
+    } else if ending.spent() && matches!(failure, ReadFailure::Stopped | ReadFailure::Unreachable) {
+        ReadFailure::Unreachable
+    } else {
+        failure
+    }
+}
+
+/// A range the budget cancelled is not a caller stop. `failure` maps that
+/// cancellation to `Stopped` before this sees it.
+fn classify_artifact_fault(
+    fault: ArtifactFault,
+    stop: &ReadStop,
+    ending: &Stopping,
+) -> ArtifactFault {
+    let ArtifactFaultKind::Gateway(failure) = fault.kind() else {
+        return fault;
+    };
+    let failure = dial_failure(failure, stop, ending, false);
+    ArtifactFault::progress(
+        ArtifactFaultKind::Gateway(failure),
+        fault.reached(),
+        fault.resumed_from(),
+    )
 }
 
 #[cfg(test)]

@@ -1,8 +1,8 @@
 //! Local integrity is not a gateway hold, and a gateway answer is fresh only
 //! when the part on disk matches the named digest.
 use super::{
-    confirmed_held_file, local_held_file, ArtifactFaultKind, ArtifactFreshness, ArtifactRequest,
-    Pause, ReadFailure, ReadStop, StoppedSource,
+    confirmed_held_file, local_held_file, ArtifactFault, ArtifactFaultKind, ArtifactFreshness,
+    ArtifactRequest, Pause, ReadFailure, ReadStop, StoppedSource,
 };
 use crate::read_only_sync::application::held_file::{HeldFileSource, RangeAnswer};
 use crate::read_only_sync::application::GatewayError;
@@ -11,6 +11,7 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -199,4 +200,198 @@ fn a_stopped_source_is_not_a_fresh_file_and_asks_nothing() {
     );
     assert_eq!(reads.load(Ordering::SeqCst), 0);
     assert!(!output.exists());
+}
+
+struct Wall;
+impl nessa_auth::application::ports::Clock for Wall {
+    fn unix_milliseconds(&self) -> u64 {
+        1
+    }
+}
+struct Held;
+impl nessa_protocol::clock::Clock for Held {
+    fn elapsed_ms(&self) -> u64 {
+        0
+    }
+}
+fn cache() -> (tempfile::TempDir, super::super::RetainedCache) {
+    let root = tempfile::tempdir().unwrap();
+    let private = root.path().join("cache");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let cache = super::super::RetainedCache::open(
+        &private.join("cache.sqlite3"),
+        Arc::new(Wall),
+        Arc::new(Held),
+    )
+    .unwrap();
+    (root, cache)
+}
+fn access<'a>(
+    address: std::net::SocketAddr,
+    relay: Option<&'a nessa_protocol::relay::RelayAddress>,
+    identity: &'a nessa_auth::adapters::pairing::NativeIdentity,
+    pin: &'a [u8; 44],
+) -> super::super::ReaderAccess<'a> {
+    super::super::ReaderAccess {
+        role: super::super::ReaderRole::DeviceOwner,
+        address,
+        relay,
+        identity,
+        pin: *pin,
+        credential: "issued",
+        receiver: "receiver",
+        access_epoch: 1,
+        client_id: "nessa-ios",
+    }
+}
+fn missing_request<'a>(
+    conversation: &'a ConversationId,
+    digest: &'a str,
+    output: &'a std::path::Path,
+) -> ArtifactRequest<'a> {
+    ArtifactRequest::new(conversation, digest, MEDIA, 2, output)
+}
+
+#[test]
+fn a_budget_that_cancels_a_range_is_unreachable_and_a_stop_stays_stopped() {
+    let stop = ReadStop::new();
+    let ending = super::super::Stopping {
+        stop: stop.clone(),
+        clock: Arc::new(Held),
+        until: 0,
+    };
+    let fault = ArtifactFault::progress(ArtifactFaultKind::Gateway(ReadFailure::Stopped), 4, 1);
+    let spent = super::classify_artifact_fault(fault, &stop, &ending);
+    assert_eq!(
+        spent.kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Unreachable)
+    );
+    assert_eq!(spent.reached(), 4);
+    assert_eq!(spent.resumed_from(), 1);
+    stop.stop();
+    let stopped = super::classify_artifact_fault(fault, &stop, &ending);
+    assert_eq!(
+        stopped.kind(),
+        ArtifactFaultKind::Gateway(ReadFailure::Stopped)
+    );
+}
+
+#[test]
+fn a_spent_budget_is_unreachable_and_an_explicit_stop_stays_stopped() {
+    let identity = nessa_auth::adapters::pairing::NativeIdentity::generate(
+        &mut nessa_auth::adapters::pairing::OsEntropy,
+    )
+    .unwrap();
+    let pin = identity.public_spki();
+    let conversation = conversation();
+    let digest = digest_of(b"ab");
+    let (root, mut cache) = cache();
+    let output = root.path().join("held.bin");
+    let request = missing_request(&conversation, &digest, &output);
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], 9));
+    let stop = ReadStop::new();
+    assert_eq!(
+        cache.fetch_artifact(
+            access(address, None, &identity, &pin),
+            &stop,
+            Duration::from_millis(0),
+            &request,
+            &Still,
+        ),
+        Err(ReadFailure::Unreachable)
+    );
+    assert!(stop.sockets.lock().unwrap().is_empty());
+    let stop = ReadStop::new();
+    stop.stop();
+    assert_eq!(
+        cache.fetch_artifact(
+            access(address, None, &identity, &pin),
+            &stop,
+            Duration::from_secs(5),
+            &request,
+            &Still,
+        ),
+        Err(ReadFailure::Stopped)
+    );
+    assert!(stop.sockets.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_failed_handshake_releases_the_socket_the_stop_registered() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let listening = accepted.clone();
+    let peer = std::thread::spawn(move || {
+        if listener.accept().is_ok() {
+            listening.store(1, Ordering::SeqCst);
+        }
+    });
+    let identity = nessa_auth::adapters::pairing::NativeIdentity::generate(
+        &mut nessa_auth::adapters::pairing::OsEntropy,
+    )
+    .unwrap();
+    let pin = identity.public_spki();
+    let conversation = conversation();
+    let digest = digest_of(b"ab");
+    let (root, mut cache) = cache();
+    let output = root.path().join("held.bin");
+    let request = missing_request(&conversation, &digest, &output);
+    let stop = ReadStop::new();
+    let failure = cache
+        .fetch_artifact(
+            access(address, None, &identity, &pin),
+            &stop,
+            Duration::from_secs(5),
+            &request,
+            &Still,
+        )
+        .unwrap_err();
+    assert_eq!(failure, ReadFailure::Unreachable);
+    peer.join().unwrap();
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
+    assert!(stop.sockets.lock().unwrap().is_empty());
+}
+
+#[test]
+fn an_offline_relay_makes_the_artifact_fetch_away() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address =
+        nessa_protocol::relay::RelayAddress::try_from(listener.local_addr().unwrap().to_string())
+            .unwrap();
+    let serving = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        nessa_protocol::relay::read_frame(&mut stream).unwrap();
+        stream
+            .write_all(&nessa_protocol::relay::RelayFrame::Offline.encode())
+            .unwrap();
+    });
+    let identity = nessa_auth::adapters::pairing::NativeIdentity::generate(
+        &mut nessa_auth::adapters::pairing::OsEntropy,
+    )
+    .unwrap();
+    let pin = identity.public_spki();
+    let conversation = conversation();
+    let digest = digest_of(b"ab");
+    let (root, mut cache) = cache();
+    let output = root.path().join("held.bin");
+    let request = missing_request(&conversation, &digest, &output);
+    let stop = ReadStop::new();
+    let failure = cache
+        .fetch_artifact(
+            access(
+                std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                Some(&address),
+                &identity,
+                &pin,
+            ),
+            &stop,
+            Duration::from_secs(5),
+            &request,
+            &Still,
+        )
+        .unwrap_err();
+    serving.join().unwrap();
+    assert_eq!(failure, ReadFailure::Away);
+    assert!(stop.sockets.lock().unwrap().is_empty());
 }
