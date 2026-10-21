@@ -279,7 +279,8 @@ box frame.
   open has settled. A drop commits on the frame after pointerup paints.
 - Owned scope: `paneBox`, the drop's two callbacks, the grid painting a
   column change three frames later and a same-pane resize on the frame
-  it happens, the workspace marked `data-spare-held`
+  it happens, a removed session staying in its box until that box goes,
+  the workspace marked `data-spare-held`
   for that wait so a folded sidebar stays in the row, the side-column fit
   waiting one frame when the pane count changes,   the window painting the
   fold with the new boxes (`usePaintedWithPanes`, passed into the source

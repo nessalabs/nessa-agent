@@ -5,11 +5,8 @@ import {
   useWorkspaceSelector,
   useWorkspaceStore,
 } from "../../adapters/store/hooks"
-import {
-  selectDraft,
-  selectPaneSession,
-  selectSession,
-} from "../../adapters/store/selectors"
+import { selectDraft, selectPaneSession } from "../../adapters/store/selectors"
+import { useRememberedSession } from "../../adapters/store/remembered-session"
 import { settleOnReshape } from "../../adapters/dom/home-shape"
 import { retireHomeFocus } from "../../adapters/dom/focus"
 import { FocusedSliver, PaneFocusMark } from "./pane-focus-mark"
@@ -53,12 +50,14 @@ export const Pane = memo(function Pane({
   const focusHandlers = usePaneFocus(key)
   const liveSession = useWorkspaceSelector((state) => selectPaneSession(state, key)) ?? ""
   const sessionId = liveSession || heldSession || ""
-  const draft = useWorkspaceSelector(
-    (state) => selectDraft(state, sessionId) !== undefined,
-  )
-  const sessionTitle = useWorkspaceSelector(
-    (state) => selectSession(state, sessionId)?.title,
-  )
+  // The layout selector waits a frame when the column count changes, so this
+  // pane hears the record disappear before it is told the id to keep. The id
+  // it was showing covers that frame.
+  const shownId = useRef(sessionId)
+  if (sessionId) shownId.current = sessionId
+  const id = sessionId || shownId.current
+  const draft = useWorkspaceSelector((state) => selectDraft(state, id) !== undefined)
+  const sessionTitle = useRememberedSession(id)?.title
   const listed = sessionTitle !== undefined
   const [headingVisible, setHeadingVisible] = useState(false)
   const filled = useFilledAfterFirstPaint()
@@ -68,14 +67,14 @@ export const Pane = memo(function Pane({
     sessionId: string
     from: Arrival
   } | null>(null)
-  if (arriving && arriving.sessionId !== sessionId) setArriving(null)
-  const arrival = arriving?.sessionId === sessionId ? arriving.from : null
+  if (arriving && arriving.sessionId !== id) setArriving(null)
+  const arrival = arriving?.sessionId === id ? arriving.from : null
   const finishArrival = useCallback(() => setArriving(null), [])
   // The session shown now, for the callbacks below: they keep their identity
   // for the pane's life, so the memoised home and conversation they are
   // handed render only for what they show, never because this pane did.
-  const shownRef = useRef(sessionId)
-  shownRef.current = sessionId
+  const shownRef = useRef(id)
+  shownRef.current = id
   const sendFromHome = useCallback(
     (text: string) => {
       const shown = shownRef.current
@@ -107,7 +106,7 @@ export const Pane = memo(function Pane({
     const home = homeRef.current
     if (!homeShown || !home) return
     return settleOnReshape(home)
-  }, [homeShown, sessionId])
+  }, [homeShown, id])
   const [picture] = usePictureInConversationsPreference()
   const pictured = picture === "on"
   return (
@@ -121,25 +120,25 @@ export const Pane = memo(function Pane({
       {pictured && filled && listed && !showHome ? <FocusedSliver paneKey={key} /> : null}
       <PaneHeader
         pane={key}
-        sessionId={sessionId}
+        sessionId={id}
         multi={multi}
         titleShown={listed && !headingVisible}
       />
       <div className="workspace-pane-body" data-split-through>
         {!filled ? null : showHome ? (
           <div
-            key={`home-${sessionId}`}
+            key={`home-${id}`}
             ref={homeRef}
             className="workspace-pane-home"
             data-split-keeps="middle"
           >
-            <PaneHome sessionId={sessionId} onSend={sendFromHome} />
+            <PaneHome sessionId={id} onSend={sendFromHome} />
           </div>
         ) : null}
         {filled && listed ? (
           <Conversation
-            key={sessionId}
-            sessionId={sessionId}
+            key={id}
+            sessionId={id}
             onHeadingVisible={setHeadingVisible}
             arrival={arrival}
             onArrivalDone={finishArrival}

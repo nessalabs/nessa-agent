@@ -17,12 +17,11 @@ import { curveToken, durationToken } from "../../../adapters/motion"
 import { IconButton } from "../../../ui/icon-button"
 import { retryTranscript } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import { selectOutbox, selectTranscriptFailure } from "../../adapters/store/selectors"
 import {
-  selectOutbox,
-  selectSession,
-  selectTranscript,
-  selectTranscriptFailure,
-} from "../../adapters/store/selectors"
+  useRememberedSession,
+  useRememberedTranscript,
+} from "../../adapters/store/remembered-session"
 import { ProviderSignIn } from "./provider-sign-in"
 import { ApprovalCard } from "./approval-card"
 import { LiveRow } from "./live-row"
@@ -83,12 +82,12 @@ export const Transcript = memo(function Transcript({
   onHeadingVisible: (visible: boolean) => void
 }) {
   const dispatch = useWorkspaceDispatch()
-  const transcript = useWorkspaceSelector((state) => selectTranscript(state, sessionId))
+  const transcript = useRememberedTranscript(sessionId)
   const outbox = useWorkspaceSelector((state) => selectOutbox(state, sessionId))
   const failure = useWorkspaceSelector((state) =>
     selectTranscriptFailure(state, sessionId),
   )
-  const model = useWorkspaceSelector((state) => selectSession(state, sessionId)?.model)
+  const model = useRememberedSession(sessionId)?.model
   const provider = signInProvider(transcript?.agent)
   const recoveryShown =
     provider !== undefined &&

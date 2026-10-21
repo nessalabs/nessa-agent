@@ -30,6 +30,8 @@ import {
   testStore,
 } from "../../testing"
 import { paneItemOf } from "../../model/pane-item"
+import { workspaceActions } from "../../adapters/store/slice"
+import { selectSession } from "../../adapters/store/selectors"
 import {
   openReviewEvent,
   waitingReviewNotices,
@@ -472,6 +474,38 @@ describe("a pane's close is offered where closing it does something", () => {
     )
     expect(offered()).toEqual([true])
     expect(await menuOffers()).toBe(true)
+    await act(async () => root.unmount())
+  })
+})
+
+describe("a source removing a session", () => {
+  it("keeps that session in its box until the box goes", async () => {
+    const { store, root } = await render(ThreeColumns)
+    const labels = () =>
+      [...host.querySelectorAll("article.workspace-pane")].map((pane) =>
+        pane.getAttribute("aria-label"),
+      )
+    expect(labels()).toEqual(["Session a", "Session b"])
+    await act(async () => {
+      store.dispatch(
+        workspaceActions.sessionRemoved({
+          sessionId: "b",
+          revision: 2,
+          draftId: "fresh",
+        }),
+      )
+    })
+    expect(selectSession(store.getState(), "b")).toBeUndefined()
+    expect(labels()).toEqual(["Session a", "Session b"])
+    await act(
+      async () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+        ),
+    )
+    expect(labels()).toEqual(["Session a"])
     await act(async () => root.unmount())
   })
 })
