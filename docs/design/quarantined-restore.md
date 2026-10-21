@@ -139,6 +139,17 @@ supplies the id.
 - Cleanup removes the directory object this stage published. A different
   directory at that path is left in place, including its files.
   `a_different_published_directory_is_not_removed`
+- The sealed copy is the directory this attempt created. Its identity is
+  that open. Immediately before the rename, that directory is still at the
+  path and its bytes still match the seal. A replacement directory is not
+  adopted and is not deleted. A changed file in the copy is not promoted.
+  `a_changed_sealed_copy_is_not_promoted`,
+  `a_replaced_sealed_directory_is_not_published`
+- The session file is the regular file this attempt still holds when SQLite
+  opens it. The open does not follow a symlink, and the name must still be
+  that file. Drop unlinks a planted symlink and does not write its target.
+  `a_dangling_symlink_is_not_the_session_file`,
+  `a_symlink_planted_after_reserve_is_not_opened`
 - That directory is opened as a directory. On Windows the open sets backup
   semantics, so the handle names the directory. A reparse point is not that
   directory. The volume of the temporary directory is read the same way.
@@ -274,12 +285,15 @@ supplies the id.
   `an_unaudited_session_is_not_promoted`
 - The case rule comes from the volume that will hold the final component, not
   from the host operating system. On that volume, `Restore` and `restore` are
-  one root when the volume folds case, and so are `Ä` and `ä`. On macOS, a
+  one root when the volume folds case, and so are `Ä` and `ä`, and so are
+  sigma and final sigma. The fold is uppercase, then lowercase. On macOS, a
   composed name and its decomposition are one root when the volume is not
   case-sensitive. Linux vfat, exFAT, NTFS, and casefolded ext4 fold. Two
   paths on different volumes do not fold into each other. The drive letter
   folds with the name. The refusal happens before either lock is taken.
-  `paths_and_receipts_are_constrained`, `case_for_a_reported_filesystem_follows_the_volume`
+  `paths_and_receipts_are_constrained`,
+  `a_folding_volume_orders_spellings_together`,
+  `case_for_a_reported_filesystem_follows_the_volume`
 - A realistic session whose database is over 64 MiB is deferred by the
   export, then recovered by this open. `a_session_over_64_mib_is_restored_when_opened`
 - A failed publish retires the temp name and the final name independently.

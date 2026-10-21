@@ -383,8 +383,16 @@ fn fold_name(name: &OsStr, volume: VolumeCase) -> String {
     }
 }
 
+/// Case fold for a volume that ignores case.
+///
+/// Uppercase, then lowercase. Final sigma and sigma are one character, which
+/// is how a case-insensitive volume compares them. `char::to_lowercase` leaves
+/// final sigma unchanged.
 fn unicode_fold(text: &str) -> String {
-    text.chars().flat_map(char::to_lowercase).collect()
+    text.chars()
+        .flat_map(char::to_uppercase)
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// A non-Unicode component stays byte-distinct. A lossy display is not an identity.
@@ -1097,6 +1105,15 @@ mod tests {
             path_identity(&earlier_path, bytes).unwrap(),
             path_identity(&again_path, bytes).unwrap()
         );
+        let (sigma, final_sigma) = sigma_spellings();
+        assert_eq!(
+            path_identity(&sigma, volume).unwrap(),
+            path_identity(&final_sigma, volume).unwrap()
+        );
+        assert_ne!(
+            path_identity(&sigma, bytes).unwrap(),
+            path_identity(&final_sigma, bytes).unwrap()
+        );
     }
 
     /// Absolute spellings of one pair. `/restore/a` is not absolute on Windows,
@@ -1118,6 +1135,23 @@ mod tests {
                 PathBuf::from("/restore/B"),
                 PathBuf::from("/restore/A"),
                 PathBuf::from("/restore/b"),
+            )
+        }
+    }
+
+    fn sigma_spellings() -> (PathBuf, PathBuf) {
+        #[cfg(windows)]
+        {
+            (
+                PathBuf::from("C:\\restore\\\u{03c3}"),
+                PathBuf::from("C:\\restore\\\u{03c2}"),
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            (
+                PathBuf::from("/restore/\u{03c3}"),
+                PathBuf::from("/restore/\u{03c2}"),
             )
         }
     }

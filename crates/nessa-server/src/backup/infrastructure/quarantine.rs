@@ -501,43 +501,47 @@ impl QuarantineLayout for DirectoryQuarantine {
         if on_disk != loaded.journal || content_token(quarantine)? != loaded.content {
             return Err(RestoreFault::Tamper);
         }
-        // The live tree is a directory this attempt writes from those sealed
-        // bytes. An open descriptor on the quarantine file keeps the old inode.
-        let dest = sealed_dest(quarantine)?;
-        let dest_identity = tree_id(&dest)?;
+        // The live tree is a directory this attempt creates and writes from
+        // those sealed bytes. The identity is that directory's open, not a
+        // later lookup of the path. An open descriptor on the quarantine file
+        // keeps the old inode.
+        let SealedDir {
+            path: dest,
+            file: created,
+            identity: created_id,
+        } = sealed_dest(quarantine)?;
+        if tree_id(&dest).ok().as_ref() != Some(&created_id) {
+            return Err(RestoreFault::Tamper);
+        }
         let copied = match copy_sealed(quarantine, &dest) {
             Ok(token) => token,
             Err(error) => {
-                let _ = remove_same(&dest, &dest_identity);
+                let _ = remove_same(&dest, &created_id);
                 return Err(error);
             }
         };
         if copied != loaded.content || tree_id_of(&opened)? != loaded.identity {
-            let _ = remove_same(&dest, &dest_identity);
+            let _ = remove_same(&dest, &created_id);
             return Err(RestoreFault::Tamper);
         }
         if write_new(&dest.join("journal.txt"), loaded.journal.as_bytes()).is_err() {
-            let _ = remove_same(&dest, &dest_identity);
+            let _ = remove_same(&dest, &created_id);
             return Err(RestoreFault::Unreadable);
         }
-        let dest_opened = match open_directory(&dest, false) {
-            Ok(file) => file,
-            Err(_) => {
-                let _ = remove_same(&dest, &dest_identity);
-                return Err(RestoreFault::Unreadable);
-            }
-        };
-        let published = match tree_id_of(&dest_opened) {
-            Ok(identity) => identity,
-            Err(error) => {
-                let _ = remove_same(&dest, &dest_identity);
-                return Err(error);
-            }
-        };
         if sync_tree(&dest).is_err() {
-            let _ = remove_same(&dest, &published);
+            let _ = remove_same(&dest, &created_id);
             return Err(RestoreFault::Unreadable);
         }
+        // The directory we created, re-read immediately before the rename.
+        // A replacement at this path is not adopted.
+        if let Err(error) = copy_still_sealed(&dest, &created, &created_id, loaded) {
+            if tree_id(&dest).ok().as_ref() == Some(&created_id) {
+                let _ = remove_same(&dest, &created_id);
+            }
+            return Err(error);
+        }
+        let published = created_id;
+        let dest_opened = created;
         let from_parent = dest.parent().map(Path::to_path_buf);
         let to_parent = live.parent().map(Path::to_path_buf);
         // The rename itself refuses an existing destination, including an
@@ -930,7 +934,14 @@ fn symlink_metadata_dir(path: &Path) -> Result<bool, RestoreFault> {
     }
 }
 
-fn sealed_dest(quarantine: &Path) -> Result<PathBuf, RestoreFault> {
+/// The directory this attempt created, and the open that names it.
+struct SealedDir {
+    path: PathBuf,
+    file: File,
+    identity: TreeId,
+}
+
+fn sealed_dest(quarantine: &Path) -> Result<SealedDir, RestoreFault> {
     let parent = quarantine.parent().ok_or(RestoreFault::Paths)?;
     let name = quarantine
         .file_name()
@@ -941,12 +952,36 @@ fn sealed_dest(quarantine: &Path) -> Result<PathBuf, RestoreFault> {
         staged.push(format!(".sealed-{}-{attempt}", std::process::id()));
         let path = parent.join(&staged);
         match mkdir_exclusive(&path) {
-            Ok(()) => return Ok(path),
+            Ok(()) => return adopt_created(&path),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(_) => return Err(RestoreFault::Unreadable),
         }
     }
     Err(RestoreFault::Unreadable)
+}
+
+/// Open the directory `mkdir` just created. A different object at that path
+/// is not this attempt, and it is not removed.
+fn adopt_created(path: &Path) -> Result<SealedDir, RestoreFault> {
+    let file = open_directory(path, false).map_err(|_| RestoreFault::Unreadable)?;
+    let identity = tree_id_of(&file)?;
+    if tree_id(path)? != identity || !directory_is_empty(path)? {
+        return Err(RestoreFault::Tamper);
+    }
+    Ok(SealedDir {
+        path: path.to_path_buf(),
+        file,
+        identity,
+    })
+}
+
+fn directory_is_empty(path: &Path) -> Result<bool, RestoreFault> {
+    let mut entries = fs::read_dir(path).map_err(|_| RestoreFault::Unreadable)?;
+    match entries.next() {
+        None => Ok(true),
+        Some(Ok(_)) => Ok(false),
+        Some(Err(_)) => Err(RestoreFault::Unreadable),
+    }
 }
 
 /// Copy every sealed file into `dest`, which this attempt just created.
@@ -956,6 +991,25 @@ fn copy_sealed(source: &Path, dest: &Path) -> Result<Fingerprint, RestoreFault> 
     copy_content(source, source, dest, &mut lines)?;
     lines.sort();
     Ok(Fingerprint::of(lines.join("\n").as_bytes()))
+}
+
+/// `created` is still `created_id`, that directory is still at `dest`, and
+/// the bytes there are still the seal. A replacement path is not adopted.
+fn copy_still_sealed(
+    dest: &Path,
+    created: &File,
+    created_id: &TreeId,
+    loaded: &LoadedTree,
+) -> Result<(), RestoreFault> {
+    if tree_id_of(created)? != *created_id || tree_id(dest)? != *created_id {
+        return Err(RestoreFault::Tamper);
+    }
+    let journal =
+        fs::read_to_string(dest.join("journal.txt")).map_err(|_| RestoreFault::Unreadable)?;
+    if journal != loaded.journal || content_token(dest)? != loaded.content {
+        return Err(RestoreFault::Tamper);
+    }
+    Ok(())
 }
 
 fn copy_content(
@@ -1845,6 +1899,63 @@ fn a_different_published_directory_is_not_removed() {
         .remove_known(&saved, &published)
         .unwrap();
     assert!(!saved.exists());
+}
+
+#[test]
+fn a_changed_sealed_copy_is_not_promoted() {
+    let root = tempfile::tempdir().unwrap();
+    let dest = root.path().join("sealed");
+    fs::create_dir(&dest).unwrap();
+    fs::write(dest.join("note"), b"one").unwrap();
+    fs::write(dest.join("journal.txt"), b"journal").unwrap();
+    let created = open_directory(&dest, false).unwrap();
+    let created_id = tree_id_of(&created).unwrap();
+    let loaded = LoadedTree {
+        journal: "journal".into(),
+        files: Vec::new(),
+        extras: Vec::new(),
+        helpers: Vec::new(),
+        identity: created_id,
+        content: content_token(&dest).unwrap(),
+    };
+    fs::write(dest.join("note"), b"two").unwrap();
+    assert_eq!(
+        copy_still_sealed(&dest, &created, &created_id, &loaded).unwrap_err(),
+        RestoreFault::Tamper
+    );
+    assert!(dest.join("note").is_file());
+}
+
+#[test]
+fn a_replaced_sealed_directory_is_not_published() {
+    let root = tempfile::tempdir().unwrap();
+    let dest = root.path().join("sealed");
+    fs::create_dir(&dest).unwrap();
+    fs::write(dest.join("note"), b"one").unwrap();
+    fs::write(dest.join("journal.txt"), b"journal").unwrap();
+    let created = open_directory(&dest, false).unwrap();
+    let created_id = tree_id_of(&created).unwrap();
+    let loaded = LoadedTree {
+        journal: "journal".into(),
+        files: Vec::new(),
+        extras: Vec::new(),
+        helpers: Vec::new(),
+        identity: created_id,
+        content: content_token(&dest).unwrap(),
+    };
+    let aside = root.path().join("aside");
+    fs::rename(&dest, &aside).unwrap();
+    fs::create_dir(&dest).unwrap();
+    fs::write(dest.join("sentinel"), b"keep").unwrap();
+    assert_eq!(
+        copy_still_sealed(&dest, &created, &created_id, &loaded).unwrap_err(),
+        RestoreFault::Tamper
+    );
+    if tree_id(&dest).ok().as_ref() == Some(&created_id) {
+        let _ = remove_same(&dest, &created_id);
+    }
+    assert_eq!(fs::read(dest.join("sentinel")).unwrap(), b"keep");
+    assert_eq!(fs::read(aside.join("note")).unwrap(), b"one");
 }
 
 #[test]

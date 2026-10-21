@@ -1,11 +1,13 @@
 //! A SQLite read snapshot. Opened while admission is held; copied afterwards.
 
+use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
 use nessa_local_database::rusqlite::backup::{Backup, StepResult};
 use nessa_local_database::rusqlite::ffi::{self, sqlite3_int64};
 use nessa_local_database::rusqlite::{Connection, OpenFlags};
+#[cfg(unix)]
 use nessa_local_storage::{open, OpenMode};
 use sha2::{Digest, Sha256};
 
@@ -294,7 +296,18 @@ pub(crate) fn materialize_conversation(
     let (stream_key, stream) = one_stream(&connection, conversation_id)?;
     progress(0, stream.size);
     let mut created = CreatedDestination::new(destination)?;
-    copy_stream(&connection, stream_key, &stream, created.path, progress)?;
+    let reserved = created
+        .reserved
+        .as_ref()
+        .ok_or(MaterializeError::Unreadable)?;
+    copy_stream(
+        &connection,
+        stream_key,
+        &stream,
+        created.path,
+        reserved,
+        progress,
+    )?;
     let copied = inspect_conversation(created.path, conversation_id)?;
     if copied.size != stream.size || copied.digest != stream.digest {
         return Err(MaterializeError::Unreadable);
@@ -305,24 +318,209 @@ pub(crate) fn materialize_conversation(
 
 struct CreatedDestination<'a> {
     path: &'a Path,
+    /// The exclusive no-follow handle from the create. SQLite opens this file.
+    reserved: Option<File>,
     keep: bool,
 }
 
 impl<'a> CreatedDestination<'a> {
     fn new(path: &'a Path) -> Result<Self, MaterializeError> {
-        // Exclusive and no-follow. SQLite then opens this regular file, not a
-        // symlink planted at the same name.
-        open(path, OpenMode::CreateNew).map_err(|_| MaterializeError::Unreadable)?;
-        Ok(Self { path, keep: false })
+        // Exclusive and no-follow. The handle stays open until SQLite has
+        // opened this same file. A symlink planted at the name is not it.
+        let reserved = reserve_session(path)?;
+        Ok(Self {
+            path,
+            reserved: Some(reserved),
+            keep: false,
+        })
     }
 }
 
 impl Drop for CreatedDestination<'_> {
     fn drop(&mut self) {
-        if !self.keep {
-            let _ = std::fs::remove_file(self.path);
+        if self.keep {
+            return;
+        }
+        let binding = self
+            .reserved
+            .as_ref()
+            .and_then(|file| reserved_name(file, self.path).ok());
+        match binding {
+            Some(NameBinding::Same) => {
+                // Windows refuses the unlink while a handle that does not
+                // share delete is open. Unix unlinks the name we still hold.
+                #[cfg(windows)]
+                {
+                    self.reserved.take();
+                }
+                let _ = std::fs::remove_file(self.path);
+            }
+            Some(NameBinding::Symlink) => {
+                // Unlink the link. Do not follow it into the target.
+                let _ = std::fs::remove_file(self.path);
+            }
+            Some(NameBinding::Missing | NameBinding::Other) | None => {}
         }
     }
+}
+
+/// What the reserved name is, compared with the handle this attempt holds.
+enum NameBinding {
+    Same,
+    Symlink,
+    Other,
+    Missing,
+}
+
+fn reserve_session(path: &Path) -> Result<File, MaterializeError> {
+    #[cfg(unix)]
+    {
+        open(path, OpenMode::CreateNew).map_err(|_| MaterializeError::Unreadable)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        for parent in path
+            .ancestors()
+            .skip(1)
+            .filter(|parent| parent.parent().is_some())
+        {
+            let meta =
+                std::fs::symlink_metadata(parent).map_err(|_| MaterializeError::Unreadable)?;
+            if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(MaterializeError::Unreadable);
+            }
+        }
+        // No delete share, and the reparse point is the object itself. A peer
+        // cannot replace this name while the handle is open.
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|_| MaterializeError::Unreadable)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Err(MaterializeError::Unreadable)
+    }
+}
+
+fn open_reserved(reserved: &File, path: &Path) -> Result<Connection, MaterializeError> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|_| MaterializeError::Unreadable)?;
+    match reserved_name(reserved, path)? {
+        NameBinding::Same => Ok(connection),
+        NameBinding::Symlink | NameBinding::Other | NameBinding::Missing => {
+            Err(MaterializeError::Unreadable)
+        }
+    }
+}
+
+fn reserved_name(file: &File, path: &Path) -> Result<NameBinding, MaterializeError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let held = file.metadata().map_err(|_| MaterializeError::Unreadable)?;
+        let named = match std::fs::symlink_metadata(path) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(NameBinding::Missing);
+            }
+            Err(_) => return Err(MaterializeError::Unreadable),
+        };
+        if named.file_type().is_symlink() {
+            return Ok(NameBinding::Symlink);
+        }
+        if named.is_file() && held.dev() == named.dev() && held.ino() == named.ino() {
+            return Ok(NameBinding::Same);
+        }
+        Ok(NameBinding::Other)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        let held = file_index(file)?;
+        let named = match std::fs::symlink_metadata(path) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(NameBinding::Missing);
+            }
+            Err(_) => return Err(MaterializeError::Unreadable),
+        };
+        if named.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Ok(NameBinding::Symlink);
+        }
+        let opened = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|_| MaterializeError::Unreadable)?;
+        if file_index(&opened)? == held {
+            Ok(NameBinding::Same)
+        } else {
+            Ok(NameBinding::Other)
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (file, path);
+        Err(MaterializeError::Unreadable)
+    }
+}
+
+#[cfg(windows)]
+fn file_index(file: &File) -> Result<(u64, u64), MaterializeError> {
+    use std::os::windows::io::AsRawHandle;
+    #[repr(C)]
+    struct ByHandleFileInformation {
+        attributes: u32,
+        creation_low: u32,
+        creation_high: u32,
+        access_low: u32,
+        access_high: u32,
+        write_low: u32,
+        write_high: u32,
+        volume_serial: u32,
+        size_high: u32,
+        size_low: u32,
+        links: u32,
+        index_high: u32,
+        index_low: u32,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetFileInformationByHandle(
+            file: *mut std::ffi::c_void,
+            information: *mut ByHandleFileInformation,
+        ) -> i32;
+    }
+    // The handle is the still-open file. The call writes one information struct.
+    let mut info = unsafe { std::mem::zeroed::<ByHandleFileInformation>() };
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) };
+    if ok == 0 {
+        return Err(MaterializeError::Unreadable);
+    }
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    if info.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(MaterializeError::Unreadable);
+    }
+    let index = (u64::from(info.index_high) << 32) | u64::from(info.index_low);
+    Ok((u64::from(info.volume_serial), index))
 }
 
 fn one_stream(
@@ -395,6 +593,7 @@ fn copy_stream(
     stream_key: i64,
     stream: &DeferredStream,
     destination: &Path,
+    reserved: &File,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<(), MaterializeError> {
     let (incarnation, floor, tail) = source
@@ -411,7 +610,7 @@ fn copy_stream(
         )
         .map_err(|_| MaterializeError::Interrupted)?;
     let records = digest_records(source, stream_key).map_err(|_| MaterializeError::Interrupted)?;
-    let dest = Connection::open(destination).map_err(|_| MaterializeError::Unreadable)?;
+    let dest = open_reserved(reserved, destination)?;
     dest.execute_batch(SESSION_SCHEMA)
         .map_err(|_| MaterializeError::Unreadable)?;
     dest.execute(
@@ -642,6 +841,24 @@ mod tests {
         assert!(CreatedDestination::new(&link).is_err());
         assert!(!outside.exists());
         assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_planted_after_reserve_is_not_opened() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = root.path().join("outside");
+        std::fs::write(&outside, b"keep").unwrap();
+        let path = root.path().join("session.sqlite3.partial");
+        let created = CreatedDestination::new(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&outside, &path).unwrap();
+        let reserved = created.reserved.as_ref().unwrap();
+        assert!(open_reserved(reserved, created.path).is_err());
+        assert_eq!(std::fs::read(&outside).unwrap(), b"keep");
+        drop(created);
+        assert_eq!(std::fs::read(&outside).unwrap(), b"keep");
+        assert!(std::fs::symlink_metadata(&path).is_err());
     }
 
     #[test]
