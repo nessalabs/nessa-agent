@@ -157,6 +157,16 @@ fn sdk_cleanup_acknowledgement_requires_exact_lease_target_and_atomic_history() 
         lease: id("another-lease"),
         lifetime: scope.lifetime().clone(),
     };
+    // Refuse foreign identity before an existing ACK can also reject a
+    // duplicate lifetime. The original two-record rollback oracle stays below.
+    assert!(
+        continuation
+            .apply_unit(&[SessionChange::Lease(bad.clone())])
+            .is_err(),
+        "a first SDK cleanup ACK cannot name another lease"
+    );
+    assert_eq!(continuation.snapshot.as_ref(), Some(&snapshot));
+    assert_eq!(continuation.snapshot_bytes, bytes);
     assert!(continuation
         .apply_unit(&[
             SessionChange::Lease(proof.clone()),
