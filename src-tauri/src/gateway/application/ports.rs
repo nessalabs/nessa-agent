@@ -23,7 +23,9 @@ use std::sync::mpsc;
 use std::{
     error::Error,
     fmt,
+    future::Future,
     path::{Path, PathBuf},
+    pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -457,6 +459,12 @@ pub trait MonotonicClock: Send + Sync {
     /// deterministically instead of sleeping the process thread.
     fn wait(&self, duration: Duration) {
         std::thread::sleep(duration);
+    }
+
+    /// Wait without holding a thread, for an async caller. Test clocks may
+    /// advance instead of sleeping.
+    fn pause(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(tokio::time::sleep(duration))
     }
 }
 
@@ -1694,9 +1702,22 @@ pub(crate) mod testing {
         pub(crate) initiators: Mutex<Vec<ReconciliationInitiator>>,
         /// Told when a held registration is entered, then waited on to let it finish.
         hold: Mutex<Option<(Sender<()>, Receiver<()>)>>,
+        /// Whether classifying startup panics, so `Gateway::start` fails before
+        /// any reconciliation is admitted.
+        pub(crate) classify_panics: std::sync::atomic::AtomicBool,
     }
 
     impl GatewayHost for RecordingGatewayHost {
+        fn startup_cause(&self) -> super::ReconciliationCause {
+            if self
+                .classify_panics
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                panic!("the test's startup classification panics");
+            }
+            super::ReconciliationCause::Startup
+        }
+
         fn register(
             &self,
             _: &Path,
@@ -1771,23 +1792,54 @@ pub(crate) mod testing {
         (gateway, host, on_entered, release)
     }
 
+    /// As [`recording_gateway_held`], on `clock`.
+    pub(crate) fn recording_gateway_held_on(
+        registration: Result<ReconciledGateway, GatewayError>,
+        clock: Arc<dyn super::MonotonicClock>,
+    ) -> (Gateway, Arc<RecordingGatewayHost>, Receiver<()>, Sender<()>) {
+        let (entered, on_entered) = channel();
+        let (release, on_release) = channel();
+        let (gateway, host) = gateway_on(registration, Some((entered, on_release)), clock);
+        (gateway, host, on_entered, release)
+    }
+
+    /// As [`recording_gateway`], on `clock`.
+    pub(crate) fn recording_gateway_on(
+        registration: Result<ReconciledGateway, GatewayError>,
+        clock: Arc<dyn super::MonotonicClock>,
+    ) -> (Gateway, Arc<RecordingGatewayHost>) {
+        gateway_on(registration, None, clock)
+    }
+
     fn gateway_over(
         registration: Result<ReconciledGateway, GatewayError>,
         hold: Option<(Sender<()>, Receiver<()>)>,
+    ) -> (Gateway, Arc<RecordingGatewayHost>) {
+        gateway_on(registration, hold, Arc::new(super::SystemMonotonicClock))
+    }
+
+    fn gateway_on(
+        registration: Result<ReconciledGateway, GatewayError>,
+        hold: Option<(Sender<()>, Receiver<()>)>,
+        clock: Arc<dyn super::MonotonicClock>,
     ) -> (Gateway, Arc<RecordingGatewayHost>) {
         let host = Arc::new(RecordingGatewayHost {
             registration,
             registrations: Mutex::new(0),
             initiators: Mutex::new(Vec::new()),
             hold: Mutex::new(hold),
+            classify_panics: std::sync::atomic::AtomicBool::new(false),
         });
         (
-            Gateway::bootstrap(
-                host.clone(),
-                system_login_shell(),
-                discard_startup_events(),
-                sequential_reconciliation_ids(),
-                discard_reconciliation_audit(),
+            Gateway::bootstrap_with_dependencies(
+                crate::gateway::application::GatewayRuntimeDependencies::new(
+                    host.clone(),
+                    system_login_shell(),
+                    discard_startup_events(),
+                    sequential_reconciliation_ids(),
+                    discard_reconciliation_audit(),
+                    clock,
+                ),
                 "/runtime".into(),
                 "ci".into(),
             ),

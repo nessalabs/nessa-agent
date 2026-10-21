@@ -109,6 +109,10 @@ export const KNOBS = {
     default: 1,
     what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps",
   },
+  launches: {
+    default: 1,
+    what: "window reloads while the host is still starting the gateway: no startup screen, and the conversation listed as soon as it is up",
+  },
   long: {
     default: 30,
     what: "turns of long streamed answers one conversation takes before it is talked to in the window",
@@ -182,6 +186,7 @@ export function plan(knobs) {
   add(knobs.pools, () => ({ kind: "pool" }))
   add(knobs.drifts, () => ({ kind: "drift" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))
+  add(knobs.launches, () => ({ kind: "launch" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

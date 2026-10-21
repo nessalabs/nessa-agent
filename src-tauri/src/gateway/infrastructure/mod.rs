@@ -82,7 +82,7 @@ pub use commands::{
     __tauri_command_name_set_claude_configuration_directory, gateway_startup,
     retry_gateway_startup, runtime_copy, set_claude_configuration_directory, startup_events,
 };
-pub(crate) use commands::{GatewayReader, GatewayUnread};
+pub(crate) use commands::{desktop_startup_wait, GatewayReader, GatewayUnread};
 pub use selection::{
     current, login_shell_path, platform_context, reconciliation_audit, reconciliation_ids,
 };
