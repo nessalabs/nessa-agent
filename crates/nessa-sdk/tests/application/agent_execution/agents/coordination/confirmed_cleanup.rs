@@ -417,3 +417,80 @@ async fn cycle9_old_cleanup_ticket_cannot_publish_after_replacement_start() {
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test]
+async fn cycle9_cleanup_proof_writer_precedes_replacement_retirement() {
+    let backend = Arc::new(Backend::default());
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = attached_agent(Arc::new(Provider(backend)), manager)
+        .await
+        .unwrap();
+    let old = agent.start_shutdown(SessionCloseRequest::Explicit(actor()));
+    assert!(timeout(
+        Duration::from_secs(2),
+        agent.inner.lifecycle.complete_stop(&old)
+    )
+    .await
+    .unwrap()
+    .is_confirmed());
+    let (entered, writing) = oneshot::channel();
+    let (release, held) = oneshot::channel();
+    let lifecycle = agent.inner.lifecycle.clone();
+    let proof = tokio::spawn(async move {
+        lifecycle
+            .record_cleanup_proof(&old, async {
+                entered.send(()).unwrap();
+                held.await.unwrap();
+                Ok(())
+            })
+            .await
+    });
+    timeout(Duration::from_secs(2), writing)
+        .await
+        .unwrap()
+        .unwrap();
+    let auth = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    let wait = agent.start_attachment(auth).unwrap();
+    let called = std::sync::atomic::AtomicBool::new(false);
+    let blocked = {
+        let transition = agent
+            .inner
+            .lifecycle
+            .run_attachment_transition(wait.generation, async {
+                called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok::<_, AgentError>(())
+            });
+        tokio::pin!(transition);
+        poll_fn(|cx| Poll::Ready(transition.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    };
+    // Settle both actual owners before asserting the captured ordering.
+    release.send(()).unwrap();
+    timeout(Duration::from_secs(2), proof)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    timeout(Duration::from_secs(2), wait.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    timeout(Duration::from_secs(2), agent.close(actor()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        blocked,
+        "replacement retirement cannot overtake an in-flight proof writer"
+    );
+    assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+}

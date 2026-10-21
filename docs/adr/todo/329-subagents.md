@@ -1946,3 +1946,9 @@ The existing Follower.open owns this classification for all three stream kinds;
 no refusal exemption, retry budget or server capacity change is introduced. The
 CI audit fixtures separately construct private parents through the existing
 local-storage owner; production directory checks and canonical umask022 stay.
+
+`cycle9_cleanup_proof_writer_precedes_replacement_retirement` holds an admitted
+proof write, starts the actual replacement and directly polls the current
+resource transition before releasing the first writer. Both owners settle before
+the captured pending result is asserted. It enforces the resource-fence ordering
+independently of the stale-ticket generation check, without scheduling sleeps.

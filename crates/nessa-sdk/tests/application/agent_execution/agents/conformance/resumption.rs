@@ -1497,9 +1497,10 @@ async fn cycle8_same_lease_sdk_proof_is_retired_before_reacquisition() {
         let auth = agent
             .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
             .unwrap();
-        assert!(bounded(agent.start_attachment(auth).unwrap().wait())
-            .await
-            .is_err());
+        assert!(matches!(
+            bounded(agent.start_attachment(auth).unwrap().wait()).await,
+            Err(AgentError::Storage(_))
+        ));
         let started_after = backend.audit.records.lock().unwrap().iter().filter(|record| {
         matches!(record, ExecutionAuditRecord::Attachment(record)
             if record.after() == nessa_sdk::application::agent_execution::executions::AttachmentAuditStage::Starting)
