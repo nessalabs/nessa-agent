@@ -140,8 +140,9 @@ starts the measured row.
    A draft the close lets go keeps its home and its unsent text in the box
    until that box goes.    A session the source removes keeps the unsent reply
    its composer was showing, a message still on its way, a transcript
-   read that failed, Stop while a turn was still running, and a model
-   change that had not settled, until that box goes. A pane preview stays until the
+   read that failed, Stop while a turn was still running, a model
+   change that had not settled, and an approval answer still on its way
+   or refused, until that box goes. A pane preview stays until the
    frame that paints the dropped arrangement. A drag's copy does not paint the night scene. A pane change does not
    render the shell, and it does not render the fitted window. A person's
    toggle still paints in the turn. The click does not render the
@@ -315,8 +316,9 @@ box frame.
   a removed session staying in its box until that box goes,
   a closing draft keeping its home and unsent text in that box until it goes,
   a removed session keeping its unsent reply, a message still on its way,
-  a failed transcript read, Stop while a turn was still running, and a model
-  change that had not settled, in that box until it goes,
+  a failed transcript read, Stop while a turn was still running, a model
+  change that had not settled, and an approval answer still on its way or
+  refused, in that box until it goes,
   a pane preview staying until the frame that paints the dropped arrangement
   (`layouts.test.tsx`, `columns.mjs` `draft-held`, `reply-held`, and `stop-held`,
   `drag.test.tsx`),

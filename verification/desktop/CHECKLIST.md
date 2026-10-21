@@ -909,6 +909,12 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   sample source refuses a model change before the next paint, so this is
   the layout test that puts an acknowledged change on screen and then
   removes the session.
+- [ ] **An approval answer stays until that box goes.** The source
+  removing the session drops the answer at once. The box still shows
+  the refusal until the box itself goes. The sample source takes an
+  answer before the next paint and drops the approval from the
+  conversation, so this is the layout test that shows the refusal and
+  then removes the session.
 - [ ] **A pane preview stays until the dropped arrangement paints.** An
   accepted swap keeps the preview on the panes the grid has not replaced
   yet. The next two frames still show it. It lets go on the frame the new

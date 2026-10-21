@@ -9,11 +9,12 @@
  * close, and the home would go with it while the box is still there. An
  * established session the source removes does too: `forgetSession` drops
  * its unsent reply, its outbox, a transcript read that failed, the
- * transcript a turn was still running in, and a model change still
- * settling. The composer, the message still on its way, that failure,
- * Stop, and the model notice would clear while the box stays. What the
+ * transcript a turn was still running in, a model change still
+ * settling, and an approval answer still on its way or refused. The
+ * composer, the message still on its way, that failure, Stop, the model
+ * notice, and that answer would clear while the box stays. What the
  * composer was showing, that message, the failure, whether the agent was
- * at work, and that model change stay with the component.
+ * at work, that model change, and that answer stay with the component.
  */
 import { useRef } from "react"
 import type { Transcript } from "../../model/transcript"

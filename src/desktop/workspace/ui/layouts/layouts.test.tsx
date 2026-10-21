@@ -817,6 +817,80 @@ describe("a source removing a session", () => {
       frames.restore()
     }
   })
+
+  it("keeps an approval answer until the box goes", async () => {
+    // The refusal has to be on the card before the source removes the session.
+    // The answer is already gone then. A pending answer is that same value.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      const failure = () => pane()?.querySelector(".workspace-approval-failure")
+      for (let step = 0; step < 8 && !pane()?.querySelector("textarea"); step++)
+        await act(async () => frames.runFrame())
+      expect(pane()?.querySelector("textarea")).not.toBeNull()
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.transcriptLoaded({
+            transcript: {
+              sessionId: "b",
+              messages: [],
+              activity: null,
+              approvals: [
+                {
+                  id: "ap",
+                  command: "cargo test",
+                  reason: "Runs the tests.",
+                  origin: { kind: "agent" },
+                  options: [{ id: "deny", label: "Deny", choice: "deny" }],
+                  ask: "tool",
+                },
+              ],
+              revision: 2,
+            },
+          }),
+        )
+        store.dispatch(
+          workspaceActions.approvalAnswering({
+            sessionId: "b",
+            approvalId: "ap",
+            token: "answer",
+          }),
+        )
+        store.dispatch(
+          workspaceActions.approvalFailed({
+            sessionId: "b",
+            approvalId: "ap",
+            token: "answer",
+            reason: "unavailable",
+          }),
+        )
+      })
+      expect(failure()?.textContent).toBe("Nessa couldn’t confirm this just now.")
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.answers).not.toHaveProperty("b")
+      expect(failure()?.textContent).toBe("Nessa couldn’t confirm this just now.")
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(failure()?.textContent).toBe("Nessa couldn’t confirm this just now.")
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
 })
 
 describe("a draft's close", () => {
