@@ -555,7 +555,10 @@ fn a_bundle_staged_under_a_new_directory_keeps_the_desktop_launch_identity() {
     let data = root.path().join("data");
     nessa_local_storage::create_directory(&data).unwrap();
     let dependencies = provider_dependencies(root.path());
-    let identity = |release: &str| {
+    // One configuration staged twice, as an upgrade does: the second bundle
+    // updates the entries the first one inserted.
+    let mut settings = RuntimeConfig::default();
+    let mut identity = |release: &str| {
         let bundle = root.path().join(release).join("runtime");
         for (command, entry) in AgentId::ALL
             .iter()
@@ -569,9 +572,8 @@ fn a_bundle_staged_under_a_new_directory_keeps_the_desktop_launch_identity() {
         }
         std::fs::copy(sdk_catalog(), bundle.join("models.json")).unwrap();
         std::fs::write(bundle.join("nessa-mcp"), "").unwrap();
-        let mut settings = RuntimeConfig::default();
         configure(&mut settings, &bundle, &data).unwrap();
-        let agents = settings.agents.unwrap();
+        let agents = settings.agents.clone().unwrap();
         AgentId::ALL
             .iter()
             .filter(|agent| bundled_launch(**agent).is_some())

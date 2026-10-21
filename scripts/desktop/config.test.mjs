@@ -510,4 +510,25 @@ test("the justfile's macOS bundle choices pass the macOS build's own check", () 
     })
     assert.equal(status, 0, `${name}: ${choice}`)
   }
+  // The checked choices only matter if every build the recipes run takes
+  // them, and no recipe names its own bundles.
+  const builds = recipe
+    .split("\n")
+    .filter((line) => line.includes("scripts/desktop/build.mjs"))
+  assert.ok(builds.length > 0, "no recipe runs scripts/desktop/build.mjs")
+  for (const line of builds) {
+    assert.ok(
+      line.includes('{{if mode == "fast" { fast-bundles } else { release-bundles }}}'),
+      `build without the checked bundles: ${line.trim()}`,
+    )
+  }
+  const stray = recipe
+    .split("\n")
+    .filter(
+      (line) =>
+        line.includes("--bundles") &&
+        !line.trimStart().startsWith("#") &&
+        !/^(fast|release)-bundles := /.test(line),
+    )
+  assert.deepEqual(stray, [], "--bundles named outside the checked choices")
 })
