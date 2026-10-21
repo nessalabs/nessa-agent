@@ -314,7 +314,8 @@ impl ProviderSessionBackend for WorkflowBackend {
             let gate = self.cleanup_gate.lock().unwrap().take();
             if let Some(held) = gate {
                 self.cleanup_entered.notify_one();
-                held.await.expect("the cleanup owner receives its actual receipt");
+                held.await
+                    .expect("the cleanup owner receives its actual receipt");
             }
             let report = self.cleanup.lock().unwrap().clone();
             if report.is_confirmed() {
