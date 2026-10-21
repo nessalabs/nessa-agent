@@ -447,7 +447,13 @@ describe("a pane's close is offered where closing it does something", () => {
     expect(offered()).toEqual([true, true])
     await act(async () => void store.dispatch(closePane()))
     // The closed pane's box stays through the frames a drop's copy and a
-    // column title take; the grid paints the one pane after that.
+    // column title take, and it keeps the session it showed. The grid
+    // paints the one pane after that.
+    expect(
+      [...host.querySelectorAll("article.workspace-pane")].map((pane) =>
+        pane.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Session a", "Session b"])
     await act(
       async () =>
         new Promise<void>((resolve) =>

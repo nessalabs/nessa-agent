@@ -16,6 +16,8 @@ import {
 /** A pane's rectangle as fractions of the grid, and its place in it. */
 export interface PanePlacement {
   readonly key: PaneKey
+  /** The item the pane showed when this box was placed. A box held after the pane closes still names it. */
+  readonly item: string
   readonly x: number
   readonly width: number
   readonly column: number
@@ -101,6 +103,7 @@ export function placements(columns: PaneLayout["columns"]): {
       const h = pane.share / height
       panes.push({
         key: pane.key,
+        item: pane.item,
         x,
         width: w,
         column: c,

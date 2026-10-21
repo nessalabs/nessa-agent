@@ -31,6 +31,7 @@ describe("placements", () => {
     expect(panes).toEqual([
       {
         key: 1,
+        item: "a",
         x: 0,
         width: 1,
         column: 0,

@@ -38,17 +38,21 @@ export const Pane = memo(function Pane({
   placement,
   frame,
   multi,
+  heldSession,
 }: {
   placement: PanePlacement
   /** What the grid puts on the pane's root: where it is placed, and its names (`SplitPanes`). */
   frame: PaneFrame
   multi: boolean
+  /** The session a closed pane's box was painted with, until that box goes. */
+  heldSession?: string
 }) {
   const key = placement.key
   const dispatch = useWorkspaceDispatch()
   const store = useWorkspaceStore()
   const focusHandlers = usePaneFocus(key)
-  const sessionId = useWorkspaceSelector((state) => selectPaneSession(state, key)) ?? ""
+  const liveSession = useWorkspaceSelector((state) => selectPaneSession(state, key)) ?? ""
+  const sessionId = liveSession || heldSession || ""
   const draft = useWorkspaceSelector(
     (state) => selectDraft(state, sessionId) !== undefined,
   )
