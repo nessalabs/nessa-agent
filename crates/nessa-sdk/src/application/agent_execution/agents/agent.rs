@@ -1314,7 +1314,7 @@ impl Agent {
             let retired = agent
                 .inner
                 .lifecycle
-                .run_attachment(start.generation, async {
+                .run_attachment_transition(start.generation, async {
                     if let Some(scope) = agent
                         .inner
                         .lifecycle

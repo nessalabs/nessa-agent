@@ -1918,3 +1918,12 @@ The original cycle8 failed assertions are retained unchanged. Positive controls,
 ordering/storage-fault controls, mutation evidence and a fresh scoped independent
 review qualify the resulting source; unavailable Windows/WebKit/browser gates
 remain open and are not substituted by Linux focused passes.
+
+Cycle9's first expanded library selection retained an original restore/close
+failure: using the provider-preparation pause for the earlier proof-retirement
+transition moved the controlled close before rearming. The lifecycle now has one
+shared generation/resource fence, with the original provider-preparation pause
+still at the actual provider I/O boundary. `close_during_restore_cleans_the_rearmed_attachment`
+keeps its original close-count, cause, uncertainty and two-second assertions.
+Close between acknowledged proof retirement and provider preparation may refuse
+startup; close after preparation's admitted boundary joins its actual rearmed owner.

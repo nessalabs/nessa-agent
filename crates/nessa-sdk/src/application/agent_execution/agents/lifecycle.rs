@@ -854,7 +854,7 @@ impl SessionLifecycle {
             && matches!(state.work_status, WorkStatus::Open)
             && matches!(state.attachment, AttachmentState::Attached { generation: current, .. } if current == generation)
     }
-    pub(super) async fn run_attachment<T, E>(
+    pub(super) async fn run_attachment_transition<T, E>(
         &self,
         generation: u64,
         operation: impl Future<Output = Result<T, E>>,
@@ -866,15 +866,28 @@ impl SessionLifecycle {
         if !self.attachment_current(generation) {
             return Err(AgentError::Closed.into());
         }
-        #[cfg(test)]
-        {
-            let pause = self.preparation_pause.lock().unwrap().take();
-            if let Some((entered, release)) = pause {
-                let _ = entered.send(());
-                let _ = release.await;
-            }
-        }
         operation.await
+    }
+    pub(super) async fn run_attachment<T, E>(
+        &self,
+        generation: u64,
+        operation: impl Future<Output = Result<T, E>>,
+    ) -> Result<T, E>
+    where
+        E: From<AgentError>,
+    {
+        self.run_attachment_transition(generation, async {
+            #[cfg(test)]
+            {
+                let pause = self.preparation_pause.lock().unwrap().take();
+                if let Some((entered, release)) = pause {
+                    let _ = entered.send(());
+                    let _ = release.await;
+                }
+            }
+            operation.await
+        })
+        .await
     }
     // The same resource fence orders durable proof publication against a
     // replacement's acknowledged retirement before its first external effect.
