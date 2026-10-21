@@ -1005,6 +1005,57 @@ describe("the model a session runs on", () => {
 })
 
 describe("usage limits", () => {
+  it("compares the reset on the gateway timeline", () => {
+    const reset = GATEWAY_NOW_MS + 30_000
+    const receivedAt = GATEWAY_NOW_MS + 120_000
+    const transcript = transcriptFrom(
+      view("limit", {
+        usageLimitAutoContinue: true,
+        messages: [
+          turn({
+            status: "failed",
+            usageLimit: {
+              provider: "claude",
+              recovery: "timed_reset",
+              resetsAtMs: reset,
+            },
+          }),
+        ],
+      }),
+      1,
+      at,
+      receivedAt,
+    )
+    expect(transcript.messages[0]).toMatchObject({
+      usageLimit: {
+        resetsAtMs: reset,
+        resetsAtClientMs: receivedAt + 30_000,
+      },
+    })
+    const past = GATEWAY_NOW_MS - 10_000
+    const slow = GATEWAY_NOW_MS - 120_000
+    const later = transcriptFrom(
+      view("later", {
+        messages: [
+          turn({
+            status: "failed",
+            usageLimit: {
+              provider: "claude",
+              recovery: "timed_reset",
+              resetsAtMs: past,
+            },
+          }),
+        ],
+      }),
+      1,
+      at,
+      slow,
+    )
+    expect(later.messages[0]).toMatchObject({
+      usageLimit: { resetsAtMs: past, resetsAtClientMs: slow - 10_000 },
+    })
+  })
+
   it("keeps the classification and the gateway preference, without a diagnostic", () => {
     const source = view("limit", {
       usageLimitAutoContinue: false,

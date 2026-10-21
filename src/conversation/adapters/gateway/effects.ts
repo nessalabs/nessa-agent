@@ -29,7 +29,12 @@ import {
   type ControlOutcome,
   type ConversationEffects,
 } from "../../application/ports"
-import type { CommandFailure, ConversationSelection, ReadFailure } from "../../model"
+import {
+  usageLimitOnClientClock,
+  type CommandFailure,
+  type ConversationSelection,
+  type ReadFailure,
+} from "../../model"
 import { heldFileReader } from "./held-files"
 import { shownNote } from "./notes"
 
@@ -63,6 +68,14 @@ export function conversationView(
   const asked = new Map(questionDetails.map((detail) => [detail.entry.question, detail]))
   return {
     ...value,
+    messages: value.messages.map((message) => {
+      const limit = message.usageLimit
+      if (limit?.resetsAtMs === undefined) return message
+      return {
+        ...message,
+        usageLimit: usageLimitOnClientClock(limit, serverNowMs, receivedAtMs),
+      }
+    }),
     questionsWaiting: listedQuestions.flatMap((entry) => {
       const detail = asked.get(entry.question)
       return detail?.state === "loaded"

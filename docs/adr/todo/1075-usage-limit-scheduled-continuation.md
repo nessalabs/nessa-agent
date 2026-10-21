@@ -36,8 +36,13 @@ stable execution identity, causal turn, caller, initiation, and cancellation.
 Every schedule-row change is one compare-and-set against the history
 generation and the preference revision that plan read. A preference receipt
 is not success until its scan settles or its rollback commits; a retry of
-an unfinished enable resumes that work. A compare-and-set to `delivering`
-is the only thing that may call `submit_command`. Cedar and the deleted-target refusal stay inside that
+an unfinished enable resumes that work. An observed outcome whose audit
+does not commit leaves the row `submitting` until a bounded retry; the next
+pass records that outcome and does not mint an execution id. A reset instant
+is kept through 2100-01-01 UTC, and the card compares that instant on the
+gateway's clock, translated the same way as a permission deadline. A
+compare-and-set to `delivering` is the only thing that may call
+`submit_command`. Cedar and the deleted-target refusal stay inside that
 command. Schedule and cancellation audits commit with the status change. The
 delivery audit follows admission and, if it fails, leaves the row delivering
 so the same execution id is not minted again. The project preference is one

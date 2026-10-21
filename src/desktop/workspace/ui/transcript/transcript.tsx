@@ -312,6 +312,7 @@ export const Transcript = memo(function Transcript({
             <UsageLimitCard
               limit={usageLimit.usageLimit}
               enabled={transcript?.usageLimitAutoContinue === true}
+              nowMs={Date.now()}
               onChange={(enabled) =>
                 dispatch(setUsageLimitAutoContinue({ enabled, initiator: "person" }))
               }

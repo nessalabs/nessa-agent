@@ -51,9 +51,13 @@ capability) puts a prompt failure only on the string `usageLimitExceeded`.
 | Claude `overloaded`, `max_output_tokens` | Not a usage limit | |
 
 `resetsAt` below `1e11` is Unix seconds. `1e11` or more is Unix milliseconds.
-An instant is kept only when it falls on 2024-01-01 through 2100-01-01 UTC.
-The scheduler then requires it to be after the gateway clock. A past instant
-does not schedule.
+An instant is kept when it falls on 2024-01-01 through 2100-01-01 UTC,
+both ends included. The scheduler then requires it to be after the gateway
+clock. A past instant does not schedule. The card compares that same
+gateway instant: the view's `serverNowMs` and the client's receipt time
+are the two clocks, and the reset is moved onto the client clock the same
+way as a permission deadline. The words under the title still format the
+absolute instant.
 
 ## State
 
@@ -114,6 +118,7 @@ and the history generation it observed. The partial unique index covers only
 | `submitting` | `submit_command` returns a terminal refusal, or the caller cannot be rebuilt | `finish_fenced_submit` | `refused` | Status and audit, after the observation |
 | `submitting` | The mutation journal returns `Interrupted` | `finish_fenced_submit` | `unconfirmed` | Status and audit `submission_interrupted`. No second submit |
 | `submitting` | `submit_command` returns a retryable or unclassified failure, or the command store is absent | `finish_fenced_submit`, then `defer_submit` | `submitting` | `retry_at_ms`, `retry_failures`, and audit `submission_retry`, one transaction. The status stays `submitting`. `begin_submit` does not adopt the row before `retry_at_ms`. A lost lease does not write this retry |
+| `submitting` | An observed outcome's `record_outcome` does not commit | `finish_fenced_submit`, then `defer_submit` | `submitting` | `retry_at_ms`, `retry_failures`, and audit `submission_retry`, one transaction. The status and the outcome audit stay unwritten. The next pass after `retry_at_ms` records that same outcome and does not mint an execution id. A missing row writes nothing. A `defer_submit` that does not commit leaves `retry_at_ms` unchanged and the loop waits one second |
 | none | Settlement's plan returns an error, and catch-up is already complete | `consider_usage_limit` | reconcile debt | One `reconcile_retry` row: the conversation, how many attempts have failed, and `retry_at_ms`. The loop retries that plan at that time. A debt the database refuses stays in this process until a later pass writes it or the plan commits. A plan that commits deletes the debt |
 | `submitting` | Preference off, and `fence_until_ms` is at or before the clock | `record_preference_decision`, `set_preference`, or `retire_unfenced_submissions` | `cancelled` | Status and audit. A later pass waits until a still-live lease and then cancels it |
 | `submitting` | Preference off, and the lease is still live | the owning process | `submitting` | The submit finishes into `delivered`, `refused`, or `unconfirmed` |
@@ -197,7 +202,7 @@ confirmed view catches up. Both follow this order.
 | `defer_submit` commits | the process continues | `submitting`, `retry_at_ms` still ahead, audit `submission_retry` | The next pass waits until `retry_at_ms`. It does not submit before then. The same process does not reacquire the row in a tight loop |
 | `defer_submit`'s transaction fails | the audit | `submitting`, `retry_at_ms` unchanged | The pass waits one second and tries again. The timestamp and the audit roll back together |
 | a settlement plan fails | the reconcile row commits | no schedule change yet; `reconcile_retry` when the write commits | The loop retries that conversation at `retry_at_ms` even though catch-up is complete. A crash drops a debt the database never stored. The next start's catch-up plans every owner. A debt this process kept in memory is written on a later pass |
-| `record_outcome` fails | its commit | the previous status | The next pass records the same outcome. It does not mint an execution id |
+| `record_outcome` fails | `defer_submit` commits, or that write fails too | `submitting`. `retry_at_ms` is still ahead when the defer commits; otherwise the previous retry time | The next pass waits until `retry_at_ms`, then records the same outcome. It does not mint an execution id. A defer that does not commit waits one second and tries the outcome again. A missing row is not retried |
 | preference turns on | the owner scan finishes, or the rollback commits | preference on at the revision this request installed, unsettled, the decision audit, and the request receipt `pending` | A retry resumes the scan. It does not report success and it does not apply a second change. A scan error reverts that revision only while it is still unsettled, as the system, which cancels those rows and marks the receipt failed in that same transaction. A revert that does not commit leaves the receipt `pending`, and the next retry resumes. A scan that finishes settles the revision and only then marks the receipt stored. A request that did not install it does not turn it off; its receipt becomes failed when that write commits, and stays `pending` when the write does not. If the process dies during the scan, or the next start's scan fails, catch-up stays pending until a later pass traverses every owner |
 | preference turns off | a live lease expires | preference off; `scheduled`, `delivering`, and expired `submitting` cancelled | A live lease finishes its submit. The off path waits until that lease and then cancels it, so a later enable does not deliver it |
 | `erase_conversation` commits | the tombstone is marked erased | prompt and identifying fields blank, one new audit per row that still held them | A crash before the commit leaves the payload. Deletion stays unfinished and the next attempt scrubs again. A second scrub writes no audit. Older audit rows stay |
@@ -224,7 +229,7 @@ schedule with nothing due and no live lease. A store error is never that.
 | `submitting`, this process inside `finish_fenced_submit`, lease still ahead | This process, while `renew_fence` returns true and `fence_until_ms` is ahead of the clock | `renew_fence` returns an error, such as SQLite busy, before the deadline | Renewal continues. `lost` stays false. `submit_command` is not abandoned | `FENCE_RENEW_RETRY_MS` (one second) until a renew succeeds, then every ten seconds, and only while the deadline is still ahead |
 | `submitting`, the lease this process wrote has expired | Whoever adopts it after `fence_until_ms` | Renew keeps returning an error through the deadline, or `renew_fence` returns false because the deadline has passed | `lost` is set and renewal stops. The expired lease is not extended. `submit_command` does not start. A submit already running does not record an outcome or a retry | No further renew from this process. The next due pass adopts the row. A saved execution is recorded as delivered and is not submitted again |
 | `submitting`, renew reports this process does not own the row | Whoever the store now names, or nobody | `renew_fence` returns false | `lost` is set and renewal stops. `submit_command` does not start. A submit already running does not record an outcome. This process does not write a retry time on a row it does not own | No further renew from this process. The next due pass, or the process that adopted the expired lease, continues the row |
-| `submitting`, retry time still ahead | This process until the lease, then whoever adopts it | A retryable submit failure already wrote `retry_at_ms` | The pass does not claim the row and does not call `submit_command` | `retry_at_ms`. The first failure waits one second. Each later failure doubles that wait, at most one minute. A shorter delivery or catch-up wait wins |
+| `submitting`, retry time still ahead | This process until the lease, then whoever adopts it | A retryable submit failure, or an observed outcome whose audit did not commit, already wrote `retry_at_ms` | The pass does not claim the row and does not call `submit_command`. The later pass records the outcome already observed when the execution is saved or the refusal is stable, and does not mint an execution id | `retry_at_ms`. The first failure waits one second. Each later failure doubles that wait, at most one minute. A shorter delivery or catch-up wait wins. A `defer_submit` that does not commit leaves the previous retry time and the loop waits one second |
 | `submitting`, another process holds a live lease | `fence_owner` until `fence_until_ms` | `begin_submit` would return false | `claim_due` does not return the row. `next_due` waits until the later of `retry_at_ms` and `fence_until_ms`. The pass does not run again after one millisecond | That deadline. The owner may attempt the row when `retry_at_ms` has arrived |
 | Reconcile debt, catch-up already complete | The delivery loop | The plan failed at settlement | The debt stays. The log line is not the end of the attempt | `retry_at_ms` on the debt, on the same curve. The loop wakes for that debt. A later successful plan deletes it |
 | Enable in progress, this request installed the revision | The decision transaction, then the scan. The receipt is `pending` | The catalogue scan fails, or the revert does not commit | Revert that revision only while it is still enabled and unsettled. The audit cause is `preference` and the initiator is the system. The receipt becomes failed in that transaction. A revert that returns an error leaves the receipt `pending` | The next retry of this request resumes the scan or the revert. It does not report success. A revision a later request already settled matches nothing and stays on |
@@ -436,6 +441,18 @@ turn with no saved result clears it.
     saved usage limit is read by `AgentError::usage_limit`. A provider report
     owns that walk when one was saved. Without one, the walk includes every
     aggregate position.
+23. An observed outcome whose audit does not commit is the same retry as a
+    submit that can be tried again. The row stays `submitting`. `defer_submit`
+    records `retry_at_ms` and the `submission_retry` audit on the same curve.
+    The pass does not claim the row again before that time, and it does not
+    mint an execution id when it records the outcome. A missing row is not a
+    debt. A `defer_submit` that does not commit leaves the previous retry
+    time, and the loop waits one second. A compare-and-set that does not
+    match writes no status and no audit.
+    The card's scheduling-failure line uses the gateway's reset. The absolute
+    instant is what the line formats. Whether that instant is still ahead is
+    decided on the client clock after the same translation as a permission
+    deadline, from the view's `serverNowMs` and the time the view arrived.
 
 ## Card
 
@@ -443,7 +460,9 @@ The transcript card is titled **Usage limit reached**. The checkbox label is
 **Auto-continue this project's threads when limits reset**. A schedule that
 has been accepted shows **Auto-resuming** plus the local date and time. The
 local zone is the environment zone, the same way other desktop labels format
-time. The checkbox is the gateway preference, not a per-turn flag. While a
+time. Whether the reset is still ahead is the gateway's clock, translated
+onto the client the same way as a permission deadline. A client clock that
+disagrees with the gateway does not move that decision. The checkbox is the gateway preference, not a per-turn flag. While a
 choice has not landed, the checkbox shows it and the line under the title
 keeps the confirmed preference. After the command has settled, a confirmed
 value that is not the pending choice releases the checkbox, so another

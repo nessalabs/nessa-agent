@@ -228,6 +228,7 @@ export function Transcript({
                       key={`${row.key}:usage-limit`}
                       limit={usageLimit}
                       enabled={conversation.remote?.usageLimitAutoContinue === true}
+                      nowMs={Date.now()}
                       onChange={onUsageLimitAutoContinue}
                     />
                   ) : null}

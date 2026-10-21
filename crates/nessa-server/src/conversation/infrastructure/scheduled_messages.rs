@@ -1541,11 +1541,12 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         let owner = self.owner.clone();
         self.run(move |connection| {
             let now = millis(now_ms)?;
-            // A claim stops at its limit, and a failed outcome audit leaves the
-            // row delivering. Either one is already due. A submitting row this
-            // process owns, or whose lease has expired, is due once its retry
-            // time has arrived. A live lease owned by someone else waits until
-            // that deadline, or until a later retry time.
+            // A claim stops at its limit, and a row still `delivering` is
+            // already due. A failed outcome audit leaves the row `submitting`
+            // until its retry time. A submitting row this process owns, or
+            // whose lease has expired, is due once its retry time has arrived.
+            // A live lease owned by someone else waits until that deadline,
+            // or until a later retry time.
             let pending: bool = connection
                 .query_row(
                     "SELECT EXISTS( \

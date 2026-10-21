@@ -101,5 +101,6 @@ export {
   USAGE_LIMIT_TITLE,
   USAGE_LIMIT_TOGGLE,
   usageLimitDetail,
+  usageLimitOnClientClock,
   type UsageLimitNotice,
 } from "./usage-limit"

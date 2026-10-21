@@ -13,7 +13,9 @@ import "./usage-limit-card.css"
  * refreshed view agrees, the command fails, or the command has settled and
  * the confirmed preference is a different value. The line under the title
  * follows the confirmed preference, so a choice that has not landed does
- * not read as a scheduling failure.
+ * not read as a scheduling failure. `nowMs` is this client's clock. A reset
+ * that arrived on a view is compared through `resetsAtClientMs`, which the
+ * adapter put on that same clock.
  */
 export function UsageLimitCard({
   limit,
@@ -24,7 +26,8 @@ export function UsageLimitCard({
   limit: UsageLimitNotice
   /** The gateway preference. Absent is off. */
   enabled: boolean
-  nowMs?: number
+  /** This client's clock, the clock `resetsAtClientMs` is on. */
+  nowMs: number
   onChange?: (enabled: boolean) => Promise<void> | void
 }) {
   const [pending, setPending] = useState<boolean | null>(null)
@@ -37,7 +40,7 @@ export function UsageLimitCard({
     }
   }, [pending, enabled, settled])
   const shown = pending ?? enabled
-  const detail = usageLimitDetail(limit, enabled, nowMs ?? Date.now())
+  const detail = usageLimitDetail(limit, enabled, nowMs)
   return (
     <section
       className="usage-limit-card"

@@ -224,7 +224,7 @@ fn absolute_reset_ms(value: Option<&Value>) -> Option<u64> {
     } else {
         number
     };
-    (EARLIEST_RESET_MS..LATEST_RESET_MS)
+    (EARLIEST_RESET_MS..=LATEST_RESET_MS)
         .contains(&millis)
         .then_some(millis)
 }
@@ -373,6 +373,45 @@ mod tests {
         let meta = json!({"status": "allowed_warning", "resetsAt": 1_800_000_000_000_u64});
         let observed = ObservedRateLimit { claude: Some(meta) };
         assert!(claude(frame(-32603, Some("ok"), None, Some(&observed))).is_none());
+    }
+
+    #[test]
+    fn the_published_reset_bounds_are_inclusive() {
+        let earliest = json!({
+            "status": "rejected",
+            "rateLimitType": "five_hour",
+            "resetsAt": 1_704_067_200_000_u64
+        });
+        let latest = json!({
+            "status": "rejected",
+            "rateLimitType": "five_hour",
+            "resetsAt": 4_102_444_800_000_u64
+        });
+        let past = json!({
+            "status": "rejected",
+            "rateLimitType": "five_hour",
+            "resetsAt": 4_102_444_800_001_u64
+        });
+        let data = json!({"errorKind": "rate_limit"});
+        for (meta, kept) in [
+            (earliest, Some(1_704_067_200_000)),
+            (latest, Some(4_102_444_800_000)),
+        ] {
+            let observed = ObservedRateLimit { claude: Some(meta) };
+            let limit = claude(frame(-32603, None, Some(&data), Some(&observed))).unwrap();
+            assert_eq!(
+                limit.recovery(),
+                crate::application::agent_execution::agents::UsageLimitRecovery::TimedReset
+            );
+            assert_eq!(limit.resets_at_ms(), kept);
+        }
+        let observed = ObservedRateLimit { claude: Some(past) };
+        let limit = claude(frame(-32603, None, Some(&data), Some(&observed))).unwrap();
+        assert_eq!(
+            limit.recovery(),
+            crate::application::agent_execution::agents::UsageLimitRecovery::Unknown
+        );
+        assert_eq!(limit.resets_at_ms(), None);
     }
 
     #[test]

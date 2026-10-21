@@ -37,6 +37,7 @@ import {
   placeNotes,
   placePublished,
   shownNote,
+  usageLimitOnClientClock,
 } from "../../../../conversation"
 import { composerModels } from "../../../model/composer-options"
 import { encodeId } from "../../../model/id-encoding"
@@ -432,7 +433,10 @@ export function transcriptFrom(
     parts.push(...(published.byExecution.get(turn.executionId) ?? []).map(publishedPart))
     const terminal = turnTerminal(turn)
     const working = turn.status === "running" || turn.status === "queued"
-    const usageLimit = turn.usageLimit
+    const usageLimit =
+      turn.usageLimit === undefined
+        ? undefined
+        : usageLimitOnClientClock(turn.usageLimit, view.serverNowMs, receivedAtMs)
     const marked =
       terminal || usageLimit
         ? {

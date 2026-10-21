@@ -44,7 +44,12 @@ import {
 } from "../../model"
 import { deletedAnyway } from "../../application/usecases"
 import type { ConversationView as ConversationViewOf } from "../../application/view"
-import { BUSY_RETRY_DELAYS_MS, FOLLOW_RETRY_MS, gatewayEffects } from "./effects"
+import {
+  BUSY_RETRY_DELAYS_MS,
+  FOLLOW_RETRY_MS,
+  conversationView,
+  gatewayEffects,
+} from "./effects"
 
 function gatewayView(): ConversationView {
   return {
@@ -112,6 +117,38 @@ function deferred<T>() {
   })
   return { promise, resolve }
 }
+it("puts a usage-limit reset on the panel clock", () => {
+  const reset = SERVER_NOW_MS + 30_000
+  const receivedAt = SERVER_NOW_MS + 120_000
+  const viewed = conversationView(
+    {
+      ...gatewayView(),
+      messages: [
+        {
+          executionId: "e1",
+          userText: "hello",
+          attachments: [],
+          files: [],
+          status: "failed",
+          parts: [],
+          usageLimit: {
+            provider: "claude",
+            recovery: "timed_reset",
+            resetsAtMs: reset,
+          },
+        },
+      ],
+    },
+    receivedAt,
+  )
+  expect(viewed.messages[0]?.usageLimit).toEqual({
+    provider: "claude",
+    recovery: "timed_reset",
+    resetsAtMs: reset,
+    resetsAtClientMs: receivedAt + 30_000,
+  })
+})
+
 it("joins concurrent creation and forwards exact stable submission IDs", async () => {
   const gate = deferred<{ conversationId: string }>()
   const create = vi.fn(() => gate.promise)

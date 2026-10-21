@@ -6,7 +6,9 @@
 //! decided there. The compare-and-set from `delivering` to `submitting` is the
 //! only permission to submit, and it takes a lease the other processes on this
 //! file can see. A retryable submit failure keeps the row `submitting` until
-//! a bounded retry time. A settlement whose plan does not commit keeps the
+//! a bounded retry time. An outcome whose audit does not commit is that
+//! same retry: the next pass records the outcome and does not mint an
+//! execution id. A settlement whose plan does not commit keeps the
 //! same kind of debt and is planned again at that time. Cancel, defer, and a
 //! model change lose to that transition and win against a claim that has not
 //! made it. An applied model change is not complete until that plan commits.
@@ -1516,16 +1518,14 @@ impl ConversationService {
         }
         match self.execution_saved(&id, &row.execution_id).await {
             Ok(true) => {
-                let now = self.inner.clock.unix_milliseconds();
-                let _ = store
-                    .record_outcome(
-                        &row.execution_id,
+                return self
+                    .persist_observed_outcome(
+                        &store,
+                        row,
                         ScheduleSettlement::Delivered,
                         "delivered",
-                        now,
                     )
                     .await;
-                return false;
             }
             Ok(false) => {}
             Err(error) => {
@@ -1547,24 +1547,20 @@ impl ConversationService {
             return !self.hold_submit_retry(&store, row).await;
         };
         // A stored caller or grant that cannot be rebuilt will never pass
-        // submit. Refuse it once. The row stays out of `delivering`, so the
-        // next pass adopts `submitting` only until this refusal is recorded.
+        // submit. Refuse it. The row stays out of `delivering`. When the
+        // refusal's audit commits, the next pass adopts `submitting` only
+        // until that record is visible. When the audit does not commit, the
+        // row stays `submitting` until a bounded retry and that same refusal
+        // is recorded then.
         let (caller, initiation) = match (schedule_caller(row), continuation_initiation(row)) {
             (Ok(caller), Ok(initiation)) => (caller, initiation),
             _ => {
                 if lost.load(Ordering::SeqCst) {
                     return false;
                 }
-                let now = self.inner.clock.unix_milliseconds();
-                let _ = store
-                    .record_outcome(
-                        &row.execution_id,
-                        ScheduleSettlement::Refused,
-                        "revoked",
-                        now,
-                    )
+                return self
+                    .persist_observed_outcome(&store, row, ScheduleSettlement::Refused, "revoked")
                     .await;
-                return false;
             }
         };
         // The store said this process no longer owns the row, or the lease it
@@ -1593,30 +1589,58 @@ impl ConversationService {
                 if lost.load(Ordering::SeqCst) {
                     return false;
                 }
-                let now = self.inner.clock.unix_milliseconds();
-                let _ = store
-                    .record_outcome(
-                        &row.execution_id,
-                        ScheduleSettlement::Delivered,
-                        "delivered",
-                        now,
-                    )
-                    .await;
-                false
+                self.persist_observed_outcome(
+                    &store,
+                    row,
+                    ScheduleSettlement::Delivered,
+                    "delivered",
+                )
+                .await
             }
             Err(error) => {
                 if lost.load(Ordering::SeqCst) {
                     return false;
                 }
                 if let Some((outcome, cause)) = settled_outcome(&error) {
-                    let now = self.inner.clock.unix_milliseconds();
-                    let _ = store
-                        .record_outcome(&row.execution_id, outcome, cause, now)
-                        .await;
-                    false
+                    self.persist_observed_outcome(&store, row, outcome, cause)
+                        .await
                 } else {
                     !self.hold_submit_retry(&store, row).await
                 }
+            }
+        }
+    }
+
+    /// The outcome is already known. Commit it, or leave the row `submitting`
+    /// until a bounded retry.
+    ///
+    /// `false` when the outcome committed, the row is gone, or the retry time
+    /// committed: [`ScheduledMessageStore::next_due`] then carries the wait.
+    /// `true` when the outcome did not commit and the retry time did not
+    /// either, so the delivery loop waits one step instead of claiming the
+    /// row again immediately. A lost compare-and-set writes no status and no
+    /// audit, and is not a debt.
+    async fn persist_observed_outcome(
+        &self,
+        store: &Arc<dyn ScheduledMessageStore>,
+        row: &ScheduledMessage,
+        outcome: ScheduleSettlement,
+        cause: &str,
+    ) -> bool {
+        let now = self.inner.clock.unix_milliseconds();
+        match store
+            .record_outcome(&row.execution_id, outcome, cause, now)
+            .await
+        {
+            Ok(()) => false,
+            Err(ConversationError::NotFound) => false,
+            Err(error) => {
+                tracing::warn!(
+                    execution_id = %row.execution_id,
+                    %error,
+                    "a scheduled outcome could not be recorded; the row waits for another attempt"
+                );
+                !self.hold_submit_retry(store, row).await
             }
         }
     }
@@ -2156,6 +2180,10 @@ mod catalogue_pages {
         lose_settle: AtomicBool,
         /// The next revert returns an error and writes nothing.
         fail_revert: AtomicBool,
+        /// The next this many outcome writes fail and leave the row due.
+        fail_outcome: AtomicUsize,
+        /// The next submit hold returns false and writes no retry time.
+        fail_defer: AtomicBool,
     }
 
     impl RecordingStore {
@@ -2185,6 +2213,8 @@ mod catalogue_pages {
                 installed_request: Mutex::new(String::new()),
                 lose_settle: AtomicBool::new(false),
                 fail_revert: AtomicBool::new(false),
+                fail_outcome: AtomicUsize::new(0),
+                fail_defer: AtomicBool::new(false),
             }
         }
 
@@ -2557,10 +2587,15 @@ mod catalogue_pages {
             _: &str,
             at_ms: u64,
         ) -> ConversationFuture<'_, ()> {
+            if failing(&self.fail_outcome) {
+                return Box::pin(async { Err(ConversationError::Metadata) });
+            }
             self.outcomes
                 .lock()
                 .unwrap()
                 .push((execution_id.to_owned(), at_ms));
+            // A committed outcome is terminal. The row is no longer due.
+            self.due_row.lock().unwrap().take();
             Box::pin(async { Ok(()) })
         }
         fn erase_conversation(&self, _: &str, _: u64) -> ConversationFuture<'_, ()> {
@@ -2573,6 +2608,9 @@ mod catalogue_pages {
             retry_at_ms: u64,
             _: u64,
         ) -> ConversationFuture<'_, bool> {
+            if self.fail_defer.swap(false, Ordering::SeqCst) {
+                return Box::pin(async { Ok(false) });
+            }
             self.retry_failures.store(failures, Ordering::SeqCst);
             self.retry_at_ms.store(retry_at_ms, Ordering::SeqCst);
             self.defers
@@ -3176,6 +3214,150 @@ mod catalogue_pages {
         assert!(retry);
         assert!(store.outcomes.lock().unwrap().is_empty());
         assert!(store.defers.lock().unwrap().is_empty());
+    }
+
+    fn due_row(initiation: &str) -> ScheduledMessage {
+        ScheduledMessage {
+            conversation: "11111111-1111-4111-8111-111111111111".into(),
+            causal_execution: "causal".into(),
+            execution_id: "exec-1".into(),
+            due_at_ms: 10,
+            delivering: true,
+            agent: "claude".into(),
+            model: "opus".into(),
+            prompt: "continue".into(),
+            organization_id: "org".into(),
+            principal_id: "person".into(),
+            surface_id: "desktop".into(),
+            action_id: "action".into(),
+            initiation: initiation.into(),
+            grant_id: None,
+            policy_revision: None,
+            tools_checked: false,
+            retry_failures: 0,
+        }
+    }
+
+    fn delivering(
+        clock: &Arc<ShiftClock>,
+        store: &Arc<RecordingStore>,
+        initiation: &str,
+    ) -> ConversationService {
+        let service = service(
+            Arc::new(TwoOwners {
+                seen: Mutex::new(Vec::new()),
+                fail: false,
+            }),
+            clock.clone(),
+        );
+        store.submit_attempts.store(true, Ordering::SeqCst);
+        *store.due_row.lock().unwrap() = Some(due_row(initiation));
+        service.bind_scheduled_messages(store.clone());
+        service.bind_commands(Arc::new(ShiftStorage {
+            clock: clock.clone(),
+        }));
+        service
+    }
+
+    #[tokio::test]
+    async fn a_failed_outcome_waits_out_its_backoff_and_the_replay_records_it() {
+        let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+        let store = Arc::new(RecordingStore::new(true));
+        store.fail_outcome.store(2, Ordering::SeqCst);
+        let service = delivering(&clock, &store, "grant");
+
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert!(store.outcomes.lock().unwrap().is_empty());
+        assert_eq!(
+            store.defers.lock().unwrap().as_slice(),
+            [("exec-1".into(), 1, 5_000 + SCHEDULE_RETRY_MS)]
+        );
+
+        // The row is not due yet. A second pass does not take the lease again.
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+        assert_eq!(store.defers.lock().unwrap().len(), 1);
+
+        clock.0.store(5_000 + SCHEDULE_RETRY_MS, Ordering::SeqCst);
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS * 2)
+        );
+        assert!(store.outcomes.lock().unwrap().is_empty());
+        assert_eq!(
+            store.defers.lock().unwrap().as_slice(),
+            [
+                ("exec-1".into(), 1, 5_000 + SCHEDULE_RETRY_MS),
+                (
+                    "exec-1".into(),
+                    2,
+                    5_000 + SCHEDULE_RETRY_MS + SCHEDULE_RETRY_MS * 2
+                ),
+            ]
+        );
+
+        clock.0.store(
+            5_000 + SCHEDULE_RETRY_MS + SCHEDULE_RETRY_MS * 2,
+            Ordering::SeqCst,
+        );
+        assert_eq!(service.deliver_due_scheduled().await, None);
+        assert_eq!(
+            store.outcomes.lock().unwrap().as_slice(),
+            [(
+                "exec-1".into(),
+                5_000 + SCHEDULE_RETRY_MS + SCHEDULE_RETRY_MS * 2
+            )]
+        );
+        assert_eq!(store.defers.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_failed_outcome_after_submit_is_not_due_again_immediately() {
+        let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+        let store = Arc::new(RecordingStore::new(true));
+        store.fail_outcome.store(1, Ordering::SeqCst);
+        let service = delivering(&clock, &store, "owner");
+
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert!(store.outcomes.lock().unwrap().is_empty());
+        assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            store.defers.lock().unwrap().as_slice(),
+            [("exec-1".into(), 1, 9_000 + SCHEDULE_RETRY_MS)]
+        );
+
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+        assert!(store.outcomes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_outcome_whose_retry_does_not_commit_still_waits() {
+        let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+        let store = Arc::new(RecordingStore::new(true));
+        store.fail_outcome.store(1, Ordering::SeqCst);
+        store.fail_defer.store(true, Ordering::SeqCst);
+        let service = delivering(&clock, &store, "grant");
+
+        assert_eq!(
+            service.deliver_due_scheduled().await,
+            Some(SCHEDULE_RETRY_MS)
+        );
+        assert!(store.outcomes.lock().unwrap().is_empty());
+        assert!(store.defers.lock().unwrap().is_empty());
+        assert_eq!(store.retry_at_ms.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
