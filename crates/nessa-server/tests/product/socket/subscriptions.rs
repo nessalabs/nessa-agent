@@ -290,26 +290,30 @@ impl crate::conversation::application::DriveToolAudit for AcceptingDriveToolAudi
     }
 }
 
-fn conversation_service(
-    storage: &Arc<RecordStorage>,
-    metadata: &Arc<LocalConversationStore>,
-    provider: &Arc<ProviderFactory>,
-) -> Arc<ConversationService> {
-    conversation_service_with_repository(
-        storage,
-        metadata,
-        provider,
-        metadata.clone(),
-        Arc::new(AcceptingModeAudit),
-    )
-}
-
 fn conversation_service_with_repository(
     storage: &Arc<RecordStorage>,
     metadata: &Arc<LocalConversationStore>,
     provider: &Arc<ProviderFactory>,
     repository: Arc<dyn ConversationRepository>,
     mode_audit: Arc<dyn ConversationModeAudit>,
+) -> Arc<ConversationService> {
+    conversation_service_with_summaries(
+        storage,
+        metadata,
+        provider,
+        repository,
+        mode_audit,
+        metadata.clone(),
+    )
+}
+
+fn conversation_service_with_summaries(
+    storage: &Arc<RecordStorage>,
+    metadata: &Arc<LocalConversationStore>,
+    provider: &Arc<ProviderFactory>,
+    repository: Arc<dyn ConversationRepository>,
+    mode_audit: Arc<dyn ConversationModeAudit>,
+    summaries: Arc<dyn crate::conversation::application::ConversationSummaries>,
 ) -> Arc<ConversationService> {
     let service = ConversationService::new(
         ConversationDependencies {
@@ -325,7 +329,7 @@ fn conversation_service_with_repository(
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
-            summaries: metadata.clone(),
+            summaries,
             listing: metadata.clone(),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: claude_erasers(),
@@ -412,6 +416,15 @@ fn composed_catalog() -> AgentsListResult {
 
 impl SubscriptionFixture {
     async fn new() -> Self {
+        Self::with_summaries(|metadata| metadata.clone()).await
+    }
+
+    async fn with_summaries(
+        summaries: impl FnOnce(
+            &Arc<LocalConversationStore>,
+        )
+            -> Arc<dyn crate::conversation::application::ConversationSummaries>,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -423,7 +436,14 @@ impl SubscriptionFixture {
         let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
         storage.initialize().await.unwrap();
         let provider = Arc::new(ProviderFactory::default());
-        let service = conversation_service(&storage, &metadata, &provider);
+        let service = conversation_service_with_summaries(
+            &storage,
+            &metadata,
+            &provider,
+            metadata.clone(),
+            Arc::new(AcceptingModeAudit),
+            summaries(&metadata),
+        );
         let (state, authority) = fixture(MembershipRole::Member);
         grants(&authority, &["conversation.write", "server.read"]);
         // A writer that may be held past a delivery timeout without the

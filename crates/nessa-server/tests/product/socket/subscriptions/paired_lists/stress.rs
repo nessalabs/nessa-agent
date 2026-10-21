@@ -5,6 +5,19 @@ use super::*;
 use crate::conversation::application::ConversationCatalogue;
 use std::collections::BTreeSet;
 
+#[path = "settlement.rs"]
+mod settlement;
+
+fn reply_settled(frame: &Value, main: &str, reply: &str) -> bool {
+    let row = frame["payload"]["list"]["conversations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["conversationId"] == main)
+        .unwrap();
+    row["running"] == false && row["preview"] == reply
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Step {
     Hidden,
@@ -264,7 +277,13 @@ async fn run(seed: u64, cycles: usize) {
                     }
                     release.send(()).unwrap();
                     fixture.turn_settled(&execution).await;
-                    for frame in client.until(&subscription, |frame| !running(frame)).await {
+                    let reply = format!("Response: question {execution}");
+                    for frame in client
+                        .until(&subscription, |frame| {
+                            reply_settled(frame, &expected.main, &reply)
+                        })
+                        .await
+                    {
                         expected.frame(&frame, &subscription);
                     }
                 }
