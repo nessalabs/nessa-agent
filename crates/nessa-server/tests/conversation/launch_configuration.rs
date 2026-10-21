@@ -7,8 +7,12 @@
 //! the client back under the gateway and loses the typed answer again.
 use super::{build::launch_configuration, AgentRuntime, AgentsConfig};
 use crate::composition::agent_budgets;
-use nessa_sdk::application::agent_execution::providers::ExecutableUseSnapshot;
-use nessa_sdk::application::agent_execution::providers::UserImageSource;
+use crate::composition::desktop::{bundled_launch, configure};
+use crate::composition::runtime_config::RuntimeConfig;
+use nessa_protocol::agents::AgentId;
+use nessa_sdk::application::agent_execution::providers::{
+    ApprovalMode, ExecutableUseSnapshot, UserImageSource,
+};
 use nessa_sdk::application::agent_execution::{
     agents::AgentFuture,
     executions::{ExecutionAudit, ExecutionAuditRecord},
@@ -28,7 +32,7 @@ use nessa_sdk::infrastructure::{
 use std::{
     collections::{BTreeMap, HashMap},
     ffi::{OsStr, OsString},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -479,28 +483,9 @@ async fn turning_the_switch_on_reaches_the_next_claude_and_codex_provider() {
     std::fs::create_dir(&workspace).unwrap();
     let executable = root.path().join("agent");
     std::fs::write(&executable, "").unwrap();
-    let providers = root.path().join("providers");
-    std::fs::create_dir(&providers).unwrap();
-    let catalog = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../nessa-sdk/data/models.json");
-    let clock = Arc::new(crate::composition::local_auth::SystemClock);
-    let preferences = crate::agents::infrastructure::NativeHooksPreferences::open(
-        root.path().join("hooks"),
-        clock.clone(),
-    )
-    .unwrap();
-    let dependencies = super::ProviderDependencies {
-        directory: providers,
-        clock,
-        images: Arc::new(NoImages),
-        credentials: Arc::new(NoCredentials),
-        native_hooks: preferences.clone(),
-        permission_rules: Arc::new(
-            nessa_sdk::application::agent_execution::permissions::IdlePermissionRules,
-        ),
-        review_notices: Arc::new(
-            nessa_sdk::application::agent_execution::permissions::IdleReviewNotices,
-        ),
-    };
+    let catalog = sdk_catalog();
+    let dependencies = provider_dependencies(root.path());
+    let preferences = dependencies.native_hooks.clone();
     let claude = composed_provider(
         &dependencies,
         nessa_protocol::agents::AgentId::Claude,
@@ -556,6 +541,93 @@ async fn turning_the_switch_on_reaches_the_next_claude_and_codex_provider() {
     assert!(claude.native_hooks_allowed());
     assert!(codex.native_hooks_allowed());
     assert!(!opencode.native_hooks_allowed());
+}
+
+/// The desktop app writes the launch of its bundled adapters (`configure`), and
+/// an update stages that bundle under a new directory. A conversation saved
+/// before the update resumes only if its restoration identity is the same, so
+/// the identity the desktop's own launch leads to must not follow the bundle's
+/// directory (#1071). The conversation stress step that moves the runtime
+/// writes its gateway's launch itself, so it never reaches `configure`.
+#[test]
+fn a_bundle_staged_under_a_new_directory_keeps_the_desktop_launch_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    let dependencies = provider_dependencies(root.path());
+    // One configuration staged twice, as an upgrade does: the second bundle
+    // updates the entries the first one inserted.
+    let mut settings = RuntimeConfig::default();
+    let mut identity = |release: &str| {
+        let bundle = root.path().join(release).join("runtime");
+        for (command, entry) in AgentId::ALL
+            .iter()
+            .filter_map(|agent| bundled_launch(*agent))
+        {
+            for name in [command, entry] {
+                let path = bundle.join(name);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, "").unwrap();
+            }
+        }
+        std::fs::copy(sdk_catalog(), bundle.join("models.json")).unwrap();
+        std::fs::write(bundle.join("nessa-mcp"), "").unwrap();
+        configure(&mut settings, &bundle, &data).unwrap();
+        let agents = settings.agents.clone().unwrap();
+        AgentId::ALL
+            .iter()
+            .filter(|agent| bundled_launch(**agent).is_some())
+            .map(|agent| {
+                let runtime = agents.runtime(*agent).unwrap();
+                let provider = super::build::provider(
+                    *agent,
+                    &agents,
+                    runtime,
+                    ApprovalMode::Ask,
+                    &dependencies,
+                    super::build::environment(*agent, BTreeMap::new()),
+                    None,
+                )
+                .unwrap_or_else(|error| panic!("{agent:?} provider: {error}"))
+                .provider;
+                (*agent, provider.identity().clone())
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = identity("Nessa-1.0.app");
+    assert!(!before.is_empty());
+    assert_eq!(identity("Nessa-1.1.app"), before);
+}
+
+/// The model catalogue the SDK ships, which every provider here reads.
+fn sdk_catalog() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../nessa-sdk/data/models.json")
+}
+
+/// What `build::provider` needs, with nothing configured: no images, no
+/// credentials, native hooks off, and idle permission rules and notices.
+fn provider_dependencies(root: &Path) -> super::ProviderDependencies {
+    let providers = root.join("providers");
+    std::fs::create_dir(&providers).unwrap();
+    let clock = Arc::new(crate::composition::local_auth::SystemClock);
+    let native_hooks = crate::agents::infrastructure::NativeHooksPreferences::open(
+        root.join("hooks"),
+        clock.clone(),
+    )
+    .unwrap();
+    super::ProviderDependencies {
+        directory: providers,
+        clock,
+        images: Arc::new(NoImages),
+        credentials: Arc::new(NoCredentials),
+        native_hooks,
+        permission_rules: Arc::new(
+            nessa_sdk::application::agent_execution::permissions::IdlePermissionRules,
+        ),
+        review_notices: Arc::new(
+            nessa_sdk::application::agent_execution::permissions::IdleReviewNotices,
+        ),
+    }
 }
 
 fn composed_provider(
