@@ -830,3 +830,29 @@ fn nested_close_storage_failures_preserve_cleanup_without_acknowledging_other_ob
         assert_eq!(confirmed_despite(&nested), None);
     }
 }
+
+#[test]
+fn pending_sdk_release_diagnostic_cannot_become_whole_cleanup_confirmation() {
+    for resources in [
+        ResourceCleanup::ReleasePending {
+            physical: CloseOutcome { forced: false },
+            failure: AgentError::StorageDuringClose {
+                error: StorageError::Io("retained executable-use acknowledgement".into()),
+                cleanup_result: Box::new(Ok(CloseOutcome { forced: false })),
+            },
+        },
+        ResourceCleanup::Unconfirmed(AgentError::StorageDuringClose {
+            error: StorageError::Io("another owned resource is still unacknowledged".into()),
+            cleanup_result: Box::new(Ok(CloseOutcome { forced: false })),
+        }),
+    ] {
+        let report = CleanupReport::new(resources, Ok(()));
+        assert_eq!(confirmed_cleanup(&report), None);
+        let diagnostic = report.into_result().unwrap_err();
+        assert_eq!(
+            confirmed_despite(&diagnostic),
+            None,
+            "a nested diagnostic about cleanup cannot release the actual SDK resource owner"
+        );
+    }
+}
