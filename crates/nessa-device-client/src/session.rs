@@ -1264,6 +1264,8 @@ impl NativeSession {
     }
     /// Bind the lease to the saved issued receiver without dialing.
     /// The same receiver keeps its stamp. No credential leaves the lease unbound.
+    /// A receiver with a successful purge receipt is not bound again, even when
+    /// that credential is still stored.
     pub fn bind_saved_receiver(&self) -> Result<PhoneStamp, SessionFailure> {
         let mut operation = self.enter(None)?;
         let driver = operation.driver();
@@ -1272,10 +1274,26 @@ impl NativeSession {
             .load_credential()
             .map_err(SessionFailure::PrivateState)?
             .ok_or(SessionFailure::NoCredential)?;
-        driver
-            .lease
-            .bind(issued.receiver().as_str())
-            .map_err(SessionFailure::Fenced)
+        let receiver = issued.receiver().as_str();
+        if driver.path.is_file() {
+            let purged = driver
+                .cache()
+                .map_err(SessionFailure::Cache)?
+                .purge_receipt(receiver)
+                .map_err(SessionFailure::Cache)?;
+            if purged.is_some() {
+                if driver
+                    .lease
+                    .stamp()
+                    .ok()
+                    .is_some_and(|stamp| stamp.receiver() == receiver)
+                {
+                    driver.lease.release_receiver();
+                }
+                return Err(SessionFailure::Fenced(PhoneFence::Purged));
+            }
+        }
+        driver.lease.bind(receiver).map_err(SessionFailure::Fenced)
     }
     /// The stamp currently admitted, if a receiver is bound.
     pub fn publication(&self) -> Result<PhoneStamp, SessionFailure> {

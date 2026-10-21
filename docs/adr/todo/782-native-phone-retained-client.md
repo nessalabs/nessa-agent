@@ -193,7 +193,8 @@ flowchart LR
 - A stamp names one lease instance, one generation, and one receiver. `accept` returns that receiver's saved rows only while that same lease still has that generation and receiver. A new session mints a new instance, so a generation that starts again does not accept the earlier stamp.
 - The same issued receiver keeps the generation. A different receiver, a successful terminal purge, or session close advances it. The previous stamp then fails and no bytes are read.
 - Close is permanent for that session. A successful purge only releases the receiver, so a later enrollment in the same session can bind the next one. That release happens when the purge succeeded, including when the status has no observation. No observation and no successful purge leaves the bound receiver in place.
-- Catalogue presence is one stored identity, read from one snapshot of the fence and the row. A live row is Live. A deletion fence or receiver purge receipt is Tombstone. No row and no fence is Absent. A page that does not mention a chat does not write a tombstone.
+- Catalogue presence is one stored identity, read from one snapshot of the fence, the row, and the purge receipt. A live row is Live. A deletion fence or receiver purge receipt is Tombstone. No row, no fence, and no receipt is Absent. A page that does not mention a chat does not write a tombstone.
+- A saved credential whose receiver has a successful purge receipt is not bound again. Bind returns Purged and does not mint a stamp.
 - A deletion whose commit did not land leaves the previous row. Presence after that failure is the previous state, not Tombstone.
 - A withdrawn grant removes the local row and writes no fence. Presence is Absent, so the chat can return with a later grant.
 - `LocalMatch` means the output file already had the named size and digest. No range was asked. It is not a new gateway hold.

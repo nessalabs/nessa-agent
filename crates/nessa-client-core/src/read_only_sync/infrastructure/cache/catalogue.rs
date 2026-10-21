@@ -38,8 +38,8 @@ impl ReadOnlyCache {
         committed.map_err(|_| CacheError::Uncertain)
     }
 
-    /// One conversation's stored row and fence, from one deferred snapshot.
-    /// A missing row is [`CataloguePresence::Absent`].
+    /// One conversation's stored row, fence, and purge receipt, from one deferred snapshot.
+    /// A missing row is [`CataloguePresence::Absent`] only when that snapshot has no receipt.
     /// A deleted row without its fence is damaged, matching the catalogue reader.
     pub(crate) fn catalogue_presence(
         &mut self,
@@ -67,13 +67,11 @@ impl ReadOnlyCache {
             )
             .optional()
             .map_err(rows::database_error)?;
+        let purged = Self::terminal_receipt_present(&tx, receiver.as_str())?;
         tx.commit().map_err(rows::database_error)?;
         match deleted {
-            None => Ok(if fenced {
-                CataloguePresence::Tombstone
-            } else {
-                CataloguePresence::Absent
-            }),
+            None if purged || fenced => Ok(CataloguePresence::Tombstone),
+            None => Ok(CataloguePresence::Absent),
             Some(0) if fenced => Err(CacheError::Fenced),
             Some(0) => Ok(CataloguePresence::Live),
             Some(1) if fenced => Ok(CataloguePresence::Tombstone),

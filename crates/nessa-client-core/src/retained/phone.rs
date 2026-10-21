@@ -31,6 +31,8 @@ pub enum PhoneFence {
     Closed,
     /// A newer receiver or a released binding replaced this stamp.
     Replaced,
+    /// This receiver has a successful purge receipt, so it cannot be bound again.
+    Purged,
 }
 
 /// The lease, receiver, and generation a publication was admitted under.

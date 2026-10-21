@@ -887,6 +887,10 @@ fn terminal_remote_receipt_and_actual_purge_survive_independent_private_removal_
             .as_str(),
         "receiver"
     );
+    assert!(matches!(
+        parent.bind_saved_receiver(),
+        Err(SessionFailure::Fenced(PhoneFence::Purged))
+    ));
     peer.join().unwrap();
 }
 

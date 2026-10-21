@@ -998,3 +998,38 @@ fn incoming_catalogue_live_value_requires_retained_fence_check() {
     );
     assert_eq!(count(&cache, "catalogue_deletions"), 1);
 }
+
+#[test]
+fn a_purge_receipt_in_the_presence_snapshot_is_a_tombstone_without_a_row() {
+    let root = tempfile::tempdir().unwrap();
+    let mut cache = cache(&cache_path(root.path(), "presence.sqlite3"));
+    let scope = catalogue_scope();
+    let expected = CatalogueStore::progress(&mut cache, &scope).unwrap();
+    CatalogueStore::begin(&mut cache, &scope, expected, 2).unwrap();
+    let zero = 0u64.to_be_bytes();
+    cache
+        .connection
+        .execute(
+            "INSERT INTO cache_purges (receiver,cause,initiator,transcripts,records,catalogue_entries,observed_at_ms)
+             VALUES (?1,'TerminalEnrollment','GatewayStatus',?2,?3,?4,?5)",
+            params![
+                scope.receiver().as_str(),
+                zero.as_slice(),
+                zero.as_slice(),
+                zero.as_slice(),
+                1u64.to_be_bytes().as_slice()
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        cache
+            .catalogue_presence(
+                scope.receiver(),
+                scope.origin(),
+                scope.stream(),
+                &id("missing")
+            )
+            .unwrap(),
+        CataloguePresence::Tombstone
+    );
+}

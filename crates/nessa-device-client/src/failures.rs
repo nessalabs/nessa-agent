@@ -370,6 +370,8 @@ pub enum NativePhoneFence {
     Closed,
     /// A newer receiver replaced this stamp.
     Replaced,
+    /// The receiver has a successful purge receipt.
+    Purged,
 }
 impl From<nessa_client_core::retained::PhoneFence> for NativePhoneFence {
     fn from(value: nessa_client_core::retained::PhoneFence) -> Self {
@@ -377,6 +379,7 @@ impl From<nessa_client_core::retained::PhoneFence> for NativePhoneFence {
             nessa_client_core::retained::PhoneFence::Unbound => Self::Unbound,
             nessa_client_core::retained::PhoneFence::Closed => Self::Closed,
             nessa_client_core::retained::PhoneFence::Replaced => Self::Replaced,
+            nessa_client_core::retained::PhoneFence::Purged => Self::Purged,
         }
     }
 }
