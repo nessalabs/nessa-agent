@@ -1014,16 +1014,22 @@ not hash the MCP servers. Its inputs are listed once, on `fingerprint` in
   `conversation_configuration_changed` for conversations saved before it.
   Nothing moves them, and no reader of the earlier fingerprint is kept (one
   current contract). The same release re-runs the agent warm-up once, since
-  the configuration part of the warm-up's key is this fingerprint
-  ([`RuntimeFingerprint`](../../crates/nessa-server/src/agent_warm_up/domain/value_objects/runtime_fingerprint.rs));
+  the configuration part of the warm-up's key was this fingerprint (it is
+  now the launch fingerprint, which also hashes the runtime's location;
+  [`RuntimeFingerprint`](../../crates/nessa-server/src/agent_warm_up/domain/value_objects/runtime_fingerprint.rs));
   that costs one background launch and is harmless.
-- **What still strands a saved conversation.** A change to any hashed input,
-  and that includes every update that changes the staged runtime tree, which
-  in practice is every release. The desktop stages the runtime under a
-  directory named by the prepared tree's content fingerprint
-  ([`staging.rs`](../../src-tauri/src/gateway/infrastructure/macos/staging.rs), `tree_fingerprint`)
-  and launches the agent runtime's executable and entry from it (`configure`
-  in [`composition/desktop.rs`](../../crates/nessa-server/src/composition/desktop.rs)),
-  so the executable path and the first argument move with every such update.
-  What stops stranding a conversation after this release is only a change to
-  the MCP servers, and with it the gateway's own path.
+- **What still strands a saved conversation.** A change to any hashed input
+  listed on `fingerprint` in
+  [`acp/sessions/identity.rs`](../../crates/nessa-sdk/src/infrastructure/acp/sessions/identity.rs):
+  the workspace, the tool policy, limits, permissions, prompt, and the
+  context environment (where the agent keeps its sessions, such as `HOME`,
+  `CLAUDE_CONFIG_DIR` or `CODEX_HOME`). Where the runtime is launched from is
+  not hashed (#1071): every release stages the runtime under a new directory
+  named by the prepared tree's content fingerprint
+  ([`staging.rs`](../../src-tauri/src/gateway/infrastructure/macos/staging.rs), `tree_fingerprint`),
+  and the login shell's `PATH`, `TMPDIR`, `USER` and `LOGNAME` drift on their
+  own, so the executable, its arguments and those variables travel in
+  `AcpConfig::runtime_environment` and the launch fingerprint only. The
+  release that ships #1071 changes every saved identity once more, so
+  conversations saved before it answer `conversation_configuration_changed`
+  once; nothing moves them (one current contract).

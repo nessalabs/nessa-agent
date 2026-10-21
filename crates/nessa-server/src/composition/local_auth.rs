@@ -1157,9 +1157,12 @@ async fn conversations(
         // a lossy path conversion; what it makes a warm-up cover is stated on
         // `RuntimeFingerprint`.
         let identity = agent.provider.identity();
-        let runtime =
-            RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())
-                .map_err(|error| RunError::Agent(error.to_string()))?;
+        let runtime = RuntimeFingerprint::new(
+            identity.name(),
+            identity.model_id(),
+            &agent.provider.launch_fingerprint(),
+        )
+        .map_err(|error| RunError::Agent(error.to_string()))?;
         let prepared = AgentWarmUp::new(
             agent.provider.clone(),
             agent.execution_audit.clone(),

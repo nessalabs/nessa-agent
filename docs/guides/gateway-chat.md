@@ -802,9 +802,12 @@ before messages could point at files does not reopen. See
 [ADR 0013](../adr/done/0013-files-by-path-not-by-payload.md) for why a migration
 script was written for exactly this and then deleted.
 
-An update that changes the staged runtime tree, which in practice is every
-release, still strands saved conversations, and so, once, does the release that
-takes the MCP servers out of the fingerprint; see
+An update that moves the staged runtime, which in practice is every release,
+keeps saved conversations: the runtime's executable, arguments, `PATH`,
+`TMPDIR`, `USER`, `LOGNAME` and the native executable locators
+(`CLAUDE_CODE_EXECUTABLE`, `CODEX_PATH`) are passed to the agent but are not
+part of the fingerprint. The releases that took the MCP servers and then the
+runtime location out of the fingerprint each strand older conversations once; see
 [MCP servers and the restoration identity](../design/mcp-connections.md#mcp-servers-and-the-restoration-identity).
 
 ### Conversation activity surfaces

@@ -306,16 +306,24 @@ pub struct AcpConfig {
     /// Trusted provider executable and the authority required before each launch.
     /// The adapter admits a distinct use generation immediately before spawning it.
     pub executable: ExecutableUseSnapshot,
-    /// Noncredential arguments passed verbatim in order. These select restoration context, so
-    /// they are part of the restoration identity, whose inputs are listed on `fingerprint` in
-    /// `acp/sessions/identity.rs`. Never place secrets in arguments. Only trusted composition
-    /// may supply them.
+    /// Noncredential arguments passed verbatim in order. Like the executable, they say which
+    /// program runs and from where, not which saved context it resumes, so they are outside the
+    /// restoration identity (its inputs are listed on `fingerprint` in
+    /// `acp/sessions/identity.rs`). A setting that does choose a context belongs in
+    /// `environment`. Never place secrets in arguments. Only trusted composition may supply them.
     pub arguments: Vec<OsString>,
-    /// Noncredential context-selecting environment, including HOME, configuration directories,
-    /// endpoints, and executable search paths. These values enter the restoration fingerprint,
-    /// whose inputs are listed on `fingerprint` in `acp/sessions/identity.rs`.
-    /// Parent variables are cleared; this map and credential_environment supply the child.
+    /// Noncredential context-selecting environment: HOME, the harness's configuration
+    /// directories, endpoints. These values enter the restoration fingerprint, whose inputs are
+    /// listed on `fingerprint` in `acp/sessions/identity.rs`. Parent variables are cleared;
+    /// this map, `runtime_environment` and `credential_environment` supply the child.
     pub environment: BTreeMap<OsString, OsString>,
+    /// Noncredential environment that says where the process finds its programs and scratch
+    /// space, and who it runs as: the executable search path, a temporary directory, the user
+    /// name, a native executable's location. These change with the machine and with every
+    /// release that moves the staged runtime, never with the conversation, so they are outside
+    /// the restoration identity. Keys must not overlap `environment` or
+    /// `credential_environment`.
+    pub runtime_environment: BTreeMap<OsString, OsString>,
     /// Host-supplied credentials forwarded verbatim, without discovery or extraction.
     /// Excluded from restoration identity so credentials may rotate; the fingerprint's inputs
     /// are listed on `fingerprint` in `acp/sessions/identity.rs`. Do not put context
@@ -489,6 +497,7 @@ impl AcpConfig {
     pub(crate) fn on_host(&self, workspace: PathBuf) -> Self {
         Self {
             environment: BTreeMap::new(),
+            runtime_environment: BTreeMap::new(),
             credential_environment: BTreeMap::new(),
             workspace,
             workspace_paths: Arc::new(crate::infrastructure::workspace_paths::UnresolvedPaths),
@@ -572,13 +581,16 @@ impl AcpConfig {
         if !cfg!(unix) {
             return Err(AgentError::Unsupported("native ACP process supervision requires Unix; Windows needs an owned Job Object adapter".into()));
         }
-        if self
-            .environment
+        if self.environment.keys().any(|key| {
+            self.credential_environment.contains_key(key)
+                || self.runtime_environment.contains_key(key)
+        }) || self
+            .runtime_environment
             .keys()
             .any(|key| self.credential_environment.contains_key(key))
         {
             return Err(AgentError::Configuration(
-                "context and credential environment keys must be disjoint".into(),
+                "context, runtime and credential environment keys must be disjoint".into(),
             ));
         }
         if !self.executable.executable().is_absolute() || !self.workspace.is_absolute() {

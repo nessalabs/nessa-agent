@@ -182,7 +182,9 @@ export async function exited(child, ms) {
  * @returns the gateway: `{ directory, token, url, log, server, stop, restart }`.
  *   `token` is the owner token file's path; `log()` the gateway's output so
  *   far; `restart(signal, whileStopped)` kills it (a crash by default) and
- *   starts it again on the same directory and port; `server` the process running now; `stop()`
+ *   starts it again on the same directory and port, with the environment
+ *   variables `whileStopped` resolves with, if any, changed for it and every
+ *   later start; `server` the process running now; `stop()`
  *   stops it, waits for it and for the rest of its output (up to 2 s more), and
  *   removes its directory, and says whether it exited. On a failed start, the
  *   error carries the gateway's output as `gatewayLog`.
@@ -286,7 +288,9 @@ export async function startLocalGateway(o) {
      * `SIGKILL` is a crash, `SIGTERM` its own shutdown. Resolves once the new
      * one is healthy. Its output joins the same log. `whileStopped` runs
      * once the old one has exited and before the new one starts, for a check
-     * that changes what the gateway will find on disk.
+     * that changes what the gateway will find on disk; the variables it
+     * resolves with, if any, replace those in the gateway's environment, as
+     * a desktop update re-registering the service with a new one does.
      */
     const restart = async (signal = "SIGKILL", whileStopped = async () => {}) => {
       const previous = server
@@ -297,7 +301,7 @@ export async function startLocalGateway(o) {
           throw new Error(`the gateway (pid ${previous.pid}) did not exit`)
       }
       await Promise.race([closed, sleep(2_000, undefined, { ref: false })])
-      await whileStopped()
+      Object.assign(env, (await whileStopped()) ?? {})
       output.push(`\n--- restarted after ${signal} ---\n`)
       await launch()
     }

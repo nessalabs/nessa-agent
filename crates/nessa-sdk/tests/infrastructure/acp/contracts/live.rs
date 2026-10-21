@@ -20,6 +20,7 @@ pub(super) fn live_config(
     config.executable = ExecutableUseSnapshot::unmanaged(executable);
     config.arguments.clear();
     config.environment.clear();
+    config.runtime_environment.clear();
     for key in context_keys {
         if let Some(value) = std::env::var_os(key) {
             config.environment.insert((*key).into(), value);

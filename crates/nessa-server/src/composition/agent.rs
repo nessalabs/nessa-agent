@@ -36,7 +36,7 @@
 //! up here, which is a fact about this installation and not about the machine —
 //! rather than substituted for at startup.
 #[cfg(unix)]
-use super::managed_adapter::ManagedAdapter;
+use super::managed_adapter::{native_locator, ManagedAdapter};
 #[cfg(unix)]
 use crate::agents::application::AgentCredentialSource;
 #[cfg(unix)]
@@ -335,6 +335,33 @@ fn output_tokens() -> u32 {
     4096
 }
 
+/// The inherited variables that say how an agent finds its programs and
+/// scratch space and who it runs as, rather than which context it keeps:
+/// launched as `AcpConfig::runtime_environment`, outside the restoration
+/// identity. The search path is read from the person's shell again on every
+/// desktop update, so hashing it would strand every saved conversation on a
+/// change nobody made to the conversation (#1071). Each managed adapter's
+/// native locator ([`native_locator`]) joins them.
+#[cfg(unix)]
+const RUNTIME_VARIABLES: [&str; 4] = ["PATH", "USER", "LOGNAME", "TMPDIR"];
+
+/// `environment` split into what selects a context and what only says where
+/// things are ([`RUNTIME_VARIABLES`], [`native_locator`]).
+#[cfg(unix)]
+fn split_runtime_environment(
+    environment: BTreeMap<OsString, OsString>,
+) -> (BTreeMap<OsString, OsString>, BTreeMap<OsString, OsString>) {
+    environment.into_iter().partition(|(key, _)| {
+        !key.to_str().is_some_and(|key| {
+            RUNTIME_VARIABLES.contains(&key)
+                || AgentId::ALL
+                    .iter()
+                    .filter_map(|agent| native_locator(*agent))
+                    .any(|locator| locator == key)
+        })
+    })
+}
+
 /// The environment every agent process inherits, beyond its credentials.
 ///
 /// `env_clear` is what the bindings launch with, so anything an agent needs
@@ -403,8 +430,13 @@ fn inherited_environment(
         ],
     };
     // `PATH` is not in this list: it is decided above rather than inherited.
-    let shared = ["HOME", "USER", "LOGNAME", "TMPDIR"];
-    for key in shared.into_iter().chain(vendor.iter().copied()) {
+    let shared = ["HOME"].into_iter().chain(
+        RUNTIME_VARIABLES
+            .iter()
+            .copied()
+            .filter(|key| *key != "PATH"),
+    );
+    for key in shared.chain(vendor.iter().copied()) {
         if let Some(value) = lookup(key) {
             environment.insert(key.into(), value);
         }
@@ -1129,10 +1161,12 @@ pub(super) mod build {
         credential_environment: BTreeMap<OsString, OsString>,
         images: Option<Arc<dyn UserImageSource>>,
     ) -> AcpConfig {
+        let (environment, runtime_environment) = super::split_runtime_environment(environment);
         AcpConfig {
             executable: runtime.command.clone(),
             arguments: runtime.args.iter().map(Into::into).collect(),
             environment,
+            runtime_environment,
             credential_environment,
             workspace,
             tools_enabled: runtime.tools_enabled,

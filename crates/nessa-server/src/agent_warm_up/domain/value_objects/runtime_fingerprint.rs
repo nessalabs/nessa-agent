@@ -4,9 +4,11 @@ use std::fmt;
 ///
 /// Two launches share a fingerprint when they would run the same provider, the
 /// same model, and the same configuration. The configuration part is the
-/// provider's own credential-free identity; for the ACP providers that is the
-/// SDK's restoration fingerprint, whose inputs are listed on `fingerprint` in
-/// the SDK's `acp/sessions/identity.rs`. This is the one statement of what a
+/// provider's credential-free launch fingerprint
+/// (`AgentProvider::launch_fingerprint`); for the ACP providers that is the
+/// restoration fingerprint's inputs plus the executable, its arguments and the
+/// runtime environment, listed on `launch_fingerprint` in the SDK's
+/// `acp/sessions/identity.rs`. This is the one statement of what a
 /// warm-up covers; the gateway's composition links here.
 ///
 /// A warm-up exists for the agent runtime's first-execution scan, which is
@@ -16,9 +18,8 @@ use std::fmt;
 /// it, so their paths, and with them this value, change with every such
 /// update, which in practice is every release.
 ///
-/// Because the configuration part is the SDK's restoration fingerprint, the
-/// release that dropped the MCP servers from that fingerprint (#391) re-runs
-/// the warm-up once; that is one background launch, and harmless. What else
+/// The release that dropped the MCP servers from the fingerprint (#391)
+/// re-ran the warm-up once; that is one background launch, and harmless. What else
 /// that release changed is in `docs/design/mcp-connections.md`, "MCP servers
 /// and the restoration identity".
 ///

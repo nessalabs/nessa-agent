@@ -505,3 +505,62 @@ fn composed_provider(
     .unwrap_or_else(|error| panic!("{agent:?} provider: {error}"))
     .provider
 }
+
+/// What a desktop release changes about a launch, and nothing about a
+/// conversation: the staged runtime's directory (so the executable and its
+/// entry argument), the search path read from the person's shell again, the
+/// temporary directory, and a managed adapter's native executable. Composition
+/// launches all of those as runtime environment or program, so a saved
+/// conversation's identity stays and it resumes (#1071); where the agent keeps
+/// its sessions is still context, and moving that does change the identity.
+#[test]
+fn a_release_moving_the_runtime_keeps_a_saved_conversations_identity() {
+    let composed = |root: &str, path: &str, home: &str| {
+        let environment: BTreeMap<OsString, OsString> = [
+            ("HOME", home),
+            ("CLAUDE_CONFIG_DIR", "/home/someone/.claude"),
+            ("PATH", path),
+            ("TMPDIR", &*format!("{root}/tmp")),
+            ("USER", "someone"),
+            ("LOGNAME", "someone"),
+            ("CLAUDE_CODE_EXECUTABLE", &*format!("{root}/native/claude")),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.into(), value.into()))
+        .collect();
+        let acp = launch_configuration(
+            &agents_config(),
+            &AgentRuntime {
+                command: ExecutableUseSnapshot::unmanaged(PathBuf::from(format!("{root}/node"))),
+                args: vec![format!("{root}/acp/index.js")],
+                ..runtime()
+            },
+            PathBuf::from("/workspace"),
+            environment,
+            BTreeMap::new(),
+            None,
+        );
+        assert_eq!(
+            acp.environment.keys().collect::<Vec<_>>(),
+            ["CLAUDE_CONFIG_DIR", "HOME"],
+            "only where the agent keeps its sessions is context"
+        );
+        ClaudeAcpProvider::new(
+            acp,
+            &anthropic_model(),
+            TokenLimits::new(900, 100).unwrap(),
+            Arc::new(AcceptingAudit),
+        )
+        .unwrap()
+    };
+    let before = composed("/installations/one", "/usr/bin:/bin", "/home/someone");
+    let after = composed(
+        "/installations/two",
+        "/opt/homebrew/bin:/usr/bin:/bin",
+        "/home/someone",
+    );
+    assert_eq!(after.identity(), before.identity());
+    assert_ne!(after.launch_fingerprint(), before.launch_fingerprint());
+    let moved_home = composed("/installations/one", "/usr/bin:/bin", "/home/another");
+    assert_ne!(moved_home.identity(), before.identity());
+}

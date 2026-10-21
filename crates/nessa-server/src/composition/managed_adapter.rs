@@ -17,6 +17,17 @@ use std::{
     sync::Arc,
 };
 
+/// The variable a managed adapter reads its native executable's location
+/// from; `None` for an agent with no Node adapter. Where a program is, not
+/// which context it keeps: composition launches it as runtime environment.
+pub(super) fn native_locator(agent: AgentId) -> Option<&'static str> {
+    match agent {
+        AgentId::Claude => Some("CLAUDE_CODE_EXECUTABLE"),
+        AgentId::Codex => Some("CODEX_PATH"),
+        AgentId::Opencode => None,
+    }
+}
+
 pub(super) struct ManagedAdapter {
     pub runtime: AgentRuntime,
     pub environment: BTreeMap<OsString, OsString>,
@@ -28,12 +39,8 @@ impl ManagedAdapter {
         adapter: &AgentRuntime,
         native: ExecutableUseSnapshot,
     ) -> Result<Self, RunError> {
-        let variable = match agent {
-            AgentId::Claude => "CLAUDE_CODE_EXECUTABLE",
-            AgentId::Codex => "CODEX_PATH",
-            AgentId::Opencode => {
-                return Err(RunError::Agent("OpenCode has no Node adapter".into()))
-            }
+        let Some(variable) = native_locator(agent) else {
+            return Err(RunError::Agent("OpenCode has no Node adapter".into()));
         };
         let environment = BTreeMap::from([(
             OsString::from(variable),

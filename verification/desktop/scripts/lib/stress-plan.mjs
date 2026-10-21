@@ -105,6 +105,10 @@ export const KNOBS = {
     default: 1,
     what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps",
   },
+  relocations: {
+    default: 1,
+    what: "gateway restarts with the agent runtime moved, as every desktop update does, after which the saved conversation opens again",
+  },
   long: {
     default: 30,
     what: "turns of long streamed answers one conversation takes before it is talked to in the window",
@@ -177,6 +181,7 @@ export function plan(knobs) {
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))
+  add(knobs.relocations, () => ({ kind: "relocate" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

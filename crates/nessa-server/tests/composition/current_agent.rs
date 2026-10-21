@@ -1267,7 +1267,12 @@ fn configured_warm_up_runtime(resolver: &CurrentAgentResolver) -> RuntimeFingerp
     // The completion port owns equality and the successful-preparation fact.
     let agent = resolver.observe_opencode().provider.unwrap().unwrap();
     let identity = agent.provider.identity();
-    RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context()).unwrap()
+    RuntimeFingerprint::new(
+        identity.name(),
+        identity.model_id(),
+        &agent.provider.launch_fingerprint(),
+    )
+    .unwrap()
 }
 
 #[tokio::test]

@@ -653,6 +653,7 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
             .join("tests/infrastructure/acp/contracts/fixtures/test_acp_handler.py")
             .into_os_string()],
         environment: BTreeMap::new(),
+        runtime_environment: BTreeMap::new(),
         credential_environment: BTreeMap::new(),
         workspace: root.path().to_owned(),
         tools_enabled: true,

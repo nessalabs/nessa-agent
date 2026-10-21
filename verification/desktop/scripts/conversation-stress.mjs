@@ -89,6 +89,11 @@
  *               upgrades the file to the current version, lists every
  *               conversation it listed before, and the message sent in the
  *               window after it is answered
+ *   relocate    the gateway is stopped and started again the way a desktop
+ *               update leaves it: the agent runtime launched from a new
+ *               directory, with a new search path and scratch directory;
+ *               the conversation saved before it opens again with its
+ *               context, and the message sent in the window is answered
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -147,6 +152,7 @@ import {
 } from "./lib/selectors.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
+import { relocateRuntime } from "./lib/stress-relocate.mjs"
 import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
 import {
   openStressConversation,
@@ -1107,6 +1113,36 @@ const steps = {
         // window: that answer comes over the window's new connection, so
         // the refused connections while it was down are the restart's.
         if (failures.length === count) await steps.reply(run, step, failures)
+        return failures.length === count
+      })
+    })
+  },
+
+  async relocate(run, step, failures) {
+    await run.exclusive(async () => {
+      await run.restartConsole.during(run.opened, async () => {
+        const count = failures.length
+        const old = run.client
+        run.restarts += 1
+        await run.stack.gateway.restart("SIGTERM", async () =>
+          relocateRuntime(
+            join(run.stack.gateway.directory, "ci", "instances", INSTANCE, "config.json"),
+            run.stack.gateway.directory,
+            run.restarts,
+          ),
+        )
+        old.close()
+        run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+        log(`relocate: restarted with the runtime moved (${run.restarts})`)
+        // The saved conversation opens again after the move: before #1071
+        // the move changed its identity, and every send was refused
+        // conversation_configuration_changed.
+        await steps.reply(run, step, failures)
+        if (run.evidence)
+          await run.page.screenshot({
+            path: join(run.evidence, `relocate-${run.engine}-answered.png`),
+            scale: "css",
+          })
         return failures.length === count
       })
     })

@@ -54,7 +54,7 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
     agent.close(close_action()).await.unwrap();
     drop(agent);
     let launches = std::fs::read(root.path().join("launches")).unwrap();
-    for change in 0..6 {
+    for change in 0..4 {
         let mut changed = config.clone();
         match change {
             0 => {
@@ -68,13 +68,7 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
                     "https://fixture.invalid/b".into(),
                 );
             }
-            2 => changed.arguments.push("semantic-setting".into()),
-            3 => changed.arguments.swap(0, 1),
-            4 => {
-                changed.executable = ExecutableUseSnapshot::unmanaged(PathBuf::from(
-                    "/nonexistent/different-provider",
-                ))
-            }
+            2 => changed.workspace = PathBuf::from("/another/workspace"),
             _ => changed.tools_enabled = false,
         }
         let changed = provider(changed, &model);
@@ -118,6 +112,87 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
         std::fs::read_to_string(root.path().join("credential-received")).unwrap(),
         "yes"
     );
+}
+
+/// A desktop release stages the runtime under a new directory, and the search
+/// path is read from the person's shell again: the program, its entry
+/// argument and where it finds its tools all move, and nothing about the
+/// conversation does. The identity stays, and the saved session is resumed by
+/// the moved program (#1071). The launch fingerprint, which keys a warm-up,
+/// moves with it.
+#[tokio::test]
+async fn moving_the_runtime_keeps_the_identity_and_restores() {
+    let _slot = process_test_slot().await;
+    let (root, mut config, model) = test_acp_configuration("echo", 16);
+    config
+        .runtime_environment
+        .insert("PATH".into(), "/usr/bin:/bin".into());
+    config
+        .runtime_environment
+        .insert("TMPDIR".into(), "/tmp/before".into());
+    let original = provider(config.clone(), &model);
+    let identity = original.identity();
+    let launched = original.launch_fingerprint();
+    let storage_root = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(storage_root.path().join("sessions")).unwrap());
+    let session_id = SessionId::new("moved-runtime").unwrap();
+    let manager = || {
+        SessionManager::open(
+            Some(session_id.clone()),
+            storage.clone(),
+            std::sync::Arc::new(
+                nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+        )
+    };
+    let agent = attached_agent(Arc::new(original), manager().await.unwrap())
+        .await
+        .unwrap();
+    agent.close(close_action()).await.unwrap();
+    drop(agent);
+
+    // The release's new tree: the same handler and interpreter, elsewhere.
+    let release = tempfile::tempdir().unwrap();
+    let entry = release.path().join("claude_acp_test_handler.py");
+    std::fs::copy(&config.arguments[0], &entry).unwrap();
+    let interpreter = release.path().join("python3");
+    std::os::unix::fs::symlink(config.executable.executable(), &interpreter).unwrap();
+    let mut moved = config;
+    moved.executable = ExecutableUseSnapshot::unmanaged(interpreter);
+    moved.arguments[0] = entry.into_os_string();
+    moved
+        .runtime_environment
+        .insert("PATH".into(), "/opt/homebrew/bin:/usr/bin:/bin".into());
+    moved
+        .runtime_environment
+        .insert("TMPDIR".into(), "/tmp/after".into());
+    let moved = provider(moved, &model);
+    assert_eq!(moved.identity(), identity);
+    assert_ne!(moved.launch_fingerprint(), launched);
+    let restored = attached_agent(Arc::new(moved), manager().await.unwrap())
+        .await
+        .unwrap();
+    restored.close(close_action()).await.unwrap();
+    // Resumed, not refused and not opened afresh.
+    assert!(root.path().join("resume-observed").exists());
+}
+
+#[test]
+fn runtime_and_context_keys_must_be_disjoint() {
+    let (_root, mut config, model) = test_acp_configuration("echo", 16);
+    config.environment.insert("PATH".into(), "/context".into());
+    config
+        .runtime_environment
+        .insert("PATH".into(), "/runtime".into());
+    assert!(matches!(
+        ClaudeAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            Arc::new(RecordingAudit::default())
+        ),
+        Err(AgentError::Configuration(_))
+    ));
 }
 
 fn nessa_server(workspace: &str) -> StdioMcpServer {
@@ -253,7 +328,7 @@ impl crate::infrastructure::acp::sessions::StandInGrants for TokenGrants {
 }
 
 #[test]
-fn fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments() {
+fn fingerprint_tracks_workspace_policy_prompt_limits_and_context_environment() {
     let (_root, config, model) = test_acp_configuration("echo", 16);
     let original = provider(config.clone(), &model).identity();
     let mut changed = config.clone();
@@ -312,12 +387,32 @@ fn fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments()
         args: vec!["--workspace".into(), "/different".into()],
     }]);
     assert_eq!(provider(served, &model).identity(), original);
+    let mut configured = config.clone();
+    configured
+        .environment
+        .insert("CODEX_HOME".into(), "/another/home".into());
+    assert_ne!(provider(configured, &model).identity(), original);
+    // Nor what says which program runs and how it finds its tools; those move
+    // the launch fingerprint instead, whose fields stay unambiguous.
     let mut left = config.clone();
-    let mut right = config;
+    let mut right = config.clone();
     left.arguments = vec!["ab".into(), "c".into()];
     right.arguments = vec!["a".into(), "bc".into()];
+    assert_eq!(provider(left.clone(), &model).identity(), original);
+    assert_eq!(provider(right.clone(), &model).identity(), original);
     assert_ne!(
-        provider(left, &model).identity(),
-        provider(right, &model).identity()
+        provider(left, &model).launch_fingerprint(),
+        provider(right, &model).launch_fingerprint()
+    );
+    let mut context = config.clone();
+    let mut runtime = config;
+    context.environment.insert("KEY".into(), "value".into());
+    runtime
+        .runtime_environment
+        .insert("KEY".into(), "value".into());
+    assert_eq!(provider(runtime.clone(), &model).identity(), original);
+    assert_ne!(
+        provider(context, &model).launch_fingerprint(),
+        provider(runtime, &model).launch_fingerprint()
     );
 }

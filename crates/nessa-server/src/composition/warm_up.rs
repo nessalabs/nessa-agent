@@ -115,9 +115,12 @@ impl CurrentOpenCodeWarmUp {
         agent: &ConversationAgent,
     ) -> Result<CurrentWarmUpAdmission, ConversationError> {
         let identity = agent.provider.identity();
-        let runtime =
-            RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())
-                .map_err(|_| ConversationError::Unavailable)?;
+        let runtime = RuntimeFingerprint::new(
+            identity.name(),
+            identity.model_id(),
+            &agent.provider.launch_fingerprint(),
+        )
+        .map_err(|_| ConversationError::Unavailable)?;
         let (warm_up, id, created) = {
             let mut state = self.inner.state.lock().unwrap();
             if let Some(active) = state.as_ref() {

@@ -619,6 +619,9 @@ impl AgentProvider for LeaseFence {
             |context| context.holds(saved),
         )
     }
+    fn launch_fingerprint(&self) -> String {
+        self.inner.launch_fingerprint()
+    }
     fn model_change_context(&self) -> Option<String> {
         self.inner
             .model_change_context()

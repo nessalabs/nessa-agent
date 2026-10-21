@@ -213,17 +213,18 @@ async fn run() -> Result<(), Box<dyn Error>> {
     }
     // Composition chooses credential/environment sources. The adapter never reads
     // global environment or copies a credential from another namespace.
+    // Where the agent keeps its sessions is its identity; where it runs from
+    // is not.
     let mut environment = BTreeMap::new();
-    for key in [
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "TMPDIR",
-        "CLAUDE_CONFIG_DIR",
-    ] {
+    for key in ["HOME", "CLAUDE_CONFIG_DIR"] {
         if let Some(value) = std::env::var_os(key) {
             environment.insert(key.into(), value);
+        }
+    }
+    let mut runtime_environment = BTreeMap::new();
+    for key in ["PATH", "USER", "LOGNAME", "TMPDIR"] {
+        if let Some(value) = std::env::var_os(key) {
+            runtime_environment.insert(key.into(), value);
         }
     }
     let mut credential_environment = BTreeMap::new();
@@ -242,6 +243,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             executable: ExecutableUseSnapshot::unmanaged(PathBuf::from(&args[1])),
             arguments: vec![args[2].clone()],
             environment,
+            runtime_environment,
             credential_environment,
             workspace: workspace.clone(),
             tools_enabled: mode.ends_with("write"),

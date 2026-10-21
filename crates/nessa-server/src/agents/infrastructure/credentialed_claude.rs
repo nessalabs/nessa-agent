@@ -182,6 +182,14 @@ impl AgentProvider for CredentialedClaudeProvider {
             .ok()?
             .model_change_context()
     }
+    fn launch_fingerprint(&self) -> String {
+        // The launched binding's, which reads the same configuration, prompt
+        // and limits; a configuration it refuses never launches.
+        self.configured(self.config.clone()).map_or_else(
+            |_| self.identity.context().to_owned(),
+            |binding| binding.launch_fingerprint(),
+        )
+    }
     fn with_model_configuration(
         &self,
         mode: Option<ApprovalMode>,
@@ -350,6 +358,7 @@ mod tests {
             executable: ExecutableUseSnapshot::unmanaged("/bin/true".into()),
             arguments: Vec::new(),
             environment: BTreeMap::new(),
+            runtime_environment: BTreeMap::new(),
             credential_environment: BTreeMap::new(),
             workspace: root.path().into(),
             tools_enabled: true,

@@ -352,6 +352,16 @@ pub trait AgentProvider: Send + Sync {
     fn model_change_context(&self) -> Option<String> {
         None
     }
+    /// Credential-free identity of everything this factory launches, where
+    /// the restoration `identity` covers only what selects a saved context:
+    /// it also changes when the program, its arguments or where it finds its
+    /// tools move. Keys preparation that is paid per launched file, such as a
+    /// first-execution warm-up; never compared for restoration. Defaults to
+    /// the identity's context, for a provider whose launch inputs are all
+    /// context; wrappers delegate.
+    fn launch_fingerprint(&self) -> String {
+        self.identity().context().to_owned()
+    }
     /// Clone this factory at the complete acknowledged native configuration.
     /// This pure operation validates settings before live mutation and retains
     /// the factory's existing credentials, lease authority and supplied trace port.
