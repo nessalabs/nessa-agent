@@ -76,10 +76,17 @@ CREATE TABLE message (
     grant_id TEXT,
     policy_revision INTEGER,
     tools_checked INTEGER NOT NULL CHECK (tools_checked IN (0, 1)),
+    -- Immutable command evidence, captured with the first submitting fence.
+    -- Deletion retains these non-content facts beside the command journal.
+    command_principal TEXT,
+    command_surface TEXT,
+    command_fingerprint BLOB,
     fence_owner TEXT NOT NULL DEFAULT '',
     fence_until_ms INTEGER NOT NULL DEFAULT 0,
     retry_at_ms INTEGER NOT NULL DEFAULT 0,
     retry_failures INTEGER NOT NULL DEFAULT 0,
+    CHECK ((command_principal IS NULL AND command_surface IS NULL AND command_fingerprint IS NULL)
+        OR (command_principal IS NOT NULL AND command_surface IS NOT NULL AND command_fingerprint IS NOT NULL AND length(command_fingerprint) = 32)),
     PRIMARY KEY (conversation, causal_execution)
 ) STRICT;
 

@@ -14,18 +14,22 @@
 use crate::conversation::application::{
     ConversationError, ConversationFuture, PlanToken, PreferenceCommandOutcome,
     PreferenceCommandReceipt, PreferenceReading, PreferenceUpdate, ReconcileRetry,
-    RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage,
-    ScheduledMessageStore, UnsettledEnable, UsageLimitSnapshot, FENCE_LEASE_MS,
+    RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledCommandEvidence,
+    ScheduledMessage, ScheduledMessageStore, UnsettledEnable, UsageLimitSnapshot, FENCE_LEASE_MS,
 };
 use crate::conversation::domain::ContinuationCause;
 use nessa_local_database::{
-    rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior},
+    rusqlite::{
+        params, types::Type as SqlType, Connection, Error as RusqliteError, OptionalExtension,
+        Transaction, TransactionBehavior,
+    },
     OpenError, Schema,
 };
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::HashSet,
+    io::{Error as IoError, ErrorKind},
     path::Path,
     sync::{Arc, Mutex, PoisonError},
 };
@@ -207,11 +211,45 @@ fn audit_policies(
     Ok(())
 }
 
+fn invalid_command_evidence() -> RusqliteError {
+    RusqliteError::FromSqlConversionFailure(
+        19,
+        SqlType::Blob,
+        Box::new(IoError::new(
+            ErrorKind::InvalidData,
+            "invalid retained command evidence",
+        )),
+    )
+}
+
 fn read_message(
     row: &nessa_local_database::rusqlite::Row<'_>,
 ) -> Result<ScheduledMessage, nessa_local_database::rusqlite::Error> {
     let status: String = row.get(4)?;
+    let command_evidence = match (
+        row.get::<_, Option<String>>(17)?,
+        row.get::<_, Option<String>>(18)?,
+        row.get::<_, Option<Vec<u8>>>(19)?,
+    ) {
+        (None, None, None) => None,
+        (Some(principal), Some(surface), Some(fingerprint)) => {
+            let fingerprint: [u8; 32] = fingerprint
+                .try_into()
+                .map_err(|_| invalid_command_evidence())?;
+            Some(
+                ScheduledCommandEvidence::restore(
+                    &row.get::<_, String>(2)?,
+                    &principal,
+                    &surface,
+                    fingerprint,
+                )
+                .map_err(|_| invalid_command_evidence())?,
+            )
+        }
+        _ => return Err(invalid_command_evidence()),
+    };
     Ok(ScheduledMessage {
+        command_evidence,
         conversation: row.get(0)?,
         causal_execution: row.get(1)?,
         execution_id: row.get(2)?,
@@ -234,7 +272,7 @@ fn read_message(
 
 const MESSAGE_COLUMNS: &str = "conversation, causal_execution, execution_id, due_at_ms, status, \
      agent, model, prompt, organization_id, principal_id, surface_id, action_id, \
-     initiation, grant_id, policy_revision, tools_checked, retry_failures";
+     initiation, grant_id, policy_revision, tools_checked, retry_failures, command_principal, command_surface, command_fingerprint";
 
 /// A `delivering` row is due unless that conversation owes a reconcile retry
 /// still ahead of `?1`, the clock passed to the statement.
@@ -1668,27 +1706,29 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             let now = millis(now_ms)?;
             let until = lease_until(now_ms)?;
             let transaction = connection.transaction().map_err(failed)?;
-            // One update, so two processes cannot both become the owner.
-            let claimed = transaction
-                .execute(
-                    "UPDATE message SET status = 'submitting', fence_owner = ?2, \
-                     fence_until_ms = ?3 \
+            // Capture the canonical non-content binding with the fence, before
+            // command admission. Adoption retains the original evidence.
+            let unsubmitted: Option<(String, String, String)> = transaction.query_row(
+                "SELECT principal_id, surface_id, prompt FROM message WHERE execution_id = ?1 AND status = 'delivering'",
+                params![execution_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).optional().map_err(failed)?;
+            let claimed = if let Some((principal, surface, prompt)) = unsubmitted {
+                let evidence = ScheduledCommandEvidence::capture(&execution_id, &principal, &surface, &prompt)?;
+                transaction.execute(
+                    "UPDATE message SET status = 'submitting', fence_owner = ?2, fence_until_ms = ?3, \
+                     command_principal = ?4, command_surface = ?5, command_fingerprint = ?6 \
                      WHERE execution_id = ?1 AND status = 'delivering' \
                        AND EXISTS (SELECT 1 FROM preference WHERE id = 1 AND enabled = 1)",
-                    params![execution_id, owner, until],
-                )
-                .map_err(failed)?
-                == 1
-                || transaction
-                    .execute(
-                        "UPDATE message SET fence_owner = ?2, fence_until_ms = ?3 \
-                         WHERE execution_id = ?1 AND status = 'submitting' \
-                           AND (fence_until_ms <= ?4 OR fence_owner = ?2) \
-                           AND retry_at_ms <= ?4",
-                        params![execution_id, owner, until, now],
-                    )
-                    .map_err(failed)?
-                    == 1;
+                    params![execution_id, owner, until, evidence.principal(), evidence.surface(), evidence.fingerprint().as_slice()],
+                ).map_err(failed)? == 1
+            } else {
+                transaction.execute(
+                    "UPDATE message SET fence_owner = ?2, fence_until_ms = ?3 \
+                     WHERE execution_id = ?1 AND status = 'submitting' \
+                       AND (fence_until_ms <= ?4 OR fence_owner = ?2) AND retry_at_ms <= ?4",
+                    params![execution_id, owner, until, now],
+                ).map_err(failed)? == 1
+            };
             if !claimed {
                 transaction.commit().map_err(failed)?;
                 return Ok(false);
@@ -1924,7 +1964,6 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                             surface_id: row.get(8)?,
                             action_id: row.get(9)?,
                             grant_id: row.get(10)?,
-                            fence_until_ms: row.get(11)?,
                         })
                     })
                     .map_err(failed)?
@@ -1938,7 +1977,6 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                 }
                 let after = match row.status.as_str() {
                     "scheduled" | "delivering" => "cancelled",
-                    "submitting" if row.fence_until_ms <= at_ms => "unconfirmed",
                     status => status,
                 };
                 let changed = transaction
@@ -2043,7 +2081,6 @@ struct ScrubRow {
     surface_id: String,
     action_id: String,
     grant_id: Option<String>,
-    fence_until_ms: i64,
 }
 
 impl ScrubRow {
@@ -2542,12 +2579,53 @@ mod tests {
             store.status("exec-1").await.unwrap().as_deref(),
             Some("delivering")
         );
+        assert!(store.claim_due(10, 4).await.unwrap()[0]
+            .command_evidence
+            .is_none());
         assert!(store.begin_submit("exec-1", 10).await.unwrap());
+        assert!(store.claim_due(10, 4).await.unwrap()[0]
+            .command_evidence
+            .is_some());
         assert_eq!(
             store.status("exec-1").await.unwrap().as_deref(),
             Some("submitting")
         );
         assert!(!store.begin_submit("exec-1", 10).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn malformed_retained_command_evidence_is_not_restored() {
+        let store = enabled_store().await;
+        store
+            .accept(draft("conversation", "causal", "exec-1", 10), 1)
+            .await
+            .unwrap();
+        store.claim_due(10, 4).await.unwrap();
+        assert!(store.begin_submit("exec-1", 10).await.unwrap());
+        for principal in [String::new(), "x".repeat(5_000)] {
+            store
+                .connection
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE message SET command_principal = ?1",
+                    params![principal],
+                )
+                .unwrap();
+            assert!(store.claim_due(10, 4).await.is_err());
+        }
+        assert!(store
+            .connection
+            .lock()
+            .unwrap()
+            .execute("UPDATE message SET command_fingerprint = x'00'", [])
+            .is_err());
+        assert!(store
+            .connection
+            .lock()
+            .unwrap()
+            .execute("UPDATE message SET command_surface = NULL", [])
+            .is_err());
     }
 
     #[tokio::test]
@@ -2820,7 +2898,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deleting_an_expired_submission_keeps_admission_uncertain() {
+    async fn deleting_an_expired_submission_retains_its_command_evidence() {
         let store = enabled_store().await;
         store
             .accept(draft("conversation", "causal", "exec-1", 10), 1)
@@ -2828,6 +2906,14 @@ mod tests {
             .unwrap();
         store.claim_due(10, 4).await.unwrap();
         assert!(store.begin_submit("exec-1", 10).await.unwrap());
+        let original = store
+            .claim_due(10, 4)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap()
+            .command_evidence
+            .unwrap();
         let expired = 10 + super::FENCE_LEASE_MS;
         store
             .erase_conversation("conversation", expired)
@@ -2835,7 +2921,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             store.status("exec-1").await.unwrap().as_deref(),
-            Some("unconfirmed")
+            Some("submitting")
         );
         let before = audits(&store);
         assert_eq!(
@@ -2844,7 +2930,7 @@ mod tests {
                 "system".into(),
                 "conversation_deleted".into(),
                 "submitting".into(),
-                "unconfirmed".into()
+                "submitting".into()
             ))
         );
         store
@@ -2863,6 +2949,10 @@ mod tests {
             )
             .unwrap();
         assert!(prompt.is_empty());
+        store.release_submit("exec-1").await.unwrap();
+        assert!(store.begin_submit("exec-1", expired).await.unwrap());
+        let recovered = store.claim_due(expired, 4).await.unwrap().pop().unwrap();
+        assert_eq!(recovered.command_evidence, Some(original));
     }
 
     #[tokio::test]

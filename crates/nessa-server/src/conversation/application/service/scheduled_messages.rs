@@ -47,9 +47,10 @@ use crate::conversation::domain::{ContinuationCause, ContinuationPlan};
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::application::agent_execution::commands::{
     CreationFuture, CreationInitializationFailure, CreationStorage, MutationBinding,
-    MutationCoordinator, MutationFailure, MutationOutcome, MutationPlan, MutationReceipt,
-    MutationStage, MutationTarget,
+    MutationCoordinator, MutationFailure, MutationOperation, MutationOutcome, MutationPlan,
+    MutationReceipt, MutationStage, MutationTarget,
 };
+use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::domain::agent_execution::executions::{
     ExecutionId, GrantInitiator, Initiation, Initiator, ToolChecking,
 };
@@ -113,9 +114,76 @@ impl ScheduleActor {
     }
 }
 
+/// Immutable, non-content command facts retained when deletion scrubs a
+/// continuation. Identity bounds and validation are owned by ActionContext.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScheduledCommandEvidence {
+    actor: ActionContext,
+    fingerprint: [u8; 32],
+}
+
+impl ScheduledCommandEvidence {
+    pub(crate) fn capture(
+        execution: &str,
+        principal: &str,
+        surface: &str,
+        prompt: &str,
+    ) -> Result<Self, ConversationError> {
+        let fingerprint = super::mutation::submission_fingerprint(
+            execution,
+            &super::SubmittedMessage {
+                text: prompt.into(),
+                ..Default::default()
+            },
+            super::SubmissionMode::Queue,
+        )?;
+        Self::restore(execution, principal, surface, fingerprint)
+    }
+
+    pub(crate) fn restore(
+        execution: &str,
+        principal: &str,
+        surface: &str,
+        fingerprint: [u8; 32],
+    ) -> Result<Self, ConversationError> {
+        let actor = ActionContext::new(principal, surface, execution)
+            .map_err(|_| ConversationError::InvalidInput)?;
+        Ok(Self { actor, fingerprint })
+    }
+
+    pub(crate) fn principal(&self) -> &str {
+        self.actor.principal_id()
+    }
+    pub(crate) fn surface(&self) -> &str {
+        self.actor.surface_id()
+    }
+    pub(crate) fn fingerprint(&self) -> &[u8; 32] {
+        &self.fingerprint
+    }
+
+    fn binding(
+        &self,
+        id: &ConversationId,
+        execution: &str,
+    ) -> Result<MutationBinding, ConversationError> {
+        if self.actor.request_id() != execution {
+            return Err(ConversationError::InvalidInput);
+        }
+        MutationBinding::new(
+            self.actor.clone(),
+            MutationOperation::Submit,
+            super::conversation_session(id),
+            execution,
+            self.fingerprint,
+        )
+        .map_err(|_| ConversationError::InvalidInput)
+    }
+}
+
 /// A continuation the store has accepted or is delivering.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScheduledMessage {
+    pub command_evidence: Option<ScheduledCommandEvidence>,
     pub conversation: String,
     pub causal_execution: String,
     pub execution_id: String,
@@ -572,12 +640,11 @@ pub trait ScheduledMessageStore: Send + Sync {
         cause: &str,
         at_ms: u64,
     ) -> ConversationFuture<'_, ()>;
-    /// Blank the prompt and identifying fields of every row for `conversation`.
-    /// `scheduled`, `delivering`, and a `submitting` row whose lease has
-    /// expired become `unconfirmed`; unsubmitted rows become `cancelled`.
-    /// A live lease keeps its status until saved-execution recovery. Terminal
-    /// rows keep theirs. One new audit per row that still held a payload. A
-    /// second call writes nothing. Older audit rows stay.
+    /// Blank prompt and payload/grant identifiers for `conversation`, retaining
+    /// non-content canonical command evidence. Unsubmitted rows become cancelled;
+    /// submitting rows retain their status until leased command receipt recovery.
+    /// Terminal rows keep theirs. One audit per row still holding payload;
+    /// a second scrub writes nothing. Older audit rows stay.
     fn erase_conversation(&self, conversation: &str, at_ms: u64) -> ConversationFuture<'_, ()>;
     /// Remember that planning `conversation` failed. The next attempt is
     /// `retry_at_ms`. `failures` counts attempts so far, including this one.
@@ -1815,50 +1882,6 @@ impl ConversationService {
             lost.store(true, Ordering::SeqCst);
             return false;
         }
-        match self.execution_saved(&id, &row.execution_id).await {
-            Ok(true) => {
-                if lost.load(Ordering::SeqCst) {
-                    return false;
-                }
-                return self
-                    .persist_observed_outcome(
-                        &store,
-                        row,
-                        ScheduleSettlement::Delivered,
-                        "delivered",
-                    )
-                    .await;
-            }
-            Ok(false) => {}
-            Err(error) => {
-                // The invocation may already be saved. An unread session is
-                // not absence: submitting would see Attempted and record
-                // unconfirmed for a turn that is still running.
-                let wait = self.note_uncommitted_submit(row);
-                tracing::warn!(
-                    execution_id = %row.execution_id,
-                    %error,
-                    retry_ms = wait,
-                    "the saved execution could not be read; the submission stays and will be read again"
-                );
-                return true;
-            }
-        }
-        // Erasure removed the command binding inputs. The execution read above
-        // may still confirm delivery; absence after erasure leaves admission unknown.
-        if row.prompt.is_empty() {
-            if lost.load(Ordering::SeqCst) {
-                return false;
-            }
-            return self
-                .persist_observed_outcome(
-                    &store,
-                    row,
-                    ScheduleSettlement::Unconfirmed,
-                    ContinuationCause::ConversationDeleted.as_str(),
-                )
-                .await;
-        }
         let Some(commands) = self.commands() else {
             if lost.load(Ordering::SeqCst) {
                 return false;
@@ -1878,7 +1901,21 @@ impl ConversationService {
                     .await
             }
             Ok(None) => {}
+            Err(ConversationError::Storage(_)) => {
+                self.note_uncommitted_submit(row);
+                return true;
+            }
             Err(_) => return !self.hold_submit_retry(&store, row).await,
+        }
+        if row.prompt.is_empty() {
+            return self
+                .persist_observed_outcome(
+                    &store,
+                    row,
+                    ScheduleSettlement::Unconfirmed,
+                    ContinuationCause::ConversationDeleted.as_str(),
+                )
+                .await;
         }
         match store.preference().await {
             Ok(reading) if !reading.enabled => {
@@ -1967,6 +2004,15 @@ impl ConversationService {
             .lookup(&binding, &CancelUnattemptedSubmission)
             .await
             .map_err(|_| ConversationError::Unavailable)?;
+        // A terminal command result describes after-save refusals more exactly
+        // than the existence of a saved invocation. Recover it before history.
+        if let Some(receipt) = &receipt {
+            if receipt.stage() == MutationStage::Settled {
+                return submission_receipt_outcome(receipt)
+                    .map(Some)
+                    .ok_or(ConversationError::Unavailable);
+            }
+        }
         if self.execution_saved(id, &row.execution_id).await? {
             return Ok(Some((ScheduleSettlement::Delivered, "delivered")));
         }
@@ -1981,7 +2027,7 @@ impl ConversationService {
 
     /// A disabled preference cannot erase an admitted command. Read its durable
     /// receipt under the command lease, sealing an unattempted command with
-    /// NoEffect. Then re-read the execution: the original command may have
+    /// RefusedBeforeAttempt. Then re-read the execution: the original command may have
     /// finished while recovery waited for its command lease.
     async fn recover_disabled_submission(
         &self,
@@ -2001,6 +2047,9 @@ impl ConversationService {
                 Err(MutationFailure::Interrupted(receipt)) => *receipt,
                 Err(_) => return Err(ConversationError::Unavailable),
             };
+            if receipt.stage() == MutationStage::Settled {
+                return Ok(submission_receipt_outcome(&receipt));
+            }
             if self.execution_saved(&id, &row.execution_id).await? {
                 return Ok(Some((ScheduleSettlement::Delivered, "delivered")));
             }
@@ -2432,6 +2481,9 @@ fn scheduled_submit_binding(
     id: &ConversationId,
     row: &ScheduledMessage,
 ) -> Result<MutationBinding, ConversationError> {
+    if let Some(evidence) = &row.command_evidence {
+        return evidence.binding(id, &row.execution_id);
+    }
     ConversationService::submit_lookup(
         id,
         &schedule_caller(row)?,

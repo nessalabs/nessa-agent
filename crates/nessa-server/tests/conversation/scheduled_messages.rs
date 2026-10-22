@@ -1180,6 +1180,7 @@ async fn the_outcome_clock_is_read_after_submission() {
     service.bind_commands(Arc::new(ShiftStorage { clock }));
     let conversation = "11111111-1111-4111-8111-111111111111";
     let row = ScheduledMessage {
+        command_evidence: None,
         conversation: conversation.into(),
         causal_execution: "causal".into(),
         execution_id: "exec-1".into(),
@@ -1258,8 +1259,12 @@ async fn a_failed_execution_read_does_not_settle_the_submission() {
     );
     let store = Arc::new(RecordingStore::new(false));
     service.bind_scheduled_messages(store.clone());
+    service.bind_commands(Arc::new(ShiftStorage {
+        clock: Arc::new(ShiftClock(AtomicU64::new(0))),
+    }));
     let conversation = "11111111-1111-4111-8111-111111111111";
     let row = ScheduledMessage {
+        command_evidence: None,
         conversation: conversation.into(),
         causal_execution: "causal".into(),
         execution_id: "exec-1".into(),
@@ -1307,6 +1312,9 @@ async fn an_unread_execution_waits_out_the_same_backoff() {
     store.submit_attempts.store(true, Ordering::SeqCst);
     *store.due_row.lock().unwrap() = Some(due_row("owner"));
     service.bind_scheduled_messages(store.clone());
+    service.bind_commands(Arc::new(ShiftStorage {
+        clock: Arc::new(ShiftClock(AtomicU64::new(0))),
+    }));
 
     assert_eq!(
         service.deliver_due_scheduled().await,
@@ -1335,6 +1343,7 @@ async fn an_unread_execution_waits_out_the_same_backoff() {
 
 fn due_row(initiation: &str) -> ScheduledMessage {
     ScheduledMessage {
+        command_evidence: None,
         conversation: "11111111-1111-4111-8111-111111111111".into(),
         causal_execution: "causal".into(),
         execution_id: "exec-1".into(),
@@ -1873,6 +1882,7 @@ async fn a_failed_schedule_plan_does_not_submit() {
     let store = Arc::new(RecordingStore::new(true));
     service.bind_scheduled_messages(store.clone());
     let row = ScheduledMessage {
+        command_evidence: None,
         conversation: id.to_string(),
         causal_execution: "causal".into(),
         execution_id: "exec-1".into(),
@@ -3096,6 +3106,7 @@ impl CreationStorage for BusyCommands {
 
 fn submitting_row(conversation: &str) -> ScheduledMessage {
     ScheduledMessage {
+        command_evidence: None,
         conversation: conversation.into(),
         causal_execution: "causal".into(),
         execution_id: "exec-1".into(),
@@ -3241,8 +3252,10 @@ async fn disabled_recovery_fixture(
         clock.clone(),
         commands.clone(),
     );
-    let schedule =
-        Arc::new(LocalScheduledMessages::open(&directory.join("scheduled.sqlite3")).unwrap());
+    nessa_local_storage::create_directory(&directory.join("scheduled")).unwrap();
+    let schedule = Arc::new(
+        LocalScheduledMessages::open(&directory.join("scheduled/scheduled.sqlite3")).unwrap(),
+    );
     schedule
         .set_preference(true, ScheduleActor::system(), 1)
         .await
@@ -3263,8 +3276,9 @@ async fn disabled_recovery_fixture(
         .unwrap());
     schedule.release_submit(&row.execution_id).await.unwrap();
     drop(schedule);
-    let schedule =
-        Arc::new(LocalScheduledMessages::open(&directory.join("scheduled.sqlite3")).unwrap());
+    let schedule = Arc::new(
+        LocalScheduledMessages::open(&directory.join("scheduled/scheduled.sqlite3")).unwrap(),
+    );
     service.bind_scheduled_messages(schedule.clone());
     service.bind_commands(commands.clone());
     (service, schedule, commands, clock, row)
@@ -3402,7 +3416,8 @@ async fn preference_off_recovers_command_evidence_before_cancellation() {
             Some(expected),
             "stage {stage:?}"
         );
-        let connection = Connection::open(directory.path().join("scheduled.sqlite3")).unwrap();
+        let connection =
+            Connection::open(directory.path().join("scheduled/scheduled.sqlite3")).unwrap();
         let audit: (String, String, String, String, String, String) = connection.query_row(
             "SELECT conversation, causal_execution, execution_id, before_status, after_status, initiator_kind FROM audit WHERE after_status = ?1 ORDER BY id DESC LIMIT 1",
             [expected], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
@@ -3505,7 +3520,7 @@ async fn preference_off_recovers_a_saved_turn_after_its_delivery_audit_failed() 
     service
         .submit_command(
             commands.clone(),
-            id,
+            id.clone(),
             caller,
             Initiation::owner(),
             false,
@@ -3528,6 +3543,16 @@ async fn preference_off_recovers_a_saved_turn_after_its_delivery_audit_failed() 
         )
         .await
         .is_err());
+    // Delete through the real owner: it erases saved history before the
+    // schedule payload. The durable Dispatched receipt must still recover.
+    assert!(service
+        .delete(id.clone(), caller_as("delete"))
+        .await
+        .unwrap());
+    assert!(!service
+        .execution_saved(&id, &row.execution_id)
+        .await
+        .unwrap());
     let expired = 5_000 + FENCE_LEASE_MS;
     clock.0.store(expired, Ordering::SeqCst);
     schedule
@@ -3546,72 +3571,101 @@ async fn preference_off_recovers_a_saved_turn_after_its_delivery_audit_failed() 
 #[tokio::test]
 async fn a_scrubbed_live_submission_is_unconfirmed_when_adopted_after_restart() {
     for enabled in [true, false] {
-        let directory = tempfile::tempdir().unwrap();
-        let (service, schedule, commands, clock, row) =
-            disabled_recovery_fixture(directory.path()).await;
-        schedule
-            .erase_conversation(&row.conversation, 5_001)
-            .await
-            .unwrap();
-        assert_eq!(
-            schedule.status(&row.execution_id).await.unwrap().as_deref(),
-            Some("submitting")
-        );
-        service.shutdown().await.unwrap();
-        drop(service);
-        commands.shutdown().await.unwrap();
-        drop(commands);
-        drop(schedule);
-        let commands = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
-        let service = service_stored(
-            Arc::new(MemoryRepository::default()),
-            Arc::new(TwoOwners {
-                seen: Mutex::new(Vec::new()),
-                fail: false,
-            }),
-            clock.clone(),
-            commands.clone(),
-        );
-        let schedule = Arc::new(
-            LocalScheduledMessages::open(&directory.path().join("scheduled.sqlite3")).unwrap(),
-        );
-        service.bind_scheduled_messages(schedule.clone());
-        service.bind_commands(commands.clone());
-        let expired = 5_000 + FENCE_LEASE_MS;
-        clock.0.store(expired, Ordering::SeqCst);
-        schedule
-            .set_preference(enabled, ScheduleActor::system(), expired)
-            .await
-            .unwrap();
-        assert_eq!(service.deliver_due_scheduled().await, None);
-        assert_eq!(
-            schedule.status(&row.execution_id).await.unwrap().as_deref(),
-            Some("unconfirmed")
-        );
-        assert!(commands
-            .open_creation("person".into(), "exec-1".into(), false)
-            .await
-            .unwrap()
-            .is_none());
-        let connection = Connection::open(directory.path().join("scheduled.sqlite3")).unwrap();
-        let audit: (String, String, String) = connection
-            .query_row(
-                "SELECT cause, before_status, after_status FROM audit ORDER BY id DESC LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            audit,
-            (
-                "conversation_deleted".into(),
-                "submitting".into(),
-                "unconfirmed".into()
-            )
-        );
-        service.shutdown().await.unwrap();
-        drop(service);
-        commands.shutdown().await.unwrap();
+        for accepted_only in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let (service, schedule, commands, clock, row) =
+                disabled_recovery_fixture(directory.path()).await;
+            if accepted_only {
+                let id = ConversationId::new(&row.conversation).unwrap();
+                let binding = super::scheduled_submit_binding(&id, &row).unwrap();
+                let lease = commands
+                    .open_creation("person".into(), "exec-1".into(), true)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                lease
+                    .save_mutation(MutationReceipt::accepted(binding))
+                    .await
+                    .unwrap();
+            }
+            schedule
+                .erase_conversation(&row.conversation, 5_001)
+                .await
+                .unwrap();
+            assert_eq!(
+                schedule.status(&row.execution_id).await.unwrap().as_deref(),
+                Some("submitting")
+            );
+            service.shutdown().await.unwrap();
+            drop(service);
+            commands.shutdown().await.unwrap();
+            drop(commands);
+            drop(schedule);
+            let commands = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
+            let service = service_stored(
+                Arc::new(MemoryRepository::default()),
+                Arc::new(TwoOwners {
+                    seen: Mutex::new(Vec::new()),
+                    fail: false,
+                }),
+                clock.clone(),
+                commands.clone(),
+            );
+            let schedule = Arc::new(
+                LocalScheduledMessages::open(&directory.path().join("scheduled/scheduled.sqlite3"))
+                    .unwrap(),
+            );
+            service.bind_scheduled_messages(schedule.clone());
+            service.bind_commands(commands.clone());
+            let expired = 5_000 + FENCE_LEASE_MS;
+            clock.0.store(expired, Ordering::SeqCst);
+            schedule
+                .set_preference(enabled, ScheduleActor::system(), expired)
+                .await
+                .unwrap();
+            assert_eq!(service.deliver_due_scheduled().await, None);
+            assert_eq!(
+                schedule.status(&row.execution_id).await.unwrap().as_deref(),
+                Some("unconfirmed")
+            );
+            let journal = commands
+                .open_creation("person".into(), "exec-1".into(), false)
+                .await
+                .unwrap();
+            if accepted_only {
+                let receipt = journal
+                    .as_ref()
+                    .unwrap()
+                    .load_mutation("exec-1")
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(receipt.stage(), MutationStage::Accepted);
+            } else {
+                assert!(journal.is_none());
+            }
+            drop(journal);
+            let connection =
+                Connection::open(directory.path().join("scheduled/scheduled.sqlite3")).unwrap();
+            let audit: (String, String, String) = connection
+                .query_row(
+                    "SELECT cause, before_status, after_status FROM audit ORDER BY id DESC LIMIT 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                audit,
+                (
+                    "conversation_deleted".into(),
+                    "submitting".into(),
+                    "unconfirmed".into()
+                )
+            );
+            service.shutdown().await.unwrap();
+            drop(service);
+            commands.shutdown().await.unwrap();
+        }
     }
 }
 
@@ -3642,4 +3696,203 @@ fn stop_receipts_do_not_prove_a_disabled_submission_was_delivered_or_refused() {
             .unwrap();
         assert_eq!(super::submission_receipt_outcome(&receipt), None);
     }
+}
+
+#[tokio::test]
+async fn deletion_recovers_original_command_outcomes_after_failed_audit_and_restart() {
+    for enabled in [false, true] {
+        for delete_after_expiry in [false, true] {
+            for (outcome, expected, cause) in [
+                (Some(MutationOutcome::Dispatched), "delivered", "delivered"),
+                (Some(MutationOutcome::NoEffect), "refused", "revoked"),
+                (
+                    Some(MutationOutcome::RefusedBeforeAttempt),
+                    "refused",
+                    "preference_disabled",
+                ),
+                (None, "unconfirmed", "submission_interrupted"),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let (service, schedule, commands, clock, row) =
+                    disabled_recovery_fixture(directory.path()).await;
+                let id = ConversationId::new(&row.conversation).unwrap();
+                let binding = ConversationService::submit_lookup(
+                    &id,
+                    &schedule_caller(&row).unwrap(),
+                    &row.execution_id,
+                    &SubmittedMessage {
+                        text: row.prompt.clone(),
+                        ..Default::default()
+                    },
+                    SubmissionMode::Queue,
+                )
+                .unwrap();
+                let lease = commands
+                    .open_creation("person".into(), "exec-1".into(), true)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let mut receipt = MutationReceipt::accepted(binding.clone());
+                lease.save_mutation(receipt.clone()).await.unwrap();
+                if outcome != Some(MutationOutcome::RefusedBeforeAttempt) {
+                    receipt = receipt.advance(MutationStage::Attempted, None).unwrap();
+                    lease.save_mutation(receipt.clone()).await.unwrap();
+                }
+                if let Some(outcome) = outcome {
+                    lease
+                        .save_mutation(
+                            receipt
+                                .advance(MutationStage::Settled, Some(outcome))
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                }
+                drop(lease);
+                // Adopt the original owner's expired fence, then lose only the
+                // schedule outcome audit. The command journal stays committed.
+                let first_adoption = 5_000 + FENCE_LEASE_MS;
+                clock.0.store(first_adoption, Ordering::SeqCst);
+                schedule.fail_next_outcome_audit();
+                assert_eq!(
+                    service.deliver_due_scheduled().await,
+                    Some(SCHEDULE_RETRY_MS)
+                );
+                let deleted_at = if delete_after_expiry {
+                    first_adoption + FENCE_LEASE_MS
+                } else {
+                    first_adoption + 1
+                };
+                schedule
+                    .erase_conversation(&row.conversation, deleted_at)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    schedule.status(&row.execution_id).await.unwrap().as_deref(),
+                    Some("submitting")
+                );
+                schedule
+                    .set_preference(enabled, ScheduleActor::system(), deleted_at)
+                    .await
+                    .unwrap();
+                service.shutdown().await.unwrap();
+                drop(service);
+                commands.shutdown().await.unwrap();
+                drop(commands);
+                drop(schedule);
+                let commands =
+                    Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
+                let service = service_stored(
+                    Arc::new(MemoryRepository::default()),
+                    Arc::new(TwoOwners {
+                        seen: Mutex::new(Vec::new()),
+                        fail: false,
+                    }),
+                    clock.clone(),
+                    commands.clone(),
+                );
+                let schedule = Arc::new(
+                    LocalScheduledMessages::open(
+                        &directory.path().join("scheduled/scheduled.sqlite3"),
+                    )
+                    .unwrap(),
+                );
+                service.bind_scheduled_messages(schedule.clone());
+                service.bind_commands(commands.clone());
+                clock
+                    .0
+                    .store(first_adoption + FENCE_LEASE_MS, Ordering::SeqCst);
+                let retained = schedule
+                    .claim_due(clock.unix_milliseconds(), 8)
+                    .await
+                    .unwrap()
+                    .pop()
+                    .unwrap();
+                assert!(retained.prompt.is_empty());
+                assert!(retained.principal_id.is_empty());
+                assert!(retained.surface_id.is_empty());
+                assert!(retained.grant_id.is_none());
+                assert_eq!(
+                    super::scheduled_submit_binding(&id, &retained).unwrap(),
+                    binding
+                );
+                assert_eq!(service.deliver_due_scheduled().await, None);
+                assert_eq!(
+                    schedule.status(&row.execution_id).await.unwrap().as_deref(),
+                    Some(expected),
+                    "{outcome:?}, enabled={enabled}, expired={delete_after_expiry}"
+                );
+                let connection =
+                    Connection::open(directory.path().join("scheduled/scheduled.sqlite3")).unwrap();
+                let recorded: (String, String, String) = connection.query_row(
+                    "SELECT cause, after_status, initiator_kind FROM audit ORDER BY id DESC LIMIT 1", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                ).unwrap();
+                assert_eq!(recorded, (cause.into(), expected.into(), "system".into()));
+                service.shutdown().await.unwrap();
+                drop(service);
+                commands.shutdown().await.unwrap();
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn deleted_command_evidence_retries_a_busy_journal_without_guessing_an_outcome() {
+    let directory = tempfile::tempdir().unwrap();
+    let (service, schedule, commands, clock, row) =
+        disabled_recovery_fixture(directory.path()).await;
+    let id = ConversationId::new(&row.conversation).unwrap();
+    let binding = ConversationService::submit_lookup(
+        &id,
+        &schedule_caller(&row).unwrap(),
+        &row.execution_id,
+        &SubmittedMessage {
+            text: row.prompt.clone(),
+            ..Default::default()
+        },
+        SubmissionMode::Queue,
+    )
+    .unwrap();
+    let lease = commands
+        .open_creation("person".into(), "exec-1".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    let accepted = MutationReceipt::accepted(binding);
+    lease.save_mutation(accepted.clone()).await.unwrap();
+    let attempted = accepted.advance(MutationStage::Attempted, None).unwrap();
+    lease.save_mutation(attempted.clone()).await.unwrap();
+    lease
+        .save_mutation(
+            attempted
+                .advance(MutationStage::Settled, Some(MutationOutcome::Dispatched))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    schedule
+        .erase_conversation(&row.conversation, 5_001)
+        .await
+        .unwrap();
+    clock.0.store(5_000 + FENCE_LEASE_MS, Ordering::SeqCst);
+    assert_eq!(
+        service.deliver_due_scheduled().await,
+        Some(SCHEDULE_RETRY_MS)
+    );
+    assert_eq!(
+        schedule.status(&row.execution_id).await.unwrap().as_deref(),
+        Some("submitting")
+    );
+    drop(lease);
+    clock
+        .0
+        .store(5_000 + FENCE_LEASE_MS + SCHEDULE_RETRY_MS, Ordering::SeqCst);
+    assert_eq!(service.deliver_due_scheduled().await, None);
+    assert_eq!(
+        schedule.status(&row.execution_id).await.unwrap().as_deref(),
+        Some("delivered")
+    );
+    service.shutdown().await.unwrap();
+    drop(service);
+    commands.shutdown().await.unwrap();
 }

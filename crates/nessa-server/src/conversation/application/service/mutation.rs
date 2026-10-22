@@ -596,6 +596,23 @@ fn submit_binding(
     message: &SubmittedMessage,
     mode: SubmissionMode,
 ) -> Result<MutationBinding, ConversationError> {
+    MutationBinding::new(
+        caller.actor()?,
+        MutationOperation::Submit,
+        conversation_session(id),
+        execution_id,
+        submission_fingerprint(execution_id, message, mode)?,
+    )
+    .map_err(|_| ConversationError::InvalidInput)
+}
+
+/// Canonical submit bytes have one owner for command admission and retained
+/// scheduled-command evidence. No content is retained by the returned digest.
+pub(super) fn submission_fingerprint(
+    execution_id: &str,
+    message: &SubmittedMessage,
+    mode: SubmissionMode,
+) -> Result<[u8; 32], ConversationError> {
     let canonical = serde_json::to_vec(&(
         execution_id,
         match mode {
@@ -618,14 +635,7 @@ fn submit_binding(
     let mut digest = Sha256::new();
     digest.update(b"nessa.conversation.submit\0");
     digest.update(canonical);
-    MutationBinding::new(
-        caller.actor()?,
-        MutationOperation::Submit,
-        conversation_session(id),
-        execution_id,
-        digest.finalize().into(),
-    )
-    .map_err(|_| ConversationError::InvalidInput)
+    Ok(digest.finalize().into())
 }
 
 fn stop_binding(

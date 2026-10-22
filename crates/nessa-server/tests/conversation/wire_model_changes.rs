@@ -427,6 +427,7 @@ fn limit_message(execution_id: &str) -> ConversationMessage {
 
 fn open_row(causal: &str) -> ScheduledMessage {
     ScheduledMessage {
+        command_evidence: None,
         conversation: "11111111-1111-4111-8111-111111111111".into(),
         causal_execution: causal.into(),
         execution_id: "sched-1".into(),
