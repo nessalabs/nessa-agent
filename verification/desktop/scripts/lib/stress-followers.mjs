@@ -264,11 +264,15 @@ export class Follower {
             )
         } catch (error) {
           // The gateway restarting, this connection dropping, or a
-          // conversation the list still names being deleted, ends the
-          // probe: it asks again on a later round, against the list then.
+          // conversation the list still names being deleted or its agent
+          // being retired, ends the probe: it asks again on a later round,
+          // against the list then. A stopping owner refuses current reads
+          // as conversation_closed until cleanup is confirmed; the pool
+          // step independently requires that conversation to reopen.
           if (
             error?.code === "temporarily_unavailable" ||
             error?.code === "conversation_deleted" ||
+            error?.code === "conversation_closed" ||
             !isRefusal(error)
           )
             return
@@ -276,7 +280,7 @@ export class Follower {
             this.counts.refusedAsExpected += 1
           else
             this.fail(
-              `subscription ${this.held() + n + 1} of ${this.limits.conversationTargets} failed ${error?.code ?? error?.message}`,
+              `subscription ${this.held() + n + 1} of ${this.limits.conversationTargets} for ${others[n]} failed ${error?.code ?? error?.message}`,
             )
           return
         }
