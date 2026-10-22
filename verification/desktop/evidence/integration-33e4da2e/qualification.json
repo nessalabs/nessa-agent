@@ -1,0 +1,75 @@
+{
+  "sourceCommit": "33e4da2ea35272e41648fa33f7f9a06d4773f93e",
+  "mergedMain": "8981771f4035d285449c6ea2fc25c84ecfddbace",
+  "sourceTreeUnchangedAfterQualification": true,
+  "checks": [
+    {
+      "command": "pnpm frontend:check",
+      "exitCode": 0,
+      "vitestFiles": 387,
+      "vitestPassed": 5095,
+      "includes": [
+        "format",
+        "lint",
+        "lint rules",
+        "script tests",
+        "desktop harness tests",
+        "architecture",
+        "protocol generation and consistency",
+        "client documentation",
+        "client and application types",
+        "production build"
+      ],
+      "desktopHarnessTests": 401
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exitCode": 0
+    },
+    {
+      "command": "cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk --all-targets -- -D warnings",
+      "exitCode": 0
+    },
+    {
+      "command": "node scripts/cargo-test-parallel.mjs --concurrency 2 --partition all -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk",
+      "exitCode": 0,
+      "testBinaries": 31,
+      "summaryCountIncludingDoctests": 40,
+      "passed": 7313,
+      "failed": 0,
+      "existingIgnored": 35,
+      "serverUnitPassed": 3555,
+      "sdkUnitPassed": 1520
+    },
+    {
+      "command": "node scripts/check-sdk-docs.mjs",
+      "exitCode": 0,
+      "documentationWarningsDenied": true
+    },
+    {
+      "command": "node scripts/check-mcp.mjs",
+      "exitCode": 0,
+      "includes": ["format", "all-target Clippy with warnings denied", "tests"]
+    },
+    {
+      "command": "standalone Rust native HTTP fixture regression suite",
+      "exitCode": 0,
+      "passed": 4
+    }
+  ],
+  "environment": {
+    "filesystem": "Real filesystem ownership for private storage checks",
+    "orphanReaping": "Existing temporary child subreaper wraps process tests because the container init does not reap orphans",
+    "chromium": "Installed system executable",
+    "webkit": "Local browser installation previously failed with HTTP 403; no retry or bypass. Exact published-head CI must verify WebKit."
+  },
+  "review": {
+    "independentBackendRound": "Clean after pending-switch admission correction",
+    "freshCombinedBackendRound": "Clean",
+    "selectionRequestInterfaceRound": "Clean"
+  },
+  "limitations": [
+    "This records local qualification. Published-head CI and review status are recorded in the pull request after publication.",
+    "Browser static and combined stress evidence are separate files in this directory."
+  ]
+}
