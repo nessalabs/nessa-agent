@@ -8,7 +8,6 @@
 import { measureAdoptedPill, pressScale } from "./lib/adopted-pill.mjs"
 import { openPage, need, waitUntilSettled, withEngines } from "./lib/browser.mjs"
 import { hoverFailures, sampleHover } from "./lib/hover-state.mjs"
-import { overviewListed } from "./lib/workspace.mjs"
 import { attempt, chosen } from "./lib/cli.mjs"
 import { main } from "./lib/run.mjs"
 import { css, keys, names } from "./lib/selectors.mjs"
@@ -168,6 +167,16 @@ function rowFailures(rows, scale, where) {
       )
   }
   return failures
+}
+
+/** The sidebar publishes its quiet metadata after the complete overview paint. */
+async function overviewReady(page) {
+  await page.waitForFunction((sel) => {
+    const entry = document.querySelector(sel.overviewEntry)
+    const current = [...document.querySelectorAll(`${sel.sidebar} [aria-current="page"]`)]
+    return Boolean(document.querySelector(sel.overviewListed) && entry && current.length === 1 && current[0] === entry)
+  }, css, { timeout: 2_000, polling: "raf" })
+  await waitUntilSettled(page)
 }
 
 /** Points at the first row a selector finds that is neither chosen nor open, and reads its fill. */
@@ -486,7 +495,7 @@ const checks = {
     const scale = await page.evaluate(windowScale)
     await page.keyboard.press(keys.overview)
     await need(page, css.overviewCount, "the overview's counts")
-    await page.waitForTimeout(400)
+    await overviewReady(page)
     const read = () =>
       page.evaluate((sel) => {
         const options = [...document.querySelectorAll(sel.overviewCount)]
@@ -510,13 +519,9 @@ const checks = {
     if (before.options.some((option) => option.pressed))
       failures.push("a count is pressed while every group shows")
     const second = page.locator(css.overviewCount).nth(1)
-    await second.hover()
-    await page.waitForTimeout(250)
-    const hover = await second.evaluate(
-      (element) => getComputedStyle(element).backgroundColor,
-    )
-    if (hover !== scale.hover)
-      failures.push(`a count under the pointer is ${hover}, not ${scale.hover}`)
+    const hoverEvidence = await sampleHover(page, second)
+    const hover = hoverEvidence.settled.fill
+    failures.push(...hoverFailures(hoverEvidence.settled, [scale.hover]))
     await second.click()
     await page.mouse.move(1, 1)
     await page.waitForTimeout(400)
@@ -538,7 +543,7 @@ const checks = {
       failures.push("choosing the pressed count again did not let it go")
     return {
       failures,
-      measured: { counts: before.options.length, hover, pressed: chosen?.fill },
+      measured: { counts: before.options.length, hover, hoverEvidence, pressed: chosen?.fill },
     }
   },
   rims: async (page) => {
@@ -666,9 +671,7 @@ const checks = {
     }
     await page.keyboard.press(keys.overview)
     await need(page, css.overviewRow, "an overview row")
-    if (!(await overviewListed(page)))
-      throw new Error("the overview did not publish its complete rows")
-    await waitUntilSettled(page)
+    await overviewReady(page)
     const inOverview = await page.evaluate(rowsOnPage, css)
     failures.push(...rowFailures(inOverview, scale, "in the overview"))
     const finished = inOverview.filter((row) => row.unread)
