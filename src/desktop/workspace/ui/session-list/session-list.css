@@ -127,7 +127,8 @@
   min-height: 0;
   overflow-y: auto;
   padding: 0 0 72px;
-  scrollbar-gutter: stable;
+  /* Reserve the scrollbar on both sides so row highlights stay centred. */
+  scrollbar-gutter: stable both-edges;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in oklab, var(--foreground) 14%, transparent) transparent;
   mask-image: linear-gradient(to bottom, transparent, black 8px);

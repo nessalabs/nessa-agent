@@ -6,6 +6,7 @@
  * uncovers Archive and Delete as Mail's rows do, while a mouse drag stays the
  * drag to a pane and a right-click stays the row's menu.
  */
+import { settledOffset } from "./lib/swipe-geometry.mjs"
 import { sessionRowMenuMatches } from "./lib/session-row-menu.mjs"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
@@ -331,36 +332,6 @@ function contentLeft(wrapper) {
       element.firstElementChild.getBoundingClientRect().left -
       element.getBoundingClientRect().left,
   )
-}
-
-/**
- * How far the open row's content has slid from where it rested closed
- * (`closed`, from `contentLeft`), and the tray's width, once it holds still.
- */
-async function settledOffset(wrapper, closed) {
-  const deadline = Date.now() + 3_000
-  let last = null
-  for (;;) {
-    const now = await wrapper.evaluate((element, from) => {
-      const content = element.firstElementChild
-      const tray = element.querySelector('[data-slot="workspace-swipe-row-actions"]')
-      return {
-        offset:
-          content.getBoundingClientRect().left -
-          element.getBoundingClientRect().left -
-          from,
-        tray: tray?.getBoundingClientRect().width ?? 0,
-      }
-    }, closed)
-    if (last && now.offset === last.offset && now.tray === last.tray && now.offset !== 0)
-      return now
-    if (Date.now() > deadline)
-      throw new Error(
-        `the open row never held still (${now.offset} px, tray ${now.tray} px)`,
-      )
-    last = now
-    await new Promise((resolve) => setTimeout(resolve, 50))
-  }
 }
 
 /** The label's text once it reads `want`, or what it reads at the deadline. */
