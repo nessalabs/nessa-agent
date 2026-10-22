@@ -174,6 +174,31 @@ export type ConversationApi = {
     model: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationSetModelResult>
+  /**
+   * Carry the conversation on under another agent and model. The next message
+   * opens a new session of that agent, which is given the earlier turns as
+   * text; `read()` lists the switch in `handoffs`, where the transcript draws
+   * a line. Refused while a turn runs or waits, and for the agent the
+   * conversation already runs on (use `setModel`). `applied` is false when
+   * the switch was not made.
+   */
+  switchAgent: (
+    conversationId: string,
+    agent: string,
+    model: string,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMutationResult>
+  /**
+   * Start a new conversation from a copy of `sourceConversationId`'s turns, on
+   * its agent, model, approval preset and environment. The source must be
+   * the caller's own. The new one's first `read()` lists the copied turns in
+   * `handoffs`. IDs are generated when
+   * options are omitted, and a retry of one request opens the same fork.
+   */
+  fork: (
+    sourceConversationId: string,
+    options?: Pick<ConversationCreateOptions, "conversationId" | "requestId">,
+  ) => Promise<ConversationCreateResult>
   /** Read current provider lifecycle, output, queue, tools, and complete actionable permission choices. */
   read: (conversationId: string) => Promise<ConversationView>
   /**
@@ -812,6 +837,28 @@ export function createConversationApi(
         { conversationId: id, requestId, model },
         (value) => conversationModel(value, requestId, model),
         false,
+      )
+    },
+    switchAgent: (id, agent, model, options = {}) => {
+      validConversationId(id)
+      boundedText(model, "Model", 256)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      // The agent name is the gateway's to refuse, as for `create`.
+      return mutate(
+        ProductMethod.ConversationSwitchAgent,
+        { conversationId: id, requestId, agent, model },
+        (value) => conversationMutation(value, requestId),
+        false,
+      )
+    },
+    fork: (source, options = {}) => {
+      validConversationId(source)
+      const id = validConversationId(options.conversationId ?? newId())
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      return mutate(
+        ProductMethod.ConversationFork,
+        { conversationId: id, requestId, sourceConversationId: source },
+        (value) => conversationId(value, id),
       )
     },
     setApprovalMode: (id, mode, options = {}) => {

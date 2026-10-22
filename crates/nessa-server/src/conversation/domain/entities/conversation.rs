@@ -49,6 +49,12 @@ impl Conversation {
         self.approval_mode = approval_mode;
         self
     }
+    /// The agent and model a settled switch leaves the conversation on.
+    pub fn with_agent_selection(mut self, agent: AgentId, model: ConversationModelId) -> Self {
+        self.agent = Some(agent);
+        self.model = model;
+        self
+    }
     /// Bind an identity to the authenticated creator. Ownership never comes from prompt data.
     #[expect(
         clippy::too_many_arguments,

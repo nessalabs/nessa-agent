@@ -1,6 +1,7 @@
 //! Full semantic checkpoint mapping reuses storage field codecs and the shared validator.
 use super::{
     artifacts::WireArtifact,
+    handoffs::WireHandoff,
     leases::SavedLease,
     notes::WireNote,
     queue_order::QueueEvent,
@@ -59,6 +60,9 @@ struct SnapshotCodec<I, Q> {
     /// Absent while no note was left, as artifacts are.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     notes: Vec<WireNote>,
+    /// Absent while the conversation was never forked or switched.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    handoffs: Vec<WireHandoff>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -89,6 +93,7 @@ impl Serialize for SnapshotRef<'_> {
             lease: value.lease.as_ref().map(SavedLease::from),
             artifacts: value.artifacts.iter().map(WireArtifact::from).collect(),
             notes: value.notes.iter().map(WireNote::from).collect(),
+            handoffs: value.handoffs.iter().map(WireHandoff::from).collect(),
         }
         .serialize(serializer)
     }
@@ -194,6 +199,11 @@ impl Snapshot {
                 .into_iter()
                 .map(WireNote::decode)
                 .collect::<Result<_, _>>()?,
+            handoffs: value
+                .handoffs
+                .into_iter()
+                .map(WireHandoff::decode)
+                .collect::<Result<_, _>>()?,
         };
         super::validate(&snapshot)?;
         Ok(snapshot)
@@ -217,6 +227,7 @@ pub(crate) fn history_fixture(count: usize) -> SessionSnapshot {
             actor: ActionContext::new("user", "fixture", "send").unwrap(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -237,6 +248,7 @@ pub(crate) fn history_fixture(count: usize) -> SessionSnapshot {
         queue_history: Vec::new(),
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     }
 }

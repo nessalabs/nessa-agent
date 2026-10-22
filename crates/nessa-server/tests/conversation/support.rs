@@ -205,6 +205,12 @@ pub(crate) struct MemoryRepository {
     /// under its lock, before its resolve.
     pub(crate) pending_gate: Mutex<Option<(Arc<Notify>, Receiver<()>)>>,
     pub(crate) model_requests: Mutex<HashMap<(ConversationId, String), ConversationModelRequest>>,
+    pub(crate) agent_switches: Mutex<
+        HashMap<
+            (ConversationId, String),
+            crate::conversation::application::ConversationAgentSwitch,
+        >,
+    >,
     pub(crate) mode_requests: Mutex<HashMap<(ConversationId, String), ConversationModeRequest>>,
     pub(crate) lose_mode_intent_ack: AtomicBool,
     pub(crate) lose_mode_commit_ack: AtomicBool,
@@ -287,6 +293,115 @@ impl crate::conversation::application::ConversationModeAudit for RecordingModeAu
     }
 }
 impl ConversationRepository for MemoryRepository {
+    fn begin_agent_switch(
+        &self,
+        request: crate::conversation::application::ConversationAgentSwitch,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        use crate::conversation::application::ConversationAgentSwitchState as State;
+        let result = (|| {
+            let records = self.records.lock().unwrap();
+            let current = records
+                .get(&request.conversation_id)
+                .ok_or(ConversationError::NotFound)?;
+            if current.deletion().is_some() {
+                return Err(ConversationError::Deleted);
+            }
+            let mut switches = self.agent_switches.lock().unwrap();
+            let key = (request.conversation_id.clone(), request.request_id.clone());
+            if let Some(existing) = switches.get(&key) {
+                return if existing.same_request(&request) {
+                    Ok(existing.clone())
+                } else {
+                    Err(ConversationError::RequestConflict)
+                };
+            }
+            let pending = switches.iter().any(|((id, _), switch)| {
+                id == &request.conversation_id && switch.state == State::Pending
+            });
+            if pending
+                || request.state != State::Pending
+                || current.agent() != Some(request.prior_agent)
+                || current.model() != &request.prior_model
+                || request.prior_agent == request.requested_agent
+            {
+                return Err(ConversationError::RequestConflict);
+            }
+            switches.insert(key, request.clone());
+            Ok(request)
+        })();
+        Box::pin(async move { result })
+    }
+    fn pending_agent_switch(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        let pending = self
+            .agent_switches
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|((conversation, _), switch)| {
+                conversation == id
+                    && switch.state
+                        == crate::conversation::application::ConversationAgentSwitchState::Pending
+            })
+            .map(|(_, switch)| switch.clone());
+        Box::pin(async move { Ok(pending) })
+    }
+    fn agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        let saved = self
+            .agent_switches
+            .lock()
+            .unwrap()
+            .get(&(id.clone(), request_id.to_owned()))
+            .cloned();
+        Box::pin(async move { Ok(saved) })
+    }
+    fn finish_agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: crate::conversation::application::ConversationAgentSwitchState,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        use crate::conversation::application::ConversationAgentSwitchState as State;
+        let result = (|| {
+            if state == State::Pending {
+                return Err(ConversationError::InvalidInput);
+            }
+            let mut records = self.records.lock().unwrap();
+            let mut switches = self.agent_switches.lock().unwrap();
+            let key = (id.clone(), request_id.to_owned());
+            let request = switches
+                .get(&key)
+                .ok_or(ConversationError::NotFound)?
+                .clone();
+            if request.state != State::Pending {
+                return if request.state == state {
+                    Ok(request)
+                } else {
+                    Err(ConversationError::RequestConflict)
+                };
+            }
+            if state == State::Applied {
+                let current = records.get(id).ok_or(ConversationError::NotFound)?;
+                let switched = current
+                    .clone()
+                    .with_agent_selection(request.requested_agent, request.requested_model.clone());
+                records.insert(id.clone(), switched);
+            }
+            let settled =
+                crate::conversation::application::ConversationAgentSwitch { state, ..request };
+            switches.insert(key, settled.clone());
+            Ok(settled)
+        })();
+        Box::pin(async move { result })
+    }
     fn begin_model_change(
         &self,
         request: ConversationModelRequest,
@@ -1680,6 +1795,8 @@ pub(crate) struct Provider {
     /// host ([`AgentProvider::on_host`]), that host's workspace, as a real
     /// binding's fingerprint takes the workspace it works in.
     context: String,
+    /// The provider name its identity carries, as a binding names itself.
+    name: String,
 }
 impl Provider {
     pub(crate) fn new(factory: Arc<ProviderFactory>) -> Self {
@@ -1690,7 +1807,13 @@ impl Provider {
             approval_mode: ApprovalMode::Ask,
             model: "test".into(),
             context: "test".into(),
+            name: "gateway-test".into(),
         }
+    }
+    /// The same provider under another binding's name: another agent.
+    pub(crate) fn with_name(mut self, name: &str) -> Self {
+        self.name = name.into();
+        self
     }
     pub(crate) fn with_model(mut self, model: &str) -> Self {
         self.model = model.into();
@@ -1725,7 +1848,7 @@ impl AgentProvider for Provider {
         Some(self.approval_mode)
     }
     fn identity(&self) -> ProviderIdentity {
-        ProviderIdentity::new("gateway-test", &self.model, &self.context).unwrap()
+        ProviderIdentity::new(&self.name, &self.model, &self.context).unwrap()
     }
     fn on_host(
         &self,

@@ -203,6 +203,7 @@ const view: ConversationView = {
   notes: [],
   unreadable: [],
   unreadableTruncated: false,
+  handoffs: [],
   approvalMode: "ask",
   model: "claude-sonnet-5",
   approvalModes: [

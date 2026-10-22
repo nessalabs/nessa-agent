@@ -29,6 +29,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("large"), knobs.large)
   assert.equal(count("park"), knobs.parks)
   assert.equal(count("rename"), knobs.renames)
+  assert.equal(count("handoff"), knobs.handoffs)
   assert.equal(count("delete"), knobs.deletes)
   assert.equal(count("fresh"), knobs.fresh)
   assert.equal(count("window"), knobs.windows)
@@ -83,7 +84,17 @@ test("numbers come from flags, then NESSA_STRESS_*, then defaults, and a bad one
   assert.match(describe(plan(knobsFrom({}, {}))), /^1\. /)
 })
 
-test("positive model steps retain default and raised counts, run last, and enter Ask", () => {
+test("handoffs run last of all, after every upgrade, whatever the seed", () => {
+  for (let seed = 0; seed < 50; seed += 1) {
+    const steps = plan(knobsFrom({ seed: String(seed), handoffs: "2" }, {}))
+    const first = steps.findIndex((step) => step.kind === "handoff")
+    assert.equal(steps.filter((step) => step.kind === "handoff").length, 2)
+    assert.ok(steps.slice(first).every((step) => step.kind === "handoff"))
+    assert.ok(first > steps.findLastIndex((step) => step.kind === "upgrade"))
+  }
+})
+
+test("positive model steps retain default and raised counts, run last but for handoffs, and enter Ask", () => {
   for (let seed = 0; seed < 50; seed += 1) {
     for (const count of [1, 6]) {
       const steps = plan(
@@ -91,7 +102,9 @@ test("positive model steps retain default and raised counts, run last, and enter
       )
       const first = steps.findIndex((step) => step.kind === "model")
       assert.equal(steps.filter((step) => step.kind === "model").length, count)
-      assert.ok(steps.slice(first).every((step) => step.kind === "model"))
+      assert.ok(
+        steps.slice(first).every((step) => ["model", "handoff"].includes(step.kind)),
+      )
       let mode = "ask"
       for (const step of steps) {
         if (step.kind === "switch") {
@@ -124,6 +137,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         fresh: "0",
         renames: "0",
         deletes: "0",
+        handoffs: "0",
       },
       {},
     ),

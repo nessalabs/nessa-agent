@@ -24,9 +24,9 @@ use nessa_protocol::product::generated::{
     ConversationArchiveParams, ConversationCancelParams, ConversationCloseParams,
     ConversationCommandOperation, ConversationCommandOutcome, ConversationCommandReceipt,
     ConversationCommandStage, ConversationCreateParams, ConversationCreateResult,
-    ConversationDeleteParams, ConversationListParams, ConversationListResult,
-    ConversationMutationResult, ConversationObserveCursor, ConversationObserveParams,
-    ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
+    ConversationDeleteParams, ConversationForkParams, ConversationListParams,
+    ConversationListResult, ConversationMutationResult, ConversationObserveCursor,
+    ConversationObserveParams, ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
     ConversationPermissionReviewParams, ConversationPermissionReviewResult,
     ConversationPermissionRulesParams, ConversationPermissionRulesResult,
     ConversationPermissionSelectionState, ConversationQuestionReviewParams,
@@ -36,8 +36,8 @@ use nessa_protocol::product::generated::{
     ConversationRevokePermissionRuleResult, ConversationSendParams,
     ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
     ConversationSetModelParams, ConversationSetModelResult, ConversationStopParams,
-    ConversationSummary, ConversationView as WireConversationView, ModelChangeEffect,
-    PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
+    ConversationSummary, ConversationSwitchAgentParams, ConversationView as WireConversationView,
+    ModelChangeEffect, PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -237,6 +237,53 @@ async fn answer(
                             }
                             ConversationModelChangeEffect::NextTurn => ModelChangeEffect::NextTurn,
                         },
+                    },
+                ))
+            }
+            "conversation.switchAgent" => {
+                let params = target_params!(ConversationSwitchAgentParams);
+                let agent = AgentId::parse(&params.agent).ok_or(ConversationError::InvalidInput)?;
+                let applied = service
+                    .switch_agent(
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                        agent,
+                        ConversationModelId::new(params.model)
+                            .map_err(|_| ConversationError::InvalidInput)?,
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationMutationResult {
+                        request_id: params.request_id,
+                        applied,
+                    },
+                ))
+            }
+            "conversation.fork" => {
+                let params = target_params!(ConversationForkParams);
+                // The copy reads the source, so its read admission comes
+                // first; the service then admits only the source's owner.
+                let source = conversation_id(&params.source_conversation_id)?;
+                if let Err(code) =
+                    super::read_access::admit_conversation(state, session, &source).await
+                {
+                    return Ok(failure(&frame.id, code));
+                }
+                let store = service.commands().ok_or(ConversationError::Unavailable)?;
+                service
+                    .fork(
+                        store,
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                        source,
+                    )
+                    .await
+                    .map_err(creation_failure)?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationCreateResult {
+                        conversation_id: params.conversation_id,
                     },
                 ))
             }

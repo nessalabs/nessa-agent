@@ -1,6 +1,7 @@
 use super::{
-    ArtifactBytes, CatalogueHead, ConversationError, ConversationModelApplication,
-    ConversationModelRequest, ConversationModelRequestState, Reader,
+    ArtifactBytes, CatalogueHead, ConversationAgentSwitch, ConversationAgentSwitchState,
+    ConversationError, ConversationModelApplication, ConversationModelRequest,
+    ConversationModelRequestState, Reader,
 };
 use crate::conversation::domain::{
     Capabilities, Conversation, ConversationDeletion, ProviderSessionErasure,
@@ -255,6 +256,32 @@ pub trait ConversationRepository: Send + Sync {
         request_id: &str,
         state: ConversationModelRequestState,
     ) -> ConversationFuture<'_, ConversationModelRequest>;
+    /// Persist an admitted switch to another agent before the agent it runs
+    /// on is stopped. The same request is returned as it was saved; another
+    /// is refused while one, or a model or approval-mode change, is pending.
+    fn begin_agent_switch(
+        &self,
+        request: ConversationAgentSwitch,
+    ) -> ConversationFuture<'_, ConversationAgentSwitch>;
+    /// The one unsettled switch, which the next opening runs.
+    fn pending_agent_switch(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationAgentSwitch>>;
+    fn agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationAgentSwitch>>;
+    /// Settle a pending switch as the history decided it, committing the
+    /// requested agent and model in the same transaction when it was
+    /// applied. A settled one is returned as it stands when `state` agrees.
+    fn finish_agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationAgentSwitchState,
+    ) -> ConversationFuture<'_, ConversationAgentSwitch>;
     /// Whether a committed choice was made without an open provider session.
     /// A cold owner must verify its attachment before admitting a turn.
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool>;

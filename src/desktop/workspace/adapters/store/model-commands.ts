@@ -52,7 +52,6 @@ export function changeModel({
     if (
       !session ||
       !knownToSource(session) ||
-      session.model.provider !== target.provider ||
       modelRequesting(state, sessionId) ||
       entry(state.accessChoices, sessionId)?.state === "changing"
     )

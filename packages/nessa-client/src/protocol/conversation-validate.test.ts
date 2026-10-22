@@ -57,6 +57,7 @@ function view() {
     notes: [],
     unreadable: [],
     unreadableTruncated: false,
+    handoffs: [],
     messages: [
       {
         executionId: "queued",
@@ -196,6 +197,62 @@ describe("conversation view agreement", () => {
     expect(() =>
       conversationView({ ...view(), transcriptState: "complete_empty" }, "conversation"),
     ).toThrow(/Empty conversation/)
+  })
+
+  it("keeps each handoff a view lists, in the shape its kind has", () => {
+    const sample = view()
+    const switched = {
+      handoffId: "h-switch",
+      kind: "switch",
+      atMs: 10,
+      afterExecutionId: "run-1",
+      from: { agent: "claude", model: "opus" },
+      to: { agent: "codex", model: "gpt" },
+    }
+    const forked = {
+      handoffId: "h-fork",
+      kind: "fork",
+      atMs: 5,
+      turns: [{ said: "Plan a trip", reply: "Lisbon" }, {}],
+      omittedTurns: 3,
+    }
+    expect(
+      conversationView({ ...sample, handoffs: [forked, switched] }, "conversation")
+        .handoffs,
+    ).toEqual([forked, switched])
+    // A switch from a provider this gateway has no agent for names only its model.
+    expect(() =>
+      conversationView(
+        { ...sample, handoffs: [{ ...switched, from: { model: "old" } }] },
+        "conversation",
+      ),
+    ).not.toThrow()
+    // The schema's floor: a count of none, though the gateway leaves it out.
+    expect(() =>
+      conversationView(
+        { ...sample, handoffs: [{ ...forked, omittedTurns: 0 }] },
+        "conversation",
+      ),
+    ).not.toThrow()
+    for (const wrong of [
+      { ...switched, to: undefined },
+      { ...switched, turns: [{ said: "x" }] },
+      { ...forked, from: { model: "m" } },
+      { ...forked, kind: "merge" },
+      { ...forked, omittedTurns: -1 },
+      { ...forked, omittedTurns: 1.5 },
+      { ...forked, turns: [{ said: "" }] },
+      { ...forked, extra: true },
+    ])
+      expect(() =>
+        conversationView({ ...sample, handoffs: [wrong] }, "conversation"),
+      ).toThrow()
+    expect(() =>
+      conversationView({ ...sample, handoffs: [forked, forked] }, "conversation"),
+    ).toThrow(/Repeated conversation handoff id/)
+    expect(() =>
+      conversationView({ ...sample, handoffs: undefined }, "conversation"),
+    ).toThrow(/handoffs/)
   })
 
   it("keeps a line for a record it could not read, including when the chat is otherwise empty", () => {

@@ -25,7 +25,8 @@ CREATE TABLE catalogue_owners (
     PRIMARY KEY (organization, owner)
 ) STRICT;
 
--- Who owns a conversation, and which agent it runs on. Written once.
+-- Who owns a conversation, and which agent it runs on. Written once; a
+-- settled model change or agent switch changes its agent and model.
 CREATE TABLE conversations (
     id TEXT PRIMARY KEY NOT NULL,
     organization TEXT NOT NULL,
@@ -89,6 +90,25 @@ CREATE TABLE model_requests (
     CHECK (state = 'pending' OR application IS NOT NULL)
 ) STRICT;
 CREATE UNIQUE INDEX one_pending_model_request ON model_requests(conversation_id) WHERE state='pending';
+
+-- One admitted switch to another agent. The pending row names the agent the
+-- next opening runs; the SDK history's handoff record decides whether it
+-- happened, and settling commits the agent and model with the row's state.
+CREATE TABLE agent_switches (
+    conversation_id TEXT NOT NULL REFERENCES conversations (id),
+    request_id TEXT NOT NULL,
+    initiator TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    prior_agent TEXT NOT NULL,
+    prior_model TEXT NOT NULL,
+    requested_agent TEXT NOT NULL,
+    requested_model TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending','applied','not_applied')),
+    requested_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (conversation_id, request_id),
+    CHECK (prior_agent <> requested_agent)
+) STRICT;
+CREATE UNIQUE INDEX one_pending_agent_switch ON agent_switches (conversation_id) WHERE state = 'pending';
 
 -- A deleted conversation's tombstone. Written at the fence and carried
 -- further until `erased`; never removed.
@@ -202,4 +222,4 @@ CREATE TABLE unfinished_turns (
     retry_at_ms INTEGER CHECK (retry_at_ms >= 0)
 ) STRICT, WITHOUT ROWID;
 
-PRAGMA user_version = 8;
+PRAGMA user_version = 9;

@@ -107,6 +107,7 @@ function withLease(lease: ConversationLease | undefined): Conversation {
       notes: [],
       unreadable: [],
       unreadableTruncated: false,
+      handoffs: [],
       capabilities: {
         queue: true,
         steer: true,

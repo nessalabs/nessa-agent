@@ -29,6 +29,7 @@ fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
         queue_history: Vec::new(),
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     }
 }
@@ -64,6 +65,7 @@ fn invocation(
         actor: ActionContext::new("person", "panel", "turn-1").unwrap(),
         initiation: Initiation::owner(),
         notes: Vec::new(),
+        handoff: None,
         acknowledgement: SubmissionAcknowledgement::Acknowledged,
         events: Vec::new(),
         scheduling: vec![InvocationSchedulingEvent {
