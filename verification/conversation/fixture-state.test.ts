@@ -51,9 +51,11 @@ describe("committed browser fixture inputs", () => {
   })
 
   it("refuses the original missing permission key and inline question shapes", () => {
-    const { review: _review, ...withoutKey } = committedReview
+    const withoutKey: Record<string, unknown> = { ...committedReview }
+    delete withoutKey.review
     expect(() => conversationPermission(withoutKey)).toThrow()
-    const { question: _question, ...inline } = committedQuestion
+    const inline: Record<string, unknown> = { ...committedQuestion }
+    delete inline.question
     expect(() => conversationQuestion(inline)).toThrow()
     const published = { ...publishedQuestionView(false), questions: [inline] }
     expect(() => conversationView(published, published.conversationId)).toThrow()
