@@ -322,6 +322,16 @@ guarantee (#935).
 | AC8 | The paired environments' change source closes | Ended `source_closed` | `the_environments_source_closing_ends_the_catalog_subscription` |
 | AC9 | A native hooks command | A frame with the catalog as `agents.list` answers it then, carrying the choice in effect | `the_agent_catalog_is_sent_again_when_the_hooks_choice_changes` |
 
+The L13 fixtures emit test progress directly to stderr, outside libtest's
+per-test output capture: seed, elapsed milliseconds, static phase, and a row,
+step, cycle, or page ordinal. Setup checkpoints count synthetic rows without
+printing row identities, messages, cursors, or credentials. A returned-seed
+checkpoint follows return from that seed future; neither it nor a test-body
+checkpoint proves background-worker or Tokio-runtime shutdown. These
+checkpoints distinguish an incomplete run from an assertion failure without
+changing its deadlines or assertions.
+
+
 Desktop rows (`src/desktop/workspace/adapters/gateway/gateway-source.test.ts`;
 the test names begin with the row id). The adapter subscribes only: it sends
 no `conversation.read` or `conversation.list`, and the `GatewayClient` type it
