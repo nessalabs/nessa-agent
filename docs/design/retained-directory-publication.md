@@ -77,6 +77,15 @@ whole-tree content and identity validation. The regression requires the original
 N03 operation to remain denied after sealing; mutation through a pre-acquired
 ADD handle must also fail. A granted handle alone is not proof of mutation rights.
 
+Native `c76d` [39703824781](https://github.com/nessalabs/nessa-agent/actions/runs/39703824781)
+also failed qualification: actual leaf deletion and post-seal subdirectory
+creation succeeded, and the Win32 relative rename returned OS 87. These failed
+receipts remain failed. The relative rename candidate now uses
+`NtSetInformationFile(FileRenameInformation)` with a retained target handle and
+a buffer at least the native structure size. Bounded read-only ACL/token
+diagnostics accompany the unchanged mutation assertions; no SYSTEM grant or
+test permission is changed on a guess. Backup activation stays unavailable.
+
 | Order | Operation | Required result / failure |
 | --- | --- | --- |
 | N01 | Create one absent child with `NtCreateFile(FILE_CREATE)` and protected read/search plus ADD_FILE/ADD_SUBDIRECTORY user DACL, without DELETE_CHILD | Return initial ADD/DELETE/WRITE_DAC authority; collision preserves the existing object |
@@ -86,6 +95,9 @@ ADD handle must also fail. A granted handle alone is not proof of mutation right
 | N05 | Delete through the exact retained object handle | Remove that object only; a replacement at its old name is not cleanup authority |
 | N06 | Successful root promotion, then release temporary directory and file restrictions through their initial WRITE_DAC handles | Restore ordinary private owner ACLs only after live rename; failure remains an explicit error |
 | N07 | Any create/rename/delete fails | Return the OS error; no path fallback, automatic ACL relaxation, or success claim |
+| N08 | Fetch acquires an existing private sessions directory before creating any file | Acquire a no-delete-sharing handle; a pre-existing DELETE opener refuses acquisition. Snapshot its exact protected DACL through that handle before changing it |
+| N09 | Existing directory has a pre-acquired DELETE_CHILD handle; fetch changes its current DACL to append-only before creating a read-only-ACL leaf | Actual deletion/relocation of the new leaf through that pre-acquired handle must fail. A granted handle without a successful mutation is not evidence of a bypass |
+| N10 | Fetch seals current directory, validates output/sidecar identities and content, completes availability, then releases protection | Restore the exact captured DACL on its retained directory object. Verify ACL bytes; no ordinary private-default ACL substitutes for the original. On failure report retained protection |
 
 The threat boundary excludes an administrator, process-handle duplication and
 an owner deliberately changing the DACL, as Unix directory mode protection also

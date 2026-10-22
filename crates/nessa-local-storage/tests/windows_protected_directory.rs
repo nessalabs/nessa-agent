@@ -1,5 +1,8 @@
 #![cfg(windows)]
 
+#[path = "support/windows_permissions.rs"]
+mod permissions;
+
 use nessa_local_storage::{
     create_protected_directory_at, create_protected_file_at, open_directory_at, open_file_at,
     release_directory_writes, release_file_writes, remove_handle, rename_handle_at,
@@ -50,6 +53,14 @@ fn writer(path: &Path, access: u32) -> std::io::Result<File> {
 }
 
 fn assert_leaf_mutation_refused(path: &Path) {
+    if let Ok(file) = writer(path, READ_CONTROL | FILE_READ_ATTRIBUTES) {
+        permissions::diagnose("leaf-before-mutation", &file);
+    }
+    if let Some(parent) = path.parent() {
+        if let Ok(directory) = writer(parent, READ_CONTROL | FILE_READ_ATTRIBUTES) {
+            permissions::diagnose("parent-before-leaf-mutation", &directory);
+        }
+    }
     match OpenOptions::new().write(true).open(path) {
         Err(error) => refused_namespace_writer(&error),
         Ok(mut file) => {
@@ -92,6 +103,7 @@ fn sealed_directory_refuses_actual_additions_after_initial_handle_closes() {
     let authority = parent(root.path());
     let directory = create_protected_directory_at(&authority, OsStr::new("sealed")).unwrap();
     seal_directory_writes(&directory).unwrap();
+    permissions::diagnose("sealed-directory-before-close", &directory);
     drop(directory);
     let error = fs::write(root.path().join("sealed/injected"), b"untrusted")
         .expect_err("sealed directory must refuse actual file creation");

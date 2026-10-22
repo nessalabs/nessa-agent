@@ -18,7 +18,8 @@ use std::{
 use windows_sys::Wdk::{
     Foundation::OBJECT_ATTRIBUTES,
     Storage::FileSystem::{
-        NtCreateFile, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT,
+        FileRenameInformation, NtCreateFile, NtSetInformationFile, FILE_CREATE,
+        FILE_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION,
         FILE_SYNCHRONOUS_IO_NONALERT,
     },
 };
@@ -49,8 +50,7 @@ pub fn create_protected_subdirectory_at(parent: &File, name: &OsStr) -> io::Resu
 }
 
 fn create_directory_at(parent: &File, name: &OsStr, sharing: u32) -> io::Result<File> {
-    let access = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY;
-    let descriptor = User::current()?.descriptor_with_access(true, &format!("0x{access:08x}"))?;
+    let descriptor = append_descriptor()?;
     let file = relative(
         parent,
         name,
@@ -70,6 +70,126 @@ fn create_directory_at(parent: &File, name: &OsStr, sharing: u32) -> io::Result<
     )?;
     require_directory(&file)?;
     Ok(file)
+}
+
+fn append_descriptor() -> io::Result<LocalAllocation> {
+    let access = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY;
+    User::current()?.descriptor_with_access(true, &format!("0x{access:08x}"))
+}
+
+/// Acquire an existing private directory without delete sharing before mutation.
+/// A DELETE handle acquired earlier conflicts with this acquisition. The caller
+/// must snapshot its original DACL before installing temporary append permissions.
+pub fn retain_directory_at(parent: &File, name: &OsStr) -> io::Result<File> {
+    let file = relative(
+        parent,
+        name,
+        FILE_LIST_DIRECTORY
+            | FILE_TRAVERSE
+            | FILE_ADD_FILE
+            | FILE_ADD_SUBDIRECTORY
+            | FILE_READ_ATTRIBUTES
+            | READ_CONTROL
+            | WRITE_DAC
+            | SYNCHRONIZE,
+        FILE_OPEN,
+        FILE_OPEN_REPARSE_POINT,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        None,
+    )?;
+    require_directory(&file)?;
+    Ok(file)
+}
+
+/// Install the same append-only permissions used by new copy directories.
+/// Snapshot an existing directory's exact DACL first; restore it after the
+/// caller's publication protocol finishes, including failure cleanup.
+pub fn append_directory_writes(file: &File) -> io::Result<()> {
+    set_descriptor(file, append_descriptor()?)
+}
+
+/// Exact protected DACL of one retained directory, for temporary fetch guards.
+/// The private storage contract requires a protected current-user-owned DACL.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectoryAcl {
+    words: Vec<usize>,
+    length: usize,
+    volume: u32,
+    index: u64,
+}
+
+impl DirectoryAcl {
+    /// Capture the ACL bytes and bind restoration to this directory's identity.
+    pub fn capture(file: &File) -> io::Result<Self> {
+        require_directory(file)?;
+        let identity = information(file)?;
+        let mut acl = null_mut();
+        let mut descriptor = null_mut();
+        let result = unsafe {
+            GetSecurityInfo(
+                file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                &mut acl,
+                null_mut(),
+                &mut descriptor,
+            )
+        };
+        if result != 0 {
+            return Err(io::Error::from_raw_os_error(result as i32));
+        }
+        let _descriptor = LocalAllocation(descriptor);
+        if acl.is_null() {
+            return Err(unsafe_file());
+        }
+        let length = unsafe { (*acl).AclSize as usize };
+        if length < size_of::<ACL>() {
+            return Err(unsafe_file());
+        }
+        let mut words = vec![0usize; length.div_ceil(size_of::<usize>())];
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                acl.cast::<u8>(),
+                words.as_mut_ptr().cast::<u8>(),
+                length,
+            );
+        }
+        Ok(Self {
+            words,
+            length,
+            volume: identity.dwVolumeSerialNumber,
+            index: (u64::from(identity.nFileIndexHigh) << 32) | u64::from(identity.nFileIndexLow),
+        })
+    }
+
+    /// Restore only this directory's original protected ACL, then compare bytes.
+    pub fn restore(&self, file: &File) -> io::Result<()> {
+        let identity = information(file)?;
+        let index = (u64::from(identity.nFileIndexHigh) << 32) | u64::from(identity.nFileIndexLow);
+        if identity.dwVolumeSerialNumber != self.volume || index != self.index {
+            return Err(unsafe_file());
+        }
+        let result = unsafe {
+            SetSecurityInfo(
+                file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                self.words.as_ptr().cast::<ACL>().cast_mut(),
+                null_mut(),
+            )
+        };
+        if result != 0 {
+            return Err(io::Error::from_raw_os_error(result as i32));
+        }
+        if Self::capture(file)? != *self {
+            return Err(io::Error::other("original directory ACL was not restored"));
+        }
+        Ok(())
+    }
 }
 
 /// Exclusively create a private file with temporary read-only user permissions.
@@ -206,11 +326,12 @@ fn relative(
 pub fn rename_handle_at(source: &File, destination: &File, name: &OsStr) -> io::Result<()> {
     let name = name_units(name)?;
     let name_bytes = name.len().checked_mul(2).ok_or_else(unsafe_file)?;
-    let bytes = offset_of!(FILE_RENAME_INFO, FileName)
+    let bytes = offset_of!(FILE_RENAME_INFORMATION, FileName)
         .checked_add(name_bytes)
-        .ok_or_else(unsafe_file)?;
+        .ok_or_else(unsafe_file)?
+        .max(size_of::<FILE_RENAME_INFORMATION>());
     let mut buffer = vec![0usize; bytes.div_ceil(size_of::<usize>())];
-    let rename = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    let rename = buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
     unsafe {
         (*rename).Anonymous.ReplaceIfExists = false;
         (*rename).RootDirectory = destination.as_raw_handle();
@@ -220,12 +341,24 @@ pub fn rename_handle_at(source: &File, destination: &File, name: &OsStr) -> io::
             std::ptr::addr_of_mut!((*rename).FileName).cast(),
             name.len(),
         );
-        check(SetFileInformationByHandle(
+        let mut status = IO_STATUS_BLOCK {
+            Anonymous: IO_STATUS_BLOCK_0 { Status: 0 },
+            Information: 0,
+        };
+        let result = NtSetInformationFile(
             source.as_raw_handle(),
-            FileRenameInfo,
+            &mut status,
             rename.cast(),
             u32::try_from(bytes).map_err(|_| unsafe_file())?,
-        ))
+            FileRenameInformation,
+        );
+        if result < 0 {
+            Err(io::Error::from_raw_os_error(
+                RtlNtStatusToDosError(result) as i32
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -300,6 +433,154 @@ fn set_descriptor(file: &File, descriptor: LocalAllocation) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::os::windows::fs::OpenOptionsExt;
+
+    fn full_parent(path: &std::path::Path) -> File {
+        std::fs::OpenOptions::new()
+            .access_mode(FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .unwrap()
+    }
+
+    fn delete_child(parent: &File, name: &OsStr) -> io::Result<File> {
+        relative(
+            parent,
+            name,
+            DELETE | SYNCHRONIZE,
+            FILE_OPEN,
+            FILE_OPEN_REPARSE_POINT,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+        )
+    }
+
+    #[test]
+    fn an_existing_delete_opener_refuses_sessions_directory_acquisition_without_acl_changes() {
+        let root = tempfile::tempdir().unwrap();
+        crate::create_directory_exclusive(&root.path().join("sessions")).unwrap();
+        let ancestor = full_parent(root.path());
+        let reader = open_directory_at(&ancestor, OsStr::new("sessions")).unwrap();
+        let original = DirectoryAcl::capture(&reader).unwrap();
+        let competing = delete_child(&ancestor, OsStr::new("sessions")).unwrap();
+        let error = retain_directory_at(&ancestor, OsStr::new("sessions")).expect_err(
+            "N08: existing DELETE authority must refuse acquisition before ACL mutation",
+        );
+        assert_eq!(error.raw_os_error(), Some(ERROR_SHARING_VIOLATION as i32));
+        assert_eq!(DirectoryAcl::capture(&reader).unwrap(), original);
+        drop(competing);
+    }
+
+    #[test]
+    fn existing_directory_preacquired_delete_child_cannot_delete_a_new_readonly_leaf_after_append()
+    {
+        let root = tempfile::tempdir().unwrap();
+        crate::create_directory_exclusive(&root.path().join("sessions")).unwrap();
+        let ancestor = full_parent(root.path());
+        let preacquired = relative(
+            &ancestor,
+            OsStr::new("sessions"),
+            FILE_DELETE_CHILD | FILE_ADD_FILE | SYNCHRONIZE,
+            FILE_OPEN,
+            FILE_OPEN_REPARSE_POINT,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+        )
+        .unwrap();
+        let directory = retain_directory_at(&ancestor, OsStr::new("sessions")).unwrap();
+        let original = DirectoryAcl::capture(&directory).unwrap();
+        let before = create_protected_file_at(&directory, OsStr::new("before")).unwrap();
+        let delegated = delete_child(&preacquired, OsStr::new("before"))
+            .expect("positive control: original full parent DACL delegates actual leaf deletion");
+        remove_handle(&delegated)
+            .expect("positive control: DELETE_CHILD actually removes leaf before append");
+        drop((delegated, before));
+
+        append_directory_writes(&directory).unwrap();
+        let leaf = create_protected_file_at(&directory, OsStr::new("payload")).unwrap();
+        match delete_child(&preacquired, OsStr::new("payload")) {
+            Err(error) => assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32)),
+            Ok(competing) => {
+                let error = remove_handle(&competing).expect_err(
+                    "N09: retained DELETE_CHILD cannot delete a new FR leaf after append",
+                );
+                assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32));
+                let error = rename_handle_at(&competing, &ancestor, OsStr::new("stolen"))
+                    .expect_err(
+                        "N09: retained DELETE_CHILD cannot relocate a new FR leaf after append",
+                    );
+                assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32));
+            }
+        }
+        assert!(root.path().join("sessions/payload").is_file());
+        assert!(!root.path().join("stolen").exists());
+        seal_directory_writes(&directory).unwrap();
+        release_file_writes(&leaf).unwrap();
+        original.restore(&directory).unwrap();
+        assert_eq!(DirectoryAcl::capture(&directory).unwrap(), original);
+        remove_handle(&leaf).unwrap();
+        drop((leaf, directory, preacquired));
+        std::fs::write(
+            root.path().join("sessions/ordinary"),
+            b"after exact ACL restoration",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn directory_acl_restores_nondefault_append_permissions_instead_of_default_full_access() {
+        let root = tempfile::tempdir().unwrap();
+        let ancestor = full_parent(root.path());
+        let directory = create_protected_directory_at(&ancestor, OsStr::new("append")).unwrap();
+        let original = DirectoryAcl::capture(&directory).unwrap();
+        seal_directory_writes(&directory).unwrap();
+        assert_ne!(DirectoryAcl::capture(&directory).unwrap(), original);
+        original
+            .restore(&directory)
+            .expect("N10: restore exact append ACL, not ordinary full access");
+        assert_eq!(DirectoryAcl::capture(&directory).unwrap(), original);
+        let leaf = create_protected_file_at(&directory, OsStr::new("payload"))
+            .expect("restored original append permission admits file creation");
+        match delete_child(&directory, OsStr::new("payload")) {
+            Err(error) => assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32)),
+            Ok(competing) => {
+                let error = remove_handle(&competing)
+                    .expect_err("restoring original append ACL must not introduce DELETE_CHILD");
+                assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32));
+            }
+        }
+        assert!(root.path().join("append/payload").is_file());
+        remove_handle(&leaf).unwrap();
+        drop(leaf);
+        remove_handle(&directory).unwrap();
+    }
+
+    #[test]
+    fn directory_acl_refuses_another_directory_before_changing_its_acl() {
+        let root = tempfile::tempdir().unwrap();
+        let ancestor = full_parent(root.path());
+        let append = create_protected_directory_at(&ancestor, OsStr::new("append")).unwrap();
+        let original = DirectoryAcl::capture(&append).unwrap();
+        crate::create_directory_exclusive(&root.path().join("full")).unwrap();
+        let other = retain_directory_at(&ancestor, OsStr::new("full")).unwrap();
+        let before = DirectoryAcl::capture(&other).unwrap();
+        assert!(
+            original.restore(&other).is_err(),
+            "N10: ACL belongs to its original directory identity"
+        );
+        assert_eq!(
+            DirectoryAcl::capture(&other).unwrap(),
+            before,
+            "wrong-directory refusal must precede any ACL mutation"
+        );
+        drop(other);
+        std::fs::write(
+            root.path().join("full/ordinary"),
+            b"unchanged full permissions",
+        )
+        .unwrap();
+        remove_handle(&append).unwrap();
+    }
 
     #[test]
     fn an_ancestor_delete_child_handle_cannot_acquire_delete_on_the_held_root() {
