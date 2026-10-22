@@ -853,10 +853,13 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   `approval-request.tsx`; the `sendMessage` routing in `dependencies.ts`.)
   The real gateway's message path in a browser is #550.
   _Check:_ `app-review.mjs --only message,message-card,message-overview,message-label,message-bidi --shots <dir>`.
-- [ ] **An established conversation changes model through its existing picker,
-  within the same provider.** The source-confirmed model remains shown while
-  the correlated control and authoritative source recovery settle;
-  refusal/recovery is explicit. An unsent draft,
+- [ ] **An established conversation stages its next model through its existing
+  picker, within the same provider.** The picker shows the staged choice
+  immediately; the source keeps running its confirmed model until the next
+  Send or Retry applies the choice. Picking the source's current model again
+  before sending takes the choice back. A message goes only after authoritative
+  source recovery confirms the target. A definite refusal drops the choice;
+  uncertainty keeps it for the next send to check again. An unsent draft,
   original review and Stop survive the control. No automatic native retry.
   _Check:_ model command/adapter tests; `conversation-stress.mjs`'s actual-window
   model step (default `--modelSwitches 1`, raised `--modelSwitches 6`), both
