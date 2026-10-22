@@ -156,8 +156,8 @@ export interface WorkspaceState {
    * session, that its conversation does not run yet: only a choice until the
    * next message is sent, which asks the source for it first
    * (`model-commands.ts`). Picking the session's own model again takes it
-   * back; the send that makes it, or a summary saying the session runs it,
-   * settles it (`updates.ts`).
+   * back; only the send that makes it settles it, so a summary from another
+   * client passing through the same model does not.
    */
   readonly stagedModels: Readonly<Record<string, ModelRef>>
   /**

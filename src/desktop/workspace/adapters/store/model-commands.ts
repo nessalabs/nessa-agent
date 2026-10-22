@@ -109,6 +109,12 @@ export function applyStagedModel(
       (!entry(state.stagedModels, sessionId) && !modelUnsettled(state, sessionId))
     )
       return { applied: true, model: target }
+    // Picked what the chat already runs (another client moved it there
+    // meanwhile), with nothing unsettled: made, and nothing to ask.
+    if (sameModel(target, session.model) && !modelUnsettled(state, sessionId)) {
+      dispatch(workspaceActions.stagedModelSettled({ sessionId, model: target }))
+      return { applied: true, model: target }
+    }
     if (
       modelRequesting(state, sessionId) ||
       entry(state.accessChoices, sessionId)?.state === "changing"

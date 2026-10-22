@@ -10,7 +10,6 @@ import {
   byRecency,
   defaultModel,
   consistentIndex,
-  sameModel,
   type WorkspaceIndex,
   type SessionSummary,
 } from "../../model/workspace-index"
@@ -86,19 +85,9 @@ function summaryHeard(state: WorkspaceState, session: SessionSummary): Workspace
       removed: forgotten(state.removed, session.id),
       drafts: without(state.drafts, session.id),
       chosenModels: without(state.chosenModels, session.id),
-      // A staged pick the session now runs is made; any other still waits for a send.
-      stagedModels: settledStage(state.stagedModels, session),
     },
     session,
   )
-}
-
-function settledStage(
-  staged: WorkspaceState["stagedModels"],
-  session: SessionSummary,
-): WorkspaceState["stagedModels"] {
-  const pick = entry(staged, session.id)
-  return pick && sameModel(pick, session.model) ? without(staged, session.id) : staged
 }
 
 /**

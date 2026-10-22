@@ -42,7 +42,7 @@ async function ready() {
   return { source, store }
 }
 /** A control the source makes, saying the chat runs it before it answers. */
-let revision = 10
+let revision = 1000
 const reconciles =
   (source: ReturnType<typeof fakeSource>) =>
   async (sessionId: string, model: ModelRef, id: string): Promise<ModelReceipt> => {
@@ -108,7 +108,7 @@ describe("model choices", () => {
       model: astra,
       text: "switch now",
     })
-    // The summary saying the chat runs it settles the pick.
+    // The send that made it settles the pick.
     await settle()
     expect(store.getState().workspace.stagedModels.a).toBeUndefined()
     expect(selectNextModel(store.getState(), "a")).toEqual(astra)
@@ -124,7 +124,7 @@ describe("model choices", () => {
     // Another client moves the chat on; the next send asks nothing back.
     source.emit({
       kind: "session",
-      session: summary("a", "desktop", 1000, "idle", { model: astra, revision: 100 }),
+      session: summary("a", "desktop", 1000, "idle", { model: astra, revision: 5000 }),
     })
     await settle()
     expect(selectNextModel(store.getState(), "a")).toEqual(astra)
@@ -274,6 +274,26 @@ describe("model choices", () => {
     expect(modelChanging(store.getState().workspace, "a")).toBe(false)
   })
 
+  it("keeps a pick when another client passes through it, and applies it on send", async () => {
+    const { source, store } = await ready()
+    source.setModel = vi.fn(reconciles(source))
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    for (const [model, revision] of [
+      [next, 200],
+      [astra, 201],
+    ] as const) {
+      source.emit({
+        kind: "session",
+        session: summary("a", "desktop", 1000, "idle", { model, revision }),
+      })
+      await settle()
+    }
+    expect(store.getState().workspace.stagedModels.a).toEqual(next)
+    expect(await send(store, "on my pick")).toBe("sent")
+    expect(source.setModel).toHaveBeenCalledWith("a", next, expect.any(String), "person")
+    expect(asked(source, "send").at(-1)?.[1]).toMatchObject({ model: next })
+  })
+
   it("holds a send while the source says a model change is pending", async () => {
     const { source, store } = await ready()
     source.emit({
@@ -381,7 +401,11 @@ describe("model choices", () => {
     })
     await settle()
     expect(store.getState().workspace.modelChoices.a).toBeUndefined()
-    expect(store.getState().workspace.stagedModels.a).toBeUndefined()
     expect(modelUnsettled(store.getState().workspace, "a")).toBe(false)
+    // The chat runs the pick now: the next send makes it without asking again.
+    const asks = asked(source, "setModel").length
+    expect(await send(store, "confirmed")).toBe("sent")
+    expect(asked(source, "setModel")).toHaveLength(asks)
+    expect(store.getState().workspace.stagedModels.a).toBeUndefined()
   })
 })

@@ -306,14 +306,14 @@ describe("what the person changes", () => {
       },
     })
     expect(other.stagedModels.a).toEqual(astra)
-    // One saying the conversation runs it settles it.
+    // Even one saying the conversation runs it does not: only a send settles it.
     const same = updateReceived(other, {
       update: {
         kind: "session",
         session: summary("a", "desktop", 902, "running", { model: astra, revision: 3 }),
       },
     })
-    expect(same.stagedModels.a).toBeUndefined()
+    expect(same.stagedModels.a).toEqual(astra)
     expect(modelForNextTurn(same, "a")).toEqual(astra)
   })
 
