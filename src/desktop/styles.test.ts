@@ -10,18 +10,6 @@ import { classes, marks } from "./split-panes"
 
 const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8")
 
-/**
- * A pane in the window's corner — or where a drag's preview would put it
- * there (`marks.dragCorner`, `split-panes/adapters/dom/drag.ts`), and not
- * where it would leave — as the stylesheets select it.
- */
-const cornered = `.workspace[data-panes-alone]
-  .workspace-pane:is(
-    [${marks.corner}]:not([${marks.dragCorner}="no"]),
-    [${marks.dragCorner}="yes"]
-  )
-`
-
 it("glides without overshoot: the composer lands, and never passes its place", () => {
   const curve = /--desktop-glide:\s*linear\(([^)]*)\)/.exec(styles)?.[1]
   expect(curve).toBeDefined()
@@ -87,12 +75,6 @@ it("starts titlebar-row content at the one safe area, never at a length of its o
       ".settings-titlebar {",
       "var(--desktop-window-controls-inset)",
     ],
-    // A pane in the window's corner starts its header at the safe area.
-    [
-      read("./workspace/ui/panes/panes.css"),
-      `${cornered}  .workspace-pane-header {`,
-      "var(--desktop-titlebar-safe-start)",
-    ],
   ] as const
   for (const [sheet, selector, start] of rules) {
     const body = sheet.slice(sheet.indexOf(selector)).split("}")[0]
@@ -119,21 +101,8 @@ it("starts an inline column title after the window's controls wherever they stan
   const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8")
   const rules = [
     [
-      read("./workspace/ui/session-list/session-list.css"),
-      // The fold holds the sidebar and the list's measure, so this gutter
-      // waits until both holds are gone.
-      `.workspace[data-sidebar="closed"]:not([data-spare-held]):not([data-list-held])
-  .workspace-list
-  .desktop-column-bar {`,
-    ],
-    [
       read("./settings/ui/settings.css"),
       '.settings[data-sidebar="closed"] .settings-bar {',
-    ],
-    // The sidebar's own action, in the row the controls stand over.
-    [
-      read("./workspace/ui/source-list/source-list.css"),
-      ".workspace-sidebar > .desktop-column-bar {",
     ],
   ] as const
   for (const [sheet, selector] of rules) {
@@ -543,15 +512,12 @@ it("paints nothing of a pane under the window's controls: its content below the 
   )
   const body = (sheet: string, selector: string) =>
     sheet.slice(sheet.indexOf(selector)).split("}")[0]
-  // The header is the titlebar row; what follows it starts below the titlebar's height.
-  expect(body(panes, ".workspace-pane-header {")).toMatch(
-    /margin-bottom:\s*calc\(\s*var\(--desktop-titlebar-height\) - var\(--desktop-gutter\)/,
+  // Cards, including full-window widgets, begin below the window toolbar.
+  expect(body(panes, ".workspace-chat {")).toMatch(
+    /padding:\s*var\(--desktop-titlebar-height\)/,
   )
-  // In the corner, the band begins after the controls.
-  const corner = `${cornered}  .desktop-header[data-sliver] {`
-  expect(styles).toContain(corner)
-  expect(body(styles, corner)).toMatch(
-    /left:\s*calc\(var\(--desktop-titlebar-safe-start\) - var\(--desktop-gutter\)\)/,
+  expect(body(panes, ".workspace-widget-window {")).toMatch(
+    /top:\s*var\(--desktop-titlebar-height\)/,
   )
 })
 

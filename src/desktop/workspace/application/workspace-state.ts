@@ -27,7 +27,7 @@ import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
 import { drawn, type SideColumn } from "../../model/side-column"
 import type { WindowArrangement } from "../model/shown-window"
 import type { SessionView } from "../model/session-groups"
-import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
+import { keepDrafts, type Draft } from "../model/session-lifecycle"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
 import { settledBy, type AccessChoice } from "../model/access"
 import type {
@@ -167,6 +167,8 @@ export interface WorkspaceState {
   readonly composerText: Readonly<Record<string, string>>
   /** Where conversations sit; none until the index arrives. */
   readonly panes: PaneLayout | null
+  /** Open conversation documents; pane placement stays in `panes`. Drafts remain while their document tab is open. */
+  readonly sessionTabs: readonly string[]
   readonly view: SessionView
   /**
    * What fills the content region: the panes, the Agents overview over
@@ -344,6 +346,7 @@ export const initialWorkspace: WorkspaceState = {
   accessChoices: {},
   composerText: {},
   panes: null,
+  sessionTabs: [],
   view: { channelId: "" },
   content: "panes",
   overview: { selected: null, filter: defaultFilter, group: null },
@@ -565,13 +568,22 @@ export function without<T>(
 }
 
 /**
- * Applies a change of panes, letting go of any draft no pane shows any more.
- * The one place panes change, so no draft outlives its pane.
+ * Applies a change of panes and remembers their document tabs. Drafts stay with
+ * an open tab even while another document occupies its pane (session-tabs.test.ts).
  */
 export function withPanes(state: WorkspaceState, panes: PaneLayout): WorkspaceState {
   if (panes === state.panes) return state
   const shown = new Set(paneIds(panes))
-  const drafts = keepShownDrafts(state.drafts, shown)
+  // Remember documents displaced from the focused pane as well as newly opened ones.
+  // Their transcripts still follow the bounded cache; hidden tabs are not "on screen".
+  const sessionTabs = [...paneIds(state.panes), ...shown].reduce<readonly string[]>(
+    (tabs, id) =>
+      (entry(state.sessions, id) || entry(state.drafts, id)) && !tabs.includes(id)
+        ? [...tabs, id]
+        : tabs,
+    state.sessionTabs,
+  )
+  const drafts = keepDrafts(state.drafts, new Set([...shown, ...sessionTabs]))
   // A new session's typing, and its access, go with it; a listed session's
   // stay until it is let go.
   const dropped =
@@ -581,7 +593,14 @@ export function withPanes(state: WorkspaceState, panes: PaneLayout): WorkspaceSt
   const composerText = dropped.reduce(without, state.composerText)
   const accessChoices = dropped.reduce(without, state.accessChoices)
   // A failed read belongs to what showed it: shown again, a session is read afresh.
-  return keepShownFailures({ ...state, panes, drafts, composerText, accessChoices })
+  return keepShownFailures({
+    ...state,
+    panes,
+    sessionTabs,
+    drafts,
+    composerText,
+    accessChoices,
+  })
 }
 
 /** Adds `id` to a list of ids, or takes it out; the same list when nothing changes. */
@@ -630,6 +649,7 @@ export function modelForNextTurn(
 export function forgetSession(state: WorkspaceState, sessionId: string): WorkspaceState {
   return {
     ...state,
+    sessionTabs: state.sessionTabs.filter((id) => id !== sessionId),
     sessions: without(state.sessions, sessionId),
     transcripts: without(state.transcripts, sessionId),
     conversationRevisions: without(state.conversationRevisions, sessionId),

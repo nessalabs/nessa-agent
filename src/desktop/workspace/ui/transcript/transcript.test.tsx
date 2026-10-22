@@ -1135,10 +1135,13 @@ describe("a transcript", () => {
     expect(block?.contains(host.querySelector(".workspace-approval-command"))).toBe(true)
     // Folded or not, Copy Command copies the command as the agent sent it,
     // through the host's clipboard.
+    const copy = host.querySelector<HTMLButtonElement>(".workspace-approval-copy")
+    expect(copy?.closest(".workspace-approval-command-block")?.contains(block)).toBe(true)
+    expect(copy?.getAttribute("aria-label")).toBe("Copy Command")
+    expect(copy?.textContent).toBe("")
+    expect(copy?.querySelector("svg")).not.toBeNull()
     clipboardWrite.mockClear()
-    await act(async () =>
-      host.querySelector<HTMLButtonElement>(".workspace-approval-copy")?.click(),
-    )
+    await act(async () => copy?.click())
     expect(clipboardWrite).toHaveBeenCalledWith(steps.join("; "))
     await act(async () => unfold?.click())
     expect(unfold?.getAttribute("aria-expanded")).toBe("true")

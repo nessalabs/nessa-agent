@@ -216,6 +216,9 @@ export function useFocusFollowsPane(
       const active = document.activeElement
       const lost = !active || active === document.body
       if (inModal(active)) return
+      // Document tabs own keyboard navigation while selecting another pane.
+      // Moving that selection must not take the next arrow key into a composer.
+      if (active?.closest('[role="tablist"]')) return
       const key = selectFocusedPaneKey(store.getState())
       const marked = scope.querySelector<HTMLElement>(`[${focusedPaneAttribute}]`)
       const markAgrees =

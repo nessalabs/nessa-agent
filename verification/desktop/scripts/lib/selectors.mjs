@@ -171,6 +171,9 @@ export const css = {
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',
 
   // Approval card (arranged by its own width)
+  approvalCopy: ".workspace-approval-copy",
+  approvalCommandBlock: ".workspace-approval-command-block",
+  approvalDeny: ".workspace-approval-deny",
   approvalCard: ".workspace-approval", // class
   appApprovalCard: '.workspace-approval[data-origin="app"]', // class: a review an MCP App asked for, not the agent
   agentApproval: '.workspace-approval[data-origin="agent"]', // class: a review the agent asked for, not an app

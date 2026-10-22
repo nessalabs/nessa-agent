@@ -9,6 +9,7 @@
   width: var(--workspace-list-width);
   flex: none;
   min-height: 0;
+  padding-top: var(--desktop-titlebar-height);
   overflow: hidden;
   transition:
     opacity var(--desktop-base) ease,
@@ -65,19 +66,6 @@
   padding-left: 12px;
 }
 
-.workspace[data-sidebar="closed"]:not([data-spare-held]):not([data-list-held])
-  .workspace-list
-  .desktop-column-bar {
-  padding-left: var(--desktop-titlebar-safe-start);
-}
-
-/*
- * A drop that folds the sidebar slides the list to the window's edge before
- * it happens (`chrome.css`), under the controls. Its inline title fades out
- * of that row as the list slides, since the fold puts it on its own row
- * below (`column-header.tsx`): nothing is drawn under the controls, and
- * nothing is laid out again, since the drag lays nothing out.
- */
 .workspace-list .desktop-column-bar .desktop-column-title {
   transition: opacity var(--desktop-base) ease;
 }

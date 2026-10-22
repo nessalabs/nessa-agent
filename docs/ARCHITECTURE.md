@@ -131,18 +131,26 @@ Reuse it with AppShell by placing it before AppShellBody and passing a
 SidebarTrigger in `leading`. Each consuming app must configure its own native
 window and drag permissions. No changes to `nessa_ui` are required.
 
-Every surface, browser and native, uses the same titlebar, laid over the split
-view. The sidebar toggle sits at its leading edge (after the traffic lights on
-macOS) and the right-panel toggle at its trailing edge, and neither moves when a
-sidebar opens or closes. The lowercase nessaStudio wordmark in the sidebar
-footer is the only identity; with the side rail turned on (a preview in
-Settings › Advanced › Experimental), the rail's toggle beside it, in the
-corner, doubles as its mark. Both sidebars are inset, rounded panes of
-translucent glass: the middle's colour is the base everywhere, and a pane is
-that base lifted by a faint tint, so it sits on top while the ambient light
-still carries through and the window reads as one surface; their content begins below the
-titlebar row, and closing one fades and
-slides it toward its edge while the split view animates its width.
+The classic shell uses one titlebar over its split view, with the sidebar
+control after the native traffic lights and the right-panel control at the
+trailing edge. The workspace keeps navigation in the window's top row; New Session remains
+available through its keyboard shortcut.
+Conversation and widget cards begin below it, with their own pane actions inside
+the card, so folding the sidebar cannot put a card behind the navigation.
+Column titles clear that group, moving below only where they cannot fit. The side rail (Settings › Advanced › Experimental) is a compact 48px
+column below that bar on every host, independent of the native traffic lights.
+Its toggle stays at the bottom-left control edge. When the rail folds, the
+sidebar footer reserves a control-sized slot before "nessa Studio", keeping the
+toggle aligned to the window's left edge rather than the traffic lights.
+The toggle remains available with both side columns closed. The workspace sidebar
+uses a soft gradient wash without a rounded card, rim or shadow. Its content clears the titlebar while the wash blends into the window's
+background. A rail item's full view covers the underlying workspace up to the
+window's top, including its cards and chat navigation controls. Each plugin
+keeps one top sidebar toggle for its rail, alongside the persistent bottom toggle.
+The classic sidebar remains an inset, rounded pane of translucent glass; the
+workspace sidebar uses the window's theme lights for its frameless gradient.
+Their content begins below the titlebar row, and closing one fades and slides
+it toward its edge while the split view animates its width.
 Corner controls follow one geometry in `styles.css`: each sits the same
 distance from its pane's top and side edges, and its corner radius is the pane's
 radius minus that distance, so hover shapes are concentric with the pane. The
@@ -272,6 +280,18 @@ pane's card (`onScreen`, one rule), and the conversations it shows are read
 and kept like a pane's, bounded (`retention.overviewConversations`); a peek is
 not reading the session, which stays unread.
 
+
+The desktop window's document tabs are owned by `workspace/application/workspace-state.ts`
+(`sessionTabs`), with explicit closure in `application/usecases/session-tabs.ts`.
+`ui/chrome/window-tabs.tsx` projects these documents into the shared window toolbar.
+A document selected through the existing open command focuses an already visible
+pane or changes only the focused pane; tab state never owns a second split layout.
+Hidden tabs do not count as shown conversations for read receipts or approvals,
+and transcripts retain the existing bounded-cache lifecycle. Draft text stays
+with its document until explicit tab closure. Pane closure removes a split while
+keeping its document available in the tab strip.
+
+
 - `model/` is pure: the index's types (`workspace-index.ts`); how a
   window fits the side columns (`window-fit.ts`); why the source refused
   (`failure.ts`); what is kept of what no pane shows (`retention.ts`); a session's conversation, its messages and steps
@@ -280,7 +300,7 @@ not reading the session, which stays unread.
   draws it yet; a widget by reference (`widget-ref.ts`, until the widgets
   vertical of ADR 326 owns it); the revision rule every replacement follows
   (`revision.ts`); session grouping, search and time labels; and the new
-  session's lifecycle, a draft never listed and let go once no pane shows it,
+  session's lifecycle, a draft never listed and kept until its document tab closes,
   and a session the source never began going back to it when its last
   refused message is discarded.
 - `application/` owns the `WorkspaceSource` port (`ports.ts`: index,
@@ -434,7 +454,9 @@ A window that cannot read the gateway says why
 pane arrangement is not kept between launches (the chosen
 layout is, as a stored preference).
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML
-entries, and `pnpm app` runs both windows.
+entries, and `pnpm app` runs both windows. For native layout previews,
+`VITE_NESSA_SAMPLE_WORKSPACE=1 pnpm app` explicitly selects the browser sample
+through the environment adapter; packaged builds and non-dev/ci stages reject it.
 
 Browser-only preview: `pnpm desktop:dev`, then open
 `http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;

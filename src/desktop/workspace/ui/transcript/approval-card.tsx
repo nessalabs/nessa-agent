@@ -1,6 +1,7 @@
 import { deadlinePendingLine } from "@nessa/client"
 import { memo, useEffect, useId, useState } from "react"
 import { useNow } from "../../../../clock"
+import { IconButton } from "../../../ui/icon-button"
 import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
 import { approve, deny, retryReview } from "../../adapters/store/commands"
@@ -259,49 +260,53 @@ function ApprovalScript({ command, gist }: { command: string; gist: CommandGist 
           ) : null}
         </div>
       ) : null}
-      <div
-        id={script}
-        className="workspace-approval-script"
-        data-folded={folded ? "" : undefined}
-      >
-        <ApprovalCommand
-          command={folded ? lines.slice(0, foldedLines).join("\n") : shown}
-        />
-      </div>
-      <div className="workspace-approval-meta-row">
-        <dl className="workspace-approval-meta">
-          {gist.tool ? (
-            <div>
-              <dt>Tool</dt>
-              <dd>
-                <bdi>{shownName(gist.tool)}</bdi>
-              </dd>
-            </div>
-          ) : null}
-          {gist.script !== undefined
-            ? gist.fields.map(([name, value]) => (
-                <div key={name}>
-                  <dt>
-                    <bdi>{shownName(name)}</bdi>
-                  </dt>
-                  <dd>{shownJson(value)}</dd>
-                </div>
-              ))
-            : null}
-        </dl>
-        {folds ? (
-          <button
-            type="button"
-            className="workspace-approval-disclose"
-            aria-expanded={unfolded}
-            aria-controls={script}
-            onClick={() => setUnfolded((open) => !open)}
-          >
-            {unfolded ? "Show Less" : `Show All ${lines.length} Lines`}
-          </button>
-        ) : null}
+      <div className="workspace-approval-command-block">
+        <div
+          id={script}
+          className="workspace-approval-script"
+          data-folded={folded ? "" : undefined}
+        >
+          <ApprovalCommand
+            command={folded ? lines.slice(0, foldedLines).join("\n") : shown}
+          />
+        </div>
         <CopyCommand command={command} />
       </div>
+      {gist.tool || (gist.script !== undefined && gist.fields.length > 0) || folds ? (
+        <div className="workspace-approval-meta-row">
+          <dl className="workspace-approval-meta">
+            {gist.tool ? (
+              <div>
+                <dt>Tool</dt>
+                <dd>
+                  <bdi>{shownName(gist.tool)}</bdi>
+                </dd>
+              </div>
+            ) : null}
+            {gist.script !== undefined
+              ? gist.fields.map(([name, value]) => (
+                  <div key={name}>
+                    <dt>
+                      <bdi>{shownName(name)}</bdi>
+                    </dt>
+                    <dd>{shownJson(value)}</dd>
+                  </div>
+                ))
+              : null}
+          </dl>
+          {folds ? (
+            <button
+              type="button"
+              className="workspace-approval-disclose"
+              aria-expanded={unfolded}
+              aria-controls={script}
+              onClick={() => setUnfolded((open) => !open)}
+            >
+              {unfolded ? "Show Less" : `Show All ${lines.length} Lines`}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </>
   )
 }
@@ -317,21 +322,23 @@ function CopyCommand({ command }: { command: string }) {
   }, [said])
   if (!write) return null
   return (
-    <button
-      type="button"
+    <IconButton
+      icon={said === "copied" ? "check" : "copy"}
+      label={
+        said === "copied"
+          ? "Copied"
+          : said === "refused"
+            ? "Couldn’t Copy"
+            : "Copy Command"
+      }
       className="workspace-approval-copy"
+      size="sm"
       onClick={() =>
         void write(command).then(
           () => setSaid("copied"),
           () => setSaid("refused"),
         )
       }
-    >
-      {said === "copied"
-        ? "Copied"
-        : said === "refused"
-          ? "Couldn’t Copy"
-          : "Copy Command"}
-    </button>
+    />
   )
 }

@@ -88,6 +88,7 @@ export const selectPaneShape = (state: Root): string => {
   const layout = state.workspace.panes
   return layout ? layoutShape(layout) : ""
 }
+export const selectSessionTabs = (state: Root) => state.workspace.sessionTabs
 export const selectView = (state: Root): SessionView => state.workspace.view
 /** Whether the Agents overview fills the content region. */
 export const selectOverviewOpen = (state: Root) =>

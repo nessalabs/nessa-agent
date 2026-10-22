@@ -172,10 +172,14 @@ describe("both layouts are the one shell", () => {
           </Provider>,
         ),
       )
-      const titlebar = [...host.querySelectorAll(".workspace-titlebar button")].map(
-        (button) => button.getAttribute("aria-label")?.replace(/ \(.*\)$/, ""),
+      const titlebar = [
+        ...host.querySelectorAll(".workspace-titlebar-navigation button"),
+      ].map((button) => button.getAttribute("aria-label")?.replace(/ \(.*\)$/, ""))
+      expect(titlebar).toEqual(
+        name === "three columns"
+          ? ["Hide Sidebar", "Hide Session List", "Go Back", "Go Forward"]
+          : ["Hide Sidebar", "Go Back", "Go Forward"],
       )
-      expect(titlebar.slice(0, 3)).toEqual(["Hide Sidebar", "Go Back", "Go Forward"])
       await act(async () => press("switcher"))
       expect(host.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe(
         "Jump to",
@@ -931,8 +935,8 @@ describe("a draft's close", () => {
         : undefined
       if (!draftPane) throw new Error("draft pane missing")
       await act(async () => void store.dispatch(closePane({ pane: draftPane.key })))
-      expect(store.getState().workspace.drafts).not.toHaveProperty(draftId)
-      expect(store.getState().workspace.composerText).not.toHaveProperty(draftId)
+      // The draft lives with its window tab: closing its pane keeps it to reopen.
+      expect(store.getState().workspace.drafts).toHaveProperty(draftId)
       expect(showing()).toEqual({ label: "New session", home: true, text: "unsent line" })
       await act(async () => frames.runFrame())
       await act(async () => frames.runFrame())

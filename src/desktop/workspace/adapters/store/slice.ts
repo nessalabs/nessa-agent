@@ -37,6 +37,7 @@ import * as overview from "../../application/usecases/overview"
 import type { AgentsFilter } from "../../model/overview/filter"
 import type { AgentsGroup } from "../../model/overview/agents-glance"
 import * as panes from "../../application/usecases/panes"
+import * as sessionTabs from "../../application/usecases/session-tabs"
 import * as sessions from "../../application/usecases/sessions"
 import * as access from "../../application/usecases/access"
 import type { AccessMode } from "../../model/access"
@@ -54,6 +55,11 @@ const workspaceSlice = createSlice({
   name: "workspace",
   initialState: initialWorkspace as WorkspaceState,
   reducers: {
+    // Documents share the existing pane arrangement.
+    sessionTabClosed: (
+      state,
+      { payload }: Payload<{ sessionId: string; draftId: string }>,
+    ) => sessionTabs.closeSessionTab(state, payload),
     // Panes
     focusPane: (state, { payload }: Payload<{ pane: PaneKey }>) =>
       panes.focusPane(state, payload.pane),

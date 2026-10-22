@@ -23,20 +23,7 @@
   display: flex;
   flex: 1;
   min-width: 0;
-  padding: var(--desktop-gutter) var(--desktop-gutter) var(--desktop-gutter)
-    var(--workspace-chat-lead);
-  background: var(--desktop-pane-fill);
-  box-shadow: inset 1px 0 0 var(--desktop-rim);
-}
-
-html:not(.dark) .workspace-chat {
-  background: color-mix(in oklab, var(--background) 60%, white);
-}
-
-/* With nothing to its left, the surface is the whole window, the panes a gutter in from its edge. */
-.workspace[data-panes-alone] .workspace-chat {
-  --workspace-chat-lead: var(--desktop-gutter);
-  box-shadow: none;
+  padding: var(--desktop-titlebar-height) 0 0;
 }
 
 .workspace-pane {
@@ -44,10 +31,10 @@ html:not(.dark) .workspace-chat {
   min-width: 0;
   flex-direction: column;
   container: workspace-pane / size;
-  /* The lifted slot's corners (below); at rest a pane draws no edge of its own. */
-  border-radius: var(--desktop-radius);
+  background: transparent;
+  border-left: calc(min(1, var(--ci)) * 1px) solid var(--desktop-rim);
+  border-top: calc(min(1, var(--ri)) * 1px) solid var(--desktop-rim);
   overflow: hidden;
-  transition: opacity var(--desktop-base) ease;
 }
 
 /*
@@ -108,16 +95,7 @@ html:not(.dark) .workspace-chat {
 
 /* ——— The pane's header ——— */
 
-/*
- * The session's mark, title and state, and nothing else until the pointer is
- * in the pane. Its row lines up with the window controls.
- */
-/*
- * The header is the pane's titlebar row, level with the window's controls;
- * what follows it begins below the titlebar's height, wherever the pane is
- * and wherever it is sliding — so a transcript scrolled, a narrow pane's
- * heading, or a home's scene never passes under the window's controls.
- */
+/* Pane controls sit inside the card, below the window's navigation row. */
 /* Above the body, whose home header picture reaches up behind it. */
 .workspace-pane-header {
   position: relative;
@@ -125,10 +103,6 @@ html:not(.dark) .workspace-chat {
   display: flex;
   height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
   flex: none;
-  margin-bottom: calc(
-    var(--desktop-titlebar-height) - var(--desktop-gutter) - var(--desktop-control-size) -
-      2 * var(--desktop-control-inset)
-  );
   align-items: center;
   gap: 8px;
   padding: var(--desktop-control-inset) var(--desktop-control-inset)
@@ -147,21 +121,6 @@ html:not(.dark) .workspace-chat {
 
 .split-panes-grid[data-split-multi] .workspace-pane-header:active {
   cursor: grabbing;
-}
-
-/*
- * In the window's corner, with nothing beside it, the header steps past the
- * window controls — and so it does where a drag's preview would put it
- * (`data-drag-corner`, `split-panes/adapters/dom/drag.ts`), and not where it
- * would leave.
- */
-.workspace[data-panes-alone]
-  .workspace-pane:is(
-    [data-split-corner]:not([data-drag-corner="no"]),
-    [data-drag-corner="yes"]
-  )
-  .workspace-pane-header {
-  padding-left: var(--desktop-titlebar-safe-start);
 }
 
 .split-panes-grid[data-split-multi]
@@ -346,19 +305,19 @@ html:not(.dark) .workspace-chat {
 .workspace-widget-window {
   position: absolute;
   z-index: 2;
-  top: var(--desktop-gutter);
-  right: var(--desktop-gutter);
-  bottom: var(--desktop-gutter);
-  left: var(--workspace-chat-lead);
+  top: var(--desktop-titlebar-height);
+  right: 0;
+  bottom: 0;
+  left: 0;
   display: flex;
   min-width: 0;
   flex-direction: column;
+  background: var(--background);
   overflow: hidden;
 }
 
-/* With nothing to its left, its header steps past the window's controls, as a corner pane's does. */
-.workspace[data-panes-alone] .workspace-widget-window .workspace-pane-header {
-  padding-left: var(--desktop-titlebar-safe-start);
+.workspace[data-panes-alone] .workspace-widget-window {
+  left: 0;
 }
 
 .workspace-widget-window:hover .workspace-pane-actions {
