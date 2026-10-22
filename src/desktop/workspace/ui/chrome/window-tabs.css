@@ -117,7 +117,11 @@ html:not(.dark) .workspace-window-tab[data-active] {
   flex: none;
   align-self: center;
   margin: 0 2px 0 10px;
-  color: color-mix(in oklab, var(--desktop-light-edge, var(--foreground)) 70%, var(--foreground));
+  color: color-mix(
+    in oklab,
+    var(--desktop-light-edge, var(--foreground)) 70%,
+    var(--foreground)
+  );
   opacity: 0.85;
 }
 
@@ -140,7 +144,9 @@ html:not(.dark) .workspace-window-tab[data-active] {
 
 /* No divider beside a lit tab: its glass is its edge. */
 .workspace-tab-group > .workspace-window-tab[data-active]::before,
-.workspace-tab-group > .workspace-window-tab[data-active] + .workspace-window-tab::before {
+.workspace-tab-group
+  > .workspace-window-tab[data-active]
+  + .workspace-window-tab::before {
   opacity: 0;
 }
 
@@ -168,4 +174,13 @@ html:not(.dark) .workspace-window-tab[data-active] {
   .workspace-window-tab > .desktop-icon-button {
     opacity: 1;
   }
+}
+
+/* A merged tab in the background reads quieter than the one in front. */
+.workspace-tab-group:not([data-active]) {
+  background: color-mix(in oklab, var(--foreground) 3%, transparent);
+}
+
+.workspace-tab-group:not([data-active]) > .workspace-tab-group-glyph {
+  opacity: 0.55;
 }

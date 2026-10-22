@@ -340,5 +340,5 @@ it("closing a background document leaves the Agents view selected", async () => 
   store.dispatch(showContent({ content: "agents" }))
   store.dispatch(closeSessionTab({ sessionId: "c" }))
   expect(store.getState().workspace.content).toBe("agents")
-  expect(store.getState().workspace.sessionTabs).not.toContain("c")
+  expect(JSON.stringify(store.getState().workspace.tabs)).not.toContain("session:c")
 })

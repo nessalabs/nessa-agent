@@ -39,7 +39,9 @@
  *               beside, the panes are regions of one flat chat surface that
  *               reaches the window's top, right and bottom edges: no pane
  *               draws a fill or rim of its own, and a hairline down the
- *               middle of the gutter between them divides them
+ *               middle of the gutter between them divides them; the two
+ *               are one merged tab: New Tab opens a home alone and leaves it
+ *               as it was, and clicking back into it restores the split
  *   long        another conversation takes `--long` turns of long streamed
  *               answers through the gateway; the last answer is whole, and
  *               still whole after its agent is closed and its history opened
@@ -1704,6 +1706,10 @@ const steps = {
       )
         failures.push(`the main conversation's pane reads ${JSON.stringify(left)}`)
     }
+    // The two are one merged tab. A new tab stands alone and leaves the
+    // merged tab as it was; clicking back into it restores the split.
+    await mergedTabStays(run, conversationId, failures)
+    if (failures.length) return
     // ⌘W closes the focused pane: the one beside.
     await run.page.keyboard.press(keys.closePane)
     if (
@@ -2443,6 +2449,69 @@ const steps = {
  * Two panes side by side are regions of one flat chat surface, not cards
  * (`flatSurfaceFailures`): one hairline between them, mid-gutter.
  */
+/**
+ * The merged tab (#1077): two conversations beside each other are one tab.
+ * New Tab opens a home alone, the merged tab untouched; clicking one of the
+ * merged tab's chats brings the split back as it was left, with that chat's
+ * pane focused. The new tab is then closed.
+ */
+async function mergedTabStays(run, besideId, failures) {
+  const tabs = run.page.getByRole("tablist", { name: "Open views" })
+  const group = tabs.locator('[role="group"]')
+  const widths = () =>
+    run.page
+      .locator(css.pane)
+      .evaluateAll((panes) =>
+        panes.map((pane) => Math.round(pane.getBoundingClientRect().width)),
+      )
+  const before = await widths()
+  if ((await group.locator("[data-session-tab]").count()) !== 2) {
+    failures.push("two conversations side by side are not one merged tab")
+    return
+  }
+  await run.page.getByRole("button", { name: /^New Tab/ }).click()
+  if (
+    !(await waitFor(async () => (await run.page.locator(css.pane).count()) === 1, 10_000))
+  ) {
+    failures.push(
+      `a new tab shows ${await run.page.locator(css.pane).count()} panes, not 1`,
+    )
+    return
+  }
+  const fresh = await tabs
+    .locator('[role="tab"][aria-selected="true"]')
+    .locator("..")
+    .getAttribute("data-session-tab")
+  if ((await run.page.locator(`${css.focusedPane} ${css.paneHome}`).count()) !== 1)
+    failures.push("a new tab does not show a new session's home")
+  if ((await group.locator("[data-session-tab]").count()) !== 2)
+    failures.push("opening a new tab changed the merged tab")
+  if (fresh && (await group.locator(`[data-session-tab="${fresh}"]`).count()) > 0)
+    failures.push("a new tab joined the merged tab")
+  await group.locator(`[data-session-tab="${besideId}"] [role="tab"]`).click()
+  if (
+    !(await waitFor(async () => (await run.page.locator(css.pane).count()) === 2, 10_000))
+  ) {
+    failures.push("going back to the merged tab did not restore its split")
+    return
+  }
+  const after = await widths()
+  if (after.length !== before.length || after.some((w, i) => Math.abs(w - before[i]) > 1))
+    failures.push(`the merged tab came back at ${after} wide, not ${before}`)
+  if (fresh)
+    await tabs
+      .locator(`[data-session-tab="${fresh}"]`)
+      .getByRole("button", { name: /^Close Tab/ })
+      .click()
+  if (
+    !(await waitFor(
+      async () => (await tabs.locator("[data-session-tab]").count()) >= 2,
+      5_000,
+    ))
+  )
+    failures.push("closing the new tab closed more than it")
+}
+
 async function flatPanes(page, failures) {
   const now = async () => ({
     panes: await page.locator(css.pane).count(),

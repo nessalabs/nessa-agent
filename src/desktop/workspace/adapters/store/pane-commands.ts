@@ -245,9 +245,12 @@ export function openChannel({
   }
 }
 
-/** Closing a document may leave the last pane on a fresh draft. */
+/**
+ * Closes one chat from the tab strip: its pane out of a merged tab, or its
+ * tab; the last tab's last chat goes back to a new session's home.
+ */
 export function closeSessionTab({ sessionId }: { sessionId: string }): WorkspaceCommand {
   return (dispatch, _getState, { newId }) => {
-    dispatch(workspaceActions.sessionTabClosed({ sessionId, draftId: newId() }))
+    dispatch(workspaceActions.tabClosed({ sessionId, draftId: newId() }))
   }
 }

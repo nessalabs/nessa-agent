@@ -1,7 +1,12 @@
 /** The window's open documents, above the same split-pane workspace (#1077). */
-import { memo, useLayoutEffect, useMemo, useRef, type KeyboardEvent } from "react"
+import {
+  memo,
+  useLayoutEffect,
+  useRef,
+  type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react"
 import { panesOf } from "../../../split-panes/model/pane-layout"
-import { paneIds } from "../../application/workspace-state"
 import { DesktopIcon } from "../../../ui/icons"
 import { IconButton } from "../../../ui/icon-button"
 import {
@@ -10,6 +15,8 @@ import {
   focusPane,
   newSession,
   openSession,
+  splitOffTab,
+  switchTab,
 } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
@@ -17,9 +24,10 @@ import {
   selectOverviewOpen,
   selectPanes,
   selectSession,
-  selectSessionTabs,
+  selectTabs,
 } from "../../adapters/store/selectors"
-import { paneItemOf } from "../../model/pane-item"
+import { paneItemKey, paneItemOf, sessionItem } from "../../model/pane-item"
+import { layoutOf } from "../../model/window-tabs"
 import { useWorkspaceFrame } from "../workspace-frame"
 import { AgentTile } from "./agent-tile"
 import "./window-tabs.css"
@@ -48,27 +56,16 @@ function moveTab(event: KeyboardEvent<HTMLDivElement>) {
 export const WindowTabs = memo(function WindowTabs() {
   const dispatch = useWorkspaceDispatch()
   const panes = useWorkspaceSelector(selectPanes)
-  const ids = useWorkspaceSelector(selectSessionTabs)
+  const tabs = useWorkspaceSelector(selectTabs)
   const overview = useWorkspaceSelector(selectOverviewOpen)
   const focused = useWorkspaceSelector(selectFocusedSessionId)
-  const widgets = useMemo(
-    () =>
-      panes ? panesOf(panes).filter((p) => paneItemOf(p.item)?.kind === "widget") : [],
-    [panes],
-  )
-  // Chats open side by side are one merged view: their tabs travel together.
-  const shown = useMemo(() => paneIds(panes), [panes])
-  const merged = useMemo(
-    () => (shown.length > 1 ? shown.filter((id) => ids.includes(id)) : []),
-    [shown, ids],
-  )
   const list = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({
       block: "nearest",
       inline: "nearest",
     })
-  }, [panes?.focused, focused, overview])
+  }, [panes?.focused, focused, overview, tabs.activeTab])
   const frame = useWorkspaceFrame()
   return (
     <div className="workspace-window-tabs" data-tauri-drag-region>
@@ -79,49 +76,38 @@ export const WindowTabs = memo(function WindowTabs() {
         aria-label="Open views"
         onKeyDown={moveTab}
       >
-        {ids.map((id) => {
-          if (!merged.includes(id)) return <SessionTab key={id} sessionId={id} />
-          if (id !== ids.find((each) => merged.includes(each))) return null
+        {tabs.tabs.map((tab) => {
+          const active = !overview && tab.id === tabs.activeTab
+          const layout = layoutOf(tabs, panes, tab)
+          const shown = layout ? panesOf(layout) : []
+          const lit = (key: number) => active && layout?.focused === key
+          const members = shown.map((pane) => (
+            <TabItem
+              key={pane.item}
+              tabId={tab.id}
+              item={pane.item}
+              paneKey={pane.key}
+              active={lit(pane.key)}
+              merged={shown.length > 1}
+            />
+          ))
+          if (shown.length < 2) return members
+          // A merged tab: the chats it shows side by side travel together.
           return (
             <div
-              key="merged"
+              key={tab.id}
               className="workspace-tab-group"
               role="group"
-              aria-label={`${merged.length} chats side by side`}
-              title={`${merged.length} chats side by side`}
+              data-tab={tab.id}
+              data-active={active || undefined}
+              aria-label={`${shown.length} chats side by side`}
+              title={`${shown.length} chats side by side`}
             >
               <MergedGlyph />
-              {merged.map((each) => (
-                <SessionTab key={each} sessionId={each} />
-              ))}
+              {members}
             </div>
           )
         })}
-        {widgets.map((pane) => (
-          <div
-            key={pane.key}
-            className="workspace-window-tab"
-            data-active={(!overview && panes?.focused === pane.key) || undefined}
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={!overview && panes?.focused === pane.key}
-              tabIndex={!overview && panes?.focused === pane.key ? 0 : -1}
-              onClick={() => dispatch(focusPane({ pane: pane.key }))}
-            >
-              <DesktopIcon name="panelRight" size={16} />
-              <span>Widget</span>
-            </button>
-            <IconButton
-              icon="close"
-              size="sm"
-              label="Close Widget Tab"
-              tabIndex={-1}
-              onClick={() => dispatch(closePane({ pane: pane.key }))}
-            />
-          </div>
-        ))}
       </div>
       <IconButton
         icon="add"
@@ -140,21 +126,100 @@ export const WindowTabs = memo(function WindowTabs() {
   )
 })
 
-function SessionTab({ sessionId }: { sessionId: string }) {
+/** One item of a tab: a chat, or a widget a pane of it shows. */
+function TabItem({
+  tabId,
+  item,
+  paneKey,
+  active,
+  merged,
+}: {
+  tabId: string
+  item: string
+  paneKey: number
+  active: boolean
+  merged: boolean
+}) {
+  const dispatch = useWorkspaceDispatch()
+  const shown = paneItemOf(item)
+  if (shown?.kind === "session")
+    return <SessionTab sessionId={shown.sessionId} active={active} merged={merged} />
+  return (
+    <div className="workspace-window-tab" data-active={active || undefined}>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={active}
+        tabIndex={active ? 0 : -1}
+        onClick={() => {
+          dispatch(switchTab({ tabId }))
+          dispatch(focusPane({ pane: paneKey }))
+        }}
+      >
+        <DesktopIcon name="panelRight" size={16} />
+        <span>Widget</span>
+      </button>
+      <IconButton
+        icon="close"
+        size="sm"
+        label="Close Widget Tab"
+        tabIndex={-1}
+        onClick={() => {
+          dispatch(switchTab({ tabId }))
+          dispatch(closePane({ pane: paneKey }))
+        }}
+      />
+    </div>
+  )
+}
+
+/**
+ * Pulled out of its merged tab onto the strip, a chat stands as a tab of its
+ * own. Dropped on a pane instead, the panes' own drag merges it there
+ * (`data-drag-item`), so this only answers a release over the strip.
+ */
+function useDragOut(sessionId: string, merged: boolean) {
+  const dispatch = useWorkspaceDispatch()
+  return (event: ReactPointerEvent<HTMLElement>) => {
+    if (!merged || event.button !== 0) return
+    const group = event.currentTarget.closest(".workspace-tab-group")
+    const from = { x: event.clientX, y: event.clientY }
+    const up = (lift: PointerEvent) => {
+      window.removeEventListener("pointerup", up, true)
+      if (Math.hypot(lift.clientX - from.x, lift.clientY - from.y) < 8) return
+      const under = document.elementFromPoint(lift.clientX, lift.clientY)
+      if (!under?.closest(".workspace-window-tabs") || (group && group.contains(under)))
+        return
+      dispatch(splitOffTab({ sessionId }))
+    }
+    window.addEventListener("pointerup", up, true)
+  }
+}
+
+function SessionTab({
+  sessionId,
+  active,
+  merged,
+}: {
+  sessionId: string
+  active: boolean
+  merged: boolean
+}) {
   const dispatch = useWorkspaceDispatch()
   const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
-  const active = useWorkspaceSelector(
-    (state) => !selectOverviewOpen(state) && selectFocusedSessionId(state) === sessionId,
-  )
   const title = session?.title ?? "New session"
+  const onPointerDown = useDragOut(sessionId, merged)
   return (
     <div
       className="workspace-window-tab"
       data-active={active || undefined}
       data-session-tab={sessionId}
+      onPointerDown={onPointerDown}
     >
       <button
         type="button"
+        // Carried onto a pane's side, the panes' drag merges it there.
+        data-drag-item={session ? paneItemKey(sessionItem(sessionId)) : undefined}
         role="tab"
         aria-selected={active}
         tabIndex={active ? 0 : -1}

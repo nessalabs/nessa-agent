@@ -55,11 +55,13 @@ const workspaceSlice = createSlice({
   name: "workspace",
   initialState: initialWorkspace as WorkspaceState,
   reducers: {
-    // Documents share the existing pane arrangement.
-    sessionTabClosed: (
-      state,
-      { payload }: Payload<{ sessionId: string; draftId: string }>,
-    ) => sessionTabs.closeSessionTab(state, payload),
+    // Tabs: each one chat or a merged group, each with its own layout (#1077).
+    tabSwitched: (state, { payload }: Payload<{ tabId: string }>) =>
+      sessionTabs.switchTab(state, payload),
+    tabClosed: (state, { payload }: Payload<{ sessionId: string; draftId: string }>) =>
+      panes.closeTab(state, payload),
+    tabSplitOff: (state, { payload }: Payload<{ sessionId: string }>) =>
+      panes.splitOffTab(state, payload),
     // Panes
     focusPane: (state, { payload }: Payload<{ pane: PaneKey }>) =>
       panes.focusPane(state, payload.pane),

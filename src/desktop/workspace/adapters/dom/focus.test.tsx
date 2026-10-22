@@ -222,11 +222,13 @@ it("follows a pane taking focus even from a list, and leaves a list walked in on
   await frames()
   const row = host.querySelector<HTMLElement>("[data-list-row]")
   row?.focus()
-  // The list opens another session in the focused pane: the caret stays in the list.
+  // The list opens another session, in a tab of its own: the caret stays in the list.
   await act(async () => void store.dispatch(openSession({ sessionId: "c" })))
   await frames()
   expect(document.activeElement).toBe(row)
-  // Another pane takes focus (⌘1): the caret goes with it.
+  // Split there, then another pane takes focus (⌘1): the caret goes with it.
+  await act(async () => void store.dispatch(newSession({ beside: "right" })))
+  await frames()
   await act(async () => void store.dispatch(focusPane({ pane: 1 })))
   await frames()
   expect(caretIn()).toBe("Message 1")

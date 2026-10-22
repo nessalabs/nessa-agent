@@ -513,6 +513,11 @@ export interface SplitPanesDragOptions {
    * layer that is never seen (`split-panes-drag.test.tsx`).
    */
   readonly unscaled?: readonly string[]
+  /**
+   * Another part of the page, beside `root`, whose items can be carried onto
+   * the panes: the window's tab strip, say. Read as the drag is set up.
+   */
+  readonly carriedFrom?: (root: HTMLElement) => HTMLElement | null
 }
 
 /**
@@ -554,6 +559,7 @@ export function useSplitPanesDrag(
   useEffect(() => {
     const scope = root.current
     if (!scope) return
+    const beside = options.carriedFrom?.(scope) ?? null
 
     const announcer = document.createElement("div")
     announcer.className = "split-panes-announcer"
@@ -1544,7 +1550,7 @@ export function useSplitPanesDrag(
       const pressed = target.closest<HTMLElement>(
         `[${marks.dragPane}], [${marks.dragItem}]`,
       )
-      if (!pressed || !scope.contains(pressed)) return
+      if (!pressed || !(scope.contains(pressed) || beside?.contains(pressed))) return
       // A control inside what is carried keeps its own press.
       const control = target.closest("button, input, textarea, a, [role='menuitem']")
       if (control && control !== pressed && pressed.contains(control)) return
@@ -1670,6 +1676,7 @@ export function useSplitPanesDrag(
     const unsubscribe = source.subscribe(onStore)
 
     scope.addEventListener("pointerdown", onPointerDown)
+    beside?.addEventListener("pointerdown", onPointerDown)
     window.addEventListener("pointermove", onPointerMove)
     window.addEventListener("pointerup", onPointerUp)
     window.addEventListener("pointercancel", onLost)
@@ -1684,6 +1691,7 @@ export function useSplitPanesDrag(
       unsubscribe()
       inert.disconnect()
       scope.removeEventListener("pointerdown", onPointerDown)
+      beside?.removeEventListener("pointerdown", onPointerDown)
       window.removeEventListener("pointermove", onPointerMove)
       window.removeEventListener("pointerup", onPointerUp)
       window.removeEventListener("pointercancel", onLost)

@@ -13,6 +13,7 @@ import { chordEvent } from "../../../model/keyboard"
 import { ClockProvider } from "../../../../clock"
 import {
   closePane,
+  closeSessionTab,
   focusPane,
   loadWorkspace,
   movePane,
@@ -405,7 +406,9 @@ describe("a session's row carries its session to the panes by its pane item", ()
   ] as const)
     it(`in ${name}`, async () => {
       const { root } = await render(Layout)
-      const carried = [...host.querySelectorAll("[data-drag-item]")].map((row) => ({
+      const carried = [
+        ...host.querySelectorAll("[data-session-row][data-drag-item]"),
+      ].map((row) => ({
         row: row.getAttribute("data-session-row"),
         item: paneItemOf(row.getAttribute("data-drag-item") ?? ""),
       }))
@@ -483,7 +486,13 @@ describe("a pane's close is offered where closing it does something", () => {
     }
     expect(offered()).toEqual([true])
     expect(await menuOffers()).toBe(true)
+    // A new session opens in a tab of its own: its pane closes that tab.
     await act(async () => void store.dispatch(newSession()))
+    expect(offered()).toEqual([true])
+    // The window's last tab, on a home, has nothing to close to.
+    for (const id of ["a", "b"])
+      await act(async () => void store.dispatch(closeSessionTab({ sessionId: id })))
+    expect(store.getState().workspace.tabs.tabs).toHaveLength(1)
     expect(offered()).toEqual([false])
     expect(await menuOffers()).toBe(false)
     await act(async () =>

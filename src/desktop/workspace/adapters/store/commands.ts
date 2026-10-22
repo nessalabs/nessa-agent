@@ -48,6 +48,8 @@ export const {
   deleteAsked,
   deleteClosed,
   arrangementShown,
+  tabSwitched: switchTab,
+  tabSplitOff: splitOffTab,
 } = workspaceActions
 
 export type WorkspaceCommand<Result = void> = ThunkAction<

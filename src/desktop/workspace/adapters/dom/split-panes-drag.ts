@@ -50,5 +50,8 @@ export function workspaceDragOptions(): SplitPanesDragOptions {
     previewPanes: false,
     covered: sideColumns,
     stripped: ["data-tauri-drag-region", focusedPaneAttribute],
+    // A chat's tab is carried onto a pane's side to merge it there (#1077).
+    carriedFrom: (root) =>
+      root.parentElement?.querySelector<HTMLElement>(".workspace-titlebar") ?? null,
   }
 }

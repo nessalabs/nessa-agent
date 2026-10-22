@@ -28,6 +28,13 @@ import { drawn, type SideColumn } from "../../model/side-column"
 import type { WindowArrangement } from "../model/shown-window"
 import type { SessionView } from "../model/session-groups"
 import { keepDrafts, type Draft } from "../model/session-lifecycle"
+import {
+  itemsInTabs,
+  noTabs,
+  reconcileTabs,
+  removeFromTab,
+  type WindowTabs,
+} from "../model/window-tabs"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
 import { settledBy, type AccessChoice } from "../model/access"
 import type {
@@ -167,8 +174,12 @@ export interface WorkspaceState {
   readonly composerText: Readonly<Record<string, string>>
   /** Where conversations sit; none until the index arrives. */
   readonly panes: PaneLayout | null
-  /** Open conversation documents; pane placement stays in `panes`. Drafts remain while their document tab is open. */
-  readonly sessionTabs: readonly string[]
+  /**
+   * The window's tabs, each one chat or a merged group, each with its own
+   * layout: the active tab's is `panes` (`model/window-tabs.ts`). A draft
+   * stays while a tab holds it; only the active tab's panes are on screen.
+   */
+  readonly tabs: WindowTabs
   readonly view: SessionView
   /**
    * What fills the content region: the panes, the Agents overview over
@@ -346,7 +357,7 @@ export const initialWorkspace: WorkspaceState = {
   accessChoices: {},
   composerText: {},
   panes: null,
-  sessionTabs: [],
+  tabs: noTabs,
   view: { channelId: "" },
   content: "panes",
   overview: { selected: null, filter: defaultFilter, group: null },
@@ -568,38 +579,60 @@ export function without<T>(
 }
 
 /**
- * Applies a change of panes and remembers their document tabs. Drafts stay with
- * an open tab even while another document occupies its pane (session-tabs.test.ts).
+ * Applies a change of the active tab's panes, and reconciles the tabs with
+ * it (`reconcileTabs`): a chat that arrives leaves the tab it was in, and one
+ * that leaves stands as a tab of its own unless `released` — closed, or let
+ * go. Then keeps what the tabs hold (`withTabs`).
  */
-export function withPanes(state: WorkspaceState, panes: PaneLayout): WorkspaceState {
+export function withPanes(
+  state: WorkspaceState,
+  panes: PaneLayout,
+  released: readonly string[] = [],
+): WorkspaceState {
   if (panes === state.panes) return state
-  const shown = new Set(paneIds(panes))
-  // Remember documents displaced from the focused pane as well as newly opened ones.
-  // Their transcripts still follow the bounded cache; hidden tabs are not "on screen".
-  const sessionTabs = [...paneIds(state.panes), ...shown].reduce<readonly string[]>(
-    (tabs, id) =>
-      (entry(state.sessions, id) || entry(state.drafts, id)) && !tabs.includes(id)
-        ? [...tabs, id]
-        : tabs,
-    state.sessionTabs,
+  const tabs = reconcileTabs(
+    state.tabs,
+    state.panes,
+    panes,
+    (item) => {
+      const shown = paneItemOf(item)
+      if (shown?.kind !== "session") return shown !== null
+      return !!(
+        entry(state.sessions, shown.sessionId) || entry(state.drafts, shown.sessionId)
+      )
+    },
+    new Set(released.map((id) => paneItemKey(sessionItem(id)))),
   )
-  const drafts = keepDrafts(state.drafts, new Set([...shown, ...sessionTabs]))
-  // A new session's typing, and its access, go with it; a listed session's
-  // stay until it is let go.
+  return withTabs(state, { tabs, panes })
+}
+
+/**
+ * Sets the tabs and the active tab's panes, keeping a draft only while a tab
+ * holds it — its typing and its access go with it — and a failed read only
+ * while its session is on screen.
+ */
+export function withTabs(
+  state: WorkspaceState,
+  { tabs, panes }: { tabs: WindowTabs; panes: PaneLayout | null },
+): WorkspaceState {
+  const held = new Set(
+    [...itemsInTabs(tabs, panes)].flatMap((item) => {
+      const shown = paneItemOf(item)
+      return shown?.kind === "session" ? [shown.sessionId] : []
+    }),
+  )
+  const drafts = keepDrafts(state.drafts, held)
   const dropped =
     drafts === state.drafts
       ? []
       : Object.keys(state.drafts).filter((id) => !Object.hasOwn(drafts, id))
-  const composerText = dropped.reduce(without, state.composerText)
-  const accessChoices = dropped.reduce(without, state.accessChoices)
-  // A failed read belongs to what showed it: shown again, a session is read afresh.
   return keepShownFailures({
     ...state,
     panes,
-    sessionTabs,
+    tabs,
     drafts,
-    composerText,
-    accessChoices,
+    composerText: dropped.reduce(without, state.composerText),
+    accessChoices: dropped.reduce(without, state.accessChoices),
   })
 }
 
@@ -649,7 +682,11 @@ export function modelForNextTurn(
 export function forgetSession(state: WorkspaceState, sessionId: string): WorkspaceState {
   return {
     ...state,
-    sessionTabs: state.sessionTabs.filter((id) => id !== sessionId),
+    // Out of any other tab; the active tab's panes are the caller's.
+    tabs: state.tabs.tabs.reduce(
+      (tabs, tab) => removeFromTab(tabs, tab.id, paneItemKey(sessionItem(sessionId))),
+      state.tabs,
+    ),
     sessions: without(state.sessions, sessionId),
     transcripts: without(state.transcripts, sessionId),
     conversationRevisions: without(state.conversationRevisions, sessionId),
