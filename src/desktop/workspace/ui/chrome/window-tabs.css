@@ -32,7 +32,7 @@
   width: 196px;
   min-width: 0;
   flex: 0 1 196px;
-  border-radius: var(--desktop-radius-pill);
+  border-radius: var(--desktop-radius-sm);
   color: var(--desktop-muted);
   transition:
     background-color var(--desktop-base) ease,
@@ -54,6 +54,10 @@
   color: inherit;
   white-space: nowrap;
   font: inherit;
+  /* Every title the same: selected or not, merged or not. Selection shows
+     only as the tab's fill. */
+  font-size: var(--desktop-text-body);
+  font-weight: 500;
 }
 
 .workspace-window-tab > [role="tab"] > span:last-child {
@@ -75,8 +79,6 @@
 .workspace-window-tab[data-active] {
   color: var(--foreground);
   background: color-mix(in oklab, var(--foreground) 9%, transparent);
-  -webkit-backdrop-filter: blur(18px) saturate(1.6);
-  backdrop-filter: blur(18px) saturate(1.6);
   box-shadow:
     inset 0 0.5px 0 color-mix(in oklab, white 22%, transparent),
     inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent),
@@ -105,7 +107,8 @@ html:not(.dark) .workspace-window-tab[data-active] {
   gap: 2px;
   padding: 2px;
   padding-left: 0;
-  border-radius: var(--desktop-radius-pill);
+  /* Gentle corners; a tab inside is rounder by less, by the group's 2px inset. */
+  border-radius: var(--desktop-radius-sm);
   background: color-mix(in oklab, var(--foreground) 5%, transparent);
   box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 9%, transparent);
 }
@@ -121,6 +124,7 @@ html:not(.dark) .workspace-window-tab[data-active] {
 .workspace-tab-group > .workspace-window-tab {
   flex-basis: 168px;
   width: 168px;
+  border-radius: var(--desktop-radius-xs);
 }
 
 .workspace-tab-group > .workspace-window-tab + .workspace-window-tab::before {
@@ -143,7 +147,7 @@ html:not(.dark) .workspace-window-tab[data-active] {
 .workspace-window-tab > .desktop-icon-button {
   flex: none;
   margin-right: 3px;
-  border-radius: var(--desktop-radius-pill);
+  border-radius: var(--desktop-radius-xs);
   opacity: 0;
 }
 

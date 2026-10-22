@@ -98,24 +98,35 @@
   cursor: row-resize;
 }
 
+/*
+ * The one line between two panes: an even 1px hairline down the middle of
+ * their gutter, with no glow. It fades in below the tabs, so nothing rules
+ * across the titlebar, and only brightens — evenly, along its whole length —
+ * while the pointer is on it or it is dragged.
+ */
+.split-panes-grid > .split-panes-pane-edge::before {
+  opacity: 1;
+  background: var(--desktop-rim);
+  transition: background-color var(--desktop-base) ease;
+}
+
 .split-panes-grid > .split-panes-pane-edge[data-axis="x"]::before {
-  inset: var(--desktop-radius) 2.5px;
-  background: radial-gradient(
-    ellipse 3px 90px at 50% 50%,
-    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
-    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
-    transparent 100%
+  inset: 0 auto 0 calc(50% - 0.5px);
+  width: 1px;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent calc(var(--desktop-titlebar-height) * 0.6),
+    black calc(var(--desktop-titlebar-height) + 48px)
   );
 }
 
 .split-panes-grid > .split-panes-pane-edge[data-axis="y"]::before {
-  inset: 2.5px var(--desktop-radius);
-  background: radial-gradient(
-    ellipse 90px 3px at 50% 50%,
-    color-mix(in oklab, var(--desktop-light-edge) 60%, transparent) 0%,
-    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
-    transparent 100%
-  );
+  inset: calc(50% - 0.5px) 0 auto 0;
+  height: 1px;
+}
+
+.split-panes-grid > .split-panes-pane-edge:is(:hover, :focus-visible, :active)::before {
+  background: color-mix(in oklab, var(--foreground) 22%, transparent);
 }
 
 /*

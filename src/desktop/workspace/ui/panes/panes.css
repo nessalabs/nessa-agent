@@ -33,19 +33,9 @@
   container: workspace-pane / size;
   /* The top row runs up behind the titlebar, its content starting below it. */
   padding-top: calc(max(0, 1 - var(--ri)) * var(--desktop-titlebar-height));
-  /* A hairline between columns that fades in below the titlebar, so no rule
-     crosses the tabs; between rows, a plain one. */
-  background:
-    linear-gradient(
-        to bottom,
-        transparent calc(var(--desktop-titlebar-height) * 0.6),
-        var(--desktop-rim) calc(var(--desktop-titlebar-height) + 48px),
-        var(--desktop-rim) calc(100% - 48px),
-        transparent
-      )
-      left top / calc(min(1, var(--ci)) * 1px) 100% no-repeat,
-    transparent;
-  border-top: calc(min(1, var(--ri)) * 1px) solid var(--desktop-rim);
+  /* No edge of its own: the line between panes is the edge in their gutter
+     (`split-panes.css`), so there is one, not two. */
+  background: transparent;
   overflow: hidden;
 }
 
