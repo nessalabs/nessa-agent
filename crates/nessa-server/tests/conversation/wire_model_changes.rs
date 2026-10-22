@@ -4,6 +4,7 @@ use crate::agents_test_support::StubAgentProbe;
 use crate::conversation::application::{
     ConversationError, ConversationFuture, PlanToken, PreferenceReading, RecordedPreference,
     ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
+    SelectionRequest,
 };
 use crate::conversation::domain::ContinuationCause;
 use crate::conversation_test_support::mode_fixture;
@@ -531,7 +532,7 @@ impl ScheduledMessageStore for ScheduleReads {
     // dedicated tests against LocalScheduledMessages.
     fn invalidate_usage_limit(
         &self,
-        _: &str,
+        _: SelectionRequest<'_>,
         _: &str,
         _: Option<&str>,
         _: &crate::conversation::application::PlanToken,

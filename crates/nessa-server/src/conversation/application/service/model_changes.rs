@@ -7,7 +7,7 @@ use super::{
 };
 use crate::conversation::application::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
-    ConversationModelSelection, ScheduleActor,
+    ConversationModelSelection, ScheduleActor, SelectionChange,
 };
 use nessa_protocol::conversation::domain::ConversationApprovalMode;
 use nessa_protocol::conversation::projection::{bound_view, CommittedCursor};
@@ -227,7 +227,8 @@ impl ConversationService {
             }
         };
         if state == ConversationModelRequestState::Applied {
-            self.invalidate_model_usage_limit(
+            self.invalidate_selection_usage_limit(
+                SelectionChange::Model,
                 id,
                 &observed.request_id,
                 ScheduleActor::model_request(&observed),
@@ -452,7 +453,8 @@ impl ConversationService {
             }
         };
         if state == ConversationModelRequestState::Applied {
-            self.invalidate_model_usage_limit(
+            self.invalidate_selection_usage_limit(
+                SelectionChange::Model,
                 id,
                 &observed.request_id,
                 ScheduleActor::model_request(&observed),

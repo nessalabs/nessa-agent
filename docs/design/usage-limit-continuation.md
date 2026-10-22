@@ -124,6 +124,22 @@ causal turn remains eligible. The partial unique index covers only `scheduled`, 
 | `cancelled` | The row ended without a submit: preference off, a later turn, an agent or model change, or deletion before submit. The same causal turn can be scheduled again unless an agent or model change cancelled it. A finished submit cannot |
 | `unconfirmed` | Admission cannot be confirmed: the journal recorded `Attempted` without a saved invocation, or deletion erased history and the retained journal has no terminal evidence. The effect must not run again. Audit `submission_interrupted` or `conversation_deleted` |
 
+### Agent switching and selection invalidation
+
+Model changes and agent switches use one typed selection-invalidation owner.
+Its durable identity is conversation, selection kind (model or agent), and the
+original request id. The cancellation cause follows that kind; the audit actor
+comes from the saved original request, including recovery under another caller.
+
+| Ordering | Required result | Regression |
+| --- | --- | --- |
+| Handoff saved, switch still Pending | Invalidate the currently blocked causal turn (or record absence) before committing Applied metadata | `an_agent_switch_invalidates_the_original_limit_before_applying` |
+| Preference off or no schedule when the handoff is saved | Same durable invalidation, independent of preference and row existence; enabling after switch does not reinterpret the old turn under the new agent | `an_agent_switch_invalidates_the_original_limit_before_applying` |
+| Invalidation fails after the handoff was saved | Switch remains Pending; live completion and next-opening recovery run the same finish path | `a_pending_agent_switch_retries_invalidation_as_its_original_request` |
+| A submission resolves a live or restarted opening while an agent switch is Pending | Under the existing submission lock, settle the saved switch and its original invalidation before admitting the new turn; failed invalidation refuses admission without a new execution | `a_pending_agent_switch_retries_invalidation_as_its_original_request` |
+| Original invalidation committed, Applied metadata did not | Retry reads that request's invalidation receipt; a later blocked turn is not invalidated by the old request | `a_pending_agent_switch_retries_invalidation_as_its_original_request` |
+| Model and agent requests reuse one request id | Selection kind separates durable receipts; both original transitions apply independently | `model_and_agent_invalidations_have_separate_request_namespaces` |
+
 ### Who owns each transition
 
 **If it fails** is the only retry for a submit, an outcome write, reconciliation, and a delivery whose plan does not commit. `next_attempt` is that rule. The first failure waits one second. Each later failure doubles that wait, at most one minute. The durable record is `retry_at_ms`: audit `submission_retry` on the submitting row, or one `reconcile_retry` row for a plan. The attempt is not entered again before that time. When the durable record does not commit, this process keeps the same failure count and `retry_at_ms` and waits it; a later stored row does not replace that later attempt. A lost lease writes nothing. An unread execution, and a `begin_submit` whose transaction does not commit, write no `retry_at_ms` and still keep the attempt while the row is `delivering` or `submitting`. A missed `begin_submit` compare-and-set writes nothing. A committed outcome, a cancelled row, and a missing row drop the attempt this process kept. A status read that fails leaves the attempt. A crash drops what only this process kept. Catch-up, a store read, and lease renewal are not this column.

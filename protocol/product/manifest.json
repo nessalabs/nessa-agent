@@ -321,6 +321,14 @@
     "conversation.setModel": {
       "params": "ConversationSetModelParams",
       "grant": "conversation.write"
+    },
+    "conversation.switchAgent": {
+      "params": "ConversationSwitchAgentParams",
+      "grant": "conversation.write"
+    },
+    "conversation.fork": {
+      "params": "ConversationForkParams",
+      "grant": "conversation.write"
     }
   },
   "events": {

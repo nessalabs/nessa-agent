@@ -13,6 +13,7 @@ import { messageText, shownWhole } from "../../model/transcript"
 import { defaultModel } from "../../model/workspace-index"
 import {
   approvalId,
+  handoffId,
   inputId,
   modelFor,
   noteId,
@@ -490,6 +491,78 @@ describe("a conversation view as a transcript", () => {
     expect(line && "unreadable" in line ? line.unreadable : null).toEqual({ id: "3" })
     expect(messageText(transcript.messages[0]!)).toBe("")
     expect(new Set(transcript.messages.map((message) => message.id)).size).toBe(4)
+  })
+
+  it("draws a switch as a line after the turn it followed, and a fork's copied turns first, then its line", () => {
+    const transcript = transcriptFrom(
+      view("c", {
+        messages: [
+          turn({ executionId: "e1", parts: [textPart("Charted", 0)] }),
+          turn({ executionId: "e2", parts: [textPart("Sailed", 0)] }),
+        ],
+        notes: [note("n1", { afterExecutionId: "e1" })],
+        handoffs: [
+          {
+            handoffId: "fork",
+            kind: "fork",
+            atMs: 1,
+            turns: [{ said: "Plan a trip", reply: "Lisbon" }, { reply: "Only a reply" }],
+            omittedTurns: 2,
+          },
+          {
+            handoffId: "switch",
+            kind: "switch",
+            atMs: 2,
+            afterExecutionId: "e1",
+            from: { agent: "claude", model: "claude-opus-5" },
+            to: { agent: "codex", model: "gpt-6-astra" },
+          },
+          // After a turn the bounded view left out: older than every turn shown.
+          {
+            handoffId: "dropped",
+            kind: "switch",
+            atMs: 0,
+            afterExecutionId: "e0",
+            from: { model: "old" },
+            to: { agent: "claude", model: "claude-opus-5" },
+          },
+        ],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(transcript.messages.map((message) => [message.id, message.role])).toEqual([
+      [`${handoffId("fork")}/0`, "user"],
+      [`${handoffId("fork")}/0/reply`, "agent"],
+      [`${handoffId("fork")}/1/reply`, "agent"],
+      [handoffId("fork"), "handoff"],
+      [handoffId("dropped"), "handoff"],
+      [inputId("e1"), "user"],
+      [replyId("e1"), "agent"],
+      [noteId("n1"), "note"],
+      [handoffId("switch"), "handoff"],
+      [inputId("e2"), "user"],
+      [replyId("e2"), "agent"],
+    ])
+    const lines = transcript.messages.flatMap((message) =>
+      message.role === "handoff" ? [message.handoff] : [],
+    )
+    expect(lines).toEqual([
+      { kind: "fork", omittedTurns: 2 },
+      {
+        kind: "switch",
+        from: { model: "old" },
+        to: { agent: "claude", model: "claude-opus-5" },
+      },
+      {
+        kind: "switch",
+        from: { agent: "claude", model: "claude-opus-5" },
+        to: { agent: "codex", model: "gpt-6-astra" },
+      },
+    ])
+    expect(messageText(transcript.messages[0]!)).toBe("Plan a trip")
+    expect(new Set(transcript.messages.map((message) => message.id)).size).toBe(11)
   })
 
   it("ends with one line when more records could not be read than the view lists", () => {

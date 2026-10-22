@@ -102,6 +102,7 @@ function publishedView(
       notes: [],
       unreadable: [],
       unreadableTruncated: false,
+      handoffs: [],
       questions: [],
       tools: [],
       permissions: actionable

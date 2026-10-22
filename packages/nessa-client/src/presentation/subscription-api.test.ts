@@ -21,6 +21,7 @@ const view: ConversationView = {
   notes: [],
   unreadable: [],
   unreadableTruncated: false,
+  handoffs: [],
   approvalMode: "ask",
   model: "claude-sonnet-5",
   approvalModes: [{ id: "ask", name: "Provider asks", description: "Asks." }],

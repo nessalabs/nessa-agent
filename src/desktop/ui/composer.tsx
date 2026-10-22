@@ -100,7 +100,6 @@ export function Composer({
   onPageChange,
   model: shown,
   onModelChange,
-  modelProvider,
   modelDisabled = false,
   modelNotice,
   onSend,
@@ -122,8 +121,6 @@ export function Composer({
   model: { provider: string; modelId: string } | undefined
   /** Told when the person picks another model; the owner decides what is shown. */
   onModelChange?: (model: { provider: string; modelId: string }) => void
-  /** Established chats restrict the existing picker to their source provider. */
-  modelProvider?: string
   modelDisabled?: boolean
   modelNotice?: string
   /** Sends a turn; without it nothing can be sent and the send button says so. */
@@ -247,11 +244,7 @@ export function Composer({
           >
             <ModelPicker
               disabled={!onModelChange || modelDisabled}
-              groups={
-                modelProvider
-                  ? pickerGroups.filter((group) => group.id === modelProvider)
-                  : pickerGroups
-              }
+              groups={pickerGroups}
               value={shown && { providerId: shown.provider, modelId: shown.modelId }}
               onValueChange={({ providerId, modelId }) => {
                 const next = findComposerModel(providerId, modelId)

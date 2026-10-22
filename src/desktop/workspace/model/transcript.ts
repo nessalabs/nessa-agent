@@ -152,11 +152,16 @@ export interface QuestionChoice {
 
 /**
  * One row of a conversation: a message from the person or the agent, a
- * note somebody left in it (`NoteMessage`), or a saved record this read
- * could not apply (`UnreadableMessage`).
+ * note somebody left in it (`NoteMessage`), a saved record this read
+ * could not apply (`UnreadableMessage`), or the line where its agent ran
+ * on in a new session (`HandoffMessage`).
  */
 export type Message =
-  TurnMessage | NoteMessage | UnreadableMessage | UnreadableOverflowMessage
+  | TurnMessage
+  | NoteMessage
+  | UnreadableMessage
+  | UnreadableOverflowMessage
+  | HandoffMessage
 
 /** A message the person or the agent said in a turn. */
 export interface TurnMessage {
@@ -241,6 +246,44 @@ export interface UnreadableMessage {
   readonly terminal?: never
   readonly executionId?: never
   readonly requiredWorkFailed?: never
+}
+
+/**
+ * Where the conversation's agent ran on in a new session that was given the
+ * turns before it as text: a switch to another agent and model, or the fork
+ * the conversation began as. Drawn as one line across the transcript
+ * (`HandoffLine`). Nothing the window sends is one of these.
+ */
+export interface HandoffMessage {
+  readonly id: string
+  readonly role: "handoff"
+  readonly at: number
+  readonly parts: readonly Part[]
+  readonly handoff: Handoff
+  readonly note?: never
+  readonly unreadable?: never
+  readonly observedInput?: never
+  readonly delivery?: never
+  readonly app?: never
+  /** A handoff is not a turn, so it has no ending the gateway reported. */
+  readonly terminal?: never
+  readonly executionId?: never
+  readonly requiredWorkFailed?: never
+}
+
+/**
+ * A handoff as the transcript draws it. A switch names the agent and model
+ * either side of it; a fork, whose copied turns are drawn above it, says how
+ * many it left out.
+ */
+export type Handoff =
+  | { readonly kind: "switch"; readonly from: HandoffAgent; readonly to: HandoffAgent }
+  | { readonly kind: "fork"; readonly omittedTurns: number }
+
+/** An agent and model a switch left or went to; no agent for a provider Nessa has none for. */
+export interface HandoffAgent {
+  readonly agent?: string
+  readonly model: string
 }
 
 /**

@@ -73,6 +73,10 @@ export const KNOBS = {
     default: 1,
     what: "conversations renamed from a row's More menu, then talked to under the new title",
   },
+  handoffs: {
+    default: 1,
+    what: "conversations switched to the other agent from the composer's picker, then forked from a row's More menu, each talked to after",
+  },
   deletes: {
     default: 1,
     what: "conversations deleted from a row's More menu, once asked",
@@ -181,6 +185,7 @@ export function plan(knobs) {
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
   add(knobs.renames, () => ({ kind: "rename" }))
+  add(knobs.handoffs, () => ({ kind: "handoff" }))
   add(knobs.deletes, () => ({ kind: "delete" }))
   add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
@@ -203,10 +208,12 @@ export function plan(knobs) {
   }
   // Preset checks keep their original model. Positive model changes follow
   // that work, using Ask before their review; chaos keeps concurrent coverage.
-  const sequence = [
-    ...steps.filter((step) => step.kind !== "model"),
-    ...steps.filter((step) => step.kind === "model"),
-  ]
+  // Handoffs come last of all: a switch stays in the metadata, and no older
+  // build's file holds one, so the `upgrade` step runs before it.
+  const last = (step) => (step.kind === "handoff" ? 2 : step.kind === "model" ? 1 : 0)
+  const sequence = [0, 1, 2].flatMap((rank) =>
+    steps.filter((step) => last(step) === rank),
+  )
   let mode = "ask"
   const out = []
   for (const step of sequence) {

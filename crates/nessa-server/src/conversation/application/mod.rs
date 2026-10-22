@@ -176,6 +176,7 @@ mod locks;
 mod mcp_apps;
 mod metadata_target;
 pub(crate) use metadata_target::load_conversation;
+mod agent_switches;
 mod model_changes;
 mod owner_phone_policy;
 pub(crate) use metadata_target::ConversationMetadataReader;
@@ -281,6 +282,7 @@ pub(crate) use placement::{
     ConversationBindings, ConversationPlacements, PlacementError, WorkerBinding,
 };
 // For the paired environment adapter, which lives with the Unix-only SSH one.
+pub use agent_switches::{ConversationAgentSwitch, ConversationAgentSwitchState};
 pub(crate) use drive_tools::MAX_ADMITTED_POLICIES;
 pub use drive_tools::{DriveToolAudit, DriveToolAuditRecord, DriveTools};
 pub use model_changes::{
@@ -332,8 +334,9 @@ pub use service::{
     PreferenceUpdate, QuestionChoiceInput, ReadOpening, ReconcileRetry, RecordedPreference,
     ReportRegistration, RequestedAgent, RequestedConversation, ScheduleActor, ScheduleDraft,
     ScheduleSettlement, ScheduledCommandEvidence, ScheduledMessage, ScheduledMessageStore,
-    SubmissionMode, ThreadReport, ThreadReportStore, ThreadTurn, UnsettledEnable,
-    UsageLimitSnapshot, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
+    SelectionChange, SelectionRequest, SubmissionMode, ThreadReport, ThreadReportStore, ThreadTurn,
+    UnsettledEnable, UsageLimitSnapshot, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS,
+    MAX_RESOURCE_META_BYTES,
 };
 pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
 pub(crate) use service::{ExportAdmission, ExportHoldFailure, FENCE_LEASE_MS};

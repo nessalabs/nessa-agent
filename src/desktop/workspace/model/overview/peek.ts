@@ -43,11 +43,12 @@ export function peekOf(transcript: Transcript, limit = peekParts): Peek {
   let room = limit
   let total = 0
   for (let index = messages.length - 1; index > last; index--) {
-    // A note, or a record this read could not apply, is not the turn's.
+    // A note, a record this read could not apply, or a handoff's line is not the turn's.
     if (
       messages[index].role === "note" ||
       messages[index].role === "unreadable" ||
-      messages[index].role === "unreadable-overflow"
+      messages[index].role === "unreadable-overflow" ||
+      messages[index].role === "handoff"
     )
       continue
     const message = withoutCards(messages[index])

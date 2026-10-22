@@ -58,8 +58,38 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Which selection request invalidates a blocked continuation. The same kind
+/// owns its durable request namespace and cancellation reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectionChange {
+    Model,
+    Agent,
+}
+
+/// The original selection command, including the kind that owns its request id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectionRequest<'a> {
+    pub change: SelectionChange,
+    pub id: &'a str,
+}
+
+impl SelectionChange {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Model => "model",
+            Self::Agent => "agent",
+        }
+    }
+    pub(crate) fn cause(self) -> ContinuationCause {
+        match self {
+            Self::Model => ContinuationCause::ModelChanged,
+            Self::Agent => ContinuationCause::AgentChanged,
+        }
+    }
+}
+
 /// Who an audit row names. A provider limit is the system. The person is named
-/// for preference changes, model requests, and their cancellations.
+/// for preference changes, selection requests, and their cancellations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScheduleActor {
     pub person: bool,
@@ -513,15 +543,15 @@ pub trait ScheduledMessageStore: Send + Sync {
         let _ = conversation;
         Box::pin(async { Ok(0) })
     }
-    /// Invalidate the blocked causal turn when an applied model request first
+    /// Invalidate the blocked causal turn when an applied selection request first
     /// reconciles, including with preference off or no schedule. The request's
     /// receipt, token compare, cancellation and audit commit together. A repeat
     /// reads that receipt without invalidating a later turn. False is a stale
     /// token; absence of a blocked turn is recorded as an empty causal id.
     fn invalidate_usage_limit(
         &self,
+        request: SelectionRequest<'_>,
         conversation: &str,
-        request_id: &str,
         causal_execution: Option<&str>,
         token: &PlanToken,
         actor: ScheduleActor,
@@ -917,14 +947,19 @@ impl ConversationService {
         self.inner.schedule_wakeup.notify_waiters();
     }
 
-    pub(crate) async fn invalidate_model_usage_limit(
+    pub(crate) async fn invalidate_selection_usage_limit(
         &self,
+        change: SelectionChange,
         id: &ConversationId,
         request_id: &str,
         actor: ScheduleActor,
     ) -> Result<(), ConversationError> {
         let Some(store) = self.scheduled_messages() else {
             return Ok(());
+        };
+        let request = SelectionRequest {
+            change,
+            id: request_id,
         };
         let generation = store.history_generation(&id.to_string()).await?;
         let (history, agent, model, causal) = match self.usage_limit_facts(id).await? {
@@ -966,8 +1001,8 @@ impl ConversationService {
         };
         if !store
             .invalidate_usage_limit(
+                request,
                 &id.to_string(),
-                request_id,
                 causal.as_deref(),
                 &token,
                 actor,
@@ -975,7 +1010,10 @@ impl ConversationService {
             )
             .await?
         {
-            return Err(ConversationError::ModelChangeUncertain);
+            return Err(match change {
+                SelectionChange::Model => ConversationError::ModelChangeUncertain,
+                SelectionChange::Agent => ConversationError::RequestConflict,
+            });
         }
         Ok(())
     }

@@ -372,6 +372,7 @@ mod retained_tests {
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
+            handoffs: Vec::new(),
             notes: Vec::new(),
         };
         let expected = super::super::retained::snapshot(&snapshot);

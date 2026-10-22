@@ -390,6 +390,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
             actor: ActionContext::new("person", "panel", "send").unwrap(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Acknowledged,
             events,
             scheduling: vec![],
@@ -401,6 +402,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
         }],
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     }
 }

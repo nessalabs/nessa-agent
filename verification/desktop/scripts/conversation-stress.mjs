@@ -139,6 +139,7 @@ import { basename, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
+import { MODELS } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
   SAYS,
@@ -846,6 +847,53 @@ process.exit(result.status ?? 1)
   runtime.stagedRuntime = (runtime.stagedRuntime ?? []).map(relocate)
   writeFileSync(configPath, JSON.stringify(config))
   chmodSync(configPath, 0o600)
+}
+
+/**
+ * Whether `turn`, the first after a handoff, was the one given the earlier
+ * turns, on `model`: the scenario answers that turn alone with `SAYS.carried`
+ * and the prompt it was given, which quotes `earlier`, a message said before.
+ */
+function carriedBy(turn, model, what, earlier, failures) {
+  const said = (turn?.parts ?? [])
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("")
+  if (!said.startsWith(`${SAYS.carried}${model}: `))
+    failures.push(
+      `the first turn after ${what} said ${JSON.stringify(said.slice(0, 200))}, not that it carried the earlier turns on ${model}`,
+    )
+  else if (!said.includes(JSON.stringify(earlier)))
+    failures.push(`the first turn after ${what} was not given ${JSON.stringify(earlier)}`)
+}
+
+/**
+ * Whether the window shows, whole, the reply on `model` to `message`: it says
+ * back the prompt it answered, which ends with `message`, so no other reply
+ * quotes it, and it is shown whole once that end is.
+ */
+async function carriedShown(page, model, message) {
+  return page
+    .locator('.workspace-message[data-role="agent"]:visible')
+    .filter({ hasText: `${SAYS.carried}${model}` })
+    .filter({ hasText: message })
+    .first()
+    .waitFor({ timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false)
+}
+
+/** The scripted agent a `handoff` step switches to: the one the run does not start on. */
+function otherAgent(agent) {
+  return agent === "claude" ? "codex" : "claude"
+}
+
+/** A catalog provider's tab in the picker, as the window names it (`composer-options.ts`). */
+function providerName(provider) {
+  return (
+    { anthropic: "Anthropic", openai: "OpenAI", opencode: "OpenCode" }[provider] ??
+    provider
+  )
 }
 
 const steps = {
@@ -2021,6 +2069,158 @@ const steps = {
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
+  /**
+   * A conversation switched to the other agent from the composer's picker,
+   * as a person does, then forked from its row's More menu. Each is talked
+   * to after: the first turn of each new session is the one given the
+   * earlier turns (`SAYS.carried`), and it runs on the agent and model
+   * asked for. The window draws a line at the switch, and the fork opens
+   * on the copied turns and a line after them.
+   */
+  async handoff(run, step, failures) {
+    const other = otherAgent(run.stack.agent)
+    const target = catalog.models.find((model) => model.modelId === MODELS[other])
+    if (!target) throw new CannotRun(`the catalog has no ${MODELS[other]}`)
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " handoff")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length || !before) return
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
+    // The other provider's tab, then its model, in the composer's picker.
+    const picker = dock(run.page).locator(css.modelChip)
+    await picker.click()
+    await run.page
+      .locator(css.modelProviderTab)
+      .filter({ hasText: providerName(target.provider) })
+      .first()
+      .click()
+    await run.page
+      .locator(css.modelOption)
+      .filter({ hasText: target.displayName })
+      .first()
+      .click()
+    const switched = await waitFor(async () => {
+      const view = await run.client.conversation.read(conversationId)
+      return view.model === target.modelId &&
+        view.handoffs.some((each) => each.kind === "switch" && each.to?.agent === other)
+        ? view
+        : null
+    }, 30_000)
+    if (!switched) {
+      failures.push(`the conversation was not switched to ${other} from the picker`)
+      return
+    }
+    const line = run.page.locator(`${css.handoffLine}[data-handoff="switch"]`)
+    if (
+      !(await line
+        .first()
+        .waitFor({ timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false))
+    )
+      failures.push("the window drew no line where the conversation was switched")
+    const afterSwitch = prompt(run, STRESS.reply, step, " after switch")
+    const seen = await send(
+      run,
+      conversationId,
+      afterSwitch,
+      failures,
+      new Set(before.messages.map((each) => each.executionId)),
+    )
+    const { turn: switchedTurn } = await settled(
+      run,
+      conversationId,
+      seen,
+      afterSwitch,
+      "completed",
+      failures,
+    )
+    carriedBy(switchedTurn, target.modelId, "the switch", first, failures)
+    if (!(await carriedShown(run.page, target.modelId, afterSwitch)))
+      failures.push("the window does not show the reply after the switch")
+    if (run.evidence)
+      await run.page.screenshot({
+        path: join(run.evidence, `handoff-${run.engine}-switch.png`),
+        scale: "css",
+      })
+    // Forked from the row: the window opens the fork, on the copied turns.
+    const listed = new Set(
+      (await run.client.conversation.list({})).conversations.map(
+        (each) => each.conversationId,
+      ),
+    )
+    await choose(run.page, conversationId, "Fork")
+    const forkId = await waitFor(async () => {
+      const { conversations } = await run.client.conversation.list({})
+      return conversations.find((each) => !listed.has(each.conversationId))
+        ?.conversationId
+    }, 15_000)
+    if (!forkId) {
+      failures.push("the gateway never listed the fork")
+      return
+    }
+    run.checked.push(forkId)
+    const forked = await run.client.conversation.read(forkId)
+    const copied = forked.handoffs.find((each) => each.kind === "fork")
+    if (forked.model !== target.modelId)
+      failures.push(`the fork runs ${forked.model}, not its source's ${target.modelId}`)
+    if (!copied || (copied.turns?.length ?? 0) !== 2)
+      failures.push(
+        `the fork copied ${copied?.turns?.length ?? "no"} turns, not the source's 2`,
+      )
+    if (forked.messages.length > 0) failures.push("the fork said something of its own")
+    if (
+      !(await run.page
+        .locator(`${css.handoffLine}[data-handoff="fork"]`)
+        .first()
+        .waitFor({ timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false))
+    )
+      failures.push("the window did not open the fork on its copied turns")
+    await expectShown(run.page, `${SAYS.echo}${first}`, failures)
+    const inFork = prompt(run, STRESS.reply, step, " in fork")
+    const forkSeen = await send(run, forkId, inFork, failures, new Set())
+    const { turn: forkTurn } = await settled(
+      run,
+      forkId,
+      forkSeen,
+      inFork,
+      "completed",
+      failures,
+    )
+    // Its own first turn ran on the same model and was given the copied turns.
+    carriedBy(forkTurn, target.modelId, "the fork", first, failures)
+    if (!(await carriedShown(run.page, target.modelId, inFork)))
+      failures.push("the window does not show the fork's own reply after the copied one")
+    if (run.evidence)
+      await run.page.screenshot({
+        path: join(run.evidence, `handoff-${run.engine}-fork.png`),
+        scale: "css",
+      })
+    // The source is as it was.
+    const source = await run.client.conversation.read(conversationId)
+    if (source.messages.length !== 2)
+      failures.push(`the fork changed its source: ${source.messages.length} turns`)
+    await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
   async delete(run, step, failures) {
     const conversationId = randomUUID()
     const first = prompt(run, STRESS.reply, step, " delete")
@@ -2697,6 +2897,8 @@ async function startStack(options) {
       scenario,
       evidence: options.evidence,
       limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
+      // The agent a `handoff` step switches its conversation to.
+      others: knobs.handoffs > 0 ? [otherAgent(options.agent)] : [],
       // Off, at a port of its own: the `linking` step turns it on from Settings.
       native: { enabled: false, listenAddress: nativeAddress },
     })

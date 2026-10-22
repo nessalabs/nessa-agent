@@ -1,4 +1,5 @@
 mod acquisition;
+mod agent_switches;
 mod cached;
 mod export;
 mod model_changes;
@@ -12,7 +13,8 @@ use super::catalogue_changes::CatalogueChanges;
 
 use crate::conversation::application::{
     CatalogueChangeWatch, CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage,
-    CataloguePageRequest, CatalogueValue, ConversationAccessPolicyEvaluator, ConversationCatalogue,
+    CataloguePageRequest, CatalogueValue, ConversationAccessPolicyEvaluator,
+    ConversationAgentSwitch, ConversationAgentSwitchState, ConversationCatalogue,
     ConversationCreation, ConversationCreationDisposition, ConversationError, ConversationFuture,
     ConversationListing, ConversationModeApplication, ConversationModeRequest,
     ConversationModeRequestState, ConversationModelApplication, ConversationModelRequest,
@@ -105,9 +107,10 @@ const DEFINITION: &str = include_str!("schema.sql");
 
 /// What brings a file from an older build to [`DEFINITION`]'s version, one
 /// version at a time. Each only adds what that version added.
-static UPGRADES: [Upgrade; 2] = [
+static UPGRADES: [Upgrade; 3] = [
     Upgrade::new(6, include_str!("schema_upgrades/6.sql")),
     Upgrade::new(7, include_str!("schema_upgrades/7.sql")),
+    Upgrade::new(8, include_str!("schema_upgrades/8.sql")),
 ];
 
 /// The metadata schema, with the steps that bring an older file to it.
@@ -186,6 +189,7 @@ impl LocalConversationStore {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let connection = nessa_local_database::open(path, &schema()?)?;
         model_changes::validate_shape(&connection)?;
+        agent_switches::validate_shape(&connection)?;
         connection.set_prepared_statement_cache_capacity(cached::STATEMENTS);
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -944,6 +948,36 @@ fn write_deletion(
 }
 
 impl ConversationRepository for LocalConversationStore {
+    fn begin_agent_switch(
+        &self,
+        request: ConversationAgentSwitch,
+    ) -> ConversationFuture<'_, ConversationAgentSwitch> {
+        agent_switches::begin(self, request)
+    }
+    fn pending_agent_switch(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationAgentSwitch>> {
+        let id = id.clone();
+        self.run(move |connection| agent_switches::read_switch(connection, &id, None))
+    }
+    fn agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationAgentSwitch>> {
+        let id = id.clone();
+        let request_id = request_id.to_owned();
+        self.run(move |connection| agent_switches::read_switch(connection, &id, Some(&request_id)))
+    }
+    fn finish_agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationAgentSwitchState,
+    ) -> ConversationFuture<'_, ConversationAgentSwitch> {
+        agent_switches::finish(self, id, request_id, state)
+    }
     fn begin_model_change(
         &self,
         request: ConversationModelRequest,
@@ -1068,6 +1102,10 @@ impl ConversationRepository for LocalConversationStore {
             }
             if read_mode_request(&transaction, &request.conversation_id, None)?.is_some() {
                 return Err(ConversationError::ApprovalModeUncertain);
+            }
+            if agent_switches::read_switch(&transaction, &request.conversation_id, None)?.is_some()
+            {
+                return Err(ConversationError::RequestConflict);
             }
             if current.approval_mode() != request.prior
                 || current.organization() != &request.organization_id

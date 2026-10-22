@@ -658,6 +658,7 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
             actor: actor(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: history,
@@ -665,6 +666,7 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
         }],
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     });
     assert!(matches!(

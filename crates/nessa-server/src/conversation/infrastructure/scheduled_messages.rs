@@ -15,7 +15,8 @@ use crate::conversation::application::{
     ConversationError, ConversationFuture, PlanToken, PreferenceCommandOutcome,
     PreferenceCommandReceipt, PreferenceReading, PreferenceUpdate, ReconcileRetry,
     RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledCommandEvidence,
-    ScheduledMessage, ScheduledMessageStore, UnsettledEnable, UsageLimitSnapshot, FENCE_LEASE_MS,
+    ScheduledMessage, ScheduledMessageStore, SelectionRequest, UnsettledEnable, UsageLimitSnapshot,
+    FENCE_LEASE_MS,
 };
 use crate::conversation::domain::ContinuationCause;
 use nessa_local_database::{
@@ -1005,15 +1006,16 @@ impl ScheduledMessageStore for LocalScheduledMessages {
 
     fn invalidate_usage_limit(
         &self,
+        request: SelectionRequest<'_>,
         conversation: &str,
-        request_id: &str,
         causal_execution: Option<&str>,
         token: &PlanToken,
         actor: ScheduleActor,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool> {
         let conversation = conversation.to_owned();
-        let request_id = request_id.to_owned();
+        let change = request.change;
+        let request_id = request.id.to_owned();
         let causal = causal_execution.unwrap_or_default().to_owned();
         let token = token.clone();
         self.run(move |connection| {
@@ -1024,8 +1026,8 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             let recorded: bool = transaction
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM usage_limit_invalidation \
-                 WHERE conversation = ?1 AND request_id = ?2)",
-                    params![conversation, request_id],
+                 WHERE conversation = ?1 AND request_id = ?2 AND selection_kind = ?3)",
+                    params![conversation, request_id, change.as_str()],
                     |row| row.get(0),
                 )
                 .map_err(failed)?;
@@ -1040,15 +1042,15 @@ impl ScheduledMessageStore for LocalScheduledMessages {
             transaction
                 .execute(
                     "INSERT INTO usage_limit_invalidation \
-                 (conversation, request_id, incarnation, causal_execution) VALUES (?1, ?2, ?3, ?4)",
-                    params![conversation, request_id, token.history.incarnation, causal],
+                 (conversation, request_id, incarnation, causal_execution, selection_kind) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![conversation, request_id, token.history.incarnation, causal, change.as_str()],
                 )
                 .map_err(failed)?;
             cancel_matching(
                 &transaction,
                 "WHERE conversation = ?1 AND status IN ('scheduled', 'delivering')",
                 &[&conversation],
-                ContinuationCause::ModelChanged.as_str(),
+                change.cause().as_str(),
                 &actor,
                 at_ms,
             )?;
@@ -1065,7 +1067,7 @@ impl ScheduledMessageStore for LocalScheduledMessages {
                     } else {
                         "invalidated"
                     },
-                    cause: ContinuationCause::ModelChanged.as_str(),
+                    cause: change.cause().as_str(),
                     actor: &actor,
                 },
             )?;
@@ -2099,7 +2101,7 @@ impl ScrubRow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversation::application::HistoryGeneration;
+    use crate::conversation::application::{HistoryGeneration, SelectionChange};
 
     fn draft(conversation: &str, causal: &str, execution: &str, due: u64) -> ScheduleDraft {
         ScheduleDraft {
@@ -3570,8 +3572,11 @@ mod tests {
             let initial = token(row.history.clone(), 0);
             assert!(store
                 .invalidate_usage_limit(
+                    SelectionRequest {
+                        change: SelectionChange::Model,
+                        id: "model-request"
+                    },
                     "conversation",
-                    "model-request",
                     causal,
                     &initial,
                     person_as("model-request"),
@@ -3596,8 +3601,11 @@ mod tests {
             // Replaying the old applied command must not target this later limit.
             assert!(store
                 .invalidate_usage_limit(
+                    SelectionRequest {
+                        change: SelectionChange::Model,
+                        id: "model-request"
+                    },
                     "conversation",
-                    "model-request",
                     Some("later-limit"),
                     &initial,
                     person_as("model-request"),
@@ -3610,8 +3618,11 @@ mod tests {
             // Another request cannot use a token from before the first invalidation.
             assert!(!store
                 .invalidate_usage_limit(
+                    SelectionRequest {
+                        change: SelectionChange::Model,
+                        id: "new-request"
+                    },
                     "conversation",
-                    "new-request",
                     Some("later-limit"),
                     &initial,
                     person_as("new-request"),
@@ -3640,8 +3651,11 @@ mod tests {
             .unwrap();
         assert!(store
             .invalidate_usage_limit(
+                SelectionRequest {
+                    change: SelectionChange::Model,
+                    id: "model-request"
+                },
                 "conversation",
-                "model-request",
                 Some("causal"),
                 &current,
                 person_as("model-request"),
@@ -3670,8 +3684,11 @@ mod tests {
             .unwrap();
         assert!(store
             .invalidate_usage_limit(
+                SelectionRequest {
+                    change: SelectionChange::Model,
+                    id: "model-request"
+                },
                 "conversation",
-                "model-request",
                 Some("causal"),
                 &current,
                 person_as("model-request"),
@@ -4131,5 +4148,86 @@ mod tests {
         let snapshot = store.usage_limit_snapshot("kept").await.unwrap();
         assert!(!snapshot.enabled);
         assert!(snapshot.open.is_none());
+    }
+
+    #[tokio::test]
+    async fn model_and_agent_invalidations_have_separate_request_namespaces() {
+        let store = enabled_store().await;
+        let first = draft("conversation", "model-limit", "exec-1", 50);
+        store.accept(first.clone(), 1).await.unwrap();
+        let initial = sealed_token(&store, "conversation", first.history.clone(), 1).await;
+        assert!(store
+            .invalidate_usage_limit(
+                SelectionRequest {
+                    change: SelectionChange::Model,
+                    id: "same-request"
+                },
+                "conversation",
+                Some("model-limit"),
+                &initial,
+                person_as("same-request"),
+                2
+            )
+            .await
+            .unwrap());
+        let mut later = draft("conversation", "agent-limit", "exec-2", 60);
+        later.history.position = 2;
+        later.history.generation = store.history_generation("conversation").await.unwrap();
+        store.accept(later.clone(), 3).await.unwrap().unwrap();
+        let current = sealed_token(&store, "conversation", later.history.clone(), 1).await;
+        assert!(store
+            .invalidate_usage_limit(
+                SelectionRequest {
+                    change: SelectionChange::Agent,
+                    id: "same-request"
+                },
+                "conversation",
+                Some("agent-limit"),
+                &current,
+                person_as("same-request"),
+                4
+            )
+            .await
+            .unwrap());
+        assert!(store.open("conversation").await.unwrap().is_none());
+        let receipts: i64 = store
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM usage_limit_invalidation WHERE request_id='same-request'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(receipts, 2);
+        assert_eq!(audits(&store).last().unwrap().1, "agent_changed");
+        let mut newest = draft("conversation", "newest", "exec-3", 70);
+        newest.history.position = 3;
+        newest.history.generation = store.history_generation("conversation").await.unwrap();
+        store.accept(newest, 5).await.unwrap().unwrap();
+        assert!(store
+            .invalidate_usage_limit(
+                SelectionRequest {
+                    change: SelectionChange::Agent,
+                    id: "same-request"
+                },
+                "conversation",
+                Some("newest"),
+                &current,
+                person_as("same-request"),
+                6
+            )
+            .await
+            .unwrap());
+        assert_eq!(
+            store
+                .open("conversation")
+                .await
+                .unwrap()
+                .unwrap()
+                .causal_execution,
+            "newest"
+        );
     }
 }

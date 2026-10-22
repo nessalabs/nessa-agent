@@ -98,6 +98,7 @@ export interface AuditEntry {
     | "unpin"
     | "archive"
     | "rename"
+    | "fork"
     | "delete"
     | "let-go"
     | "answer-question"
@@ -732,6 +733,51 @@ export function inMemorySource(
           ? session.revision
           : putSession({ ...session, title }).revision
       }),
+    // As the gateway: a new session listed as this one is, whose transcript
+    // is the turns copied and the line saying so, and that has said nothing
+    // of its own yet.
+    fork: (sessionId, initiator) => {
+      const forked = crypto.randomUUID()
+      return audited({ sessionId, action: "fork", initiator }, () => {
+        const session = known(sessionId)
+        const copied = transcriptOf(sessionId).messages.flatMap((message) =>
+          message.role === "user" || message.role === "agent"
+            ? [
+                {
+                  id: `/handoff:${forked}/${message.id}`,
+                  role: message.role,
+                  at: message.at,
+                  parts: message.parts.filter((part) => part.kind === "text"),
+                },
+              ]
+            : [],
+        )
+        putTranscript({
+          ...emptyTranscript(forked),
+          messages: [
+            ...copied,
+            {
+              id: `/handoff:${forked}`,
+              role: "handoff",
+              at: schedule.now(),
+              parts: [],
+              handoff: { kind: "fork", omittedTurns: 0 },
+            },
+          ],
+        })
+        putSession({
+          ...session,
+          id: forked,
+          status: "idle",
+          now: undefined,
+          pinned: false,
+          unread: false,
+          startedAt: schedule.now(),
+          updatedAt: schedule.now(),
+        })
+        return session.revision
+      }).then(() => forked)
+    },
     // As the gateway: nothing of it is kept, and its id is never begun again.
     delete: (sessionId, initiator) =>
       audited({ sessionId, action: "delete", initiator }, () => {

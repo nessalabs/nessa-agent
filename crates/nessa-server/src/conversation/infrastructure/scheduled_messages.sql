@@ -108,14 +108,15 @@ CREATE TABLE history_fence (
     model TEXT NOT NULL
 ) STRICT;
 
--- One applied model request invalidates only the limit it first observed.
+-- One applied selection request invalidates only the limit it first observed.
 -- Empty causal_execution records that there was no limit at that boundary.
 CREATE TABLE usage_limit_invalidation (
     conversation TEXT NOT NULL,
     request_id TEXT NOT NULL,
+    selection_kind TEXT NOT NULL CHECK (selection_kind IN ('model', 'agent')),
     incarnation TEXT NOT NULL,
     causal_execution TEXT NOT NULL,
-    PRIMARY KEY (conversation, request_id)
+    PRIMARY KEY (conversation, selection_kind, request_id)
 ) STRICT;
 
 CREATE INDEX usage_limit_invalidation_causal ON usage_limit_invalidation

@@ -78,12 +78,22 @@ type Method =
   | "setApprovalMode"
   | "setUsageLimitAutoContinue"
   | "setModel"
+  | "switchAgent"
+  | "fork"
   | "read"
   | "archive"
   | "rename"
   | "delete"
   | "permissionRules"
   | "revokePermissionRule"
+
+/** A turn's reply as a fork copies it: its text, joined. */
+function turnReply(turn: ConversationView["messages"][number]): string | undefined {
+  const text = turn.parts
+    .flatMap((part) => (part.kind === "text" ? [part.text] : []))
+    .join("")
+  return text || undefined
+}
 
 type AnswerArgs = Parameters<ConversationApi["answer"]>
 type AnswerResult = Awaited<ReturnType<ConversationApi["answer"]>>
@@ -297,6 +307,7 @@ export function view(
     notes: [],
     unreadable: [],
     unreadableTruncated: false,
+    handoffs: [],
     capabilities: {
       queue: true,
       steer: true,
@@ -672,6 +683,67 @@ export function fakeGateway(
             approvalMode: current?.approvalMode ?? "ask",
             effect: "nextTurn",
           }
+        }) as never,
+      // As the gateway: the conversation carries on under the agent and
+      // model asked for, and its view lists the switch after its last turn.
+      switchAgent: (...args) =>
+        answer("switchAgent", args, () => {
+          const [id, agent, model, options] = args
+          const requestId = options?.requestId ?? "switch-agent"
+          const current = views.get(id)
+          if (!current) return { requestId, applied: false }
+          const last = current.messages.at(-1)?.executionId
+          views.set(id, {
+            ...current,
+            model,
+            handoffs: [
+              ...current.handoffs,
+              {
+                handoffId: `switch-${requestId}`,
+                kind: "switch",
+                atMs: current.serverNowMs,
+                ...(last === undefined ? {} : { afterExecutionId: last }),
+                from: {
+                  ...(current.runtime?.agent ? { agent: current.runtime.agent } : {}),
+                  model: current.model ?? "",
+                },
+                to: { agent, model },
+              },
+            ],
+            runtime: current.runtime && { ...current.runtime, agent, model },
+          })
+          return { requestId, applied: true }
+        }) as never,
+      // As the gateway: a new conversation on the source's model, whose view
+      // lists the source's turns as the fork it began as, and says nothing
+      // of its own yet.
+      fork: (...args) =>
+        answer("fork", args, () => {
+          const [sourceId, options] = args
+          const conversationId = options?.conversationId ?? ""
+          const source = views.get(sourceId) ?? view(sourceId)
+          if (!views.has(conversationId))
+            views.set(conversationId, {
+              ...view(conversationId, { revision: "forked" }),
+              model: source.model,
+              approvalMode: source.approvalMode,
+              title: source.title,
+              handoffs: [
+                {
+                  handoffId: `fork-${options?.requestId ?? conversationId}`,
+                  kind: "fork",
+                  atMs: source.serverNowMs,
+                  turns: source.messages.map((turn) => ({
+                    ...(turn.userText ? { said: turn.userText } : {}),
+                    ...(turnReply(turn) ? { reply: turnReply(turn) } : {}),
+                  })),
+                },
+              ],
+            })
+          const row = rows.get(sourceId)
+          if (row && !rows.has(conversationId))
+            rows.set(conversationId, { ...row, conversationId })
+          return { conversationId }
         }) as never,
       setApprovalMode: (...args) =>
         answer("setApprovalMode", args, () => {

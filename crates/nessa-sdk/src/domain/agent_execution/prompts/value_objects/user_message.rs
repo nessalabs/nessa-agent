@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use super::{AppModelContext, MessageSender, NoteContext, PromptText};
+use super::{AppModelContext, CarriedHistory, MessageSender, NoteContext, PromptText};
 use crate::domain::{
     agent_execution::ExecutionError,
     common::value_objects::{ImageMediaType, Sha256Digest},
@@ -216,6 +216,7 @@ pub struct UserMessage {
     sender: MessageSender,
     app_model_context: Box<[AppModelContext]>,
     notes: Box<[NoteContext]>,
+    history: Option<Box<CarriedHistory>>,
 }
 impl UserMessage {
     /// Most images in one message.
@@ -290,6 +291,7 @@ impl UserMessage {
             sender: MessageSender::Person,
             app_model_context: Box::default(),
             notes: Box::default(),
+            history: None,
         })
     }
     /// A message of text alone, the person's, which cannot fail: the text is
@@ -302,6 +304,7 @@ impl UserMessage {
             sender: MessageSender::Person,
             app_model_context: Box::default(),
             notes: Box::default(),
+            history: None,
         }
     }
     /// This message, written by `sender`. A message is the person's until
@@ -382,6 +385,21 @@ impl UserMessage {
             ..self
         })
     }
+    /// This message, carrying `history` — the earlier turns of the
+    /// conversation the native session it runs in has not seen — in place of
+    /// any it carried.
+    ///
+    /// A session adds it when it dispatches the first turn after a fork or an
+    /// agent switch, from the conversation's own records, as it adds notes; a
+    /// message a caller submits carrying history is refused, so a caller
+    /// cannot put words in the conversation's past.
+    #[must_use]
+    pub fn with_history(self, history: CarriedHistory) -> Self {
+        Self {
+            history: Some(Box::new(history)),
+            ..self
+        }
+    }
     /// The text, when the user wrote any.
     pub fn text(&self) -> Option<&PromptText> {
         self.text.as_ref()
@@ -412,5 +430,11 @@ impl UserMessage {
     /// the message and not part of what it says; empty when it takes none.
     pub fn notes(&self) -> &[NoteContext] {
         &self.notes
+    }
+    /// The earlier turns this turn is given, sent ahead of the message and
+    /// not part of what it says; `None` for every turn but the first after a
+    /// fork or an agent switch.
+    pub fn history(&self) -> Option<&CarriedHistory> {
+        self.history.as_deref()
     }
 }

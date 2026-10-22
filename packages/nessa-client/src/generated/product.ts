@@ -698,6 +698,8 @@ export interface ConversationView {
   artifacts: ConversationArtifact[]
   /** Notes left in the conversation (conversation.message), the newest 64 in the order they were left; empty before any was. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response. */
   notes: ConversationNote[]
+  /** Switches to another agent or model, and the fork the conversation began as, in the order they were recorded; empty before any. */
+  handoffs: ConversationHandoff[]
   /** Records this read could not apply, oldest first, at most 32. Empty when every record could be read. A chat with no turns may still list these. Each is one line in the transcript. The line is where a future report action attaches; this view carries no report control. */
   unreadable: ConversationUnreadable[]
   /** True when more records could not be read than the 32 lines in unreadable. Those records were still skipped. The transcript ends with one line: More parts of this conversation couldn't be read. */
@@ -2650,6 +2652,39 @@ export interface ConversationNoteAuthor {
   /** The verified surface it was left from. */
   surface: string
 }
+/** A point after which the conversation's agent ran in a new session that had not seen the turns before it: a switch to another agent or model (conversation.switchAgent), or the fork the conversation began as (conversation.fork). The first turn after it was given those turns as text. Show it as a line in the transcript, after the turn it follows. */
+export interface ConversationHandoff {
+  /** The conversation's own name for the handoff. */
+  handoffId: string
+  /** A switch to another agent or model, or the fork the conversation began as. */
+  kind: "switch" | "fork"
+  /** When it was recorded, in milliseconds since the Unix epoch, on the gateway's clock. */
+  atMs: number
+  /** The last turn the conversation held when it was recorded, which it is shown after; absent before any turn, as a fork always is. */
+  afterExecutionId?: string
+  /** A switch's agent and model before it; present exactly for a switch. */
+  from?: ConversationHandoffAgent
+  /** A switch's agent and model after it; present exactly for a switch. */
+  to?: ConversationHandoffAgent
+  /** A fork's copied turns, oldest first, shown before everything the conversation said itself. Absent for a switch, and when the view left them all out. */
+  turns?: ConversationCarriedTurn[]
+  /** Copied turns left out, by the copy's own bounds or by this view's; absent when none were. */
+  omittedTurns?: number
+}
+/** An agent and model a switch left or went to. */
+export interface ConversationHandoffAgent {
+  /** The agent, as agents.list names it; absent when the history's provider is one this gateway has no agent for. */
+  agent?: string
+  /** The model, as the agent's catalog names it. */
+  model: string
+}
+/** One turn a fork copied, as the new conversation's agent was given it: what was said, and the agent's final reply. Text only. */
+export interface ConversationCarriedTurn {
+  /** What was said in the turn, when it said anything in text. */
+  said?: string
+  /** The agent's final reply, when it gave one. */
+  reply?: string
+}
 /** Leave a note in one conversation (conversation.message). A note is saved with its author, the caller's principal and surface and the authority it was admitted under, and starts or steers no turn: a next_turn note waits for the next turn a person starts (see ConversationMessageDelivery). The conversation's owner leaves one from its own surfaces; a paired device needs a comment or drive grant on that conversation, and is refused forbidden under a read grant and conversation_not_found where it holds none. The same requestId with the same text and delivery, from the same surface under the same authority, answers the first receipt unchanged, however long after; any other note under that requestId is refused idempotency_conflict. A conversation keeps at most 1024 notes, and one author (a principal under one authority) leaves at most 20 in any 60 seconds; past either it is refused message_quota_exceeded and nothing is saved. At most 64 next_turn notes wait for a turn at once, not counting one past its 24 hours, which the next turn retires; past that a next_turn note is refused message_quota_exceeded too. A deleted conversation refuses it conversation_deleted. */
 export interface ConversationMessageParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
@@ -2824,6 +2859,26 @@ export interface ConversationSetModelParams {
   /** Exact model identifier within the conversation provider. */
   model: string
 }
+/** Carry the conversation on under another agent, in a new session of it that is given the conversation's earlier turns as text with its next message; the transcript shows a handoff line where it happened. Refused busy while a turn runs or waits; refused invalid_request for the agent the conversation already runs on (use conversation.setModel). applied is false when the switch was not made, and the conversation stays on its agent. */
+export interface ConversationSwitchAgentParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The agent to carry on under, as agents.list names it. */
+  agent: string
+  /** Exact model identifier within that agent's catalog. */
+  model: string
+}
+/** Start a new conversation from a copy of another's turns, on the same agent, model, approval preset and environment. The new conversation's agent is given the copied turns as text with its first message, and its transcript shows them first. Idempotent for a retry of one request; the conversation identity is the caller's, as for conversation.create. */
+export interface ConversationForkParams {
+  /** The new conversation, a fresh canonical lowercase hyphenated UUID. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The conversation to copy, which must be the caller's own. */
+  sourceConversationId: string
+}
 /** Durably confirmed model and approval preset, with native effect timing. */
 export interface ConversationSetModelResult {
   /** Original action identifier. */
@@ -2982,7 +3037,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 79,
+  maxReadyMethods: 81,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3279,6 +3334,8 @@ export const ProductMethod = {
   ConversationSubscribeEvents: "conversation.subscribeEvents",
   ConversationPeek: "conversation.peek",
   ConversationSetModel: "conversation.setModel",
+  ConversationSwitchAgent: "conversation.switchAgent",
+  ConversationFork: "conversation.fork",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -3371,6 +3428,8 @@ export const productReadyMethods = [
   "conversation.subscribeEvents",
   "conversation.peek",
   "conversation.setModel",
+  "conversation.switchAgent",
+  "conversation.fork",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -3454,6 +3513,8 @@ export const productMethodGrants = {
   "conversation.subscribeEvents": "conversation.write",
   "conversation.peek": "conversation.write",
   "conversation.setModel": "conversation.write",
+  "conversation.switchAgent": "conversation.write",
+  "conversation.fork": "conversation.write",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

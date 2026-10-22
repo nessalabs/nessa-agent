@@ -56,7 +56,8 @@ use super::{
     renew_while_held, schedule_caller, HistoryGeneration, PlanToken, PreferenceCommandOutcome,
     PreferenceCommandReceipt, PreferenceReading, PreferenceUpdate, RecordedPreference,
     ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
-    FENCE_LEASE_MS, FENCE_RENEW_EVERY_MS, FENCE_RENEW_RETRY_MS, SCHEDULE_RETRY_MS,
+    SelectionChange, SelectionRequest, FENCE_LEASE_MS, FENCE_RENEW_EVERY_MS, FENCE_RENEW_RETRY_MS,
+    SCHEDULE_RETRY_MS,
 };
 use crate::conversation::application::{
     ConversationCaller, ConversationDependencies, ConversationFuture, ConversationLimits,
@@ -287,7 +288,7 @@ impl ScheduledMessageStore for RecordingStore {
     // dedicated tests against LocalScheduledMessages.
     fn invalidate_usage_limit(
         &self,
-        _: &str,
+        _: SelectionRequest<'_>,
         _: &str,
         _: Option<&str>,
         _: &crate::conversation::application::PlanToken,
@@ -795,7 +796,7 @@ impl ScheduledMessageStore for NotifyOnDue {
     // dedicated tests against LocalScheduledMessages.
     fn invalidate_usage_limit(
         &self,
-        _: &str,
+        _: SelectionRequest<'_>,
         _: &str,
         _: Option<&str>,
         _: &crate::conversation::application::PlanToken,
@@ -2084,7 +2085,8 @@ async fn a_model_request_records_absence_even_without_a_committed_session() {
     let path = private.join("scheduled-chat-messages.sqlite3");
     service.bind_scheduled_messages(Arc::new(LocalScheduledMessages::open(&path).unwrap()));
     service
-        .invalidate_model_usage_limit(
+        .invalidate_selection_usage_limit(
+            SelectionChange::Model,
             &id,
             "model-request",
             ScheduleActor::person(&caller_as("model-request")),
@@ -2374,7 +2376,7 @@ impl ScheduledMessageStore for ScriptedSchedule {
     // dedicated tests against LocalScheduledMessages.
     fn invalidate_usage_limit(
         &self,
-        _: &str,
+        _: SelectionRequest<'_>,
         _: &str,
         _: Option<&str>,
         _: &crate::conversation::application::PlanToken,

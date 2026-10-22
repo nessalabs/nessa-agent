@@ -29,6 +29,7 @@ fn opening(id: &SessionId, name: &str) -> (SessionSaveUnit, SessionSnapshot) {
         queue_history: Vec::new(),
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     };
     (SessionSaveUnit::new(vec![change]).unwrap(), snapshot)

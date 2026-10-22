@@ -2,9 +2,9 @@ use super::domain::{ConversationApprovalMode, ConversationId};
 use super::tool_uis::{McpToolUis, NoMcpToolUis};
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationArtifact,
-    ConversationAsked, ConversationCapabilities, ConversationLeaseCause, ConversationLeaseCleanup,
-    ConversationLeaseEnvironment, ConversationLeaseRefusal, ConversationLeaseSandbox,
-    ConversationLeaseState, ConversationLeaseView, ConversationLifecycle,
+    ConversationAsked, ConversationCapabilities, ConversationHandoff, ConversationLeaseCause,
+    ConversationLeaseCleanup, ConversationLeaseEnvironment, ConversationLeaseRefusal,
+    ConversationLeaseSandbox, ConversationLeaseState, ConversationLeaseView, ConversationLifecycle,
     ConversationLifecyclePhase, ConversationMcpTool, ConversationMessage, ConversationMessageApp,
     ConversationMessageStatus, ConversationModelChangeEffect, ConversationModelChangeView,
     ConversationNote, ConversationPart, ConversationPending, ConversationPendingMode,
@@ -56,6 +56,8 @@ const MAX_TOOLS: usize = 16;
 pub const MAX_VIEW_ARTIFACTS: usize = 64;
 /// Most notes the view lists: the newest, in the order they were left.
 pub const MAX_VIEW_NOTES: usize = 64;
+/// Most handoffs the view lists: as many as a conversation keeps.
+pub const MAX_VIEW_HANDOFFS: usize = 256;
 // Application transcript body; product catalog enrichment is serialized afterward.
 pub const MAX_VIEW_BYTES: usize = 60_000;
 pub use crate::product::generated::{MAX_LISTED_REVIEWS, MAX_REVIEW_ENTRY_TOOL_NAME_BYTES};
@@ -747,6 +749,12 @@ impl Projection {
                     snapshot.notes[snapshot.notes.len().saturating_sub(MAX_VIEW_NOTES)..]
                         .iter()
                         .map(|note| ConversationNote::of(snapshot, note))
+                        .collect()
+                }),
+                handoffs: snapshot.map_or_else(Vec::new, |snapshot| {
+                    snapshot.handoffs[snapshot.handoffs.len().saturating_sub(MAX_VIEW_HANDOFFS)..]
+                        .iter()
+                        .map(ConversationHandoff::of)
                         .collect()
                 }),
                 unreadable: Vec::new(),
@@ -1935,6 +1943,16 @@ pub fn bound_view_within(
     limit: usize,
     interactions: bool,
 ) -> ConversationView {
+    // A fork's copied turns come before every turn of the conversation, so
+    // a view that leaves out its oldest turns leaves them out too: shown, they
+    // would read as if nothing came between them and the turns listed.
+    if view.truncated {
+        for handoff in &mut view.handoffs {
+            let left_out = u32::try_from(handoff.turns.len()).unwrap_or(u32::MAX);
+            handoff.omitted_turns = handoff.omitted_turns.saturating_add(left_out);
+            handoff.turns.clear();
+        }
+    }
     // The binding bounds actual admitted ACP asks. Custom backends can
     // retain other valid histories, so the encoded display owner gives up
     // whole interactions with an explicit notice rather than cutting choices.
@@ -1953,6 +1971,17 @@ pub fn bound_view_within(
         // nothing is removed, so the view is not truncated either.
         if !interactions && !gives_up_anything_but_interactions(&view) {
             break;
+        }
+        // A fork's copied turns are older than every turn the view lists:
+        // they yield first, the oldest first, each counted as left out.
+        if let Some(fork) = view
+            .handoffs
+            .iter_mut()
+            .find(|handoff| !handoff.turns.is_empty())
+        {
+            fork.turns.remove(0);
+            fork.omitted_turns = fork.omitted_turns.saturating_add(1);
+            continue;
         }
         // Arguments are what an app is told its call with. They yield once
         // the history has nothing left to give, and before the tool row
@@ -2051,6 +2080,10 @@ fn transcript_can_yield(view: &ConversationView) -> bool {
 /// interactions: its transcript, notes, artifacts, tool calls or queue.
 fn gives_up_anything_but_interactions(view: &ConversationView) -> bool {
     transcript_can_yield(view)
+        || view
+            .handoffs
+            .iter()
+            .any(|handoff| !handoff.turns.is_empty())
         || !view.notes.is_empty()
         || !view.artifacts.is_empty()
         || !view.tools.is_empty()

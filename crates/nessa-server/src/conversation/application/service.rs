@@ -106,7 +106,7 @@ pub use scheduled_messages::{
     HistoryGeneration, PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt,
     PreferenceReading, PreferenceUpdate, ReconcileRetry, RecordedPreference, ScheduleActor,
     ScheduleDraft, ScheduleSettlement, ScheduledCommandEvidence, ScheduledMessage,
-    ScheduledMessageStore, UnsettledEnable, UsageLimitSnapshot,
+    ScheduledMessageStore, SelectionChange, SelectionRequest, UnsettledEnable, UsageLimitSnapshot,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -954,6 +954,9 @@ struct Inner {
     /// The deletion inventory, asked after a tombstone commits. Unbound, a
     /// delete still fences and finishes; the inventory is unchanged.
     fence_capture: Arc<OnceLock<Arc<dyn FenceCapture>>>,
+    /// Forks being created, each the history its first opening records
+    /// (`handoffs`). Taken by that opening; let go of when the creation ends.
+    forks: std::sync::Mutex<HashMap<ConversationId, handoffs::ForkSeed>>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -1423,6 +1426,7 @@ impl ConversationService {
                 drive: Arc::new(OnceLock::new()),
                 permission_rules: Arc::new(OnceLock::new()),
                 fence_capture: Arc::new(OnceLock::new()),
+                forks: std::sync::Mutex::default(),
             }),
         })
     }
@@ -1852,6 +1856,9 @@ impl ConversationService {
         let owner = slot.clone();
         if !slot.started.swap(true, Ordering::SeqCst) {
             tokio::spawn(async move {
+                // The pending switch this opening carries on, if it does:
+                // settled once the opening has ended (`handoffs`).
+                let carried = std::sync::Mutex::new(None);
                 let result = owner
                     .value
                     .get_or_init(|| async {
@@ -1885,16 +1892,21 @@ impl ConversationService {
                             })?;
                             // A record naming an agent this build has no
                             // adapter for is read, listed, and deletable,
-                            // and never opened on some other agent.
-                            let agent = record.agent().ok_or(OpeningFailure {
-                                cause: ConversationError::AgentUnsupported,
-                                holds: false,
+                            // and never opened on some other agent. A
+                            // pending switch opens the agent it asked for.
+                            let plan = service.opening_plan(&record).await.map_err(|cause| {
+                                OpeningFailure {
+                                    cause,
+                                    holds: false,
+                                }
                             })?;
+                            let agent = plan.agent;
+                            *carried.lock().expect("carried switch") = plan.switch.clone();
                             let mut stops = service.inner.stops.subscribe();
                             let configured = tokio::select! {
                                 resolved = service.inner.agents.resolve_for(
                                     agent,
-                                    record.model().as_str(),
+                                    plan.model.as_str(),
                                     record.approval_mode(),
                                 ) => {
                                     resolved.map_err(|cause| OpeningFailure {
@@ -1935,7 +1947,7 @@ impl ConversationService {
                                     });
                                 }
                             };
-                            let manager = opened.map_err(|error| {
+                            let mut manager = opened.map_err(|error| {
                                 tracing::error!(conversation_id = %id, %error, "conversation storage opening failed");
                                 OpeningFailure {
                                     cause: ConversationError::Storage(error),
@@ -2023,6 +2035,9 @@ impl ConversationService {
                                     _ => break (place.environment, opening),
                                 }
                             };
+                            if let Some(handoff) = plan.handoff.clone() {
+                                manager.expect_handoff(handoff);
+                            }
                             let tool_source = checked_source(agent);
                             let agent = Agent::prepare(
                                 opening.fence.clone(),
@@ -2204,8 +2219,8 @@ impl ConversationService {
                                 Projection::new(id.to_string(), capabilities, snapshot.as_ref())
                                     .with_tool_uis(service.inner.tool_uis.clone());
                             projection.selection(ConversationSelectionView {
-                                agent: record.agent().expect("agent was resolved"),
-                                model: record.model().as_str().into(),
+                                agent: plan.agent,
+                                model: plan.model.as_str().into(),
                                 approval_mode: record.approval_mode(),
                             });
                             projection.lifecycle(lifecycle_view(&agent));
@@ -2313,6 +2328,34 @@ impl ConversationService {
                         }
                     })
                     .await;
+                // A switch this opening carried is settled once it has
+                // ended: attached, or failed, its history decides.
+                let switch = carried.lock().expect("carried switch").take();
+                if let Some(switch) = switch {
+                    if let Ok(live) = result {
+                        let _ = live.join_attachment_owner().await;
+                    }
+                    match service.settle_if_saved(&id, &switch).await {
+                        Ok(Some(_)) => {}
+                        Ok(None) => {
+                            // Not saved: settled once the requested agent is
+                            // stopped, which waits for this opening to be ready.
+                            let service = service.clone();
+                            let id = id.clone();
+                            let actor = actor.clone();
+                            tokio::spawn(async move {
+                                if let Err(error) =
+                                    service.settle_switch(&id, &switch, &actor, None).await
+                                {
+                                    tracing::warn!(conversation_id = %id, %error, "an agent switch could not be settled; the next opening carries it on");
+                                }
+                            });
+                        }
+                        Err(error) => {
+                            tracing::warn!(conversation_id = %id, %error, "an agent switch could not be settled; the next opening carries it on");
+                        }
+                    }
+                }
                 owner.ready.notify_waiters();
                 if result.as_ref().is_err_and(|failure| !failure.holds) {
                     let mut owners = service.inner.conversations.lock().await;
@@ -3695,6 +3738,7 @@ impl ConversationService {
                     (owner, live) = service.resolve_opening(&id, &caller, true).await?;
                     reopened = true;
                 }
+                service.finish_agent_switch_before_submission(&id).await?;
                 // A submission the agent already has is the agent's to answer:
                 // the same message recovers its original delivery and any
                 // other is a conflict, whatever this conversation holds today.
@@ -7104,6 +7148,7 @@ mod artifact_publish;
 pub use artifact_publish::{PublishAnswer, PublishCall, PublishCallRefusal};
 mod environment_tools;
 mod event_read;
+mod handoffs;
 mod notes;
 mod parking;
 use parking::ParkWhen;
@@ -7146,6 +7191,10 @@ mod desktop_stop_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/parking.rs"]
 mod parking_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/handoffs.rs"]
+mod handoff_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/stop_release.rs"]

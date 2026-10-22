@@ -797,6 +797,7 @@ are written here.
 | A new host event or payload | `host.rs` and `src/host/window.ts` together |
 | Leftover transcript tiles on a layout compositor | `flush_compositor` in `platform/` plus `useFlushOnTurn` in `src/panel/adapters/` |
 | The conversation surface (tabs, drafts, empty transcript) | `src/conversation/application/usecases/` (commands), `adapters/gateway/` (local session), `adapters/store/` (projection) |
+| Switching a conversation's agent or forking its history | Gateway `conversation/application/service/handoffs.rs`, the `application/agent_switches.rs` contract and `infrastructure/store/agent_switches.rs` journal; SDK `application/agent_execution/sessions/handoffs.rs` owns committed handoff history. See [conversation handoffs](design/conversation-handoffs.md) and [usage-limit continuation](design/usage-limit-continuation.md) for selection invalidation ordering. |
 | Shared clock publication for aging labels | `src/clock/`; conversation and workspace own their label consumers |
 | The transcript chrome | `src/conversation/ui/` |
 | The panel chrome or composer | `src/panel/ui/app.tsx` |
