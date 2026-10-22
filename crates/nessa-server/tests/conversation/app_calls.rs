@@ -1633,6 +1633,7 @@ async fn overfull(fixture: &Fixture) -> ConversationView {
     view.messages = (0..40)
         .map(|_| ConversationMessage {
             authentication_required: None,
+            usage_limit: None,
             user_text: "y".repeat(8_000),
             ..message.clone()
         })

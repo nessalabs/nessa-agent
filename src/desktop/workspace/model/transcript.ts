@@ -17,6 +17,7 @@ import type {
   Note,
   ImageReferencePart,
   LinkedFileReferencePart,
+  UsageLimitNotice,
 } from "../../../conversation"
 
 export type StepKind = "read" | "edit" | "run" | "search"
@@ -194,6 +195,11 @@ export interface TurnMessage {
    * The pane keeps `terminal` beside the sign-in card when this is set.
    */
   readonly requiredWorkFailed?: boolean
+  /**
+   * A provider usage limit on this turn. The pane shows the card for the
+   * latest turn that carries one, and hides a pure limit's failed mark.
+   */
+  readonly usageLimit?: UsageLimitNotice
   /**
    * The MCP App that wrote a message of the person's on their behalf
    * (`ui/message`, #390); absent when the person wrote it.
@@ -452,6 +458,11 @@ export interface Transcript {
   readonly history?: HistoryExtent
   /** A provider's typed authentication refusal on the latest turn. */
   readonly authenticationRefusal?: string
+  /**
+   * Whether this gateway schedules a continuation when a usage limit resets.
+   * Shared by every conversation. Absent when the source did not say.
+   */
+  readonly usageLimitAutoContinue?: boolean
   /**
    * Questions the agent is waiting on, as the view listed them. Empty when
    * it asked none that could be shown.

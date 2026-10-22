@@ -23,7 +23,9 @@ use super::{
     ConversationId, ConversationService, McpAppInitiator, RequestedAgent, RequestedConversation,
     Slot,
 };
-use crate::conversation::application::{ConversationAgentSwitch, ConversationAgentSwitchState};
+use crate::conversation::application::{
+    ConversationAgentSwitch, ConversationAgentSwitchState, ScheduleActor, SelectionChange,
+};
 use crate::conversation::domain::Conversation;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{ConversationModelId, ConversationSummary};
@@ -330,6 +332,21 @@ impl ConversationService {
         pending: &ConversationAgentSwitch,
         held: bool,
     ) -> Result<ConversationAgentSwitch, ConversationError> {
+        if held {
+            self.invalidate_selection_usage_limit(
+                SelectionChange::Agent,
+                id,
+                &pending.request_id,
+                ScheduleActor {
+                    person: true,
+                    organization_id: Some(pending.organization_id.as_str().to_owned()),
+                    principal_id: Some(pending.initiator_principal_id.as_str().to_owned()),
+                    surface_id: Some(pending.initiator_surface_id.clone()),
+                    action_id: Some(pending.request_id.clone()),
+                },
+            )
+            .await?;
+        }
         let state = if held {
             ConversationAgentSwitchState::Applied
         } else {
@@ -343,6 +360,21 @@ impl ConversationService {
         tracing::info!(conversation_id = %id, agent = settled.requested_agent.name(), applied = held, "an agent switch settled");
         self.inner.live_changes.publish(id);
         Ok(settled)
+    }
+
+    /// The caller holds the submission lock. Opening can leave a saved switch
+    /// pending when its durable selection invalidation failed; no new turn may
+    /// become that old request's causal limit during its later recovery.
+    pub(super) async fn finish_agent_switch_before_submission(
+        &self,
+        id: &ConversationId,
+    ) -> Result<(), ConversationError> {
+        if let Some(pending) = self.inner.metadata.pending_agent_switch(id).await? {
+            if self.settle_if_saved(id, &pending).await?.is_none() {
+                return Err(ConversationError::RequestConflict);
+            }
+        }
+        Ok(())
     }
 
     /// What the next opening of `record` runs: a pending switch's agent and

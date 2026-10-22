@@ -2,6 +2,7 @@ import type { ImageReference } from "./attachments"
 import type { MessageContent } from "./content"
 import type { PublishedFile } from "./held-files"
 import type { Note } from "./notes"
+import type { UsageLimitNotice } from "./usage-limit"
 
 export type ConversationTranscriptState =
   "not_loaded" | "partial" | "complete_empty" | "complete" | "stale" | "unknown"
@@ -346,6 +347,8 @@ export type AssistantTurn = {
    * The person-facing diagnostic stays in `status`.
    */
   requiredWorkFailed?: boolean
+  /** A provider usage limit on this failed turn. */
+  usageLimit?: UsageLimitNotice
   parts: AgentPart[]
   executionId?: string
   id: string
@@ -424,6 +427,11 @@ type ConversationState = {
     unreadableTruncated?: boolean
     /** The committed approval mode in this gateway view. */
     approvalMode: ApprovalMode
+    /**
+     * Whether this gateway schedules a continuation when a usage limit resets.
+     * Absent when the view did not say. The checkbox reads this, not a turn.
+     */
+    usageLimitAutoContinue?: boolean
     /** The modes this conversation's agent can honour. */
     approvalModes: ApprovalModeChoice[]
     /** A requested mode is not confirmed while this durable change is pending. */

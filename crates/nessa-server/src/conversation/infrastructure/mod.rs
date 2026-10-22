@@ -92,8 +92,16 @@
 //! The same memory is the board a waiting review notifies, and clears when
 //! the review ends.
 //! `CedarOwnerPhonePolicyEvaluator` owns first-party method and input restrictions.
+//! `CedarUsageLimitPreferencePolicy` owns who may change the gateway usage-limit
+//! preference.
+//! `LocalScheduledMessages` owns `scheduled_messages.sql`: continuations,
+//! preference receipts, history fences, and per-model-request usage-limit
+//! invalidations. Invalidation, open-row cancellation, and their audit share
+//! one transaction; `accept` checks the retained causal invalidation.
 pub mod owner_phone_policy;
 pub use owner_phone_policy::CedarOwnerPhonePolicyEvaluator;
+mod usage_limit_policy;
+pub use usage_limit_policy::CedarUsageLimitPreferencePolicy;
 mod change_watch;
 pub use change_watch::NessaRecordWatches;
 // Composed only by the Unix gateway (`composition/local_auth.rs`), as
@@ -110,6 +118,7 @@ mod catalogue_changes;
 mod receiver_authority;
 // Only the Unix gateway composes it, and only a Unix host serves it: it is
 // built, tests included, where both ends exist.
+mod scheduled_messages;
 #[cfg(unix)]
 pub(crate) mod ssh_environment;
 mod store;
@@ -118,6 +127,7 @@ pub use receiver_authority::{
     export_receivers, ExportedReceiver, LocalReceiverAuthority, ReceiverChangeError,
     ReceiverSnapshot, ReceiverSnapshotError,
 };
+pub use scheduled_messages::LocalScheduledMessages;
 pub use thread_reports::LocalThreadReports;
 mod record_scope;
 pub use record_scope::{exact_record_scope, record_scope_from_identity};

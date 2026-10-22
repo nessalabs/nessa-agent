@@ -30,6 +30,7 @@ import {
   AttachmentStagingError,
   ControlFailedError,
   ConversationReadFailedError,
+  ConversationUnavailableError,
   SubmissionRefusedError,
   type ConversationFollower,
 } from "../../application/ports"
@@ -44,7 +45,12 @@ import {
 } from "../../model"
 import { deletedAnyway } from "../../application/usecases"
 import type { ConversationView as ConversationViewOf } from "../../application/view"
-import { BUSY_RETRY_DELAYS_MS, FOLLOW_RETRY_MS, gatewayEffects } from "./effects"
+import {
+  BUSY_RETRY_DELAYS_MS,
+  FOLLOW_RETRY_MS,
+  conversationView,
+  gatewayEffects,
+} from "./effects"
 
 function gatewayView(): ConversationView {
   return {
@@ -113,6 +119,38 @@ function deferred<T>() {
   })
   return { promise, resolve }
 }
+it("puts a usage-limit reset on the panel clock", () => {
+  const reset = SERVER_NOW_MS + 30_000
+  const receivedAt = SERVER_NOW_MS + 120_000
+  const viewed = conversationView(
+    {
+      ...gatewayView(),
+      messages: [
+        {
+          executionId: "e1",
+          userText: "hello",
+          attachments: [],
+          files: [],
+          status: "failed",
+          parts: [],
+          usageLimit: {
+            provider: "claude",
+            recovery: "timed_reset",
+            resetsAtMs: reset,
+          },
+        },
+      ],
+    },
+    receivedAt,
+  )
+  expect(viewed.messages[0]?.usageLimit).toEqual({
+    provider: "claude",
+    recovery: "timed_reset",
+    resetsAtMs: reset,
+    resetsAtClientMs: receivedAt + 30_000,
+  })
+})
+
 it("joins concurrent creation and forwards exact stable submission IDs", async () => {
   const gate = deferred<{ conversationId: string }>()
   const create = vi.fn(() => gate.promise)
@@ -266,6 +304,212 @@ const cursor = (position: string): ConversationViewCursor => ({
 
 /** Lets every promise already settled run its callbacks. */
 const settle = () => new Promise<void>((done) => setTimeout(done, 0))
+
+it.each([true, false])(
+  "preference completion waits for a fresh applied view, including winner %s",
+  async (winner) => {
+    const gateway = subscribing()
+    const rpc = deferred<{ enabled: boolean }>()
+    Object.assign(gateway.client, {
+      conversation: { setUsageLimitAutoContinue: () => rpc.promise },
+    })
+    const effects = effectsOf(() => gateway.client)
+    const applied: boolean[] = []
+    const stop = effects.follow(gatewayView().conversationId, {
+      view: (view) => applied.push(view.usageLimitAutoContinue ?? false),
+      failed: vi.fn(),
+    })
+    await settle()
+    gateway.opens[0]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
+    let done = false
+    const changed = effects.setUsageLimitAutoContinue(true).then(() => {
+      done = true
+    })
+    rpc.resolve({ enabled: true })
+    await settle()
+    expect(done).toBe(false)
+    expect(gateway.opens).toHaveLength(2)
+    expect(gateway.opens[1]!.after).toBeUndefined()
+    gateway.opens[0]!.handlers.view({
+      cursor: cursor("2"),
+      view: { ...gatewayView(), usageLimitAutoContinue: true },
+    })
+    expect(applied).toEqual([false])
+    expect(done).toBe(false)
+    gateway.opens[1]!.handlers.view({
+      cursor: cursor("2"),
+      view: { ...gatewayView(), usageLimitAutoContinue: winner },
+    })
+    await changed
+    expect(applied).toEqual([false, winner])
+    expect(done).toBe(true)
+    stop()
+  },
+)
+
+it("preference refresh waits for the previous live subscription to close", async () => {
+  const closed = deferred<void>()
+  const gateway = subscribing([], () => closed.promise)
+  Object.assign(gateway.client, {
+    conversation: { setUsageLimitAutoContinue: async () => ({ enabled: true }) },
+  })
+  const effects = effectsOf(() => gateway.client)
+  const stop = effects.follow(gatewayView().conversationId, told().follower)
+  await settle()
+  const changed = effects.setUsageLimitAutoContinue(true)
+  await settle()
+  expect(gateway.opens[0]!.close).toHaveBeenCalledOnce()
+  expect(gateway.opens).toHaveLength(1)
+  closed.resolve()
+  await settle()
+  expect(gateway.opens).toHaveLength(2)
+  gateway.opens[1]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
+  await changed
+  stop()
+})
+
+it("superseded preference opens stay fenced across a delayed live close", async () => {
+  const closed = deferred<void>()
+  const gateway = subscribing([], () => closed.promise)
+  const attempts = vi.spyOn(gateway.client.subscriptions, "view")
+  Object.assign(gateway.client, {
+    conversation: {
+      setUsageLimitAutoContinue: async (enabled: boolean) => ({ enabled }),
+    },
+  })
+  const effects = effectsOf(() => gateway.client)
+  const stop = effects.follow(gatewayView().conversationId, told().follower)
+  await settle()
+  let firstDone = false
+  let secondDone = false
+  const first = effects.setUsageLimitAutoContinue(true).then(() => {
+    firstDone = true
+  })
+  await settle()
+  const second = effects.setUsageLimitAutoContinue(false).then(() => {
+    secondDone = true
+  })
+  await settle()
+  expect(attempts).toHaveBeenCalledOnce()
+  closed.resolve()
+  await settle()
+  expect(attempts).toHaveBeenCalledTimes(2)
+  expect(firstDone).toBe(false)
+  expect(secondDone).toBe(false)
+  gateway.opens[0]!.handlers.ended({ reason: "refused", code: "conversation_deleted" })
+  gateway.opens[1]!.handlers.view({ cursor: cursor("1"), view: gatewayView() })
+  await Promise.all([first, second])
+  expect(firstDone).toBe(true)
+  expect(secondDone).toBe(true)
+  stop()
+})
+
+it.each(["stopped", "refused", "close failed"])(
+  "preference refresh rejects when its owner is %s",
+  async (failure) => {
+    const gateway = subscribing(
+      [],
+      failure === "close failed"
+        ? async () => {
+            throw new Error("close failed")
+          }
+        : undefined,
+    )
+    Object.assign(gateway.client, {
+      conversation: { setUsageLimitAutoContinue: async () => ({ enabled: true }) },
+    })
+    const effects = gatewayEffects(
+      () => gateway.client,
+      () => new Promise<void>(() => {}),
+      panelNow,
+    )
+    const stop = effects.follow(gatewayView().conversationId, told().follower)
+    await settle()
+    // Refuse the replacement rather than the initial subscription.
+    if (failure === "refused")
+      gateway.view.mockImplementationOnce(async () => {
+        throw new NessaRpcError("conversation_deleted", "deleted")
+      })
+    const result = effects.setUsageLimitAutoContinue(true).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    await settle()
+    if (failure === "stopped") stop()
+    expect(await result).toBeInstanceOf(
+      failure === "stopped" ? ConversationUnavailableError : ConversationReadFailedError,
+    )
+    stop()
+  },
+)
+
+it("overlapping preference completions keep their waiters across every current follow owner", async () => {
+  const gateway = subscribing()
+  Object.assign(gateway.client, {
+    conversation: {
+      setUsageLimitAutoContinue: async (enabled: boolean) => ({ enabled }),
+    },
+  })
+  const effects = effectsOf(() => gateway.client)
+  const firstId = gatewayView().conversationId
+  const secondId = "00000000-0000-4000-8000-000000000002"
+  const stopFirst = effects.follow(firstId, told().follower)
+  const stopSecond = effects.follow(secondId, told().follower)
+  await settle()
+  let firstDone = false
+  let secondDone = false
+  const first = effects.setUsageLimitAutoContinue(true).then(() => {
+    firstDone = true
+  })
+  await settle()
+  expect(gateway.opens).toHaveLength(4)
+  gateway.opens[2]!.handlers.view({
+    cursor: cursor("1"),
+    view: { ...gatewayView(), usageLimitAutoContinue: true },
+  })
+  await settle()
+  expect(firstDone).toBe(false)
+  const second = effects.setUsageLimitAutoContinue(false).then(() => {
+    secondDone = true
+  })
+  await settle()
+  expect(gateway.opens).toHaveLength(6)
+  gateway.opens[3]!.handlers.view({
+    cursor: cursor("1"),
+    view: { ...gatewayView(), conversationId: secondId, usageLimitAutoContinue: true },
+  })
+  await settle()
+  expect(firstDone).toBe(false)
+  expect(secondDone).toBe(false)
+  gateway.opens[4]!.handlers.view({
+    cursor: cursor("2"),
+    view: { ...gatewayView(), usageLimitAutoContinue: false },
+  })
+  gateway.opens[5]!.handlers.view({
+    cursor: cursor("2"),
+    view: { ...gatewayView(), conversationId: secondId, usageLimitAutoContinue: false },
+  })
+  await Promise.all([first, second])
+  expect(firstDone).toBe(true)
+  expect(secondDone).toBe(true)
+  stopFirst()
+  stopSecond()
+})
+
+it("keeps preference RPC failures and no-follow completions independent of refresh", async () => {
+  const gateway = subscribing()
+  const rpc = vi
+    .fn()
+    .mockRejectedValueOnce(new NessaRpcError("audit_unavailable", "failed"))
+    .mockResolvedValueOnce({ enabled: true })
+  Object.assign(gateway.client, { conversation: { setUsageLimitAutoContinue: rpc } })
+  const effects = effectsOf(() => gateway.client)
+  await expect(effects.setUsageLimitAutoContinue(true)).rejects.toBeInstanceOf(
+    NessaRpcError,
+  )
+  await expect(effects.setUsageLimitAutoContinue(true)).resolves.toBe(true)
+  expect(gateway.opens).toEqual([])
+})
 
 /** What a follower is told, in order. */
 function told() {

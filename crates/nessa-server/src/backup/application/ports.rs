@@ -1,8 +1,12 @@
 //! What a cut needs from outside the process, and from the admission lock.
 
+use std::fs::File;
+
 use async_trait::async_trait;
 
-use super::super::domain::{DeletionFence, DeletionLog, Fingerprint, SourceCut, StoreKind};
+use super::super::domain::{
+    DeletionFence, DeletionLog, Fingerprint, RestoreFault, SourceCut, StoreKind,
+};
 
 /// Take the conversation admission lock for the cut, and release it on drop.
 #[async_trait]
@@ -231,6 +235,361 @@ pub trait InventoryDecisionAudit: Send + Sync {
         facts: &InventoryFacts<'_>,
         decision: &InventoryDecision,
     ) -> Result<(), DecisionAuditError>;
+}
+
+/// Which restore transition was asked. A fact for Cedar, not a verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreAction {
+    Stage,
+    Accept,
+    Fetch,
+}
+
+impl RestoreAction {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stage => "backup.restore.stage",
+            Self::Accept => "backup.restore.accept",
+            Self::Fetch => "backup.deferred.fetch",
+        }
+    }
+}
+
+/// Who is asking to stage, accept, or fetch. `kind` is the same principal
+/// fact the inventory policies already see.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestoreFacts<'a> {
+    pub kind: &'a str,
+    pub cause: InventoryCause,
+    pub action: RestoreAction,
+}
+
+/// Whether this principal may stage, accept, or fetch a deferred conversation.
+pub trait RestorePolicyEvaluator: Send + Sync {
+    fn evaluate(&self, facts: &RestoreFacts<'_>) -> InventoryDecision;
+}
+
+/// One restore audit line, before the adapter adds its clock and record id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestoreEvidence<'a> {
+    pub target: &'a str,
+    pub before: &'a str,
+    pub after: &'a str,
+    pub cause: &'a str,
+    pub initiator: &'a str,
+    pub decision: &'a str,
+    pub policies: &'a [String],
+    /// Acceptance stores `lease receipt` lines. A fetch stores the publication
+    /// id of the session file. A sealed stage stores the journal digest and
+    /// the staging id. A later effect that names that id spends it. Empty for
+    /// every other transition.
+    pub attestations: &'a str,
+    /// Journal bytes bound to stage readiness completion or a live acceptance
+    /// intent and its completion.
+    /// Empty on records that do not establish a root's journal authority.
+    pub journal_digest: &'a str,
+    /// Staging identity confirmed by readiness and carried into the promoted
+    /// tree. Acceptance intent and completion name the same generation,
+    /// apart from lease receipts.
+    pub root_generation: &'a str,
+}
+
+/// Persist one restore transition. Failure means the effect must not be
+/// reported as done. The adapter assigns identity and observation time.
+pub trait RestoreAudit: Send + Sync {
+    fn append(&self, evidence: &RestoreEvidence<'_>) -> Result<(), DecisionAuditError>;
+
+    /// Whether an effect line records this publication of `conversation_id` as available.
+    ///
+    /// The line's target is `{conversation_id}` then the anchored root. The root
+    /// is evidence of where the fetch ran. The publication and the conversation
+    /// are the identity, so a later rename of that root still matches. An
+    /// earlier publication's line does not count.
+    fn available(
+        &self,
+        conversation_id: &str,
+        publication: &str,
+    ) -> Result<bool, DecisionAuditError>;
+
+    /// The staging id of the latest completed, unspent stage of `digest` at `target`.
+    ///
+    /// `target` is the anchored quarantine path. The seal is `absent` to
+    /// `verified`, cause `sealed`, decision `effect`, and its attestations are
+    /// the digest and the staging id. This is pending until a `verified` to
+    /// `ready` effect, cause `ready`, repeats that journal digest and generation
+    /// in their explicit fields. A later effect naming the id spends it.
+    /// An older stage does not stay current. The readiness marker alone is
+    /// not completion evidence.
+    fn sealed(&self, target: &str, digest: &str) -> Result<Option<String>, DecisionAuditError>;
+
+    /// Whether this root's latest generation authorizes these journal bytes.
+    /// Both staged and live generations require their current marker. A live
+    /// completion must match the latest durable acceptance intent. An intent
+    /// supersedes earlier authority before the rename, including when its
+    /// completion cannot be stored.
+    fn trusted_journal(
+        &self,
+        target: &str,
+        digest: &str,
+        staging_id: Option<&str>,
+    ) -> Result<bool, DecisionAuditError>;
+}
+
+/// One audit line reduced to the fields a seal lookup reads.
+#[derive(Clone, Copy)]
+pub struct SealFields<'a> {
+    pub target: &'a str,
+    pub before: &'a str,
+    pub after: &'a str,
+    pub cause: &'a str,
+    pub decision: &'a str,
+    pub attestations: &'a str,
+}
+
+/// Fields used to identify the latest authorized journal at one root.
+#[derive(Clone, Copy)]
+pub struct JournalFields<'a> {
+    pub seal: SealFields<'a>,
+    pub journal_digest: &'a str,
+    pub root_generation: &'a str,
+}
+
+/// Independent facts that remain after the live rename. One mapping is used
+/// to write the outcome and to recognize its durable receipt on a later open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromotionCause {
+    Accepted,
+    Unsynced,
+    SourceRetained,
+    SourceRetainedUnsynced,
+    Restricted,
+    RestrictedUnsynced,
+    SourceRetainedRestricted,
+    SourceRetainedRestrictedUnsynced,
+}
+
+impl PromotionCause {
+    pub const fn from_effects(
+        durable: bool,
+        source_retirement_failed: bool,
+        publication_restricted: bool,
+    ) -> Self {
+        match (durable, source_retirement_failed, publication_restricted) {
+            (true, false, false) => Self::Accepted,
+            (false, false, false) => Self::Unsynced,
+            (true, true, false) => Self::SourceRetained,
+            (false, true, false) => Self::SourceRetainedUnsynced,
+            (true, false, true) => Self::Restricted,
+            (false, false, true) => Self::RestrictedUnsynced,
+            (true, true, true) => Self::SourceRetainedRestricted,
+            (false, true, true) => Self::SourceRetainedRestrictedUnsynced,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Unsynced => "unsynced",
+            Self::SourceRetained => "retained",
+            Self::SourceRetainedUnsynced => "retained-unsynced",
+            Self::Restricted => "restricted",
+            Self::RestrictedUnsynced => "restricted-unsynced",
+            Self::SourceRetainedRestricted => "retained-restricted",
+            Self::SourceRetainedRestrictedUnsynced => "retained-restricted-unsynced",
+        }
+    }
+
+    pub fn parse(cause: &str) -> Option<Self> {
+        [
+            Self::Accepted,
+            Self::Unsynced,
+            Self::SourceRetained,
+            Self::SourceRetainedUnsynced,
+            Self::Restricted,
+            Self::RestrictedUnsynced,
+            Self::SourceRetainedRestricted,
+            Self::SourceRetainedRestrictedUnsynced,
+        ]
+        .into_iter()
+        .find(|value| value.as_str() == cause)
+    }
+}
+
+/// The latest completed, unspent staging id for this journal digest at `target`.
+pub fn current_staging_id<'a>(
+    lines: impl IntoIterator<Item = JournalFields<'a>>,
+    target: &str,
+    digest: &str,
+) -> Option<String> {
+    match current_root_authority(lines, target, digest) {
+        RootAuthority::Staged(id) => Some(id),
+        RootAuthority::Untrusted
+        | RootAuthority::PendingStage(_)
+        | RootAuthority::Pending { .. }
+        | RootAuthority::Live { .. } => None,
+    }
+}
+
+/// A newer stage or acceptance intent supersedes the previous root generation.
+/// Completion and the on-disk marker must name that intent's generation.
+pub fn current_journal_is_trusted<'a>(
+    lines: impl IntoIterator<Item = JournalFields<'a>>,
+    target: &str,
+    digest: &str,
+    staging_id: Option<&str>,
+) -> bool {
+    match current_root_authority(lines, target, digest) {
+        RootAuthority::Staged(id) => Some(id.as_str()) == staging_id,
+        RootAuthority::Live {
+            generation,
+            digest: authorized_digest,
+        } => authorized_digest == digest && Some(generation) == staging_id,
+        RootAuthority::Untrusted
+        | RootAuthority::PendingStage(_)
+        | RootAuthority::Pending { .. } => false,
+    }
+}
+
+enum RootAuthority<'a> {
+    Untrusted,
+    PendingStage(String),
+    Staged(String),
+    Pending {
+        generation: &'a str,
+        digest: &'a str,
+    },
+    Live {
+        generation: &'a str,
+        digest: &'a str,
+    },
+}
+
+/// Both acceptance and fetching consume this one fold of root generations.
+fn current_root_authority<'a>(
+    lines: impl IntoIterator<Item = JournalFields<'a>>,
+    target: &str,
+    digest: &str,
+) -> RootAuthority<'a> {
+    let mut authority = RootAuthority::Untrusted;
+    for line in lines {
+        let fields = line.seal;
+        if fields.target != target || fields.decision != "effect" {
+            continue;
+        }
+        if fields.before == "absent" && fields.after == "verified" && fields.cause == "sealed" {
+            authority = crate::backup::domain::seal_staging_id(fields.attestations, digest)
+                .map(RootAuthority::PendingStage)
+                .unwrap_or(RootAuthority::Untrusted);
+        } else if fields.after == "ready" {
+            authority = match authority {
+                RootAuthority::PendingStage(id) | RootAuthority::Staged(id)
+                    if fields.before == "verified"
+                        && fields.cause == "ready"
+                        && id == line.root_generation
+                        && line.journal_digest == digest =>
+                {
+                    RootAuthority::Staged(id)
+                }
+                _ => RootAuthority::Untrusted,
+            };
+        } else if fields.after == "promoting" {
+            authority = if fields.before == "verified"
+                && fields.cause == "accepting"
+                && crate::backup::domain::staging_id_is_usable(line.root_generation)
+                && !line.journal_digest.is_empty()
+            {
+                RootAuthority::Pending {
+                    generation: line.root_generation,
+                    digest: line.journal_digest,
+                }
+            } else {
+                RootAuthority::Untrusted
+            };
+        } else if fields.after == "live" {
+            authority = match authority {
+                RootAuthority::Pending { generation, digest }
+                | RootAuthority::Live { generation, digest }
+                    if fields.before == "verified"
+                        && PromotionCause::parse(fields.cause).is_some()
+                        && generation == line.root_generation
+                        && digest == line.journal_digest =>
+                {
+                    RootAuthority::Live { generation, digest }
+                }
+                _ => RootAuthority::Untrusted,
+            };
+        } else if let RootAuthority::PendingStage(id) | RootAuthority::Staged(id) = &authority {
+            if crate::backup::domain::attestation_mentions(fields.attestations, id) {
+                authority = RootAuthority::Untrusted;
+            }
+        }
+    }
+    authority
+}
+
+#[cfg(test)]
+#[path = "../../../tests/backup/root_generation.rs"]
+mod root_generation_tests;
+
+/// Names the publication written beside one fetched session.
+///
+/// Infrastructure supplies the id. A test supplies a fixed id, or a failure.
+pub trait PublicationIds: Send + Sync {
+    fn publication_id(&self) -> Result<String, RestoreFault>;
+}
+
+/// Names one staging of a quarantine.
+///
+/// Infrastructure supplies the id. A test supplies a fixed id, or a failure.
+/// The sealed audit and the readiness marker both store it.
+pub trait StagingIds: Send + Sync {
+    fn staging_id(&self) -> Result<String, RestoreFault>;
+}
+
+/// `target` is the conversation id, a newline, then the anchored root.
+pub fn fetch_names_conversation(target: &str, conversation_id: &str) -> bool {
+    target
+        .split_once('\n')
+        .is_some_and(|(id, _root)| id == conversation_id)
+}
+
+/// Bytes copied while a deferred conversation is fetched.
+pub trait FetchProgress {
+    fn report(&mut self, read: u64, total: u64);
+}
+
+/// Why a deferred source did not produce a session file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionSourceError {
+    Missing,
+    Interrupted,
+    Unreadable,
+}
+
+/// Size and stream fingerprint of one conversation in a session file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionCut {
+    pub size: u64,
+    pub digest: Fingerprint,
+}
+
+/// The store that can still serve a deferred conversation's exact stream.
+pub trait DeferredSessionSource {
+    /// Write only the requested conversation and its records into the empty
+    /// file reserved by this attempt. The layout independently validates that
+    /// whole image before publication. The handle remains the destination if
+    /// a directory or file name is replaced during fetch.
+    fn write_session(
+        &self,
+        conversation_id: &str,
+        destination: &mut File,
+        progress: &mut dyn FetchProgress,
+    ) -> Result<(), SessionSourceError>;
+}
+
+/// An operator attestation that one restored lease's executor was stopped.
+pub trait LeaseReceipts {
+    fn receipt(&self, lease_id: &str) -> Option<String>;
 }
 
 impl Authenticator for MacKey {

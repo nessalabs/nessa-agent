@@ -7,10 +7,6 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
-#[path = "server_tests.rs"]
-mod tests;
-
 pub const CONTROL_URL: &str = "http://127.0.0.1:1420/control.html";
 
 pub struct Server {
@@ -49,7 +45,10 @@ impl Server {
     }
 }
 
-fn serve(stream: &mut TcpStream, observed: &AtomicBool) -> io::Result<()> {
+fn serve(stream: &mut TcpStream, observed: &AtomicBool) -> io::Result<bool> {
+    // Darwin inherits the listener's nonblocking mode on accept. Timeouts do
+    // not clear it; the real-socket regression forces that mode on every host.
+    stream.set_nonblocking(false)?;
     stream.set_write_timeout(Some(Duration::from_secs(1)))?;
     let control = control_request(|buffer, remaining| {
         stream.set_read_timeout(Some(remaining))?;
@@ -63,13 +62,14 @@ fn serve(stream: &mut TcpStream, observed: &AtomicBool) -> io::Result<()> {
             "<!doctype html><title>Allowed origin</title><p>Native control loaded.</p>",
         )
     } else {
-        ("404 Not Found", "Not found")
+        ("404 Not Found", "No control page at this request target.")
     };
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
-    stream.write_all(response.as_bytes())
+    stream.write_all(response.as_bytes())?;
+    Ok(control)
 }
 
 /// The fixture's read seam retains one deadline across partial TCP reads.
@@ -97,7 +97,10 @@ fn control_request(
                 .windows(2)
                 .position(|bytes| bytes == b"\r\n")
                 .ok_or(io::ErrorKind::InvalidData)?;
-            return Ok(&request[..line_end] == b"GET /control.html HTTP/1.1");
+            return Ok(matches!(
+                &request[..line_end],
+                b"GET /control.html HTTP/1.1" | b"GET /control.html HTTP/1.0"
+            ));
         }
         if used == request.len() {
             return Err(io::ErrorKind::InvalidData.into());
@@ -113,3 +116,7 @@ impl Drop for Server {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "server/tests.rs"]
+mod tests;

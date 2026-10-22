@@ -480,6 +480,17 @@ export interface AttachmentBeginResult {
   /** When stored: length in bytes of what the conversation holds. Null when an upload is required. */
   size: number | null
 }
+/** A provider usage limit on a failed turn. resetsAtMs is present only for a timed reset whose instant parsed. autoResuming is present only when this gateway has accepted a one-shot continuation for the turn. */
+export interface ConversationUsageLimit {
+  /** The harness that reported the limit. OpenCode is not a value. */
+  provider: "claude" | "codex"
+  /** How the limit can end. timed_reset carries resetsAtMs. user_action needs the person and never carries a reset. unknown is a usage limit with no trustworthy reset. */
+  recovery: "timed_reset" | "user_action" | "unknown"
+  /** Absolute Unix milliseconds when a timed reset ends, kept only inside 2024-01-01 through 2100-01-01 UTC. */
+  resetsAtMs?: number
+  /** True only when a continuation for this turn is scheduled or being delivered and the gateway preference is on. */
+  autoResuming?: boolean
+}
 /** One bounded conversation turn; omitted older text is indicated by the enclosing truncated flag. */
 export interface ConversationMessage {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
@@ -498,8 +509,10 @@ export interface ConversationMessage {
   error?: string
   /** The provider adapter explicitly requires authentication for this failed turn. Generic provider codes and diagnostic text do not establish this fact. */
   authenticationRequired?: boolean
-  /** This failed authentication refusal also failed independent required work. The person-facing diagnostic stays in error. Absent for a pure refusal, and absent when the failure is not an authentication refusal. */
+  /** This failed turn also failed independent required work, beside an authentication refusal or a usage limit. The person-facing diagnostic stays in error. Absent for a pure refusal or a pure usage limit. */
   requiredWorkFailed?: boolean
+  /** A provider usage limit on this failed turn. Absent when the turn did not end in one. autoResuming is present only after a continuation has been scheduled. */
+  usageLimit?: ConversationUsageLimit
   /** Execution that consumed this injected steering input; its shared reply answers this input. */
   steeringTarget?: string
   /** Provider observations in execution order; offsets address the retained SDK event sequence. */
@@ -703,6 +716,8 @@ export interface ConversationView {
   approvalModeChange?: ApprovalModeChange
   /** Pending correlated model change; the confirmed selection remains authoritative. */
   modelChange?: ModelChange
+  /** Whether this gateway schedules one continuation when a usage limit resets. The preference is the gateway's, shared by every conversation, and defaults to false. The card copies Auto-resuming only when a schedule for that turn has been accepted. */
+  usageLimitAutoContinue?: boolean
   /** Native effect boundary of the last confirmed model change. */
   modelChangeEffect?: ModelChangeEffect
   /** The conversation's selected catalog model, present whether or not an agent is open. */
@@ -1850,6 +1865,20 @@ export interface AgentOption {
   defaultModel: string
   /** Models runnable by this agent. */
   models: AgentModelOption[]
+}
+/** Turn this gateway's usage-limit continuation preference on or off. The preference is shared by every conversation on this gateway. Turning it on schedules a continuation for each currently blocked eligible turn. Turning it off cancels open schedules. */
+export interface ConversationSetUsageLimitAutoContinueParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** True schedules continuations when a usage limit names a future reset. False cancels open schedules. The default, before any command, is false. */
+  enabled: boolean
+}
+/** The preference now in effect for this gateway. */
+export interface ConversationSetUsageLimitAutoContinueResult {
+  /** Original action identifier. */
+  requestId: string
+  /** Whether continuations will be scheduled. */
+  enabled: boolean
 }
 /** Allow or stop allowing one harness to run its own hooks. The next launch of that harness omits Nessa's suppression request when enabled is true. OpenCode is not a value of agent. */
 export interface AgentsSetNativeHooksParams {
@@ -3008,7 +3037,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 80,
+  maxReadyMethods: 81,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3262,6 +3291,7 @@ export const ProductMethod = {
   AgentsSubscribe: "agents.subscribe",
   AgentsUnsubscribe: "agents.unsubscribe",
   ConversationSetApprovalMode: "conversation.setApprovalMode",
+  ConversationSetUsageLimitAutoContinue: "conversation.setUsageLimitAutoContinue",
   AgentsInstallOptions: "agents.installOptions",
   AgentsInstall: "agents.install",
   ConversationCatalogueHead: "conversation.catalogueHead",
@@ -3355,6 +3385,7 @@ export const productReadyMethods = [
   "agents.subscribe",
   "agents.unsubscribe",
   "conversation.setApprovalMode",
+  "conversation.setUsageLimitAutoContinue",
   "agents.installOptions",
   "agents.install",
   "conversation.catalogueHead",
@@ -3439,6 +3470,7 @@ export const productMethodGrants = {
   "agents.subscribe": "server.read",
   "agents.unsubscribe": "server.read",
   "conversation.setApprovalMode": "conversation.write",
+  "conversation.setUsageLimitAutoContinue": "credential.manage",
   "agents.installOptions": "server.read",
   "agents.install": "conversation.write",
   "conversation.catalogueHead": "conversation.read",

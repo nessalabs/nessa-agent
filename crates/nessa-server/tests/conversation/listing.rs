@@ -1367,6 +1367,9 @@ impl ConversationListing for AskedLimit {
             })
         })
     }
+    fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
 }
 
 #[tokio::test]
@@ -1449,6 +1452,9 @@ impl ConversationListing for Answering {
                 cursor: None,
             })
         })
+    }
+    fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 }
 
@@ -1809,4 +1815,28 @@ async fn an_observation_cursor_from_another_catalogue_is_refused() {
     ));
     listing.service.shutdown().await.unwrap();
     empty.service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_catalogue_names_every_owner() {
+    let stored = stored(ConversationLimits::default());
+    stored_put(&stored, &id(), "org-a", "person-a", 1).await;
+    stored_put(&stored, &id(), "org-b", "person-b", 2).await;
+    let mut labeled: Vec<_> = stored
+        .store
+        .owners()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(organization, owner)| (organization.as_str().to_owned(), owner.as_str().to_owned()))
+        .collect();
+    labeled.sort();
+    assert_eq!(
+        labeled,
+        vec![
+            ("org-a".into(), "person-a".into()),
+            ("org-b".into(), "person-b".into())
+        ]
+    );
+    stored.service.shutdown().await.unwrap();
 }

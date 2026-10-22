@@ -236,6 +236,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             permission_sequence: Arc::new(AtomicU64::new(0)),
             question_sequence: Arc::new(AtomicU64::new(0)),
             active: None,
+            observed_rate_limit: Default::default(),
             steering: None,
             steering_supported: false,
             agent_accepts_images: false,
@@ -585,7 +586,8 @@ fn acp_authentication_code_maps_to_its_own_failure_variant() {
                 phase,
                 RpcError {
                     code: -32000,
-                    message: None
+                    message: None,
+                    data: None,
                 }
             ),
             AgentError::AuthenticationRequired { diagnostic: None }
@@ -596,7 +598,8 @@ fn acp_authentication_code_maps_to_its_own_failure_variant() {
                     phase,
                     RpcError {
                         code,
-                        message: Some("OAuth session expired".into())
+                        message: Some("OAuth session expired".into()),
+                        data: None,
                     }
                 ),
                 AgentError::Provider {

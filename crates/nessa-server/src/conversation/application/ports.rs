@@ -432,6 +432,10 @@ pub trait ConversationListing: Send + Sync {
         cursor: Option<ObservationCursor>,
         reader: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations>;
+    /// Every catalogue owner. The usage-limit preference scans these, not the
+    /// caller who changed it. An owner id that cannot be read is an error:
+    /// skipping it would report the walk finished.
+    fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>>;
 }
 
 /// Where an observation pass resumes.

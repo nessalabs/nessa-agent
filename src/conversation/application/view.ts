@@ -9,6 +9,7 @@ import type {
   LinkedFile,
   Note,
   PublishedFile,
+  UsageLimitNotice,
 } from "../model"
 import type { AgentPart } from "../model/types"
 /** Authorized bounded gateway projection. It does not own execution scheduling. */
@@ -48,6 +49,11 @@ export type ConversationView = {
    * Messages list shows — or null before anything was said in it.
    */
   title: string | null
+  /**
+   * Whether this gateway schedules one continuation when a usage limit resets.
+   * Shared by every conversation. Absent on a view that did not say.
+   */
+  usageLimitAutoContinue?: boolean
   conversationId: string
   revision: string
   queueComplete: boolean
@@ -70,6 +76,8 @@ export type ConversationView = {
      * The person-facing diagnostic stays in `error`.
      */
     requiredWorkFailed?: boolean
+    /** A provider usage limit on this failed turn. Absent when it did not end in one. */
+    usageLimit?: UsageLimitNotice
     error?: string
     status: string
   }[]

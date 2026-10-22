@@ -108,6 +108,7 @@ async fn blocked_worker(
             reply,
             deadline: None,
         }),
+        observed_rate_limit: Default::default(),
         steering: None,
         steering_supported: false,
         agent_accepts_images: false,

@@ -167,6 +167,7 @@ export interface GatewayClient {
     | "answerQuestion"
     | "stop"
     | "setApprovalMode"
+    | "setUsageLimitAutoContinue"
     | "setModel"
     | "switchAgent"
     | "fork"
@@ -330,6 +331,8 @@ interface Waiter<T> {
  */
 interface Followed<T> {
   handle: Subscription | undefined
+  /** The ACK of a live open's close, retained across superseding opens. */
+  closing: Promise<void> | undefined
   /**
    * Gives the current open up: closed now, or once answered. The client sends
    * the next subscribe to this target only after that close (D23).
@@ -350,6 +353,7 @@ interface Followed<T> {
 
 const followed = <T>(): Followed<T> => ({
   handle: undefined,
+  closing: undefined,
   giveUp: undefined,
   applied: false,
   opening: undefined,
@@ -366,6 +370,15 @@ const followed = <T>(): Followed<T> => ({
  */
 const letGo = <T>(follow: Followed<T>) => {
   follow.token = {}
+  // Closing explicitly removes the live handle's abort listener. Its ACK
+  // must arrive before the next subscribe, as for an aborted pending open.
+  if (follow.handle) {
+    const closing = follow.handle.close()
+    follow.closing = Promise.all([follow.closing, closing]).then(noop)
+    // Disposal need not wait, but a replacement open must observe a failed
+    // close rather than treating it as permission to subscribe again.
+    void follow.closing.catch(noop)
+  }
   follow.giveUp?.abort()
   follow.giveUp = undefined
   follow.handle = undefined
@@ -943,6 +956,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const opening = within(
       async (live) => {
         const connected = await client(who)
+        if (list.closing) await list.closing
         if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
         const handle = await connected.subscriptions
           .list(
@@ -1182,7 +1196,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
    * is open or on its way: the one place it is opened (D14). A cursor ahead
    * of the history the gateway holds opens once more without it.
    */
-  const open = (sessionId: string, follow: Followed<Transcript>, who: Caller) => {
+  const open = (
+    sessionId: string,
+    follow: Followed<Transcript>,
+    who: Caller,
+    snapshot = false,
+  ) => {
     if (follow.handle || follow.opening) return
     const token = {}
     follow.token = token
@@ -1207,6 +1226,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const opening = within(
       async (live) => {
         const connected = await client(who)
+        if (follow.closing) await follow.closing
         if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
         if (evicted) {
           await evicted
@@ -1214,17 +1234,18 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         }
         let handle: Subscription
         try {
-          const subscribing = subscribe(connected, reads.get(sessionId)?.cursor).catch(
-            (error: unknown) => {
-              if (!(error instanceof NessaRpcError) || error.code !== "cursor_ahead")
-                throw error
-              // The client is ahead of the history the gateway holds: start over.
-              reads.delete(sessionId)
-              dropReviews(sessionId, true)
-              if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
-              return subscribe(connected, undefined)
-            },
-          )
+          const subscribing = subscribe(
+            connected,
+            snapshot ? undefined : reads.get(sessionId)?.cursor,
+          ).catch((error: unknown) => {
+            if (!(error instanceof NessaRpcError) || error.code !== "cursor_ahead")
+              throw error
+            // The client is ahead of the history the gateway holds: start over.
+            reads.delete(sessionId)
+            dropReviews(sessionId, true)
+            if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
+            return subscribe(connected, undefined)
+          })
           follow.subscribing = subscribing.then(noop, noop)
           handle = await subscribing
         } catch (error) {
@@ -1571,6 +1592,25 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           held(sessionId)
           return connected.conversation.setApprovalMode(sessionId, mode)
         })
+      }),
+    setUsageLimitAutoContinue: (enabled, _initiator) =>
+      within(async (live) => {
+        await dispatch(live, (connected) =>
+          connected.conversation.setUsageLimitAutoContinue(enabled),
+        )
+        // The receipt can precede its streamed frame. Complete only after
+        // the existing frame owners have published fresh snapshots, which
+        // may already include a newer preference from another client.
+        await Promise.all(
+          [...views].map(([sessionId, following]) => {
+            letGo(following)
+            const applied = new Promise<Transcript>((resolve, reject) =>
+              following.waiters.add({ resolve, reject }),
+            )
+            open(sessionId, following, "person", true)
+            return applied
+          }),
+        )
       }),
     setModel: (sessionId, { provider, modelId }, requestId, _initiator) =>
       within(async (live) => {

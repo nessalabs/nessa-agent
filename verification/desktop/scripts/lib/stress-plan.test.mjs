@@ -22,6 +22,7 @@ test("every required step appears as often as its number says", () => {
   )
   assert.equal(count("stop"), knobs.stops)
   assert.equal(count("fail"), knobs.fails)
+  assert.equal(count("usageLimit"), knobs.usageLimits)
   assert.equal(count("restart"), knobs.restarts)
   assert.equal(count("delegate"), knobs.threads)
   assert.equal(count("await"), knobs.awaits)
@@ -56,7 +57,8 @@ test("a failure is always followed by a reply, and a switch never picks the mode
   for (let seed = 0; seed < 50; seed += 1) {
     const steps = plan(knobsFrom({ seed: String(seed), fails: "3", switches: "6" }, {}))
     steps.forEach((step, index) => {
-      if (step.kind === "fail") assert.equal(steps[index + 1]?.kind, "reply")
+      if (step.kind === "fail" || step.kind === "usageLimit")
+        assert.equal(steps[index + 1]?.kind, "reply")
       if (step.kind === "switch") {
         assert.notEqual(step.from, step.to)
         assert.ok(
@@ -137,6 +139,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         fresh: "0",
         renames: "0",
         deletes: "0",
+        usageLimits: "0",
         handoffs: "0",
       },
       {},

@@ -1,0 +1,110 @@
+{
+  "check": "usage-limit",
+  "ok": true,
+  "started": "2026-10-21T23:51:28.521Z",
+  "finished": "2026-10-21T23:51:55.569Z",
+  "target": {
+    "url": "http://127.0.0.1:1438/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1438/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "timed",
+      "engine": "chromium",
+      "width": 360,
+      "passed": true,
+      "detail": "Auto-resuming Oct 21 at 4:00 PM",
+      "resetTransitions": 0,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "unknown",
+      "engine": "chromium",
+      "width": 360,
+      "passed": true,
+      "detail": "Reset time unknown",
+      "resetTransitions": 0,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "user-action",
+      "engine": "chromium",
+      "width": 360,
+      "passed": true,
+      "detail": "An account change is required before this thread can continue.",
+      "resetTransitions": 0,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "scheduling-failed",
+      "engine": "chromium",
+      "width": 360,
+      "passed": true,
+      "detail": "Scheduling failed.",
+      "resetTransitions": 2,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "timed",
+      "engine": "chromium",
+      "width": 1000,
+      "passed": true,
+      "detail": "Auto-resuming Oct 21 at 4:00 PM",
+      "resetTransitions": 0,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "unknown",
+      "engine": "chromium",
+      "width": 1000,
+      "passed": true,
+      "detail": "Reset time unknown",
+      "resetTransitions": 0,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "user-action",
+      "engine": "chromium",
+      "width": 1000,
+      "passed": true,
+      "detail": "An account change is required before this thread can continue.",
+      "resetTransitions": 0,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "scheduling-failed",
+      "engine": "chromium",
+      "width": 1000,
+      "passed": true,
+      "detail": "Scheduling failed.",
+      "resetTransitions": 2,
+      "errors": 0,
+      "failures": [],
+      "ok": true
+    }
+  ]
+}
