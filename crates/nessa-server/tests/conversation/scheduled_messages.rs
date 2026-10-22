@@ -4072,7 +4072,10 @@ async fn an_admitted_scheduled_continuation_is_not_an_explicit_person_turn() {
         .create(
             id.clone(),
             caller_as("create-provenance-conversation"),
-            RequestedConversation::default(),
+            RequestedConversation {
+                model: Some(draft_row.model.clone()),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();

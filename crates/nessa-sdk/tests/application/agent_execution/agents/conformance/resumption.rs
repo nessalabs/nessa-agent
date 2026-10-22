@@ -2011,7 +2011,7 @@ async fn a_canonical_successor_limit_withholds_an_earlier_runner_stopped_tail() 
 
     // Distinguishing assertions run after draining any unexpectedly admitted
     // work and closing the actual Agent. Observations are from before close.
-    assert_eq!(closed, Ok(()));
+    assert_eq!(closed, Ok(CloseOutcome { forced: false }));
     assert_eq!(successor_outcome, Err(limit));
     assert_eq!(canonical, Some(successor.clone()));
     let saved_tail = snapshot
@@ -2106,7 +2106,7 @@ async fn a_later_limit_does_not_acknowledge_an_original_pending_decline() {
     *backend.execution_fault.lock().unwrap() = None;
     let closed = bounded(agent.close(actor())).await;
 
-    assert_eq!(closed, Ok(()));
+    assert_eq!(closed, Ok(CloseOutcome { forced: false }));
     assert_eq!(first_decline, Err(AgentError::AuditFailure));
     assert_eq!(limited, Err(limit));
     assert!(live_ids.is_empty(), "live owed: {live_ids:?}");
