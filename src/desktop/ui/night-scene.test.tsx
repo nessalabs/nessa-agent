@@ -77,10 +77,51 @@ async function scene(still = false) {
 it("uses the observed content height without synchronous layout reads, and disconnects", async () => {
   const { root, host, frame, resize, computedStyle, disconnect } = await scene()
   expect(frame.hasAttribute("data-measured")).toBe(false)
+  resize(0)
+  expect(frame.hasAttribute("data-measured")).toBe(true)
+  expect(frame.hasAttribute("data-scene-ready")).toBe(false)
+  expect(frame.hasAttribute("data-scene-complete")).toBe(false)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(frame.hasAttribute("data-scene-ready")).toBe(false)
   resize(290)
   expect(frame.style.getPropertyValue("--night-scene-scale")).toBe("1")
   expect(frame.style.getPropertyValue("--night-scene-em")).toBe("10px")
   expect(frame.hasAttribute("data-measured")).toBe(true)
+  expect(frame.hasAttribute("data-scene-ready")).toBe(false)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(frame.hasAttribute("data-scene-ready")).toBe(false)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(frame.hasAttribute("data-scene-ready")).toBe(true)
+  expect(frame.hasAttribute("data-scene-complete")).toBe(false)
+  expect(frame.querySelector("[data-dim]")?.textContent?.length).toBeGreaterThan(0)
+  expect(frame.querySelector("[data-lit]")).toBeNull()
+  expect(frame.querySelector(".desktop-night-scene-rain")).toBeNull()
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  // The dim layer's lower half, then each half of the lit layer.
+  expect(frame.querySelector("[data-lit]")).toBeNull()
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(frame.hasAttribute("data-scene-complete")).toBe(false)
+  expect(frame.querySelector("[data-lit]")?.textContent?.length).toBeGreaterThan(0)
+  expect(frame.querySelector(".desktop-night-scene-rain")).toBeNull()
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(frame.querySelector(".desktop-night-scene-rain")).toBeNull()
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(frame.hasAttribute("data-scene-complete")).toBe(true)
+  expect(frame.querySelector(".desktop-night-scene-rain")).not.toBeNull()
   resize(145)
   expect(frame.style.getPropertyValue("--night-scene-scale")).toBe("0.5")
   expect(frame.style.getPropertyValue("--night-scene-em")).toBe("5px")
@@ -92,8 +133,19 @@ it("uses the observed content height without synchronous layout reads, and disco
 })
 
 it("bounds a static window to its visible rain and steam, preserving animated travel", async () => {
-  const animated = (await scene()).frame
-  const staticFrame = (await scene(true)).frame
+  const reveal = async (still = false) => {
+    const mountedScene = await scene(still)
+    mountedScene.resize(290)
+    for (let step = 0; step < 6; step++) {
+      await act(
+        async () =>
+          new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+      )
+    }
+    return mountedScene.frame
+  }
+  const animated = await reveal()
+  const staticFrame = await reveal(true)
   for (const [depth, pattern] of [
     ["far", nightSceneRainFar],
     ["mid", nightSceneRainMid],

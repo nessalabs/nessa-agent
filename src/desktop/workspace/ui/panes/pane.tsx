@@ -5,17 +5,16 @@ import {
   useWorkspaceSelector,
   useWorkspaceStore,
 } from "../../adapters/store/hooks"
+import { selectPaneSession } from "../../adapters/store/selectors"
 import {
-  selectDraft,
-  selectFocusedPaneKey,
-  selectPaneSession,
-  selectSession,
-} from "../../adapters/store/selectors"
+  useRememberedSession,
+  useShownDraft,
+} from "../../adapters/store/remembered-session"
 import { settleOnReshape } from "../../adapters/dom/home-shape"
-import { focusedPaneAttribute, retireHomeFocus } from "../../adapters/dom/focus"
+import { retireHomeFocus } from "../../adapters/dom/focus"
+import { FocusedSliver, PaneFocusMark } from "./pane-focus-mark"
 import { captureArrival, type Arrival } from "../../adapters/dom/arrival"
 import { usePictureInConversationsPreference } from "../../../adapters/window-preferences"
-import { HeaderSliver } from "../../../ui/header-art"
 import type { PaneFrame } from "../../../split-panes"
 import type { PanePlacement } from "../../../split-panes/model/pane-sizing"
 import { Conversation, PaneHome } from "./conversation"
@@ -25,7 +24,8 @@ import { usePaneFocus } from "./use-pane-focus"
 
 /**
  * One pane: its header, and a new session's home or a conversation. It
- * subscribes to which session it shows and whether it is focused; the
+ * subscribes to which session it shows. Focus is a mark on the article
+ * (`PaneFocusMark`), so a click that moves it does not render this pane; the
  * session's own content is read further down, so a reply streaming here
  * renders this pane's transcript and nothing else.
  *
@@ -38,25 +38,30 @@ export const Pane = memo(function Pane({
   placement,
   frame,
   multi,
+  heldSession,
 }: {
   placement: PanePlacement
   /** What the grid puts on the pane's root: where it is placed, and its names (`SplitPanes`). */
   frame: PaneFrame
   multi: boolean
+  /** The session a closed pane's box was painted with, until that box goes. */
+  heldSession?: string
 }) {
   const key = placement.key
   const dispatch = useWorkspaceDispatch()
   const store = useWorkspaceStore()
   const focusHandlers = usePaneFocus(key)
-  const sessionId = useWorkspaceSelector((state) => selectPaneSession(state, key)) ?? ""
-  const focused = useWorkspaceSelector((state) => selectFocusedPaneKey(state) === key)
-  const draft = useWorkspaceSelector(
-    (state) => selectDraft(state, sessionId) !== undefined,
-  )
-  const sessionTitle = useWorkspaceSelector(
-    (state) => selectSession(state, sessionId)?.title,
-  )
+  const liveSession = useWorkspaceSelector((state) => selectPaneSession(state, key)) ?? ""
+  const sessionId = liveSession || heldSession || ""
+  // The layout selector waits a frame when the column count changes, so this
+  // pane hears the record disappear before it is told the id to keep. The id
+  // it was showing covers that frame.
+  const shownId = useRef(sessionId)
+  if (sessionId) shownId.current = sessionId
+  const id = sessionId || shownId.current
+  const sessionTitle = useRememberedSession(id)?.title
   const listed = sessionTitle !== undefined
+  const showHome = useShownDraft(id, liveSession, listed)
   const [headingVisible, setHeadingVisible] = useState(false)
   const filled = useFilledAfterFirstPaint()
 
@@ -65,14 +70,14 @@ export const Pane = memo(function Pane({
     sessionId: string
     from: Arrival
   } | null>(null)
-  if (arriving && arriving.sessionId !== sessionId) setArriving(null)
-  const arrival = arriving?.sessionId === sessionId ? arriving.from : null
+  if (arriving && arriving.sessionId !== id) setArriving(null)
+  const arrival = arriving?.sessionId === id ? arriving.from : null
   const finishArrival = useCallback(() => setArriving(null), [])
   // The session shown now, for the callbacks below: they keep their identity
   // for the pane's life, so the memoised home and conversation they are
   // handed render only for what they show, never because this pane did.
-  const shownRef = useRef(sessionId)
-  shownRef.current = sessionId
+  const shownRef = useRef(id)
+  shownRef.current = id
   const sendFromHome = useCallback(
     (text: string) => {
       const shown = shownRef.current
@@ -97,49 +102,45 @@ export const Pane = memo(function Pane({
     },
     [dispatch, key, store],
   )
-  const showHome = draft
   // A new session's home settles when its pane changes its shape, not as it appears.
   const homeShown = filled && showHome
   useLayoutEffect(() => {
     const home = homeRef.current
     if (!homeShown || !home) return
     return settleOnReshape(home)
-  }, [homeShown, sessionId])
+  }, [homeShown, id])
   const [picture] = usePictureInConversationsPreference()
   const pictured = picture === "on"
   return (
     <article
       className="workspace-pane"
       {...frame}
-      data-focused={(focused && multi) || undefined}
-      {...{ [focusedPaneAttribute]: focused || undefined }}
-      aria-label={sessionTitle ?? (draft ? "New session" : "Empty pane")}
+      aria-label={sessionTitle ?? (showHome ? "New session" : "Empty pane")}
       {...focusHandlers}
     >
-      {pictured && filled && listed && !showHome ? (
-        <HeaderSliver moving={focused} />
-      ) : null}
+      <PaneFocusMark paneKey={key} multi={multi} />
+      {pictured && filled && listed && !showHome ? <FocusedSliver paneKey={key} /> : null}
       <PaneHeader
         pane={key}
-        sessionId={sessionId}
+        sessionId={id}
         multi={multi}
         titleShown={listed && !headingVisible}
       />
       <div className="workspace-pane-body" data-split-through>
         {!filled ? null : showHome ? (
           <div
-            key={`home-${sessionId}`}
+            key={`home-${id}`}
             ref={homeRef}
             className="workspace-pane-home"
             data-split-keeps="middle"
           >
-            <PaneHome sessionId={sessionId} onSend={sendFromHome} />
+            <PaneHome sessionId={id} onSend={sendFromHome} />
           </div>
         ) : null}
         {filled && listed ? (
           <Conversation
-            key={sessionId}
-            sessionId={sessionId}
+            key={id}
+            sessionId={id}
             onHeadingVisible={setHeadingVisible}
             arrival={arrival}
             onArrivalDone={finishArrival}

@@ -342,9 +342,9 @@ surface can wrap; the workspace does. Its `model/` is pure: the pane layout
 item the host gives meaning to (the workspace's, a session), whose operations
 split, move, swap, nudge, close and even out, capped at four panes and three
 columns, an item never shown twice; its pixel rules (`pane-sizing.ts`):
-placements as fractions, the one fit rule every change of layout and every
+placements as fractions, the box those fractions draw (`paneBox`), the one fit rule every change of layout and every
 resize is held to (each pane at least 300 by 220 pixels, taking the host's
-spare room where that is what fits it), and edge drags held to it; where a
+spare room where that is what fits it), and edge drags held to it; the frame a pane insert, a scene's first text layout, and a drop's commit each take is [pane frame budget](design/pane-frame-budget.md); where a
 drag aims and what a drop does (`drop.ts`); what a press becomes, event by
 event (`drag.ts`). A host supplies one `SplitPanesSource`
 (`application/ports.ts`) that reads its layout, says when it changes — at
@@ -421,8 +421,9 @@ seeded in-memory workspace when a browser query names one, and the sample
 otherwise. The desktop app's own window
 connects to the local gateway under the panel's surface credential (#419):
 the host serves it the endpoint and the credential over IPC once the gateway
-the host started at launch is ready, and refuses it before then — it reads the
-gateway, never starts one (`GatewayReader`, `adapters/host-gateway.ts`) — and
+the host started at launch is ready, holding the read while that startup is
+still running (up to `DESKTOP_STARTUP_WAIT`) and refusing it when startup
+failed or ran past the hold — it reads the gateway, never starts one (`GatewayReader`, `adapters/host-gateway.ts`) — and
 after a failed connect it waits five poll rounds before it tries again, unless
 a person asks. A
 browser preview opened with `?gateway` connects over the session its origin

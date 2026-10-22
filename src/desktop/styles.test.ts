@@ -100,6 +100,18 @@ it("starts titlebar-row content at the one safe area, never at a length of its o
   }
 })
 
+it("gives a below column title the block the bar holds", () => {
+  // A title set below the bar is its sibling, so the block set only on the
+  // bar never reaches it. Both hold the length: the script reads the bar,
+  // and the below title's height is that same length.
+  const sheet = readFileSync(new URL("./ui/column-header.css", import.meta.url), "utf8")
+  const selector = `.desktop-column-bar,
+.desktop-column-title[data-placement="below"]`
+  expect(sheet).toContain(selector)
+  const body = sheet.slice(sheet.indexOf(selector)).split("}")[0]
+  expect(body).toContain("--desktop-column-title-block:")
+})
+
 it("starts an inline column title after the window's controls wherever they stand over its column", () => {
   // With the sidebar away, the session list and Settings' page begin at the
   // window's edge, under the controls: an inline title (`ui/column-header.tsx`)
@@ -108,7 +120,11 @@ it("starts an inline column title after the window's controls wherever they stan
   const rules = [
     [
       read("./workspace/ui/session-list/session-list.css"),
-      '.workspace[data-sidebar="closed"] .workspace-list .desktop-column-bar {',
+      // The fold holds the sidebar and the list's measure, so this gutter
+      // waits until both holds are gone.
+      `.workspace[data-sidebar="closed"]:not([data-spare-held]):not([data-list-held])
+  .workspace-list
+  .desktop-column-bar {`,
     ],
     [
       read("./settings/ui/settings.css"),
@@ -261,6 +277,10 @@ it("lifts a drag's copy without painting a shadow", () => {
     .slice(sheet.indexOf(".split-panes-ghost:not([data-drag-waiting]) {"))
     .split("}")[0]
   expect(shown).toMatch(/will-change:\s*transform/)
+  const scene = sheet
+    .slice(sheet.indexOf(".split-panes-ghost .desktop-night-scene {"))
+    .split("}")[0]
+  expect(scene).toMatch(/content-visibility:\s*hidden/)
   // The copy's box is the size `drag.ts` sets. The stylesheet only keeps
   // that box from laying anything out outside itself.
   const band = sheet.slice(sheet.indexOf(`${classes.ghost} {`)).split("}")[0]
@@ -297,7 +317,8 @@ it("holds the ambient blur still while panes travel", () => {
 })
 
 it("drops the composer's blur while a drag is carried and keeps the sidebar treatment stable", () => {
-  const selector = ":root[data-drag-pressing] .desktop-composer {"
+  const selector =
+    ":root[data-drag-pressing] .desktop-composer,\n:root[data-drag-blur] .desktop-composer {"
   expect(styles).toContain(selector)
   const body = styles.slice(styles.indexOf(selector)).split("}")[0]
   expect(body).toMatch(/backdrop-filter:\s*none/)
@@ -449,6 +470,44 @@ it("keeps the list and the panes under the Agents overview laid out", () => {
   expect(everyCoveredRule).toEqual([])
   // The overview's own sheet sets nothing on what is under it.
   expect(overview).not.toMatch(/\.workspace-(?:list|chat)\b/)
+})
+
+it("places a pane with the formula paneBox computes", () => {
+  const sheet = readFileSync(
+    new URL("./split-panes/ui/split-panes.css", import.meta.url),
+    "utf8",
+  )
+  const body = sheet
+    .slice(sheet.indexOf(".split-panes-grid > [data-pane-key] {"))
+    .split("}")[0]
+  expect(body).toContain(
+    "left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g))",
+  )
+  expect(body).toContain("width: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cw))")
+  expect(body).toContain(
+    "top: calc((100% - (var(--rn) - 1) * var(--g)) * var(--ry) + var(--ri) * var(--g))",
+  )
+  expect(body).toContain("height: calc((100% - (var(--rn) - 1) * var(--g)) * var(--rh))")
+})
+
+it("lays night-scene text out on the frame after its box is measured", () => {
+  const waiting = styles
+    .slice(styles.indexOf(".desktop-night-scene:not([data-scene-ready])"))
+    .split("}")[0]
+  expect(waiting).toMatch(/content-visibility:\s*hidden/)
+  const dimOnly = styles
+    .slice(
+      styles.indexOf(".desktop-night-scene[data-scene-ready]:not([data-scene-complete])"),
+    )
+    .split("}")[0]
+  expect(dimOnly).toContain(".desktop-night-scene-rain")
+  expect(dimOnly).toContain(".desktop-night-scene-steam")
+  expect(dimOnly).toMatch(/content-visibility:\s*hidden/)
+  const layers = styles
+    .slice(styles.indexOf(".desktop-night-scene-layers {"))
+    .split("}")[0]
+  expect(layers).toMatch(/width:\s*max-content/)
+  expect(layers).toMatch(/contain:\s*layout paint style/)
 })
 
 it("keeps a conversation's sliver of the header still, beneath the text, and out of short panes", () => {

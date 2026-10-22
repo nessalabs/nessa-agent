@@ -12,7 +12,7 @@
     "host": "STARTUP_HOST"
   },
   "not-provisioned": "This window was started without the local server. Run `just start`, or `just server`, which creates the chat credential on first run.",
-  "not-ready": "The local server is still starting.",
+  "not-ready": "The local server did not start in time, or its startup failed. Restart Nessa; host.log says why.",
   "not-listening": "The local server is not answering. Run `just start`, or `just server`, and try again.",
   "wrong-stage": "This window is on stage “{bundle}” and the local server was asked for stage “{requested}”.",
   "wrong-stage-plain": "This window and the local server are on different stages.",

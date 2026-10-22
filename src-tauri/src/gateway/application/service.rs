@@ -7,6 +7,8 @@
 )]
 
 use super::host_ownership::DesktopHostOwnership;
+#[cfg(any(target_os = "macos", test))]
+use super::RuntimeCopyProgress;
 #[cfg(test)]
 use super::SystemMonotonicClock;
 use super::{
@@ -21,7 +23,7 @@ use super::{
     ReconciliationHistoryFact, StartupStep,
 };
 #[cfg(any(target_os = "macos", test))]
-use super::{DeferredStageLaunch, DeferredStageReporter};
+use super::{DeferredStageLaunch, DeferredStageReporter, StageMessage};
 use super::{DesktopHostClaim, DesktopHostLease};
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
@@ -39,6 +41,10 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+/// How often [`Gateway::settled_startup`] reads the startup again: one lock
+/// of the lifecycle, so a waiting reader sees `Ready` within this.
+const STARTUP_POLL: Duration = Duration::from_millis(50);
 
 struct Lifecycle {
     startup: GatewayStartup,
@@ -368,16 +374,11 @@ struct StartupProgress {
         )
     )]
     attempt: Arc<AttemptReceipt>,
-    #[cfg_attr(
-        all(not(any(target_os = "macos", target_os = "linux")), not(test)),
-        expect(
-            dead_code,
-            reason = "native reconciliation is supported only on macOS and Linux"
-        )
-    )]
+    // Read on every platform. The deferred copy forwards sync progress
+    // through this port while the gateway is already ready.
     events: Arc<dyn GatewayStartupEvents>,
     // Read on every platform: quit yields this session's writer gate while a
-    // deferred copy runs. The other fields stay macOS and Linux only.
+    // deferred copy runs.
     journal: Arc<dyn GatewayReconciliationJournalSession>,
     state: Arc<Mutex<ProgressState>>,
     deferred_stage: Mutex<Option<DeferredStageWait>>,
@@ -393,17 +394,26 @@ struct DeferredStageWait {
 
 impl DeferredStageWait {
     /// The publication result. The copy starts here, after the plan was accepted.
-    fn publication_result(&mut self) -> Result<(), String> {
+    ///
+    /// Sync progress is forwarded while this waits. It does not write startup.
+    fn publication_result(&mut self, events: &dyn GatewayStartupEvents) -> Result<(), String> {
         #[cfg(any(target_os = "macos", test))]
         {
-            let (reporter, result) = DeferredStageReporter::pair();
+            let (reporter, incoming) = DeferredStageReporter::pair();
             self.launch.start(reporter);
-            result.recv().unwrap_or_else(|_| {
-                Err("deferred runtime publication ended without a result".into())
-            })
+            loop {
+                match incoming.recv() {
+                    Ok(StageMessage::Progress(progress)) => events.runtime_copy(&progress),
+                    Ok(StageMessage::Finished(result)) => return result,
+                    Err(_) => {
+                        return Err("deferred runtime publication ended without a result".into())
+                    }
+                }
+            }
         }
         #[cfg(not(any(target_os = "macos", test)))]
         {
+            let _ = events;
             Err("deferred runtime publication is unavailable".into())
         }
     }
@@ -1155,12 +1165,50 @@ impl Gateway {
             .map_err(|_| GatewayError::Registration("gateway startup state is unavailable".into()))
     }
 
+    /// The startup once it is no longer running, or as it stands when `wait`
+    /// has passed on this gateway's clock while it still runs. Only reads:
+    /// it starts, joins and reconciles nothing (the desktop window's read,
+    /// `GatewayReader`).
+    pub async fn settled_startup(&self, wait: Duration) -> Result<GatewayStartup, GatewayError> {
+        let deadline = self.clock.now() + wait;
+        loop {
+            let startup = self.startup()?;
+            if !matches!(startup.phase(), GatewayStartupPhase::Starting(_)) {
+                return Ok(startup);
+            }
+            let remaining = deadline.saturating_duration_since(self.clock.now());
+            if remaining.is_zero() {
+                return Ok(startup);
+            }
+            self.clock.pause(remaining.min(STARTUP_POLL)).await;
+        }
+    }
+
+    /// The latest private-runtime copy report, if the event adapter kept one.
+    ///
+    /// This is not startup. A window that subscribes after the report was
+    /// emitted reads this. `None` means the host has not reported.
+    #[cfg(any(target_os = "macos", test))]
+    pub fn runtime_copy(&self) -> Option<RuntimeCopyProgress> {
+        self.startup_events.latest_runtime_copy()
+    }
+
     pub async fn start(&self) -> Result<(), GatewayError> {
-        let cause = catch_unwind(AssertUnwindSafe(|| self.host.startup_cause())).map_err(|_| {
-            GatewayError::Registration("gateway host startup classification panicked".into())
-        })?;
-        self.reconcile(evidence(cause, ReconciliationInitiator::DesktopHost)?)
-            .await
+        let admitted = catch_unwind(AssertUnwindSafe(|| self.host.startup_cause()))
+            .map_err(|_| {
+                GatewayError::Registration("gateway host startup classification panicked".into())
+            })
+            .and_then(|cause| evidence(cause, ReconciliationInitiator::DesktopHost));
+        match admitted {
+            Ok(evidence) => self.reconcile(evidence).await,
+            // Startup failed before any reconciliation: said, so nothing
+            // waiting on this startup (the desktop window's read) waits for
+            // one that never runs.
+            Err(error) => {
+                start_failed(&self.lifecycle, &self.startup_events, &error);
+                Err(error)
+            }
+        }
     }
 
     pub async fn wait_ready(&self, surface: BundledSurface) -> Result<(), GatewayError> {
@@ -1635,6 +1683,30 @@ fn admission_failed(
 ) {
     let failed = lifecycle.lock().ok().and_then(|mut current| {
         if current.running.is_some() {
+            return None;
+        }
+        current.startup = current
+            .startup
+            .next(GatewayStartupPhase::Failed(error.clone()));
+        Some(current.startup.clone())
+    });
+    if let Some(failed) = &failed {
+        publish(events, failed);
+    }
+}
+
+/// `Gateway::start` failed before admitting a reconciliation: Failed, but
+/// only over the startup no reconciliation has moved on from yet. A
+/// surface's reconciliation that ran first owns the phase, Ready included.
+fn start_failed(
+    lifecycle: &Arc<Mutex<Lifecycle>>,
+    events: &Arc<dyn GatewayStartupEvents>,
+    error: &GatewayError,
+) {
+    let failed = lifecycle.lock().ok().and_then(|mut current| {
+        let unstarted = current.running.is_none()
+            && current.startup.revision() == GatewayStartup::starting().revision();
+        if !unstarted {
             return None;
         }
         current.startup = current
@@ -2148,11 +2220,11 @@ fn execute_attempt(
                 // writer gate first so quit can record a stop against the
                 // ready gateway. The stage file lock stays held.
                 let stage_result = if early.is_some() {
-                    progress
-                        .journal
-                        .while_lock_yielded(&mut || deferred.publication_result())
+                    progress.journal.while_lock_yielded(&mut || {
+                        deferred.publication_result(progress.events.as_ref())
+                    })
                 } else {
-                    deferred.publication_result()
+                    deferred.publication_result(progress.events.as_ref())
                 };
                 match complete_deferred_stage(
                     &progress,

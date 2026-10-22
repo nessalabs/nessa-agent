@@ -51,6 +51,9 @@ const checks = [
   "rail-off",
   "overview-covers",
   "rail-fold-focus",
+  "draft-held",
+  "reply-held",
+  "stop-held",
 ]
 
 const meta = {
@@ -87,7 +90,14 @@ Checks, per engine, layout and size:
   overview-covers  with the Agents overview open, the session list and the
                    panes under it are inert
   rail-fold-focus  a rail button with the keyboard on it, folded away for
-                   room, hands the keyboard to the toggle`,
+                   room, hands the keyboard to the toggle
+  draft-held       closing a new session that is not the last pane keeps its
+                   home and unsent text on the next frame, until the box goes
+  reply-held       the source removing an established session that is not the
+                   last pane keeps its unsent reply on the next frame
+  stop-held        the source removing a session whose agent is at work, and
+                   that is not the last pane, keeps Stop and that turn on the
+                   next frame`,
 }
 
 /** The columns in the order they stand; the chat area and the overview share the last place. */
@@ -557,6 +567,51 @@ const body = {
         })
       }
     }
+    try {
+      // The pane already open still shows a finished scene. The one just
+      // mounted is still taking its frames. Returning on the first finished
+      // scene would read the new one before it is ready.
+      await page.waitForFunction(
+        () => {
+          const shown = [...document.querySelectorAll(".desktop-night-scene")].filter(
+            (scene) => {
+              const box = scene.getBoundingClientRect()
+              return box.width > 0 && box.height > 0
+            },
+          )
+          return (
+            shown.length > 0 &&
+            shown.every((scene) => scene.hasAttribute("data-scene-complete"))
+          )
+        },
+        null,
+        { timeout: 1000, polling: "raf" },
+      )
+    } catch {
+      failures.push("night scene did not finish laying out after the split settled")
+    }
+    const scenes = await page.evaluate(() =>
+      [...document.querySelectorAll(".desktop-night-scene")].map((scene) => {
+        const box = scene.getBoundingClientRect()
+        const layers = scene.querySelector(".desktop-night-scene-layers")
+        return {
+          shown: box.width > 0 && box.height > 0,
+          ready: scene.hasAttribute("data-scene-ready"),
+          complete: scene.hasAttribute("data-scene-complete"),
+          skipped: getComputedStyle(scene).contentVisibility === "hidden",
+          width: layers ? layers.getBoundingClientRect().width : 0,
+        }
+      }),
+    )
+    const shown = scenes.filter((scene) => scene.shown)
+    if (shown.length === 0) failures.push("no night scene was shown after the split")
+    for (const scene of shown) {
+      if (!scene.ready || !scene.complete)
+        failures.push("night scene stayed unready after the split settled")
+      if (scene.skipped)
+        failures.push("night scene text stayed skipped after the split settled")
+      if (scene.width < 1) failures.push("night scene text has no width")
+    }
     return { runs, failures }
   },
 
@@ -801,6 +856,252 @@ const body = {
       if (!late.reduced && !late.sweeping) failures.push("the text is not sweeping")
     }
     return { opened, late, failures }
+  },
+
+  /**
+   * A non-last draft is dropped in the close, and the box stays three
+   * frames. The next frame still shows that home and the unsent text.
+   */
+  "draft-held": async ({ page }) => {
+    const text = "unsent line"
+    const before = await page.locator(css.pane).count()
+    await page.keyboard.press(keys.newSessionBeside)
+    await need(page, css.paneHome, "a new session's home")
+    const field = page.locator(`${css.paneHome} textarea`)
+    await field.fill(text)
+    await frames(page, 2)
+    const typed = await field.inputValue()
+    if (typed !== text) throw new CannotRun(`the home field reads "${typed}"`)
+    await page.evaluate(
+      ({ pane, home }) => {
+        window.__heldDraft = null
+        window.addEventListener(
+          "keydown",
+          (event) => {
+            if (event.code !== "KeyW" || !event.metaKey) return
+            requestAnimationFrame(() => {
+              window.__heldDraft = [...document.querySelectorAll(pane)].map((item) => ({
+                label: item.getAttribute("aria-label"),
+                home: item.querySelector(home) !== null,
+                text: item.querySelector("textarea")?.value ?? "",
+              }))
+            })
+          },
+          true,
+        )
+      },
+      { pane: css.pane, home: css.paneHome },
+    )
+    await page.keyboard.press(keys.closePane)
+    await page.waitForFunction(() => window.__heldDraft !== null)
+    const sample = await page.evaluate(() => window.__heldDraft)
+    await settled(page)
+    await frames(page, 4)
+    const after = await page.locator(css.pane).count()
+    const failures = []
+    const kept = sample?.find((item) => item.text === text)
+    if (!sample) failures.push("the close did not sample the next frame")
+    else if (!kept)
+      failures.push(`the next frame has no unsent text: ${JSON.stringify(sample)}`)
+    else {
+      if (!kept.home) failures.push("the held box has the text but not the home")
+      if (kept.label !== "New session")
+        failures.push(`the held box is labelled ${kept.label}`)
+      if (sample.length < before + 1)
+        failures.push(
+          `the next frame has ${sample.length} panes; the close started from ${before + 1}`,
+        )
+    }
+    if (after !== before)
+      failures.push(`after the box goes, ${after} panes remain; started from ${before}`)
+    return { sample, before, after, failures }
+  },
+
+  /**
+   * The source removes an established session while another pane stays.
+   * The box keeps the unsent reply on the next frame.
+   *
+   * The reply goes in the pane that was already open. The session the
+   * switcher opens beside it can belong to another channel, and the list
+   * shows only the channel in view.
+   */
+  "reply-held": async ({ page }) => {
+    const text = "unsent reply"
+    const before = await page.locator(css.pane).count()
+    const open = page.locator(css.focusedPane).first()
+    const label = await open.getAttribute("aria-label")
+    const key = await open.getAttribute("data-pane-key")
+    if (!label || !key) throw new CannotRun("the open pane has no label")
+    await openPanes(page, before + 1)
+    const opened = await page.locator(css.pane).count()
+    const field = page.locator(`[data-pane-key="${key}"] textarea`).first()
+    await field.click()
+    await field.fill(text)
+    await frames(page, 2)
+    const typed = await field.inputValue()
+    if (typed !== text) throw new CannotRun(`the composer reads "${typed}"`)
+    await settled(page)
+    await frames(page, 2)
+    const place = await page.evaluate((title) => {
+      const titled = (item) =>
+        item.querySelector(".desktop-list-row-label")?.textContent === title
+      const rows = [...document.querySelectorAll("[data-session-row]")]
+      const listed = rows.find((item) => item.closest(".workspace-list") && titled(item))
+      const row = listed ?? rows.find(titled)
+      const id = row?.getAttribute("data-session-row")
+      return id ? { id, list: listed === row } : null
+    }, label)
+    if (!place) throw new CannotRun(`no session row titled ${label}`)
+    await page.evaluate((pane) => {
+      window.__heldReply = null
+      window.addEventListener(
+        "click",
+        (event) => {
+          const target = event.target instanceof Element ? event.target : null
+          const removal = target?.closest(
+            "[data-session-action='archive'], [data-delete-action='confirm']",
+          )
+          if (!removal) return
+          requestAnimationFrame(() => {
+            window.__heldReply = [...document.querySelectorAll(pane)].map((item) => ({
+              label: item.getAttribute("aria-label"),
+              text: item.querySelector("textarea")?.value ?? "",
+            }))
+          })
+        },
+        true,
+      )
+    }, css.pane)
+    const row = place.list
+      ? page.locator(`.workspace-list [data-session-row="${place.id}"]`)
+      : page.locator(`[data-session-row="${place.id}"]`).first()
+    await row.hover()
+    const archive = row.locator('[data-session-action="archive"]')
+    if ((await archive.count()) > 0) await archive.click()
+    else {
+      await row.click({ button: "right" })
+      await page.getByRole("menuitem", { name: "Delete…" }).click()
+      await page.locator('[data-delete-action="confirm"]').click()
+    }
+    await page.waitForFunction(() => window.__heldReply !== null)
+    const sample = await page.evaluate(() => window.__heldReply)
+    await settled(page)
+    await frames(page, 4)
+    const after = await page.locator(css.pane).count()
+    const failures = []
+    const kept = sample?.find((item) => item.text === text)
+    if (!sample) failures.push("the removal did not sample the next frame")
+    else if (!kept)
+      failures.push(`the next frame has no unsent reply: ${JSON.stringify(sample)}`)
+    else if (kept.label !== label)
+      failures.push(`the held box is labelled ${kept.label}, was ${label}`)
+    if (after !== opened - 1)
+      failures.push(
+        `after the box goes, ${after} panes remain; the removal started from ${opened}`,
+      )
+    return { sample, label, before, opened, after, failures }
+  },
+
+  /**
+   * The source removes a session whose agent is at work, while another
+   * pane stays. The box keeps Stop and that turn on the next frame.
+   * Send in its place, while the turn is still showing, is the bug.
+   */
+  "stop-held": async ({ page }) => {
+    const title = "Split panes for the chat workspace"
+    const activity = "Editing workspace-panes.tsx"
+    const before = await page.locator(css.pane).count()
+    const place = await page.evaluate((wanted) => {
+      const titled = (item) =>
+        item.querySelector(".desktop-list-row-label")?.textContent === wanted
+      const rows = [...document.querySelectorAll("[data-session-row]")]
+      const listed = rows.find((item) => item.closest(".workspace-list") && titled(item))
+      const row = listed ?? rows.find(titled)
+      const id = row?.getAttribute("data-session-row")
+      return id ? { id, list: listed === row } : null
+    }, title)
+    if (!place) throw new CannotRun(`no session row titled ${title}`)
+    const row = place.list
+      ? page.locator(`.workspace-list [data-session-row="${place.id}"]`)
+      : page.locator(`[data-session-row="${place.id}"]`).first()
+    await row.click()
+    await page.waitForFunction(
+      ({ pane, turn }) =>
+        [...document.querySelectorAll(pane)].some((item) => {
+          const stop =
+            item.querySelector("button.desktop-send")?.getAttribute("aria-label") ===
+            "Stop"
+          const live = item.querySelector(".workspace-live")?.textContent ?? ""
+          return stop && live.includes(turn)
+        }),
+      { pane: css.pane, turn: activity },
+    )
+    await openPanes(page, before + 1)
+    const opened = await page.locator(css.pane).count()
+    const showing = await page.evaluate(
+      ({ pane, turn }) =>
+        [...document.querySelectorAll(pane)].some((item) => {
+          const stop =
+            item.querySelector("button.desktop-send")?.getAttribute("aria-label") ===
+            "Stop"
+          const live = item.querySelector(".workspace-live")?.textContent ?? ""
+          return stop && live.includes(turn)
+        }),
+      { pane: css.pane, turn: activity },
+    )
+    if (!showing) throw new CannotRun("the open turn left the pane before the removal")
+    await page.evaluate((pane) => {
+      window.__heldTurn = null
+      window.addEventListener(
+        "click",
+        (event) => {
+          const target = event.target instanceof Element ? event.target : null
+          const removal = target?.closest(
+            "[data-session-action='archive'], [data-delete-action='confirm']",
+          )
+          if (!removal) return
+          requestAnimationFrame(() => {
+            window.__heldTurn = [...document.querySelectorAll(pane)].map((item) => ({
+              label: item.getAttribute("aria-label"),
+              stop:
+                item.querySelector("button.desktop-send")?.getAttribute("aria-label") ??
+                "",
+              live: item.querySelector(".workspace-live")?.textContent ?? "",
+            }))
+          })
+        },
+        true,
+      )
+    }, css.pane)
+    await row.hover()
+    const archive = row.locator('[data-session-action="archive"]')
+    if ((await archive.count()) > 0) await archive.click()
+    else {
+      await row.click({ button: "right" })
+      await page.getByRole("menuitem", { name: "Delete…" }).click()
+      await page.locator('[data-delete-action="confirm"]').click()
+    }
+    await page.waitForFunction(() => window.__heldTurn !== null)
+    const sample = await page.evaluate(() => window.__heldTurn)
+    await settled(page)
+    await frames(page, 4)
+    const after = await page.locator(css.pane).count()
+    const failures = []
+    const kept = sample?.find((item) => item.live.includes(activity))
+    if (!sample) failures.push("the removal did not sample the next frame")
+    else if (!kept)
+      failures.push(`the next frame has no running turn: ${JSON.stringify(sample)}`)
+    else {
+      if (kept.stop !== "Stop")
+        failures.push(`the held box offers ${kept.stop} while the turn is still showing`)
+      if (kept.label !== title)
+        failures.push(`the held box is labelled ${kept.label}, was ${title}`)
+    }
+    if (after !== opened - 1)
+      failures.push(
+        `after the box goes, ${after} panes remain; the removal started from ${opened}`,
+      )
+    return { sample, title, before, opened, after, failures }
   },
 }
 

@@ -1,10 +1,12 @@
 use super::super::generation::random_generation;
 use super::{
-    begin_stage_measurement, clone_file, end_stage_measurement, entry_name, finalize_file,
-    launch_settings, parallelism, publish, stage_runtime, stage_runtime_cached,
-    stage_runtime_using, tree_fingerprint, utf8, validate_runtime, CopyHookGuard, StagePhases,
+    begin_stage_measurement, clone_file, copy_percent, end_stage_measurement, entry_name,
+    finalize_file, launch_settings, parallelism, publish, stage_runtime, stage_runtime_cached,
+    stage_runtime_reporting, stage_runtime_sequential, stage_runtime_tree, stage_runtime_using,
+    tree_fingerprint, utf8, validate_runtime, CopyHookGuard, StagePhases, SyncHookGuard,
     ValidatedRuntimes,
 };
+use crate::gateway::application::{RuntimeCopyPhase, RuntimeCopyProgress};
 use serde_json::json;
 use std::{
     ffi::{CString, OsString},
@@ -17,7 +19,10 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -207,6 +212,324 @@ fn cloned_files_are_synced_through_the_normalized_finalization_boundary() {
 }
 
 #[test]
+fn refused_tree_clone_still_publishes_a_private_runtime() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    set_test_attribute(&source.join("nessa"));
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+
+    let staged = stage_runtime_tree(&source, &versions, &fingerprint, None, &|_, destination| {
+        fs::create_dir(destination).unwrap();
+        fs::write(destination.join("junk"), b"junk").unwrap();
+        Ok(false)
+    })
+    .unwrap();
+
+    assert!(!staged.join("junk").exists());
+    assert_eq!(fs::read(staged.join("nessa")).unwrap(), b"gateway\0bytes");
+    assert_eq!(
+        fs::metadata(staged.join("nessa"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o711
+    );
+    assert!(!has_test_attribute(&staged.join("nessa")));
+    assert_eq!(tree_fingerprint(&staged).unwrap(), fingerprint);
+    assert_eq!(
+        fs::metadata(&staged).unwrap().permissions().mode() & 0o7777,
+        0o700
+    );
+}
+
+fn reproduce_tree(source: &Path, destination: &Path) {
+    let metadata = fs::symlink_metadata(source).unwrap();
+    if metadata.file_type().is_symlink() {
+        symlink(fs::read_link(source).unwrap(), destination).unwrap();
+    } else if metadata.is_dir() {
+        fs::create_dir(destination).unwrap();
+        for entry in fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            reproduce_tree(&entry.path(), &destination.join(entry.file_name()));
+        }
+    } else {
+        fs::copy(source, destination).unwrap();
+        fs::set_permissions(destination, metadata.permissions()).unwrap();
+    }
+}
+
+#[test]
+fn a_cloned_tree_that_matches_the_survey_is_sealed() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    fs::create_dir(source.join("pkg")).unwrap();
+    fs::write(source.join("pkg/lib"), b"library").unwrap();
+    symlink("nessa", source.join("gateway-link")).unwrap();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+
+    let staged = stage_runtime_tree(
+        &source,
+        &versions,
+        &fingerprint,
+        None,
+        &|source, destination| {
+            reproduce_tree(source, destination);
+            set_test_attribute(&destination.join("nessa"));
+            Ok(true)
+        },
+    )
+    .unwrap();
+
+    assert_eq!(tree_fingerprint(&staged).unwrap(), fingerprint);
+    assert_eq!(
+        fs::metadata(staged.join("nessa"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o711
+    );
+    assert!(!has_test_attribute(&staged.join("nessa")));
+    assert_eq!(
+        fs::metadata(staged.join("pkg"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::read_link(staged.join("gateway-link")).unwrap(),
+        Path::new("nessa")
+    );
+}
+
+#[test]
+fn a_cloned_directory_extended_attribute_is_stripped_before_publication() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    fs::create_dir(source.join("pkg")).unwrap();
+    fs::write(source.join("pkg/lib"), b"library").unwrap();
+    set_test_attribute(&source);
+    set_test_attribute(&source.join("pkg"));
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+
+    let staged = stage_runtime_tree(
+        &source,
+        &versions,
+        &fingerprint,
+        None,
+        &|source, destination| {
+            reproduce_tree(source, destination);
+            set_test_attribute(destination);
+            set_test_attribute(&destination.join("pkg"));
+            Ok(true)
+        },
+    )
+    .unwrap();
+
+    assert!(has_test_attribute(&source));
+    assert!(has_test_attribute(&source.join("pkg")));
+    assert!(!has_test_attribute(&staged));
+    assert!(!has_test_attribute(&staged.join("pkg")));
+    assert_eq!(
+        fs::metadata(&staged).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(staged.join("pkg"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+}
+
+#[test]
+fn a_directory_replaced_by_a_symlink_is_refused_before_sealing() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    fs::create_dir(source.join("pkg")).unwrap();
+    fs::write(source.join("pkg/lib"), b"library").unwrap();
+    symlink("nessa", source.join("gateway-link")).unwrap();
+    let fingerprint = Fixture::manifest(&source);
+
+    let outside = fixture.0.join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::set_permissions(&outside, Permissions::from_mode(0o755)).unwrap();
+    let secret = outside.join("lib");
+    fs::write(&secret, b"secret").unwrap();
+    fs::set_permissions(&secret, Permissions::from_mode(0o644)).unwrap();
+    set_test_attribute(&secret);
+
+    let versions = fixture.0.join("versions");
+    let sealed = Arc::new(AtomicBool::new(false));
+    let started = sealed.clone();
+    let _hook = CopyHookGuard::set(move |_| {
+        started.store(true, Ordering::SeqCst);
+        Ok(())
+    });
+    let error = stage_runtime_tree(
+        &source,
+        &versions,
+        &fingerprint,
+        None,
+        &|source, destination| {
+            let pkg = source.join("pkg");
+            fs::remove_dir_all(&pkg).unwrap();
+            symlink(&outside, &pkg).unwrap();
+            reproduce_tree(source, destination);
+            Ok(true)
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.contains("substituted a symlink"), "{error}");
+    assert!(!sealed.load(Ordering::SeqCst));
+    assert_eq!(
+        fs::symlink_metadata(&outside).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(
+        fs::symlink_metadata(&secret).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert!(has_test_attribute(&secret));
+    assert_eq!(fs::read(secret).unwrap(), b"secret");
+    assert_eq!(fs::read_dir(&versions).unwrap().count(), 0);
+}
+
+#[test]
+fn an_unsurveyed_symlink_is_refused_before_sealing() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let outside = fixture.0.join("outside-file");
+    fs::write(&outside, b"outside").unwrap();
+    fs::set_permissions(&outside, Permissions::from_mode(0o644)).unwrap();
+    set_test_attribute(&outside);
+
+    let versions = fixture.0.join("versions");
+    let sealed = Arc::new(AtomicBool::new(false));
+    let started = sealed.clone();
+    let _hook = CopyHookGuard::set(move |_| {
+        started.store(true, Ordering::SeqCst);
+        Ok(())
+    });
+    let error = stage_runtime_tree(
+        &source,
+        &versions,
+        &fingerprint,
+        None,
+        &|source, destination| {
+            reproduce_tree(source, destination);
+            symlink(&outside, destination.join("extra")).unwrap();
+            Ok(true)
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.contains("substituted a symlink"), "{error}");
+    assert!(!sealed.load(Ordering::SeqCst));
+    assert!(has_test_attribute(&outside));
+    assert_eq!(
+        fs::symlink_metadata(&outside).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert_eq!(fs::read_dir(&versions).unwrap().count(), 0);
+}
+
+#[test]
+fn a_clone_missing_a_surveyed_file_is_refused_before_sealing() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    let sealed = Arc::new(AtomicBool::new(false));
+    let started = sealed.clone();
+    let _hook = CopyHookGuard::set(move |_| {
+        started.store(true, Ordering::SeqCst);
+        Ok(())
+    });
+
+    let error = stage_runtime_tree(
+        &source,
+        &versions,
+        &fingerprint,
+        None,
+        &|source, destination| {
+            reproduce_tree(source, destination);
+            fs::remove_file(destination.join("node")).unwrap();
+            Ok(true)
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error.contains("does not match the surveyed tree"),
+        "{error}"
+    );
+    assert!(!sealed.load(Ordering::SeqCst));
+    assert_eq!(fs::read_dir(&versions).unwrap().count(), 0);
+}
+
+#[test]
+fn tree_clone_error_removes_the_unpublished_runtime() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+
+    let error = stage_runtime_tree(&source, &versions, &fingerprint, None, &|_, _| {
+        Err("forced tree failure".into())
+    })
+    .unwrap_err();
+
+    assert_eq!(error, "forced tree failure");
+    assert!(!versions.join(&fingerprint).exists());
+    assert_eq!(fs::read_dir(versions).unwrap().count(), 0);
+}
+
+#[test]
+fn the_zero_report_is_sent_before_tree_clone_returns() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    let events = Arc::new(Mutex::new(Vec::<RuntimeCopyProgress>::new()));
+    let during_clone = events.clone();
+
+    stage_runtime_tree(
+        &source,
+        &versions,
+        &fingerprint,
+        Some(&|progress| {
+            events.lock().expect("progress").push(progress);
+        }),
+        &|_, destination| {
+            assert!(
+                !destination.exists(),
+                "clonefile was asked to write onto an existing directory"
+            );
+            let seen = during_clone.lock().expect("progress");
+            assert!(
+                seen.iter().any(|event| {
+                    event.files_completed == 0 && event.files_total == 3 && event.bytes_total > 0
+                }),
+                "the bar was still waiting on clonefile: {seen:?}"
+            );
+            Ok(false)
+        },
+    )
+    .unwrap();
+}
+
+#[test]
 fn published_runtime_removes_bundle_extended_attributes() {
     let fixture = Fixture::new();
     let source = fixture.source();
@@ -230,7 +553,8 @@ fn byte_copy_fallback_preserves_the_published_runtime_contract() {
     let fingerprint = Fixture::manifest(&source);
     let versions = fixture.0.join("versions");
 
-    let staged = stage_runtime_using(&source, &versions, &fingerprint, force_byte_copy).unwrap();
+    let staged =
+        stage_runtime_using(&source, &versions, &fingerprint, force_byte_copy, None).unwrap();
 
     assert_eq!(staged, versions.join(&fingerprint));
     assert_eq!(fs::read(staged.join("nessa")).unwrap(), b"gateway\0bytes");
@@ -254,8 +578,8 @@ fn clone_attempt_failure_removes_its_unpublished_runtime() {
     let fingerprint = Fixture::manifest(&source);
     let versions = fixture.0.join("versions");
 
-    let error =
-        stage_runtime_using(&source, &versions, &fingerprint, fail_clone_attempt).unwrap_err();
+    let error = stage_runtime_using(&source, &versions, &fingerprint, fail_clone_attempt, None)
+        .unwrap_err();
 
     assert_eq!(error, "forced clone failure");
     assert!(!versions.join(&fingerprint).exists());
@@ -328,6 +652,11 @@ fn published_permissions_and_manifest_are_validated_without_repair() {
     fs::set_permissions(staged.join("node"), Permissions::from_mode(0o600)).unwrap();
     fs::write(staged.join("manifest.json"), b"invalid").unwrap();
     assert!(stage_runtime(&source, &versions, &fingerprint).is_err());
+    assert!(
+        staged.exists(),
+        "a failed validation removed the published generation"
+    );
+    assert_eq!(fs::read(staged.join("manifest.json")).unwrap(), b"invalid");
 }
 
 #[test]
@@ -424,7 +753,9 @@ fn moving_the_bundle_during_copy_removes_only_this_attempt() {
     let _hook = CopyHookGuard::set(move |copied| {
         if copied.file_name().and_then(|name| name.to_str()) == Some("manifest.json") {
             fs::rename(&source_path, &moved_during_copy).unwrap();
+            return Err("bundle moved during copy".into());
         }
+        Ok(())
     });
 
     assert!(stage_runtime(&source, &versions, &fingerprint).is_err());
@@ -446,7 +777,9 @@ fn replacing_an_uncopied_bundle_file_during_copy_fails_closed() {
     let _hook = CopyHookGuard::set(move |copied| {
         if copied.file_name().and_then(|name| name.to_str()) == Some("manifest.json") {
             fs::write(&node, b"replaced while the gateway is running").unwrap();
+            return Err("bundle file replaced during copy".into());
         }
+        Ok(())
     });
 
     assert!(stage_runtime(&source, &versions, &fingerprint).is_err());
@@ -457,6 +790,203 @@ fn replacing_an_uncopied_bundle_file_during_copy_fails_closed() {
         b"replaced while the gateway is running"
     );
     assert_eq!(fs::read(source.join("nessa")).unwrap(), b"gateway\0bytes");
+}
+
+#[test]
+fn file_copies_overlap_when_the_machine_has_more_than_one_worker() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    let in_flight = AtomicUsize::new(0);
+    let max_in_flight = AtomicUsize::new(0);
+    stage_runtime_using(
+        &source,
+        &versions,
+        &fingerprint,
+        |path, output| {
+            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            max_in_flight.fetch_max(now, Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(50));
+            let result = force_byte_copy(path, output);
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            result
+        },
+        None,
+    )
+    .unwrap();
+    let max = max_in_flight.load(Ordering::SeqCst);
+    if parallelism() > 1 {
+        assert!(max > 1, "file copies stayed serial: max in flight {max}");
+    } else {
+        assert_eq!(max, 1);
+    }
+}
+
+#[test]
+fn sync_progress_counts_a_file_only_after_its_sync_returns() {
+    let fixture = Fixture::new();
+    let source = fixture.0.join("source");
+    nessa_local_storage::create_directory(&source).unwrap();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    let events = Arc::new(Mutex::new(Vec::<RuntimeCopyProgress>::new()));
+    let during_sync = events.clone();
+    let _hook = SyncHookGuard::set(move || {
+        let events = during_sync.lock().expect("progress");
+        assert!(
+            events.iter().all(|event| event.files_completed == 0),
+            "progress counted a file before sync_all: {events:?}"
+        );
+        assert!(
+            events
+                .last()
+                .is_some_and(|event| event.files_total == 1 && event.bytes_total > 0),
+            "the copy total is known before sync_all: {events:?}"
+        );
+    });
+    let recorded = events.clone();
+    stage_runtime_using(
+        &source,
+        &versions,
+        &fingerprint,
+        clone_file,
+        Some(&|progress| recorded.lock().expect("progress").push(progress)),
+    )
+    .unwrap();
+    let events = events.lock().expect("progress");
+    let last = events.last().expect("progress after sync");
+    assert_eq!(last.state, RuntimeCopyPhase::Copying);
+    assert_eq!(last.files_completed, 1);
+    assert_eq!(last.files_total, 1);
+    assert_eq!(last.bytes_completed, last.bytes_total);
+    assert!(last.bytes_total > 0);
+}
+
+/// Two sync workers can finish together. The first report holds the count
+/// until it returns, so the other file cannot publish a lower percent, or the
+/// final count, while that report is still running.
+#[test]
+fn a_slower_progress_report_does_not_move_the_percent_backwards() {
+    let fixture = Fixture::new();
+    let source = fixture.0.join("source");
+    nessa_local_storage::create_directory(&source).unwrap();
+    fs::write(source.join("large-a"), vec![b'a'; 4096]).unwrap();
+    fs::write(source.join("large-b"), vec![b'b'; 4096]).unwrap();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    let parallel = parallelism() > 1;
+    let hold = Arc::new(AtomicBool::new(parallel));
+    let inside = Arc::new(AtomicBool::new(false));
+    let events = Arc::new(Mutex::new(Vec::<RuntimeCopyProgress>::new()));
+    let watcher = parallel.then(|| {
+        let events = events.clone();
+        let inside = inside.clone();
+        let hold = hold.clone();
+        thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !inside.load(Ordering::SeqCst) {
+                assert!(
+                    Instant::now() < deadline,
+                    "no partial progress report started"
+                );
+                thread::yield_now();
+            }
+            thread::sleep(Duration::from_millis(40));
+            let events = events.lock().expect("progress");
+            let partials = events
+                .iter()
+                .filter(|event| {
+                    event.files_completed > 0 && event.files_completed < event.files_total
+                })
+                .count();
+            let finished = events
+                .iter()
+                .filter(|event| event.files_total > 0 && event.files_completed == event.files_total)
+                .count();
+            assert_eq!(
+                partials, 1,
+                "another report ran while the first callback held the count: {events:?}"
+            );
+            assert_eq!(
+                finished, 0,
+                "the final report landed while an earlier callback was still running: {events:?}"
+            );
+            hold.store(false, Ordering::SeqCst);
+        })
+    });
+    let recorded = events.clone();
+    let hold_for_report = hold.clone();
+    let inside_for_report = inside.clone();
+    stage_runtime_using(
+        &source,
+        &versions,
+        &fingerprint,
+        clone_file,
+        Some(&|progress| {
+            recorded.lock().expect("progress").push(progress);
+            if parallel
+                && progress.files_completed > 0
+                && progress.files_completed < progress.files_total
+            {
+                inside_for_report.store(true, Ordering::SeqCst);
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while hold_for_report.load(Ordering::SeqCst) {
+                    assert!(
+                        Instant::now() < deadline,
+                        "the following sync did not stay behind this report"
+                    );
+                    thread::yield_now();
+                }
+            }
+        }),
+    )
+    .unwrap();
+    if let Some(watcher) = watcher {
+        watcher.join().expect("progress watcher");
+    }
+    let events = events.lock().expect("progress");
+    let mut previous = 0u64;
+    for event in events.iter() {
+        let percent = copy_percent(
+            event.files_completed,
+            event.bytes_completed,
+            event.files_total,
+            event.bytes_total,
+        );
+        assert!(percent >= previous, "progress moved backwards: {events:?}");
+        previous = percent;
+    }
+    let last = events.last().expect("final progress");
+    assert_eq!(last.files_completed, last.files_total);
+    assert_eq!(last.bytes_completed, last.bytes_total);
+    assert_eq!(
+        events
+            .iter()
+            .position(|event| event.files_completed == event.files_total),
+        Some(events.len() - 1)
+    );
+}
+
+#[test]
+fn a_reused_generation_reports_no_copy_progress() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    stage_runtime(&source, &versions, &fingerprint).unwrap();
+    let reports = AtomicUsize::new(0);
+    stage_runtime_using(
+        &source,
+        &versions,
+        &fingerprint,
+        clone_file,
+        Some(&|_| {
+            reports.fetch_add(1, Ordering::SeqCst);
+        }),
+    )
+    .unwrap();
+    assert_eq!(reports.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -508,7 +1038,8 @@ fn measurement_ledger_counts_the_staged_files_and_records_sync_and_digest() {
     let phases = armed.end();
     assert_eq!(phases.files, 3);
     assert_eq!(phases.cloned_files + phases.copied_files, 3);
-    assert!(phases.directories >= 1);
+    assert_eq!(phases.directories, 1);
+    assert!(phases.tree_cloned);
     assert!(phases.file_sync > Duration::ZERO);
     assert!(phases.xattr > Duration::ZERO);
     assert!(phases.digest > Duration::ZERO);
@@ -781,19 +1312,7 @@ fn measure_runtime_staging_phases() {
     let fingerprint = Fixture::manifest(&source);
     quarantine_tree(&source);
 
-    let purge = if purge_required {
-        let output = Command::new("sudo").args(["-n", "purge"]).output();
-        match output {
-            Ok(output) if output.status.success() => (true, String::new()),
-            Ok(output) => (
-                false,
-                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            ),
-            Err(error) => (false, error.to_string()),
-        }
-    } else {
-        (false, "not requested".to_owned())
-    };
+    let purge = purge_disk_cache(purge_required);
     assert!(
         !purge_required || purge.0,
         "disk cache purge failed: {}",
@@ -888,7 +1407,10 @@ fn measure_runtime_staging_phases() {
         + phases.parent_sync;
     let report = serde_json::json!({
         "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
-        "workers": parallelism(),
+        "workers": 1,
+        "strategy": "clonefile-tree",
+        "cpu_parallelism": parallelism(),
+        "tree_cloned": phases.tree_cloned,
         "destination": "fresh directory under ~/Library/Application Support",
         "destination_path": root.0,
         "filesystem": command_text("stat", &["-f", "%T", root.0.to_str().unwrap()]),
@@ -950,6 +1472,223 @@ fn measure_runtime_staging_phases() {
         "launchctl bootstrap failed: {}",
         String::from_utf8_lossy(&launch.stderr)
     );
+}
+
+fn purge_disk_cache(required: bool) -> (bool, String) {
+    if !required {
+        return (false, "not requested".to_owned());
+    }
+    match Command::new("sudo").args(["-n", "purge"]).output() {
+        Ok(output) if output.status.success() => (true, String::new()),
+        Ok(output) => (
+            false,
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        ),
+        Err(error) => (false, error.to_string()),
+    }
+}
+
+struct StrategyTiming {
+    wall: Duration,
+    first_progress: Duration,
+    phases: StagePhases,
+}
+
+fn time_staging(
+    source: &Path,
+    installations: &Path,
+    expected: &str,
+    sequential: bool,
+) -> StrategyTiming {
+    let mut armed = ArmedMeasurement::begin();
+    let started = Instant::now();
+    let first = Mutex::new(None);
+    let report = |progress: RuntimeCopyProgress| {
+        let mut slot = first.lock().expect("progress");
+        if slot.is_none() && progress.files_total > 0 {
+            *slot = Some(started.elapsed());
+        }
+    };
+    let result = if sequential {
+        stage_runtime_sequential(source, installations, expected, Some(&report))
+    } else {
+        stage_runtime_reporting(source, installations, expected, &report)
+    };
+    let wall = started.elapsed();
+    let phases = armed.end();
+    result.expect("stage_runtime");
+    StrategyTiming {
+        wall,
+        first_progress: first.into_inner().expect("progress").expect("zero report"),
+        phases,
+    }
+}
+
+fn strategy_report(timing: &StrategyTiming, workers: usize) -> serde_json::Value {
+    let phases = &timing.phases;
+    let accounted = phases.open
+        + phases.clone
+        + phases.byte_copy
+        + phases.permissions
+        + phases.xattr
+        + phases.file_sync
+        + phases.dir_sync
+        + phases.private_walk
+        + phases.manifest
+        + phases.digest
+        + phases.publish
+        + phases.parent_sync;
+    serde_json::json!({
+        "workers": workers,
+        "copy_wall_ms": millis(timing.wall),
+        "first_progress_ms": millis(timing.first_progress),
+        "setup_usable_added_ms": 0,
+        "cloned_files": phases.cloned_files,
+        "copied_files": phases.copied_files,
+        "tree_cloned": phases.tree_cloned,
+        "files": phases.files,
+        "directories": phases.directories,
+        "symlinks": phases.symlinks,
+        "bytes": phases.bytes,
+        "phases_ms": {
+            "open": millis(phases.open),
+            "clone": millis(phases.clone),
+            "byte_copy": millis(phases.byte_copy),
+            "permissions": millis(phases.permissions),
+            "xattr": millis(phases.xattr),
+            "file_sync": millis(phases.file_sync),
+            "file_sync_work": millis(phases.file_sync_work),
+            "dir_sync": millis(phases.dir_sync),
+            "private_walk": millis(phases.private_walk),
+            "manifest": millis(phases.manifest),
+            "digest": millis(phases.digest),
+            "publish": millis(phases.publish),
+            "parent_sync": millis(phases.parent_sync),
+            "accounted": millis(accounted),
+            "wall": millis(timing.wall),
+        },
+    })
+}
+
+/// Old per-file copy on one thread beside the shipping tree clone.
+///
+/// Run this on the signed Mac after `sudo -v`, so `sudo -n purge` can drop
+/// the disk cache before each copy:
+///
+/// ```text
+/// sudo -v
+/// NESSA_STAGING_PURGE=required cargo test -p nessa-app --release compare_runtime_staging_strategies -- --ignored --nocapture --test-threads=1
+/// ```
+///
+/// `copy_wall_ms` is how long the copy takes. `setup_usable_added_ms` is how
+/// much of that copy sits in front of setup: none. Ready is published before
+/// either copy starts, and agents stay selectable. `first_progress_ms` is when
+/// the bar can appear, at the zero report, before `clonefile` or the first
+/// file copy.
+#[test]
+#[ignore = "cold ~390MB sequential and tree-clone comparison for a signed Mac"]
+fn compare_runtime_staging_strategies() {
+    let files = env_u64("NESSA_STAGING_FILES", 6337);
+    let directories = env_u64("NESSA_STAGING_DIRS", 685);
+    let bytes = env_u64("NESSA_STAGING_BYTES", 393_574_698);
+    let purge_required = std::env::var("NESSA_STAGING_PURGE").ok().as_deref() == Some("required");
+
+    let root = fresh_application_support();
+    let source = root.0.join("source");
+    fs::create_dir_all(&source).unwrap();
+    let subdirs = directories.saturating_sub(1);
+    for index in 0..subdirs {
+        fs::create_dir(source.join(format!("d{index:04}"))).unwrap();
+    }
+    let executable_len = fs::copy("/usr/bin/true", source.join("probe")).unwrap();
+    fs::set_permissions(source.join("probe"), Permissions::from_mode(0o755)).unwrap();
+    let small_count = files.saturating_sub(3);
+    let small_bytes = small_count.saturating_mul(64);
+    for index in 0..small_count {
+        let dir = index % subdirs.max(1);
+        let path = if subdirs == 0 {
+            source.join(format!("f{index:05}"))
+        } else {
+            source.join(format!("d{dir:04}/f{index:05}"))
+        };
+        fs::write(&path, [0x11u8; 64]).unwrap();
+    }
+    let payload = bytes.saturating_sub(executable_len + small_bytes);
+    if payload > 0 {
+        write_repeated(&source.join("payload.bin"), payload);
+    }
+    if payload > 0 {
+        for index in 0..8 {
+            let from = if subdirs == 0 {
+                source.join(format!("link-{index}"))
+            } else {
+                source.join(format!("d0000/link-{index}"))
+            };
+            let target = if subdirs == 0 {
+                "payload.bin"
+            } else {
+                "../payload.bin"
+            };
+            symlink(target, &from).unwrap();
+        }
+    }
+    let fingerprint = Fixture::manifest(&source);
+    quarantine_tree(&source);
+
+    let sequential_purge = purge_disk_cache(purge_required);
+    assert!(
+        !purge_required || sequential_purge.0,
+        "disk cache purge failed: {}",
+        sequential_purge.1
+    );
+    let sequential = time_staging(&source, &root.0.join("sequential"), &fingerprint, true);
+
+    let tree_purge = purge_disk_cache(purge_required);
+    assert!(
+        !purge_required || tree_purge.0,
+        "disk cache purge failed: {}",
+        tree_purge.1
+    );
+    let tree = time_staging(&source, &root.0.join("tree"), &fingerprint, false);
+
+    let sequential_report = strategy_report(&sequential, 1);
+    let tree_report = strategy_report(&tree, 1);
+    let report = serde_json::json!({
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "order": ["sequential", "tree_clone"],
+        "cache_purge": purge_required,
+        "setup_usable": {
+            "copy_wait_ms": 0,
+            "note": "Ready is published before either copy starts. The copy adds nothing to time-until-setup-is-usable. Agents stay selectable. first_progress_ms is when the bar can appear."
+        },
+        "sequential": sequential_report,
+        "tree_clone": tree_report,
+    });
+    let line = serde_json::to_string(&report).unwrap();
+    println!(
+        "strategy     copy_wall_ms  first_progress_ms  setup_usable_added_ms\n\
+         sequential   {sequential_wall:>12}  {sequential_first:>17}  0\n\
+         tree_clone   {tree_wall:>12}  {tree_first:>17}  0",
+        sequential_wall = sequential_report["copy_wall_ms"],
+        sequential_first = sequential_report["first_progress_ms"],
+        tree_wall = tree_report["copy_wall_ms"],
+        tree_first = tree_report["first_progress_ms"],
+    );
+    println!("NESSA_STAGE_COMPARE {line}");
+    if let Ok(path) = std::env::var("NESSA_STAGING_MEASUREMENT_OUT") {
+        fs::write(path, format!("{line}\n")).unwrap();
+    }
+    assert!(
+        sequential.phases.cloned_files > 0,
+        "sequential APFS clone did not run"
+    );
+    assert!(
+        tree.phases.tree_cloned,
+        "directory clonefile did not run; the tree path fell back to per-file copy"
+    );
+    assert!(tree.phases.cloned_files > 0, "tree APFS clone did not run");
+    assert!(sequential.first_progress <= sequential.wall);
+    assert!(tree.first_progress <= tree.wall);
 }
 
 /// Releases a deferred publication if the test fails while the thread is paused.

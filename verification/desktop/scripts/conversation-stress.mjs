@@ -88,6 +88,11 @@
  *               window binds the conversation to the other, with new provider
  *               context, as the window's heading and the binding both say;
  *               both workers stop and linking is turned off again
+ *   launch      the window is reloaded while the host is still starting the
+ *               gateway: the host holds the window's read, the startup
+ *               screen never covers it, and once the gateway is up the
+ *               window lists the conversation and the message sent after
+ *               it is answered
  *   upgrade     the gateway is stopped, its conversation metadata turned
  *               back into the file an older build wrote (version 6, or 7
  *               when a newer table holds rows), and started again: it
@@ -142,7 +147,7 @@ import {
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, log } from "./lib/cli.mjs"
-import { gatewayHost } from "./lib/fake-host.mjs"
+import { gatewayHost, STARTING } from "./lib/fake-host.mjs"
 import {
   connectClient,
   panelTarget,
@@ -250,6 +255,15 @@ const LONG_CHUNK_BYTES = 300
 const FRESH_BURST = 24
 /** The clients that burst is spread over, each well within one socket's 16 requests at once. */
 const FRESH_CLIENTS = 3
+/**
+ * The `launch` step's host stays "starting" this long after the window is
+ * reloaded, well under the host's hold (`STARTING.waitMs`). A refused window
+ * covers itself with the startup screen at once, which is what the step
+ * checks; `LAUNCH_LISTED_MS` only bounds how long listing may take once the
+ * gateway is up.
+ */
+const LAUNCH_STARTING_MS = 3_000
+const LAUNCH_LISTED_MS = 10_000
 /**
  * How much longer opening the `long` conversation again may take than
  * opening one of a single long turn, both closed first so their whole saved
@@ -1230,6 +1244,66 @@ const steps = {
         return failures.length === count
       })
     })
+  },
+
+  async launch(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      const removeKey = () =>
+        page.evaluate((key) => sessionStorage.removeItem(key), STARTING.key)
+      // The window opens while the host is still starting the gateway, as at
+      // every launch: the host holds its read until the gateway is up.
+      await page.evaluate((key) => sessionStorage.setItem(key, "1"), STARTING.key)
+      let covered
+      let askedWhileStarting
+      try {
+        await page.reload()
+        // Whatever the window shows meanwhile, it is never the startup
+        // screen: the gateway did not fail, it is starting.
+        covered = await page
+          .locator(css.startupScreen)
+          .waitFor({ timeout: LAUNCH_STARTING_MS })
+          .then(() => true)
+          .catch(() => false)
+        // And the window did ask while it was starting: the hold was met.
+        askedWhileStarting = await page.evaluate(
+          () => window.__fakeHostAsked.load_gateway_endpoint,
+        )
+      } finally {
+        // Up, whatever happened: a later reload must not find it starting.
+        // A page mid-navigation refuses the evaluate; the next one may not.
+        await removeKey().catch(() => removeKey().catch(() => {}))
+      }
+      if (covered) {
+        failures.push(
+          "the window showed the startup screen while the gateway was starting",
+        )
+        return
+      }
+      if (!(askedWhileStarting > 0)) {
+        failures.push("the window did not ask for the gateway while it was starting")
+        return
+      }
+      const started = Date.now()
+      const listed = await page
+        .locator(selectorFor.sessionListRowFor(run.main.id))
+        .waitFor({ timeout: LAUNCH_LISTED_MS })
+        .then(() => true)
+        .catch(() => false)
+      if (!listed) {
+        failures.push(
+          `the window did not list the main conversation within ${LAUNCH_LISTED_MS}ms of the gateway being up`,
+        )
+        return
+      }
+      log(`launch: listed ${Date.now() - started}ms after the gateway was up`)
+      if ((await page.locator(css.startupScreen).count()) > 0) {
+        failures.push("the startup screen covers the window after the gateway was up")
+        return
+      }
+      await openStressConversation(page, run.main.id, run.main.title)
+    })
+    if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
   async rail(run, step, failures) {
@@ -2640,7 +2714,12 @@ await main(
         initScripts: [
           [
             gatewayHost,
-            { endpoint: stack.endpoint, credential: stack.credential, notices: true },
+            {
+              endpoint: stack.endpoint,
+              credential: stack.credential,
+              notices: true,
+              starting: STARTING,
+            },
           ],
         ],
       })

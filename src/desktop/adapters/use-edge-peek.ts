@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type RefObject,
@@ -164,20 +165,26 @@ export function useEdgePeek(
     [held],
   )
 
-  return {
-    shown: state.shown,
-    handingOff: state.pending === "handoff",
-    handedOff: state.handedOff,
-    enter,
-    leave,
-    /** For the revealed sidebar: pointer and focus both hold it open. */
-    holders: {
-      onPointerEnter: enter,
-      onPointerLeave: leave,
-      onFocus: focusIn,
-      onBlur: focusOut,
-    },
-  }
+  // A new object here would be a new context value, and the shell re-renders
+  // on a pane change. Every consumer — the sidebar — would render again in
+  // that click (`use-edge-peek.test.tsx`).
+  return useMemo(
+    () => ({
+      shown: state.shown,
+      handingOff: state.pending === "handoff",
+      handedOff: state.handedOff,
+      enter,
+      leave,
+      /** For the revealed sidebar: pointer and focus both hold it open. */
+      holders: {
+        onPointerEnter: enter,
+        onPointerLeave: leave,
+        onFocus: focusIn,
+        onBlur: focusOut,
+      },
+    }),
+    [state.shown, state.pending, state.handedOff, enter, leave, focusIn, focusOut],
+  )
 }
 
 export type EdgePeekControls = ReturnType<typeof useEdgePeek>

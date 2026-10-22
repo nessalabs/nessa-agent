@@ -15,20 +15,27 @@ import {
   closePane,
   focusPane,
   loadWorkspace,
+  movePane,
   newSession,
   openBeside,
   openWidget,
+  setComposerText,
   showContent,
+  toggleSidebar,
 } from "../../adapters/store/commands"
 import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
 import {
   controlledAnimationFrames,
+  fakeSource,
   flushAnimationFrames,
+  opus,
   settle,
   shownBy,
   testStore,
 } from "../../testing"
 import { paneItemOf } from "../../model/pane-item"
+import { workspaceActions } from "../../adapters/store/slice"
+import { selectSession } from "../../adapters/store/selectors"
 import {
   openReviewEvent,
   waitingReviewNotices,
@@ -444,7 +451,32 @@ describe("a pane's close is offered where closing it does something", () => {
       return enabled
     }
     expect(offered()).toEqual([true, true])
-    await act(async () => void store.dispatch(closePane()))
+    // jsdom runs animation frames on a timer. Stepping them keeps a busy
+    // event loop from painting the closed box away before the assertion.
+    const frames = controlledAnimationFrames()
+    try {
+      await act(async () => void store.dispatch(closePane()))
+      // The closed pane's box stays through the frames a drop's copy and a
+      // column title take, and it keeps the session it showed. The grid
+      // paints the one pane after that.
+      expect(
+        [...host.querySelectorAll("article.workspace-pane")].map((pane) =>
+          pane.getAttribute("aria-label"),
+        ),
+      ).toEqual(["Session a", "Session b"])
+      expect(offered()).toEqual([true, true])
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(
+        [...host.querySelectorAll("article.workspace-pane")].map((pane) =>
+          pane.getAttribute("aria-label"),
+        ),
+      ).toEqual(["Session a", "Session b"])
+      expect(offered()).toEqual([true, true])
+      await act(async () => frames.runFrame())
+    } finally {
+      frames.restore()
+    }
     expect(offered()).toEqual([true])
     expect(await menuOffers()).toBe(true)
     await act(async () => void store.dispatch(newSession()))
@@ -456,6 +488,461 @@ describe("a pane's close is offered where closing it does something", () => {
     expect(offered()).toEqual([true])
     expect(await menuOffers()).toBe(true)
     await act(async () => root.unmount())
+  })
+})
+
+describe("a source removing a session", () => {
+  it("keeps that session in its box until the box goes", async () => {
+    // jsdom runs animation frames on a timer. Stepping them keeps a busy
+    // event loop from painting the box away before the assertion.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const labels = () =>
+        [...host.querySelectorAll("article.workspace-pane")].map((pane) =>
+          pane.getAttribute("aria-label"),
+        )
+      expect(labels()).toEqual(["Session a", "Session b"])
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(selectSession(store.getState(), "b")).toBeUndefined()
+      expect(labels()).toEqual(["Session a", "Session b"])
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(labels()).toEqual(["Session a", "Session b"])
+      await act(async () => frames.runFrame())
+      expect(labels()).toEqual(["Session a"])
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+
+  it("keeps an unsent reply in the box until the box goes", async () => {
+    // The composer fills on a frame. Stepping that frame, and the ones
+    // after the source removes the session, keeps the box from leaving
+    // before the reply is read.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      await act(async () => {
+        store.dispatch(setComposerText({ sessionId: "b", text: "unsent reply" }))
+      })
+      const reply = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (pane) => pane.getAttribute("aria-label") === "Session b",
+        )
+      const textOf = (pane: Element | undefined) =>
+        pane?.querySelector("textarea")?.value ?? ""
+      const modelOf = (pane: Element | undefined) =>
+        pane?.querySelector('[data-slot="model-picker-trigger"]')?.textContent ?? ""
+      const accessOf = (pane: Element | undefined) =>
+        pane?.querySelector("[data-access-mode]")?.getAttribute("data-access-mode") ?? ""
+      for (let step = 0; step < 8 && textOf(reply()) !== "unsent reply"; step++)
+        await act(async () => frames.runFrame())
+      const model = modelOf(reply())
+      const access = accessOf(reply())
+      expect(textOf(reply())).toBe("unsent reply")
+      expect(model.length).toBeGreaterThan(0)
+      expect(access.length).toBeGreaterThan(0)
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(selectSession(store.getState(), "b")).toBeUndefined()
+      expect(store.getState().workspace.composerText).not.toHaveProperty("b")
+      expect(textOf(reply())).toBe("unsent reply")
+      expect(modelOf(reply())).toBe(model)
+      expect(accessOf(reply())).toBe(access)
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(textOf(reply())).toBe("unsent reply")
+      expect(modelOf(reply())).toBe(model)
+      expect(accessOf(reply())).toBe(access)
+      await act(async () => frames.runFrame())
+      expect(reply()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+
+  it("keeps a message still on its way until the box goes", async () => {
+    // The conversation fills on a frame. The message has to be on screen
+    // before the source removes the session, or the box has nothing to keep.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      for (let step = 0; step < 8 && !pane()?.querySelector("textarea"); step++)
+        await act(async () => frames.runFrame())
+      expect(pane()?.querySelector("textarea")).not.toBeNull()
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.messageSent({
+            sessionId: "b",
+            initiator: "person",
+            message: {
+              id: "m-out",
+              role: "user",
+              at: 1000,
+              parts: [{ kind: "text", text: "still sending" }],
+              delivery: { state: "sending" },
+            },
+          }),
+        )
+      })
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sendFailed({
+            sessionId: "b",
+            messageId: "m-out",
+            reason: "unavailable",
+          }),
+        )
+      })
+      const bubble = () => pane()?.querySelector('[data-role="user"]')
+      const failure = () => pane()?.querySelector("[data-send-failure]")
+      expect(bubble()?.textContent).toContain("still sending")
+      expect(failure()).not.toBeNull()
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.outbox).not.toHaveProperty("b")
+      expect(bubble()?.textContent).toContain("still sending")
+      expect(failure()).not.toBeNull()
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(bubble()?.textContent).toContain("still sending")
+      expect(failure()).not.toBeNull()
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+
+  it("keeps a failed read until the box goes", async () => {
+    // The note has to be on screen before the source removes the session,
+    // or the box has nothing to keep. The read never arrived, so the note
+    // is the conversation.
+    const frames = controlledAnimationFrames()
+    try {
+      const source = fakeSource()
+      source.refuse("transcript", "unavailable")
+      const store = testStore(source)
+      await store.dispatch(loadWorkspace())
+      await settle()
+      store.dispatch(openBeside({ sessionId: "b" }))
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      const note = () => pane()?.querySelector(".workspace-transcript-note")
+      for (let step = 0; step < 8 && !note(); step++)
+        await act(async () => frames.runFrame())
+      expect(note()?.textContent).toContain("Try Again")
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.transcriptFailures).not.toHaveProperty("b")
+      expect(note()?.textContent).toContain("Try Again")
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(note()?.textContent).toContain("Try Again")
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+
+  it("keeps Stop until the box goes while a turn was running", async () => {
+    // The turn has to be on screen before the source removes the session,
+    // or the box has nothing to keep. Stop reads that turn.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      const send = () => pane()?.querySelector("button.desktop-send")
+      const live = () => pane()?.querySelector(".workspace-live")
+      for (let step = 0; step < 8 && !pane()?.querySelector("textarea"); step++)
+        await act(async () => frames.runFrame())
+      expect(pane()?.querySelector("textarea")).not.toBeNull()
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.transcriptLoaded({
+            transcript: {
+              sessionId: "b",
+              messages: [],
+              activity: { label: "Running cargo test", since: 1 },
+              approvals: [],
+              revision: 2,
+            },
+          }),
+        )
+      })
+      expect(send()?.getAttribute("aria-label")).toBe("Stop")
+      expect(live()?.textContent).toContain("Running cargo test")
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.transcripts).not.toHaveProperty("b")
+      expect(send()?.getAttribute("aria-label")).toBe("Stop")
+      expect(live()?.textContent).toContain("Running cargo test")
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(send()?.getAttribute("aria-label")).toBe("Stop")
+      expect(live()?.textContent).toContain("Running cargo test")
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+
+  it("keeps a model change until the box goes", async () => {
+    // The notice has to be on screen before the source removes the session.
+    // The choice and the transcript's model control are already gone then.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      const notice = () => pane()?.querySelector(".desktop-composer-notice")
+      for (let step = 0; step < 8 && !pane()?.querySelector("textarea"); step++)
+        await act(async () => frames.runFrame())
+      expect(pane()?.querySelector("textarea")).not.toBeNull()
+      const chip = () => pane()?.querySelector('[data-slot="model-picker-trigger"]')
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.transcriptLoaded({
+            transcript: {
+              sessionId: "b",
+              messages: [],
+              activity: null,
+              approvals: [],
+              revision: 2,
+              modelControl: {
+                pending: {
+                  requestId: "ask",
+                  requestedModel: opus.modelId,
+                  status: "recovery_required",
+                },
+              },
+            },
+          }),
+        )
+        store.dispatch(
+          workspaceActions.modelChoiceAsked({
+            sessionId: "b",
+            choice: { requestId: "ask", model: opus, state: "asking" },
+          }),
+        )
+      })
+      expect(notice()?.textContent).toBe(
+        "The model change is not confirmed. Choose again to check and try.",
+      )
+      expect(chip()?.hasAttribute("disabled")).toBe(true)
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.modelChoices).not.toHaveProperty("b")
+      expect(store.getState().workspace.transcripts).not.toHaveProperty("b")
+      expect(notice()?.textContent).toBe(
+        "The model change is not confirmed. Choose again to check and try.",
+      )
+      expect(chip()?.hasAttribute("disabled")).toBe(true)
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(notice()?.textContent).toBe(
+        "The model change is not confirmed. Choose again to check and try.",
+      )
+      expect(chip()?.hasAttribute("disabled")).toBe(true)
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+
+  it("keeps an approval answer until the box goes", async () => {
+    // The refusal has to be on the card before the source removes the session.
+    // The answer is already gone then. A pending answer is that same value.
+    const frames = controlledAnimationFrames()
+    try {
+      const { store, root } = await render(ThreeColumns)
+      const pane = () =>
+        [...host.querySelectorAll("article.workspace-pane")].find(
+          (item) => item.getAttribute("aria-label") === "Session b",
+        )
+      const failure = () => pane()?.querySelector(".workspace-approval-failure")
+      for (let step = 0; step < 8 && !pane()?.querySelector("textarea"); step++)
+        await act(async () => frames.runFrame())
+      expect(pane()?.querySelector("textarea")).not.toBeNull()
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.transcriptLoaded({
+            transcript: {
+              sessionId: "b",
+              messages: [],
+              activity: null,
+              approvals: [
+                {
+                  id: "ap",
+                  command: "cargo test",
+                  reason: "Runs the tests.",
+                  origin: { kind: "agent" },
+                  options: [{ id: "deny", label: "Deny", choice: "deny" }],
+                  ask: "tool",
+                },
+              ],
+              revision: 2,
+            },
+          }),
+        )
+        store.dispatch(
+          workspaceActions.approvalAnswering({
+            sessionId: "b",
+            approvalId: "ap",
+            token: "answer",
+          }),
+        )
+        store.dispatch(
+          workspaceActions.approvalFailed({
+            sessionId: "b",
+            approvalId: "ap",
+            token: "answer",
+            reason: "unavailable",
+          }),
+        )
+      })
+      expect(failure()?.textContent).toBe("Nessa couldn’t confirm this just now.")
+      await act(async () => {
+        store.dispatch(
+          workspaceActions.sessionRemoved({
+            sessionId: "b",
+            revision: 2,
+            draftId: "fresh",
+          }),
+        )
+      })
+      expect(store.getState().workspace.answers).not.toHaveProperty("b")
+      expect(failure()?.textContent).toBe("Nessa couldn’t confirm this just now.")
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(failure()?.textContent).toBe("Nessa couldn’t confirm this just now.")
+      await act(async () => frames.runFrame())
+      expect(pane()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
+  })
+})
+
+describe("a draft's close", () => {
+  it("keeps the home and its unsent text until the box goes", async () => {
+    // jsdom runs animation frames on a timer. Stepping them keeps a busy
+    // event loop from painting the closed box away before the assertion.
+    const { store, root } = await render(ThreeColumns)
+    const frames = controlledAnimationFrames()
+    try {
+      let draftId = ""
+      await act(async () => {
+        draftId = store.dispatch(newSession({ beside: "right" })) ?? ""
+      })
+      if (!draftId) throw new Error("no draft")
+      await act(async () => {
+        store.dispatch(setComposerText({ sessionId: draftId, text: "unsent line" }))
+      })
+      const homes = () =>
+        [...host.querySelectorAll("article.workspace-pane")].map((pane) => ({
+          label: pane.getAttribute("aria-label"),
+          home: pane.querySelector(".workspace-pane-home") !== null,
+          text: pane.querySelector("textarea")?.value ?? "",
+        }))
+      const showing = () => homes().find((pane) => pane.text === "unsent line")
+      for (let step = 0; step < 8 && !showing(); step++)
+        await act(async () => frames.runFrame())
+      expect(showing()).toEqual({ label: "New session", home: true, text: "unsent line" })
+      const pane = store.getState().workspace.panes
+      const draftPane = pane
+        ? panesOf(pane).find((item) => shownBy(item) === draftId)
+        : undefined
+      if (!draftPane) throw new Error("draft pane missing")
+      await act(async () => void store.dispatch(closePane({ pane: draftPane.key })))
+      expect(store.getState().workspace.drafts).not.toHaveProperty(draftId)
+      expect(store.getState().workspace.composerText).not.toHaveProperty(draftId)
+      expect(showing()).toEqual({ label: "New session", home: true, text: "unsent line" })
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(showing()).toEqual({ label: "New session", home: true, text: "unsent line" })
+      await act(async () => frames.runFrame())
+      expect(showing()).toBeUndefined()
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
   })
 })
 
@@ -524,5 +1011,219 @@ describe("a review notice opens its conversation", () => {
     await load()
     expect(shown()).not.toContain("b")
     await act(async () => root.unmount())
+  })
+})
+
+describe("a spare sidebar fold paints before the boxes, and the list keeps its measure", () => {
+  const narrow = { width: 500, height: 800, spare: 240 }
+
+  it("keeps the sidebar's tree through the fold and releases the list measure after the boxes", async () => {
+    const frames = controlledAnimationFrames()
+    const width = window.innerWidth
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 })
+    const store = testStore(undefined, () => narrow)
+    try {
+      await store.dispatch(loadWorkspace())
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      const drain = async () => {
+        for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
+          await act(async () => frames.runFrame())
+      }
+      await drain()
+      const sidebar = () => host.querySelector<HTMLElement>(".workspace")
+      const list = () => host.querySelector<HTMLElement>("#workspace-sidebar")
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
+      expect(list()?.hasAttribute("inert")).toBe(false)
+      await act(async () => {
+        store.dispatch(openBeside({ sessionId: "c" }))
+      })
+      expect(store.getState().workspace.chrome.sidebar.folded).toBe(true)
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
+      expect(list()?.hasAttribute("inert")).toBe(false)
+      expect(host.querySelector(".workspace-window")?.getAttribute("data-sidebar")).toBe(
+        "open",
+      )
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
+      expect(list()?.hasAttribute("inert")).toBe(false)
+      expect(sidebar()?.hasAttribute("data-spare-held")).toBe(true)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
+      expect(list()?.hasAttribute("inert")).toBe(false)
+      expect(sidebar()?.hasAttribute("data-spare-held")).toBe(true)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      expect(host.querySelector(".workspace-window")?.getAttribute("data-sidebar")).toBe(
+        "closed",
+      )
+      await act(async () => frames.runFrame())
+      // The boxes and the folded window land together. The list's measure
+      // is still the one it had.
+      expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
+      expect(list()?.hasAttribute("inert")).toBe(true)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      await act(async () => frames.runFrame())
+      // Scene text returns on the frame after the boxes. The list's measure
+      // is still the one it had.
+      expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
+      expect(list()?.hasAttribute("inert")).toBe(true)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      await act(async () => frames.runFrame())
+      expect(list()?.hasAttribute("inert")).toBe(true)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: width })
+    }
+  })
+
+  it("keeps the list measure when a column change reverses after the boxes paint", async () => {
+    const frames = controlledAnimationFrames()
+    const width = window.innerWidth
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 })
+    const store = testStore(undefined, () => narrow)
+    try {
+      await store.dispatch(loadWorkspace())
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
+        await act(async () => frames.runFrame())
+      const sidebar = () => host.querySelector<HTMLElement>(".workspace")
+      await act(async () => {
+        store.dispatch(openBeside({ sessionId: "c" }))
+      })
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
+      await act(async () => {
+        store.dispatch(closePane())
+      })
+      // The next frame is the one that used to drop the hold, because the
+      // list's painted count was still the original one.
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: width })
+    }
+  })
+
+  it("drops a list hold when the shape returns before the next frame", async () => {
+    const frames = controlledAnimationFrames()
+    const width = window.innerWidth
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 })
+    const store = testStore(undefined, () => narrow)
+    try {
+      await store.dispatch(loadWorkspace())
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      const drain = async () => {
+        for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
+          await act(async () => frames.runFrame())
+      }
+      await drain()
+      await act(async () => {
+        store.dispatch(openBeside({ sessionId: "c" }))
+      })
+      await drain()
+      const sidebar = () => host.querySelector<HTMLElement>(".workspace")
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      const panes = store.getState().workspace.panes
+      if (!panes) throw new Error("no panes")
+      const keys = panesOf(panes).map((pane) => pane.key)
+      const [first, second] = keys
+      if (first === undefined || second === undefined) throw new Error("one pane")
+      const shape = layoutShape(panes)
+      // The swap queues the hold. The swap back lands before that frame.
+      await act(async () => {
+        store.dispatch(movePane({ pane: first, target: second, zone: "center" }))
+      })
+      await act(async () => {
+        store.dispatch(movePane({ pane: first, target: second, zone: "center" }))
+      })
+      const restored = store.getState().workspace.panes
+      if (!restored) throw new Error("no panes")
+      expect(layoutShape(restored)).toBe(shape)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      await drain()
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: width })
+    }
+  })
+
+  it("folds a sidebar the person closes before paint", async () => {
+    const frames = controlledAnimationFrames()
+    const store = testStore()
+    try {
+      await store.dispatch(loadWorkspace())
+      await settle()
+      const root = createRoot(host)
+      await act(async () =>
+        root.render(
+          <Provider store={store}>
+            <ClockProvider now={() => 1000}>
+              <ThreeColumns hostKind="browser" browserSurface />
+            </ClockProvider>
+          </Provider>,
+        ),
+      )
+      for (let frame = 0; frame < 8 && frames.pending() > 0; frame++)
+        await act(async () => frames.runFrame())
+      await act(async () => {
+        store.dispatch(toggleSidebar())
+      })
+      expect(host.querySelector(".workspace")?.getAttribute("data-sidebar")).toBe(
+        "closed",
+      )
+      expect(frames.pending()).toBe(0)
+      await act(async () => root.unmount())
+    } finally {
+      frames.restore()
+    }
   })
 })
