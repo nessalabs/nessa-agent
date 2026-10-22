@@ -228,3 +228,23 @@ test("binary ACKs and extra receipt fields cannot confirm the browser command", 
     f.observer.dispose()
   }
 })
+
+test("response envelope identity must match even with the exact command receipt", () => {
+  const f = fixture(),
+    socket = f.socket(),
+    scope = f.observer.begin(target)
+  f.send(socket)
+  socket.emit("framereceived", {
+    payload: JSON.stringify({
+      type: "res",
+      id: "other-envelope",
+      ok: true,
+      payload: { requestId: "command", applied: true },
+    }),
+  })
+  assert.equal(scope.acknowledged(), false)
+  f.ack(socket)
+  assert.equal(scope.acknowledged(), true)
+  assert.equal(scope.finish().outcome, "acknowledged")
+  f.observer.dispose()
+})

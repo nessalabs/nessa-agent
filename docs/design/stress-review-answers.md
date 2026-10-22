@@ -23,6 +23,7 @@ post-click wait, rather than granting a second settlement interval.
 | Answer sent after expiry, refusal received | Refused; step fails and retains refusal code | refusal after expiry |
 | Wrong conversation, execution, review, permission or option | Not this answer; cannot confirm it | mismatched target fields |
 | Another socket reuses a response id | Not this command's ACK | socket identity |
+| Response envelope names another socket request despite the exact command receipt | Not this command’s ACK; the genuine response remains accepted | response envelope identity |
 | ACK names another command, or applied=false | Not an applied ACK | command identity and applied flag |
 | Observer disposed while sockets remain | Listeners detached; no later confirmation | disposal |
 
