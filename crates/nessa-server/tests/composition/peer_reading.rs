@@ -1738,11 +1738,15 @@ struct TwoPeers {
 }
 impl TwoPeers {
     async fn start(root: &Path) -> Self {
-        Self::start_with_c(root, false).await
+        Self::start_with_held_records(root, false).await
     }
 
-    async fn start_with_c(root: &Path, hold_record: bool) -> Self {
-        let a = Peer::start(&root.join("a")).await;
+    async fn start_with_held_records(root: &Path, hold_record: bool) -> Self {
+        let a = if hold_record {
+            Peer::with_held_record(&root.join("a")).await
+        } else {
+            Peer::start(&root.join("a")).await
+        };
         let c = if hold_record {
             Peer::with_held_record(&root.join("c")).await
         } else {
@@ -1834,56 +1838,74 @@ impl TwoPeers {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_first_sync_completed_before_observation_is_not_lost() {
-    first_sync_before_observation(false).await;
+    first_sync_before_observation(false, true).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[should_panic(expected = "C's captured read remained active while A completed")]
 async fn an_ended_peer_read_cannot_prove_concurrent_first_sync() {
-    first_sync_before_observation(true).await;
+    first_sync_before_observation(true, true).await;
 }
 
-/// Hold C after authentication, so A's allowed enrollment work does not spend
-/// C's five-second handshake. Keep the actual cycle identity, not a retained
-/// accept-side socket whose client may already have closed.
-async fn first_sync_before_observation(end_c_before_observation: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[should_panic(expected = "A's first sync did not complete before observation")]
+async fn an_unfinished_a_cannot_be_hidden_by_an_ended_c() {
+    first_sync_before_observation(true, false).await;
+}
+
+/// Prepare enrollment outside C's server source deadline, then force A's
+/// first completion to happen beside C's actual live read, before observation.
+async fn first_sync_before_observation(end_c_before_observation: bool, release_a: bool) {
     let directory = tempfile::tempdir().unwrap();
-    let mut peers = TwoPeers::start_with_c(directory.path(), true).await;
-    let record_hold = peers.c.record_hold.as_ref().unwrap().clone();
-    let _release = ReleaseRecord(record_hold.clone());
-    let (key_c, receiver) = enroll(&peers.c, &peers.b, &peers.relay_c, true).await;
+    let mut peers = TwoPeers::start_with_held_records(directory.path(), true).await;
+    let hold_a = peers.a.record_hold.as_ref().unwrap().clone();
+    let hold_c = peers.c.record_hold.as_ref().unwrap().clone();
+    let _release_a = ReleaseRecord(hold_a.clone());
+    let _release_c = ReleaseRecord(hold_c.clone());
+    let (key_c, receiver_c) = enroll(&peers.c, &peers.b, &peers.relay_c, true).await;
     peers.key_c = key_c;
-    let conversation = peers.c.conversation().await;
-    peers
-        .c
-        .grant(
+    let (key_a, receiver_a) = enroll(&peers.a, &peers.b, &peers.relay_a, true).await;
+    peers.key_a = key_a;
+    for (peer, receiver) in [(&peers.a, receiver_a), (&peers.c, receiver_c)] {
+        let conversation = peer.conversation().await;
+        peer.grant(
             ShareGrantTransition::Grant(ShareAccess::read()),
             &conversation,
             &receiver.unwrap(),
         )
         .await;
+    }
     let policy = PollPolicy {
         interval: HANDSHAKE * 2,
         backoff_cap: HANDSHAKE * 2,
         ..POLICY
     };
     let observation = HANDSHAKE.saturating_sub(Duration::from_secs(2));
+    let source = Duration::from_millis(nessa_protocol::product::generated::PASSIVE_READ_TIMEOUT_MS);
     let request =
         Duration::from_millis(nessa_protocol::product::generated::PASSIVE_MIN_REQUEST_TIMEOUT_MS);
-    assert!(WAIT + observation < request.min(policy.read_budget));
-    let deadline = tokio::time::Instant::now() + WAIT;
+    let critical = source.checked_sub(observation + PROMPT).unwrap().min(WAIT);
+    assert!(critical + observation < source.min(request).min(policy.read_budget));
+    let started = tokio::time::Instant::now();
+    let deadline = started + critical;
     let poller = peers.b.poller(policy);
-    tokio::time::timeout_at(deadline, record_hold.entered())
-        .await
-        .expect("C's authenticated record read reached its source");
+    tokio::time::timeout_at(deadline, async {
+        tokio::join!(hold_a.entered(), hold_c.entered());
+    })
+    .await
+    .expect("both authenticated record reads reached their sources");
+    let entered_at = started.elapsed();
     let captured = peers
         .b
         .peers
         .active_read_stop(&key_c)
         .expect("C's held read still owns its cycle");
     let connections = peers.relay_c.accepted();
+    let a_was_incomplete = sync_of(&peers.b, &key_a)
+        .await
+        .is_none_or(|sync| sync.state != SyncState::Synced);
     if end_c_before_observation {
-        record_hold.release();
+        hold_c.release();
         tokio::time::timeout_at(deadline, async {
             while peers.b.peers.active_read_stop(&key_c).is_some() {
                 tokio::time::sleep(Duration::from_millis(1)).await;
@@ -1894,12 +1916,27 @@ async fn first_sync_before_observation(end_c_before_observation: bool) {
     }
 
     let since = SystemClock.unix_milliseconds();
-    tokio::time::timeout_at(deadline, peers.enroll_a(true))
-        .await
-        .expect("A enrolled and completed its first sync within the fixture window");
+    if release_a {
+        hold_a.release();
+    }
+    let completed = tokio::time::timeout_at(deadline, async {
+        loop {
+            if sync_of(&peers.b, &key_a).await.is_some_and(|sync| {
+                sync.state == SyncState::Synced
+                    && sync
+                        .last_synced_ms
+                        .is_some_and(|at| SystemClock.unix_milliseconds() > at)
+            }) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await;
+    let completed_at = started.elapsed();
     let synced = tokio::time::timeout(observation, async {
         loop {
-            if sync_of(&peers.b, &peers.key_a).await.is_some_and(|sync| {
+            if sync_of(&peers.b, &key_a).await.is_some_and(|sync| {
                 sync.state == SyncState::Synced && sync.last_synced_ms.is_some_and(|at| at >= since)
             }) {
                 return;
@@ -1908,25 +1945,64 @@ async fn first_sync_before_observation(end_c_before_observation: bool) {
         }
     })
     .await;
-    let same_read = peers
-        .b
-        .peers
-        .active_read_stop(&key_c)
-        .is_some_and(|current| Arc::ptr_eq(&captured, &current))
-        && !captured.is_stopped();
+    let active = peers.b.peers.active_read_stop(&key_c);
+    let same_identity = active
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(&captured, current));
+    let identity = match &active {
+        None => "absent",
+        Some(_) if same_identity => "same",
+        Some(_) => "replaced",
+    };
+    let stopped = captured.is_stopped();
+    let same_read = same_identity && !stopped;
     let after = peers.relay_c.accepted();
-    // Poller shutdown also stops reads: retain the concurrency fact first, then
-    // release and join all physical work before any positive/negative assertion.
-    record_hold.release();
+    let evidence = format!(
+        "A incomplete_before_release={a_was_incomplete} completed={} observed={} sync={:?}; \
+         C captured={:p} active={:?} identity={identity} stopped={stopped} sync={:?} \
+         connections={connections}->{after} exact_termination_reason=unknown; \
+         elapsed entered={entered_at:?} completed={completed_at:?} observed={:?}; \
+         budgets critical={critical:?} observation={observation:?} server={source:?} \
+         client={request:?} read={:?}",
+        completed.is_ok(),
+        synced.is_ok(),
+        sync_of(&peers.b, &key_a).await,
+        Arc::as_ptr(&captured),
+        active
+            .as_ref()
+            .map(|value| format!("{:p}", Arc::as_ptr(value))),
+        sync_of(&peers.b, &key_c).await,
+        started.elapsed(),
+        policy.read_budget,
+    );
+    eprintln!("peer first-sync evidence: {evidence}");
+    // Shutdown itself stops cycles. Save both results first, then release and
+    // join all physical work before positive or negative assertions.
+    hold_a.release();
+    hold_c.release();
     tokio::time::timeout(WAIT, poller.join()).await.unwrap();
     stop(peers.a).await;
     stop(peers.c).await;
     assert!(
-        same_read,
-        "C's captured read remained active while A completed"
+        a_was_incomplete,
+        "A completed before its source release; {evidence}"
     );
-    assert!(synced.is_ok(), "A was not read while C's read was held");
-    assert_eq!(after, connections, "reading A restarted C's held read");
+    assert!(
+        completed.is_ok(),
+        "A's first sync did not complete before observation; {evidence}"
+    );
+    assert!(
+        synced.is_ok(),
+        "A was not read while C's read was held; {evidence}"
+    );
+    assert!(
+        same_read,
+        "C's captured read remained active while A completed; {evidence}"
+    );
+    assert_eq!(
+        after, connections,
+        "reading A restarted C's held read; {evidence}"
+    );
 }
 
 /// A slow peer's read stays open while another peer, enrolled after that
