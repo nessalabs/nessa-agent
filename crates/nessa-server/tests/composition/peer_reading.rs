@@ -1893,13 +1893,23 @@ async fn finish_first_sync(mut peers: TwoPeers, poller: PeerPoller) -> (bool, St
     let mut c = peers.c.running.take().unwrap();
     a.signal_stop();
     c.signal_stop();
-    let (a, c) = tokio::join!(
+    // Native join ends the listeners, not these externally composed source
+    // workers. Join both owners before their storage or TempDir can go away.
+    let (a, c, source_a, source_c) = tokio::join!(
         tokio::time::timeout(WAIT, a.join()),
         tokio::time::timeout(WAIT, c.join()),
+        tokio::time::timeout(WAIT, peers.a.record_source.shutdown()),
+        tokio::time::timeout(WAIT, peers.c.record_source.shutdown()),
     );
     (
-        poller.is_ok() && matches!(a, Ok(Ok(()))) && matches!(c, Ok(Ok(()))),
-        format!("cleanup poller={poller:?} A={a:?} C={c:?}"),
+        poller.is_ok()
+            && matches!(a, Ok(Ok(())))
+            && matches!(c, Ok(Ok(())))
+            && matches!(source_a, Ok(Ok(())))
+            && matches!(source_c, Ok(Ok(()))),
+        format!(
+            "cleanup poller={poller:?} A={a:?} C={c:?} source_A={source_a:?} source_C={source_c:?}"
+        ),
     )
 }
 
