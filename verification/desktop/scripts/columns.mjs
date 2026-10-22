@@ -392,16 +392,20 @@ const body = {
           )
       }
     }
-    // Beside, and one of the two split in a row: every hairline meets an edge.
-    for (const theme of ["dark", "light"]) {
-      await page.evaluate(
-        (theme) => document.documentElement.classList.toggle("dark", theme === "dark"),
-        theme,
-      )
-      await settled(page)
-      for (const broken of await flatSurfaceFailures(page))
-        failures.push(`${theme}, beside: ${broken}`)
+    // Beside, and one of the two split in a row: every hairline meets an edge,
+    // in both themes.
+    const flatIn = async (shape) => {
+      for (const theme of ["dark", "light"]) {
+        await page.evaluate(
+          (theme) => document.documentElement.classList.toggle("dark", theme === "dark"),
+          theme,
+        )
+        await settled(page)
+        for (const broken of await flatSurfaceFailures(page))
+          failures.push(`${theme}, ${shape}: ${broken}`)
+      }
     }
+    await flatIn("beside")
     await page.locator(css.composer).nth(1).focus()
     await page.keyboard.press(keys.splitDown)
     await paneCountIs(page, 3)
@@ -409,8 +413,7 @@ const body = {
     // A narrow window stacks every pane, so there may be more than one row.
     const rows = await page.locator(`${css.chat} ${css.paneEdge}[data-axis="y"]`).count()
     if (rows < 1) failures.push(`⇧⌘\\ left no row hairline`)
-    for (const broken of await flatSurfaceFailures(page))
-      failures.push(`stacked: ${broken}`)
+    await flatIn("stacked")
     return { runs, failures }
   },
 

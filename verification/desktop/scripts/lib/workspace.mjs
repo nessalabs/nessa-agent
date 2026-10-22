@@ -548,8 +548,11 @@ export function flatSurfaceFailures(page) {
           content: after.content,
           fill: after.backgroundColor,
           thick: element.dataset.axis === "x" ? after.width : after.height,
+          // Across the line: where the hairline itself stands, from its own inset.
           middle:
-            element.dataset.axis === "x" ? b.left + b.width / 2 : b.top + b.height / 2,
+            element.dataset.axis === "x"
+              ? b.left + parseFloat(after.left) + parseFloat(after.width) / 2
+              : b.top + parseFloat(after.top) + parseFloat(after.height) / 2,
           // Its insets reach past the edge's own box.
           start:
             element.dataset.axis === "x"
