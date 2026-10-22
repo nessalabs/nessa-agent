@@ -25,6 +25,11 @@ import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withCleanup, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { keysWhileRowsArrive } from "./lib/overview-keyboard.mjs"
+import {
+  expectedPaneFocus,
+  paneFocusSettled,
+  requirePendingMovement,
+} from "./lib/pane-settlement.mjs"
 import { content, css, keys, names, preferenceEvents, storage } from "./lib/selectors.mjs"
 import {
   contentIs,
@@ -34,7 +39,9 @@ import {
   leaveSettings,
   overviewListed,
   openPanes,
+  order,
   paneCount,
+  paneCountIs,
   requestCount,
   settled,
   state,
@@ -54,6 +61,7 @@ function paneSteps() {
       "⇧⌘N (new session beside)",
       (p) => p.keyboard.press(keys.newSessionBeside),
       inComposer,
+      "new",
     ],
     [
       "⌘\\ and a pick",
@@ -65,15 +73,16 @@ function paneSteps() {
         await p.keyboard.press(keys.enter)
       },
       inComposer,
+      "new",
     ],
-    ["⇧⌘\\ (split down)", (p) => p.keyboard.press(keys.splitDown), inComposer],
-    ["⌘1", (p) => p.keyboard.press(keys.focusPane(1)), inComposer],
-    ["⌘2", (p) => p.keyboard.press(keys.focusPane(2)), inComposer],
-    ["⌘3", (p) => p.keyboard.press(keys.focusPane(3)), inComposer],
-    ["⌘4", (p) => p.keyboard.press(keys.focusPane(4)), inComposer],
-    ["⇧⌘]", (p) => p.keyboard.press(keys.focusNext), inComposer],
-    ["⇧⌘[", (p) => p.keyboard.press(keys.focusPrevious), inComposer],
-    ["⌘W", (p) => p.keyboard.press(keys.closePane), inComposer],
+    ["⇧⌘\\ (split down)", (p) => p.keyboard.press(keys.splitDown), inComposer, "new"],
+    ["⌘1", (p) => p.keyboard.press(keys.focusPane(1)), inComposer, 0],
+    ["⌘2", (p) => p.keyboard.press(keys.focusPane(2)), inComposer, 1],
+    ["⌘3", (p) => p.keyboard.press(keys.focusPane(3)), inComposer, 2],
+    ["⌘4", (p) => p.keyboard.press(keys.focusPane(4)), inComposer, 3],
+    ["⇧⌘]", (p) => p.keyboard.press(keys.focusNext), inComposer, "next"],
+    ["⇧⌘[", (p) => p.keyboard.press(keys.focusPrevious), inComposer, "previous"],
+    ["⌘W", (p) => p.keyboard.press(keys.closePane), inComposer, "close"],
     [
       "⌘K closed without a pick",
       async (p) => {
@@ -1005,10 +1014,7 @@ async function retiredLayout(page, layout) {
   try {
     await page.keyboard.press(keys.focusPane(2))
     const captured = await clock.evaluate((owner) => owner.capture())
-    if (captured !== 1)
-      throw new CannotRun(
-        `pane movement queued ${captured} frames; expected its one settlement`,
-      )
+    requirePendingMovement(captured)
     const next = layout === "columns" ? "sidebar" : "columns"
     await page.evaluate(
       ([key, event, value]) => {
@@ -1036,13 +1042,15 @@ async function retiredLayout(page, layout) {
     await clock.evaluate((owner) => owner.restore())
     await clock.dispose()
   }
+  const paneKeys = await order(page)
   await page.keyboard.press(keys.focusPane(1))
-  await settled(page)
-  await frames(page, 3)
+  const settlement = await paneFocusSettled(page, { keys: paneKeys, target: paneKeys[0] })
   const after = await state(page)
   const problem = inComposer(after)
+  if (!settlement.converged)
+    failures.push("replacement focus did not settle in its budget")
   if (problem) failures.push(`replacement: ${problem}`)
-  return { retirement, pending, after, failures }
+  return { retirement, pending, settlement, after, failures }
 }
 
 const meta = {
@@ -1157,7 +1165,7 @@ async function boundKeys(page) {
     await page.keyboard.press(keys.escape)
     await page.waitForSelector(css.switcherField, { state: "hidden" })
     await page.keyboard.press(keys.newSessionBeside)
-    await settled(page)
+    const ordinaryReady = await paneCountIs(page, original + 1)
     const ordinary = await paneCount(page)
     const records = await page.evaluate(() => window.__boundKeyProof.records)
     return {
@@ -1165,6 +1173,7 @@ async function boundKeys(page) {
       original,
       retained,
       ordinary,
+      ordinaryReady,
       modal,
       failures: [
         ...(["KeyN", "KeyW"].some(
@@ -1178,7 +1187,9 @@ async function boundKeys(page) {
         ...(retained !== original || !modal
           ? ["unavailable command changed the workspace or closed the switcher"]
           : []),
-        ...(ordinary !== original + 1 ? ["ordinary split command stopped working"] : []),
+        ...(!ordinaryReady || ordinary !== original + 1
+          ? ["ordinary split command stopped working within its pane-count budget"]
+          : []),
       ],
     }
   } finally {
@@ -1206,17 +1217,36 @@ await main(meta, async ({ options, rep, url }) => {
             await attempt(rep, { name: `focus-${group}`, engine, layout }, async () => {
               const failures = []
               const trail = []
-              for (const [label, act, check] of steps) {
+              const unrun = []
+              for (const [index, [label, act, check, move]] of steps.entries()) {
+                const expected =
+                  group === "panes"
+                    ? expectedPaneFocus(
+                        { keys: await order(page), ...(await state(page)) },
+                        move,
+                      )
+                    : null
                 await act(page)
-                await settled(page)
-                // The caret lands a frame or two after what moved it.
-                await frames(page, 3)
+                let settlement
+                if (expected) settlement = await paneFocusSettled(page, expected)
+                else {
+                  await settled(page)
+                  await frames(page, 3)
+                }
                 const s = await state(page)
-                const problem = check(s)
-                trail.push({ step: label, ...s, ok: !problem })
-                if (problem) failures.push(`${label}: ${problem}`)
+                const problem =
+                  check(s) ??
+                  (settlement && !settlement.converged
+                    ? "expected pane focus did not settle in its budget"
+                    : null)
+                trail.push({ step: label, ...s, expected, settlement, ok: !problem })
+                if (problem) {
+                  failures.push(`${label}: ${problem}`)
+                  unrun.push(...steps.slice(index + 1).map(([name]) => name))
+                  break
+                }
               }
-              return { trail, failures }
+              return { trail, unrun, failures }
             })
 
           await attempt(rep, { name: "focus-overview-arriving", engine, layout }, () =>

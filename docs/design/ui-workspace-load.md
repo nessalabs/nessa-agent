@@ -37,6 +37,21 @@ focus taken during target search.
 | Mounted sliver already moving | Replace its store with one focused elsewhere | Before paint the replacement reflects its own focus; its later focus change still waits for its requested frame. |
 | Pane focus or sliver owner replaced while its paint is queued | Replace the store or layout with the same pane key, then deliver the cancelled paint | The replacement's focus and sliver are unchanged; its own later focus change still applies. `pane-focus-mark.test.tsx` covers both replacements. |
 
+## Sidebar action during a fold
+
+The pane arrangement may keep the sidebar's space until its new boxes paint.
+That hold does not keep the sidebar's action painted: a closed sidebar's bar
+hides immediately, including while a previously started slide is still running.
+`chrome.test.ts` checks the actual stylesheet cascade; `drag.mjs`'s
+`command-mid-drag` checks the painted reserved corner throughout Cmd+W.
+
+| State | Event ordering | Required observation |
+| --- | --- | --- |
+| Open sidebar | A pane closes during a drag; sidebar closes while spare space is held | The sidebar may remain painted, but its bar, New Session button and icon are hidden immediately. |
+| Closed sidebar, space held | The hold ends while the slide continues | The bar remains hidden; no action crosses the reserved corner. |
+| Closed sidebar | Person reveals the edge peek | The existing reveal delay governs the bar; the fold rule does not suppress the peek. |
+| Closed sidebar | Sidebar opens again | The open bar remains available after its existing reveal ordering. |
+
 ## What load coverage exists
 
 | Check | What it drives | Scale | Evidence |
@@ -101,6 +116,9 @@ dispatch policy. Existing published readiness and shared waits are the owners.
 
 | State | Event | Measurement or next action | Enforcer |
 | --- | --- | --- | --- |
+| A pane command has committed its model change but its arrangement or caret is still pending | The fixture observes the command | Within the existing 3-second settlement budget require the expected pane membership and destination, its mark and its composer caret, with finite motion finished. An old pane/old caret match cannot complete an added-pane command. | `pane-settlement.mjs`; actual-shell ordering probe and delayed/wrong-target/stalled controls |
+| A bound ordinary split was pressed | No finite animation exists before the grid draws its new arrangement | Wait for exactly one additional pane under the existing pane-count budget; timeout remains a failure even if a later read matches. | `paneCountIs`; `focus-bound-keys` |
+| Pane movement queues work for several effects | The layout is replaced and all captured callbacks are delivered despite cancellation | At least one callback was queued; every captured callback was cancelled, creates zero new work, and cannot prevent the replacement's own focus. Callback count is not an ownership identity. | `requirePendingMovement`; `focus-retired-layout` |
 | A control has received hover | Its finite CSS transition is still running | Wait for finite animations before reading the exact hover fill | `waitUntilSettled` in `lib/browser.mjs`; `shared-controls.mjs` identity check |
 | A row query excludes focused or selected rows | Focus or layout changes after input | Read the pinned input/measurement elements; record actual pointer containment and animation state, without accepting another query result | `sampleHover` in `lib/hover-state.mjs`; `shared-controls.mjs` rows |
 | A sampled row has lost the pointer or still has finite animation | Its color happens to match the expected ink | Fail the sample; keep exact color comparison and retain the settled/away measurements | `hoverFailures` and `hover-state.test.mjs` |

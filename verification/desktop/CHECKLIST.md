@@ -352,10 +352,14 @@ _ADR 238 › Focus follows the focused pane_; keys in
 
 - [ ] **The caret lands in the focused pane's composer** after ⌘N, ⇧⌘N,
   ⌘\\ and a pick, ⇧⌘\\, ⌘1–4, ⇧⌘] and ⇧⌘[, and ⌘W. _Check:_ `focus.mjs` (`focus-panes`).
+  Wait for the command's expected pane membership, destination, focus mark and
+  composer together, with finite motion finished, within the existing 3 s
+  settlement budget. The old pane's caret cannot complete a new-pane command.
 - [ ] **Closing ⌘K without a pick, or Settings, gives focus back** to what
   opened it. _Check:_ `focus.mjs` (`focus-panes`).
 - [ ] **Replacing a workspace layout retires queued focus settlement**: deliver
-  held callbacks after the old workspace unmounts; they enqueue zero new frame
+  all held callbacks after the old workspace unmounts (at least one must have
+  been queued); they enqueue zero new frame
   work, and the current layout still focuses its composer. _Check:_ `focus.mjs`
   (`focus-retired-layout`); [frame lifetime](../../docs/design/ui-workspace-load.md#focus-frame-lifetime-730), #730.
 - [ ] **Keys during incremental overview rendering use the mounted prefix.**
@@ -365,7 +369,8 @@ _ADR 238 › Focus follows the focused pane_; keys in
 - [ ] **Bound workspace keys stay consumed while their actions are unavailable.**
   With the quick switcher open, ⌘N and ⌘W prevent the native default, leave the
   panes unchanged, and retain the switcher. An unbound key remains unconsumed;
-  closing the switcher restores ordinary split commands.
+  closing the switcher restores ordinary split commands, observed by the exact
+  additional pane within the existing 3 s pane-count budget.
   _Check:_ `focus.mjs` (`focus-bound-keys`), [workspace shortcuts](../../docs/design/workspace-shortcuts.md).
 - [ ] **A burst of keys leaves a working window**: no error, a focused pane.
   _Check:_ `focus.mjs` (`focus-mash`).
