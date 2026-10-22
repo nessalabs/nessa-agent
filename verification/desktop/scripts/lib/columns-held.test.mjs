@@ -13,9 +13,16 @@ const end = source.indexOf("\n  /**", begin)
 assert.ok(begin >= 0 && end > begin)
 const method = source.slice(begin, end).trim().replace(/,$/, "")
 
-async function check(layout, damage = {}) {
+async function check(layout, damage = {}, { width = 760, rail = 84 } = {}) {
   let listOpen = layout === "columns"
-  let sidebarOpen = true
+  // The narrow columns layout starts with a chosen-open but folded sidebar.
+  let sidebar = { open: true, folded: layout === "columns" }
+  const drawn = () => sidebar.open && !sidebar.folded
+  const room = () => ({
+    width: width - rail - 16 - (listOpen ? 268 : 0) - (drawn() ? 208 : 0),
+    spare: drawn() ? 208 : 0,
+  })
+  let beforeSplit
   let count = 1
   let text = ""
   let onKey
@@ -51,9 +58,18 @@ async function check(layout, damage = {}) {
     keyboard: {
       async press(key) {
         events.push(key)
-        if (key === keys.toggleSidebar) sidebarOpen = !sidebarOpen
+        if (key === keys.toggleSidebar) sidebar = { open: !drawn(), folded: false }
         if (key === keys.toggleSessionList) listOpen = !listOpen
-        if (key === keys.newSessionBeside && !listOpen && !sidebarOpen) count++
+        if (key === keys.newSessionBeside) {
+          const measured = room()
+          beforeSplit = { ...measured, sidebarDrawn: drawn() }
+          // Two readable 300px panes plus their 8px gutter. The real store
+          // probe covers this admission and its use of measured sidebar spare.
+          if (measured.width + measured.spare >= 608) {
+            count++
+            if (measured.width < 608) sidebar = { ...sidebar, folded: true }
+          }
+        }
         if (key === keys.closePane) {
           onKey({ code: "KeyW", metaKey: true })
           count = damage.after ?? 1
@@ -83,15 +99,24 @@ async function check(layout, damage = {}) {
     },
   })
   const result = await body({ page, layout })
-  return { result, events }
+  return { result, events, beforeSplit, sidebar }
 }
 
 for (const layout of ["columns", "sidebar"]) {
   test(`draft close check makes room before splitting in ${layout}`, async () => {
-    const { result, events } = await check(layout)
+    const { result, events, beforeSplit, sidebar } = await check(layout)
     assert.deepEqual(Array.from(result.failures), [])
     assert.equal(result.before, 1)
     assert.equal(result.after, 1)
+    if (layout === "columns") {
+      assert.equal(beforeSplit.sidebarDrawn, true)
+      assert.ok(beforeSplit.width < 608)
+      assert.ok(beforeSplit.width + beforeSplit.spare >= 608)
+      assert.equal(sidebar.folded, true)
+    } else {
+      assert.equal(beforeSplit.sidebarDrawn, false)
+      assert.equal(beforeSplit.spare, 0)
+    }
     assert.ok(events.indexOf(keys.toggleSidebar) < events.indexOf(keys.newSessionBeside))
     if (layout === "columns")
       assert.ok(
@@ -115,3 +140,14 @@ for (const [name, damage, part] of [
     )
   })
 }
+
+test("draft setup still refuses when even reclaimed sidebar room is insufficient", async () => {
+  await assert.rejects(() => check("columns", {}, { width: 707 }), CannotRun)
+})
+
+test("draft setup admits the exact readable-room boundary using sidebar spare", async () => {
+  const { result, beforeSplit, sidebar } = await check("columns", {}, { width: 708 })
+  assert.deepEqual(Array.from(result.failures), [])
+  assert.equal(beforeSplit.width + beforeSplit.spare, 608)
+  assert.equal(sidebar.folded, true)
+})
