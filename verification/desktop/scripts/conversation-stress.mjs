@@ -171,11 +171,17 @@ import {
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import {
   observeReviewAnswers,
+  observeAccessRefusals,
   reviewAnswerAcknowledged,
 } from "./lib/stress-review-answers.mjs"
 import { parentRestarted, parentStopCheckpoint } from "./lib/stress-parent-stop.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
+import {
+  stressProfile,
+  requireStressCapabilities,
+  elevatedAccessAfter,
+} from "./lib/stress-profile.mjs"
 
 const INSTANCE = "conversation-stress"
 /** The conversation metadata version this build writes (`schema.sql`'s last line). */
@@ -203,6 +209,8 @@ const meta = {
   defaults: { engine: "chromium", layout: "columns" },
   options: {
     agent: { type: "string", default: "claude" },
+    model: { type: "string" },
+    accessScenario: { type: "string", default: "full" },
     evidence: { type: "string" },
     ...Object.fromEntries(Object.keys(KNOBS).map((name) => [name, { type: "string" }])),
   },
@@ -223,8 +231,13 @@ ${Object.entries(KNOBS)
   .join("\n")}
 
 Options:
-  --agent claude|codex  the harness profile the scripted agent speaks (default:
-                        claude; Linux offers full access only on Claude's model)
+  --agent claude|codex  the harness protocol (default: claude)
+  --model <id>          explicit scripted model; defaults to the shared agent fixture
+  --accessScenario full|ask-only
+                        full requires advertised Ask/Auto/Full; ask-only requires
+                        only Ask and verifies Full refusal, never Full success.
+                        Codex examples: --model gpt-6-astra for full;
+                        --model gpt-5.6-terra --accessScenario ask-only on Linux.
   --evidence <dir>      write the plan, acp.jsonl, mcp.jsonl, gateway.log and views/`,
 }
 
@@ -1207,6 +1220,81 @@ const steps = {
     run.mode = step.to
   },
 
+  async "refused-access"(run, step, failures) {
+    let text, seen
+    if (step.during) {
+      text = prompt(run, STRESS.pause, step)
+      seen = await send(run, run.main.id, text, failures)
+      if (!(await stopShown(run.page)))
+        failures.push("Send did not turn into Stop before the refused access choice")
+    }
+    const before = await readWithReviews(run.client, run.main.id)
+    requireStressCapabilities(run.stack.profile, {
+      modelId: before.runtime?.model,
+      approvalModes: before.approvalModes,
+    })
+    const recording = readFileSync(run.stack.acpRecording, "utf8")
+    const observation = run.accessRefusals.begin({
+      conversationId: run.main.id,
+      mode: "full",
+    })
+    let refused = false
+    try {
+      await pickAccess(run.page, "full")
+      if (step.during) await settled(run, run.main.id, seen, text, "completed", failures)
+      refused = await waitFor(() => observation.refused(), 20_000)
+    } finally {
+      const evidence = observation.finish()
+      run.accessRefusalEvidence.push(evidence)
+      if (run.evidence)
+        writeView(
+          run.evidence,
+          `views/${run.engine}-access-refusals.json`,
+          run.accessRefusalEvidence,
+        )
+      if (
+        !refused ||
+        evidence.outcome !== "refused" ||
+        evidence.code !== "approval_mode_unavailable"
+      )
+        failures.push(
+          `Full was not explicitly refused as unavailable: ${evidence.outcome}/${evidence.code}`,
+        )
+    }
+    const notice = await waitFor(
+      async () =>
+        (
+          await dock(run.page)
+            .locator(composerControls.notice)
+            .innerText()
+            .catch(() => "")
+        ).includes("This model doesn’t offer that access."),
+      10_000,
+    )
+    if (!notice) failures.push("the window did not explain the unavailable access choice")
+    const after = await readWithReviews(run.client, run.main.id)
+    if (
+      before.approvalMode !== "ask" ||
+      after.approvalMode !== "ask" ||
+      after.runtime?.model !== before.runtime?.model ||
+      JSON.stringify(after.approvalModeChange) !==
+        JSON.stringify(before.approvalModeChange) ||
+      JSON.stringify(after.messages.map((turn) => turn.executionId)) !==
+        JSON.stringify(before.messages.map((turn) => turn.executionId))
+    )
+      failures.push(
+        "the refused Full choice changed the selection, pending change or admitted turns",
+      )
+    if (
+      (await dock(run.page)
+        .locator(composerControls.access)
+        .getAttribute("data-access-mode")) !== composerControls.accessValue.ask
+    )
+      failures.push("the shield did not retain Ask after the refusal")
+    if (elevatedAccessAfter(recording, readFileSync(run.stack.acpRecording, "utf8")))
+      failures.push("the refused Full choice reached the provider as elevated access")
+  },
+
   async restart(run, step, failures) {
     const text = prompt(run, STRESS.cut, step)
     await run.exclusive(async () => {
@@ -1425,7 +1513,10 @@ const steps = {
     try {
       // Pairing is the owner's: the panel's credential cannot approve.
       owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
-      const launch = scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario })
+      const launch = scriptedLaunch(run.stack.agent, {
+        scenario: run.stack.scenario,
+        model: run.stack.profile.model,
+      })
       for (const label of ["a", "b"])
         workers.push(
           await startWorker({
@@ -2711,6 +2802,7 @@ async function atRest(run, ids) {
 }
 
 async function startStack(options) {
+  const profile = stressProfile(options)
   const knobs = knobsFrom(options)
   const nativeAddress = `127.0.0.1:${await freePort()}`
   const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
@@ -2731,7 +2823,7 @@ async function startStack(options) {
     mkdirSync(options.evidence, { recursive: true })
     writeFileSync(
       join(options.evidence, "plan.txt"),
-      `${JSON.stringify(knobs)}\n${describe(plan(knobs))}\n`,
+      `${JSON.stringify({ ...knobs, profile })}\n${describe(plan(knobs, profile.scenario))}\n`,
     )
   }
   let stack
@@ -2739,12 +2831,19 @@ async function startStack(options) {
     stack = await startGatewayStack(options, INSTANCE, {
       as: "panel",
       scenario,
+      model: profile.model,
       evidence: recordingDirectory,
       limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
       // Off, at a port of its own: the `linking` step turns it on from Settings.
       native: { enabled: false, listenAddress: nativeAddress },
     })
+    const { agents } = await stack.client.agents.list()
+    const model = agents
+      .find((row) => row.agent === profile.agent)
+      ?.models.find((row) => row.modelId === profile.model)
+    stack.profile = requireStressCapabilities(profile, model)
   } catch (error) {
+    await stack?.close()
     rmSync(directory, { recursive: true, force: true })
     throw error
   }
@@ -2758,6 +2857,7 @@ async function startStack(options) {
   }
   return panelTarget(stack, () => ({
     knobs,
+    profile: stack.profile,
     agent: options.agent,
     acpRecording: join(recordingDirectory, "acp.jsonl"),
     nativeAddress,
@@ -2770,17 +2870,21 @@ await main(
   meta,
   async ({ options, rep, target: stack }) => {
     const knobs = stack.knobs
-    const planned = plan(knobs)
-    log(`conversation-stress ${JSON.stringify(knobs)}\n${describe(planned)}`)
+    const planned = plan(knobs, stack.profile.scenario)
+    log(
+      `conversation-stress ${JSON.stringify({ ...knobs, profile: stack.profile })}\n${describe(planned)}`,
+    )
     const origin = new URL(stack.url).origin
     await withEngines(options, rep, async (engine, browser) => {
       const layout = options.layouts[0]
       let restartConsole
       let reviewAnswers
+      let accessRefusals
       const opened = await openPage(browser, {
         preparePage: async (page) => {
           restartConsole = observeGatewayRestarts(page, stack.endpoint)
           reviewAnswers = observeReviewAnswers(page, stack.endpoint)
+          accessRefusals = observeAccessRefusals(page, stack.endpoint)
         },
         url: `${origin}/desktop.html`,
         layout,
@@ -2795,6 +2899,8 @@ await main(
       const run = new Run(stack, opened, knobs, restartConsole)
       run.reviewAnswers = reviewAnswers
       run.reviewAnswerEvidence = []
+      run.accessRefusals = accessRefusals
+      run.accessRefusalEvidence = []
       run.evidence = options.evidence
       run.engine = engine
       const base = { engine, layout }
@@ -2808,6 +2914,15 @@ await main(
         await settled(run, id, new Set(), first, "completed", setup)
         run.main = { id, title: await titleOf(run, id) }
         await openStressConversation(run.page, run.main.id, run.main.title)
+        const initial = await readWithReviews(run.client, run.main.id)
+        const verifiedProfile = requireStressCapabilities(stack.profile, {
+          modelId: initial.runtime?.model,
+          approvalModes: initial.approvalModes,
+        })
+        if (initial.approvalMode !== "ask")
+          setup.push("the stress fixture did not start in Ask")
+        if (run.evidence)
+          writeView(run.evidence, `views/${engine}-profile.json`, verifiedProfile)
         if (setup.length) {
           rep.add({ name: "setup", ...base, failures: setup })
           return
@@ -2916,6 +3031,7 @@ await main(
         } finally {
           restartConsole.dispose()
           reviewAnswers.dispose()
+          accessRefusals.dispose()
         }
       }
     })

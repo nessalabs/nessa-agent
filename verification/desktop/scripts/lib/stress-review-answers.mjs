@@ -24,10 +24,25 @@ const { bounds, ConversationPermissionSelectionState } = await tsImport(
   import.meta.url,
 )
 
-const fields = ["conversationId", "executionId", "review", "permissionId", "optionId"]
-
 /** Observe existing window commands; an ACK does not prove provider settlement. */
 export function observeReviewAnswers(page, endpoint, now = Date.now) {
+  return observeCommands(page, endpoint, now, {
+    method: "conversation.answer",
+    fields: ["conversationId", "executionId", "review", "permissionId", "optionId"],
+    applied: (payload, requestId) => conversationMutation(payload, requestId).applied,
+  })
+}
+
+/** Only an exact refusal can satisfy the Ask-only scenario, never a success. */
+export function observeAccessRefusals(page, endpoint, now = Date.now) {
+  return observeCommands(page, endpoint, now, {
+    method: "conversation.setApprovalMode",
+    fields: ["conversationId", "mode"],
+    applied: () => false,
+  })
+}
+
+function observeCommands(page, endpoint, now, { method, fields, applied }) {
   const url = new URL("/session", endpoint).href
   const sockets = new Map()
   let active
@@ -50,7 +65,7 @@ export function observeReviewAnswers(page, endpoint, now = Date.now) {
       if (
         !active ||
         frame?.type !== "req" ||
-        frame.method !== "conversation.answer" ||
+        frame.method !== method ||
         typeof frame.id !== "string" ||
         typeof frame.params?.requestId !== "string" ||
         !frame.params.requestId ||
@@ -85,8 +100,9 @@ export function observeReviewAnswers(page, endpoint, now = Date.now) {
           active.selectionState = selection
       } else {
         try {
-          const receipt = conversationMutation(frame.payload, command.requestId)
-          active.outcome = receipt.applied ? "acknowledged" : "invalid acknowledgement"
+          active.outcome = applied(frame.payload, command.requestId)
+            ? "acknowledged"
+            : "invalid acknowledgement"
         } catch {
           active.outcome = "invalid acknowledgement"
         }
@@ -111,6 +127,7 @@ export function observeReviewAnswers(page, endpoint, now = Date.now) {
       active = scope
       return {
         acknowledged: () => scope.outcome === "acknowledged",
+        refused: () => scope.outcome === "refused",
         finish() {
           if (active === scope) active = undefined
           return {

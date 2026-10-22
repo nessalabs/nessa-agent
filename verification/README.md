@@ -33,6 +33,23 @@ controls are mapped in [stress review answer evidence](../docs/design/stress-rev
 A review disappearing does not confirm an answer, and a control ACK does not
 confirm provider tool completion.
 
+Stress access scenarios name their fixture requirements explicitly. `full`
+(the default) requires the selected model to advertise Ask, Auto and Full;
+its existing success assertions are unchanged. `ask-only` requires only Ask
+and replaces the counted access switches with Full-refusal checks, followed
+by real permission turns that still require a review. It is separate evidence,
+not Full-success evidence for that model. The published gateway catalog and
+initial conversation must both match the exact requested model and scenario;
+an incompatible fixture fails setup without selecting a fallback.
+
+For example, on Linux run `conversation-stress.mjs --agent codex --model
+gpt-6-astra --accessScenario full` for the Full-capable profile, and `--agent
+codex --model gpt-5.6-terra --accessScenario ask-only` for the Ask-only profile.
+Raise the same scenario with `--rounds 66 --reviews 30 --switches 9
+--parentstops 3 --followers 4 --restarts 2`. The evidence keeps the exact
+profile, requirements, review ACKs and typed access refusals. Availability
+comes from the product; these examples do not enable additional presets.
+
 A large-workspace measurement is specified in
 [UI workspace load](../docs/design/ui-workspace-load.md). The seeded page is
 opt-in (`workspace-load.mjs`). Startup, the pane cap, and one long transcript
@@ -133,6 +150,8 @@ verification/
         review-notices.test.mjs default/denied/granted/unsupported row contracts, without a browser
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
         gateway-stack.mjs   a real gateway, the dev server or a production preview before it, and a client on it, for the real-gateway checks, or the scripted agent signed out; the panel's credential; an agent turn sent and waited out
+        stress-profile.mjs  explicit stress scenario/model requirements and refusal provider-effect checks; stress-profile.test.mjs covers incompatible fixtures and counted Ask-only work
+        stress-access-refusals.test.mjs exact window Full-request refusal correlation, sharing the review command observer
         scripted-evidence.mjs the scripted command's verdict line and the pull-request summary; page lines are read from the checks' own results
         fake-host.mjs       the desktop app's host over IPC, faked: its gateway endpoint and credential answers
         gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs and gateway-window.mjs: setup's one admitted call, the review a step opened and how long that step waits for it (#474), what a text-only turn said

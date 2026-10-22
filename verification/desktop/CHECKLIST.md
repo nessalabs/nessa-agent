@@ -2061,3 +2061,11 @@ with a typed failure.
   the existing final transcript and at-rest checks. _Check:_
   `lib/stress-review-answers.test.mjs` and `conversation-stress.mjs` in Chromium
   and WebKit; [ordering controls](../../docs/design/stress-review-answers.md).
+
+- [ ] **Stress fixtures match their named access scenario.** `full` keeps the
+  original successful access-change assertions on a model advertising all three
+  modes. `ask-only` clicks Full and requires its exact unavailable refusal,
+  retained Ask selection and shield, no new turn or elevated provider command,
+  and a real review on the following permission turn. Incompatible model/scenario
+  pairs fail setup without fallback. Run defaults and raised counts for each
+  applicable profile; label the model and scenario in the evidence.
