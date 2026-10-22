@@ -499,7 +499,8 @@ function railLayout(page) {
         probe.remove()
         return width
       }
-      // The workspace's first card: the rounded panel at its left edge.
+      // The workspace's first column: the rounded box at its left edge (the
+      // docked sidebar, drawn flat but still cornered for its peek).
       const card = (inside) => {
         const left = inside.getBoundingClientRect().left
         const x = left + length(inside, "--desktop-gutter") + 2
@@ -2225,13 +2226,6 @@ const steps = {
 }
 
 /**
- * Asks `conversationId`'s agent what the window shows, until what it says
- * meets `holds`, asked in the focused pane's composer. The window tells the
- * gateway what it shows on its own request, so the turn can start a moment
- * before the gateway has the change. Resolves with the answer that met
- * `holds`, else `null`; the window shows each answer.
- */
-/**
  * Two panes side by side are regions of one flat chat surface (`panes.css`),
  * not cards: the surface fills to the window's top, right and bottom edges,
  * neither pane draws a fill or rim of its own, and the one hairline between
@@ -2310,6 +2304,13 @@ async function flatPanes(page, failures) {
   failures.push(`the panes are not one flat surface: ${JSON.stringify(await read())}`)
 }
 
+/**
+ * Asks `conversationId`'s agent what the window shows, until what it says
+ * meets `holds`, asked in the focused pane's composer. The window tells the
+ * gateway what it shows on its own request, so the turn can start a moment
+ * before the gateway has the change. Resolves with the answer that met
+ * `holds`, else `null`; the window shows each answer.
+ */
 async function windowRead(run, conversationId, step, extra, failures, holds) {
   let said
   for (let attempt = 1; attempt <= 3; attempt += 1) {

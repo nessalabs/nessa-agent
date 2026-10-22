@@ -1,5 +1,5 @@
 /*
- * The source list: the sidebar's glass pane of sections and channels. Two
+ * The source list: the sidebar's column of sections and channels. Two
  * variants share it — `channels`, where a channel is chosen for the session
  * list beside it, and `tree`, where a channel discloses its sessions inline.
  */
@@ -81,7 +81,7 @@
 }
 
 /*
- * The sidebar's titlebar row: its own action, in the glass's top corner, and
+ * The sidebar's titlebar row: its own action, in the column's top corner, and
  * never under the window's controls, which stand over the sidebar — at its
  * narrowest the action is pushed past its edge and clipped, rather than drawn
  * beneath them.

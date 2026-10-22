@@ -199,7 +199,7 @@ export const css = {
   overviewRowItem: ".agents-row-item", // class: a listed row's item
   overviewEdge: ".agents-overview-edge", // class: the resize edge between the list and the peek beside it (role=separator)
   overviewSide: ".agents-overview-side", // class: the list's side of the overview, whose right is the edge
-  overviewSurface: ".agents-overview-surface", // class: the overview's card, holding the list and the peek
+  overviewSurface: ".agents-overview-surface", // class: the overview's surface, holding the list and the peek
   overviewSaid: ".agents-overview-said", // class: the overview's live region, which says what became of an answer
   overviewRow: ".agents-row", // class
   overviewReplyPill: ".agents-reply-pill", // class

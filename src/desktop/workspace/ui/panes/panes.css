@@ -11,10 +11,11 @@
  * The chat area is one flat surface, from the side columns to the window's
  * edges and up behind the titlebar: the panes are regions of it, not cards
  * floating on the window, so no card's rim or corner stands beside the
- * window's controls. The panes keep their gutters, which the surface fills;
- * a hairline down the middle of each gutter between two panes is all that
- * divides them, and one down the surface's left edge sets it apart from the
- * columns beside it.
+ * window's controls. The panes keep their gutters — the window's edges and
+ * between each other, which the surface fills; beside a column, the gutter is
+ * that column's resize edge, outside the surface. A hairline down the middle
+ * of each gutter between two panes is all that divides them, and one down the
+ * surface's left edge sets it apart from the columns beside it.
  */
 .workspace-chat {
   /* The gutter between the surface's left edge and the panes. */
@@ -56,9 +57,8 @@ html:not(.dark) .workspace-chat {
 .workspace:not([data-drag-card]) .workspace-pane[data-drag-lifted] {
   background: color-mix(in oklab, var(--foreground) 2%, transparent);
   box-shadow: inset 0 0 0 1px var(--desktop-rim);
-  /* The slot snaps. Interpolating the resting blur shadow would paint a new
-     blur on the lift frame and keep painting it until the preview's own
-     rule takes over (`styles.test.ts`). */
+  /* The slot snaps: nothing of it is interpolated on the lift frame
+     (`styles.test.ts`). */
   transition: none;
 }
 
@@ -76,7 +76,7 @@ html:not(.dark) .workspace-chat {
 /*
  * While panes travel — a flight (`data-split-flying`), or a drag's preview of
  * where a drop would put them (`data-drag-reflow`) — nothing inside them
- * repaints expensively: the glass blur and deep shadows wait until they have
+ * repaints expensively: the composer's glass blur and shadow wait until they have
  * landed. One set of rules for both, so a drop that hands a preview over to a
  * flight changes no style. A pane's two parts are named rather than matched
  * as `> *`: a rule whose subject is any element makes the browser restyle
@@ -234,12 +234,13 @@ html:not(.dark) .workspace-chat {
 /*
  * A pane clips what it holds, and with no edge of its own that clip would show
  * as a line wherever a shadow reached it. So the composer's lift stays inside
- * the room a pane leaves round it.
+ * the least room a pane leaves round it: 6px, in the shortest pane
+ * (`conversation.css`).
  */
 .workspace-pane .desktop-composer {
   box-shadow:
     0 1px 2px rgb(0 0 0 / 20%),
-    0 6px 16px -8px rgb(0 0 0 / 45%);
+    0 3px 8px -5px rgb(0 0 0 / 40%);
 }
 
 /* ——— Between panes ——— */
@@ -271,11 +272,17 @@ html:not(.dark) .workspace-chat {
 
 /* A row's edge reaches the surface's side only from the first or last column. */
 .workspace-chat .split-panes-pane-edge[data-axis="y"] {
+  /* 1 where the row's edge meets the surface's side, 0 where it meets a column's edge. */
+  --workspace-edge-first: calc(1 - min(1, var(--cx) * 10000));
+  --workspace-edge-last: calc(1 - min(1, max(0, 1 - var(--cx) - var(--cw)) * 10000));
+  /* At a column's edge it runs on half a gutter, to that edge's hairline. */
   --workspace-edge-start: calc(
-    var(--workspace-chat-lead) * (1 - min(1, var(--cx) * 10000))
+    var(--workspace-chat-lead) * var(--workspace-edge-first) + var(--desktop-gutter) / 2 *
+      (1 - var(--workspace-edge-first))
   );
   --workspace-edge-end: calc(
-    var(--desktop-gutter) * (1 - min(1, max(0, 1 - var(--cx) - var(--cw)) * 10000))
+    var(--desktop-gutter) * var(--workspace-edge-last) + var(--desktop-gutter) / 2 *
+      (1 - var(--workspace-edge-last))
   );
 }
 
