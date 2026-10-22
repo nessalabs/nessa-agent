@@ -594,7 +594,7 @@ impl QuarantineLayout for DirectoryQuarantine {
             sidecar: None,
             namespace: None,
             #[cfg(windows)]
-            session_guard,
+            _session_guard: session_guard,
             expected: None,
         }))
     }
@@ -800,7 +800,7 @@ struct DirectorySessionAttempt {
     sidecar: Option<Unpublished>,
     namespace: Option<ProtectedDirectories>,
     #[cfg(windows)]
-    session_guard: windows_backend::SessionDirectory,
+    _session_guard: windows_backend::SessionDirectory,
     expected: Option<(String, Fingerprint)>,
 }
 
@@ -833,7 +833,7 @@ impl SessionAttempt for DirectorySessionAttempt {
             .ok_or(RestoreFault::Unreadable)?
             .try_clone()
             .map_err(|_| RestoreFault::Unreadable)?;
-        self.output = Some(create_unpublished(
+        self.output = Some(create_session_unpublished(
             &self.directory,
             &self.name,
             &self.relative,
@@ -871,7 +871,7 @@ impl SessionAttempt for DirectorySessionAttempt {
         }
         let mut name = self.name.clone();
         name.push(".publication");
-        self.sidecar = Some(create_unpublished(
+        self.sidecar = Some(create_session_unpublished(
             &self.directory,
             &name,
             "publication",
@@ -883,8 +883,6 @@ impl SessionAttempt for DirectorySessionAttempt {
         sidecar.store(b"\n")?;
         sidecar.sync_file()?;
         sidecar.publish_in(RestoreFault::SessionDiffers)?;
-        #[cfg(windows)]
-        self.session_guard.seal()?;
         #[cfg(not(windows))]
         {
             self.namespace = Some(ProtectedDirectories::seal(&self.directory)?);
@@ -933,8 +931,6 @@ impl SessionAttempt for DirectorySessionAttempt {
                 return Err(RestoreFault::Retained);
             }
         }
-        #[cfg(windows)]
-        self.session_guard.release()?;
         Ok(())
     }
 
@@ -943,11 +939,7 @@ impl SessionAttempt for DirectorySessionAttempt {
         let temp = self.temp.retire();
         let output = self.output.as_mut().map(Unpublished::retire).transpose();
         let sidecar = self.sidecar.as_mut().map(Unpublished::retire).transpose();
-        #[cfg(windows)]
-        let restored = self.session_guard.release().is_ok();
-        #[cfg(not(windows))]
-        let restored = true;
-        if temp.is_err() || output.is_err() || sidecar.is_err() || !restored {
+        if temp.is_err() || output.is_err() || sidecar.is_err() {
             Err(RestoreFault::Retained)
         } else {
             Ok(())
@@ -2663,9 +2655,30 @@ fn create_source_scratch(
     name: &OsStr,
     relative: &str,
 ) -> Result<Unpublished, RestoreFault> {
-    let mut scratch = create_unpublished(parent, name, relative, true, RestoreFault::Retained)?;
+    let mut scratch =
+        create_session_unpublished(parent, name, relative, true, RestoreFault::Retained)?;
     scratch.retirement_scope = RetirementScope::ExternalSourceScratch;
     Ok(scratch)
+}
+
+/// Fetch leaves retain their initial write/delete exclusion through the final audit.
+/// Stage/copy descendants use their separate close-before-directory-rename lifecycle.
+fn create_session_unpublished(
+    parent: &File,
+    name: &OsStr,
+    relative: &str,
+    private: bool,
+    occupied: RestoreFault,
+) -> Result<Unpublished, RestoreFault> {
+    #[cfg(windows)]
+    {
+        let _ = private;
+        let parent = duplicate(parent)?;
+        let file = windows_backend::pinned_file(&parent, name, occupied)?;
+        reserved_file(parent, name, relative, file)
+    }
+    #[cfg(not(windows))]
+    create_unpublished(parent, name, relative, private, occupied)
 }
 
 fn create_unpublished(
@@ -2726,6 +2739,15 @@ fn create_unpublished(
         let _ = (parent, name);
         return Err(RestoreFault::Unreadable);
     };
+    reserved_file(parent, name, relative, file)
+}
+
+fn reserved_file(
+    parent: File,
+    name: &OsStr,
+    relative: &str,
+    file: File,
+) -> Result<Unpublished, RestoreFault> {
     Ok(Unpublished {
         parent,
         name: name.to_os_string(),
@@ -5965,4 +5987,134 @@ fn external_source_retirement_requires_exact_zero_and_sync_but_not_name_removal(
     candidate.release().unwrap();
     #[cfg(windows)]
     nessa_local_storage::release_file_writes(scratch.file.as_ref().unwrap()).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_session_leaf_pins_survive_release_and_preserve_foreign_entries() {
+    use nessa_local_storage::DirectoryAcl;
+    for retire in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = open_ancestor(temp.path()).unwrap();
+        let root = create_directory_handle(&parent, OsStr::new("live"), true).unwrap();
+        nessa_local_storage::release_directory_writes(&root).unwrap();
+        let sessions =
+            nessa_local_storage::create_session_directory_at(&root, OsStr::new("sessions"))
+                .unwrap();
+        let live = temp.path().join("live");
+        let sessions_path = live.join("sessions");
+        let foreign =
+            nessa_local_storage::create_session_directory_at(&sessions, OsStr::new("foreign"))
+                .unwrap();
+        drop(foreign);
+        fs::write(sessions_path.join("foreign/sentinel"), b"unrelated bytes").unwrap();
+        let foreign = open_dir_at(&sessions, OsStr::new("foreign")).unwrap();
+        let parent_acl = DirectoryAcl::capture(&sessions).unwrap();
+        let foreign_acl = DirectoryAcl::capture(&foreign).unwrap();
+        drop(foreign);
+        drop(sessions);
+        drop(root);
+        let anchored = DirectoryQuarantine.anchor(&live).unwrap();
+        let (bytes, digest) = one_conversation("conv", b"pinned publication");
+        let mut attempt = DirectoryQuarantine
+            .begin_session(&anchored, "sessions/conv.sqlite3")
+            .unwrap();
+        let mut source = attempt.destination().unwrap();
+        source.write_all(&bytes).unwrap();
+        attempt.publish("conv", &digest).unwrap();
+        attempt.note_publication("pub-pinned").unwrap();
+        let output = sessions_path.join("conv.sqlite3");
+        let sidecar = sessions_path.join("conv.sqlite3.publication");
+        let published = fs::read(&output).unwrap();
+        for released in [false, true] {
+            if released {
+                attempt.release().unwrap();
+            }
+            for path in [&output, &sidecar] {
+                for error in [
+                    fs::OpenOptions::new().write(true).open(path).unwrap_err(),
+                    fs::remove_file(path).unwrap_err(),
+                    fs::rename(path, path.with_extension("swapped")).unwrap_err(),
+                ] {
+                    assert!(matches!(error.raw_os_error(), Some(5 | 32)), "{error}");
+                }
+            }
+            assert!(fs::rename(&sessions_path, live.join("moved-sessions")).is_err());
+            source.seek(SeekFrom::Start(0)).unwrap();
+            source.write_all(b"changed old source inode").unwrap();
+            assert_eq!(fs::read(&output).unwrap(), published);
+            assert_eq!(fs::read(&sidecar).unwrap(), b"pub-pinned\n");
+            assert_eq!(
+                DirectoryQuarantine
+                    .session_cut_relative(&anchored, "sessions/conv.sqlite3", "conv")
+                    .unwrap()
+                    .digest,
+                digest
+            );
+            let held_root = open_root_dir(&anchored).unwrap();
+            let sessions = open_dir_at(&held_root, OsStr::new("sessions")).unwrap();
+            let foreign = open_dir_at(&sessions, OsStr::new("foreign")).unwrap();
+            assert_eq!(DirectoryAcl::capture(&sessions).unwrap(), parent_acl);
+            assert_eq!(DirectoryAcl::capture(&foreign).unwrap(), foreign_acl);
+            assert_eq!(
+                fs::read(sessions_path.join("foreign/sentinel")).unwrap(),
+                b"unrelated bytes"
+            );
+        }
+        if retire {
+            assert_eq!(attempt.retire(), Err(RestoreFault::Retained));
+            assert_eq!(source.metadata().unwrap().len(), 0);
+            assert!(fs::read(&output).unwrap().is_empty());
+            assert!(fs::read(&sidecar).unwrap().is_empty());
+        }
+        drop(source);
+        drop(attempt);
+        // The ordinary SQLite consumer may reopen only after initial DELETE
+        // authority and its write/delete sharing exclusions have been dropped.
+        fs::OpenOptions::new().write(true).open(&output).unwrap();
+        if !retire {
+            assert_eq!(
+                DirectoryQuarantine
+                    .session_cut(&output, "conv")
+                    .unwrap()
+                    .digest,
+                digest
+            );
+        }
+        let held_root = open_root_dir(&anchored).unwrap();
+        let sessions = open_dir_at(&held_root, OsStr::new("sessions")).unwrap();
+        let foreign = open_dir_at(&sessions, OsStr::new("foreign")).unwrap();
+        assert_eq!(DirectoryAcl::capture(&sessions).unwrap(), parent_acl);
+        assert_eq!(DirectoryAcl::capture(&foreign).unwrap(), foreign_acl);
+        assert_eq!(
+            fs::read(sessions_path.join("foreign/sentinel")).unwrap(),
+            b"unrelated bytes"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn a_readonly_existing_session_parent_is_refused_without_acl_effects() {
+    use nessa_local_storage::DirectoryAcl;
+    let temp = tempfile::tempdir().unwrap();
+    let parent = open_ancestor(temp.path()).unwrap();
+    let root = create_directory_handle(&parent, OsStr::new("live"), true).unwrap();
+    nessa_local_storage::release_directory_writes(&root).unwrap();
+    let sessions =
+        nessa_local_storage::create_session_directory_at(&root, OsStr::new("sessions")).unwrap();
+    nessa_local_storage::seal_directory_writes(&sessions).unwrap();
+    let original = DirectoryAcl::capture(&sessions).unwrap();
+    drop(sessions);
+    let anchored = DirectoryQuarantine
+        .anchor(&temp.path().join("live"))
+        .unwrap();
+    assert!(matches!(
+        DirectoryQuarantine.begin_session(&anchored, "sessions/conv.sqlite3"),
+        Err(RestoreFault::Retained)
+    ));
+    let sessions = open_dir_at(&root, OsStr::new("sessions")).unwrap();
+    assert_eq!(DirectoryAcl::capture(&sessions).unwrap(), original);
+    assert!(list_names(&sessions).unwrap().is_empty());
+    assert_eq!(list_names(&parent).unwrap(), vec![OsString::from("live")]);
 }

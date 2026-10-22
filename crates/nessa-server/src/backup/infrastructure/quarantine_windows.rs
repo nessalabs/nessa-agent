@@ -1,11 +1,11 @@
 //! Windows filesystem adapter for the shared restore lifecycle.
 //!
 //! Native mechanics and ACL rules belong to nessa-local-storage. This adapter
-//! maps their outcomes and retains existing-session permissions for restoration.
+//! maps their outcomes and retains session directories without changing their ACLs.
 //! The shared lifecycle owns final validation, publication and audit ordering.
 
 use super::{duplicate, EntryKind, RestoreFault};
-use nessa_local_storage::{self as storage, DirectoryAcl, MaxAccessDirectory, OpenMode};
+use nessa_local_storage::{self as storage, OpenMode};
 use std::{
     ffi::{OsStr, OsString},
     fs::File,
@@ -59,6 +59,21 @@ pub(super) fn protected_file(
     })
 }
 
+/// A fetch leaf stays pinned against write and delete opens through its final audit.
+pub(super) fn pinned_file(
+    parent: &File,
+    name: &OsStr,
+    occupied: RestoreFault,
+) -> Result<File, RestoreFault> {
+    storage::create_pinned_file_at(parent, name).map_err(|error| {
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            occupied
+        } else {
+            RestoreFault::Unreadable
+        }
+    })
+}
+
 pub(super) fn rename_owned(
     source: &File,
     parent: &File,
@@ -101,165 +116,60 @@ pub(super) fn release_copy_directory(directory: &File) -> Result<(), RestoreFaul
     storage::release_directory_writes(directory).map_err(|_| RestoreFault::Retained)
 }
 
-enum SessionAuthority {
-    Existing {
-        directory: MaxAccessDirectory,
-        original: DirectoryAcl,
-    },
-    NewPrivate(File),
-}
-
 /// Session directory retained without delete sharing before any leaf is created.
-/// Existing ACL effects use only the original typed MAXIMUM_ALLOWED handle.
-/// New directories retain the initial native constructor's authority.
+/// Its ACL is final from acquisition onward. Only this attempt's pinned leaves
+/// receive permission changes; inherited permissions on unrelated children stay intact.
 pub(super) struct SessionDirectory {
-    authority: SessionAuthority,
-    armed: bool,
+    directory: File,
 }
 
 impl SessionDirectory {
     pub(super) fn begin(parent: &File, name: &OsStr) -> Result<Self, RestoreFault> {
-        let directory = match MaxAccessDirectory::open_at(parent, name) {
+        let directory = match storage::open_session_directory_at(parent, name) {
             Ok(directory) => directory,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let directory = storage::create_protected_directory_at(parent, name)
-                    .map_err(|_| RestoreFault::Retained)?;
-                return Ok(Self {
-                    authority: SessionAuthority::NewPrivate(directory),
-                    armed: true,
-                });
+                storage::create_session_directory_at(parent, name)
+                    .map_err(|_| RestoreFault::Retained)?
             }
             Err(_) => return Err(RestoreFault::Retained),
         };
-        let original =
-            DirectoryAcl::capture(directory.file()).map_err(|_| RestoreFault::Unreadable)?;
-        let mut guard = Self {
-            authority: SessionAuthority::Existing {
-                directory,
-                original,
-            },
-            armed: true,
-        };
-        let appended = match &guard.authority {
-            SessionAuthority::Existing { directory, .. } => directory.append(),
-            // NewPrivate constructors already grant append authority atomically.
-            SessionAuthority::NewPrivate(_) => Ok(()),
-        };
-        if appended.is_err() {
-            guard.release()?;
-            return Err(RestoreFault::Unreadable);
-        }
-        Ok(guard)
+        Ok(Self { directory })
     }
 
     pub(super) fn directory(&self) -> &File {
-        match &self.authority {
-            SessionAuthority::Existing { directory, .. } => directory.file(),
-            SessionAuthority::NewPrivate(directory) => directory,
-        }
+        &self.directory
     }
 
-    /// Complete setup before transferring this guard into a fetch attempt.
-    /// A failed setup must observe restoration failure rather than rely on Drop.
+    /// Setup has no parent permission effects to undo on failure.
     pub(super) fn prepare<T>(
         &mut self,
         setup: impl FnOnce(&File) -> Result<T, RestoreFault>,
     ) -> Result<T, RestoreFault> {
-        let prepared = setup(self.directory());
-        finish_setup(prepared, || self.release())
-    }
-
-    pub(super) fn seal(&self) -> Result<(), RestoreFault> {
-        match &self.authority {
-            SessionAuthority::Existing { directory, .. } => directory.seal(),
-            SessionAuthority::NewPrivate(directory) => storage::seal_directory_writes(directory),
-        }
-        .map_err(|_| RestoreFault::Unreadable)
-    }
-
-    pub(super) fn release(&mut self) -> Result<(), RestoreFault> {
-        if self.armed {
-            match &self.authority {
-                SessionAuthority::Existing {
-                    directory,
-                    original,
-                } => directory.restore(original),
-                SessionAuthority::NewPrivate(directory) => {
-                    storage::release_directory_writes(directory)
-                }
-            }
-            .map_err(|_| RestoreFault::Retained)?;
-            self.armed = false;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for SessionDirectory {
-    fn drop(&mut self) {
-        let _ = self.release();
-    }
-}
-
-fn finish_setup<T>(
-    prepared: Result<T, RestoreFault>,
-    restore: impl FnOnce() -> Result<(), RestoreFault>,
-) -> Result<T, RestoreFault> {
-    match prepared {
-        Ok(value) => Ok(value),
-        Err(error) => match restore() {
-            Ok(()) => Err(error),
-            Err(_) => Err(RestoreFault::Retained),
-        },
+        setup(self.directory())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn existing_sessions(parent: &File) -> DirectoryAcl {
-        let directory =
-            storage::create_protected_directory_at(parent, OsStr::new("sessions")).unwrap();
-        storage::release_directory_writes(&directory).unwrap();
-        DirectoryAcl::capture(&directory).unwrap()
-    }
+    use storage::DirectoryAcl;
 
     #[test]
-    fn failed_setup_restores_the_exact_existing_acl_and_preserves_its_error() {
+    fn failed_session_setup_preserves_the_existing_parent_acl_and_error() {
         let temp = tempfile::tempdir().unwrap();
         let parent = super::super::open_ancestor(temp.path()).unwrap();
-        let original = existing_sessions(&parent);
+        let directory =
+            storage::create_session_directory_at(&parent, OsStr::new("sessions")).unwrap();
+        let original = DirectoryAcl::capture(&directory).unwrap();
+        drop(directory);
         let mut guard = SessionDirectory::begin(&parent, OsStr::new("sessions")).unwrap();
-        assert_ne!(DirectoryAcl::capture(guard.directory()).unwrap(), original);
+        assert_eq!(DirectoryAcl::capture(guard.directory()).unwrap(), original);
         let result: Result<(), RestoreFault> = guard.prepare(|_| Err(RestoreFault::Unreadable));
         assert_eq!(result, Err(RestoreFault::Unreadable));
         assert_eq!(DirectoryAcl::capture(guard.directory()).unwrap(), original);
-    }
-
-    #[test]
-    fn failed_setup_and_failed_acl_restoration_report_retained_permissions() {
-        let temp = tempfile::tempdir().unwrap();
-        let parent = super::super::open_ancestor(temp.path()).unwrap();
-        let original = existing_sessions(&parent);
-        let mut guard = SessionDirectory::begin(&parent, OsStr::new("sessions")).unwrap();
-        let temporary = DirectoryAcl::capture(guard.directory()).unwrap();
-        assert_ne!(temporary, original);
-        // This genuine directory handle has no WRITE_DAC authority. Native
-        // restoration must fail; the production setup decision keeps that
-        // retained metadata distinct from the original setup error.
-        let readonly = storage::open_relative_directory(&parent, OsStr::new("sessions")).unwrap();
-        let mut restoration_attempted = false;
-        let result: Result<(), RestoreFault> = finish_setup(Err(RestoreFault::Unreadable), || {
-            restoration_attempted = true;
-            original
-                .restore(&readonly)
-                .map_err(|_| RestoreFault::Retained)
-        });
-        assert!(restoration_attempted);
-        assert_eq!(result, Err(RestoreFault::Retained));
-        assert_eq!(DirectoryAcl::capture(guard.directory()).unwrap(), temporary);
-        guard.release().unwrap();
-        assert_eq!(DirectoryAcl::capture(guard.directory()).unwrap(), original);
+        drop(guard);
+        let directory =
+            storage::open_session_directory_at(&parent, OsStr::new("sessions")).unwrap();
+        assert_eq!(DirectoryAcl::capture(&directory).unwrap(), original);
     }
 }

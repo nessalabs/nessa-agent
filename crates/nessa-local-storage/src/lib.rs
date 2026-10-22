@@ -28,18 +28,19 @@ pub use platform::{
     remove_directory_beneath, remove_file_beneath, replace, replace_beneath, sync_directory,
     sync_directory_beneath, verify_directory, verify_file,
 };
-#[cfg(unix)]
-pub use platform::{
-    create_private_directory_path, create_shared_directory_path, verify_shared_directory_file,
-};
 #[cfg(windows)]
 pub use platform::{
-    create_protected_directory_at, create_protected_file_at, create_protected_subdirectory_at,
-    open_directory_at, open_file_at, open_relative_directory, open_relative_file,
+    create_pinned_file_at, create_protected_directory_at, create_protected_file_at,
+    create_protected_subdirectory_at, create_session_directory_at, open_directory_at, open_file_at,
+    open_relative_directory, open_relative_file, open_session_directory_at,
     open_verified_directory_at, open_verified_file_at, reacquire_exclusive_file,
     relative_entry_kind, relative_names, release_directory_writes, release_file_writes,
     remove_handle, rename_handle_at, rename_relative_entry_at, seal_directory_writes,
-    seal_file_writes, DirectoryAcl, MaxAccessDirectory, NativeObjectId, RelativeEntryKind,
+    seal_file_writes, DirectoryAcl, NativeObjectId, RelativeEntryKind,
+};
+#[cfg(unix)]
+pub use platform::{
+    create_private_directory_path, create_shared_directory_path, verify_shared_directory_file,
 };
 pub use retained_directory::{
     PrivateDirectory, PrivateDirectoryEntries, PrivateDirectoryEntry, PrivateDirectoryTempFile,

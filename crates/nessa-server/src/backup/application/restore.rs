@@ -399,6 +399,9 @@ pub fn stage_quarantine(
     };
     let mut staging = match layout.begin(&quarantine, &live) {
         Ok(staging) => staging,
+        Err(RestoreFault::Retained) => {
+            return Err(retained_stage(&recorded, RestoreFault::Retained));
+        }
         Err(error) => return Err(recorded.stop(error)),
     };
     for (path, bytes) in &prepared.files {
@@ -410,14 +413,8 @@ pub fn stage_quarantine(
         Ok(owner) => owner,
         // A rename whose cleanup could not delete the tree left it unready.
         // Any other finish error means this attempt did not leave a tree.
-        Err(error) if error == RestoreFault::Retained => {
-            if recorded
-                .write("absent", "unready", error.cause(), "effect")
-                .is_err()
-            {
-                return Err(RestoreFault::Retained);
-            }
-            return Err(error);
+        Err(RestoreFault::Retained) => {
+            return Err(retained_stage(&recorded, RestoreFault::Retained));
         }
         Err(error) => return Err(recorded.stop(error)),
     };
@@ -1108,6 +1105,13 @@ fn resolve_root(
     }
 }
 
+/// Outcome shared by retained construction, finish, and discard failures.
+/// A rejected audit cannot hide the partial tree that still needs recovery.
+fn retained_stage(recorded: &Recorded<'_>, cause: RestoreFault) -> RestoreFault {
+    let _ = recorded.write("absent", "unready", cause.cause(), "effect");
+    RestoreFault::Retained
+}
+
 /// The partial directory is gone, or it is still there and the caller is told retained.
 fn abandon(
     staging: Box<dyn Staging>,
@@ -1116,15 +1120,7 @@ fn abandon(
 ) -> RestoreFault {
     match staging.discard() {
         Ok(()) => recorded.stop(error),
-        Err(_) => {
-            if recorded
-                .write("absent", "unready", error.cause(), "effect")
-                .is_err()
-            {
-                return RestoreFault::Retained;
-            }
-            RestoreFault::Retained
-        }
+        Err(_) => retained_stage(recorded, error),
     }
 }
 

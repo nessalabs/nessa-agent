@@ -1645,9 +1645,16 @@ async fn a_constant_ready_marker_is_not_a_generation() {
     }
     #[cfg(windows)]
     {
-        let mut permissions = fs::metadata(&marker).unwrap().permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(&marker, permissions).unwrap();
+        use std::os::windows::fs::OpenOptionsExt;
+        let denied = fs::write(&marker, b"ready\n").unwrap_err();
+        assert_eq!(denied.raw_os_error(), Some(5));
+        assert_eq!(fs::read(&marker).unwrap(), b"stage-fixed\n");
+        const WRITE_DAC: u32 = 0x0004_0000;
+        let metadata_authority = fs::OpenOptions::new()
+            .access_mode(WRITE_DAC)
+            .open(&marker)
+            .unwrap();
+        nessa_local_storage::release_file_writes(&metadata_authority).unwrap();
     }
     fs::write(&marker, b"ready\n").unwrap();
     let error = accept(&place, &audit, &NoReceipts).unwrap_err();
@@ -2520,10 +2527,15 @@ async fn an_unfenced_executor_blocks_acceptance() {
     let error = accept(&place, &audit, &MapReceipts(&[("lease-9", "")])).unwrap_err();
     assert_eq!(error, RestoreFault::ExecutorsUnfenced);
     accept(&place, &audit, &MapReceipts(&[("lease-9", "host-stopped")])).unwrap();
+    let expected_cause = if cfg!(windows) {
+        "unsynced"
+    } else {
+        "accepted"
+    };
     let accepted = audit
         .lines()
         .into_iter()
-        .find(|line| line.cause == "accepted")
+        .find(|line| line.cause == expected_cause)
         .unwrap();
     assert_eq!(accepted.attestations, "lease-9 host-stopped\n");
     assert_eq!(accepted.after, "live");
@@ -3448,6 +3460,8 @@ async fn a_session_over_64_mib_is_restored_when_opened() {
 
     let source = SqliteDeferredSource::new(&database_path);
     let opened = open_one(&place, "conv-bulk", &source, &audit).unwrap();
+    #[cfg(windows)]
+    assert_eq!(opened.durable, Some(false));
     assert!(!opened.already_present);
     assert_eq!(opened.size, bulk_len as u64);
     let session = place.live.join("sessions/conv-bulk.sqlite3");
@@ -3475,7 +3489,18 @@ async fn a_session_over_64_mib_is_restored_when_opened() {
 
     let record = fs::read_to_string(audit_dir.join("restore.jsonl")).unwrap();
     assert!(record.contains("\"cause\":\"sealed\""));
-    assert!(record.contains("\"cause\":\"accepted\""));
+    let expected_cause = if cfg!(windows) {
+        "unsynced"
+    } else {
+        "accepted"
+    };
+    let live_effects: Vec<serde_json::Value> = record
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|line: &serde_json::Value| line["after"] == "live")
+        .collect();
+    assert_eq!(live_effects.len(), 1);
+    assert_eq!(live_effects[0]["cause"], expected_cause);
     assert!(record.contains("\"cause\":\"fetched\""));
     assert!(record.contains("\"initiator\":\"person\""));
     assert!(record.contains("\"observedAtMs\":42"));
@@ -4462,6 +4487,171 @@ async fn a_failed_publish_retires_the_final_name_when_the_temp_is_already_gone()
     assert!(partial_names(&place.live).is_empty());
 }
 
+struct RefusesStageBegin {
+    partial: PathBuf,
+    retained: bool,
+    begins: AtomicUsize,
+}
+
+impl QuarantineLayout for RefusesStageBegin {
+    fn begin_session(
+        &self,
+        root: &AnchoredRoot,
+        relative: &str,
+    ) -> Result<Box<dyn SessionAttempt + '_>, RestoreFault> {
+        DirectoryQuarantine.begin_session(root, relative)
+    }
+    fn begin(
+        &self,
+        _quarantine: &AnchoredRoot,
+        _live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
+        self.begins.fetch_add(1, Ordering::SeqCst);
+        if self.retained {
+            // Model FILE_CREATE succeeding before a constructor's permission
+            // readback fails, before a Staging cleanup owner can be returned.
+            fs::create_dir(&self.partial).unwrap();
+            Err(RestoreFault::Retained)
+        } else {
+            Err(RestoreFault::Unreadable)
+        }
+    }
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
+        DirectoryQuarantine.load(root)
+    }
+    fn promote(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+        loaded: &LoadedTree,
+        generation: &str,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, loaded, generation)
+    }
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
+        DirectoryQuarantine.read_bytes(path)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.exists(path)
+    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.canonicalize(path)
+    }
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
+        DirectoryQuarantine.anchor(path)
+    }
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        DirectoryQuarantine.session_cut(path, conversation_id)
+    }
+}
+
+async fn assert_stage_begin_refusal(retained: bool, audit_fails: bool) {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let audit = if audit_fails {
+        MemoryAudit::fail_after(1)
+    } else {
+        MemoryAudit::open()
+    };
+    let source = DirectoryVerificationSource::open(bundle.root.clone()).unwrap();
+    let layout = RefusesStageBegin {
+        partial: place.quarantine.with_extension("retained-partial"),
+        retained,
+        begins: AtomicUsize::new(0),
+    };
+    let result = stage_quarantine(
+        &StageRequest {
+            facts: person(RestoreAction::Stage),
+            bundle: &source,
+            format: &ExportFormat,
+            verifier: &bundle.key,
+            limits: VerificationLimits::default(),
+            later_inventory: None,
+            quarantine: &place.quarantine,
+            live: &place.live,
+        },
+        &policy(),
+        &audit,
+        &layout,
+        &DirectoryMaterializer,
+        &KeyedInventory::new(bundle.key),
+        &OsStagingIds,
+    );
+    assert_eq!(layout.begins.load(Ordering::SeqCst), 1);
+    assert!(!place.quarantine.exists());
+    assert!(!place.live.exists());
+    assert_eq!(layout.partial.exists(), retained);
+    if retained {
+        assert_eq!(fs::read_dir(&layout.partial).unwrap().count(), 0);
+    }
+    let expected = if retained {
+        RestoreFault::Retained
+    } else if audit_fails {
+        RestoreFault::Audit
+    } else {
+        RestoreFault::Unreadable
+    };
+    assert_eq!(result.unwrap_err(), expected);
+    let lines = audit.lines();
+    assert_eq!(
+        lines.iter().filter(|line| line.decision == "allow").count(),
+        1
+    );
+    assert!(!lines
+        .iter()
+        .any(|line| matches!(line.after.as_str(), "available" | "ready" | "verified")));
+    if retained {
+        assert!(!lines
+            .iter()
+            .any(|line| line.before == "unchanged" || line.after == "unchanged"));
+        if !audit_fails {
+            let effect = lines.iter().find(|line| line.after == "unready").unwrap();
+            assert_eq!(effect.before, "absent");
+            assert_eq!(effect.cause, "retained");
+            assert_eq!(effect.decision, "effect");
+            assert_eq!(effect.initiator, "person");
+            assert_eq!(
+                effect.target,
+                DirectoryQuarantine
+                    .anchor(&place.quarantine)
+                    .unwrap()
+                    .display()
+                    .to_string()
+            );
+        }
+    } else if !audit_fails {
+        let effect = lines.iter().find(|line| line.after == "unchanged").unwrap();
+        assert_eq!(effect.before, "unchanged");
+        assert_eq!(effect.cause, RestoreFault::Unreadable.cause());
+        assert!(!lines.iter().any(|line| line.after == "unready"));
+    }
+}
+
+#[tokio::test]
+async fn a_retained_stage_begin_records_the_partial_as_unready() {
+    assert_stage_begin_refusal(true, false).await;
+}
+
+#[tokio::test]
+async fn a_retained_stage_begin_is_not_masked_by_a_failed_audit() {
+    assert_stage_begin_refusal(true, true).await;
+}
+
+#[tokio::test]
+async fn a_stage_begin_refusal_without_effect_preserves_unchanged_audit() {
+    assert_stage_begin_refusal(false, false).await;
+    assert_stage_begin_refusal(false, true).await;
+}
+
 struct RetainedStaging {
     quarantine: PathBuf,
 }
@@ -5096,6 +5286,184 @@ struct HookAudit<'a, F> {
     cause: &'static str,
     hook: Mutex<Option<F>>,
     fail: bool,
+}
+
+#[cfg(windows)]
+fn windows_security_bytes(path: &Path) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn GetFileSecurityW(
+            name: *const u16,
+            information: u32,
+            descriptor: *mut std::ffi::c_void,
+            length: u32,
+            needed: *mut u32,
+        ) -> i32;
+    }
+    let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut needed = 0;
+    // Owner, group, and DACL include the self-relative descriptor's control
+    // flags and each ACE's inheritance flags, not merely rendered permissions.
+    let information = 1 | 2 | 4;
+    let first = unsafe {
+        GetFileSecurityW(
+            name.as_ptr(),
+            information,
+            std::ptr::null_mut(),
+            0,
+            &mut needed,
+        )
+    };
+    let first_error = std::io::Error::last_os_error();
+    assert_eq!(first, 0);
+    assert_eq!(first_error.raw_os_error(), Some(122));
+    assert!(needed > 0);
+    let mut descriptor = vec![0u32; (needed as usize).div_ceil(4)];
+    let capacity = (descriptor.len() * 4) as u32;
+    // The counted UTF-16 name and aligned writable descriptor storage remain
+    // live for the native call; the returned byte count bounds the final slice.
+    let read = unsafe {
+        GetFileSecurityW(
+            name.as_ptr(),
+            information,
+            descriptor.as_mut_ptr().cast(),
+            capacity,
+            &mut needed,
+        )
+    };
+    assert_ne!(
+        read,
+        0,
+        "read the actual Windows security descriptor: {}",
+        std::io::Error::last_os_error()
+    );
+    assert!(needed <= capacity);
+    unsafe { std::slice::from_raw_parts(descriptor.as_ptr().cast::<u8>(), needed as usize) }
+        .to_vec()
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn final_available_audit_keeps_owned_session_names_pinned_without_changing_foreign_acls() {
+    for fail in [false, true] {
+        let session = sealed_session(b"session-v1");
+        let (_bundle, place, audit) =
+            deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+        let sessions = place.live.join("sessions");
+        nessa_local_storage::create_directory(&sessions).unwrap();
+        fs::create_dir_all(sessions.join("foreign-directory")).unwrap();
+        let foreign = sessions.join("foreign.sqlite3");
+        let grandchild = sessions.join("foreign-directory/child");
+        fs::write(&foreign, b"foreign session").unwrap();
+        fs::write(&grandchild, b"foreign child").unwrap();
+        let foreign_paths = [
+            sessions.clone(),
+            foreign.clone(),
+            sessions.join("foreign-directory"),
+            grandchild.clone(),
+        ];
+        let before: Vec<_> = foreign_paths
+            .iter()
+            .map(|path| windows_security_bytes(path))
+            .collect();
+        let output = sessions.join("conv-bulk.sqlite3");
+        let sidecar = output.with_extension("sqlite3.publication");
+        let called = AtomicUsize::new(0);
+        let hooked = HookAudit {
+            inner: &audit,
+            cause: "fetched",
+            fail,
+            hook: Mutex::new(Some(|| {
+                called.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(
+                    foreign_paths
+                        .iter()
+                        .map(|path| windows_security_bytes(path))
+                        .collect::<Vec<_>>(),
+                    before,
+                );
+                // The final audit follows owned ACL release. ERROR_SHARING_VIOLATION
+                // on a new writer proves the retained File's sharing pin still
+                // protects each leaf, rather than an unreleased restrictive ACL.
+                for path in [&output, &sidecar] {
+                    let bytes = fs::read(path).unwrap();
+                    let write = fs::OpenOptions::new().write(true).open(path).unwrap_err();
+                    assert_eq!(write.raw_os_error(), Some(32));
+                    let remove = fs::remove_file(path).unwrap_err();
+                    assert!(matches!(remove.raw_os_error(), Some(5 | 32)));
+                    let moved = path.with_extension("attacker-moved");
+                    let rename = fs::rename(path, &moved).unwrap_err();
+                    assert!(matches!(rename.raw_os_error(), Some(5 | 32)));
+                    assert!(!moved.exists());
+                    assert_eq!(fs::read(path).unwrap(), bytes);
+                }
+                assert_eq!(fs::read(&sidecar).unwrap(), b"pub-audit-pins\n");
+                fs::OpenOptions::new().write(true).open(&foreign).unwrap();
+                fs::OpenOptions::new()
+                    .write(true)
+                    .open(&grandchild)
+                    .unwrap();
+            })),
+        };
+        let source = FakeSource::matching(&session);
+        let result = open_deferred_conversation(
+            &OpenRequest {
+                facts: person(RestoreAction::Fetch),
+                root: &place.live,
+                conversation_id: "conv-bulk",
+            },
+            &policy(),
+            &hooked,
+            &DirectoryQuarantine,
+            &source,
+            &FixedIds("pub-audit-pins"),
+            &mut Quiet,
+        );
+        assert_eq!(called.load(Ordering::SeqCst), 1);
+        assert_eq!(*source.writes.lock().unwrap(), 1);
+        assert_eq!(
+            foreign_paths
+                .iter()
+                .map(|path| windows_security_bytes(path))
+                .collect::<Vec<_>>(),
+            before,
+        );
+        assert_eq!(fs::read(&foreign).unwrap(), b"foreign session");
+        assert_eq!(fs::read(&grandchild).unwrap(), b"foreign child");
+        if fail {
+            assert_eq!(result.unwrap_err(), RestoreFault::Retained);
+            assert_eq!(fs::metadata(&output).unwrap().len(), 0);
+            assert_eq!(fs::metadata(&sidecar).unwrap().len(), 0);
+            assert!(!audit.available("conv-bulk", "pub-audit-pins").unwrap());
+            assert!(!audit.lines().iter().any(|line| line.after == "available"));
+        } else {
+            let report = result.unwrap();
+            assert_eq!(report.digest, session.digest);
+            assert!(!report.already_present);
+            assert!(audit.available("conv-bulk", "pub-audit-pins").unwrap());
+            // Normal SQLite pathname opens and mutation resume only after the
+            // successful application call drops the publication attempt.
+            assert_eq!(
+                DirectoryQuarantine
+                    .session_cut(&output, "conv-bulk")
+                    .unwrap()
+                    .digest,
+                session.digest
+            );
+            for path in [&output, &sidecar] {
+                let bytes = fs::read(path).unwrap();
+                let mut writer = fs::OpenOptions::new().write(true).open(path).unwrap();
+                writer.write_all(&bytes).unwrap();
+                writer.sync_all().unwrap();
+                drop(writer);
+                let moved = path.with_extension("consumer-moved");
+                fs::rename(path, &moved).unwrap();
+                fs::rename(&moved, path).unwrap();
+                assert_eq!(fs::read(path).unwrap(), bytes);
+            }
+        }
+    }
 }
 
 impl<F: FnOnce() + Send> RestoreAudit for HookAudit<'_, F> {

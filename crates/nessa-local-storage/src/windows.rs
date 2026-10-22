@@ -29,12 +29,13 @@ use windows_sys::Win32::{
 mod native_directory;
 mod retained_directory;
 pub use native_directory::{
-    create_protected_directory_at, create_protected_file_at, create_protected_subdirectory_at,
-    open_directory_at, open_file_at, open_relative_directory, open_relative_file,
+    create_pinned_file_at, create_protected_directory_at, create_protected_file_at,
+    create_protected_subdirectory_at, create_session_directory_at, open_directory_at, open_file_at,
+    open_relative_directory, open_relative_file, open_session_directory_at,
     open_verified_directory_at, open_verified_file_at, reacquire_exclusive_file,
     relative_entry_kind, relative_names, release_directory_writes, release_file_writes,
     remove_handle, rename_handle_at, rename_relative_entry_at, seal_directory_writes,
-    seal_file_writes, DirectoryAcl, MaxAccessDirectory, NativeObjectId, RelativeEntryKind,
+    seal_file_writes, DirectoryAcl, NativeObjectId, RelativeEntryKind,
 };
 pub(crate) use retained_directory::{
     validate_native_name, RetainedDirectory, RetainedDirectoryEntries,

@@ -102,6 +102,13 @@ pub fn create_protected_subdirectory_at(parent: &File, name: &OsStr) -> io::Resu
 
 fn create_directory_at(parent: &File, name: &OsStr, sharing: u32) -> io::Result<File> {
     let descriptor = append_descriptor()?;
+    unsafe {
+        check(SetSecurityDescriptorControl(
+            descriptor.0,
+            SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ,
+            SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED,
+        ))?;
+    }
     let file = relative(
         parent,
         name,
@@ -113,6 +120,13 @@ fn create_directory_at(parent: &File, name: &OsStr, sharing: u32) -> io::Result<
     )?;
     require_directory(&file)?;
     require_directory_access(&file, DIRECTORY_BUILD_ACCESS | DELETE)?;
+    if directory_control(&file)? & (SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED)
+        != (SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED)
+    {
+        return Err(io::Error::other(
+            "created directory did not retain protected modern inheritance",
+        ));
+    }
     Ok(file)
 }
 
@@ -121,66 +135,43 @@ fn append_descriptor() -> io::Result<LocalAllocation> {
     User::current()?.descriptor_with_access(true, &format!("0x{access:08x}"))
 }
 
-/// Original maximum-access handle for an existing private directory.
-///
-/// The original maximum-access handle admits the required build/control rights
-/// without delete sharing. Parent ACL isolation additionally depends on native
-/// full-descriptor updates preserving inheritance-model controls; the MAX open
-/// alone did not establish isolation in the 303 native qualification receipt.
-#[derive(Debug)]
-pub struct MaxAccessDirectory {
-    file: File,
+/// Retain an existing private session directory without changing its ACL.
+/// The original no-DELETE-sharing handle pins its name; required original
+/// addition/control rights are checked before a source or leaf is created.
+pub fn open_session_directory_at(parent: &File, name: &OsStr) -> io::Result<File> {
+    let file = relative(
+        parent,
+        name,
+        MAXIMUM_ALLOWED | SYNCHRONIZE,
+        FILE_OPEN,
+        FILE_OPEN_REPARSE_POINT,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        None,
+    )?;
+    require_directory(&file)?;
+    require_directory_access(&file, DIRECTORY_BUILD_ACCESS)?;
+    Ok(file)
 }
 
-impl MaxAccessDirectory {
-    /// Acquire the original maximum-access handle without delete sharing.
-    /// Original required ADD/control rights are checked before any ACL change.
-    pub fn open_at(parent: &File, name: &OsStr) -> io::Result<Self> {
-        // relative() uses synchronous native I/O, so request SYNCHRONIZE with
-        // MAXIMUM_ALLOWED. Role admission is checked before any ACL effect.
-        let file = relative(
-            parent,
-            name,
-            MAXIMUM_ALLOWED | SYNCHRONIZE,
-            FILE_OPEN,
-            FILE_OPEN_REPARSE_POINT,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            None,
-        )?;
-        require_directory(&file)?;
-        require_directory_access(&file, DIRECTORY_BUILD_ACCESS)?;
-        Ok(Self { file })
-    }
-
-    /// Read this guard's directory authority; ACL methods retain the original handle.
-    pub fn file(&self) -> &File {
-        &self.file
-    }
-
-    /// Permit additions during fetch without changing existing child ACLs.
-    pub fn append(&self) -> io::Result<()> {
-        set_directory_descriptor(&self.file, append_descriptor()?)?;
-        require_directory(&self.file)
-    }
-
-    /// Deny further additions before final target validation.
-    pub fn seal(&self) -> io::Result<()> {
-        set_directory_descriptor(
-            &self.file,
-            User::current()?.descriptor_with_access(true, "FRFX")?,
-        )?;
-        require_directory(&self.file)
-    }
-
-    /// Restore this same directory's captured ACL with exact control readback.
-    pub fn restore(&self, original: &DirectoryAcl) -> io::Result<()> {
-        original.restore_with(&self.file, |descriptor| unsafe {
-            set_directory_security(&self.file, descriptor)
-        })
-    }
+/// Create an absent session directory with its final protected full ACL.
+/// Retain the original no-DELETE-sharing handle; never seal or release this ACL.
+pub fn create_session_directory_at(parent: &File, name: &OsStr) -> io::Result<File> {
+    let descriptor = User::current()?.descriptor(true)?;
+    let file = relative(
+        parent,
+        name,
+        MAXIMUM_ALLOWED | DIRECTORY_BUILD_ACCESS | DELETE,
+        FILE_CREATE,
+        FILE_DIRECTORY_FILE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        Some(&descriptor),
+    )?;
+    require_directory(&file)?;
+    require_directory_access(&file, DIRECTORY_BUILD_ACCESS | DELETE)?;
+    Ok(file)
 }
 
-/// Exact protected DACL of one retained directory, for temporary fetch guards.
+/// Exact protected DACL of one owned stage/copy directory.
 /// The private storage contract requires a protected current-user-owned DACL.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirectoryAcl {
@@ -247,15 +238,16 @@ impl DirectoryAcl {
         })
     }
 
-    /// Restore the original ACL/control through an original maximum-access directory handle.
-    /// `file` must come from a protected-directory constructor or verified directory
-    /// reopen in this module. Existing parents use MaxAccessDirectory::restore.
-    pub fn restore(&self, file: &File) -> io::Result<()> {
+    /// Native control helper for exact-byte and identity characterization tests.
+    /// Production exposes capture only; arbitrary directories cannot be restored.
+    #[cfg(test)]
+    fn restore(&self, file: &File) -> io::Result<()> {
         self.restore_with(file, |descriptor| unsafe {
             set_directory_security(file, descriptor)
         })
     }
 
+    #[cfg(test)]
     fn restore_with(
         &self,
         file: &File,
@@ -267,7 +259,7 @@ impl DirectoryAcl {
             return Err(unsafe_file());
         }
         // A stack descriptor references the retained exact ACL bytes. The
-        // original MAX handle is required for parent-only directory assignment.
+        // restore is restricted to owned stage/copy directory authority.
         let mut descriptor = SECURITY_DESCRIPTOR::default();
         unsafe {
             check(InitializeSecurityDescriptor(
@@ -305,6 +297,16 @@ impl DirectoryAcl {
 /// The initial payload and DELETE authority omit write sharing. Native tests
 /// require competing write/deletion operations to fail after this handle closes.
 pub fn create_protected_file_at(parent: &File, name: &OsStr) -> io::Result<File> {
+    create_file_with_sharing(parent, name, FILE_SHARE_READ | FILE_SHARE_DELETE)
+}
+
+/// Create a fresh session publication inode with lifetime WRITE/DELETE exclusion.
+/// Keep this original handle through own-handle rename, ACL release and audit.
+pub fn create_pinned_file_at(parent: &File, name: &OsStr) -> io::Result<File> {
+    create_file_with_sharing(parent, name, FILE_SHARE_READ)
+}
+
+fn create_file_with_sharing(parent: &File, name: &OsStr, sharing: u32) -> io::Result<File> {
     let descriptor = User::current()?.descriptor_with_access(false, "FR")?;
     let file = relative(
         parent,
@@ -312,7 +314,7 @@ pub fn create_protected_file_at(parent: &File, name: &OsStr) -> io::Result<File>
         GENERIC_READ | GENERIC_WRITE | DELETE | WRITE_DAC | SYNCHRONIZE,
         FILE_CREATE,
         0,
-        FILE_SHARE_READ | FILE_SHARE_DELETE,
+        sharing,
         Some(&descriptor),
     )?;
     verify_file(&file)?;
@@ -500,7 +502,7 @@ pub fn remove_handle(file: &File) -> io::Result<()> {
 /// Release temporary namespace protection through the retained WRITE_DAC handle.
 /// The caller owns the ordering: call only after successful live publication.
 /// Requires the original MAX handle from a protected constructor or verified
-/// directory reopen; use MaxAccessDirectory for pre-existing foreign parents.
+/// directory reopen. Never call this on an existing session parent.
 pub fn release_directory_writes(file: &File) -> io::Result<()> {
     set_directory_descriptor(file, User::current()?.descriptor(true)?)?;
     require_directory(file)
@@ -774,10 +776,17 @@ mod tests {
                 )
             };
             assert_eq!(status, 0);
+            let receipt = acl_receipt(&handle);
             assert_eq!(
-                acl_receipt(&handle).1 & SE_DACL_PROTECTED,
+                receipt.1 & SE_DACL_PROTECTED,
                 0,
                 "test setup must produce a genuinely unprotected foreign object"
+            );
+            assert!(
+                acl_shape(&receipt.0)
+                    .iter()
+                    .any(|(_, flags, _)| u32::from(*flags) & INHERITED_ACE != 0),
+                "ordinary inheritance must supply a real inherited ACE alongside explicit FA"
             );
         }
         for name in ["other-chat", "foreign-directory/grandchild"] {
@@ -910,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    fn original_max_owned_directory_preserves_injected_foreign_acls_through_seal_and_release() {
+    fn modern_owned_directory_preserves_inherited_foreign_acls_through_seal_and_release() {
         let _ordinary = token::OrdinaryToken::enter();
         let root = tempfile::tempdir().unwrap();
         let ancestor = full_parent(root.path());
@@ -932,7 +941,7 @@ mod tests {
                 eprintln!("native-owned-parent transition={transition} original_control={parent_before:#06x} current_control={:#06x}", directory_control(&directory).unwrap());
             }
             assert!(after == before,
-                "MAX-created directory must preserve exact injected child ACL/control: {transition}");
+                "modern-born directory must preserve exact inherited child ACL/control: {transition}");
             for relative in ["other-chat", "foreign-directory/grandchild"] {
                 let path = root.path().join("max-owned").join(relative);
                 std::fs::write(&path, b"other chat unchanged")
@@ -1001,86 +1010,76 @@ mod tests {
     }
 
     #[test]
-    fn native_parent_assignment_preserves_unprotected_foreign_acls_at_every_transition_and_cleanup()
-    {
+    fn session_lifetime_pins_preserve_parent_and_foreign_acls_at_every_transition_and_cleanup() {
         let _ordinary = token::OrdinaryToken::enter();
-        let root = tempfile::tempdir().unwrap();
-        crate::create_directory_exclusive(&root.path().join("sessions")).unwrap();
-        let ancestor = full_parent(root.path());
-        let directory = MaxAccessDirectory::open_at(&ancestor, OsStr::new("sessions")).unwrap();
-        let original = DirectoryAcl::capture(directory.file()).unwrap();
-        let children = foreign_children(&root.path().join("sessions"));
-        let before: Vec<_> = children.iter().map(acl_receipt).collect();
-        for (_, control) in &before {
-            assert_eq!(
-                control & SE_DACL_PROTECTED,
-                0,
-                "foreign descendants must actually be unprotected"
-            );
-        }
-        let assert_foreign = |transition: &str| {
-            let after: Vec<_> = children.iter().map(acl_receipt).collect();
-            if after != before {
-                diagnose_foreign_difference(&before, &after);
-                eprintln!("native-parent-acl transition={transition} original_control={:#06x} current_control={:#06x}", original.control, directory_control(directory.file()).unwrap());
-            }
-            assert!(after == before,
-                "parent-only assignment must preserve exact foreign DACL and security control immediately: {transition}");
-            for relative in ["other-chat", "foreign-directory/grandchild"] {
-                let path = root.path().join("sessions").join(relative);
-                std::fs::write(&path, b"other chat unchanged")
-                    .expect("other chat keeps actual existing-file write authority");
-                assert_eq!(std::fs::read(path).unwrap(), b"other chat unchanged");
-            }
-        };
-        directory.append().unwrap();
-        assert_foreign("append");
-        directory.seal().unwrap();
-        assert_foreign("seal");
-        directory.restore(&original).unwrap();
-        assert_foreign("restore");
-        struct RestoreGuard<'a> {
-            directory: &'a MaxAccessDirectory,
-            original: &'a DirectoryAcl,
-        }
-        impl Drop for RestoreGuard<'_> {
-            fn drop(&mut self) {
-                self.directory
-                    .restore(self.original)
-                    .expect("native failure cleanup restores original parent ACL");
-            }
-        }
-        let failed = (|| -> io::Result<()> {
-            let _guard = RestoreGuard {
-                directory: &directory,
-                original: &original,
+        for create_new in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let ancestor = full_parent(root.path());
+            let directory = if create_new {
+                create_session_directory_at(&ancestor, OsStr::new("sessions")).unwrap()
+            } else {
+                crate::create_directory_exclusive(&root.path().join("sessions")).unwrap();
+                open_session_directory_at(&ancestor, OsStr::new("sessions")).unwrap()
             };
-            directory.append()?;
-            assert_foreign("failure-append");
-            directory.seal()?;
-            assert_foreign("failure-seal");
-            Err(io::Error::other("forced failure after seal"))
-        })();
-        assert!(failed.is_err());
-        assert_foreign("failure-cleanup");
-        assert!(
-            DirectoryAcl::capture(directory.file()).unwrap() == original,
-            "failure cleanup must restore exact original parent DACL/control"
-        );
+            let original = DirectoryAcl::capture(&directory).unwrap();
+            let children = foreign_children(&root.path().join("sessions"));
+            let before: Vec<_> = children.iter().map(acl_receipt).collect();
+            assert!(before
+                .iter()
+                .all(|(_, control)| control & SE_DACL_PROTECTED == 0));
+            let assert_foreign = |transition: &str| {
+                let after: Vec<_> = children.iter().map(acl_receipt).collect();
+                if after != before {
+                    diagnose_foreign_difference(&before, &after);
+                }
+                assert!(
+                    after == before,
+                    "session pins preserve exact foreign ACL/control: {transition}"
+                );
+                assert!(
+                    DirectoryAcl::capture(&directory).unwrap() == original,
+                    "session parent ACL is never mutated: {transition}"
+                );
+                for relative in ["other-chat", "foreign-directory/grandchild"] {
+                    let path = root.path().join("sessions").join(relative);
+                    std::fs::write(&path, b"other chat unchanged").unwrap();
+                    assert_eq!(std::fs::read(path).unwrap(), b"other chat unchanged");
+                }
+            };
+            assert_foreign("open");
+            let output = create_pinned_file_at(&directory, OsStr::new("candidate")).unwrap();
+            let sidecar = create_pinned_file_at(&directory, OsStr::new("sidecar")).unwrap();
+            assert_foreign("create");
+            rename_handle_at(&output, &directory, OsStr::new("canonical")).unwrap();
+            assert_foreign("own-rename");
+            release_file_writes(&output).unwrap();
+            release_file_writes(&sidecar).unwrap();
+            assert_foreign("leaf-release-and-available-audit");
+            remove_handle(&output).unwrap();
+            remove_handle(&sidecar).unwrap();
+            drop((output, sidecar));
+            assert_foreign("failure-cleanup");
+        }
     }
 
     #[test]
-    fn maximum_guard_refuses_originally_readonly_directory_without_changing_its_acl() {
+    fn session_admission_refuses_originally_readonly_directory_without_changing_its_acl() {
         let _ordinary = token::OrdinaryToken::enter();
         let root = tempfile::tempdir().unwrap();
         crate::create_directory_exclusive(&root.path().join("readonly")).unwrap();
         let ancestor = full_parent(root.path());
-        let initial = MaxAccessDirectory::open_at(&ancestor, OsStr::new("readonly")).unwrap();
-        initial.seal().unwrap();
+        let initial = open_session_directory_at(&ancestor, OsStr::new("readonly")).unwrap();
+        legacy_directory_assignment(
+            &initial,
+            User::current()
+                .unwrap()
+                .descriptor_with_access(true, "FRFX")
+                .unwrap(),
+        );
         drop(initial);
         let reader = open_directory_at(&ancestor, OsStr::new("readonly")).unwrap();
         let before = DirectoryAcl::capture(&reader).unwrap();
-        let error = MaxAccessDirectory::open_at(&ancestor, OsStr::new("readonly"))
+        let error = open_session_directory_at(&ancestor, OsStr::new("readonly"))
             .expect_err("maximum access must not elevate missing original ADD rights");
         assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32));
         assert!(
@@ -1098,7 +1097,7 @@ mod tests {
         let reader = open_directory_at(&ancestor, OsStr::new("sessions")).unwrap();
         let original = DirectoryAcl::capture(&reader).unwrap();
         let competing = delete_child(&ancestor, OsStr::new("sessions")).unwrap();
-        let error = MaxAccessDirectory::open_at(&ancestor, OsStr::new("sessions")).expect_err(
+        let error = open_session_directory_at(&ancestor, OsStr::new("sessions")).expect_err(
             "N08: existing DELETE authority must refuse acquisition before ACL mutation",
         );
         assert_eq!(error.raw_os_error(), Some(ERROR_SHARING_VIOLATION as i32));
@@ -1107,8 +1106,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_directory_preacquired_delete_child_cannot_delete_a_new_readonly_leaf_after_append()
-    {
+    fn preacquired_delete_child_cannot_mutate_pinned_leaf_before_or_after_leaf_acl_release() {
         let _ordinary = token::OrdinaryToken::enter();
         let root = tempfile::tempdir().unwrap();
         crate::create_directory_exclusive(&root.path().join("sessions")).unwrap();
@@ -1123,43 +1121,43 @@ mod tests {
             None,
         )
         .unwrap();
-        let guard = MaxAccessDirectory::open_at(&ancestor, OsStr::new("sessions")).unwrap();
-        let directory = guard.file();
-        let original = DirectoryAcl::capture(directory).unwrap();
-        let before = create_protected_file_at(directory, OsStr::new("before")).unwrap();
+        let directory = open_session_directory_at(&ancestor, OsStr::new("sessions")).unwrap();
+        let original = DirectoryAcl::capture(&directory).unwrap();
+        let before = create_protected_file_at(&directory, OsStr::new("before")).unwrap();
         let delegated = delete_child(&preacquired, OsStr::new("before"))
-            .expect("positive control: original full parent DACL delegates actual leaf deletion");
+            .expect("positive control: original full parent delegates leaf DELETE");
         remove_handle(&delegated)
-            .expect("positive control: DELETE_CHILD actually removes leaf before append");
+            .expect("unpinned leaf is actually deleted through parent authority");
         drop((delegated, before));
-
-        guard.append().unwrap();
-        let leaf = create_protected_file_at(directory, OsStr::new("payload")).unwrap();
-        match delete_child(&preacquired, OsStr::new("payload")) {
-            Err(error) => assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32)),
-            Ok(competing) => {
-                let error = remove_handle(&competing).expect_err(
-                    "N09: retained DELETE_CHILD cannot delete a new FR leaf after append",
-                );
-                assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32));
-                let error = rename_handle_at(&competing, &ancestor, OsStr::new("stolen"))
-                    .expect_err(
-                        "N09: retained DELETE_CHILD cannot relocate a new FR leaf after append",
-                    );
-                assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32));
+        let leaf = create_pinned_file_at(&directory, OsStr::new("candidate")).unwrap();
+        rename_handle_at(&leaf, &directory, OsStr::new("payload"))
+            .expect("original DELETE handle can rename its own no-delete-sharing inode");
+        for released in [false, true] {
+            if released {
+                release_file_writes(&leaf).unwrap();
             }
+            let delete = delete_child(&preacquired, OsStr::new("payload"));
+            let error = delete.unwrap_err();
+            assert!(
+                matches!(error.raw_os_error(), Some(code) if code == ERROR_ACCESS_DENIED as i32 || code == ERROR_SHARING_VIOLATION as i32),
+                "ACL or lifetime sharing must refuse fresh DELETE authority: {error}"
+            );
+            assert!(std::fs::remove_file(root.path().join("sessions/payload")).is_err());
+            assert!(std::fs::rename(
+                root.path().join("sessions/payload"),
+                root.path().join("stolen")
+            )
+            .is_err());
+            assert!(std::fs::write(root.path().join("sessions/payload"), b"changed").is_err());
+            assert!(DirectoryAcl::capture(&directory).unwrap() == original);
+            assert!(root.path().join("sessions/payload").is_file());
+            assert!(!root.path().join("stolen").exists());
         }
-        assert!(root.path().join("sessions/payload").is_file());
-        assert!(!root.path().join("stolen").exists());
-        guard.seal().unwrap();
-        release_file_writes(&leaf).unwrap();
-        guard.restore(&original).unwrap();
-        assert_eq!(DirectoryAcl::capture(directory).unwrap(), original);
         remove_handle(&leaf).unwrap();
-        drop((leaf, guard, preacquired));
+        drop((leaf, directory, preacquired));
         std::fs::write(
             root.path().join("sessions/ordinary"),
-            b"after exact ACL restoration",
+            b"unchanged original ACL",
         )
         .unwrap();
     }
@@ -1201,14 +1199,14 @@ mod tests {
         let append = create_protected_directory_at(&ancestor, OsStr::new("append")).unwrap();
         let original = DirectoryAcl::capture(&append).unwrap();
         crate::create_directory_exclusive(&root.path().join("full")).unwrap();
-        let other = MaxAccessDirectory::open_at(&ancestor, OsStr::new("full")).unwrap();
-        let before = DirectoryAcl::capture(other.file()).unwrap();
+        let other = open_session_directory_at(&ancestor, OsStr::new("full")).unwrap();
+        let before = DirectoryAcl::capture(&other).unwrap();
         assert!(
-            other.restore(&original).is_err(),
+            original.restore(&other).is_err(),
             "N10: ACL belongs to its original directory identity"
         );
         assert_eq!(
-            DirectoryAcl::capture(other.file()).unwrap(),
+            DirectoryAcl::capture(&other).unwrap(),
             before,
             "wrong-directory refusal must precede any ACL mutation"
         );

@@ -231,20 +231,7 @@ retirement scope: exact zeroing and sync must succeed before preserving a
 primary source refusal. Empty external scratch names can remain. Named
 publication candidates and failed zeroing or sync still return `Retained`.
 
-Windows qualification preserves failures rather than treating cross compilation
-as native proof. Native results disproved the DACL-selector and synchronization-only
-corrections. Native `3030429` also disproved the MAXIMUM_ALLOWED / SetSecurityInfo
-isolation candidate: child ACL/control changes and exact restoration failures
-remain open. Passing only the DACL to SetSecurityInfo discards the reconstructed
-security-descriptor control bits. The next directory-only correction must retain
-the current inheritance model through temporary transitions and the exact saved
-model through restoration, with unchanged-child and legacy mutation controls.
-The cursor correction uses a native empty counted name rooted in the retained
-directory, following the Microsoft filesystem sample; the prior literal dot
-returned InvalidFilename 123. Independent-cursor native proof remains required.
-Native assertions retain exact foreign-child ACL comparisons and
-actual write, rename, and deletion controls. Fixtures distinguish Windows'
-open-descendant directory-rename refusal from successful Unix ancestor swaps.
+Windows qualification preserves failures rather than treating cross compilation as native proof. Native f4ce passed the empty-name cursor and exact-restoration controls, but existing-parent assignment still converted inherited child ACEs to explicit protected ACEs. The owned-tree control also had explicit children and did not reproduce its claimed hazard. The resulting structural repair is designed in the [retained-directory publication ordering table](../design/retained-directory-publication.md#windows-session-publication-lifetime-pins): sessions-parent ACL effects are removed, owned publication lifetimes are pinned, and the separate stage/copy birth model and genuine inherited-child controls require native proof. The former public directory restoration effect API is removed; historical kernel controls remain test-private. Existing actual writer, rename, deletion, identity and audit-failure assertions remain required.
 
 The public deferred source is not trusted to enforce the published database's
 data boundary. A deterministic source returning the exact requested stream plus
