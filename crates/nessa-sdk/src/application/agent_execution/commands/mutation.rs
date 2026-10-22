@@ -46,6 +46,10 @@ pub enum MutationOutcome {
     /// Classification refused the command before its effect was attempted.
     /// A delayed caller replays this terminal without authorizing an effect.
     RefusedBeforeAttempt,
+    /// Selection of another model refused this unattempted submit.
+    ModelChangedBeforeAttempt,
+    /// Selection of another agent refused this unattempted submit.
+    AgentChangedBeforeAttempt,
     /// The submit saved the turn and then refused before injection.
     ///
     /// Saved only from `Attempted`. A retry returns this receipt and does not
@@ -146,8 +150,10 @@ impl MutationReceipt {
     /// Make the next immutable progress record.
     ///
     /// `Accepted` may become `Attempted` with no outcome, or `Settled` with
-    /// [`MutationOutcome::AlreadyFinal`] or [`MutationOutcome::RefusedBeforeAttempt`] when
-    /// classification proved nothing would be sent. `Attempted` may become
+    /// [`MutationOutcome::AlreadyFinal`], [`MutationOutcome::RefusedBeforeAttempt`],
+    /// [`MutationOutcome::ModelChangedBeforeAttempt`], or
+    /// [`MutationOutcome::AgentChangedBeforeAttempt`] when classification proved
+    /// nothing would be sent. `Attempted` may become
     /// `Settled` with the effect's outcome,
     /// including [`MutationOutcome::NoEffect`] when the effect refused before
     /// it enqueued or injected anything, [`MutationOutcome::RefusedAfterSave`]
@@ -181,7 +187,12 @@ impl MutationReceipt {
                 | (
                     MutationStage::Accepted,
                     MutationStage::Settled,
-                    Some(MutationOutcome::AlreadyFinal | MutationOutcome::RefusedBeforeAttempt)
+                    Some(
+                        MutationOutcome::AlreadyFinal
+                            | MutationOutcome::RefusedBeforeAttempt
+                            | MutationOutcome::ModelChangedBeforeAttempt
+                            | MutationOutcome::AgentChangedBeforeAttempt
+                    )
                 )
         );
         if !legal {
@@ -205,6 +216,10 @@ pub enum MutationPlan {
     /// Refuse an unattempted effect and save `Settled(RefusedBeforeAttempt)` under the
     /// request lease. A delayed original caller then replays that receipt.
     NoEffect,
+    /// Refuse before attempting because the model changed.
+    ModelChanged,
+    /// Refuse before attempting because the agent changed.
+    AgentChanged,
 }
 
 /// Failure retains uncertainty separately from the host's typed cause.
@@ -313,10 +328,19 @@ impl MutationCoordinator {
                         .await
                         .map_err(MutationFailure::Target)?
                     {
-                        plan @ (MutationPlan::AlreadyFinal | MutationPlan::NoEffect) => {
+                        plan @ (MutationPlan::AlreadyFinal
+                        | MutationPlan::NoEffect
+                        | MutationPlan::ModelChanged
+                        | MutationPlan::AgentChanged) => {
                             let outcome = match plan {
                                 MutationPlan::AlreadyFinal => MutationOutcome::AlreadyFinal,
                                 MutationPlan::NoEffect => MutationOutcome::RefusedBeforeAttempt,
+                                MutationPlan::ModelChanged => {
+                                    MutationOutcome::ModelChangedBeforeAttempt
+                                }
+                                MutationPlan::AgentChanged => {
+                                    MutationOutcome::AgentChangedBeforeAttempt
+                                }
                                 MutationPlan::Effect => unreachable!(),
                             };
                             let settled = receipt

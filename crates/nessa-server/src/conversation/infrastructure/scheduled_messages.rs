@@ -1076,6 +1076,19 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         })
     }
 
+    fn selection_invalidation_causal(
+        &self,
+        request: SelectionRequest<'_>,
+        conversation: &str,
+    ) -> ConversationFuture<'_, Option<String>> {
+        let conversation = conversation.to_owned();
+        let request_id = request.id.to_owned();
+        let change = request.change;
+        self.run(move |connection| {
+            connection.query_row("SELECT causal_execution FROM usage_limit_invalidation WHERE conversation = ?1 AND request_id = ?2 AND selection_kind = ?3", params![conversation, request_id, change.as_str()], |row| row.get(0)).optional().map_err(failed)
+        })
+    }
+
     fn note_history(
         &self,
         conversation: &str,

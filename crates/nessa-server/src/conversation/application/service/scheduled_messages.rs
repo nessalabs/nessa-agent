@@ -14,9 +14,9 @@
 //! commit, write no `retry_at_ms` and are still that attempt while the row
 //! is `delivering` or `submitting`. A committed outcome, a cancelled row,
 //! and a missing row drop the attempt this process kept.
-//! Cancel, defer, and a
-//! model change lose to that transition and win against a claim that has not
-//! made it. An applied model change is not complete until that plan commits.
+//! Cancel and defer lose to that transition. Selection changes share the
+//! submission permit and seal a crash-left unattempted command before Applied.
+//! Attempted and terminal command evidence retains its original meaning.
 //! Cedar's allow and deny of the preference are each one audit before the
 //! command result. That audit and the request's receipt commit together.
 //! An enable stays pending until its scan settles or its rollback commits.
@@ -557,6 +557,16 @@ pub trait ScheduledMessageStore: Send + Sync {
         actor: ScheduleActor,
         at_ms: u64,
     ) -> ConversationFuture<'_, bool>;
+    /// Original causal turn recorded by this selection request. Used to seal
+    /// only that request's submitting command when a pending request recovers.
+    fn selection_invalidation_causal(
+        &self,
+        request: SelectionRequest<'_>,
+        conversation: &str,
+    ) -> ConversationFuture<'_, Option<String>> {
+        let _ = (request, conversation);
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
     /// Seal `token` when it is still current. A different revision writes
     /// nothing, including the fence. A later position, a different
     /// incarnation, or a different agent or model replaces the fence only
@@ -1014,6 +1024,32 @@ impl ConversationService {
                 SelectionChange::Model => ConversationError::ModelChangeUncertain,
                 SelectionChange::Agent => ConversationError::RequestConflict,
             });
+        }
+        // A crash can leave a pre-admission submitting row behind. Seal its
+        // original command before Applied, even if the person switches back
+        // before delivery recovers. Terminal and attempted receipts are retained.
+        if let Some(row) = store.open(&id.to_string()).await? {
+            if store.status(&row.execution_id).await?.as_deref() == Some("submitting")
+                && store
+                    .selection_invalidation_causal(request, &id.to_string())
+                    .await?
+                    .as_deref()
+                    == Some(row.causal_execution.as_str())
+            {
+                let commands = self.commands().ok_or(ConversationError::Unavailable)?;
+                let binding = scheduled_submit_binding(id, &row)?;
+                let plan = match change {
+                    SelectionChange::Model => MutationPlan::ModelChanged,
+                    SelectionChange::Agent => MutationPlan::AgentChanged,
+                };
+                match MutationCoordinator::new(commands)
+                    .execute(binding, Arc::new(CancelUnattemptedSubmission(plan)))
+                    .await
+                {
+                    Ok(_) | Err(MutationFailure::Interrupted(_)) => {}
+                    Err(_) => return Err(ConversationError::Unavailable),
+                }
+            }
         }
         Ok(())
     }
@@ -1832,6 +1868,15 @@ impl ConversationService {
         {
             return DeliveredStep::Held;
         }
+        // Shared with model/agent changes; transferred to the supervised enqueue.
+        let admission = self.inner.admission.clone().read_owned().await;
+        if self.inner.retirement.get().is_some() {
+            return DeliveredStep::Held;
+        }
+        let selection = Arc::new(super::mutation::SubmissionPermit {
+            _admission: admission,
+            _selection: self.inner.mode_changes.lock(&id).await,
+        });
         let enabled = match store.preference().await {
             Ok(reading) => reading.enabled,
             Err(_) => {
@@ -1847,6 +1892,10 @@ impl ConversationService {
                 return DeliveredStep::Held;
             }
         };
+        if !submitting && self.recover_scheduled_selection(&id, &row).await.is_err() {
+            self.note_uncommitted_submit(&row);
+            return DeliveredStep::Held;
+        }
         if enabled
             && !submitting
             && !row.prompt.is_empty()
@@ -1865,8 +1914,8 @@ impl ConversationService {
         }
         // Reconciliation above may cancel or defer while the row is still
         // `delivering`. The transition below is the decision to submit: a
-        // cancel, model change, or later reset that wins first leaves this
-        // false, and one that arrives after cannot undo it.
+        // cancel or later reset that wins first leaves this false. Selection
+        // changes wait for this permit; crash recovery seals unattempted work.
         let now = self.inner.clock.unix_milliseconds();
         match store.begin_submit(&row.execution_id, now).await {
             Ok(true) => {}
@@ -1885,7 +1934,7 @@ impl ConversationService {
         }
         let lease_until = now.saturating_add(FENCE_LEASE_MS);
         let held = self
-            .finish_fenced_submit(store.clone(), id, &row, lease_until)
+            .finish_fenced_submit(store.clone(), id, &row, lease_until, selection)
             .await;
         let _ = store.release_submit(&row.execution_id).await;
         if held {
@@ -1901,6 +1950,7 @@ impl ConversationService {
         id: ConversationId,
         row: &ScheduledMessage,
         lease_until: u64,
+        selection: Arc<super::mutation::SubmissionPermit>,
     ) -> bool {
         let lost = Arc::new(AtomicBool::new(false));
         let renew = {
@@ -1955,14 +2005,65 @@ impl ConversationService {
                 )
                 .await;
         }
+        // Recover pending metadata before comparing selection, including when
+        // consent is off. Terminal command evidence above keeps its original cause.
+        match self.recover_scheduled_selection(&id, row).await {
+            Err(_) => return !self.hold_submit_retry(&store, row).await,
+            Ok(false) => {}
+            Ok(true) => {
+                // Recovery may just have sealed this original command. Read
+                // its cause even when the selected strings now match again.
+                let receipt = self
+                    .recover_submission_receipt(commands.clone(), &id, row)
+                    .await;
+                if lost.load(Ordering::SeqCst) {
+                    return false;
+                }
+                match receipt {
+                    Ok(Some((outcome, cause))) => {
+                        return self
+                            .persist_observed_outcome(&store, row, outcome, cause)
+                            .await
+                    }
+                    Ok(None) => {}
+                    Err(_) => return !self.hold_submit_retry(&store, row).await,
+                }
+            }
+        }
         match store.preference().await {
             Ok(reading) if !reading.enabled => {
                 return self
-                    .recover_disabled_submission(&store, commands, id, row, &lost)
+                    .retire_scheduled_submission(
+                        &store,
+                        commands,
+                        id,
+                        row,
+                        &lost,
+                        MutationPlan::NoEffect,
+                    )
                     .await;
             }
             Ok(_) => {}
             Err(_) => return !self.hold_submit_retry(&store, row).await,
+        }
+        let change = match super::load_conversation(self.inner.metadata.as_ref(), &id).await {
+            Ok(Some(record))
+                if record
+                    .agent()
+                    .is_some_and(|agent| agent.name() != row.agent) =>
+            {
+                Some(MutationPlan::AgentChanged)
+            }
+            Ok(Some(record)) if record.model().as_str() != row.model => {
+                Some(MutationPlan::ModelChanged)
+            }
+            Ok(_) => None,
+            Err(_) => return !self.hold_submit_retry(&store, row).await,
+        };
+        if let Some(change) = change {
+            return self
+                .retire_scheduled_submission(&store, commands, id, row, &lost, change)
+                .await;
         }
         // A stored caller or grant that cannot be rebuilt will never pass
         // submit. Refuse it. The row stays out of `delivering`. When the
@@ -1988,7 +2089,7 @@ impl ConversationService {
             return false;
         }
         match self
-            .submit_command(
+            .submit_command_permitted(
                 commands,
                 id,
                 caller,
@@ -2000,6 +2101,7 @@ impl ConversationService {
                     ..Default::default()
                 },
                 super::SubmissionMode::Queue,
+                Some(selection),
             )
             .await
         {
@@ -2029,6 +2131,39 @@ impl ConversationService {
         }
     }
 
+    /// Called under the selection lock, before fresh eligibility classification.
+    async fn recover_scheduled_selection(
+        &self,
+        id: &ConversationId,
+        row: &ScheduledMessage,
+    ) -> Result<bool, ConversationError> {
+        let caller = schedule_caller(row)?;
+        let mut recovered = false;
+        if self
+            .inner
+            .metadata
+            .pending_model_change(id)
+            .await?
+            .is_some()
+        {
+            recovered = true;
+            self.recover_model_change(id, &caller).await?;
+            self.refuse_pending_model_change(id, &caller).await?;
+        }
+        if self
+            .inner
+            .metadata
+            .pending_agent_switch(id)
+            .await?
+            .is_some()
+        {
+            recovered = true;
+            self.resolve(id, &caller).await?;
+            self.finish_agent_switch_before_submission(id).await?;
+        }
+        Ok(recovered)
+    }
+
     /// Recover retained command evidence before reading current preference: a
     /// later enable does not replace the reason a previous retirement recorded.
     async fn recover_submission_receipt(
@@ -2039,7 +2174,10 @@ impl ConversationService {
     ) -> Result<Option<(ScheduleSettlement, &'static str)>, ConversationError> {
         let binding = scheduled_submit_binding(id, row)?;
         let receipt = MutationCoordinator::new(commands)
-            .lookup(&binding, &CancelUnattemptedSubmission)
+            .lookup(
+                &binding,
+                &CancelUnattemptedSubmission(MutationPlan::NoEffect),
+            )
             .await
             .map_err(|_| ConversationError::Unavailable)?;
         // A terminal command result describes after-save refusals more exactly
@@ -2067,18 +2205,19 @@ impl ConversationService {
     /// receipt under the command lease, sealing an unattempted command with
     /// RefusedBeforeAttempt. Then re-read the execution: the original command may have
     /// finished while recovery waited for its command lease.
-    async fn recover_disabled_submission(
+    async fn retire_scheduled_submission(
         &self,
         store: &Arc<dyn ScheduledMessageStore>,
         commands: Arc<dyn CreationStorage>,
         id: ConversationId,
         row: &ScheduledMessage,
         lost: &AtomicBool,
+        plan: MutationPlan,
     ) -> bool {
         let recovered = async {
             let binding = scheduled_submit_binding(&id, row)?;
             let receipt = match MutationCoordinator::new(commands)
-                .execute(binding, Arc::new(CancelUnattemptedSubmission))
+                .execute(binding, Arc::new(CancelUnattemptedSubmission(plan)))
                 .await
             {
                 Ok(receipt) => receipt,
@@ -2216,7 +2355,7 @@ impl ConversationService {
 /// Retire only commands whose journal has not admitted their original effect.
 /// The coordinator owns the receipt/lease ordering; Attempted and Settled are
 /// recovered before this target can classify an unattempted command.
-struct CancelUnattemptedSubmission;
+struct CancelUnattemptedSubmission(MutationPlan);
 
 impl MutationTarget for CancelUnattemptedSubmission {
     type Error = ConversationError;
@@ -2232,7 +2371,7 @@ impl MutationTarget for CancelUnattemptedSubmission {
     }
 
     fn classify(&self, _: &MutationBinding) -> CreationFuture<'_, MutationPlan, Self::Error> {
-        Box::pin(async { Ok(MutationPlan::NoEffect) })
+        Box::pin(async { Ok(self.0) })
     }
 
     fn effect(
@@ -2258,6 +2397,14 @@ fn submission_receipt_outcome(
         (MutationStage::Settled, Some(MutationOutcome::Dispatched)) => {
             Some((ScheduleSettlement::Delivered, "delivered"))
         }
+        (MutationStage::Settled, Some(MutationOutcome::ModelChangedBeforeAttempt)) => Some((
+            ScheduleSettlement::Refused,
+            ContinuationCause::ModelChanged.as_str(),
+        )),
+        (MutationStage::Settled, Some(MutationOutcome::AgentChangedBeforeAttempt)) => Some((
+            ScheduleSettlement::Refused,
+            ContinuationCause::AgentChanged.as_str(),
+        )),
         (MutationStage::Settled, Some(MutationOutcome::RefusedBeforeAttempt)) => Some((
             ScheduleSettlement::Refused,
             ContinuationCause::PreferenceDisabled.as_str(),

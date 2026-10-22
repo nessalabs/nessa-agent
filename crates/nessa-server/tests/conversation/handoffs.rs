@@ -1089,3 +1089,345 @@ async fn a_pending_agent_switch_retries_invalidation_as_its_original_request() {
     );
     fixture.retire().await;
 }
+
+/// A stopped gateway may have claimed a submit without admitting a command.
+/// Applied seals it even if selection returns to the original agent before recovery.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_switch_seals_a_crash_left_unattempted_continuation() {
+    use nessa_sdk::application::agent_execution::commands::{CreationStorage, MutationOutcome};
+    for enabled in [true, false] {
+        let fixture = Fixture::new();
+        let id = fixture.create().await;
+        let schedule = fixture.schedules(true).await;
+        fixture
+            .blocked(&id, "original-limit", AgentId::Claude)
+            .await;
+        fixture
+            .service
+            .reconcile_usage_limit_schedule(&id)
+            .await
+            .unwrap();
+        let row = schedule.open(&id.to_string()).await.unwrap().unwrap();
+        assert_eq!(schedule.claim_due(row.due_at_ms, 8).await.unwrap().len(), 1);
+        assert!(schedule
+            .begin_submit(&row.execution_id, row.due_at_ms)
+            .await
+            .unwrap());
+        schedule.release_submit(&row.execution_id).await.unwrap();
+        schedule
+            .set_preference(
+                enabled,
+                crate::conversation::application::ScheduleActor::system(),
+                row.due_at_ms,
+            )
+            .await
+            .unwrap();
+        assert!(fixture.switch(&id, "switch-after-crash").await.unwrap());
+        let lease = fixture
+            .storage
+            .open_creation(row.principal_id.clone(), row.execution_id.clone(), false)
+            .await
+            .unwrap()
+            .unwrap();
+        let receipt = lease
+            .load_mutation(&row.execution_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            receipt.outcome(),
+            Some(MutationOutcome::AgentChangedBeforeAttempt)
+        );
+        drop(lease);
+        fixture
+            .service
+            .switch_agent(
+                id.clone(),
+                caller("back-after-crash"),
+                AgentId::Claude,
+                ConversationModelId::new("test").unwrap(),
+            )
+            .await
+            .unwrap();
+        let lease = fixture
+            .storage
+            .open_creation(row.principal_id.clone(), row.execution_id.clone(), false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            lease
+                .load_mutation(&row.execution_id)
+                .await
+                .unwrap()
+                .unwrap(),
+            receipt
+        );
+        drop(lease);
+        assert!(
+            !fixture.snapshot(&id).await.invocations.iter().any(|inv| inv
+                .request
+                .execution_id
+                .as_str()
+                == row.execution_id)
+        );
+        fixture.retire().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn scheduled_delivery_recovers_pending_selection_before_fresh_classification() {
+    let fixture = Fixture::new();
+    let id = fixture.create().await;
+    let schedule = fixture.schedules(true).await;
+    fixture.blocked(&id, "pending-limit", AgentId::Claude).await;
+    fixture
+        .service
+        .reconcile_usage_limit_schedule(&id)
+        .await
+        .unwrap();
+    let row = schedule.open(&id.to_string()).await.unwrap().unwrap();
+    let connection =
+        Connection::open(fixture._directory.path().join("gateway/scheduled.sqlite3")).unwrap();
+    connection.execute_batch("CREATE TRIGGER fail_pending_selection BEFORE INSERT ON usage_limit_invalidation BEGIN SELECT RAISE(ABORT, 'injected invalidation failure'); END;").unwrap();
+    assert!(fixture.switch(&id, "pending-selection").await.is_err());
+    // Reset is still future. Fresh classification would defer this row. A
+    // pending switch must recover first, and its failure must leave it held.
+    let now = i64::try_from(TestClock.unix_milliseconds()).unwrap();
+    connection
+        .execute(
+            "UPDATE message SET due_at_ms = ?1 WHERE execution_id = ?2",
+            nessa_local_database::rusqlite::params![now, row.execution_id],
+        )
+        .unwrap();
+    fixture.service.deliver_due_scheduled().await;
+    let state: (String, i64) = connection
+        .query_row(
+            "SELECT status,due_at_ms FROM message WHERE execution_id = ?1",
+            [&row.execution_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(state, ("delivering".into(), now));
+    assert!(
+        !fixture.snapshot(&id).await.invocations.iter().any(|inv| inv
+            .request
+            .execution_id
+            .as_str()
+            == row.execution_id)
+    );
+    connection
+        .execute_batch("DROP TRIGGER fail_pending_selection;")
+        .unwrap();
+    // Positive control: pending recovery can finish once its durable write works.
+    assert!(fixture.switch(&id, "pending-selection").await.unwrap());
+    assert_eq!(
+        fixture
+            .metadata
+            .agent_switch(&id, "pending-selection")
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        ConversationAgentSwitchState::Applied
+    );
+    fixture.retire().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pending_selection_recovery_retains_its_refusal_when_selection_matches_again() {
+    let fixture = Fixture::new();
+    let id = fixture.create().await;
+    let schedule = fixture.schedules(true).await;
+    fixture.blocked(&id, "old-limit", AgentId::Claude).await;
+    fixture
+        .service
+        .reconcile_usage_limit_schedule(&id)
+        .await
+        .unwrap();
+    let row = schedule.open(&id.to_string()).await.unwrap().unwrap();
+    schedule.claim_due(row.due_at_ms, 8).await.unwrap();
+    assert!(schedule
+        .begin_submit(&row.execution_id, row.due_at_ms)
+        .await
+        .unwrap());
+    schedule.release_submit(&row.execution_id).await.unwrap();
+    drop(schedule);
+    let fixture = fixture.restart().await;
+    // Reproduce a persisted pre-fix ordering: selection changed while the
+    // continuation's command had not been admitted or sealed. This service
+    // has not bound scheduling yet, so the old row survives the first switch.
+    assert!(fixture.switch(&id, "away-before-recovery").await.unwrap());
+    let schedule = fixture.schedules(true).await;
+    let connection =
+        Connection::open(fixture._directory.path().join("gateway/scheduled.sqlite3")).unwrap();
+    connection.execute_batch("CREATE TRIGGER fail_return_selection BEFORE INSERT ON usage_limit_invalidation BEGIN SELECT RAISE(ABORT, 'injected invalidation failure'); END;").unwrap();
+    assert!(fixture
+        .service
+        .switch_agent(
+            id.clone(),
+            caller("back-pending"),
+            AgentId::Claude,
+            ConversationModelId::new("test").unwrap()
+        )
+        .await
+        .is_err());
+    connection
+        .execute_batch("DROP TRIGGER fail_return_selection;")
+        .unwrap();
+    let now = i64::try_from(TestClock.unix_milliseconds()).unwrap();
+    connection
+        .execute(
+            "UPDATE message SET due_at_ms=?1, fence_until_ms=?1-1 WHERE execution_id=?2",
+            nessa_local_database::rusqlite::params![now, row.execution_id],
+        )
+        .unwrap();
+    fixture.service.deliver_due_scheduled().await;
+    assert_eq!(fixture.record(&id).await.agent(), Some(AgentId::Claude));
+    assert_eq!(
+        schedule.status(&row.execution_id).await.unwrap().as_deref(),
+        Some("refused")
+    );
+    let cause: String = connection.query_row("SELECT cause FROM audit WHERE execution_id=?1 AND after_status='refused' ORDER BY id DESC LIMIT 1", [&row.execution_id], |r| r.get(0)).unwrap();
+    assert_eq!(cause, "agent_changed");
+    assert!(
+        !fixture.snapshot(&id).await.invocations.iter().any(|inv| inv
+            .request
+            .execution_id
+            .as_str()
+            == row.execution_id)
+    );
+    fixture.retire().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unchanged_selection_admits_one_recovered_continuation() {
+    let fixture = Fixture::new();
+    let id = fixture.create().await;
+    let schedule = fixture.schedules(true).await;
+    fixture.blocked(&id, "valid-limit", AgentId::Claude).await;
+    fixture
+        .service
+        .reconcile_usage_limit_schedule(&id)
+        .await
+        .unwrap();
+    let row = schedule.open(&id.to_string()).await.unwrap().unwrap();
+    schedule.claim_due(row.due_at_ms, 8).await.unwrap();
+    assert!(schedule
+        .begin_submit(&row.execution_id, row.due_at_ms)
+        .await
+        .unwrap());
+    schedule.release_submit(&row.execution_id).await.unwrap();
+    let connection =
+        Connection::open(fixture._directory.path().join("gateway/scheduled.sqlite3")).unwrap();
+    let now = i64::try_from(TestClock.unix_milliseconds()).unwrap();
+    connection
+        .execute(
+            "UPDATE message SET due_at_ms=?1, fence_until_ms=?1-1 WHERE execution_id=?2",
+            nessa_local_database::rusqlite::params![now, row.execution_id],
+        )
+        .unwrap();
+    tokio::time::timeout(BOUND, fixture.service.deliver_due_scheduled())
+        .await
+        .expect("owned permit reaches enqueue without reacquiring its lock");
+    assert_eq!(
+        schedule.status(&row.execution_id).await.unwrap().as_deref(),
+        Some("delivered")
+    );
+    assert_eq!(
+        fixture
+            .snapshot(&id)
+            .await
+            .invocations
+            .iter()
+            .filter(|inv| inv.request.execution_id.as_str() == row.execution_id)
+            .count(),
+        1
+    );
+    fixture.service.deliver_due_scheduled().await;
+    assert_eq!(
+        fixture
+            .snapshot(&id)
+            .await
+            .invocations
+            .iter()
+            .filter(|inv| inv.request.execution_id.as_str() == row.execution_id)
+            .count(),
+        1
+    );
+    fixture.retire().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn retrying_an_old_selection_does_not_seal_a_later_submit() {
+    use crate::conversation::application::{ScheduleActor, ScheduleSettlement, SelectionChange};
+    use nessa_sdk::application::agent_execution::commands::CreationStorage;
+    let fixture = Fixture::new();
+    let id = fixture.create().await;
+    let schedule = fixture.schedules(true).await;
+    fixture.blocked(&id, "first-limit", AgentId::Claude).await;
+    fixture
+        .service
+        .reconcile_usage_limit_schedule(&id)
+        .await
+        .unwrap();
+    let first = schedule.open(&id.to_string()).await.unwrap().unwrap();
+    schedule.claim_due(first.due_at_ms, 8).await.unwrap();
+    assert!(schedule
+        .begin_submit(&first.execution_id, first.due_at_ms)
+        .await
+        .unwrap());
+    assert!(fixture.switch(&id, "original-selection").await.unwrap());
+    schedule
+        .record_outcome(
+            &first.execution_id,
+            ScheduleSettlement::Refused,
+            "agent_changed",
+            first.due_at_ms,
+        )
+        .await
+        .unwrap();
+    schedule.release_submit(&first.execution_id).await.unwrap();
+    fixture.blocked(&id, "later-limit", AgentId::Codex).await;
+    fixture
+        .service
+        .reconcile_usage_limit_schedule(&id)
+        .await
+        .unwrap();
+    let later = schedule.open(&id.to_string()).await.unwrap().unwrap();
+    schedule.claim_due(later.due_at_ms, 8).await.unwrap();
+    assert!(schedule
+        .begin_submit(&later.execution_id, later.due_at_ms)
+        .await
+        .unwrap());
+    fixture
+        .service
+        .invalidate_selection_usage_limit(
+            SelectionChange::Agent,
+            &id,
+            "original-selection",
+            ScheduleActor::person(&caller("original-selection")),
+        )
+        .await
+        .unwrap();
+    assert!(fixture
+        .storage
+        .open_creation(
+            later.principal_id.clone(),
+            later.execution_id.clone(),
+            false
+        )
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        schedule
+            .status(&later.execution_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("submitting")
+    );
+    schedule.release_submit(&later.execution_id).await.unwrap();
+    fixture.retire().await;
+}

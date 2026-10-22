@@ -68,6 +68,34 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
     ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
+        self.submit_command_permitted(
+            storage,
+            id,
+            caller,
+            initiation,
+            offers_remember,
+            execution_id,
+            message,
+            mode,
+            None,
+        )
+        .await
+    }
+
+    /// Scheduled delivery transfers its selection lock into the supervised effect.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn submit_command_permitted(
+        &self,
+        storage: Arc<dyn CreationStorage>,
+        id: ConversationId,
+        caller: ConversationCaller,
+        initiation: Initiation,
+        offers_remember: bool,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        selection: Option<Arc<SubmissionPermit>>,
+    ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
         let binding = submit_binding(&id, &caller, &execution_id, &message, mode)
             .map_err(MutationFailure::Target)?;
         // Shape is refused before any stage. A deleted target is named before a
@@ -88,11 +116,17 @@ impl ConversationService {
         let delivery = Arc::new(Mutex::new(None));
         let captured = delivery.clone();
         let progress = tokio::spawn(async move {
-            let _admission = service
-                .admit()
-                .await
-                .map_err(ConversationError::from)
-                .map_err(MutationFailure::Target)?;
+            let _admission = if selection.is_some() {
+                None
+            } else {
+                Some(
+                    service
+                        .admit()
+                        .await
+                        .map_err(ConversationError::from)
+                        .map_err(MutationFailure::Target)?,
+                )
+            };
             let target = Arc::new(SubmitTarget {
                 service: service.clone(),
                 id,
@@ -103,6 +137,7 @@ impl ConversationService {
                 message: Mutex::new(Some(message)),
                 mode,
                 delivery: captured,
+                selection,
             });
             MutationCoordinator::new(storage)
                 .execute(binding, target)
@@ -111,7 +146,12 @@ impl ConversationService {
         .await
         .map_err(|error| MutationFailure::TaskFault(CreationTaskFault::from_join_error(error)))??;
         match progress.outcome() {
-            Some(MutationOutcome::NoEffect | MutationOutcome::RefusedBeforeAttempt) => {
+            Some(
+                MutationOutcome::NoEffect
+                | MutationOutcome::RefusedBeforeAttempt
+                | MutationOutcome::ModelChangedBeforeAttempt
+                | MutationOutcome::AgentChangedBeforeAttempt,
+            ) => {
                 return Err(MutationFailure::Target(ConversationError::Revoked));
             }
             Some(MutationOutcome::RefusedAfterSave) => {
@@ -254,6 +294,12 @@ pub struct SubmittedCommand {
     pub delivery: Option<SubmissionReceipt>,
 }
 
+/// Owns admission and selection ordering through detached scheduled submission.
+pub(super) struct SubmissionPermit {
+    pub(super) _admission: tokio::sync::OwnedRwLockReadGuard<()>,
+    pub(super) _selection: tokio::sync::OwnedMutexGuard<()>,
+}
+
 struct SubmitTarget {
     service: ConversationService,
     id: ConversationId,
@@ -264,6 +310,7 @@ struct SubmitTarget {
     message: Mutex<Option<SubmittedMessage>>,
     mode: SubmissionMode,
     delivery: Arc<Mutex<Option<SubmissionReceipt>>>,
+    selection: Option<Arc<SubmissionPermit>>,
 }
 impl MutationTarget for SubmitTarget {
     type Error = ConversationError;
@@ -297,10 +344,11 @@ impl MutationTarget for SubmitTarget {
         let execution_id = self.execution_id.clone();
         let mode = self.mode;
         let delivery = self.delivery.clone();
+        let selection = self.selection.clone();
         Box::pin(async move {
             // `submit_command` holds admission through this effect.
             let submitted = service
-                .submit_admitted_as(
+                .submit_admitted_as_permitted(
                     id,
                     caller,
                     execution_id,
@@ -308,6 +356,7 @@ impl MutationTarget for SubmitTarget {
                     mode,
                     Writer::Person(initiation, offers_remember),
                     true,
+                    selection,
                 )
                 .await
                 .map_err(SubmitFailure::into_error);

@@ -569,47 +569,59 @@ impl crate::application::agent_execution::commands::MutationTarget for Classifie
 async fn a_no_effect_classification_fences_a_delayed_submit_and_survives_reopen() {
     use crate::application::agent_execution::commands::{MutationCoordinator, MutationPlan};
     use std::sync::{atomic::Ordering, Arc};
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("records");
-    let storage = Arc::new(RecordStorage::new(&path).unwrap());
-    let binding = MutationBinding::new(
-        ActionContext::new("person", "panel", "cancelled-submit").unwrap(),
-        MutationOperation::Submit,
-        SessionId::new("target").unwrap(),
-        "turn",
-        [7; 32],
-    )
-    .unwrap();
-    let refuse = Arc::new(ClassifiedMutation {
-        plan: MutationPlan::NoEffect,
-        effects: 0.into(),
-    });
-    let receipt = MutationCoordinator::new(storage.clone())
-        .execute(binding.clone(), refuse.clone())
-        .await
+    for (plan, outcome) in [
+        (
+            MutationPlan::NoEffect,
+            MutationOutcome::RefusedBeforeAttempt,
+        ),
+        (
+            MutationPlan::ModelChanged,
+            MutationOutcome::ModelChangedBeforeAttempt,
+        ),
+        (
+            MutationPlan::AgentChanged,
+            MutationOutcome::AgentChangedBeforeAttempt,
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("records");
+        let storage = Arc::new(RecordStorage::new(&path).unwrap());
+        let binding = MutationBinding::new(
+            ActionContext::new("person", "panel", "cancelled-submit").unwrap(),
+            MutationOperation::Submit,
+            SessionId::new("target").unwrap(),
+            "turn",
+            [7; 32],
+        )
         .unwrap();
-    assert_eq!(receipt.stage(), MutationStage::Settled);
-    assert_eq!(
-        receipt.outcome(),
-        Some(MutationOutcome::RefusedBeforeAttempt)
-    );
-    assert_eq!(refuse.effects.load(Ordering::SeqCst), 0);
-    storage.shutdown().await.unwrap();
-    drop(storage);
-    let reopened = Arc::new(RecordStorage::new(&path).unwrap());
-    let submit = Arc::new(ClassifiedMutation {
-        plan: MutationPlan::Effect,
-        effects: 0.into(),
-    });
-    assert_eq!(
-        MutationCoordinator::new(reopened.clone())
-            .execute(binding, submit.clone())
+        let refuse = Arc::new(ClassifiedMutation {
+            plan,
+            effects: 0.into(),
+        });
+        let receipt = MutationCoordinator::new(storage.clone())
+            .execute(binding.clone(), refuse.clone())
             .await
-            .unwrap(),
-        receipt
-    );
-    assert_eq!(submit.effects.load(Ordering::SeqCst), 0);
-    reopened.shutdown().await.unwrap();
+            .unwrap();
+        assert_eq!(receipt.stage(), MutationStage::Settled);
+        assert_eq!(receipt.outcome(), Some(outcome));
+        assert_eq!(refuse.effects.load(Ordering::SeqCst), 0);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+        let reopened = Arc::new(RecordStorage::new(&path).unwrap());
+        let submit = Arc::new(ClassifiedMutation {
+            plan: MutationPlan::Effect,
+            effects: 0.into(),
+        });
+        assert_eq!(
+            MutationCoordinator::new(reopened.clone())
+                .execute(binding, submit.clone())
+                .await
+                .unwrap(),
+            receipt
+        );
+        assert_eq!(submit.effects.load(Ordering::SeqCst), 0);
+        reopened.shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -638,14 +650,21 @@ async fn a_no_effect_classification_preserves_an_attempted_submit_as_interrupted
     let attempted = accepted.advance(MutationStage::Attempted, None).unwrap();
     lease.save_mutation(attempted.clone()).await.unwrap();
     drop(lease);
-    let target = Arc::new(ClassifiedMutation {
-        plan: MutationPlan::NoEffect,
-        effects: 0.into(),
-    });
-    assert!(matches!(
-        MutationCoordinator::new(storage.clone()).execute(binding, target).await,
-        Err(MutationFailure::Interrupted(receipt)) if *receipt == attempted
-    ));
+    for plan in [
+        MutationPlan::NoEffect,
+        MutationPlan::ModelChanged,
+        MutationPlan::AgentChanged,
+    ] {
+        let target = Arc::new(ClassifiedMutation {
+            plan,
+            effects: 0.into(),
+        });
+        assert!(matches!(
+            MutationCoordinator::new(storage.clone()).execute(binding.clone(), target.clone()).await,
+            Err(MutationFailure::Interrupted(receipt)) if *receipt == attempted
+        ));
+        assert_eq!(target.effects.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
     storage.shutdown().await.unwrap();
 }
 
@@ -664,12 +683,15 @@ fn a_pre_attempt_refusal_cannot_replace_attempted_evidence() {
         .advance(MutationStage::Settled, Some(MutationOutcome::NoEffect))
         .is_err());
     let attempted = accepted.advance(MutationStage::Attempted, None).unwrap();
-    assert!(attempted
-        .advance(
-            MutationStage::Settled,
-            Some(MutationOutcome::RefusedBeforeAttempt),
-        )
-        .is_err());
+    for outcome in [
+        MutationOutcome::RefusedBeforeAttempt,
+        MutationOutcome::ModelChangedBeforeAttempt,
+        MutationOutcome::AgentChangedBeforeAttempt,
+    ] {
+        assert!(attempted
+            .advance(MutationStage::Settled, Some(outcome))
+            .is_err());
+    }
     let refused = attempted
         .advance(MutationStage::Settled, Some(MutationOutcome::NoEffect))
         .unwrap();

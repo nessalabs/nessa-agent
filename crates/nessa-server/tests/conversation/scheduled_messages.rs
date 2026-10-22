@@ -1206,6 +1206,14 @@ async fn the_outcome_clock_is_read_after_submission() {
             ConversationId::new(conversation).unwrap(),
             &row,
             u64::MAX,
+            Arc::new(super::super::mutation::SubmissionPermit {
+                _admission: service.inner.admission.clone().read_owned().await,
+                _selection: service
+                    .inner
+                    .mode_changes
+                    .lock(&ConversationId::new(conversation).unwrap())
+                    .await,
+            }),
         )
         .await;
     assert_eq!(
@@ -1290,6 +1298,14 @@ async fn a_failed_execution_read_does_not_settle_the_submission() {
             ConversationId::new(conversation).unwrap(),
             &row,
             1_700_000_000_123 + 60_000,
+            Arc::new(super::super::mutation::SubmissionPermit {
+                _admission: service.inner.admission.clone().read_owned().await,
+                _selection: service
+                    .inner
+                    .mode_changes
+                    .lock(&ConversationId::new(conversation).unwrap())
+                    .await,
+            }),
         )
         .await;
     assert!(retry);
@@ -3712,6 +3728,16 @@ async fn deletion_recovers_original_command_outcomes_after_failed_audit_and_rest
                     "refused",
                     "preference_disabled",
                 ),
+                (
+                    Some(MutationOutcome::ModelChangedBeforeAttempt),
+                    "refused",
+                    "model_changed",
+                ),
+                (
+                    Some(MutationOutcome::AgentChangedBeforeAttempt),
+                    "refused",
+                    "agent_changed",
+                ),
                 (None, "unconfirmed", "submission_interrupted"),
             ] {
                 let directory = tempfile::tempdir().unwrap();
@@ -3736,7 +3762,14 @@ async fn deletion_recovers_original_command_outcomes_after_failed_audit_and_rest
                     .unwrap();
                 let mut receipt = MutationReceipt::accepted(binding.clone());
                 lease.save_mutation(receipt.clone()).await.unwrap();
-                if outcome != Some(MutationOutcome::RefusedBeforeAttempt) {
+                if !matches!(
+                    outcome,
+                    Some(
+                        MutationOutcome::RefusedBeforeAttempt
+                            | MutationOutcome::ModelChangedBeforeAttempt
+                            | MutationOutcome::AgentChangedBeforeAttempt
+                    )
+                ) {
                     receipt = receipt.advance(MutationStage::Attempted, None).unwrap();
                     lease.save_mutation(receipt.clone()).await.unwrap();
                 }
@@ -3897,4 +3930,86 @@ async fn deleted_command_evidence_retries_a_busy_journal_without_guessing_an_out
     service.shutdown().await.unwrap();
     drop(service);
     commands.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_selection_lock_blocks_the_durable_submit_claim() {
+    let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+    let store = Arc::new(RecordingStore::new(true));
+    let service = delivering(&clock, &store, "owner");
+    let row = store.due_row.lock().unwrap().clone().unwrap();
+    let id = ConversationId::new(&row.conversation).unwrap();
+    let permit = service.inner.mode_changes.lock(&id).await;
+    let delivery = service.deliver_due_scheduled();
+    tokio::pin!(delivery);
+    assert!(futures_util::poll!(&mut delivery).is_pending());
+    assert_eq!(store.submits.load(Ordering::SeqCst), 0);
+    drop(permit);
+    delivery.await;
+    assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+}
+
+struct GatedCommandAdmission {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+impl CreationStorage for GatedCommandAdmission {
+    fn open_creation(
+        &self,
+        _: String,
+        _: String,
+        _: bool,
+    ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
+        Box::pin(async {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(None)
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_detached_scheduled_command_keeps_its_submission_permit() {
+    let service = service(
+        Arc::new(TwoOwners {
+            seen: Mutex::new(Vec::new()),
+            fail: false,
+        }),
+        Arc::new(TestClock),
+    );
+    let id = ConversationId::new("11111111-1111-4111-8111-111111111111").unwrap();
+    let permit = Arc::new(super::super::mutation::SubmissionPermit {
+        _admission: service.inner.admission.clone().read_owned().await,
+        _selection: service.inner.mode_changes.lock(&id).await,
+    });
+    let commands = Arc::new(GatedCommandAdmission {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let waiting = service.submit_command_permitted(
+        commands.clone(),
+        id.clone(),
+        caller(),
+        Initiation::owner(),
+        false,
+        "held-command".into(),
+        SubmittedMessage {
+            text: "continue".into(),
+            ..Default::default()
+        },
+        SubmissionMode::Queue,
+        Some(permit),
+    );
+    let mut waiting = Box::pin(waiting);
+    assert!(futures_util::poll!(&mut waiting).is_pending());
+    commands.entered.notified().await;
+    drop(waiting);
+    assert!(service.inner.mode_changes.try_lock(&id).is_none());
+    assert!(service.inner.admission.try_write().is_err());
+    commands.release.notify_one();
+    let _released =
+        tokio::time::timeout(Duration::from_secs(5), service.inner.mode_changes.lock(&id))
+            .await
+            .unwrap();
+    assert!(service.inner.admission.try_write().is_ok());
 }

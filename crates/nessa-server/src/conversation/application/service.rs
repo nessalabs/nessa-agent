@@ -3608,6 +3608,32 @@ impl ConversationService {
         writer: Writer,
         held: bool,
     ) -> Result<SubmissionReceipt, SubmitFailure> {
+        self.submit_admitted_as_permitted(
+            id,
+            caller,
+            execution_id,
+            message,
+            mode,
+            writer,
+            held,
+            None,
+        )
+        .await
+    }
+
+    /// Reuse the scheduler's selection lock without queueing behind ourselves.
+    #[allow(clippy::too_many_arguments)]
+    async fn submit_admitted_as_permitted(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        writer: Writer,
+        held: bool,
+        selection: Option<Arc<mutation::SubmissionPermit>>,
+    ) -> Result<SubmissionReceipt, SubmitFailure> {
         // A message that reaches an agent between a failed turn and its
         // recovery is refused with nothing taken (`Halt::Again`): the agent
         // is stopping, or would run it at a mode other than the
@@ -3623,7 +3649,7 @@ impl ConversationService {
         let deadline = std::time::Instant::now() + self.inner.deletion_budgets.stop;
         let carried = Carried::default();
         let (asked, outcome) = loop {
-            let (asked, submission) = self.submission_future(
+            let (asked, submission) = self.submission_future_permitted(
                 id.clone(),
                 caller.clone(),
                 execution_id.clone(),
@@ -3632,6 +3658,7 @@ impl ConversationService {
                 writer.clone(),
                 held,
                 carried.clone(),
+                selection.clone(),
             );
             let outcome = tokio::spawn(submission).await;
             if !matches!(outcome, Ok(Err(Halt::Again(_)))) || std::time::Instant::now() >= deadline
@@ -3656,6 +3683,7 @@ impl ConversationService {
     /// The submission task, shared by normal supervision and controlled polling
     /// in the desktop-stop ordering test. Refusal attribution stays on this task.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     fn submission_future(
         &self,
         id: ConversationId,
@@ -3666,6 +3694,35 @@ impl ConversationService {
         writer: Writer,
         held: bool,
         carried: Carried,
+    ) -> (
+        Arc<AtomicBool>,
+        impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
+    ) {
+        self.submission_future_permitted(
+            id,
+            caller,
+            execution_id,
+            message,
+            mode,
+            writer,
+            held,
+            carried,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn submission_future_permitted(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        writer: Writer,
+        held: bool,
+        carried: Carried,
+        selection: Option<Arc<mutation::SubmissionPermit>>,
     ) -> (
         Arc<AtomicBool>,
         impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
@@ -3684,7 +3741,12 @@ impl ConversationService {
             } else {
                 Some(service.admit().await?)
             };
-            let _mode = service.inner.mode_changes.lock(&id).await;
+            let _mode = if selection.is_some() {
+                None
+            } else {
+                Some(service.inner.mode_changes.lock(&id).await)
+            };
+            let _selection = selection;
             service.recover_mode_change(&id, &caller).await?;
             service.recover_model_change(&id, &caller).await?;
             service.refuse_pending_model_change(&id, &caller).await?;

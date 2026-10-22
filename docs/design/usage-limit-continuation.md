@@ -118,7 +118,7 @@ causal turn remains eligible. The partial unique index covers only `scheduled`, 
 | --- | --- |
 | `scheduled` | Accepted. No submit has been claimed. Cancel, defer, and a model change match it |
 | `delivering` | `claim_due` won. Cancel, defer, and a model change can still win. It may not call `submit_command` |
-| `submitting` | `begin_submit` committed. Cancel and defer no longer match. `fence_owner` holds the lease until `fence_until_ms`. `retry_at_ms` is 0, or already past, when the row may be attempted. A later `retry_at_ms` is the next attempt, and the row is not due before it. The in-memory `armed` set only stops this process entering twice |
+| `submitting` | `begin_submit` committed under the submission permit. Cancel and defer no longer match. Selection invalidation seals an unattempted command before Applied; attempted and terminal receipts retain their original result. `fence_owner` holds the lease until `fence_until_ms`. `retry_at_ms` is 0, or already past, when the row may be attempted. A later `retry_at_ms` is the next attempt, and the row is not due before it. The in-memory `armed` set only stops this process entering twice |
 | `delivered` | The terminal journal says dispatched, or execution was saved without a terminal refusal. Audit `delivered` |
 | `refused` | The submit ended for a reason that will not change on retry: deleted, not found, revoked, unavailable after save, or a caller that cannot be rebuilt |
 | `cancelled` | The row ended without a submit: preference off, a later turn, an agent or model change, or deletion before submit. The same causal turn can be scheduled again unless an agent or model change cancelled it. A finished submit cannot |
@@ -138,6 +138,11 @@ comes from the saved original request, including recovery under another caller.
 | Invalidation fails after the handoff was saved | Switch remains Pending; live completion and next-opening recovery run the same finish path | `a_pending_agent_switch_retries_invalidation_as_its_original_request` |
 | A submission resolves a live or restarted opening while an agent switch is Pending | Under the existing submission lock, settle the saved switch and its original invalidation before admitting the new turn; failed invalidation refuses admission without a new execution | `a_pending_agent_switch_retries_invalidation_as_its_original_request` |
 | Original invalidation committed, Applied metadata did not | Retry reads that request's invalidation receipt; a later blocked turn is not invalidated by the old request | `a_pending_agent_switch_retries_invalidation_as_its_original_request` |
+| Selection holds the submission lock before delivery classification | Delivery waits before `begin_submit`; its owned permit continues through supervised enqueue | `a_selection_lock_blocks_the_durable_submit_claim` |
+| Delivery holds the lock first | Selection waits through classification, command admission and enqueue; it cannot report Applied in that gap | `a_detached_scheduled_command_keeps_its_submission_permit` |
+| Crash leaves an unattempted submitting row, then selection changes (including away and back or preference off) | Before Applied, seal the original command under its request lease with the distinct durable model/agent refusal. Attempted and terminal receipts retain their original meaning | `an_agent_switch_seals_a_crash_left_unattempted_continuation` |
+| Pending recovery seals a command while selected strings match its original row again | Read the newly sealed receipt before any fresh classification; keep the exact durable cause | `pending_selection_recovery_retains_its_refusal_when_selection_matches_again` |
+| Pending selection precedes fresh delivery classification | Recover selection before planning; a failed recovery holds delivery for bounded retry. For submitting recovery, terminal evidence wins first | `scheduled_delivery_recovers_pending_selection_before_fresh_classification` |
 | Model and agent requests reuse one request id | Selection kind separates durable receipts; both original transitions apply independently | `model_and_agent_invalidations_have_separate_request_namespaces` |
 
 ### Who owns each transition
