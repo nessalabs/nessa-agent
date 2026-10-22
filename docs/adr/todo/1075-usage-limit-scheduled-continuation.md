@@ -44,10 +44,10 @@ does not commit leaves the row `submitting` until a bounded retry; the next
 pass records that outcome and does not mint an execution id. A reset instant
 is kept through 2100-01-01 UTC, and the card compares that instant on the
 gateway's clock, translated the same way as a permission deadline. A
-compare-and-set to `delivering` is the only thing that may call
+compare-and-set to `submitting` is the only thing that may call
 `submit_command`. Cedar and the deleted-target refusal stay inside that
 command. Schedule and cancellation audits commit with the status change. The
-delivery audit follows admission and, if it fails, leaves the row delivering
+delivery audit follows admission and, if it fails, leaves the row submitting
 so the same execution id is not minted again. The project preference is one
 boolean on this gateway, default off. "Auto-resuming" is shown only after
 that store accepts the row.

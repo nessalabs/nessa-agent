@@ -102,7 +102,7 @@ causal turn remains eligible. The partial unique index covers only `scheduled`, 
 | `delivered` | The execution was saved, or `submit_command` admitted it. Audit `delivered` |
 | `refused` | The submit ended for a reason that will not change on retry: deleted, not found, revoked, unavailable after save, or a caller that cannot be rebuilt |
 | `cancelled` | The row ended without a submit: preference off, a later turn, an agent or model change, or deletion before submit. The same causal turn can be scheduled again unless an agent or model change cancelled it. A finished submit cannot |
-| `unconfirmed` | The mutation journal recorded `Attempted` and the invocation was not saved. The effect must not run again. Audit `submission_interrupted` |
+| `unconfirmed` | Admission cannot be confirmed: the journal recorded `Attempted` without a saved invocation, or deletion erased the recovery inputs of a submitting row. The effect must not run again. Audit `submission_interrupted` or `conversation_deleted` |
 
 ### Who owns each transition
 
