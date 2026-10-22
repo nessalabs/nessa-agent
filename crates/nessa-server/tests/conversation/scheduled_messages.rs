@@ -4058,3 +4058,139 @@ async fn a_detached_scheduled_command_keeps_its_submission_permit() {
     assert!(service.inner.admission.try_write().is_ok());
     assert!(service.inner.thread_admission.try_lock().is_ok());
 }
+
+#[tokio::test]
+async fn an_admitted_scheduled_continuation_is_not_an_explicit_person_turn() {
+    let directory = tempfile::tempdir().unwrap();
+    // Real SQLite schedule accept -> claim_due -> begin_submit -> close/reopen;
+    // real RecordStorage command + session store. No fabricated receipt/evidence.
+    let (service, schedule, commands, clock, draft_row) =
+        disabled_recovery_fixture(directory.path()).await;
+    let id = ConversationId::new(&draft_row.conversation).unwrap();
+    let automatic_caller = schedule_caller(&draft_row).unwrap();
+    service
+        .create(
+            id.clone(),
+            caller_as("create-provenance-conversation"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+
+    // The reopened store must adopt the expired ORIGINAL fence. Obtain the
+    // actual row as decoded from SQLite, including its retained non-content
+    // command evidence; do not set command_evidence on a struct in the test.
+    let adopted_at = 5_000 + FENCE_LEASE_MS;
+    clock.0.store(adopted_at, Ordering::SeqCst);
+    let rows = schedule.claim_due(adopted_at, 8).await.unwrap();
+    let stored = rows
+        .into_iter()
+        .find(|row| row.execution_id == draft_row.execution_id)
+        .expect("the durable submitting row is recoverable");
+    assert!(stored.command_evidence.is_some());
+    assert_eq!(
+        schedule
+            .status(&stored.execution_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("submitting")
+    );
+    let original_binding = super::scheduled_submit_binding(&id, &stored).unwrap();
+
+    // Invoke the real scheduler recovery/effect owner, not submit_command with
+    // a caller-supplied boolean claiming to be scheduled. It acquires the real
+    // thread/admission/selection permit and performs begin_submit adoption.
+    tokio::time::timeout(Duration::from_secs(5), service.deliver_due_scheduled())
+        .await
+        .expect("automatic delivery completes within the existing five-second fixture bound");
+    assert_eq!(
+        schedule
+            .status(&stored.execution_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("delivered"),
+        "the proposed regression must exercise a genuinely admitted automatic command"
+    );
+    let receipts = commands.mutations("person".into()).await.unwrap();
+    let dispatched = receipts
+        .iter()
+        .find(|receipt| receipt.binding() == &original_binding)
+        .expect("the original retained canonical binding has a real receipt");
+    assert_eq!(dispatched.stage(), MutationStage::Settled);
+    assert_eq!(dispatched.outcome(), Some(MutationOutcome::Dispatched));
+
+    let committed = commands
+        .read_committed(super::super::conversation_session(&id))
+        .await
+        .unwrap()
+        .unwrap();
+    let history = committed.snapshot().unwrap().invocations.clone();
+    let automatic = history
+        .iter()
+        .find(|record| record.request.execution_id.as_str() == stored.execution_id)
+        .expect("the scheduled command was actually saved in the SDK history");
+    assert_eq!(
+        automatic.request.user_message.sender(),
+        &nessa_sdk::domain::agent_execution::prompts::MessageSender::Person
+    );
+    let classified_after_automatic = service
+        .person_turns(&id, &automatic_caller, &history)
+        .await
+        .unwrap();
+
+    // Both positives use genuine public person admission. Identical prompt,
+    // surface, and a scheduling-looking execution spelling must not substitute
+    // for durable origin evidence. A prefix filter would fail this positive.
+    let genuine = "explicit-person-after-automatic".to_owned();
+    let lookalike = format!("{}-person-lookalike", stored.execution_id);
+    for execution in [&genuine, &lookalike] {
+        service
+            .submit_command(
+                commands.clone(),
+                id.clone(),
+                caller_as(execution),
+                Initiation::owner(),
+                false,
+                execution.clone(),
+                SubmittedMessage {
+                    text: stored.prompt.clone(),
+                    ..Default::default()
+                },
+                SubmissionMode::Queue,
+            )
+            .await
+            .unwrap();
+    }
+    let committed = commands
+        .read_committed(super::super::conversation_session(&id))
+        .await
+        .unwrap()
+        .unwrap();
+    let history = committed.snapshot().unwrap().invocations.clone();
+    let classified_after_people = service
+        .person_turns(&id, &automatic_caller, &history)
+        .await
+        .unwrap();
+
+    // Cleanup precedes the intended failing regression assertion, so the
+    // negative control does not leave the real process/storage fixture running.
+    service.shutdown().await.unwrap();
+    drop(service);
+    commands.shutdown().await.unwrap();
+
+    assert!(
+        classified_after_automatic.is_empty(),
+        "an admitted automatic continuation is not an explicit person turn: {classified_after_automatic:?}"
+    );
+    let people: Vec<_> = classified_after_people
+        .iter()
+        .map(|(_, execution)| execution.as_str())
+        .collect();
+    assert_eq!(
+        people,
+        vec![genuine.as_str(), lookalike.as_str()],
+        "only real person receipts reauthorize report delivery; spelling and text confer no origin"
+    );
+}

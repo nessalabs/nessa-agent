@@ -1919,3 +1919,220 @@ async fn no_acquisition_evidence_retires_prior_proof(
         );
     }
 }
+
+fn usage_limit_error_for_resumption() -> AgentError {
+    use nessa_sdk::application::agent_execution::agents::{
+        UsageLimit, UsageLimitKind, UsageLimitProvider,
+    };
+    AgentError::UsageLimitReached(UsageLimit::unknown(
+        UsageLimitProvider::Claude,
+        UsageLimitKind::SevenDay,
+        None,
+    ))
+}
+
+#[tokio::test]
+async fn a_canonical_successor_limit_withholds_an_earlier_runner_stopped_tail() {
+    let (agent, backend, storage) = failed_with(AgentError::Deadline).await;
+    let owed = agent.owed_turns().await;
+    // Setup uses failed_with's existing deterministic failed/behind fixture.
+    let failed = owed
+        .iter()
+        .find(|turn| turn.execution_id().as_str() == "failed")
+        .expect("failed_with leaves its retryable source owed")
+        .clone();
+    let behind = owed
+        .iter()
+        .find(|turn| turn.execution_id().as_str() == "behind")
+        .expect("failed_with leaves the stopped queued tail owed")
+        .clone();
+
+    let limit = usage_limit_error_for_resumption();
+    *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
+        limit.clone(),
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    ));
+    let continued = bounded(agent.resume_turn(&failed, resumer())).await;
+    let admission = match continued {
+        Ok(Resumed::Continued(admission)) => admission,
+        Ok(Resumed::ContinuedUnaudited { admission, error }) => {
+            let outcome = bounded(admission.wait()).await;
+            let closed = bounded(agent.close(actor())).await;
+            panic!("setup admission was unaudited: {error:?}; {outcome:?}; close={closed:?}");
+        }
+        Ok(Resumed::NotOwed | Resumed::Exhausted) => {
+            let closed = bounded(agent.close(actor())).await;
+            panic!("setup did not canonically continue source; close={closed:?}");
+        }
+        Err(error) => {
+            let closed = bounded(agent.close(actor())).await;
+            panic!("setup continuation failed: {error:?}; close={closed:?}");
+        }
+    };
+    let successor = admission.id().clone();
+    let successor_outcome = bounded(admission.wait()).await;
+    let snapshot = storage.snapshot();
+    let canonical = resumed_turn_id(&snapshot.invocations, failed.execution_id());
+    let live = agent.owed_turns().await;
+    let live_ids: Vec<_> = live
+        .iter()
+        .map(|turn| turn.execution_id().clone())
+        .collect();
+    let saved_ids = owed_turn_ids(&snapshot.invocations);
+    let executions_before_stale = backend.executions.lock().unwrap().clone();
+
+    // Test the stale captured capability too: an empty listing alone is not
+    // proof that settle_owed refuses the earlier RunnerStopped tail.
+    let (stale_not_owed, stale_observation) =
+        match bounded(agent.resume_turn(&behind, resumer())).await {
+            Ok(Resumed::NotOwed) => (true, "NotOwed".to_owned()),
+            Ok(Resumed::Continued(admission)) => {
+                let id = admission.id().clone();
+                let outcome = bounded(admission.wait()).await;
+                (false, format!("Continued({id:?}), outcome={outcome:?}"))
+            }
+            Ok(Resumed::ContinuedUnaudited { admission, error }) => {
+                let id = admission.id().clone();
+                let outcome = bounded(admission.wait()).await;
+                (
+                    false,
+                    format!("ContinuedUnaudited({id:?}, {error:?}), outcome={outcome:?}"),
+                )
+            }
+            Ok(Resumed::Exhausted) => (false, "Exhausted".to_owned()),
+            Err(error) => (false, format!("Err({error:?})")),
+        };
+    let executions_after_stale = backend.executions.lock().unwrap().clone();
+    let resumption_audits = resumptions(&backend);
+    *backend.execution_fault.lock().unwrap() = None;
+    let closed = bounded(agent.close(actor())).await;
+
+    // Distinguishing assertions run after draining any unexpectedly admitted
+    // work and closing the actual Agent. Observations are from before close.
+    assert_eq!(closed, Ok(()));
+    assert_eq!(successor_outcome, Err(limit));
+    assert_eq!(canonical, Some(successor.clone()));
+    let saved_tail = snapshot
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id == *behind.execution_id())
+        .unwrap();
+    assert_eq!(
+        saved_tail.scheduling.last().unwrap().cause,
+        SchedulingCause::RunnerStopped
+    );
+    assert!(!behind.dispatched());
+    assert_eq!(
+        executions_before_stale,
+        vec![failed.execution_id().clone(), successor.clone()]
+    );
+    assert!(live_ids.is_empty(), "live owed before close: {live_ids:?}");
+    assert!(
+        saved_ids.is_empty(),
+        "saved owed before close: {saved_ids:?}"
+    );
+    assert!(stale_not_owed, "stale captured tail: {stale_observation}");
+    assert_eq!(executions_after_stale, executions_before_stale);
+    assert_eq!(
+        resumption_audits,
+        vec![TurnResumption::Continued { successor }]
+    );
+}
+
+#[tokio::test]
+async fn a_later_limit_does_not_acknowledge_an_original_pending_decline() {
+    let (agent, backend, storage) = failed_with(AgentError::Deadline).await;
+    let turn = agent
+        .owed_turns()
+        .await
+        .into_iter()
+        .find(|turn| turn.execution_id().as_str() == "failed")
+        .expect("failed_with leaves its original source owed");
+    backend.audit.reject_decline.store(true, Ordering::SeqCst);
+    let first_decline = bounded(agent.decline_turn(&turn, resumer())).await;
+    let original_decision = storage.snapshot().invocations[0].decline.clone();
+
+    let limit = usage_limit_error_for_resumption();
+    *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
+        limit.clone(),
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    ));
+    let admitted = agent
+        .enqueue(request("limit-after-decline"), Submitter::owner(actor()))
+        .await;
+    let limited = match admitted {
+        Ok(admission) => bounded(admission.wait()).await,
+        Err(error) => {
+            backend.audit.reject_decline.store(false, Ordering::SeqCst);
+            *backend.execution_fault.lock().unwrap() = None;
+            let closed = bounded(agent.close(actor())).await;
+            panic!("later ordinary input setup failed: {error:?}; close={closed:?}");
+        }
+    };
+    let live_ids: Vec<_> = agent
+        .owed_turns()
+        .await
+        .iter()
+        .map(|turn| turn.execution_id().clone())
+        .collect();
+    let saved_ids = owed_turn_ids(&storage.snapshot().invocations);
+    let still_rejected = bounded(agent.retry_declined_turns()).await;
+    let pending_decision = storage.snapshot().invocations[0].decline.clone();
+    let executions_before_retry = backend.executions.lock().unwrap().clone();
+
+    backend.audit.reject_decline.store(false, Ordering::SeqCst);
+    let recovered = bounded(agent.retry_declined_turns()).await;
+    let acknowledged_decision = storage.snapshot().invocations[0].decline.clone();
+    let executions_after_retry = backend.executions.lock().unwrap().clone();
+    let declines: Vec<_> = backend
+        .audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|record| match record {
+            ExecutionAuditRecord::TurnResumed(record)
+                if record.resumption() == &TurnResumption::Declined =>
+            {
+                Some(record.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    *backend.execution_fault.lock().unwrap() = None;
+    let closed = bounded(agent.close(actor())).await;
+
+    assert_eq!(closed, Ok(()));
+    assert_eq!(first_decline, Err(AgentError::AuditFailure));
+    assert_eq!(limited, Err(limit));
+    assert!(live_ids.is_empty(), "live owed: {live_ids:?}");
+    assert!(saved_ids.is_empty(), "saved owed: {saved_ids:?}");
+    assert_eq!(still_rejected, Err(AgentError::AuditFailure));
+    let original_decision = original_decision.expect("original preparation exists");
+    let pending_decision = pending_decision.expect("later limit cannot erase decline");
+    assert!(!original_decision.acknowledged());
+    assert!(!pending_decision.acknowledged());
+    assert_eq!(pending_decision.event(), original_decision.event());
+    assert_eq!(recovered, Ok(()));
+    let acknowledged_decision = acknowledged_decision.expect("same decision acknowledged");
+    assert!(acknowledged_decision.acknowledged());
+    assert_eq!(acknowledged_decision.event(), original_decision.event());
+    assert_eq!(
+        acknowledged_decision.event().actor.as_ref(),
+        Some(&resumer())
+    );
+    assert_eq!(executions_after_retry, executions_before_retry);
+    assert_eq!(
+        declines.len(),
+        3,
+        "original rejection, rejected retry, acknowledged retry"
+    );
+    assert!(declines.windows(2).all(|pair| pair[0] == pair[1]));
+    assert!(declines
+        .iter()
+        .all(|record| record.resumed_by() == &resumer()));
+}
