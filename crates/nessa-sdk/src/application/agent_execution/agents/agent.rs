@@ -1318,21 +1318,11 @@ impl Agent {
         let (start, wait) = self.inner.lifecycle.start_attachment(authorization)?;
         let agent = self.clone();
         runtime.spawn(async move {
-            let retired = agent
+            let started = agent
                 .inner
                 .lifecycle
-                .begin_attachment_transition(start.generation)
+                .record_new_attachment_evidence(ExecutionAuditRecord::Attachment(start.record))
                 .await;
-            let started = match retired {
-                Ok(()) => {
-                    agent
-                        .inner
-                        .lifecycle
-                        .record_attachment_audit(ExecutionAuditRecord::Attachment(start.record))
-                        .await
-                }
-                Err(error) => Err(error),
-            };
             start.started_evidence.send_replace(Some(started.clone()));
             let lifecycle = agent.inner.lifecycle.clone();
             let provider = agent.current_provider();

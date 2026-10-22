@@ -876,14 +876,7 @@ impl SessionLifecycle {
         }
         Ok(())
     }
-    pub(super) async fn begin_attachment_transition(
-        &self,
-        generation: u64,
-    ) -> Result<(), AgentError> {
-        self.run_attachment_transition(generation, self.retire_cleanup_proof())
-            .await
-    }
-    async fn record_new_attachment_evidence(
+    pub(super) async fn record_new_attachment_evidence(
         &self,
         record: ExecutionAuditRecord,
     ) -> Result<(), AgentError> {
