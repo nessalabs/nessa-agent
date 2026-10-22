@@ -151,6 +151,13 @@ controls — text, icons, images, code, or decorative art — in any frame.
   the next paint, with no ResizeObserver loop error (#693).
   _Check:_ `responsive.mjs --only column-title`; drag a column edge slowly
   across the flip point by hand and watch for a flicker (the 12px hold).
+- [ ] **Pane fitting starts after resize delivery.** Its first measurement may
+  start another observer on the grid; it runs on the next animation frame,
+  coalesces notifications, and retires with the source/grid. No native
+  ErrorEvent or pageerror occurs on first load or 30 viewport changes in
+  either layout. _Check:_ `resize-observers.mjs` (Chromium and WebKit), also
+  included in `test:e2e:scripted`; the native event is checked separately
+  because Chromium does not forward this loop error as a Playwright pageerror.
 - [ ] **A column's titlebar action hides at once as it folds and shows once it
   has slid in; a pane's header stays painted as workspace bounds land.**
   _Check:_ manual, with
