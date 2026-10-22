@@ -4,6 +4,8 @@
 use super::*;
 use crate::conversation::application::ConversationCatalogue;
 use std::collections::BTreeSet;
+use std::io::Write;
+use std::time::Instant;
 
 #[path = "settlement.rs"]
 mod settlement;
@@ -26,6 +28,33 @@ enum Step {
     Archive,
     Turn,
     Reconnect,
+}
+
+/// Test-only progress remains visible if libtest never receives a completed
+/// result. Static labels and ordinals reveal no conversation or credential data.
+struct Progress {
+    seed: u64,
+    started: Instant,
+}
+
+impl Progress {
+    fn new(seed: u64) -> Self {
+        Self {
+            seed,
+            started: Instant::now(),
+        }
+    }
+
+    fn at(&self, phase: &'static str, ordinal: usize) {
+        // eprintln! is captured until the test returns; this write preserves
+        // the last phase when the enclosing CI step reaches its limit.
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "paired_catalogue seed={} phase={phase} ordinal={ordinal} elapsed_ms={}",
+            self.seed,
+            self.started.elapsed().as_millis(),
+        );
+    }
 }
 
 /// A replayable permutation; every cycle exercises every transition.
@@ -136,9 +165,13 @@ async fn head(fixture: &SubscriptionFixture) -> u64 {
 }
 
 async fn run(seed: u64, cycles: usize) {
+    let progress = Progress::new(seed);
+    progress.at("fixture_start", 0);
     let fixture = SubscriptionFixture::new().await;
+    progress.at("fixture_created", 0);
     fixture.turn(&format!("seed-{seed}-bootstrap")).await;
     fixture.settled_read(1).await;
+    progress.at("bootstrap_settled", 0);
     let (owner, authority) = super::super::fixture(MembershipRole::Member);
     grants(&authority, &["conversation.write", "server.read"]);
     let owner = owner.with_conversations(fixture.service.clone());
@@ -153,16 +186,22 @@ async fn run(seed: u64, cycles: usize) {
         main: fixture.id.to_string(),
         active: BTreeSet::from([fixture.id.to_string()]),
     };
-    for _ in 0..=MAX_LISTED_CONVERSATIONS {
+    for index in 0..=MAX_LISTED_CONVERSATIONS {
         expected
             .active
             .insert(stored_row(&fixture, 0, true).await.to_string());
+        if index % 100 == 0 {
+            progress.at("granted_rows", index + 1);
+        }
     }
     // More newer hidden rows than the bound: filtering after LIMIT cannot
     // construct the oracle's first page.
     let mut hidden = None;
-    for _ in 0..=MAX_LISTED_CONVERSATIONS {
+    for index in 0..=MAX_LISTED_CONVERSATIONS {
         hidden = Some(stored_row(&fixture, 2_000_000_000_000, false).await);
+        if index % 100 == 0 {
+            progress.at("hidden_rows", index + 1);
+        }
     }
     let hidden = hidden.unwrap();
     let omitted: Vec<_> = expected
@@ -176,13 +215,16 @@ async fn run(seed: u64, cycles: usize) {
     let (moving, archived) = (&omitted[0], &omitted[1]);
     let watches = fixture.storage.committed_watches();
     let mut client = fixture.connect();
+    progress.at("subscription_start", 0);
     let (mut subscription, first) = open_list(&mut client).await;
     expected.frame(&first, &subscription);
+    progress.at("subscription_open", 0);
 
     let mut random = seed;
     for cycle in 0..cycles {
         for (index, step) in plan(&mut random).into_iter().enumerate() {
             eprintln!("paired catalogue seed={seed} cycle={cycle} step={index} {step:?}");
+            progress.at("step_start", cycle * 6 + index);
             match step {
                 Step::Hidden => {
                     fixture
@@ -261,7 +303,9 @@ async fn run(seed: u64, cycles: usize) {
                         panic!("a turn response")
                     };
                     assert_eq!(serde_json::to_value(answer).unwrap()["ok"], true);
+                    progress.at("turn_dispatched", cycle);
                     fixture.provider.execution_started.notified().await;
+                    progress.at("turn_started", cycle);
                     let running = |frame: &Value| {
                         frame["payload"]["list"]["conversations"]
                             .as_array()
@@ -275,8 +319,10 @@ async fn run(seed: u64, cycles: usize) {
                     for frame in client.until(&subscription, running).await {
                         expected.frame(&frame, &subscription);
                     }
+                    progress.at("turn_running_seen", cycle);
                     release.send(()).unwrap();
                     fixture.turn_settled(&execution).await;
+                    progress.at("turn_transcript_settled", cycle);
                     let reply = format!("Response: question {execution}");
                     for frame in client
                         .until(&subscription, |frame| {
@@ -286,6 +332,7 @@ async fn run(seed: u64, cycles: usize) {
                     {
                         expected.frame(&frame, &subscription);
                     }
+                    progress.at("turn_summary_settled", cycle);
                 }
                 Step::Reconnect => {
                     client.close().await;
@@ -299,7 +346,10 @@ async fn run(seed: u64, cycles: usize) {
             let list = fixture.call("conversation.list", json!({})).await;
             assert_eq!(list["ok"], true, "{list}");
             expected.check(&list["payload"]);
+            progress.at("step_checked", cycle * 6 + index);
         }
+        progress.at("observation_start", cycle);
+        let mut pages = 0;
         let mut actual = BTreeSet::new();
         let mut cursor = None;
         loop {
@@ -309,6 +359,8 @@ async fn run(seed: u64, cycles: usize) {
             let observed = fixture.call("conversation.observe", params).await;
             assert_eq!(observed["ok"], true, "{observed}");
             let page = &observed["payload"];
+            pages += 1;
+            progress.at("observation_page", pages);
             for row in page["conversations"].as_array().unwrap() {
                 let id = row["conversationId"].as_str().unwrap().to_owned();
                 assert!(expected.active.contains(&id), "no hidden row in a page");
@@ -327,8 +379,10 @@ async fn run(seed: u64, cycles: usize) {
             "the existing observation cursor scope"
         );
     }
+    progress.at("close_start", cycles);
     client.close().await;
     wait_for_watches(&fixture, watches).await;
+    progress.at("watches_released", cycles);
     assert_eq!(
         fixture.state.requests.available_permits(),
         fixture.state.limits.requests()
@@ -338,16 +392,20 @@ async fn run(seed: u64, cycles: usize) {
         cycles + 1
     );
     assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), 1);
+    progress.at("seed_assertions_complete", cycles);
 }
 
 #[tokio::test]
 async fn paired_catalogue_seeded_mock_agent_stress() {
     for seed in [1, 7, 41] {
         run(seed, 1).await;
+        Progress::new(seed).at("seed_returned", 1);
     }
+    Progress::new(0).at("test_body_complete", 3);
 }
 
 #[tokio::test]
 async fn paired_catalogue_seeded_mock_agent_stress_under_load() {
     run(211, 8).await;
+    Progress::new(211).at("test_body_complete", 8);
 }
