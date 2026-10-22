@@ -10,6 +10,8 @@ mod closed_windows;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(all(test, windows))]
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -6170,6 +6172,64 @@ fn failed_multilink_validation_drops_namespace_guard_without_changing_foreign_se
             .to_vec()
     }
 
+    fn native_security_bytes(file: &File) -> Vec<u8> {
+        #[link(name = "ntdll")]
+        extern "system" {
+            fn NtQuerySecurityObject(
+                handle: *mut std::ffi::c_void,
+                information: u32,
+                descriptor: *mut std::ffi::c_void,
+                length: u32,
+                needed: *mut u32,
+            ) -> i32;
+        }
+        let mut descriptor = vec![0usize; 65536 / std::mem::size_of::<usize>()];
+        let mut needed = 0;
+        // Query the retained object directly, with aligned output storage and
+        // a bounded NTFS security descriptor buffer. No pathname is reopened.
+        let status = unsafe {
+            NtQuerySecurityObject(
+                file.as_raw_handle(),
+                1 | 2 | 4,
+                descriptor.as_mut_ptr().cast(),
+                65536,
+                &mut needed,
+            )
+        };
+        assert!(status >= 0, "native security query status={status:#010x}");
+        assert!(needed > 0 && needed <= 65536);
+        unsafe { std::slice::from_raw_parts(descriptor.as_ptr().cast::<u8>(), needed as usize) }
+            .to_vec()
+    }
+
+    fn log_security_shape(phase: &str, bytes: &[u8]) {
+        assert!(bytes.len() >= 20);
+        let control = u16::from_le_bytes(bytes[2..4].try_into().unwrap());
+        let owner = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) != 0;
+        let group = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) != 0;
+        let dacl = u32::from_le_bytes(bytes[16..20].try_into().unwrap()) as usize;
+        assert!(dacl > 0 && dacl + 8 <= bytes.len());
+        let count = u16::from_le_bytes(bytes[dacl + 4..dacl + 6].try_into().unwrap());
+        let mut offset = dacl + 8;
+        let mut entries = Vec::new();
+        for index in 0..count {
+            assert!(offset + 8 <= bytes.len());
+            let size =
+                u16::from_le_bytes(bytes[offset + 2..offset + 4].try_into().unwrap()) as usize;
+            assert!(size >= 8 && offset + size <= bytes.len());
+            if index < 16 {
+                entries.push((
+                    bytes[offset],
+                    bytes[offset + 1],
+                    u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()),
+                ));
+            }
+            offset += size;
+        }
+        // Only structural ACL fields are logged: never owner/group/SID bytes.
+        eprintln!("guard-cleanup-security phase={phase} owner={owner} group={group} control={control:#06x} count={count} first16_type_flags_masks={entries:?} sd_length={}", bytes.len());
+    }
+
     let temp = tempfile::tempdir().unwrap();
     nessa_local_storage::create_directory_exclusive(&temp.path().join("legacy")).unwrap();
     let external_path = temp.path().join("legacy/external");
@@ -6180,7 +6240,13 @@ fn failed_multilink_validation_drops_namespace_guard_without_changing_foreign_se
         .share_mode(7)
         .open(&external_path)
         .unwrap();
+    let native_before_named = native_security_bytes(&external);
+    log_security_shape("native-held-before-named-baseline", &native_before_named);
     let before = security_bytes(&external_path);
+    log_security_shape("named-provider-baseline", &before);
+    let native_after_named = native_security_bytes(&external);
+    log_security_shape("native-held-after-named-baseline", &native_after_named);
+    eprintln!("guard-cleanup-security named_equals_native_before={} named_equals_native_after={} native_changed_after_named={}", before == native_before_named, before == native_after_named, native_before_named != native_after_named);
     let control = u16::from_le_bytes(before[2..4].try_into().unwrap());
     assert_eq!(
         control & (0x1000 | 0x0400),

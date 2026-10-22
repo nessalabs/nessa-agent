@@ -859,7 +859,7 @@ mod tests {
         baseline: &(Vec<u8>, SECURITY_DESCRIPTOR_CONTROL),
     ) {
         eprintln!("native-link-query phase={phase} exact_baseline={} control={:#06x} acl_bytes={} ace_type_flags_masks={:?}",
-            receipt == baseline, receipt.1, receipt.0.len(), acl_shape(&receipt.0));
+            receipt == baseline, receipt.1, receipt.0.len(), acl_shape(&receipt.0).into_iter().take(16).collect::<Vec<_>>());
     }
 
     fn log_native_pair(
@@ -868,14 +868,47 @@ mod tests {
         target: Option<&File>,
         baseline: &(Vec<u8>, SECURITY_DESCRIPTOR_CONTROL),
     ) {
-        let original = native_acl_receipt(held);
-        log_acl_receipt(&format!("{phase}/native-held"), &original, baseline);
-        if let Some(target) = target {
-            let target = native_acl_receipt(target);
-            log_acl_receipt(&format!("{phase}/native-target"), &target, baseline);
+        log_native_pair_ordered(phase, held, target, baseline, false);
+    }
+
+    fn log_native_pair_ordered(
+        phase: &str,
+        held: &File,
+        target: Option<&File>,
+        baseline: &(Vec<u8>, SECURITY_DESCRIPTOR_CONTROL),
+        target_first: bool,
+    ) {
+        eprintln!(
+            "native-link-query phase={phase} native_query_order={}",
+            if target.is_none() {
+                "held-only"
+            } else if target_first {
+                "target-then-held"
+            } else {
+                "held-then-target"
+            }
+        );
+        let (original, target_receipt) = if target_first {
+            let target_receipt = target.map(native_acl_receipt);
+            if let Some(receipt) = &target_receipt {
+                log_acl_receipt(&format!("{phase}/native-target"), receipt, baseline);
+            }
+            let original = native_acl_receipt(held);
+            log_acl_receipt(&format!("{phase}/native-held"), &original, baseline);
+            (original, target_receipt)
+        } else {
+            let original = native_acl_receipt(held);
+            log_acl_receipt(&format!("{phase}/native-held"), &original, baseline);
+            let target_receipt = target.map(native_acl_receipt);
+            if let Some(receipt) = &target_receipt {
+                log_acl_receipt(&format!("{phase}/native-target"), receipt, baseline);
+            }
+            (original, target_receipt)
+        };
+        if let Some(target_receipt) = target_receipt {
             eprintln!(
                 "native-link-query phase={phase} native_held_target_equal={}",
-                original == target
+                original == target_receipt
             );
         }
     }
@@ -974,13 +1007,33 @@ mod tests {
     }
 
     fn acl_shape(bytes: &[u8]) -> Vec<(u8, u8, u32)> {
-        let mut entries = Vec::new();
-        let mut offset = 8usize;
-        while entries.len() < 16 && offset + 8 <= bytes.len() {
+        assert!(
+            bytes.len() >= size_of::<ACL>(),
+            "ACL receipt lacks its complete header"
+        );
+        let length = u16::from_le_bytes([bytes[2], bytes[3]]) as usize;
+        let count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+        assert_eq!(
+            length,
+            bytes.len(),
+            "ACL receipt must contain exactly AclSize bytes"
+        );
+        let mut entries = Vec::with_capacity(count);
+        let mut offset = size_of::<ACL>();
+        for _ in 0..count {
+            assert!(
+                offset + size_of::<ACE_HEADER>() <= length,
+                "declared ACE header exceeds AclSize"
+            );
             let size = u16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]) as usize;
-            if size < 8 || size > bytes.len() - offset {
-                break;
-            }
+            assert!(
+                size >= 8 && size.is_multiple_of(4),
+                "ACE shape needs an aligned header and mask"
+            );
+            assert!(
+                size <= length - offset,
+                "declared ACE extends beyond AclSize"
+            );
             entries.push((
                 bytes[offset],
                 bytes[offset + 1],
@@ -993,7 +1046,136 @@ mod tests {
             ));
             offset += size;
         }
+        eprintln!("native-acl-layout declared_count={count} parsed_count={} acl_size={length} bytes_in_use={offset} free_bytes={}",
+            entries.len(), length - offset);
         entries
+    }
+
+    #[test]
+    fn acl_shape_ignores_fake_inherited_ace_in_free_slack() {
+        let mut bytes = vec![0u8; 48];
+        bytes[0] = 2;
+        bytes[2..4].copy_from_slice(&48u16.to_le_bytes());
+        bytes[4..6].copy_from_slice(&1u16.to_le_bytes());
+        for offset in [8, 28] {
+            bytes[offset + 2..offset + 4].copy_from_slice(&20u16.to_le_bytes());
+            bytes[offset + 4..offset + 8].copy_from_slice(&FILE_GENERIC_READ.to_le_bytes());
+            bytes[offset + 8..offset + 20].copy_from_slice(&[1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]);
+        }
+        bytes[29] = INHERITED_ACE as u8;
+        let parsed = acl_shape(&bytes);
+        assert_eq!(parsed.len(), 1);
+        assert!(
+            parsed
+                .iter()
+                .all(|(_, flags, _)| u32::from(*flags) & INHERITED_ACE == 0),
+            "slack must never establish a genuine inherited-ACE fixture precondition"
+        );
+    }
+
+    #[test]
+    fn acl_shape_parses_every_declared_entry_beyond_sixteen() {
+        let mut bytes = vec![0u8; 8 + 17 * 20];
+        let length = bytes.len() as u16;
+        bytes[0] = 2;
+        bytes[2..4].copy_from_slice(&length.to_le_bytes());
+        bytes[4..6].copy_from_slice(&17u16.to_le_bytes());
+        for index in 0..17 {
+            let offset = 8 + index * 20;
+            bytes[offset + 2..offset + 4].copy_from_slice(&20u16.to_le_bytes());
+            bytes[offset + 4..offset + 8].copy_from_slice(&FILE_GENERIC_READ.to_le_bytes());
+            bytes[offset + 8..offset + 20].copy_from_slice(&[1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]);
+        }
+        bytes[8 + 16 * 20 + 1] = INHERITED_ACE as u8;
+        let parsed = acl_shape(&bytes);
+        assert_eq!(parsed.len(), 17);
+        assert_ne!(u32::from(parsed[16].1) & INHERITED_ACE, 0);
+    }
+
+    #[test]
+    fn fresh_hardlink_security_queries_reverse_provider_order_without_inheritance_assumptions() {
+        let _ordinary = token::OrdinaryToken::enter();
+        for target_first in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            crate::create_directory_exclusive(&root.path().join("legacy-query")).unwrap();
+            let source = root.path().join("legacy-query/source");
+            let payload = b"query-order bytes unchanged";
+            std::fs::write(&source, payload).unwrap();
+            let held = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(&source)
+                .unwrap();
+            let before = acl_receipt(&held);
+            let native_pair = |phase: &str, target: Option<&File>| {
+                log_native_pair_ordered(phase, &held, target, &before, target_first);
+            };
+            log_acl_receipt("fresh/baseline-provider-held", &before, &before);
+            native_pair("fresh/baseline-native", None);
+            let identity = NativeObjectId::capture(&held).unwrap();
+            let ancestor = full_parent(root.path());
+            let directory =
+                create_protected_directory_at(&ancestor, OsStr::new("owned-query")).unwrap();
+            let target_path = root.path().join("owned-query/linked");
+            std::fs::hard_link(&source, &target_path).unwrap();
+            native_pair("fresh/after-link-before-open", None);
+            let target = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(&target_path)
+                .unwrap();
+            assert_eq!(NativeObjectId::capture(&target).unwrap(), identity);
+            native_pair("fresh/after-open-before-provider", Some(&target));
+            eprintln!("native-link-query fresh_target_provider_first={target_first}");
+            if target_first {
+                log_acl_receipt(
+                    "fresh/first-target-provider",
+                    &acl_receipt(&target),
+                    &before,
+                );
+                native_pair("fresh/after-target-provider", Some(&target));
+                log_acl_receipt("fresh/second-held-provider", &acl_receipt(&held), &before);
+            } else {
+                log_acl_receipt("fresh/first-held-provider", &acl_receipt(&held), &before);
+                native_pair("fresh/after-held-provider", Some(&target));
+                log_acl_receipt(
+                    "fresh/second-target-provider",
+                    &acl_receipt(&target),
+                    &before,
+                );
+            }
+            native_pair("fresh/after-both-provider", Some(&target));
+            std::fs::remove_file(&source).unwrap();
+            assert!(!source.exists());
+            assert_eq!(information(&held).unwrap().nNumberOfLinks, 1);
+            native_pair("fresh/after-unlink-before-verify", Some(&target));
+            eprintln!(
+                "native-link-query fresh_private_file_admitted={}",
+                verify_file(&target).is_ok()
+            );
+            native_pair("fresh/after-verify", Some(&target));
+            log_acl_receipt(
+                "fresh/held-provider-after-verify",
+                &acl_receipt(&held),
+                &before,
+            );
+            log_acl_receipt(
+                "fresh/target-provider-after-verify",
+                &acl_receipt(&target),
+                &before,
+            );
+            let mut bytes = vec![0u8; payload.len()];
+            assert_eq!(held.seek_read(&mut bytes, 0).unwrap(), payload.len());
+            assert_eq!(bytes.as_slice(), payload);
+            assert_eq!(std::fs::read(&target_path).unwrap(), payload);
+            std::fs::write(&target_path, payload).unwrap();
+            assert_eq!(NativeObjectId::capture(&held).unwrap(), identity);
+            assert_eq!(NativeObjectId::capture(&target).unwrap(), identity);
+            assert_eq!(std::fs::read(&target_path).unwrap(), payload);
+            // No ACL preservation claim is made by this diagnostic-only test.
+            // The separate strict foreign-inode tests retain their exact checks.
+            drop((directory, target, held));
+        }
     }
 
     fn diagnose_foreign_difference(
@@ -1003,7 +1185,7 @@ mod tests {
         for (index, (old, new)) in before.iter().zip(after).enumerate() {
             if old != new {
                 eprintln!("native-foreign-acl child={index} dacl_equal={} control={:#06x}->{:#06x} acl_bytes={}->{} ace_type_flags_masks={:?}->{:?}",
-                    old.0 == new.0, old.1, new.1, old.0.len(), new.0.len(), acl_shape(&old.0), acl_shape(&new.0));
+                    old.0 == new.0, old.1, new.1, old.0.len(), new.0.len(), acl_shape(&old.0).into_iter().take(16).collect::<Vec<_>>(), acl_shape(&new.0).into_iter().take(16).collect::<Vec<_>>());
             }
         }
     }
