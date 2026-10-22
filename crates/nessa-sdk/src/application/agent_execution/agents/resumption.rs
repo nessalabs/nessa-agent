@@ -190,7 +190,7 @@ fn canonical_successor<'a>(
     if successor_index <= index {
         return None;
     }
-    let Stop::Recorded(edge) = owed(record, false, false, |_| false)? else {
+    let Stop::Recorded(edge) = owed(record, false, false, &|_| false, false)? else {
         return None;
     };
     let successor = &history[successor_index];
@@ -257,6 +257,7 @@ struct OwedHistory<'a, F> {
     resumed: HashSet<&'a ExecutionId>,
     newest_final: Option<usize>,
     newest_message: Option<usize>,
+    usage_limit_hold: Option<usize>,
     live: F,
 }
 impl<'a, F: Fn(&ExecutionId) -> bool> OwedHistory<'a, F> {
@@ -271,6 +272,8 @@ impl<'a, F: Fn(&ExecutionId) -> bool> OwedHistory<'a, F> {
         let newest_final = history
             .iter()
             .rposition(|record| ended_for_good(record, &resumed, &live));
+        let usage_limit_hold =
+            newest_final.filter(|&index| usage_limit_blocks_resume(&history[index]));
         let newest_message = history.iter().rposition(|record| {
             record.submission != SubmissionMode::Immediate && record.resumed_from.is_none()
         });
@@ -279,6 +282,7 @@ impl<'a, F: Fn(&ExecutionId) -> bool> OwedHistory<'a, F> {
             resumed,
             newest_final,
             newest_message,
+            usage_limit_hold,
             live,
         }
     }
@@ -290,6 +294,7 @@ impl<'a, F: Fn(&ExecutionId) -> bool> OwedHistory<'a, F> {
             self.resumed.contains(&record.request.execution_id),
             self.newest_final > Some(index) || retry_moved_past,
             &self.live,
+            self.usage_limit_hold.is_some_and(|held| index > held),
         )
     }
     fn turns(&self) -> Vec<OwedTurn> {
@@ -329,7 +334,8 @@ fn owed(
     record: &InvocationRecord,
     resumed: bool,
     superseded: bool,
-    live: impl Fn(&ExecutionId) -> bool,
+    live: &impl Fn(&ExecutionId) -> bool,
+    hold_runner_stopped: bool,
 ) -> Option<Stop> {
     let id = &record.request.execution_id;
     if record.decline.is_some() {
@@ -339,7 +345,7 @@ fn owed(
         return None;
     }
     let last = record.scheduling.last()?;
-    match last.stage {
+    let stop = match last.stage {
         InvocationStage::Cancelled | InvocationStage::Settled
             if recorded_resume_stop(record, last, superseded) =>
         {
@@ -389,6 +395,16 @@ fn owed(
             })
         }
         _ => None,
+    };
+    match stop {
+        // The newest turn that ran ended in a usage limit. A turn the runner
+        // stopped behind it is not sent again before that window resets.
+        Some(Stop::Recorded(edge) | Stop::CutOff { edge })
+            if hold_runner_stopped && edge.cause == SchedulingCause::RunnerStopped =>
+        {
+            None
+        }
+        other => other,
     }
 }
 
@@ -423,19 +439,27 @@ pub(crate) fn decline_stop_is_owed(
 fn ended_for_good(
     record: &InvocationRecord,
     resumed: &HashSet<&ExecutionId>,
-    live: impl Fn(&ExecutionId) -> bool,
+    live: &impl Fn(&ExecutionId) -> bool,
 ) -> bool {
     record.submission != SubmissionMode::Immediate
         && record.resumed_from.is_none()
         && (dispatched(record)
             || (!resumed.contains(&record.request.execution_id)
-                && owed(record, false, false, live).is_none()))
+                && owed(record, false, false, live, false).is_none()))
 }
 
 /// Whether a turn that a failure ended still owes its work: no stop but the
 /// runner's was asked for it, and it has no result, or a cancelled one, or
 /// an error a retry can fix ([`AgentError::leaves_work_owed`]). A turn the
 /// provider finished or refused, and one a person stopped, is not owed.
+fn usage_limit_blocks_resume(record: &InvocationRecord) -> bool {
+    record.result.as_ref().is_some_and(|result| {
+        result
+            .as_ref()
+            .is_err_and(AgentError::blocks_immediate_resume)
+    })
+}
+
 fn failure_owed(record: &InvocationRecord) -> bool {
     let stopped_by_others = record
         .local_cancellation

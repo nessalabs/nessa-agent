@@ -12,14 +12,15 @@ use super::view::{
     ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
     ConversationQuestion, ConversationQuestionEntry, ConversationReviewEntry,
     ConversationReviewKind, ConversationRuntime, ConversationSelectionView, ConversationTool,
-    ConversationTranscriptState, ConversationUnreadable, ConversationView, NativeHooksChoice,
-    MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationTranscriptState, ConversationUnreadable, ConversationUsageLimit,
+    ConversationUsageLimitProvider, ConversationUsageLimitRecovery, ConversationView,
+    NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::permissions::{
     ApprovalRuleReference, CancellationOrigin, DeclinedReview, PermissionCancellation,
 };
 use nessa_sdk::application::agent_execution::{
-    agents::AgentError,
+    agents::{AgentError, UsageLimit, UsageLimitProvider, UsageLimitRecovery},
     executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
     sessions::{
         CommittedSession, CommittedStatus, CurrentLease, CurrentLeaseState, InvocationRecord,
@@ -511,6 +512,89 @@ fn authentication_independent_failure(record: &InvocationRecord) -> bool {
         .and_then(|report| report.clone().into_result().err());
     report_error.as_ref().is_some_and(|error| error != refusal) || refusal != final_error
 }
+/// The saved usage limit. [`AgentError::usage_limit`] is the only walk of
+/// nested operation failures. A provider report owns the settlement when one
+/// was saved. Without one, that walk reads every position of an aggregate, so
+/// a limit carried only as `subsequent_error` is still the card. A diagnostic
+/// that merely mentions a limit is not one.
+fn usage_limit_refusal(record: &InvocationRecord) -> Option<&UsageLimit> {
+    let error = match record.provider_report.as_ref() {
+        Some(report) => report.provider_result()?.as_ref().err()?,
+        None => record.result.as_ref()?.as_ref().err()?,
+    };
+    error.usage_limit()
+}
+
+/// A typed usage limit kept a separate failure beside it.
+///
+/// The live settlement records the provider error as both the observation and
+/// the execution result. That wrap is still the usage limit. A different
+/// error, a successful execution beside the limit, storage after the turn, or
+/// hook failures after it are a second failure.
+fn usage_limit_independent_failure(record: &InvocationRecord) -> bool {
+    if usage_limit_refusal(record).is_none() {
+        return false;
+    }
+    let saved = record
+        .result
+        .as_ref()
+        .and_then(|result| result.as_ref().err())
+        .is_some_and(distinct_from_usage_limit);
+    let reported = record
+        .provider_report
+        .as_ref()
+        .and_then(|report| report.clone().into_result().err())
+        .as_ref()
+        .is_some_and(distinct_from_usage_limit);
+    saved || reported
+}
+
+/// Whether `error` contains a failure other than a usage limit.
+fn distinct_from_usage_limit(error: &AgentError) -> bool {
+    match error {
+        AgentError::UsageLimitReached(_) => false,
+        AgentError::ExecutionObservation {
+            error,
+            execution_result,
+        } => match execution_result.as_deref() {
+            Some(Ok(_)) => true,
+            Some(Err(failed)) => {
+                distinct_from_usage_limit(error) || distinct_from_usage_limit(failed)
+            }
+            None => distinct_from_usage_limit(error),
+        },
+        AgentError::MultipleOperationFailures {
+            first_error,
+            subsequent_error,
+        } => distinct_from_usage_limit(first_error) || distinct_from_usage_limit(subsequent_error),
+        AgentError::OperationAndCleanupFailure {
+            operation_error,
+            cleanup_error,
+        } => distinct_from_usage_limit(operation_error) || distinct_from_usage_limit(cleanup_error),
+        _ => true,
+    }
+}
+
+fn published_usage_limit(record: &InvocationRecord) -> Option<ConversationUsageLimit> {
+    Some(conversation_usage_limit(usage_limit_refusal(record)?))
+}
+
+fn conversation_usage_limit(limit: &UsageLimit) -> ConversationUsageLimit {
+    ConversationUsageLimit {
+        provider: match limit.provider() {
+            UsageLimitProvider::Claude => ConversationUsageLimitProvider::Claude,
+            UsageLimitProvider::Codex => ConversationUsageLimitProvider::Codex,
+        },
+        recovery: match limit.recovery() {
+            UsageLimitRecovery::TimedReset => ConversationUsageLimitRecovery::TimedReset,
+            UsageLimitRecovery::UserAction => ConversationUsageLimitRecovery::UserAction,
+            UsageLimitRecovery::Unknown => ConversationUsageLimitRecovery::Unknown,
+        },
+        resets_at_ms: limit.resets_at_ms(),
+        auto_resuming: None,
+    }
+}
+
 fn failure_notice(record: &InvocationRecord) -> Option<String> {
     let final_error = record.result.as_ref()?.as_ref().err()?;
     let report = record.provider_report.as_ref();
@@ -519,6 +603,9 @@ fn failure_notice(record: &InvocationRecord) -> Option<String> {
         .and_then(|result| result.as_ref().err());
     if authentication_refusal(record).is_some() {
         return authentication_independent_failure(record).then(|| REQUIRED_WORK_FAILURE.into());
+    }
+    if usage_limit_refusal(record).is_some() {
+        return usage_limit_independent_failure(record).then(|| REQUIRED_WORK_FAILURE.into());
     }
     let Some(AgentError::Provider {
         diagnostic: Some(diagnostic),
@@ -1035,6 +1122,7 @@ impl Projection {
         self.view.messages.push(ConversationMessage {
             authentication_required: None,
             required_work_failed: None,
+            usage_limit: None,
             parts: Vec::new(),
             steering_offset: None,
             event_count: 0,
@@ -1637,8 +1725,13 @@ impl Projection {
             .map(|_| true);
         self.view.messages[index].required_work_failed = (self.view.messages[index].status
             == ConversationMessageStatus::Failed
-            && authentication_independent_failure(record))
+            && (authentication_independent_failure(record)
+                || usage_limit_independent_failure(record)))
         .then_some(true);
+        self.view.messages[index].usage_limit = (self.view.messages[index].status
+            == ConversationMessageStatus::Failed)
+            .then_some(record)
+            .and_then(published_usage_limit);
         // An ask is offered only while its execution is the one running here.
         // A settled or restarted message drops it, and so does a turn that is
         // running but not active: the gap around liveness is not an open ask.

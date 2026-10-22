@@ -1367,6 +1367,24 @@ async fn conversations(
                 )
             })?,
     ));
+    let scheduled_messages_path = root.join("scheduled-chat-messages.sqlite3");
+    service.bind_scheduled_messages(Arc::new(
+        crate::conversation::infrastructure::LocalScheduledMessages::open(&scheduled_messages_path)
+            .map_err(|cause| {
+                RunError::opening(
+                    crate::core::Dataset::ScheduledMessages,
+                    &scheduled_messages_path,
+                    cause,
+                )
+            })?,
+    ));
+    service.bind_usage_limit_preference_policy(Arc::new(
+        crate::conversation::infrastructure::CedarUsageLimitPreferencePolicy::new().map_err(
+            |_| {
+                RunError::Agent("the usage-limit preference policy bundle does not validate".into())
+            },
+        )?,
+    ));
     let ownership_path = root.join("ownership.sqlite3");
     let ownership_store = Arc::new(
         SqliteOwnershipStore::open(&ownership_path)

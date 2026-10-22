@@ -6,9 +6,11 @@ mod opening_resources;
 mod owned_threads;
 use opening_resources::OpeningResources;
 mod parent_stop;
+mod scheduled_messages;
 mod thread_report_admission;
 mod thread_reports;
 mod workspace_windows;
+use self::mutation::SubmissionPermit;
 use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::source_permits::SourcePermits;
@@ -105,6 +107,13 @@ use nessa_sdk::domain::agent_execution::{
     sessions::{ExecutionSessionId, SessionId},
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
+pub(crate) use scheduled_messages::FENCE_LEASE_MS;
+pub use scheduled_messages::{
+    HistoryGeneration, PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt,
+    PreferenceReading, PreferenceUpdate, ReconcileRetry, RecordedPreference, ScheduleActor,
+    ScheduleDraft, ScheduleSettlement, ScheduledCommandEvidence, ScheduledMessage,
+    ScheduledMessageStore, SelectionChange, SelectionRequest, UnsettledEnable, UsageLimitSnapshot,
+};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -871,6 +880,26 @@ struct Inner {
     thread_admission: Arc<Mutex<()>>,
     ownership_preparations: Mutex<HashMap<SessionId, owned_threads::PendingPreparation>>,
 
+    /// One-shot continuations after a provider usage limit.
+    scheduled_messages: OnceLock<Arc<dyn scheduled_messages::ScheduledMessageStore>>,
+    /// Cedar for the gateway usage-limit preference. Unbound refuses the change.
+    preference_policy:
+        OnceLock<Arc<dyn super::usage_limit_policy::UsageLimitPreferencePolicyEvaluator>>,
+    /// Wakes the continuation loop when a row is accepted or the preference changes.
+    schedule_wakeup: Arc<Notify>,
+    /// Applied model changes whose continuation plan has not committed.
+    /// [`ConversationService::commit_applied_model_plan`] is the only writer.
+    /// A crash drops the set; catch-up runs the same plan while the preference is on.
+    model_reconcile_owed: std::sync::Mutex<HashSet<ConversationId>>,
+    /// Settlement plans that did not commit. The schedule database holds the
+    /// same debt when it accepted the write. This map is the copy written
+    /// when that write failed, so this process still retries it. A crash
+    /// drops it; the next start's catch-up plans every owner.
+    reconcile_retry_owed: std::sync::Mutex<HashMap<String, (u32, u64)>>,
+    /// A submit or an outcome whose retry row did not commit. Keyed by
+    /// execution id. The same backoff as a reconcile debt. A crash drops it;
+    /// the submitting row is still due, and the next pass records the retry.
+    submit_retry_owed: std::sync::Mutex<HashMap<String, (u32, u64)>>,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1396,6 +1425,12 @@ impl ConversationService {
                 ownership: OnceLock::new(),
                 thread_admission: Arc::new(Mutex::new(())),
                 ownership_preparations: Mutex::new(HashMap::new()),
+                scheduled_messages: OnceLock::new(),
+                preference_policy: OnceLock::new(),
+                schedule_wakeup: Arc::new(Notify::new()),
+                model_reconcile_owed: std::sync::Mutex::default(),
+                reconcile_retry_owed: std::sync::Mutex::default(),
+                submit_retry_owed: std::sync::Mutex::default(),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
@@ -3660,6 +3695,32 @@ impl ConversationService {
         writer: Writer,
         held: bool,
     ) -> Result<SubmissionReceipt, SubmitFailure> {
+        self.submit_admitted_as_permitted(
+            id,
+            caller,
+            execution_id,
+            message,
+            mode,
+            writer,
+            held,
+            None,
+        )
+        .await
+    }
+
+    /// Reuse the scheduler's selection lock without queueing behind ourselves.
+    #[allow(clippy::too_many_arguments)]
+    async fn submit_admitted_as_permitted(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        writer: Writer,
+        held: bool,
+        selection: Option<Arc<SubmissionPermit>>,
+    ) -> Result<SubmissionReceipt, SubmitFailure> {
         // A message that reaches an agent between a failed turn and its
         // recovery is refused with nothing taken (`Halt::Again`): the agent
         // is stopping, or would run it at a mode other than the
@@ -3675,7 +3736,7 @@ impl ConversationService {
         let deadline = std::time::Instant::now() + self.inner.deletion_budgets.stop;
         let carried = Carried::default();
         let (asked, outcome) = loop {
-            let (asked, submission) = self.submission_future(
+            let (asked, submission) = self.submission_future_permitted(
                 id.clone(),
                 caller.clone(),
                 execution_id.clone(),
@@ -3684,6 +3745,7 @@ impl ConversationService {
                 writer.clone(),
                 held,
                 carried.clone(),
+                selection.clone(),
             );
             let outcome = tokio::spawn(submission).await;
             if !matches!(outcome, Ok(Err(Halt::Again(_)))) || std::time::Instant::now() >= deadline
@@ -3708,6 +3770,7 @@ impl ConversationService {
     /// The submission task, shared by normal supervision and controlled polling
     /// in the desktop-stop ordering test. Refusal attribution stays on this task.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     fn submission_future(
         &self,
         id: ConversationId,
@@ -3718,6 +3781,35 @@ impl ConversationService {
         writer: Writer,
         held: bool,
         carried: Carried,
+    ) -> (
+        Arc<AtomicBool>,
+        impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
+    ) {
+        self.submission_future_permitted(
+            id,
+            caller,
+            execution_id,
+            message,
+            mode,
+            writer,
+            held,
+            carried,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn submission_future_permitted(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        writer: Writer,
+        held: bool,
+        carried: Carried,
+        selection: Option<Arc<SubmissionPermit>>,
     ) -> (
         Arc<AtomicBool>,
         impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
@@ -3736,7 +3828,12 @@ impl ConversationService {
             } else {
                 Some(service.admit().await?)
             };
-            let _mode = service.inner.mode_changes.lock(&id).await;
+            let _mode = if selection.is_some() {
+                None
+            } else {
+                Some(service.inner.mode_changes.lock(&id).await)
+            };
+            let _selection = selection;
             service.recover_mode_change(&id, &caller).await?;
             service.recover_model_change(&id, &caller).await?;
             service.refuse_pending_model_change(&id, &caller).await?;
@@ -3790,6 +3887,7 @@ impl ConversationService {
                     (owner, live) = service.resolve_opening(&id, &caller, true).await?;
                     reopened = true;
                 }
+                service.finish_agent_switch_before_submission(&id).await?;
                 // A submission the agent already has is the agent's to answer:
                 // the same message recovers its original delivery and any
                 // other is a conflict, whatever this conversation holds today.
@@ -5678,6 +5776,14 @@ impl ConversationService {
             // the summary's kind of failure, retried with the erasure.
             if let Err(error) = self.inner.environment.erase(&id).await {
                 failures.summary.get_or_insert(error);
+            }
+            if let Some(store) = self.inner.scheduled_messages.get() {
+                if let Err(error) = store
+                    .erase_conversation(&id.to_string(), self.inner.clock.unix_milliseconds())
+                    .await
+                {
+                    failures.schedule = Some(error);
+                }
             }
         }
         drop(lease);

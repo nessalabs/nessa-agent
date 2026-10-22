@@ -43,6 +43,13 @@ pub enum MutationOutcome {
     /// Saved only from `Attempted`. A retry returns this receipt and does not
     /// perform the effect again.
     NoEffect,
+    /// Classification refused the command before its effect was attempted.
+    /// A delayed caller replays this terminal without authorizing an effect.
+    RefusedBeforeAttempt,
+    /// Selection of another model refused this unattempted submit.
+    ModelChangedBeforeAttempt,
+    /// Selection of another agent refused this unattempted submit.
+    AgentChangedBeforeAttempt,
     /// The submit saved the turn and then refused before injection.
     ///
     /// Saved only from `Attempted`. A retry returns this receipt and does not
@@ -143,8 +150,11 @@ impl MutationReceipt {
     /// Make the next immutable progress record.
     ///
     /// `Accepted` may become `Attempted` with no outcome, or `Settled` with
-    /// [`MutationOutcome::AlreadyFinal`] when classification proved nothing
-    /// would be sent. `Attempted` may become `Settled` with the effect's outcome,
+    /// [`MutationOutcome::AlreadyFinal`], [`MutationOutcome::RefusedBeforeAttempt`],
+    /// [`MutationOutcome::ModelChangedBeforeAttempt`], or
+    /// [`MutationOutcome::AgentChangedBeforeAttempt`] when classification proved
+    /// nothing would be sent. `Attempted` may become
+    /// `Settled` with the effect's outcome,
     /// including [`MutationOutcome::NoEffect`] when the effect refused before
     /// it enqueued or injected anything, [`MutationOutcome::RefusedAfterSave`]
     /// when a saved steer was refused before injection, and
@@ -177,7 +187,12 @@ impl MutationReceipt {
                 | (
                     MutationStage::Accepted,
                     MutationStage::Settled,
-                    Some(MutationOutcome::AlreadyFinal)
+                    Some(
+                        MutationOutcome::AlreadyFinal
+                            | MutationOutcome::RefusedBeforeAttempt
+                            | MutationOutcome::ModelChangedBeforeAttempt
+                            | MutationOutcome::AgentChangedBeforeAttempt
+                    )
                 )
         );
         if !legal {
@@ -198,6 +213,13 @@ pub enum MutationPlan {
     Effect,
     /// The turn is already final. Save `Settled(AlreadyFinal)` and send nothing.
     AlreadyFinal,
+    /// Refuse an unattempted effect and save `Settled(RefusedBeforeAttempt)` under the
+    /// request lease. A delayed original caller then replays that receipt.
+    NoEffect,
+    /// Refuse before attempting because the model changed.
+    ModelChanged,
+    /// Refuse before attempting because the agent changed.
+    AgentChanged,
 }
 
 /// Failure retains uncertainty separately from the host's typed cause.
@@ -306,12 +328,23 @@ impl MutationCoordinator {
                         .await
                         .map_err(MutationFailure::Target)?
                     {
-                        MutationPlan::AlreadyFinal => {
+                        plan @ (MutationPlan::AlreadyFinal
+                        | MutationPlan::NoEffect
+                        | MutationPlan::ModelChanged
+                        | MutationPlan::AgentChanged) => {
+                            let outcome = match plan {
+                                MutationPlan::AlreadyFinal => MutationOutcome::AlreadyFinal,
+                                MutationPlan::NoEffect => MutationOutcome::RefusedBeforeAttempt,
+                                MutationPlan::ModelChanged => {
+                                    MutationOutcome::ModelChangedBeforeAttempt
+                                }
+                                MutationPlan::AgentChanged => {
+                                    MutationOutcome::AgentChangedBeforeAttempt
+                                }
+                                MutationPlan::Effect => unreachable!(),
+                            };
                             let settled = receipt
-                                .advance(
-                                    MutationStage::Settled,
-                                    Some(MutationOutcome::AlreadyFinal),
-                                )
+                                .advance(MutationStage::Settled, Some(outcome))
                                 .map_err(|error| MutationFailure::Storage(error.into()))?;
                             lease
                                 .save_mutation(settled.clone())

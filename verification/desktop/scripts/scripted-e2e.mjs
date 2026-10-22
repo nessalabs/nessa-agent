@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * One signed-out command for the gateway-backed checks (#510). It builds
+ * One signed-out command for native resize and gateway-backed checks (#510). It builds
  * `nessa-server`, starts each check with the scripted agent, and runs it in
  * Chromium and WebKit. stdout is one verdict line. The short summary for a
  * pull request body is printed on stderr and written to `pr-summary.md` in
@@ -43,12 +43,12 @@ const help = `test:e2e:scripted — gateway-backed checks, signed out, Chromium 
 
 Usage: node verification/desktop/scripts/scripted-e2e.mjs [--mode dev|prod] [--evidence <dir>] [--agent claude|codex] [--channel <name>]
 
-Builds nessa-server, then runs mcp-apps-gateway --scripted, gateway-window
---scripted, and scripted-scenarios. stdout is one JSON verdict line. The
+Builds nessa-server, then runs resize-observers, mcp-apps-gateway --scripted,
+gateway-window --scripted, and scripted-scenarios. stdout is one JSON verdict line. The
 summary is on stderr and in <evidence>/pr-summary.md.
 
 --mode prod skips mcp-apps-gateway (not run: dev server only) and runs the
-other two against a production preview. --channel is chrome (installed
+other checks against a production preview. --channel is chrome (installed
 Google Chrome) or bundled (Playwright's Chromium), default
 $NESSA_BROWSER_CHANNEL else chrome, and is forwarded to each check. Exit 0 pass, 1 fail, 2 could-not-run.
 `
@@ -83,6 +83,7 @@ function readJson(path) {
 }
 
 const checks = [
+  { name: "resize-observers", gateway: false, layout: "columns,sidebar", args: [] },
   {
     name: "mcp-apps-gateway",
     args: ["--scripted"],
@@ -164,10 +165,11 @@ for (const check of checks) {
   const status = await child(
     scriptedCheckArgs({
       script: join(scripts, `${check.name}.mjs`),
-      agent: values.agent,
+      agent: check.gateway === false ? undefined : values.agent,
+      layout: check.layout,
       mode: values.mode,
       channel: values.channel,
-      evidence: dir,
+      evidence: check.gateway === false ? undefined : dir,
       shots: join(dir, "shots"),
       out,
       extra: check.args,

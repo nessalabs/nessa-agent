@@ -295,6 +295,7 @@ async fn worker_with_ready_frames_boundary(
             permission_sequence: Arc::new(AtomicU64::new(0)),
             question_sequence: Arc::new(AtomicU64::new(0)),
             active: None,
+            observed_rate_limit: Default::default(),
             steering: None,
             steering_supported: true,
             agent_accepts_images: false,

@@ -131,6 +131,25 @@ it("correlates an acknowledged mode change and rejects a mismatched reply", asyn
     api.setApprovalMode(conversationId, "auto", { requestId: "mode-1" }),
   ).rejects.toBeInstanceOf(NessaConversationControlError)
 })
+
+it("sets the gateway usage-limit preference without naming a conversation", async () => {
+  const request = vi.fn().mockResolvedValue({ requestId: "pref-1", enabled: true })
+  const api = createConversationApi({ request }, () => "id")
+  await expect(
+    api.setUsageLimitAutoContinue(true, { requestId: "pref-1" }),
+  ).resolves.toEqual({
+    requestId: "pref-1",
+    enabled: true,
+  })
+  expect(request).toHaveBeenCalledWith("conversation.setUsageLimitAutoContinue", {
+    requestId: "pref-1",
+    enabled: true,
+  })
+  request.mockResolvedValue({ requestId: "pref-1", enabled: false })
+  await expect(
+    api.setUsageLimitAutoContinue(true, { requestId: "pref-1" }),
+  ).rejects.toThrow(/contradicts/)
+})
 it("validates attachment lifecycle fields and their cross-field agreement", async () => {
   const api = createConversationApi(
     { request: vi.fn().mockResolvedValue(view) },

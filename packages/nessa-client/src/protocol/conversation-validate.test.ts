@@ -1269,6 +1269,100 @@ it("accepts typed authentication only on a failed turn and rejects untyped value
   ).toThrow(/required-work failure/)
 })
 
+it("accepts required work beside a usage limit on a failed turn", () => {
+  const sample = view()
+  const limited = {
+    ...sample,
+    messages: [
+      {
+        ...sample.messages[1],
+        parts: [],
+        status: "failed",
+        error: "The turn could not complete all required work.",
+        requiredWorkFailed: true,
+        usageLimit: {
+          provider: "claude",
+          recovery: "timed_reset",
+          resetsAtMs: 1_800_000_000_000,
+        },
+      },
+    ],
+    pending: [],
+    permissions: [],
+    questions: [],
+    tools: [],
+  }
+  const message = conversationView(limited, "conversation").messages[0]
+  expect(message?.requiredWorkFailed).toBe(true)
+  expect(message?.usageLimit).toMatchObject({
+    provider: "claude",
+    recovery: "timed_reset",
+    resetsAtMs: 1_800_000_000_000,
+  })
+  expect(message?.authenticationRequired).toBeUndefined()
+  expect(() =>
+    conversationView(
+      {
+        ...limited,
+        messages: [{ ...limited.messages[0], error: undefined }],
+      },
+      "conversation",
+    ),
+  ).toThrow(/required-work failure/)
+  expect(() =>
+    conversationView(
+      {
+        ...limited,
+        messages: [
+          {
+            ...limited.messages[0],
+            usageLimit: undefined,
+          },
+        ],
+      },
+      "conversation",
+    ),
+  ).toThrow(/required-work failure/)
+})
+
+it("accepts the inclusive reset bound the schema publishes", () => {
+  const sample = view()
+  const limited = (resetsAtMs: number) => ({
+    ...sample,
+    messages: [
+      {
+        ...sample.messages[1],
+        parts: [],
+        status: "failed",
+        error: "Usage limit reached.",
+        usageLimit: {
+          provider: "claude",
+          recovery: "timed_reset",
+          resetsAtMs,
+        },
+      },
+    ],
+    pending: [],
+    permissions: [],
+    questions: [],
+    tools: [],
+  })
+  expect(
+    conversationView(limited(4_102_444_800_000), "conversation").messages[0]?.usageLimit
+      ?.resetsAtMs,
+  ).toBe(4_102_444_800_000)
+  expect(
+    conversationView(limited(1_704_067_200_000), "conversation").messages[0]?.usageLimit
+      ?.resetsAtMs,
+  ).toBe(1_704_067_200_000)
+  expect(() => conversationView(limited(4_102_444_800_001), "conversation")).toThrow(
+    /reset instant/,
+  )
+  expect(() => conversationView(limited(1_704_067_199_999), "conversation")).toThrow(
+    /reset instant/,
+  )
+})
+
 function protocolFile(path: string) {
   return JSON.parse(
     readFileSync(

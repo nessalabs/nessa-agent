@@ -23,7 +23,9 @@ use crate::conversation::{
         PermissionDenialSupport, MAX_STRUCTURED_CONTENT_BYTES,
     },
 };
-use nessa_sdk::application::agent_execution::agents::{AgentError, ProviderDiagnostic};
+use nessa_sdk::application::agent_execution::agents::{
+    AgentError, ProviderDiagnostic, UsageLimitKind, UsageLimitProvider,
+};
 use nessa_sdk::application::agent_execution::executions::{
     ExecutionController, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
     SubmissionMode as InvocationSubmissionMode,
@@ -2260,6 +2262,147 @@ fn authentication_recovery_keeps_independent_required_work_failure() {
             independent.as_ref().map(|_| true)
         );
     }
+}
+
+#[test]
+fn a_usage_limit_is_published_without_the_provider_failure_sentence() {
+    let limit = nessa_sdk::application::agent_execution::agents::UsageLimit::timed_reset(
+        UsageLimitProvider::Claude,
+        UsageLimitKind::FiveHour,
+        1_800_000_000_000,
+        Some(ProviderDiagnostic::new("You've hit your limit")),
+    );
+    let report = ExecutionReport::new(
+        Some(Err(AgentError::UsageLimitReached(limit))),
+        None,
+        ProviderSessionState::Usable,
+    );
+    let mut snapshot = review_snapshot(Vec::new());
+    snapshot.invocations[0].result = Some(report.clone().into_result());
+    snapshot.invocations[0].provider_report = Some(report);
+    let message = &Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        },
+        Some(&snapshot),
+    )
+    .read()
+    .messages[0];
+    let usage = message.usage_limit.as_ref().expect("usage limit");
+    assert_eq!(
+        usage.provider,
+        crate::conversation::view::ConversationUsageLimitProvider::Claude
+    );
+    assert_eq!(
+        usage.recovery,
+        crate::conversation::view::ConversationUsageLimitRecovery::TimedReset
+    );
+    assert_eq!(usage.resets_at_ms, Some(1_800_000_000_000));
+    assert_eq!(usage.auto_resuming, None);
+    assert_eq!(message.error, None);
+    assert_eq!(message.required_work_failed, None);
+    assert_eq!(message.status, ConversationMessageStatus::Failed);
+}
+
+#[test]
+fn a_usage_limit_wrapped_as_its_own_observation_is_not_a_second_failure() {
+    let reached = AgentError::UsageLimitReached(weekly_limit());
+    let report = ExecutionReport::new(
+        Some(Err(reached.clone())),
+        None,
+        ProviderSessionState::Usable,
+    );
+    let mut snapshot = review_snapshot(Vec::new());
+    snapshot.invocations[0].result = Some(Err(AgentError::ExecutionObservation {
+        error: Box::new(reached.clone()),
+        execution_result: Some(Box::new(Err(reached))),
+    }));
+    snapshot.invocations[0].provider_report = Some(report);
+    let message = &project_snapshot(&snapshot).messages[0];
+    assert!(message.usage_limit.is_some());
+    assert_eq!(message.error, None);
+    assert_eq!(message.required_work_failed, None);
+}
+
+#[test]
+fn a_usage_limit_keeps_a_different_failure_beside_it() {
+    let reached = AgentError::UsageLimitReached(weekly_limit());
+    let report = ExecutionReport::new(
+        Some(Err(reached.clone())),
+        None,
+        ProviderSessionState::Usable,
+    );
+    for result in [
+        AgentError::ExecutionObservation {
+            error: Box::new(AgentError::Protocol(
+                "terminal observation contradicts execution settlement".into(),
+            )),
+            execution_result: Some(Box::new(Err(reached.clone()))),
+        },
+        AgentError::StorageAfterExecution {
+            error: StorageError::Busy,
+            execution_result: Box::new(Err(reached.clone())),
+        },
+    ] {
+        let mut snapshot = review_snapshot(Vec::new());
+        snapshot.invocations[0].result = Some(Err(result));
+        snapshot.invocations[0].provider_report = Some(report.clone());
+        let message = &project_snapshot(&snapshot).messages[0];
+        assert!(message.usage_limit.is_some());
+        assert_eq!(
+            message.error.as_deref(),
+            Some("The turn could not complete all required work.")
+        );
+        assert_eq!(message.required_work_failed, Some(true));
+    }
+}
+
+#[test]
+fn a_usage_limit_in_a_later_aggregate_error_is_published_without_a_provider_report() {
+    let reached = AgentError::UsageLimitReached(weekly_limit());
+    let mut snapshot = review_snapshot(Vec::new());
+    snapshot.invocations[0].result = Some(Err(AgentError::MultipleOperationFailures {
+        first_error: Box::new(AgentError::Protocol("provider had no report".into())),
+        subsequent_error: Box::new(reached),
+    }));
+    snapshot.invocations[0].provider_report = None;
+    let message = &project_snapshot(&snapshot).messages[0];
+    let usage = message.usage_limit.as_ref().expect("usage limit");
+    assert_eq!(
+        usage.provider,
+        crate::conversation::view::ConversationUsageLimitProvider::Claude
+    );
+    assert_eq!(message.required_work_failed, Some(true));
+}
+
+fn weekly_limit() -> nessa_sdk::application::agent_execution::agents::UsageLimit {
+    nessa_sdk::application::agent_execution::agents::UsageLimit::unknown(
+        UsageLimitProvider::Claude,
+        UsageLimitKind::Unspecified,
+        Some(ProviderDiagnostic::new("You've hit your weekly limit")),
+    )
+}
+
+fn project_snapshot(snapshot: &SessionSnapshot) -> ConversationView {
+    Projection::new(
+        "conversation".into(),
+        ConversationCapabilities {
+            queue: true,
+            steer: true,
+            resume: false,
+            permissions: true,
+            image_input: false,
+            agent_features: OperationCapabilities::default().into(),
+        },
+        Some(snapshot),
+    )
+    .read()
 }
 
 fn shown(events: Vec<ExecutionEvent>) -> ConversationView {

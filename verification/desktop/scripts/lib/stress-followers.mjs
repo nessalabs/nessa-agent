@@ -316,12 +316,20 @@ export class Follower {
             return
           // The gateway restarting, or this connection dropping, ends the
           // probe: it asks again on a later round.
-          if (error?.code === "temporarily_unavailable" || !isRefusal(error)) return
+          // A retiring owner admits no new read until its release is
+          // acknowledged. This interrupted probe claims no capacity proof;
+          // the next stable probe and pool reopen must still succeed.
+          if (
+            error?.code === "temporarily_unavailable" ||
+            error?.code === "conversation_closed" ||
+            !isRefusal(error)
+          )
+            return
           if (n === room && error?.code === "subscription_capacity")
             this.counts.refusedAsExpected += 1
           else
             this.fail(
-              `subscription ${this.held() + n + 1} of ${this.limits.conversationTargets} failed ${error?.code ?? error?.message}`,
+              `subscription ${this.held() + n + 1} of ${this.limits.conversationTargets} for ${others[n]} failed ${error?.code ?? error?.message}`,
             )
           return
         }

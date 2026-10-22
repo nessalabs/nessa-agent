@@ -69,6 +69,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
           .join(""),
         authenticationRequired: message.authenticationRequired,
         ...(message.requiredWorkFailed === true ? { requiredWorkFailed: true } : {}),
+        ...(message.usageLimit === undefined ? {} : { usageLimit: message.usageLimit }),
         status: message.error ?? message.status,
       })
     }
@@ -157,6 +158,9 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       unreadable: view.unreadable,
       unreadableTruncated: view.unreadableTruncated,
       approvalMode: view.approvalMode,
+      ...(view.usageLimitAutoContinue === undefined
+        ? {}
+        : { usageLimitAutoContinue: view.usageLimitAutoContinue }),
       approvalModes: view.approvalModes,
       approvalModeChange: view.approvalModeChange,
       running: view.messages.some((message) => message.status === "running"),

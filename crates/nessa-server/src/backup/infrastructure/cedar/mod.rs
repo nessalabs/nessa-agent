@@ -6,6 +6,7 @@
 //!                   loads and strictly validates schema.json + policies.cedar,
 //!                   every policy carrying an @id
 //! application ──▶ InventoryCapturePolicyEvaluator::evaluate(InventoryFacts)
+//!                 RestorePolicyEvaluator::evaluate(RestoreFacts)
 //!                   evaluator.rs: kind ──▶ a Principal entity
 //!                   cause ──▶ context
 //!                   record or capture ──▶ the action

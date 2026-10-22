@@ -59,7 +59,7 @@ use nessa_sdk::domain::effective_capabilities::value_objects::{
 };
 use nessa_sdk::domain::model_metadata::entities::ModelMetadata;
 use nessa_sdk::domain::model_metadata::value_objects::{EffortLevel, Modalities, ModelFeatures};
-use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
+pub(crate) use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -997,6 +997,25 @@ impl ConversationListing for MemoryListing {
             Ok(listed)
         })
     }
+    fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>> {
+        let mut owners = Vec::new();
+        for record in self.repository.records.lock().unwrap().values() {
+            if record.deletion().is_some() {
+                continue;
+            }
+            let pair = (record.organization().clone(), record.owner().clone());
+            if !owners.contains(&pair) {
+                owners.push(pair);
+            }
+        }
+        owners.sort_by(|left, right| {
+            left.0
+                .as_str()
+                .cmp(right.0.as_str())
+                .then_with(|| left.1.as_str().cmp(right.1.as_str()))
+        });
+        Box::pin(async move { Ok(owners) })
+    }
     fn observe(
         &self,
         organization: &OrganizationId,
@@ -1067,6 +1086,9 @@ impl ConversationListing for Unlisted {
         _: bool,
         _: Option<ObservationCursor>,
     ) -> ConversationFuture<'_, ObservedConversations> {
+        Box::pin(async { Err(ConversationError::Metadata) })
+    }
+    fn owners(&self) -> ConversationFuture<'_, Vec<(OrganizationId, PrincipalId)>> {
         Box::pin(async { Err(ConversationError::Metadata) })
     }
 }
@@ -1501,6 +1523,17 @@ impl ConversationAttachments for MemoryAttachments {
             Ok(ArtifactKept::Held)
         })
     }
+}
+
+/// The in-process environment a service fixture runs commands in.
+pub(crate) fn in_process_environment() -> crate::conversation::application::Environments {
+    crate::conversation::infrastructure::in_process_environment().into()
+}
+
+/// The clock a message commit records with when a test has no frozen clock.
+pub(crate) fn runtime_message_commit_clock(
+) -> Arc<dyn nessa_sdk::application::agent_execution::sessions::MessageCommitClock> {
+    Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new())
 }
 
 /// The deletion budgets every test service runs with. Test values, not the

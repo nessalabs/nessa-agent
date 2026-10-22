@@ -609,6 +609,27 @@ async fn a_failure_a_retry_cannot_fix_ends_the_turn() {
 }
 
 #[tokio::test]
+async fn a_usage_limit_does_not_resume_the_failed_turn_or_the_turn_behind_it() {
+    let (agent, backend, _storage) = failed_with(AgentError::UsageLimitReached(
+        nessa_sdk::application::agent_execution::agents::UsageLimit::unknown(
+            nessa_sdk::application::agent_execution::agents::UsageLimitProvider::Claude,
+            nessa_sdk::application::agent_execution::agents::UsageLimitKind::SevenDay,
+            None,
+        ),
+    ))
+    .await;
+    assert!(
+        agent.owed_turns().await.is_empty(),
+        "a usage limit spends no resume before the window resets"
+    );
+    assert!(
+        resumptions(&backend).is_empty(),
+        "nothing was resumed while the limit was in force"
+    );
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
 async fn a_declined_failed_turn_is_recorded_ended() {
     let (agent, backend, storage) = failed_with(AgentError::Deadline).await;
     let owed = agent.owed_turns().await;

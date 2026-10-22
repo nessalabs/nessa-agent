@@ -180,6 +180,7 @@ fn deletion(out: &mut String, failures: &DeletionFailures) {
         audit,
         attachments,
         summary,
+        schedule,
         tombstone,
         interrupted,
         another_attempt,
@@ -196,6 +197,7 @@ fn deletion(out: &mut String, failures: &DeletionFailures) {
         ("audit", audit),
         ("attachments", attachments),
         ("summary", summary),
+        ("schedule", schedule),
         ("tombstone", tombstone),
     ] {
         if let Some(error) = failure {
@@ -304,6 +306,15 @@ fn agent(out: &mut String, error: &AgentError) {
         A::StalePermission => "stale-permission",
         A::Protocol(_) => "protocol",
         A::AuthenticationRequired { .. } => "authentication-required",
+        A::UsageLimitReached(limit) => {
+            let mut group = Group::new(out, "usage-limit");
+            let _ = write!(group.cause("provider"), "{:?}", limit.provider());
+            let _ = write!(group.cause("recovery"), "{:?}", limit.recovery());
+            if let Some(resets_at_ms) = limit.resets_at_ms() {
+                let _ = write!(group.cause("resets-at-ms"), "{resets_at_ms}");
+            }
+            return group.end();
+        }
         A::Provider { code, .. } => {
             let mut group = Group::new(out, "provider");
             let _ = write!(group.cause("code"), "{code}");

@@ -1,0 +1,168 @@
+{
+  "check": "combined usage-limit continuation and agent handoff/fork conversation stress",
+  "ok": true,
+  "sourceCommit": "33e4da2ea35272e41648fa33f7f9a06d4773f93e",
+  "mergedMain": "8981771f4035d285449c6ea2fc25c84ecfddbace",
+  "runtime": {
+    "engine": "chromium",
+    "layout": "columns",
+    "browser": "installed system Chromium",
+    "childReaper": "existing verified PS-scanning subreaper",
+    "gateway": "fresh nessa-server debug build of frozen integration source"
+  },
+  "frozenRuntimeAndSourceFilesUnchangedAcrossBothRuns": true,
+  "sha256": {
+    "src/desktop/workspace/adapters/gateway/gateway-source.ts": "2c36d2b729a645e9a15f27bce963d1109ce8c66f15fc7ba7b0cc49565398014c",
+    "src/conversation/adapters/gateway/effects.ts": "fec3768c70fb2f3af09f6094a2a7a8db5ab6f4bddf6bb4704f5e682ca4e94214",
+    "src/conversation/ui/usage-limit-card.tsx": "4d120a878cdf75314a013f766b03e709f66837789afe8ca791d42a6c21b827e6",
+    "verification/desktop/scripts/lib/stress-followers.mjs": "b732d37a597fb18788e96fba9183e204bea840f4051e951fac43308f3fe2e4ca",
+    "verification/desktop/scripts/lib/stress-plan.mjs": "72195d86a9ee94e333654dcefbc7cc963fc4c454d0a5163264be1c2cd88779fe",
+    "verification/desktop/scripts/conversation-stress.mjs": "2243efa7753201d53acc6da9cc776c3204eccc948814995f8cd1400976bb5aab",
+    "target/debug/nessa": "4b07f9e74d254c8f6837148566ac9e1cf08c1db6e99b8f7c54a125c755a07e8d"
+  },
+  "environmentOverrides": {
+    "MCP_LIVE_NESSA": false,
+    "NESSA_STRESS": []
+  },
+  "runs": [
+    {
+      "name": "default",
+      "ok": true,
+      "started": "2026-10-22T05:02:57.692Z",
+      "finished": "2026-10-22T05:06:25.429Z",
+      "command": "<verified-child-subreaper> node --import <installed-system-chromium-preload> verification/desktop/scripts/conversation-stress.mjs --engine chromium --layout columns --channel bundled --evidence <private-evidence-dir> --out <private-result-json>",
+      "knobs": {
+        "modelSwitches": 1,
+        "seed": 1,
+        "rounds": 16,
+        "asides": 2,
+        "parallel": 2,
+        "turns": 3,
+        "switches": 3,
+        "stops": 2,
+        "fails": 1,
+        "usageLimits": 1,
+        "reviews": 20,
+        "large": 1,
+        "restarts": 1,
+        "threads": 1,
+        "awaits": 1,
+        "watches": 1,
+        "followers": 2,
+        "parks": 1,
+        "renames": 1,
+        "handoffs": 1,
+        "deletes": 1,
+        "fresh": 2,
+        "windows": 1,
+        "rails": 1,
+        "linkings": 1,
+        "tables": 1,
+        "notices": 1,
+        "pools": 1,
+        "drifts": 1,
+        "upgrades": 1,
+        "launches": 1,
+        "long": 30
+      },
+      "result": {
+        "passed": 42,
+        "total": 42,
+        "plannedStepsPassed": 38,
+        "usageLimitSteps": ["011 usageLimit"],
+        "followingUsageLimitReplySteps": ["012 reply"],
+        "handoffAndForkSteps": ["038 handoff"],
+        "backgroundPassed": true,
+        "atRestPassed": true,
+        "followersPassed": true,
+        "consolePassed": true
+      },
+      "followers": [
+        {
+          "conversations": 7,
+          "churned": 160,
+          "resumed": 54,
+          "lagging": 0,
+          "refusedAsExpected": 27
+        },
+        {
+          "conversations": 7,
+          "churned": 155,
+          "resumed": 50,
+          "lagging": 0,
+          "refusedAsExpected": 24
+        }
+      ]
+    },
+    {
+      "name": "raised",
+      "ok": true,
+      "started": "2026-10-22T05:06:34.985Z",
+      "finished": "2026-10-22T05:09:42.269Z",
+      "command": "<verified-child-subreaper> node --import <installed-system-chromium-preload> verification/desktop/scripts/conversation-stress.mjs --engine chromium --layout columns --channel bundled --usageLimits 3 --handoffs 2 --rounds 24 --evidence <private-evidence-dir> --out <private-result-json>",
+      "knobs": {
+        "modelSwitches": 1,
+        "seed": 1,
+        "rounds": 24,
+        "asides": 2,
+        "parallel": 2,
+        "turns": 3,
+        "switches": 3,
+        "stops": 2,
+        "fails": 1,
+        "usageLimits": 3,
+        "reviews": 20,
+        "large": 1,
+        "restarts": 1,
+        "threads": 1,
+        "awaits": 1,
+        "watches": 1,
+        "followers": 2,
+        "parks": 1,
+        "renames": 1,
+        "handoffs": 2,
+        "deletes": 1,
+        "fresh": 2,
+        "windows": 1,
+        "rails": 1,
+        "linkings": 1,
+        "tables": 1,
+        "notices": 1,
+        "pools": 1,
+        "drifts": 1,
+        "upgrades": 1,
+        "launches": 1,
+        "long": 30
+      },
+      "result": {
+        "passed": 48,
+        "total": 48,
+        "plannedStepsPassed": 44,
+        "usageLimitSteps": ["016 usageLimit", "024 usageLimit", "027 usageLimit"],
+        "followingUsageLimitReplySteps": ["017 reply", "025 reply", "028 reply"],
+        "handoffAndForkSteps": ["043 handoff", "044 handoff"],
+        "backgroundPassed": true,
+        "atRestPassed": true,
+        "followersPassed": true,
+        "consolePassed": true
+      },
+      "followers": [
+        {
+          "conversations": 7,
+          "churned": 161,
+          "resumed": 58,
+          "lagging": 0,
+          "refusedAsExpected": 22
+        },
+        {
+          "conversations": 7,
+          "churned": 152,
+          "resumed": 57,
+          "lagging": 0,
+          "refusedAsExpected": 21
+        }
+      ]
+    }
+  ],
+  "privacy": "Raw gateway, ACP, MCP, conversation views, temporary endpoints, screenshots, and credentials are excluded."
+}

@@ -211,6 +211,7 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
         audit,
         attachments,
         summary,
+        schedule,
         tombstone,
         interrupted,
         another_attempt,
@@ -221,6 +222,7 @@ fn deletion_incomplete(failures: &DeletionFailures) -> ConversationErrorCode {
         && provider.is_none()
         && !no_agent_slot
         && summary.is_none()
+        && schedule.is_none()
         && tombstone.is_none()
         && !interrupted
         && !another_attempt

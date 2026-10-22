@@ -343,7 +343,44 @@ it("resizes, evens and fits through the source", async () => {
   expect(fake.asked.equalized).toBe(1)
   const fitted = fake.asked.fitted
   await act(async () => observed.find((each) => each.target === grid())?.resized())
+  await frames.run()
   expect(fake.asked.fitted).toBe(fitted + 1)
+})
+
+it("fits outside resize delivery and coalesces notifications before that frame", async () => {
+  const fake = fakeSource(two())
+  await mounted(fake)
+  const resize = observed.find((each) => each.target === grid())?.resized
+  if (!resize) throw new Error("grid is not observed")
+  await act(async () => {
+    resize()
+    resize()
+  })
+  // The workspace's first fit starts its own geometry observer on this grid.
+  // Starting it inside this broadcast produces a skipped same-depth observation.
+  expect(fake.asked.fitted).toBe(0)
+  await frames.run()
+  expect(fake.asked.fitted).toBe(1)
+})
+
+it("retires queued and late fits when the source changes or the grid unmounts", async () => {
+  const first = fakeSource(two())
+  await mounted(first)
+  const retired = observed.find((each) => each.target === grid())?.resized
+  if (!retired) throw new Error("grid is not observed")
+  const current = fakeSource(two())
+  await mounted(current)
+  await act(async () => retired())
+  await frames.run()
+  expect(first.asked.fitted).toBe(0)
+  const resize = observed.find((each) => each.target === grid())?.resized
+  if (!resize) throw new Error("replacement grid is not observed")
+  await act(async () => resize())
+  await act(async () => root.unmount())
+  root = createRoot(host)
+  await act(async () => resize())
+  await frames.run()
+  expect(current.asked.fitted).toBe(0)
 })
 
 it("asks nothing of an edge moved with no room measured, or with the layout gone", async () => {

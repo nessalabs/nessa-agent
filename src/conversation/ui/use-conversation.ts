@@ -23,6 +23,7 @@ import {
   setDraft,
   setSelection,
   controlConversation,
+  setUsageLimitAutoContinue,
   stopGenerating,
   followConversation,
   unfollowConversation,
@@ -54,6 +55,8 @@ export function useConversation() {
   return {
     setApprovalMode: (id: string, mode: ApprovalMode) =>
       dispatch(controlConversation({ id, control: { kind: "setApprovalMode", mode } })),
+    setUsageLimitAutoContinue: (enabled: boolean) =>
+      dispatch(setUsageLimitAutoContinue(enabled)).unwrap(),
     setSelection: (id: string, selection: ConversationSelection) =>
       dispatch(setSelection({ id, selection })),
     rename: (id: string, title: string) => dispatch(renameConversation({ id, title })),

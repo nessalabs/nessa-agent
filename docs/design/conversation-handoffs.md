@@ -41,6 +41,7 @@ sequenceDiagram
     participant W as Window
     participant G as Gateway (service/handoffs.rs)
     participant J as agent_switches (metadata)
+    participant L as Usage-limit schedule store
     participant A as Agent being left
     participant B as New agent (SDK)
     W->>G: conversation.switchAgent(agent, model, requestId)
@@ -53,6 +54,7 @@ sequenceDiagram
     B->>B: prepare: new native session, history records the handoff
     G->>G: settle: does the committed history hold the handoff?
     G->>B: not yet: stop every agent of the requested provider, then ask again
+    G->>L: if made, commit original-request causal invalidation
     G->>J: finish: applied (conversation row takes agent + model) or not applied
     G-->>W: {applied}
     W->>G: next message
@@ -70,6 +72,11 @@ history on one agent and the conversation on another.
 The handoff's id is made from the request (`HandoffId::of`), so the opening
 that carries it on records the same handoff the first one would have, never
 a second.
+
+An applied switch also follows the selection-invalidation and newer-turn
+admission ordering in [usage-limit continuation](usage-limit-continuation.md#agent-switching-and-selection-invalidation).
+Its pending request retains the original caller; an invalidation failure keeps
+the switch pending and prevents admission of a newer turn until settlement.
 
 ## Fork
 
