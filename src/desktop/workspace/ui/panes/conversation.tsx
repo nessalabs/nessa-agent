@@ -196,13 +196,13 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
       : modelControl?.pending?.status === "recovery_required" ||
           modelChoice?.state === "recovery_required" ||
           modelChoice?.state === "acknowledged"
-        ? "The model change is not confirmed. Choose again to check and try."
+        ? "The model change is not confirmed. Send again to check and try."
         : modelBusy
           ? "Changing model…"
           : modelChoice?.state === "refused"
             ? modelChoice.code === "model_change_not_applied"
               ? "Model didn’t change. Choose again to try."
-              : "The model change could not be confirmed. Choose again to check and try."
+              : "The model change could not be confirmed. Send again to check and try."
             : modelControl?.effect === "nextTurn"
               ? "Model applies to the next turn."
               : modelControl?.effect === "subsequentResponses"

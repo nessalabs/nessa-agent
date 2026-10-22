@@ -1658,7 +1658,19 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         let receipt: Awaited<ReturnType<GatewayClient["conversation"]["setModel"]>>
         try {
           await reconcile()
-          if (agent) {
+          // Already what the conversation runs, read fresh just now (a pick
+          // applied once, sent again before the summary said so): nothing
+          // is asked again.
+          const fresh = reads.get(sessionId)?.view
+          const running = knownModel(sessionId)
+          if (fresh && running?.provider === provider && running.modelId === modelId)
+            receipt = {
+              requestId,
+              model: modelId,
+              approvalMode: fresh.approvalMode,
+              effect: "nextTurn",
+            }
+          else if (agent) {
             const switched = await dispatch(live, (connected) => {
               held(sessionId)
               return connected.conversation.switchAgent(sessionId, agent, modelId, {

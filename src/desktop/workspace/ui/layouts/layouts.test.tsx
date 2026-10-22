@@ -793,7 +793,7 @@ describe("a source removing a session", () => {
         )
       })
       expect(notice()?.textContent).toBe(
-        "The model change is not confirmed. Choose again to check and try.",
+        "The model change is not confirmed. Send again to check and try.",
       )
       expect(chip()?.hasAttribute("disabled")).toBe(true)
       await act(async () => {
@@ -808,13 +808,13 @@ describe("a source removing a session", () => {
       expect(store.getState().workspace.modelChoices).not.toHaveProperty("b")
       expect(store.getState().workspace.transcripts).not.toHaveProperty("b")
       expect(notice()?.textContent).toBe(
-        "The model change is not confirmed. Choose again to check and try.",
+        "The model change is not confirmed. Send again to check and try.",
       )
       expect(chip()?.hasAttribute("disabled")).toBe(true)
       await act(async () => frames.runFrame())
       await act(async () => frames.runFrame())
       expect(notice()?.textContent).toBe(
-        "The model change is not confirmed. Choose again to check and try.",
+        "The model change is not confirmed. Send again to check and try.",
       )
       expect(chip()?.hasAttribute("disabled")).toBe(true)
       await act(async () => frames.runFrame())

@@ -4,7 +4,7 @@ import type { FailureDiagnostic } from "../../model/failure"
  * its model, archive it. The source owns sessions and their conversations, so
  * nothing here writes into what the source said: what the person does waits
  * beside it — a sent message in the outbox, an answer in `answers`, a chosen
- * model in `chosenModels` — until the source's own replacements settle it
+ * model in `chosenModels` or staged in `stagedModels` — until the source's own replacements settle it
  * (`updates.ts`). The one mark the window clears itself is "unread", since
  * showing a session is reading it. Pinning and archiving are the source's to
  * show; a session the source has not spoken of cannot be either yet.
@@ -12,7 +12,7 @@ import type { FailureDiagnostic } from "../../model/failure"
 import type { Initiator } from "../ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import { knownToSource } from "../../model/revision"
-import type { ModelRef } from "../../model/workspace-index"
+import { sameModel, type ModelRef } from "../../model/workspace-index"
 import { startSession } from "../../model/session-lifecycle"
 import { messageText, type TurnMessage } from "../../model/transcript"
 import {
@@ -227,16 +227,45 @@ export function unsentDiscarded(
 }
 
 /**
- * A draft's local creation model. Established conversation choices go through
- * the source command; this local operation never overrides their summary.
+ * A model picked in a session's composer. A draft starts on it. An
+ * established session only stages it: nothing is asked of the source until
+ * the next message is sent (`model-commands.ts`), and picking the model the
+ * session runs takes the staged one back. Never overrides the summary.
  */
 export function chooseModel(
   state: WorkspaceState,
   { sessionId, model }: { sessionId: string; model: ModelRef },
 ): WorkspaceState {
   const draft = draftOf(state, sessionId)
-  if (!draft) return state
-  return { ...state, drafts: { ...state.drafts, [sessionId]: { ...draft, model } } }
+  if (draft)
+    return { ...state, drafts: { ...state.drafts, [sessionId]: { ...draft, model } } }
+  const session = sessionOf(state, sessionId)
+  if (!session || !knownToSource(session)) return state
+  // A new pick is the person's newer word: an earlier one the source refused
+  // is no longer said. One not known to be settled stays, so the next send
+  // still checks it (`modelUnsettled`).
+  const refused = entry(state.modelChoices, sessionId)?.state === "refused"
+  return {
+    ...state,
+    stagedModels: sameModel(model, session.model)
+      ? without(state.stagedModels, sessionId)
+      : { ...state.stagedModels, [sessionId]: model },
+    modelChoices: refused ? without(state.modelChoices, sessionId) : state.modelChoices,
+  }
+}
+
+/**
+ * A staged pick the source made or refused outright: no longer waiting for
+ * a send. Only that pick; a newer one made meanwhile still waits.
+ */
+export function stagedModelSettled(
+  state: WorkspaceState,
+  { sessionId, model }: { sessionId: string; model: ModelRef },
+): WorkspaceState {
+  const staged = entry(state.stagedModels, sessionId)
+  return staged && sameModel(staged, model)
+    ? { ...state, stagedModels: without(state.stagedModels, sessionId) }
+    : state
 }
 
 /** An answer to an approval is on its way; it cannot be given twice meanwhile. */

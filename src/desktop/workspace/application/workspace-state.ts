@@ -152,6 +152,15 @@ export interface WorkspaceState {
   readonly modelChoices: Readonly<Record<string, ModelChoice>>
   readonly chosenModels: Readonly<Record<string, ModelRef>>
   /**
+   * The model the person picked in an established session's composer, by
+   * session, that its conversation does not run yet: only a choice until the
+   * next message is sent, which asks the source for it first
+   * (`model-commands.ts`). Picking the session's own model again takes it
+   * back; the send that makes it, or a summary saying the session runs it,
+   * settles it (`updates.ts`).
+   */
+  readonly stagedModels: Readonly<Record<string, ModelRef>>
+  /**
    * The access the person chose for a session, by session or new session,
    * until the source's conversation says it (`model/access.ts`). The
    * source's own word is the transcript's `access`.
@@ -340,6 +349,7 @@ export const initialWorkspace: WorkspaceState = {
   removed: [],
   answers: {},
   chosenModels: {},
+  stagedModels: {},
   modelChoices: {},
   accessChoices: {},
   composerText: {},
@@ -603,19 +613,24 @@ export function focusedChannel(state: WorkspaceState): string | undefined {
   return sessionOf(state, sessionId)?.channelId ?? draftOf(state, sessionId)?.channelId
 }
 
-/** Drafts choose locally; established source sessions ask their same-provider control. */
+/** Drafts choose locally; established source sessions stage a pick their next send applies. */
 export function canChooseModel(state: WorkspaceState, sessionId: string): boolean {
   const session = sessionOf(state, sessionId)
   return !!draftOf(state, sessionId) || (!!session && knownToSource(session))
 }
 
-/** Draft choices do not override the source-owned model of an established session. */
+/**
+ * The model a session's next message is sent with. Draft choices do not
+ * override the source-owned model of an established session; only a pick
+ * staged in its composer does, and sending asks the source for it first.
+ */
 export function modelForNextTurn(
   state: WorkspaceState,
   sessionId: string,
 ): ModelRef | undefined {
   const session = sessionOf(state, sessionId)
-  if (session && knownToSource(session)) return session.model
+  if (session && knownToSource(session))
+    return entry(state.stagedModels, sessionId) ?? session.model
   return (
     draftOf(state, sessionId)?.model ??
     entry(state.chosenModels, sessionId) ??
@@ -637,6 +652,7 @@ export function forgetSession(state: WorkspaceState, sessionId: string): Workspa
     outbox: without(state.outbox, sessionId),
     answers: without(state.answers, sessionId),
     chosenModels: without(state.chosenModels, sessionId),
+    stagedModels: without(state.stagedModels, sessionId),
     accessChoices: without(state.accessChoices, sessionId),
     modelChoices: without(state.modelChoices, sessionId),
     composerText: without(state.composerText, sessionId),

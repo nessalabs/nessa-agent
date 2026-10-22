@@ -14,7 +14,7 @@
 export const KNOBS = {
   modelSwitches: {
     default: 1,
-    what: "same-provider model choices through the actual composer picker",
+    what: "same-provider model choices through the actual composer picker, applied by the next send",
   },
   seed: { default: 1, what: "the plan's seed; the same seed gives the same plan" },
   rounds: {
@@ -75,7 +75,7 @@ export const KNOBS = {
   },
   handoffs: {
     default: 1,
-    what: "conversations switched to the other agent from the composer's picker, then forked from a row's More menu, each talked to after",
+    what: "conversations switched to the other agent from the composer's picker (staged, taken back, picked again, made by the next send), then forked from a row's More menu, each talked to after",
   },
   deletes: {
     default: 1,

@@ -96,7 +96,7 @@ async function sentWith(store: Store, source: FakeSource, sessionId: string) {
 }
 
 describe("a pane's composer shows the model the next message is sent with", () => {
-  it("keeps the established model when an agent asks for an unsupported local switch", async () => {
+  it("shows a staged pick at once and sends on it once the source takes it", async () => {
     const { store, source } = await conversation()
     expect(shownModel()).toContain("Claude Opus 5")
     const mounted = field()
@@ -104,11 +104,32 @@ describe("a pane's composer shows the model the next message is sent with", () =
       store.dispatch(chooseModel({ sessionId: "a", model: astra }))
     })
     expect(field()).toBe(mounted)
-    expect(shownModel()).toContain("Claude Opus 5")
+    expect(shownModel()).toContain("GPT-6 Astra")
     expect(host.querySelector(".desktop-chip-model")?.getAttribute("disabled")).toBeNull()
+    expect(source.calls.some((call) => call[0] === "setModel")).toBe(false)
+    expect(await sentWith(store, source, "a")).toEqual(astra)
+    const order = source.calls.map((call) => call[0])
+    expect(order.indexOf("setModel")).toBeLessThan(order.indexOf("send"))
+  })
+
+  it("takes a staged pick back when the session's own model is picked again", async () => {
+    const { store, source } = await conversation()
+    await act(async () => {
+      store.dispatch(chooseModel({ sessionId: "a", model: astra }))
+    })
+    await act(async () => {
+      store.dispatch(
+        chooseModel({
+          sessionId: "a",
+          model: store.getState().workspace.sessions.a.model,
+        }),
+      )
+    })
+    expect(shownModel()).toContain("Claude Opus 5")
     expect(await sentWith(store, source, "a")).toEqual(
       store.getState().workspace.sessions.a.model,
     )
+    expect(source.calls.some((call) => call[0] === "setModel")).toBe(false)
   })
 
   it("follows a newer summary that moves the session to another model", async () => {
@@ -192,7 +213,7 @@ describe("a pane's composer shows the model the next message is sent with", () =
       )
     })
     expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
-      "The model change is not confirmed. Choose again to check and try.",
+      "The model change is not confirmed. Send again to check and try.",
     )
   })
 })
