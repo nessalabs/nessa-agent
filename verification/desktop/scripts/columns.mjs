@@ -37,7 +37,13 @@ import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { css, keys, selectorFor, storage } from "./lib/selectors.mjs"
-import { frames, settled, openPanes } from "./lib/workspace.mjs"
+import {
+  flatSurfaceFailures,
+  frames,
+  openPanes,
+  paneCountIs,
+  settled,
+} from "./lib/workspace.mjs"
 
 const checks = [
   "no-overlap",
@@ -71,7 +77,9 @@ Usage: node verification/desktop/scripts/columns.mjs [options]
   --sizes <list>   Window sizes (default 1440x900,1000x700,760x700; --quick: the first).
 
 Checks, per engine, layout and size:
-  pane-level      focus changes no pane's fill or elevation, in both themes
+  pane-level      the panes are one flat surface, divided by hairlines, and focus
+                  changes no pane's fill or elevation, in both themes, beside and
+                  stacked
   content-visible pane bodies and fill stay visible through toggles and a new pane mounts fully opaque at unit scale
   no-overlap       every combination of the rail, the sidebar, the session list
                    (columns layout) and the overview leaves the drawn columns in
@@ -384,6 +392,25 @@ const body = {
           )
       }
     }
+    // Beside, and one of the two split in a row: every hairline meets an edge.
+    for (const theme of ["dark", "light"]) {
+      await page.evaluate(
+        (theme) => document.documentElement.classList.toggle("dark", theme === "dark"),
+        theme,
+      )
+      await settled(page)
+      for (const broken of await flatSurfaceFailures(page))
+        failures.push(`${theme}, beside: ${broken}`)
+    }
+    await page.locator(css.composer).nth(1).focus()
+    await page.keyboard.press(keys.splitDown)
+    await paneCountIs(page, 3)
+    await settled(page)
+    // A narrow window stacks every pane, so there may be more than one row.
+    const rows = await page.locator(`${css.chat} ${css.paneEdge}[data-axis="y"]`).count()
+    if (rows < 1) failures.push(`⇧⌘\\ left no row hairline`)
+    for (const broken of await flatSurfaceFailures(page))
+      failures.push(`stacked: ${broken}`)
     return { runs, failures }
   },
 

@@ -88,11 +88,6 @@
   box-shadow: inset 1px 0 0 color-mix(in oklab, var(--foreground) 6%, transparent);
 }
 
-html:not(.dark) .agents-overview-surface {
-  background: color-mix(in oklab, var(--background) 60%, white);
-  box-shadow: inset 0 0 0 1px var(--desktop-rim);
-}
-
 /* The title's frame, before the filter and the list. No fill yet: painting
    the card across the content region misses the frame budget (`overview.test.tsx`). */
 .agents-overview-surface[data-bare] {

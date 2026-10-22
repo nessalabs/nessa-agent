@@ -178,6 +178,7 @@ import {
 } from "./lib/stress-conversation.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
+import { flatSurfaceFailures } from "./lib/workspace.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
 
 const INSTANCE = "conversation-stress"
@@ -2226,82 +2227,19 @@ const steps = {
 }
 
 /**
- * Two panes side by side are regions of one flat chat surface (`panes.css`),
- * not cards: the surface fills to the window's top, right and bottom edges,
- * neither pane draws a fill or rim of its own, and the one hairline between
- * them stands in the middle of their gutter and runs past the panes to the
- * window's top and bottom.
+ * Two panes side by side are regions of one flat chat surface, not cards
+ * (`flatSurfaceFailures`): one hairline between them, mid-gutter.
  */
 async function flatPanes(page, failures) {
-  const read = () =>
-    page.evaluate(
-      ({ chat, pane, edge }) => {
-        const box = (element) => element?.getBoundingClientRect()
-        const surface = document.querySelector(chat)
-        const panes = [...document.querySelectorAll(pane)].map((element) => {
-          const style = getComputedStyle(element)
-          return {
-            box: box(element).toJSON(),
-            fill: style.backgroundColor,
-            shadow: style.boxShadow,
-          }
-        })
-        const edges = [...document.querySelectorAll(`${chat} ${edge}[data-axis="x"]`)]
-        const lines = edges.map((element) => {
-          const line = getComputedStyle(element, "::after")
-          const b = box(element)
-          return {
-            content: line.content,
-            width: line.width,
-            fill: line.backgroundColor,
-            middle: b.left + b.width / 2,
-            // The hairline's own ends: its insets reach past the edge's box.
-            top: b.top + parseFloat(line.top),
-            bottom: b.bottom - parseFloat(line.bottom),
-          }
-        })
-        return {
-          window: { width: innerWidth, height: innerHeight },
-          surface: surface && {
-            box: box(surface).toJSON(),
-            fill: getComputedStyle(surface).backgroundColor,
-          },
-          panes,
-          lines,
-        }
-      },
-      { chat: css.chat, pane: css.pane, edge: css.paneEdge },
-    )
-  const near = (a, b) => Math.abs(a - b) <= 1
-  const flat = (now) =>
-    now.surface &&
-    now.panes.length === 2 &&
-    now.lines.length === 1 &&
-    near(now.surface.box.top, 0) &&
-    near(now.surface.box.right, now.window.width) &&
-    near(now.surface.box.bottom, now.window.height) &&
-    now.surface.fill !== "rgba(0, 0, 0, 0)" &&
-    now.panes.every((p) => p.fill === "rgba(0, 0, 0, 0)" && p.shadow === "none")
-  const between = (now) => {
-    const [left, right] = [...now.panes].sort((a, b) => a.box.left - b.box.left)
-    const line = now.lines[0]
-    return (
-      line.content !== "none" &&
-      line.width === "1px" &&
-      line.fill !== "rgba(0, 0, 0, 0)" &&
-      near(line.middle, (left.box.right + right.box.left) / 2) &&
-      near(line.top, 0) &&
-      near(line.bottom, now.window.height)
-    )
-  }
-  if (
-    await waitFor(async () => {
-      const now = await read()
-      return flat(now) && between(now)
-    }, 10_000)
-  )
-    return
-  failures.push(`the panes are not one flat surface: ${JSON.stringify(await read())}`)
+  const now = async () => ({
+    panes: await page.locator(css.pane).count(),
+    hairlines: await page.locator(`${css.chat} ${css.paneEdge}[data-axis="x"]`).count(),
+    broken: await flatSurfaceFailures(page),
+  })
+  const holds = (state) =>
+    state.panes === 2 && state.hairlines === 1 && state.broken.length === 0
+  if (await waitFor(async () => holds(await now()), 10_000)) return
+  failures.push(`the panes are not one flat surface: ${JSON.stringify(await now())}`)
 }
 
 /**

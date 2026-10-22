@@ -289,8 +289,13 @@ Experimental turns it on; the rail stands beside the workspace in
   workspace at the window's edge. _Check:_ `columns.mjs --only rail-off`;
   `smoke.mjs` (Experimental offers the side rail's switch, off).
 
-- [ ] **Focused panes keep the same fill and elevation as their neighbors.**
-  A subtle rim identifies focus in both themes. _Check:_ `columns.mjs --only pane-level`.
+- [ ] **The panes are one flat surface, not cards.** The chat area reaches the
+  window's top, right and bottom edges; no pane draws a fill, rim or shadow of
+  its own; a 1px hairline mid-gutter divides two panes, a column's from the
+  window's top to its bottom, a row's to the surface's side or the column's
+  hairline. Focus changes no pane's fill or elevation (the unfocused header
+  dims). Both themes, beside and stacked. _Check:_ `columns.mjs --only pane-level`;
+  `conversation-stress` step `window`.
 - [ ] **Conversation content stays visible during toggles and when a pane mounts.**
   Pane bodies, including the composer, do not disappear and their fill does not
   darken as bounds land immediately, without a workspace FLIP. Independent
