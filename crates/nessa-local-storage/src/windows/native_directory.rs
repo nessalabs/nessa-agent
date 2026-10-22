@@ -29,13 +29,28 @@ use windows_sys::Win32::{
     System::IO::{IO_STATUS_BLOCK, IO_STATUS_BLOCK_0},
 };
 
-/// Create an absent directory with temporary read/search-only user permissions.
+/// Create an absent root with temporary read/search and addition permissions.
 ///
-/// The returned initial handle requests namespace mutation, DELETE and WRITE_DAC.
-/// Native tests must qualify whether the OS permits child mutation through this
-/// handle while refusing fresh writer handles. This is not an activation API.
+/// Its user ACL omits DELETE_CHILD from creation. The initial handle does not
+/// share DELETE, protecting this root even when its parent grants DELETE_CHILD.
+/// Seal every copied directory before final identity and content validation.
 pub fn create_protected_directory_at(parent: &File, name: &OsStr) -> io::Result<File> {
-    let descriptor = User::current()?.descriptor_with_access(true, "FRFX")?;
+    create_directory_at(parent, name, FILE_SHARE_READ)
+}
+
+/// Create one append-only child directory. Its parent must also omit DELETE_CHILD.
+/// Delete sharing allows the retained root to carry this open child into live.
+pub fn create_protected_subdirectory_at(parent: &File, name: &OsStr) -> io::Result<File> {
+    create_directory_at(
+        parent,
+        name,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    )
+}
+
+fn create_directory_at(parent: &File, name: &OsStr, sharing: u32) -> io::Result<File> {
+    let access = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY;
+    let descriptor = User::current()?.descriptor_with_access(true, &format!("0x{access:08x}"))?;
     let file = relative(
         parent,
         name,
@@ -43,7 +58,6 @@ pub fn create_protected_directory_at(parent: &File, name: &OsStr) -> io::Result<
             | FILE_TRAVERSE
             | FILE_ADD_FILE
             | FILE_ADD_SUBDIRECTORY
-            | FILE_DELETE_CHILD
             | FILE_READ_ATTRIBUTES
             | READ_CONTROL
             | WRITE_DAC
@@ -51,11 +65,7 @@ pub fn create_protected_directory_at(parent: &File, name: &OsStr) -> io::Result<
             | SYNCHRONIZE,
         FILE_CREATE,
         FILE_DIRECTORY_FILE,
-        // The parent's DELETE_CHILD permission can otherwise grant a fresh
-        // DELETE handle despite this directory's read-only DACL. Retain the
-        // initial DELETE authority for our own handle rename, but do not share
-        // it with a second opener. Native publication tests qualify that order.
-        FILE_SHARE_READ,
+        sharing,
         Some(&descriptor),
     )?;
     require_directory(&file)?;
@@ -64,7 +74,7 @@ pub fn create_protected_directory_at(parent: &File, name: &OsStr) -> io::Result<
 
 /// Exclusively create a private file with temporary read-only user permissions.
 /// The initial payload and DELETE authority omit write sharing. Native tests
-/// require fresh write and DELETE opens to fail even after this handle closes.
+/// require competing write/deletion operations to fail after this handle closes.
 pub fn create_protected_file_at(parent: &File, name: &OsStr) -> io::Result<File> {
     let descriptor = User::current()?.descriptor_with_access(false, "FR")?;
     let file = relative(
@@ -240,6 +250,12 @@ pub fn release_directory_writes(file: &File) -> io::Result<()> {
     release_writes(file, true)
 }
 
+/// Refuse further additions before final whole-tree identity/content validation.
+/// Native tests exercise real creation/rename through pre-acquired ADD handles.
+pub fn seal_directory_writes(file: &File) -> io::Result<()> {
+    set_descriptor(file, User::current()?.descriptor_with_access(true, "FRFX")?)
+}
+
 /// Release temporary file restrictions through the retained WRITE_DAC handle.
 /// The caller owns the ordering: call only after successful live publication.
 pub fn release_file_writes(file: &File) -> io::Result<()> {
@@ -247,7 +263,10 @@ pub fn release_file_writes(file: &File) -> io::Result<()> {
 }
 
 fn release_writes(file: &File, directory: bool) -> io::Result<()> {
-    let descriptor = User::current()?.descriptor(directory)?;
+    set_descriptor(file, User::current()?.descriptor(directory)?)
+}
+
+fn set_descriptor(file: &File, descriptor: LocalAllocation) -> io::Result<()> {
     let mut present = 0;
     let mut defaulted = 0;
     let mut acl = null_mut();
@@ -306,6 +325,107 @@ mod tests {
         .expect_err("pre-acquired ancestor DELETE_CHILD must not defeat root sharing protection");
         assert_eq!(error.raw_os_error(), Some(ERROR_SHARING_VIOLATION as i32));
         assert!(root.path().join("sealed").is_dir());
+        remove_handle(&directory).unwrap();
+    }
+
+    #[test]
+    fn sealing_refuses_actual_mutations_through_preacquired_add_handles() {
+        let root = tempfile::tempdir().unwrap();
+        let ancestor = std::fs::OpenOptions::new()
+            .access_mode(FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(root.path())
+            .unwrap();
+        let directory = create_protected_directory_at(&ancestor, OsStr::new("sealed")).unwrap();
+        let child = create_protected_subdirectory_at(&directory, OsStr::new("child")).unwrap();
+        // Acquire real ADD rights while copying permits additions. RootDirectory
+        // retains this same object after its ACL changes; no path reopening occurs.
+        let preacquired = relative(
+            &directory,
+            OsStr::new("child"),
+            FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_OPEN,
+            FILE_OPEN_REPARSE_POINT,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+        )
+        .unwrap();
+        let before = create_protected_file_at(&preacquired, OsStr::new("before"))
+            .expect("positive control: pre-acquired ADD_FILE performs creation before seal");
+        remove_handle(&before).unwrap();
+        drop(before);
+        let before_directory =
+            create_protected_subdirectory_at(&preacquired, OsStr::new("before-directory"))
+                .expect("positive control: pre-acquired ADD_SUBDIRECTORY works before seal");
+        remove_handle(&before_directory).unwrap();
+        drop(before_directory);
+        let external = create_protected_file_at(&ancestor, OsStr::new("external")).unwrap();
+        rename_handle_at(&external, &preacquired, OsStr::new("before-rename"))
+            .expect("positive control: pre-acquired ADD_FILE admits a rename before seal");
+        rename_handle_at(&external, &ancestor, OsStr::new("external")).unwrap();
+
+        seal_directory_writes(&child).unwrap();
+        seal_directory_writes(&directory).unwrap();
+        for error in [
+            create_protected_file_at(&preacquired, OsStr::new("injected")).unwrap_err(),
+            create_protected_subdirectory_at(&preacquired, OsStr::new("injected-directory"))
+                .unwrap_err(),
+            rename_handle_at(&external, &preacquired, OsStr::new("injected-rename")).unwrap_err(),
+        ] {
+            assert_eq!(
+                error.raw_os_error(),
+                Some(ERROR_ACCESS_DENIED as i32),
+                "current sealed parent ACL must refuse actual mutation through retained ADD rights"
+            );
+        }
+        assert!(root.path().join("external").is_file());
+        assert!(!root.path().join("sealed/child/injected").exists());
+        assert!(!root.path().join("sealed/child/injected-directory").exists());
+        assert!(!root.path().join("sealed/child/injected-rename").exists());
+        drop(preacquired);
+        remove_handle(&external).unwrap();
+        drop(external);
+        remove_handle(&child).unwrap();
+        drop(child);
+        remove_handle(&directory).unwrap();
+    }
+
+    #[test]
+    fn append_only_parent_does_not_delegate_deletion_of_its_nested_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let ancestor = std::fs::OpenOptions::new()
+            .access_mode(FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(root.path())
+            .unwrap();
+        let directory = create_protected_directory_at(&ancestor, OsStr::new("sealed")).unwrap();
+        let child = create_protected_subdirectory_at(&directory, OsStr::new("child")).unwrap();
+        // Test actual mutations, even if a backup-intent opener returns a handle.
+        match relative(
+            &directory,
+            OsStr::new("child"),
+            DELETE | SYNCHRONIZE,
+            FILE_OPEN,
+            FILE_OPEN_REPARSE_POINT,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+        ) {
+            Err(error) => assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32)),
+            Ok(competing) => {
+                let error = remove_handle(&competing)
+                    .expect_err("nested deletion must be refused from birth");
+                assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32));
+                let error = rename_handle_at(&competing, &ancestor, OsStr::new("stolen"))
+                    .expect_err("nested relocation must be refused from birth");
+                assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32));
+            }
+        }
+        assert!(root.path().join("sealed/child").is_dir());
+        assert!(!root.path().join("stolen").exists());
+        remove_handle(&child).unwrap();
+        drop(child);
         remove_handle(&directory).unwrap();
     }
 }

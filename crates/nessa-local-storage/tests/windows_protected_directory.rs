@@ -3,6 +3,7 @@
 use nessa_local_storage::{
     create_protected_directory_at, create_protected_file_at, open_directory_at, open_file_at,
     release_directory_writes, release_file_writes, remove_handle, rename_handle_at,
+    seal_directory_writes,
 };
 use std::{
     ffi::OsStr,
@@ -48,36 +49,62 @@ fn writer(path: &Path, access: u32) -> std::io::Result<File> {
         .open(path)
 }
 
+fn assert_leaf_mutation_refused(path: &Path) {
+    match OpenOptions::new().write(true).open(path) {
+        Err(error) => refused_namespace_writer(&error),
+        Ok(mut file) => {
+            let error = file
+                .write_all(b"untrusted")
+                .expect_err("a granted handle must still refuse actual leaf writes");
+            refused_namespace_writer(&error);
+        }
+    }
+    match writer(path, DELETE) {
+        Err(error) => refused_namespace_writer(&error),
+        Ok(file) => {
+            let error = remove_handle(&file)
+                .expect_err("a granted handle must still refuse actual leaf deletion");
+            refused_namespace_writer(&error);
+        }
+    }
+}
+
 #[test]
-fn protected_creation_refuses_fresh_namespace_writer_handles() {
+fn read_only_parent_acl_refuses_child_create_despite_initial_add_handle() {
     let root = tempfile::tempdir().unwrap();
     let authority = parent(root.path());
-    let directory = create_protected_directory_at(&authority, OsStr::new("sealed"))
-        .expect("N01: atomic restrictive directory creation must return initial writer authority");
-    for access in [FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_DELETE_CHILD] {
-        let error = writer(&root.path().join("sealed"), access)
-            .expect_err("N02: a later handle must not acquire namespace mutation authority");
-        refused_namespace_writer(&error);
-    }
-    // This also proves the restriction is the creation DACL, not only sharing:
-    // the initial writer closes before the new namespace access attempts.
+    let directory = create_protected_directory_at(&authority, OsStr::new("sealed")).unwrap();
+    seal_directory_writes(&directory).unwrap();
+    // Exact original N03 failure at native CI 39701307415 / 5f8d: retaining
+    // ADD_FILE in the original handle does not delegate it through a read-only ACL.
+    let error = create_protected_file_at(&directory, OsStr::new("payload"))
+        .expect_err("original N03 child creation remains refused after read-only sealing");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
+    );
+    remove_handle(&directory).unwrap();
+}
+
+#[test]
+fn sealed_directory_refuses_actual_additions_after_initial_handle_closes() {
+    let root = tempfile::tempdir().unwrap();
+    let authority = parent(root.path());
+    let directory = create_protected_directory_at(&authority, OsStr::new("sealed")).unwrap();
+    seal_directory_writes(&directory).unwrap();
     drop(directory);
-    for access in [FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_DELETE_CHILD] {
-        let error = writer(&root.path().join("sealed"), access)
-            .expect_err("creation DACL remains restrictive after initial handle closes");
-        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
-    }
-    // TempDir owns test cleanup; restore owner ACL deliberately for cleanup.
-    let cleanup = OpenOptions::new()
-        .access_mode(WRITE_DAC)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(root.path().join("sealed"))
-        .unwrap();
+    let error = fs::write(root.path().join("sealed/injected"), b"untrusted")
+        .expect_err("sealed directory must refuse actual file creation");
+    refused_namespace_writer(&error);
+    let error = fs::create_dir(root.path().join("sealed/injected-directory"))
+        .expect_err("sealed directory must refuse actual directory creation");
+    refused_namespace_writer(&error);
+    let cleanup = writer(&root.path().join("sealed"), WRITE_DAC).unwrap();
     release_directory_writes(&cleanup).unwrap();
 }
 
 #[test]
-fn a_waiting_writer_cannot_preacquire_the_created_directory() {
+fn a_waiting_writer_cannot_relocate_the_created_root() {
     let root = tempfile::tempdir().unwrap();
     let authority = parent(root.path());
     let path = root.path().join("sealed");
@@ -87,8 +114,10 @@ fn a_waiting_writer_cannot_preacquire_the_created_directory() {
         waiting.wait();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
-            match writer(&path, FILE_ADD_FILE | FILE_DELETE_CHILD) {
-                Ok(_) => panic!("N02: contender acquired mutation rights in a creation/ACL window"),
+            match fs::rename(&path, path.with_file_name("stolen")) {
+                Ok(()) => {
+                    panic!("N02: contender relocated root while its initial handle was retained")
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     assert!(
                         std::time::Instant::now() < deadline,
@@ -130,23 +159,20 @@ fn relative_creation_uses_retained_parent_after_its_name_changes() {
 }
 
 #[test]
-fn initial_directory_authority_creates_children_under_restrictive_creation_acl() {
+fn initial_directory_authority_creates_children_before_sealing() {
     let root = tempfile::tempdir().unwrap();
     let authority = parent(root.path());
     let directory = create_protected_directory_at(&authority, OsStr::new("sealed"))
         .expect("N01: atomic protected creation");
     let mut file = create_protected_file_at(&directory, OsStr::new("payload"))
-        .expect("N03: initial RootDirectory authority must create a child despite restrictive DACL; failure means the native capability is NOT qualified");
+        .expect("N03 revised: append-only parent permits initial child creation before sealing");
     file.write_all(b"exact bytes").unwrap();
     file.sync_all().unwrap();
     let mut read = open_file_at(&directory, OsStr::new("payload")).unwrap();
     let mut bytes = Vec::new();
     read.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"exact bytes");
-    assert!(OpenOptions::new()
-        .write(true)
-        .open(root.path().join("sealed/payload"))
-        .is_err());
+    assert_leaf_mutation_refused(&root.path().join("sealed/payload"));
     remove_handle(&file).expect("N05: retained child cleanup");
     drop(read);
     drop(file);
@@ -174,6 +200,7 @@ fn protected_root_blocks_competing_delete_but_renames_through_its_own_handle() {
     file.write_all(b"owned").unwrap();
     file.sync_all().unwrap();
     let mut reader = open_file_at(&directory, OsStr::new("payload")).unwrap();
+    seal_directory_writes(&directory).unwrap();
     rename_handle_at(&directory, &authority, OsStr::new("live")).expect(
         "N04: initial DELETE handle must rename its own root while child handles remain open",
     );
@@ -193,7 +220,6 @@ fn protected_root_blocks_competing_delete_but_renames_through_its_own_handle() {
 
 #[test]
 fn protected_child_refuses_delete_and_write_until_post_publication_release() {
-    use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
     let root = tempfile::tempdir().unwrap();
     let authority = parent(root.path());
     let directory = create_protected_directory_at(&authority, OsStr::new("sealed")).unwrap();
@@ -201,21 +227,13 @@ fn protected_child_refuses_delete_and_write_until_post_publication_release() {
         .expect("N03: initial directory authority creates protected child");
     file.write_all(b"owned").unwrap();
     file.sync_all().unwrap();
-    for access in [DELETE, FILE_WRITE_DATA, FILE_APPEND_DATA] {
-        let error = writer(&root.path().join("sealed/payload"), access)
-            .expect_err("N03: fresh leaf DELETE or write authority must be refused");
-        refused_namespace_writer(&error);
-    }
+    assert_leaf_mutation_refused(&root.path().join("sealed/payload"));
     drop(file);
-    for access in [DELETE, FILE_WRITE_DATA, FILE_APPEND_DATA] {
-        let error = writer(&root.path().join("sealed/payload"), access).expect_err(
-            "N03: leaf ACL and protected parent must refuse mutation after creator closes",
-        );
-        assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32));
-    }
+    assert_leaf_mutation_refused(&root.path().join("sealed/payload"));
     // The owner retains ACL control, explicitly outside the competing namespace
     // writer threat boundary. Retain it before rename, then release after live.
     let acl = writer(&root.path().join("sealed/payload"), WRITE_DAC).unwrap();
+    seal_directory_writes(&directory).unwrap();
     rename_handle_at(&directory, &authority, OsStr::new("live")).unwrap();
     release_file_writes(&acl).unwrap();
     release_directory_writes(&directory).unwrap();
@@ -255,6 +273,7 @@ fn retained_relative_rename_refuses_collisions_and_cleanup_keeps_replacement() {
     remove_handle(&replacement).unwrap();
     remove_handle(&occupied).unwrap();
     drop((replacement, occupied));
+    seal_directory_writes(&directory).unwrap();
     rename_handle_at(&directory, &authority, OsStr::new("live")).unwrap();
     release_directory_writes(&directory).unwrap();
     assert!(open_directory_at(&authority, OsStr::new("sealed")).is_err());

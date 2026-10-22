@@ -68,16 +68,21 @@ single-link and no-reparse checks on the same handles used for I/O.
 The Windows-only native directory module in `nessa-local-storage` owns the
 candidate mechanics; backup owns whether they are qualified for activation.
 The existing backup fail-closed path stays in place until native tests prove
-this candidate. `RootDirectory` binds name resolution; its presence alone is
-not evidence that an initial handle delegates directory write authority through
-a restrictive DACL. The native tests deliberately require that property.
+this candidate. Native CI [39701307415](https://github.com/nessalabs/nessa-agent/actions/runs/39701307415)
+at `5f8d` disproved the original N03 assumption: the initial handle could not
+create a child under a read/search-only directory DACL (access denied, OS 5).
+That failed receipt remains failed. The revised candidate permits additions,
+but never DELETE_CHILD, during copying. It seals all directories before final
+whole-tree content and identity validation. The regression requires the original
+N03 operation to remain denied after sealing; mutation through a pre-acquired
+ADD handle must also fail. A granted handle alone is not proof of mutation rights.
 
 | Order | Operation | Required result / failure |
 | --- | --- | --- |
-| N01 | Create one absent child with `NtCreateFile(FILE_CREATE)` and a protected read/search-only user DACL | Return the initial writer/DELETE/WRITE_DAC handle; a collision leaves the existing object untouched |
-| N02 | Another handle requests ADD_FILE, ADD_SUBDIRECTORY, DELETE_CHILD or DELETE; another process attempts to rename the root | Refuse it before any mutable namespace is exposed. The initial directory handle shares only READ, preventing parent DELETE_CHILD from supplying a competing DELETE handle; no post-create ACL repair window |
-| N03 | Use initial directory handle as RootDirectory for exclusive child create with read-only user file ACL | Create beneath the retained object despite renamed ancestors; fresh file WRITE and DELETE handles are refused, including after initial file handle closes. If the kernel rechecks the restrictive parent ACL, native qualification fails here |
-| N04 | Rename the retained child handle to one relative destination, without replacement; rename the root through its initial DELETE handle while leaf handles stay open | Preserve an occupied destination and source; never reopen the source for DELETE authority. Native qualification must prove the root's own rename works without delete sharing |
+| N01 | Create one absent child with `NtCreateFile(FILE_CREATE)` and protected read/search plus ADD_FILE/ADD_SUBDIRECTORY user DACL, without DELETE_CHILD | Return initial ADD/DELETE/WRITE_DAC authority; collision preserves the existing object |
+| N02 | Another process attempts actual root rename/removal, nested-directory removal or leaf mutation | Root initially shares only READ; nested directories share DELETE but neither their own ACL nor their parent grants DELETE. Leaves have read-only user ACLs from creation; no DELETE_CHILD exists in the copied tree |
+| N03 | Create children relative to retained append-only directory; seal every directory read/search-only before final enumeration and content/identity verification | Child creation works before seal; the original N03 create is denied after seal, including through pre-acquired ADD_FILE/ADD_SUBDIRECTORY handles. Pre-acquired ADD authority cannot rename an external source into the sealed tree. Any unexpected entry fails final validation |
+| N04 | Rename retained child handles before sealing, without replacement; after seal and final validation rename root through its initial DELETE handle while leaf handles stay open | Preserve occupied destinations. Never reopen source for DELETE. Native qualification proves root publication works without root delete sharing; no additions or replacement survive final verification |
 | N05 | Delete through the exact retained object handle | Remove that object only; a replacement at its old name is not cleanup authority |
 | N06 | Successful root promotion, then release temporary directory and file restrictions through their initial WRITE_DAC handles | Restore ordinary private owner ACLs only after live rename; failure remains an explicit error |
 | N07 | Any create/rename/delete fails | Return the OS error; no path fallback, automatic ACL relaxation, or success claim |

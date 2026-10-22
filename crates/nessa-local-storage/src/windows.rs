@@ -29,8 +29,9 @@ use windows_sys::Win32::{
 mod native_directory;
 mod retained_directory;
 pub use native_directory::{
-    create_protected_directory_at, create_protected_file_at, open_directory_at, open_file_at,
-    release_directory_writes, release_file_writes, remove_handle, rename_handle_at,
+    create_protected_directory_at, create_protected_file_at, create_protected_subdirectory_at,
+    open_directory_at, open_file_at, release_directory_writes, release_file_writes, remove_handle,
+    rename_handle_at, seal_directory_writes,
 };
 pub(crate) use retained_directory::{
     validate_native_name, RetainedDirectory, RetainedDirectoryEntries,
