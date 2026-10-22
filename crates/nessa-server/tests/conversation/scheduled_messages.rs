@@ -2433,7 +2433,7 @@ impl ScheduledMessageStore for ScriptedSchedule {
         execution: &str,
     ) -> ConversationFuture<'_, Option<ScheduledCommandEvidence>> {
         let _ = (conversation, execution);
-        store_error()
+        Box::pin(async { Err(ConversationError::Metadata) })
     }
 
     fn invalidated_selection(&self, _: &str) -> ConversationFuture<'_, Option<SelectionChange>> {
