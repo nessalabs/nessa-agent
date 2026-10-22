@@ -2734,6 +2734,7 @@ impl ConversationListing for FailThenPlan {
         }
         let conversations = if name == "person-b" {
             vec![ListedConversation {
+                held: None,
                 conversation: self.conversation.clone(),
                 summary: self.summary.clone(),
             }]
