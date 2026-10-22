@@ -23,6 +23,7 @@ function markPane(paneKey: PaneKey, multi: boolean, focused: boolean) {
 export function PaneFocusMark({ paneKey, multi }: { paneKey: PaneKey; multi: boolean }) {
   const store = useWorkspaceStore()
   useLayoutEffect(() => {
+    let active = true
     let frame = 0
     let focused = selectFocusedPaneKey(store.getState()) === paneKey
     // Before this pane's first paint, so the caret finds the mark on that
@@ -34,9 +35,12 @@ export function PaneFocusMark({ paneKey, multi }: { paneKey: PaneKey; multi: boo
       if (next === focused) return
       focused = next
       cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => markPane(paneKey, multi, next))
+      frame = requestAnimationFrame(() => {
+        if (active) markPane(paneKey, multi, next)
+      })
     })
     return () => {
+      active = false
       cancelAnimationFrame(frame)
       unsubscribe()
     }
@@ -51,6 +55,7 @@ export function FocusedSliver({ paneKey }: { paneKey: PaneKey }) {
     () => selectFocusedPaneKey(store.getState()) === paneKey,
   )
   useEffect(() => {
+    let active = true
     let frame = 0
     let movingNow = selectFocusedPaneKey(store.getState()) === paneKey
     const unsubscribe = store.subscribe(() => {
@@ -58,9 +63,12 @@ export function FocusedSliver({ paneKey }: { paneKey: PaneKey }) {
       if (next === movingNow) return
       movingNow = next
       cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => setMoving(next))
+      frame = requestAnimationFrame(() => {
+        if (active) setMoving(next)
+      })
     })
     return () => {
+      active = false
       cancelAnimationFrame(frame)
       unsubscribe()
     }
