@@ -247,9 +247,24 @@ export const SplitPanes = memo(function SplitPanes({
   useEffect(() => {
     const grid = gridRef.current
     if (!grid) return
-    const observer = new ResizeObserver(() => source.fit())
+    let active = true
+    let frame: number | null = null
+    const observer = new ResizeObserver(() => {
+      if (!active || frame !== null) return
+      // The workspace's first fit starts a geometry observer on this grid.
+      // Starting a same-depth observation during delivery leaves it skipped;
+      // resize-observers.mjs checks the native ErrorEvent in both engines.
+      frame = requestAnimationFrame(() => {
+        frame = null
+        source.fit()
+      })
+    })
     observer.observe(grid)
-    return () => observer.disconnect()
+    return () => {
+      active = false
+      observer.disconnect()
+      if (frame !== null) cancelAnimationFrame(frame)
+    }
   }, [source])
   return (
     <div

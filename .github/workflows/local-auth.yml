@@ -344,6 +344,8 @@ jobs:
         run: pnpm test:e2e:scripted -- --channel bundled --evidence "$STRESS_EVIDENCE/scripted"
       - name: Verify usage-limit cards in both browsers
         run: node verification/desktop/scripts/usage-limit.mjs --channel bundled --out "$STRESS_EVIDENCE/usage-limit.json" --shots "$STRESS_EVIDENCE/usage-limit"
+      - name: Verify pane dragging after deferred fitting in both browsers
+        run: node verification/desktop/scripts/drag.mjs --engine chromium,webkit --layout columns --channel bundled --only resize-mid-drag,return-interrupted --out "$STRESS_EVIDENCE/drag.json"
       - name: Run the conversation stress check
         shell: bash
         run: |
