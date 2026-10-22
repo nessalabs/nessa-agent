@@ -17,6 +17,7 @@ import {
   newSession,
   openSession,
   sendMessage,
+  setComposerText,
 } from "../../adapters/store/commands"
 import { workspaceActions } from "../../adapters/store/slice"
 import { emptyTranscript, type Transcript } from "../../model/transcript"
@@ -215,6 +216,36 @@ describe("a pane's composer shows the model the next message is sent with", () =
     expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
       "The model change is not confirmed. Send again to check and try.",
     )
+  })
+  it("asks for no send while the source settles a model change it holds", async () => {
+    const { store } = await conversation()
+    await act(async () => {
+      store.dispatch(
+        workspaceActions.transcriptLoaded({
+          transcript: {
+            sessionId: "a",
+            messages: [],
+            activity: null,
+            approvals: [],
+            revision: 50,
+            modelControl: {
+              pending: {
+                requestId: "elsewhere",
+                requestedModel: astra.modelId,
+                status: "recovery_required",
+              },
+            },
+          },
+        }),
+      )
+      store.dispatch(setComposerText({ sessionId: "a", text: "next" }))
+    })
+    expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
+      "The model change is not confirmed yet. You can send once it settles.",
+    )
+    expect(
+      host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled,
+    ).toBe(true)
   })
 })
 

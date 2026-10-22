@@ -193,21 +193,23 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
   const modelNotice =
     choiceCode === "conversation_configuration_changed"
       ? "This chat can't be reopened."
-      : modelControl?.pending?.status === "recovery_required" ||
-          modelChoice?.state === "recovery_required" ||
-          modelChoice?.state === "acknowledged"
-        ? "The model change is not confirmed. Send again to check and try."
-        : modelBusy
-          ? "Changing model…"
-          : modelChoice?.state === "refused"
-            ? modelChoice.code === "model_change_not_applied"
-              ? "Model didn’t change. Choose again to try."
-              : "The model change wasn’t made. Choose again to try."
-            : modelControl?.effect === "nextTurn"
-              ? "Model applies to the next turn."
-              : modelControl?.effect === "subsequentResponses"
-                ? "Model applies to subsequent responses."
-                : undefined
+      : // The source settles its own pending change; sending waits for it.
+        modelControl?.pending?.status === "recovery_required"
+        ? "The model change is not confirmed yet. You can send once it settles."
+        : modelChoice?.state === "recovery_required" ||
+            modelChoice?.state === "acknowledged"
+          ? "The model change is not confirmed. Send again to check and try."
+          : modelBusy
+            ? "Changing model…"
+            : modelChoice?.state === "refused"
+              ? modelChoice.code === "model_change_not_applied"
+                ? "Model didn’t change. Choose again to try."
+                : "The model change wasn’t made. Choose again to try."
+              : modelControl?.effect === "nextTurn"
+                ? "Model applies to the next turn."
+                : modelControl?.effect === "subsequentResponses"
+                  ? "Model applies to subsequent responses."
+                  : undefined
 
   return (
     <>
