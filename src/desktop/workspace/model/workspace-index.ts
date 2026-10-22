@@ -129,6 +129,11 @@ export const contradicts = (contradictions: IndexContradictions): boolean =>
   contradictions.channels.length > 0 ||
   contradictions.sessions.length > 0
 
+/** Whether two refs name one model: the same provider's same id. */
+export function sameModel(a: ModelRef, b: ModelRef): boolean {
+  return a.provider === b.provider && a.modelId === b.modelId
+}
+
 /** The agent that runs a model, by its provider; Claude for a provider nessa runs no agent for. */
 export function agentOf(model: ModelRef): AgentId {
   return agentForProvider(model.provider) ?? "claude"

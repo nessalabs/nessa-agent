@@ -34,7 +34,11 @@ model of the same agent is `conversation.setModel`'s, so asking for the
 agent the conversation already runs on is `invalid_request`. The desktop
 window has one picker for both: a model of the session's own provider goes
 to `setModel`, one of another provider to `switchAgent`
-(`gateway-source.ts`).
+(`gateway-source.ts`). A pick is only staged in the window
+(`stagedModels`); the next message sent asks for it first and goes only
+once the change is confirmed (`applyStagedModel`), so the line is drawn
+when the person sends, and picking the session's own model again before
+that takes the pick back without asking the gateway anything.
 
 ```mermaid
 sequenceDiagram
@@ -44,6 +48,7 @@ sequenceDiagram
     participant L as Usage-limit schedule store
     participant A as Agent being left
     participant B as New agent (SDK)
+    Note over W: picker only stages the model; the next Send asks first
     W->>G: conversation.switchAgent(agent, model, requestId)
     G->>G: admit, take the submission lock
     G->>J: same request already? answer as it did

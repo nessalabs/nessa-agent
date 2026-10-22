@@ -3,7 +3,7 @@
  * answer, stop, pin, archive, rename, delete — and whether this host can
  * open a provider's login. Re-exported by `commands.ts`, the one list.
  */
-import { modelChanging } from "./model-commands"
+import { applyStagedModel, modelChanging } from "./model-commands"
 import {
   atWork,
   messageText,
@@ -140,7 +140,36 @@ export function sendMessage({
       delivery: { state: "sending" },
     }
     dispatch(messageSent({ sessionId, message, initiator }))
-    return dispatch(deliver(sessionId, message, model, initiator))
+    return dispatch(deliverOnStagedModel(sessionId, message, model, initiator))
+  }
+}
+
+/**
+ * Delivers a message already in the outbox after the model staged in its
+ * session's composer is applied (`applyStagedModel`): the switch happens
+ * when the message is sent, not when the model is picked. A change the
+ * source did not confirm marks the message not sent, with why.
+ */
+function deliverOnStagedModel(
+  sessionId: string,
+  message: Message,
+  model: ModelRef,
+  initiator: Initiator,
+): WorkspaceCommand<Promise<SendOutcome>> {
+  return async (dispatch) => {
+    const staged = await dispatch(applyStagedModel(sessionId))
+    if (staged.applied)
+      return dispatch(deliver(sessionId, message, staged.model, initiator))
+    dispatch(
+      sendFailed({
+        sessionId,
+        messageId: message.id,
+        reason: staged.reason,
+        model,
+        ...(staged.diagnostic ? { diagnostic: staged.diagnostic } : {}),
+      }),
+    )
+    return outcomeOf(staged.reason)
   }
 }
 
@@ -165,7 +194,7 @@ export function resendMessage({
     const model = modelForNextTurn(state, sessionId)
     if (!refused || !model || modelChanging(state, sessionId)) return "not-asked"
     dispatch(messageResent({ sessionId, messageId }))
-    return dispatch(deliver(sessionId, refused, model, initiator))
+    return dispatch(deliverOnStagedModel(sessionId, refused, model, initiator))
   }
 }
 
