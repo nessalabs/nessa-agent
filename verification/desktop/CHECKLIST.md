@@ -31,6 +31,16 @@ Opt-in. Not part of `run-all`. The contract is
 
 ## Alpha startup and stress
 
+- [ ] **Follower reference replay reaches its captured head.** After background
+  turns settle, the verifier captures the default event subscription's committed
+  checkpoint, closes that source, and replays to the identical opaque cursor.
+  Quiet, an intermediate empty batch, and a matching event count do not prove
+  completion. Capture and replay share the existing 60-second overall deadline;
+  stalled or ended streams fail, and every source closes. Ordered event identity
+  and count assertions remain unchanged.
+  _Check:_ `lib/stress-followers.test.mjs` includes late, missing, empty, terminal,
+  shared-deadline and late-open controls; `conversation-stress.mjs` uses it.
+
 - [ ] **Native paired catalogue stress uses the actual protected product child.**
   `conversation-stress.mjs` runs `native_paired_catalogue_stress` while its window,
   background conversations and followers remain active. `--pairedCatalogues` is

@@ -34,37 +34,85 @@ const isRefusal = (error) =>
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** Each event of `conversationId` from the start, read until nothing comes for `quietMs`. */
-export async function replayEvents(client, conversationId, quietMs = 1_500) {
+/** Replay to the captured committed checkpoint, never treating quiet as completion. */
+export async function replayEvents(client, conversationId) {
   const ids = []
-  let last = Date.now()
+  const controller = new AbortController()
+  const { signal } = controller
+  const opened = new Set()
+  let head
+  let cursor
   let ended = null
-  const subscription = await client.subscriptions.events(
-    conversationId,
-    {
+  let timer
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const failure = new Error(
+        `a replay of ${conversationId} did not ${head === undefined ? "capture" : "reach"} its committed head within 60000 ms`,
+      )
+      controller.abort(failure)
+      reject(failure)
+    }, 60_000)
+  })
+  const open = async (handlers, options = {}) => {
+    const subscription = await client.subscriptions.events(conversationId, handlers, {
+      ...options,
+      signal,
+    })
+    if (signal.aborted) {
+      void subscription.close().catch(() => {})
+      signal.throwIfAborted()
+    }
+    opened.add(subscription)
+    return subscription
+  }
+  const wait = async (complete) => {
+    while (!complete() && !ended && !signal.aborted) await sleep(100)
+    signal.throwIfAborted()
+    if (ended) throw new Error(`a replay of ${conversationId} ended ${ended.reason}`)
+  }
+  const replay = async () => {
+    // The default event start is Now: its first batch checkpoints the captured
+    // committed head. SDK Idle emits that outer-save boundary after replay too.
+    // Compare opaque cursors unchanged; neither a page nor silence proves Idle.
+    const capture = await open({
       batch(batch) {
-        for (const event of batch.events) ids.push(event.id)
-        last = Date.now()
+        head ??= batch.cursor
       },
       ended(end) {
         ended = end
       },
-    },
-    { replay: true },
-  )
-  const deadline = Date.now() + 60_000
-  // Quiet counts from the first batch: a replay of a long history can
-  // take longer than the quiet window to start, and nothing read then is
-  // not the same as nothing there.
-  while (
-    !ended &&
-    (ids.length === 0 ? Date.now() - last < 15_000 : Date.now() - last < quietMs) &&
-    Date.now() < deadline
-  )
-    await sleep(100)
-  await subscription.close().catch(() => {})
-  if (ended) throw new Error(`a replay of ${conversationId} ended ${ended.reason}`)
-  return ids
+    })
+    await wait(() => head !== undefined)
+    await capture.close()
+    opened.delete(capture)
+    signal.throwIfAborted()
+    const subscription = await open(
+      {
+        batch(batch) {
+          if (signal.aborted || cursor === head) return
+          for (const event of batch.events) ids.push(event.id)
+          cursor = batch.cursor
+        },
+        ended(end) {
+          ended = end
+        },
+      },
+      { replay: true },
+    )
+    await wait(() => cursor === head)
+    await subscription.close()
+    opened.delete(subscription)
+    return ids
+  }
+  try {
+    return await Promise.race([replay(), deadline])
+  } finally {
+    clearTimeout(timer)
+    controller.abort()
+    // The client's abort gate owns late opens and their physical close ACKs.
+    // Do not let a stalled unsubscribe extend this verifier's overall deadline.
+    for (const subscription of opened) void subscription.close().catch(() => {})
+  }
 }
 
 export class Follower {
