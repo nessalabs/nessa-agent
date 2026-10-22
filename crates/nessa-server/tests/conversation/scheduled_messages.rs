@@ -57,9 +57,9 @@ use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use super::{
     renew_while_held, schedule_caller, HistoryGeneration, PlanToken, PreferenceCommandOutcome,
     PreferenceCommandReceipt, PreferenceReading, PreferenceUpdate, RecordedPreference,
-    ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
-    SelectionChange, SelectionRequest, FENCE_LEASE_MS, FENCE_RENEW_EVERY_MS, FENCE_RENEW_RETRY_MS,
-    SCHEDULE_RETRY_MS,
+    ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledCommandEvidence, ScheduledMessage,
+    ScheduledMessageStore, SelectionChange, SelectionRequest, FENCE_LEASE_MS, FENCE_RENEW_EVERY_MS,
+    FENCE_RENEW_RETRY_MS, SCHEDULE_RETRY_MS,
 };
 use crate::conversation::application::{
     ConversationCaller, ConversationDependencies, ConversationFuture, ConversationLimits,
@@ -286,6 +286,24 @@ fn refused<T: Send + 'static>() -> ConversationFuture<'static, T> {
 }
 
 impl ScheduledMessageStore for RecordingStore {
+    fn command_evidence(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<ScheduledCommandEvidence>> {
+        let row = self.due_row.lock().unwrap().clone();
+        let result = match row
+            .filter(|row| row.conversation == conversation && row.execution_id == execution)
+        {
+            Some(row) => row
+                .command_evidence
+                .map(Some)
+                .ok_or(ConversationError::Unavailable),
+            None => Ok(None),
+        };
+        Box::pin(async move { result })
+    }
+
     fn invalidated_selection(&self, _: &str) -> ConversationFuture<'_, Option<SelectionChange>> {
         Box::pin(async { Ok(None) })
     }
@@ -798,6 +816,15 @@ struct NotifyOnDue {
 }
 
 impl ScheduledMessageStore for NotifyOnDue {
+    fn command_evidence(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<ScheduledCommandEvidence>> {
+        let _ = (conversation, execution);
+        refused()
+    }
+
     fn invalidated_selection(&self, _: &str) -> ConversationFuture<'_, Option<SelectionChange>> {
         Box::pin(async { Ok(None) })
     }
@@ -2400,6 +2427,15 @@ fn store_error() -> ConversationFuture<'static, bool> {
 }
 
 impl ScheduledMessageStore for ScriptedSchedule {
+    fn command_evidence(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<ScheduledCommandEvidence>> {
+        let _ = (conversation, execution);
+        store_error()
+    }
+
     fn invalidated_selection(&self, _: &str) -> ConversationFuture<'_, Option<SelectionChange>> {
         Box::pin(async { Ok(None) })
     }
@@ -4144,6 +4180,8 @@ async fn an_admitted_scheduled_continuation_is_not_an_explicit_person_turn() {
         .person_turns(&id, &automatic_caller, &history)
         .await
         .unwrap();
+    schedule.fail_next_command_evidence_read();
+    let failed_evidence_read = service.person_turns(&id, &automatic_caller, &history).await;
 
     // Both positives use genuine public person admission. Identical prompt,
     // surface, and a scheduling-looking execution spelling must not substitute
@@ -4189,6 +4227,10 @@ async fn an_admitted_scheduled_continuation_is_not_an_explicit_person_turn() {
         classified_after_automatic.is_empty(),
         "an admitted automatic continuation is not an explicit person turn: {classified_after_automatic:?}"
     );
+    assert!(matches!(
+        failed_evidence_read,
+        Err(ConversationError::Metadata)
+    ));
     let people: Vec<_> = classified_after_people
         .iter()
         .map(|(_, execution)| execution.as_str())

@@ -3,8 +3,8 @@ use super::{wire_view, ConversationModelChangeEffect, ProductRouteState};
 use crate::agents_test_support::StubAgentProbe;
 use crate::conversation::application::{
     ConversationError, ConversationFuture, PlanToken, PreferenceReading, RecordedPreference,
-    ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
-    SelectionChange, SelectionRequest,
+    ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledCommandEvidence, ScheduledMessage,
+    ScheduledMessageStore, SelectionChange, SelectionRequest,
 };
 use crate::conversation::domain::ContinuationCause;
 use crate::conversation_test_support::mode_fixture;
@@ -528,6 +528,28 @@ fn schedule_unavailable<'a, T: Send + 'static>() -> ConversationFuture<'a, T> {
 }
 
 impl ScheduledMessageStore for ScheduleReads {
+    fn command_evidence(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<ScheduledCommandEvidence>> {
+        if self.fail_open {
+            return schedule_unavailable();
+        }
+        let result = match self
+            .open_row
+            .clone()
+            .filter(|row| row.conversation == conversation && row.execution_id == execution)
+        {
+            Some(row) => row
+                .command_evidence
+                .map(Some)
+                .ok_or(ConversationError::Unavailable),
+            None => Ok(None),
+        };
+        Box::pin(async move { result })
+    }
+
     fn invalidated_selection(&self, _: &str) -> ConversationFuture<'_, Option<SelectionChange>> {
         schedule_unavailable()
     }

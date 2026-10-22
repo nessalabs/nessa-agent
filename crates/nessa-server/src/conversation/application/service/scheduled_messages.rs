@@ -200,7 +200,7 @@ impl ScheduledCommandEvidence {
         &self.fingerprint
     }
 
-    fn binding(
+    pub(super) fn binding(
         &self,
         id: &ConversationId,
         execution: &str,
@@ -451,6 +451,15 @@ pub trait ScheduledMessageStore: Send + Sync {
     ) -> ConversationFuture<'_, bool>;
     /// The open row for one conversation, if it is scheduled or delivering.
     fn open(&self, conversation: &str) -> ConversationFuture<'_, Option<ScheduledMessage>>;
+    /// Read immutable automatic-command evidence for this exact conversation
+    /// and execution across all statuses, including deletion-scrubbed rows.
+    /// Absence or a row that never crossed submission returns `None`.
+    /// Missing required or malformed evidence is a typed failure, not absence.
+    fn command_evidence(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<ScheduledCommandEvidence>>;
     /// Insert the row, or move its due time when it is still open, only while
     /// the draft's token is current: the preference revision is still enabled,
     /// and the history generation, agent, and model are still the ones stored.

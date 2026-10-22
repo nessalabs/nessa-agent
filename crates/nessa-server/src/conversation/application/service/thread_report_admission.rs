@@ -244,6 +244,16 @@ impl ConversationService {
                     && receipt.binding() == &expected
                     && receipt.outcome() == Some(MutationOutcome::Dispatched)
             }) {
+                if let Some(store) = self.inner.scheduled_messages.get() {
+                    if let Some(evidence) = store
+                        .command_evidence(&id.to_string(), record.request.execution_id.as_str())
+                        .await?
+                    {
+                        if evidence.binding(id, record.request.execution_id.as_str())? == expected {
+                            continue;
+                        }
+                    }
+                }
                 people.push((index, record.request.execution_id.as_str().to_owned()));
             }
         }
