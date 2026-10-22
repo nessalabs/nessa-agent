@@ -40,7 +40,8 @@ describe("new sessions and closing", () => {
     expect(store.getState().workspace.drafts[draftId]).toBeDefined()
     store.dispatch(closePane())
     expect(shown(store)).toEqual(["a"])
-    expect(store.getState().workspace.drafts[draftId]).toBeDefined()
+    // Nothing was typed in it: it closes with its pane, not kept as a tab.
+    expect(store.getState().workspace.drafts[draftId]).toBeUndefined()
   })
 
   it("opens a channel with no sessions on a new session's home", async () => {
@@ -337,8 +338,12 @@ describe("what a drag carries into the grid", () => {
 it("closing a background document leaves the Agents view selected", async () => {
   const { store } = await ready()
   store.dispatch(openSession({ sessionId: "c" }))
+  store.dispatch(openSession({ sessionId: "a" }))
   store.dispatch(showContent({ content: "agents" }))
   store.dispatch(closeSessionTab({ sessionId: "c" }))
   expect(store.getState().workspace.content).toBe("agents")
-  expect(JSON.stringify(store.getState().workspace.tabs)).not.toContain("session:c")
+  expect(JSON.stringify(store.getState().workspace.tabs)).not.toContain("s:c")
+  // Closing the tab in front changes what is under the overview: it shows it.
+  store.dispatch(closeSessionTab({ sessionId: "a" }))
+  expect(store.getState().workspace.content).toBe("panes")
 })

@@ -261,10 +261,10 @@ export function useFocusFollowsPane(
         return
       // Another pane took focus, or the panes came back from under the
       // overview or the window — by a command that changed nothing else, too.
-      // A list that opened a chat in another tab keeps its caret, as one
-      // opening it in the focused pane does; anything else follows the tab.
+      // A session row that opened a chat in another tab keeps its caret, as
+      // one opening it in the focused pane does; anything else follows the tab.
       const fromList =
-        next.tab !== was.tab && !!document.activeElement?.closest("[data-list-row]")
+        next.tab !== was.tab && !!document.activeElement?.closest("[data-session-row]")
       const moved =
         back || (!fromList && (next.pane !== was.pane || next.tab !== was.tab))
       // After the change reaches the page. Coming back from the overview,

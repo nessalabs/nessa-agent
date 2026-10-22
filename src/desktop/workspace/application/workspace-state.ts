@@ -581,8 +581,8 @@ export function without<T>(
 /**
  * Applies a change of the active tab's panes, and reconciles the tabs with
  * it (`reconcileTabs`): a chat that arrives leaves the tab it was in, and one
- * that leaves stands as a tab of its own unless `released` — closed, or let
- * go. Then keeps what the tabs hold (`withTabs`).
+ * that leaves stands as a tab of its own unless `released` (pane item keys)
+ * — closed, or let go. Then keeps what the tabs hold (`withTabs`).
  */
 export function withPanes(
   state: WorkspaceState,
@@ -595,13 +595,17 @@ export function withPanes(
     state.panes,
     panes,
     (item) => {
+      // A widget, or a new session nothing was typed in, does not stand as a
+      // tab of its own once it leaves: it is closed with its pane.
       const shown = paneItemOf(item)
-      if (shown?.kind !== "session") return shown !== null
-      return !!(
-        entry(state.sessions, shown.sessionId) || entry(state.drafts, shown.sessionId)
+      if (shown?.kind !== "session") return false
+      if (entry(state.sessions, shown.sessionId)) return true
+      return (
+        !!entry(state.drafts, shown.sessionId) &&
+        !!entry(state.composerText, shown.sessionId)
       )
     },
-    new Set(released.map((id) => paneItemKey(sessionItem(id)))),
+    new Set(released),
   )
   return withTabs(state, { tabs, panes })
 }

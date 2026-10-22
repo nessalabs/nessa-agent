@@ -1,6 +1,8 @@
 /** The window's open documents, above the same split-pane workspace (#1077). */
 import {
+  Fragment,
   memo,
+  useEffect,
   useLayoutEffect,
   useRef,
   type KeyboardEvent,
@@ -91,7 +93,7 @@ export const WindowTabs = memo(function WindowTabs() {
               merged={shown.length > 1}
             />
           ))
-          if (shown.length < 2) return members
+          if (shown.length < 2) return <Fragment key={tab.id}>{members}</Fragment>
           // A merged tab: the chats it shows side by side travel together.
           return (
             <div
@@ -180,12 +182,23 @@ function TabItem({
  */
 function useDragOut(sessionId: string, merged: boolean) {
   const dispatch = useWorkspaceDispatch()
+  const stop = useRef<(() => void) | null>(null)
+  useEffect(() => () => stop.current?.(), [])
   return (event: ReactPointerEvent<HTMLElement>) => {
+    stop.current?.()
     if (!merged || event.button !== 0) return
     const group = event.currentTarget.closest(".workspace-tab-group")
+    const { pointerId } = event
     const from = { x: event.clientX, y: event.clientY }
-    const up = (lift: PointerEvent) => {
+    const end = () => {
       window.removeEventListener("pointerup", up, true)
+      window.removeEventListener("pointercancel", end, true)
+      window.removeEventListener("blur", end)
+      stop.current = null
+    }
+    const up = (lift: PointerEvent) => {
+      if (lift.pointerId !== pointerId) return
+      end()
       if (Math.hypot(lift.clientX - from.x, lift.clientY - from.y) < 8) return
       const under = document.elementFromPoint(lift.clientX, lift.clientY)
       if (!under?.closest(".workspace-window-tabs") || (group && group.contains(under)))
@@ -193,6 +206,9 @@ function useDragOut(sessionId: string, merged: boolean) {
       dispatch(splitOffTab({ sessionId }))
     }
     window.addEventListener("pointerup", up, true)
+    window.addEventListener("pointercancel", end, true)
+    window.addEventListener("blur", end)
+    stop.current = end
   }
 }
 

@@ -68,10 +68,14 @@ export function itemsInTabs(tabs: WindowTabs, panes: PaneLayout | null): Set<str
   return new Set(tabs.tabs.flatMap((tab) => itemsOf(layoutOf(tabs, panes, tab))))
 }
 
-/** Mints a tab for `layout`, inactive, after the active tab (or last). */
-export function addTab(tabs: WindowTabs, layout: PaneLayout): WindowTabs {
+/** Mints a tab for `layout`, inactive, after `after` — the active tab by default — or last. */
+export function addTab(
+  tabs: WindowTabs,
+  layout: PaneLayout,
+  after: string | null = tabs.activeTab,
+): WindowTabs {
   const tab: WindowTab = { id: `tab-${tabs.nextTab}`, layout }
-  const at = tabs.tabs.findIndex((each) => each.id === tabs.activeTab)
+  const at = tabs.tabs.findIndex((each) => each.id === after)
   const list =
     at < 0
       ? [...tabs.tabs, tab]

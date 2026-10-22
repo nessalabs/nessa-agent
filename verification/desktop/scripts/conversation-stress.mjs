@@ -2498,18 +2498,19 @@ async function mergedTabStays(run, besideId, failures) {
   const after = await widths()
   if (after.length !== before.length || after.some((w, i) => Math.abs(w - before[i]) > 1))
     failures.push(`the merged tab came back at ${after} wide, not ${before}`)
-  if (fresh)
-    await tabs
-      .locator(`[data-session-tab="${fresh}"]`)
-      .getByRole("button", { name: /^Close Tab/ })
-      .click()
-  if (
-    !(await waitFor(
-      async () => (await tabs.locator("[data-session-tab]").count()) >= 2,
-      5_000,
-    ))
+  if (!fresh) return
+  await tabs
+    .locator(`[data-session-tab="${fresh}"]`)
+    .getByRole("button", { name: /^Close Tab/ })
+    .click()
+  const closedAlone = await waitFor(
+    async () =>
+      (await tabs.locator(`[data-session-tab="${fresh}"]`).count()) === 0 &&
+      (await group.locator("[data-session-tab]").count()) === 2,
+    5_000,
   )
-    failures.push("closing the new tab closed more than it")
+  if (!closedAlone)
+    failures.push("closing the new tab did not close it alone, the merged tab intact")
 }
 
 async function flatPanes(page, failures) {

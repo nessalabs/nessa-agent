@@ -10,7 +10,7 @@ import {
   archiveSession,
   deleteSession,
   newSession,
-  openSession,
+  walkToSession,
 } from "../../adapters/store/commands"
 import {
   useWorkspaceDispatch,
@@ -107,7 +107,8 @@ export const SessionList = memo(function SessionList() {
     const at = ordered.findIndex((id) => id === focused)
     const next = ordered[Math.min(Math.max(walk[event.key](at), 0), ordered.length - 1)]
     if (!next) return
-    dispatch(openSession({ sessionId: next }))
+    // Walking the list shows each row in this tab, not a tab per row passed.
+    dispatch(walkToSession({ sessionId: next }))
     listRef.current
       ?.querySelector<HTMLElement>(`[data-session-row="${CSS.escape(next)}"]`)
       ?.focus()

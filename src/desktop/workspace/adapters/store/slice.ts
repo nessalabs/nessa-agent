@@ -62,6 +62,8 @@ const workspaceSlice = createSlice({
       panes.closeTab(state, payload),
     tabSplitOff: (state, { payload }: Payload<{ sessionId: string }>) =>
       panes.splitOffTab(state, payload),
+    sessionWalked: (state, { payload }: Payload<{ sessionId: string }>) =>
+      panes.walkToSession(state, payload),
     // Panes
     focusPane: (state, { payload }: Payload<{ pane: PaneKey }>) =>
       panes.focusPane(state, payload.pane),
@@ -431,6 +433,8 @@ const goesSomewhere: ReadonlySet<string> = new Set(
     workspaceActions.widgetOpened,
     workspaceActions.selectChannel,
     workspaceActions.channelOpened,
+    workspaceActions.tabSwitched,
+    workspaceActions.sessionWalked,
   ].map((action) => action.type),
 )
 
@@ -450,6 +454,8 @@ const changesPanes: ReadonlySet<string> = new Set(
     workspaceActions.closeInFront,
     workspaceActions.equalizePanes,
     workspaceActions.resizePanes,
+    workspaceActions.tabClosed,
+    workspaceActions.tabSplitOff,
   ].map((action) => action.type),
 )
 

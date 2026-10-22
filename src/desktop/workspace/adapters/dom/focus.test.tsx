@@ -83,7 +83,7 @@ function Page() {
   )
   return (
     <div ref={root}>
-      <button type="button" data-list-row>
+      <button type="button" data-session-row="row">
         A row in a list
       </button>
       {windowWidget ? (
@@ -220,7 +220,7 @@ it("follows a pane taking focus even from a list, and leaves a list walked in on
   const store = await page()
   await act(async () => void store.dispatch(newSession({ beside: "right" })))
   await frames()
-  const row = host.querySelector<HTMLElement>("[data-list-row]")
+  const row = host.querySelector<HTMLElement>("[data-session-row]")
   row?.focus()
   // The list opens another session, in a tab of its own: the caret stays in the list.
   await act(async () => void store.dispatch(openSession({ sessionId: "c" })))
@@ -291,7 +291,7 @@ it("puts the caret in the focused pane's composer when the panes come back from 
   await act(async () => void store.dispatch(showContent({ content: "agents" })))
   await frames()
   // In the overview, the keyboard is its own: nothing here takes it.
-  const row = host.querySelector<HTMLElement>("[data-list-row]")
+  const row = host.querySelector<HTMLElement>("[data-session-row]")
   row?.focus()
   row?.remove()
   expect(document.activeElement).toBe(document.body)

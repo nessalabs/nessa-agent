@@ -16,7 +16,9 @@ import {
   dropSession,
   openBeside,
   openSession,
+  openWidget,
   splitOffTab,
+  walkToSession,
 } from "./panes"
 import { switchTab } from "./session-tabs"
 import { indexLoaded, sessionRemoved } from "./updates"
@@ -138,4 +140,42 @@ it("a session deleted leaves the tab it was in", () => {
   const away = openSession(merged(), { sessionId: "c" })
   const gone = sessionRemoved(away, { sessionId: "b", revision: 2, draftId: "unused" })
   expect(strip(gone)).toEqual(["a", "*c"])
+})
+
+it("walking the list shows each row in this tab, not a tab per row", () => {
+  const walked = ["b", "c", "d"].reduce(
+    (state, sessionId) => walkToSession(state, { sessionId }),
+    loaded(),
+  )
+  expect(strip(walked)).toEqual(["*d"])
+  // A row that has a tab of its own is brought forward there.
+  const away = openSession(walked, { sessionId: "a" })
+  expect(strip(walkToSession(away, { sessionId: "d" }))).toEqual(["*d", "a"])
+})
+
+it("a closed widget pane, or an untouched new session, does not come back as a tab", () => {
+  const run = { plugin: "p", id: "w" }
+  const two = openWidget(loaded(), { widget: run, origin: "a", room: roomyGrid })
+  const widget = panesOf(two.panes!).find((pane) => pane.item.startsWith("w:"))!
+  expect(strip(closePane(two, { pane: widget.key, draftId: "x" }))).toEqual(["*a"])
+  const split = createDraft(loaded(), {
+    draftId: "blank",
+    beside: "right",
+    room: roomyGrid,
+  })
+  const blank = panesOf(split.panes!).find((pane) => shownBy(pane) === "blank")!
+  const closed = closePane(split, { pane: blank.key, draftId: "x" })
+  expect(strip(closed)).toEqual(["*a"])
+  expect(closed.drafts).not.toHaveProperty("blank")
+})
+
+it("a chat split off a background group stands after that group", () => {
+  const away = openSession(merged(), { sessionId: "c" })
+  expect(strip(splitOffTab(away, { sessionId: "b" }))).toEqual(["a", "b", "*c"])
+})
+
+it("a session removed upstream closes its tab when it was alone there", () => {
+  const away = openSession(loaded(), { sessionId: "c" })
+  const gone = sessionRemoved(away, { sessionId: "c", revision: 2, draftId: "unused" })
+  expect(strip(gone)).toEqual(["*a"])
 })

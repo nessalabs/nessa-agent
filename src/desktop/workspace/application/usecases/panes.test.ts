@@ -1,3 +1,4 @@
+import { composerTextChanged } from "./sessions"
 import { describe, expect, it } from "vitest"
 import { dropOutcome } from "../../../split-panes/model/drop"
 import {
@@ -192,8 +193,15 @@ describe("new sessions", () => {
     const replaced = openSession(drafted, { sessionId: "c" })
     expect(replaced.drafts.new).toBeDefined()
     const beside = createDraft(loaded(), { draftId: "new", beside: "right", room: roomy })
-    const closed = closePane(beside, { pane: keyOf(beside, "new") })
+    // Typed in, it is kept as a tab of its own when its pane closes.
+    const typed = composerTextChanged(beside, {
+      sessionId: "new",
+      text: "half a thought",
+    })
+    const closed = closePane(typed, { pane: keyOf(typed, "new") })
     expect(closed.drafts.new).toBeDefined()
+    // Untouched, it closes with its pane.
+    expect(closePane(beside, { pane: keyOf(beside, "new") }).drafts.new).toBeUndefined()
   })
 
   it("does not reuse an id already in use", () => {

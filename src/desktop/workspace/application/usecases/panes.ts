@@ -14,6 +14,7 @@ import {
   locate,
   nudgePane as nudgeLayoutPane,
   paneByKey,
+  focusedPane,
   paneCount,
   removePane,
   singlePane,
@@ -332,7 +333,7 @@ export function createDraft(
     beside?: Side
     target?: PaneKey
     room?: PaneRoom
-    /** What the pane it takes showed, let go rather than kept as a tab (a close). */
+    /** Pane items the pane it takes showed, let go rather than kept as a tab (a close). */
     released?: readonly string[]
   },
 ): WorkspaceState {
@@ -435,7 +436,6 @@ export function closePane(
   // Out of a merged tab, the chat stands as a tab of its own (`withPanes`).
   if (paneCount(panes) > 1) return withPanes(state, removePane(panes, pane))
   const item = itemIn(shown)
-  const sessionId = item?.kind === "session" ? item.sessionId : undefined
   // A tab's only pane: the tab closes, if it is not the last.
   if (state.tabs.tabs.length > 1 && state.tabs.activeTab !== null)
     return closeActiveTab(state)
@@ -445,12 +445,12 @@ export function closePane(
     draftId,
     ...home,
     target: pane,
-    released: sessionId ? [sessionId] : [],
+    released: [shown.item],
   })
 }
 
 /** Closes the active tab, showing the one after it, else before it. */
-function closeActiveTab(state: WorkspaceState): WorkspaceState {
+export function closeActiveTab(state: WorkspaceState): WorkspaceState {
   const active = state.tabs.activeTab
   if (active === null) return state
   const { tabs, heir } = dropTab(state.tabs, active)
@@ -486,12 +486,33 @@ export function closeTab(
   const panes = state.panes
   const pane = panes && paneShowingSession(panes, sessionId)
   if (!panes || !pane) return state
-  if (paneCount(panes) > 1)
-    return withPanes(state, removePane(panes, pane.key), [sessionId])
+  if (paneCount(panes) > 1) return withPanes(state, removePane(panes, pane.key), [key])
   if (state.tabs.tabs.length > 1) return closeActiveTab(state)
   const home = homeAfterLast(state, itemIn(pane)) ?? draftHome(state, {})
   if (!home) return state
-  return createDraft(state, { draftId, ...home, target: pane.key, released: [sessionId] })
+  return createDraft(state, { draftId, ...home, target: pane.key, released: [key] })
+}
+
+/**
+ * Walking the session list with the arrow keys: each row passed shows in
+ * this tab's focused pane, in place of the one before, which is let go
+ * rather than left behind as a tab per row — unless something was typed in
+ * it. A chat that already has a tab is brought forward there instead.
+ */
+export function walkToSession(
+  state: WorkspaceState,
+  { sessionId }: { sessionId: string },
+): WorkspaceState {
+  const panes = state.panes
+  const key = paneItemKey(sessionItem(sessionId))
+  if (!panes || tabShowing(state.tabs, panes, key))
+    return openSession(state, { sessionId })
+  const before = itemIn(focusedPane(panes))
+  const leaving =
+    before?.kind === "session" && !Object.hasOwn(state.composerText, before.sessionId)
+      ? [focusedPane(panes).item]
+      : []
+  return openSession(state, { sessionId, pane: panes.focused, released: leaving })
 }
 
 /**
@@ -513,7 +534,7 @@ export function splitOffTab(
   }
   if (!tab.layout || paneCount(tab.layout) < 2) return state
   return withTabs(state, {
-    tabs: addTab(removeFromTab(state.tabs, tab.id, key), singlePane(key)),
+    tabs: addTab(removeFromTab(state.tabs, tab.id, key), singlePane(key), tab.id),
     panes: state.panes,
   })
 }

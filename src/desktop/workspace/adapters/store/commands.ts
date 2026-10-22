@@ -50,6 +50,7 @@ export const {
   arrangementShown,
   tabSwitched: switchTab,
   tabSplitOff: splitOffTab,
+  sessionWalked: walkToSession,
 } = workspaceActions
 
 export type WorkspaceCommand<Result = void> = ThunkAction<
