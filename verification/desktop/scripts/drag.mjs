@@ -60,6 +60,7 @@ import { content, css, keys, modules, storage, zoneSaid } from "./lib/selectors.
 import {
   latestShapeFrame,
   recordShapeFrames,
+  recordedDropSettled,
   stopShapeFrames,
 } from "./lib/shape-sampler.mjs"
 import {
@@ -1155,14 +1156,15 @@ Object.assign(checks, {
     const placeholders = await still.locator(css.dragPlaceholder).count()
     const recorded = await shapes.stop()
     const before = list.map((p) => p.key)
+    const expected = [before[1], before[0], ...before.slice(2)]
     const landing = await recordShapes(still)
     await still.mouse.up()
-    await settled(still)
-    // Nothing flies with less motion: the drop's marks go two frames on.
-    await frames(still, 4)
+    // No finite animation need exist before the deferred arrangement paints.
+    const committed = await recordedDropSettled(still, expected)
     const landed = await landing.stop()
     const after = await order(still)
     const failures = []
+    if (!committed) failures.push("released swap did not settle within its budget")
     if (!said) throw new CannotRun("no swap was offered over the pane beside it")
     // Targeting leaves the existing pane where it is.
     const drawn = recorded.at(-1)?.panes.find((p) => p.key === next.key) ?? next
@@ -1205,10 +1207,10 @@ Object.assign(checks, {
         `released, a pane was drawn off where it landed: ${px(jumped[0])} (${jumped.length} frames)`,
       )
     if (!placeholders) failures.push("no placeholder marks where the drop would land")
-    if (after.join(",") !== [before[1], before[0], ...before.slice(2)].join(","))
+    if (after.join(",") !== expected.join(","))
       failures.push(`released on the swap shown: ${before} became ${after}`)
     failures.push(...residueFailures(await dragResidue(still)))
-    return { failures }
+    return { committed, before, after, failures }
   },
   "compact-drag-card": async (page, layout, fresh, run) => {
     const { own, other } = await sideBySide(page, layout)
