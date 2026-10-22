@@ -760,6 +760,9 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   higher than the wait: the card counts down from the gateway's `serverNowMs`,
   not the window's clock (ADR 141 › What a person sees). Chromium
   and WebKit. The fixture is `fixtures/approval-deadline/`, dev server only.
+  The fixture's expired view carries the deadline notice source and the same
+  permission identity, as the gateway projection does; an untyped notice is
+  refused by the actual client (`lib/approval-deadline-state.test.mjs`).
   _Check:_ `approval-deadline.mjs`. The card's own widths stay
   `responsive.mjs --only approval-card` at 280 and 340 px.
 - [ ] **A clock snapshot is stable across React's consecutive reads even when
