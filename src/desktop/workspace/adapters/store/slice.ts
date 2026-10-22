@@ -278,6 +278,10 @@ const workspaceSlice = createSlice({
     },
     chooseModel: (state, { payload }: Payload<{ sessionId: string; model: ModelRef }>) =>
       sessions.chooseModel(state, payload),
+    stagedModelSettled: (
+      state,
+      { payload }: Payload<{ sessionId: string; model: ModelRef }>,
+    ) => sessions.stagedModelSettled(state, payload),
     accessChosen: (
       state,
       { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
