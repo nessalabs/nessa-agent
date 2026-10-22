@@ -65,7 +65,7 @@ use crate::conversation::application::{
     ConversationCaller, ConversationDependencies, ConversationFuture, ConversationLimits,
     ConversationListing, ConversationModelApplication, ConversationModelRequest,
     ConversationModelRequestState, ConversationModelSelection, ConversationService,
-    ListedConversation, ListedConversations, ObservationCursor, ObservedConversations,
+    ListedConversation, ListedConversations, ObservationCursor, ObservedConversations, Reader,
     RequestedConversation, SubmissionMode, SubmittedMessage, UsageLimitPreferenceDecision,
     UsageLimitPreferenceFacts, UsageLimitPreferenceGrant, UsageLimitPreferencePolicyEvaluator,
 };
@@ -756,6 +756,7 @@ impl ConversationListing for TwoOwners {
         _: &PrincipalId,
         _: bool,
         _: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         Box::pin(async { Ok(ListedConversations::default()) })
     }
@@ -765,7 +766,9 @@ impl ConversationListing for TwoOwners {
         owner: &PrincipalId,
         _: bool,
         _: Option<ObservationCursor>,
+        reader: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
+        assert!(matches!(reader, Reader::Owner));
         self.seen.lock().unwrap().push(owner.as_str().to_owned());
         let fail = self.fail;
         Box::pin(async move {
@@ -2307,6 +2310,7 @@ impl ConversationListing for SettleThenFail {
         _: &PrincipalId,
         _: bool,
         _: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         Box::pin(async { Ok(ListedConversations::default()) })
     }
@@ -2316,7 +2320,9 @@ impl ConversationListing for SettleThenFail {
         _: &PrincipalId,
         _: bool,
         _: Option<ObservationCursor>,
+        reader: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
+        assert!(matches!(reader, Reader::Owner));
         let revision = self.store.revision.load(Ordering::SeqCst);
         self.store.settle_revision(revision);
         Box::pin(async {
@@ -2702,6 +2708,7 @@ impl ConversationListing for FailThenPlan {
         _: &PrincipalId,
         _: bool,
         _: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         Box::pin(async { Ok(ListedConversations::default()) })
     }
@@ -2711,7 +2718,9 @@ impl ConversationListing for FailThenPlan {
         owner: &PrincipalId,
         _: bool,
         _: Option<ObservationCursor>,
+        reader: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
+        assert!(matches!(reader, Reader::Owner));
         let name = owner.as_str().to_owned();
         self.seen.lock().unwrap().push(name.clone());
         if name == "person-a" && self.failed_pages.fetch_add(1, Ordering::SeqCst) == 0 {
