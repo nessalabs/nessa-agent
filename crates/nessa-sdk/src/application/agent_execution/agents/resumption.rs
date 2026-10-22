@@ -272,8 +272,18 @@ impl<'a, F: Fn(&ExecutionId) -> bool> OwedHistory<'a, F> {
         let newest_final = history
             .iter()
             .rposition(|record| ended_for_good(record, &resumed, &live));
-        let usage_limit_hold =
-            newest_final.filter(|&index| usage_limit_blocks_resume(&history[index]));
+        let usage_limit_hold = newest_final.filter(|&root| {
+            let mut current = root;
+            while let Some(next) = canonical_successor(history, current, &positions)
+                .and_then(|execution| positions.get(execution))
+                .copied()
+            {
+                current = next;
+            }
+            // A continuation keeps the original queue position. Its limit
+            // also holds the tail saved before that successor was admitted.
+            usage_limit_blocks_resume(&history[current])
+        });
         let newest_message = history.iter().rposition(|record| {
             record.submission != SubmissionMode::Immediate && record.resumed_from.is_none()
         });

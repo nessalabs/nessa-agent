@@ -3268,6 +3268,7 @@ async fn a_retryable_submit_whose_retry_does_not_commit_still_waits() {
 /// schedule fence, including a restarted delivery owner.
 async fn disabled_recovery_fixture(
     directory: &Path,
+    model: &str,
 ) -> (
     ConversationService,
     Arc<LocalScheduledMessages>,
@@ -3294,7 +3295,8 @@ async fn disabled_recovery_fixture(
         .set_preference(true, ScheduleActor::system(), 1)
         .await
         .unwrap();
-    let row = submitting_row("11111111-1111-4111-8111-111111111111");
+    let mut row = submitting_row("11111111-1111-4111-8111-111111111111");
+    row.model = model.into();
     schedule
         .accept(
             recovery_draft(&row, schedule.preference().await.unwrap().revision),
@@ -3371,7 +3373,7 @@ async fn preference_off_recovers_command_evidence_before_cancellation() {
     ] {
         let directory = tempfile::tempdir().unwrap();
         let (service, schedule, commands, clock, row) =
-            disabled_recovery_fixture(directory.path()).await;
+            disabled_recovery_fixture(directory.path(), "opus").await;
         let id = ConversationId::new(&row.conversation).unwrap();
         if stage.is_none() || stage == Some(MutationStage::Accepted) {
             service
@@ -3544,7 +3546,7 @@ async fn preference_off_recovers_command_evidence_before_cancellation() {
 async fn preference_off_recovers_a_saved_turn_after_its_delivery_audit_failed() {
     let directory = tempfile::tempdir().unwrap();
     let (service, schedule, commands, clock, row) =
-        disabled_recovery_fixture(directory.path()).await;
+        disabled_recovery_fixture(directory.path(), "opus").await;
     let id = ConversationId::new(&row.conversation).unwrap();
     let caller = schedule_caller(&row).unwrap();
     service
@@ -3608,7 +3610,7 @@ async fn a_scrubbed_live_submission_is_unconfirmed_when_adopted_after_restart() 
         for accepted_only in [false, true] {
             let directory = tempfile::tempdir().unwrap();
             let (service, schedule, commands, clock, row) =
-                disabled_recovery_fixture(directory.path()).await;
+                disabled_recovery_fixture(directory.path(), "opus").await;
             if accepted_only {
                 let id = ConversationId::new(&row.conversation).unwrap();
                 let binding = super::scheduled_submit_binding(&id, &row).unwrap();
@@ -3758,7 +3760,7 @@ async fn deletion_recovers_original_command_outcomes_after_failed_audit_and_rest
             ] {
                 let directory = tempfile::tempdir().unwrap();
                 let (service, schedule, commands, clock, row) =
-                    disabled_recovery_fixture(directory.path()).await;
+                    disabled_recovery_fixture(directory.path(), "opus").await;
                 let id = ConversationId::new(&row.conversation).unwrap();
                 let binding = ConversationService::submit_lookup(
                     &id,
@@ -3891,7 +3893,7 @@ async fn deletion_recovers_original_command_outcomes_after_failed_audit_and_rest
 async fn deleted_command_evidence_retries_a_busy_journal_without_guessing_an_outcome() {
     let directory = tempfile::tempdir().unwrap();
     let (service, schedule, commands, clock, row) =
-        disabled_recovery_fixture(directory.path()).await;
+        disabled_recovery_fixture(directory.path(), "opus").await;
     let id = ConversationId::new(&row.conversation).unwrap();
     let binding = ConversationService::submit_lookup(
         &id,
@@ -4065,7 +4067,7 @@ async fn an_admitted_scheduled_continuation_is_not_an_explicit_person_turn() {
     // Real SQLite schedule accept -> claim_due -> begin_submit -> close/reopen;
     // real RecordStorage command + session store. No fabricated receipt/evidence.
     let (service, schedule, commands, clock, draft_row) =
-        disabled_recovery_fixture(directory.path()).await;
+        disabled_recovery_fixture(directory.path(), "test").await;
     let id = ConversationId::new(&draft_row.conversation).unwrap();
     let automatic_caller = schedule_caller(&draft_row).unwrap();
     service
