@@ -122,7 +122,7 @@ session, generation, stage, cause and actor together.
 | Ordering | Required evidence and effect | Regression |
 | --- | --- | --- |
 | Start synchronously selects Starting; close seals before the attachment worker first runs | Join the real Started and Closed audit acknowledgements with their original actors; no provider acquisition; the attachment waiter is Closed, while close succeeds only after its actual cleanup and evidence complete | `close_before_the_attachment_worker_joins_its_actual_started_audit` |
-| The same ordering, but Started audit is rejected or its acknowledgement is held | Preserve the actual sink failure, or keep close pending until the real acknowledgement; never substitute the worker's generation refusal for an audit receipt | Started rejection and held-acknowledgement controls beside that regression |
+| The same ordering, but Started audit is rejected or its acknowledgement is held | Preserve the actual sink failure, or keep close pending until the real acknowledgement; never substitute the worker's generation refusal for an audit receipt | `close_before_the_attachment_worker_keeps_real_started_rejection_and_late_ack` |
 
 The installed Started obligation is already owned when close seals admission.
 Its evidence uses the existing serialized proof-retirement/audit owner; the

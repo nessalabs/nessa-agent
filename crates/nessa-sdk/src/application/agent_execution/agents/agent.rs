@@ -1318,6 +1318,8 @@ impl Agent {
         let (start, wait) = self.inner.lifecycle.start_attachment(authorization)?;
         let agent = self.clone();
         runtime.spawn(async move {
+            // Starting was selected synchronously. Close must join its actual
+            // audit receipt even if it fences provider I/O before this task runs.
             let started = agent
                 .inner
                 .lifecycle
