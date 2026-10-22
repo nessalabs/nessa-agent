@@ -322,3 +322,156 @@ async fn a_paired_list_admits_its_scope_before_service_availability() {
 
 #[path = "paired_lists/stress.rs"]
 mod stress;
+
+/// A committed change wakes an established paired list even when its SQL
+/// head cannot be read: the real socket ends it with the typed storage failure.
+#[tokio::test]
+async fn a_paired_list_ends_with_storage_failure_after_its_initial_read() {
+    use nessa_local_database::rusqlite::Connection;
+    use nessa_protocol::conversation::domain::ConversationPreview;
+    use tokio_tungstenite::tungstenite::Message as PeerMessage;
+    let fixture = SubscriptionFixture::new()
+        .await
+        .with_devices(this_device(true));
+    grants(&fixture.authority, &["conversation.read", "server.read"]);
+    let shared = stored_row(&fixture, 1, true).await;
+    let watch_baseline = fixture.storage.committed_watches();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let state = fixture.state.clone();
+    let session = fixture.session.clone();
+    let router = axum::Router::new().route(
+        "/probe",
+        axum::routing::get(move |ws: axum::extract::WebSocketUpgrade| {
+            let state = state.clone();
+            let session = session.clone();
+            async move { ws.on_upgrade(move |socket| run_authenticated(socket, state, session)) }
+        }),
+    );
+    let (stop, stopped) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+            .unwrap();
+    });
+    let (mut peer, _) = tokio_tungstenite::connect_async(format!("ws://{address}/probe"))
+        .await
+        .unwrap();
+    let request =
+        RequestFrame::new("fault-list", "conversation.subscribeList", &json!({})).unwrap();
+    peer.send(PeerMessage::Text(
+        serde_json::to_string(&request).unwrap().into(),
+    ))
+    .await
+    .unwrap();
+    let reply_text = timeout(EXPECTED, peer.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .into_text()
+        .unwrap();
+    let reply: Value = serde_json::from_str(&reply_text).unwrap();
+    assert_eq!(reply["type"], "res", "{reply}");
+    assert_eq!(reply["id"], "fault-list", "{reply}");
+    assert_eq!(reply["ok"], true, "{reply}");
+    let subscription = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let initial_text = timeout(EXPECTED, peer.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .into_text()
+        .unwrap();
+    let initial: Value = serde_json::from_str(&initial_text).unwrap();
+    assert_eq!(initial["event"], "conversation.listed", "{initial}");
+    assert_eq!(
+        initial["payload"]["subscriptionId"], subscription,
+        "{initial}"
+    );
+    assert_eq!(
+        initial["payload"]["list"]["conversations"][0]["conversationId"],
+        shared.to_string(),
+        "{initial}"
+    );
+    wait_for_watches(&fixture, watch_baseline + 1).await;
+    let path = fixture
+        ._directory
+        .path()
+        .join("conversations/metadata.sqlite3");
+    let external = Connection::open(&path).unwrap();
+    external.execute("ALTER TABLE share_grant_changes RENAME COLUMN revision TO intentionally_unreadable_revision", []).unwrap();
+    assert!(external
+        .query_row("SELECT MAX(revision) FROM share_grant_changes", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .is_err());
+    fixture
+        .metadata
+        .record(
+            &shared,
+            ConversationSummary::new(
+                None,
+                Some(ConversationPreview::new("durable-after-fault").unwrap()),
+                2,
+                false,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let preview: String = external
+        .query_row(
+            "SELECT preview FROM summaries WHERE conversation_id = ?1",
+            [shared.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(preview, "durable-after-fault");
+    let terminal_text = timeout(Duration::from_secs(3), peer.next())
+        .await
+        .expect("SQL failure must produce a terminal frame, not silent idle")
+        .expect("connection remains open")
+        .unwrap()
+        .into_text()
+        .unwrap();
+    let terminal: Value = serde_json::from_str(&terminal_text).unwrap();
+    assert_eq!(terminal["type"], "event", "{terminal}");
+    assert_eq!(
+        terminal["event"], "conversation.subscriptionEnded",
+        "{terminal}"
+    );
+    assert_eq!(
+        terminal["payload"]["subscriptionId"], subscription,
+        "{terminal}"
+    );
+    assert_eq!(terminal["payload"]["reason"], "refused", "{terminal}");
+    assert_eq!(
+        terminal["payload"]["code"], "conversation_storage_unavailable",
+        "{terminal}"
+    );
+    wait_for_watches(&fixture, watch_baseline).await;
+    // A websocket ping/pong after the terminal proves the transport is alive.
+    peer.send(PeerMessage::Ping(vec![1, 2, 3].into()))
+        .await
+        .unwrap();
+    let pong = timeout(EXPECTED, peer.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(pong, PeerMessage::Pong(ref bytes) if bytes.as_ref() == [1, 2, 3]),
+        "{pong:?}"
+    );
+    peer.close(None).await.unwrap();
+    drop(peer);
+    stop.send(()).unwrap();
+    timeout(EXPECTED, server).await.unwrap().unwrap();
+}
