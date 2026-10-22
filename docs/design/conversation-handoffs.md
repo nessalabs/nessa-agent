@@ -94,7 +94,7 @@ sequenceDiagram
     participant S as Source history
     participant N as New conversation (SDK)
     W->>G: conversation.fork(sourceConversationId, conversationId)
-    G->>G: admit; source the caller's own; target new or this request's
+    G->>G: admit, source is the caller's own, target new or this request's
     G->>S: carried_history() of the committed snapshot
     G->>G: seed Inner.forks[conversationId] = Fork{source, history}
     G->>N: create_command(source's agent, model, preset, placement)
