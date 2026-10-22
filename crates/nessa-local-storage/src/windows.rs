@@ -26,7 +26,12 @@ use windows_sys::Win32::{
         },
     },
 };
+mod native_directory;
 mod retained_directory;
+pub use native_directory::{
+    create_protected_directory_at, create_protected_file_at, open_directory_at, open_file_at,
+    release_directory_writes, release_file_writes, remove_handle, rename_handle_at,
+};
 pub(crate) use retained_directory::{
     validate_native_name, RetainedDirectory, RetainedDirectoryEntries,
 };
@@ -75,6 +80,10 @@ impl User {
         }
     }
     fn descriptor(&self, directory: bool) -> io::Result<LocalAllocation> {
+        self.descriptor_with_access(directory, "FA")
+    }
+
+    fn descriptor_with_access(&self, directory: bool, access: &str) -> io::Result<LocalAllocation> {
         unsafe {
             let mut text = null_mut();
             check(ConvertSidToStringSidW(self.sid, &mut text))?;
@@ -87,7 +96,7 @@ impl User {
                 .map_err(|_| unsafe_file())?;
             drop(allocation);
             let inherit = if directory { "OICI" } else { "" };
-            let sddl = format!("O:{sid}D:P(A;{inherit};FA;;;{sid})(A;{inherit};FA;;;SY)");
+            let sddl = format!("O:{sid}D:P(A;{inherit};{access};;;{sid})(A;{inherit};FA;;;SY)");
             let wide: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
             let mut descriptor = null_mut();
             check(ConvertStringSecurityDescriptorToSecurityDescriptorW(

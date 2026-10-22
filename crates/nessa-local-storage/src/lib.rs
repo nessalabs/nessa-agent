@@ -32,6 +32,11 @@ pub use platform::{
 pub use platform::{
     create_private_directory_path, create_shared_directory_path, verify_shared_directory_file,
 };
+#[cfg(windows)]
+pub use platform::{
+    create_protected_directory_at, create_protected_file_at, open_directory_at, open_file_at,
+    release_directory_writes, release_file_writes, remove_handle, rename_handle_at,
+};
 pub use retained_directory::{
     PrivateDirectory, PrivateDirectoryEntries, PrivateDirectoryEntry, PrivateDirectoryTempFile,
     PrivateFileIdentity, PrivateFileType, PrivatePublicationFailure, PrivatePublicationStage,

@@ -63,6 +63,31 @@ replacement. Existing verified read-only probes share deletion. Creation ACLs
 remain protected current-user plus LocalSystem before bytes, with owner, regular
 single-link and no-reparse checks on the same handles used for I/O.
 
+## Windows protected restore directory candidate (#270)
+
+The Windows-only native directory module in `nessa-local-storage` owns the
+candidate mechanics; backup owns whether they are qualified for activation.
+The existing backup fail-closed path stays in place until native tests prove
+this candidate. `RootDirectory` binds name resolution; its presence alone is
+not evidence that an initial handle delegates directory write authority through
+a restrictive DACL. The native tests deliberately require that property.
+
+| Order | Operation | Required result / failure |
+| --- | --- | --- |
+| N01 | Create one absent child with `NtCreateFile(FILE_CREATE)` and a protected read/search-only user DACL | Return the initial writer/DELETE/WRITE_DAC handle; a collision leaves the existing object untouched |
+| N02 | Another handle requests ADD_FILE, ADD_SUBDIRECTORY, DELETE_CHILD or DELETE; another process attempts to rename the root | Refuse it before any mutable namespace is exposed. The initial directory handle shares only READ, preventing parent DELETE_CHILD from supplying a competing DELETE handle; no post-create ACL repair window |
+| N03 | Use initial directory handle as RootDirectory for exclusive child create with read-only user file ACL | Create beneath the retained object despite renamed ancestors; fresh file WRITE and DELETE handles are refused, including after initial file handle closes. If the kernel rechecks the restrictive parent ACL, native qualification fails here |
+| N04 | Rename the retained child handle to one relative destination, without replacement; rename the root through its initial DELETE handle while leaf handles stay open | Preserve an occupied destination and source; never reopen the source for DELETE authority. Native qualification must prove the root's own rename works without delete sharing |
+| N05 | Delete through the exact retained object handle | Remove that object only; a replacement at its old name is not cleanup authority |
+| N06 | Successful root promotion, then release temporary directory and file restrictions through their initial WRITE_DAC handles | Restore ordinary private owner ACLs only after live rename; failure remains an explicit error |
+| N07 | Any create/rename/delete fails | Return the OS error; no path fallback, automatic ACL relaxation, or success claim |
+
+The threat boundary excludes an administrator, process-handle duplication and
+an owner deliberately changing the DACL, as Unix directory mode protection also
+excludes an owner deliberately changing its mode. Native Windows tests must
+exercise the candidate on Windows; Linux compilation does not qualify it.
+The existing platform CI owns those tests. No power-loss durability is claimed.
+
 ## Durability and evidence limits
 
 Retained publication flushes the writable payload before and after handle rename.
