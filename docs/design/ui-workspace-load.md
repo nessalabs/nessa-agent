@@ -34,6 +34,8 @@ focus taken during target search.
 | Effect mounted | Return from overview | Two settlement frames precede target search; the overview leave's own frame does not search the panes. |
 | Mounted search waiting to land | Person focuses a list or dialog | That focus remains the person's. |
 | Browser layout owner replaced while pane movement is queued | Replace the workspace layout, then deliver retired callbacks | Retired callbacks enqueue zero new work; current layout's focus remains usable. |
+| Mounted sliver already moving | Replace its store with one focused elsewhere | Before paint the replacement reflects its own focus; its later focus change still waits for its requested frame. |
+| Pane focus or sliver owner replaced while its paint is queued | Replace the store or layout with the same pane key, then deliver the cancelled paint | The replacement's focus and sliver are unchanged; its own later focus change still applies. `pane-focus-mark.test.tsx` covers both replacements. |
 
 ## What load coverage exists
 
