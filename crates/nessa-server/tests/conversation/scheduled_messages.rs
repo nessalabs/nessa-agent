@@ -945,9 +945,13 @@ impl CreationStorage for ShiftStorage {
         &self,
         _: String,
         _: String,
-        _: bool,
+        create: bool,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
-        self.clock.0.store(9_000, Ordering::SeqCst);
+        // Read-only receipt recovery does not perform the simulated submit.
+        // Advance time only when the command effect opens its writable stream.
+        if create {
+            self.clock.0.store(9_000, Ordering::SeqCst);
+        }
         Box::pin(async { Ok(Some(Arc::new(ShiftLease) as Arc<dyn CreationStorageLease>)) })
     }
 }
@@ -1926,6 +1930,8 @@ async fn a_failed_delivery_plan_waits_out_its_backoff() {
     );
     let store = Arc::new(RecordingStore::new(true));
     store.submit_attempts.store(true, Ordering::SeqCst);
+    // This row has been claimed for delivery but has not crossed begin_submit.
+    *store.known_status.lock().unwrap() = Some(Some("delivering".into()));
     store.fail_open.store(true, Ordering::SeqCst);
     *store.due_row.lock().unwrap() = Some(due_row("owner"));
     service.bind_scheduled_messages(store.clone());
@@ -1997,6 +2003,8 @@ async fn a_delivery_plan_the_database_refuses_does_not_spin() {
     );
     let store = Arc::new(RecordingStore::new(true));
     store.submit_attempts.store(true, Ordering::SeqCst);
+    // This row has been claimed for delivery but has not crossed begin_submit.
+    *store.known_status.lock().unwrap() = Some(Some("delivering".into()));
     store.fail_open.store(true, Ordering::SeqCst);
     store.fail_reconcile_note.store(true, Ordering::SeqCst);
     *store.due_row.lock().unwrap() = Some(due_row("owner"));

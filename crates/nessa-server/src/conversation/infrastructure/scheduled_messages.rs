@@ -3081,7 +3081,11 @@ mod tests {
 
     #[tokio::test]
     async fn an_expired_owner_cannot_write_an_outcome_or_retry_before_adoption() {
-        let store = store().await;
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("scheduled");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("scheduled-chat-messages.sqlite3");
+        let store = LocalScheduledMessages::open(&path).unwrap();
         store.set_preference(true, person(), 1).await.unwrap();
         store
             .accept(draft("conversation", "causal", "exec-1", 1000), 2)
@@ -3109,8 +3113,9 @@ mod tests {
             Some("submitting")
         );
         assert_eq!(audits(&store), before);
-        assert!(store.begin_submit("exec-1", expired).await.unwrap());
-        store
+        let adopted = LocalScheduledMessages::open(&path).unwrap();
+        assert!(adopted.begin_submit("exec-1", expired).await.unwrap());
+        adopted
             .record_outcome(
                 "exec-1",
                 ScheduleSettlement::Delivered,
