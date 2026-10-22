@@ -306,6 +306,27 @@ describe("model choices", () => {
     expect(asked(source, "setModel")).toHaveLength(0)
   })
 
+  it("keeps a take-back staged while an earlier change can still land", async () => {
+    const { source, store } = await ready()
+    source.setModel = async (_id, _model, id) => receipt(id)
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    await send(store, "acknowledged only")
+    expect(store.getState().workspace.modelChoices.a?.state).toBe("acknowledged")
+    store.dispatch(changeModel({ sessionId: "a", model: opus }))
+    expect(store.getState().workspace.stagedModels.a).toEqual(opus)
+    // The earlier change lands late: the take-back still decides the next send.
+    source.emit({
+      kind: "session",
+      session: summary("a", "desktop", 1000, "idle", { model: next, revision: 300 }),
+    })
+    await settle()
+    expect(selectNextModel(store.getState(), "a")).toEqual(opus)
+    source.setModel = vi.fn(reconciles(source))
+    expect(await send(store, "back on opus")).toBe("sent")
+    expect(source.setModel).toHaveBeenCalledWith("a", opus, expect.any(String), "person")
+    expect(asked(source, "send").at(-1)?.[1]).toMatchObject({ model: opus })
+  })
+
   it("holds a send while the source says a model change is pending", async () => {
     const { source, store } = await ready()
     source.emit({

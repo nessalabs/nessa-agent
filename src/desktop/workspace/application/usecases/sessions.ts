@@ -244,12 +244,18 @@ export function chooseModel(
   // A new pick is the person's newer word: an earlier one the source refused
   // is no longer said. One not known to be settled stays, so the next send
   // still checks it (`modelUnsettled`).
-  const refused = entry(state.modelChoices, sessionId)?.state === "refused"
+  const choice = entry(state.modelChoices, sessionId)?.state
+  const refused = choice === "refused"
+  // Taking a pick back to the model the summary shows only drops it when no
+  // earlier change can still land; one that may stays staged, so a late
+  // summary of that change cannot decide the next send's model.
+  const unsettled = choice === "acknowledged" || choice === "recovery_required"
   return {
     ...state,
-    stagedModels: sameModel(model, session.model)
-      ? without(state.stagedModels, sessionId)
-      : { ...state.stagedModels, [sessionId]: model },
+    stagedModels:
+      sameModel(model, session.model) && !unsettled
+        ? without(state.stagedModels, sessionId)
+        : { ...state.stagedModels, [sessionId]: model },
     modelChoices: refused ? without(state.modelChoices, sessionId) : state.modelChoices,
   }
 }
