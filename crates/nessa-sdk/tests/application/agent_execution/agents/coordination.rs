@@ -104,7 +104,7 @@ async fn close_before_the_attachment_worker_joins_its_actual_started_audit() {
         .authorize_attachment(AttachmentRequest::CallerRequested(original.clone()))
         .unwrap();
     let attachment = agent.start_attachment(authorization).unwrap();
-    let generation = agent.attachment_status().generation();
+    let generation = attachment.generation;
     let closer = ActionContext::new("person", "panel", "close-before-worker").unwrap();
     // Current-thread scheduling: neither the attachment nor shutdown worker
     // can run between these synchronous lifecycle decisions.
