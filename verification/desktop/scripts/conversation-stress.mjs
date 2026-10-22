@@ -1254,9 +1254,9 @@ const steps = {
     const settledTurn = await settled(run, run.main.id, seen, text, "failed", failures)
     if (!settledTurn.turn) return
     const limit = settledTurn.turn.usageLimit
-    if (!limit || limit.provider !== "claude" || limit.recovery !== "unknown")
+    if (!limit || limit.provider !== run.stack.agent || limit.recovery !== "unknown")
       failures.push(
-        `the turn is not an unknown Claude usage limit: ${JSON.stringify(limit)}`,
+        `the turn is not an unknown ${run.stack.agent} usage limit: ${JSON.stringify(limit)}`,
       )
     if (settledTurn.turn.error)
       failures.push(`a usage limit kept a diagnostic: ${settledTurn.turn.error}`)

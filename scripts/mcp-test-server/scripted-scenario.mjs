@@ -23,6 +23,7 @@
  * | waiting | outcome cancelled, no branch, or the turn is cancelled | stop `cancelled` |
  * | waiting | an answer that is not a selection or a cancellation | the turn fails |
  * | running | fail | the turn fails; chunks and calls already sent stay sent |
+ * | running | usage-limit | the selected harness's terminal usage-limit RPC error; no successful completion |
  * | running | pause | waits `ms`, or until `session/cancel`, then the next step |
  * | running | wait-cancel | waiting for `session/cancel` |
  * | waiting for cancel | `session/cancel` | stop `cancelled` |
@@ -65,7 +66,16 @@ export const ALLOW_ONCE = "allow-once"
 export const DENY_ONCE = "deny-once"
 
 const ANSWERS = [ALLOW_ONCE, DENY_ONCE, "cancelled"]
-const KINDS = ["text", "permission", "tool", "pause", "fail", "wait-cancel", "end"]
+const KINDS = [
+  "text",
+  "permission",
+  "tool",
+  "pause",
+  "fail",
+  "usage-limit",
+  "wait-cancel",
+  "end",
+]
 const BRANCH_KINDS = ["text", "tool", "pause", "fail", "end"]
 
 const FIELDS = {
@@ -74,6 +84,7 @@ const FIELDS = {
   tool: ["do", "tool", "arguments"],
   pause: ["do", "ms"],
   fail: ["do", "message"],
+  "usage-limit": ["do"],
   "wait-cancel": ["do"],
   end: ["do"],
 }
@@ -138,7 +149,7 @@ function parseSteps(steps, branch) {
   if (!Array.isArray(steps) || steps.length === 0) throw new Error("a step list is empty")
   const parsed = steps.map((step) => parseStep(step, branch))
   const terminal = parsed.findIndex((step) =>
-    ["fail", "wait-cancel", "end"].includes(step.do),
+    ["fail", "usage-limit", "wait-cancel", "end"].includes(step.do),
   )
   if (terminal !== -1 && terminal !== parsed.length - 1)
     throw new Error(`steps follow ${parsed[terminal].do}, which ends the turn`)
@@ -147,7 +158,9 @@ function parseSteps(steps, branch) {
 
 function parseStep(step, branch) {
   if (!plain(step) || typeof step.do !== "string" || !KINDS.includes(step.do))
-    throw new Error("a step's do is text, permission, tool, fail, wait-cancel, or end")
+    throw new Error(
+      "a step's do is text, permission, tool, fail, usage-limit, wait-cancel, or end",
+    )
   if (branch && !BRANCH_KINDS.includes(step.do))
     throw new Error(`a permission answer cannot ${step.do}`)
   const allowed = FIELDS[step.do]
@@ -394,6 +407,23 @@ export async function runSteps(steps, ctx) {
   return { stopReason: "end_turn" }
 }
 
+/** The pinned harness's terminal limit frame; generic failures keep no such data. */
+export class ScriptedUsageLimitError extends Error {
+  constructor(agent) {
+    switch (agent) {
+      case "claude":
+        super("You've hit your weekly limit")
+        break
+      case "codex":
+        super("Usage limit exceeded")
+        this.data = { codexErrorInfo: "usageLimitExceeded" }
+        break
+      default:
+        throw new Error(`no scripted usage-limit frame for ${agent}`)
+    }
+  }
+}
+
 async function runStep(step, ctx) {
   switch (step.do) {
     case "text": {
@@ -425,6 +455,8 @@ async function runStep(step, ctx) {
       return ctx.cancelled() ? { stopReason: "cancelled" } : null
     case "fail":
       return { fail: step.message }
+    case "usage-limit":
+      throw new ScriptedUsageLimitError(ctx.agent)
     case "wait-cancel":
       await ctx.untilCancelled()
       return { stopReason: "cancelled" }

@@ -126,6 +126,14 @@ causal turn remains eligible. The partial unique index covers only `scheduled`, 
 
 ### Agent switching and selection invalidation
 
+The scripted stress limit uses the selected harness's wire contract: Claude's
+`-32603` weekly-limit message, or Codex's `data.codexErrorInfo` equal to
+`usageLimitExceeded`. A Claude-looking string alone on Codex stays a generic
+failure. `scripted-scenario.test.mjs` checks both real stdio frames and that
+negative control; `stress-scenario.test.mjs` checks the workload selects this
+terminal step. The window still requires the typed limit for its actual agent,
+unknown recovery, no diagnostic, and the unchanged continuation checkbox checks.
+
 Model changes and agent switches use one typed selection-invalidation owner.
 Its durable identity is conversation, selection kind (model or agent), and the
 original request id. The cancellation cause follows that kind; the audit actor

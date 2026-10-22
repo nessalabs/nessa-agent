@@ -4,6 +4,11 @@ import { test } from "node:test"
 import { parseScenario, runSteps, turnFor } from "./scripted-scenario.mjs"
 import { SAYS, STRESS, stressScenario } from "./scenarios/stress.mjs"
 
+test("stress requests the actual harness's usage-limit frame", () => {
+  const scenario = parseScenario(stressScenario())
+  assert.deepEqual(turnFor(scenario, STRESS.limit).steps, [{ do: "usage-limit" }])
+})
+
 test("recursive Stop creates owned work through the selected server and waits for cancellation", async () => {
   const scenario = parseScenario(stressScenario())
   for (const [phrase, message] of [

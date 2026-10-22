@@ -122,6 +122,67 @@ const claudeOpen = {
   _meta: { claudeCode: { options: { model: "claude-test" } } },
 }
 
+test("usage-limit sends the selected harness's exact failure frame", async () => {
+  for (const provider of ["claude", "codex"]) {
+    const agent = start(
+      provider,
+      { turns: [{ steps: [{ do: "usage-limit" }] }] },
+      provider === "codex" ? { CODEX_CONFIG: JSON.stringify({ model: "gpt-test" }) } : {},
+    )
+    await agent.request("initialize", {})
+    const opened = await agent.request("session/new", claudeOpen)
+    assert.equal(opened.error, undefined)
+    const result = await agent.request("session/prompt", {
+      sessionId: opened.result.sessionId,
+      prompt: [],
+    })
+    assert.deepEqual(
+      result.error,
+      provider === "codex"
+        ? {
+            code: -32603,
+            message: "Usage limit exceeded",
+            data: { codexErrorInfo: "usageLimitExceeded" },
+          }
+        : { code: -32603, message: "You've hit your weekly limit" },
+    )
+    assert.equal(result.result, undefined)
+    agent.child.stdin.end()
+    await exited(agent.child)
+  }
+})
+
+test("a generic Claude-looking failure on Codex remains unclassified wire data", async () => {
+  const agent = start(
+    "codex",
+    {
+      turns: [{ steps: [{ do: "fail", message: "You've hit your weekly limit" }] }],
+    },
+    { CODEX_CONFIG: JSON.stringify({ model: "gpt-test" }) },
+  )
+  await agent.request("initialize", {})
+  const opened = await agent.request("session/new", { cwd: here, mcpServers: [mcptest] })
+  assert.equal(opened.error, undefined)
+  const result = await agent.request("session/prompt", {
+    sessionId: opened.result.sessionId,
+    prompt: [],
+  })
+  assert.deepEqual(result.error, {
+    code: -32603,
+    message: "You've hit your weekly limit",
+  })
+  agent.child.stdin.end()
+  await exited(agent.child)
+})
+
+test("usage-limit is terminal and accepts no invented provider fields", () => {
+  for (const steps of [
+    [{ do: "usage-limit" }, { do: "end" }],
+    [{ do: "usage-limit", provider: "claude" }],
+  ])
+    assert.throws(() => parseScenario({ turns: [{ steps }] }))
+})
+
 test("parse rejects a scenario that is not a non-empty turn list", () => {
   for (const value of [
     {},

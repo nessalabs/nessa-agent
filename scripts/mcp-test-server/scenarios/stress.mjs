@@ -313,12 +313,7 @@ export function stressScenario({
       })),
       {
         when: STRESS.limit,
-        steps: [
-          {
-            do: "fail",
-            message: "You've hit your weekly limit",
-          },
-        ],
+        steps: [{ do: "usage-limit" }],
       },
       {
         when: STRESS.delegate,
