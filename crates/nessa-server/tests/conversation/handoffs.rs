@@ -2,10 +2,10 @@
 //! metadata store and record storage (issue #1080,
 //! `docs/design/conversation-handoffs.md`).
 use super::*;
-use crate::conversation::application::ScheduledMessageStore;
 use crate::conversation::application::{
-    ConversationAgentSwitch, ConversationAgentSwitchState, FailureBackoff, ProviderSessionErasers,
-    RequestedConversation, SubmittedMessage, UnfinishedTurns,
+    ConversationAgentSwitch, ConversationAgentSwitchState, FailureBackoff, HistoryGeneration,
+    PlanToken, ProviderSessionErasers, RequestedConversation, ScheduleActor, ScheduleSettlement,
+    ScheduledMessageStore, SelectionChange, SelectionRequest, SubmittedMessage, UnfinishedTurns,
 };
 use crate::conversation::infrastructure::{LocalConversationStore, LocalScheduledMessages};
 use crate::conversation_test_support::{
@@ -19,7 +19,9 @@ use nessa_protocol::conversation::view::{ConversationHandoffKind, ConversationMe
 use nessa_sdk::application::agent_execution::agents::{
     UsageLimit, UsageLimitKind, UsageLimitProvider,
 };
-use nessa_sdk::application::agent_execution::commands::CreationFailure;
+use nessa_sdk::application::agent_execution::commands::{
+    CreationFailure, CreationStorage, MutationOutcome,
+};
 use nessa_sdk::application::agent_execution::providers::{
     ExecutionReport, ObservationFailure, ObservationFailureCause, ProviderExecutionReply,
     ProviderSessionState,
@@ -1094,7 +1096,6 @@ async fn a_pending_agent_switch_retries_invalidation_as_its_original_request() {
 /// Applied seals it even if selection returns to the original agent before recovery.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_switch_seals_a_crash_left_unattempted_continuation() {
-    use nessa_sdk::application::agent_execution::commands::{CreationStorage, MutationOutcome};
     for enabled in [true, false] {
         let fixture = Fixture::new();
         let id = fixture.create().await;
@@ -1360,8 +1361,6 @@ async fn an_unchanged_selection_admits_one_recovered_continuation() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retrying_an_old_selection_does_not_seal_a_later_submit() {
-    use crate::conversation::application::{ScheduleActor, ScheduleSettlement, SelectionChange};
-    use nessa_sdk::application::agent_execution::commands::CreationStorage;
     let fixture = Fixture::new();
     let id = fixture.create().await;
     let schedule = fixture.schedules(true).await;
@@ -1429,5 +1428,190 @@ async fn retrying_an_old_selection_does_not_seal_a_later_submit() {
         Some("submitting")
     );
     schedule.release_submit(&later.execution_id).await.unwrap();
+    fixture.retire().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_applied_pre_fix_selection_still_refuses_its_continuation_after_returning() {
+    for enabled in [false, true] {
+        let fixture = Fixture::new();
+        let id = fixture.create().await;
+        let schedule = fixture.schedules(true).await;
+        fixture.blocked(&id, "legacy-limit", AgentId::Claude).await;
+        fixture
+            .service
+            .reconcile_usage_limit_schedule(&id)
+            .await
+            .unwrap();
+        let row = schedule.open(&id.to_string()).await.unwrap().unwrap();
+        schedule.claim_due(row.due_at_ms, 8).await.unwrap();
+        assert!(schedule
+            .begin_submit(&row.execution_id, row.due_at_ms)
+            .await
+            .unwrap());
+        schedule.release_submit(&row.execution_id).await.unwrap();
+        let connection =
+            Connection::open(fixture._directory.path().join("gateway/scheduled.sqlite3")).unwrap();
+        let token = connection.query_row("SELECT incarnation,position,generation,agent,model FROM history_fence WHERE conversation=?1", [id.to_string()], |r| {
+        Ok(PlanToken { history: HistoryGeneration { incarnation: r.get(0)?, position: u64::try_from(r.get::<_, i64>(1)?).unwrap(), generation: u64::try_from(r.get::<_, i64>(2)?).unwrap() }, preference_revision: 0, agent: r.get(3)?, model: r.get(4)? })
+    }).unwrap();
+        let token = PlanToken {
+            preference_revision: schedule.preference().await.unwrap().revision,
+            ..token
+        };
+        // Reconstruct the old writer's durable boundary: invalidation did not
+        // seal a submitting command. The current application wrapper is omitted.
+        assert!(schedule
+            .invalidate_usage_limit(
+                SelectionRequest {
+                    change: SelectionChange::Agent,
+                    id: "old-away"
+                },
+                &id.to_string(),
+                Some(&row.causal_execution),
+                &token,
+                ScheduleActor::person(&caller("old-away")),
+                row.due_at_ms
+            )
+            .await
+            .unwrap());
+        drop(connection);
+        drop(schedule);
+        let fixture = fixture.restart().await;
+        // Scheduling is unbound during both real controls, preserving that old
+        // writer's no-receipt state while each selection reaches Applied.
+        assert!(fixture.switch(&id, "old-away").await.unwrap());
+        assert!(fixture
+            .service
+            .switch_agent(
+                id.clone(),
+                caller("old-back"),
+                AgentId::Claude,
+                ConversationModelId::new("test").unwrap()
+            )
+            .await
+            .unwrap());
+        for request in ["old-away", "old-back"] {
+            assert_eq!(
+                fixture
+                    .metadata
+                    .agent_switch(&id, request)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                ConversationAgentSwitchState::Applied
+            );
+        }
+        assert!(fixture
+            .metadata
+            .pending_agent_switch(&id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(fixture
+            .storage
+            .open_creation(row.principal_id.clone(), row.execution_id.clone(), false)
+            .await
+            .unwrap()
+            .is_none());
+        let schedule = fixture.schedules(enabled).await;
+        let connection =
+            Connection::open(fixture._directory.path().join("gateway/scheduled.sqlite3")).unwrap();
+        let now = i64::try_from(TestClock.unix_milliseconds()).unwrap();
+        connection
+            .execute(
+                "UPDATE message SET due_at_ms=?1, fence_until_ms=?1-1 WHERE execution_id=?2",
+                nessa_local_database::rusqlite::params![now, row.execution_id],
+            )
+            .unwrap();
+        tokio::time::timeout(BOUND, fixture.service.deliver_due_scheduled())
+            .await
+            .unwrap();
+        assert_eq!(
+            schedule.status(&row.execution_id).await.unwrap().as_deref(),
+            Some("refused")
+        );
+        let lease = fixture
+            .storage
+            .open_creation(row.principal_id.clone(), row.execution_id.clone(), false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            lease
+                .load_mutation(&row.execution_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .outcome(),
+            Some(MutationOutcome::AgentChangedBeforeAttempt)
+        );
+        drop(lease);
+        let cause: String = connection.query_row("SELECT cause FROM audit WHERE execution_id=?1 AND after_status='refused' ORDER BY id DESC LIMIT 1", [&row.execution_id], |r| r.get(0)).unwrap();
+        assert_eq!(cause, "agent_changed");
+        assert!(
+            !fixture.snapshot(&id).await.invocations.iter().any(|inv| inv
+                .request
+                .execution_id
+                .as_str()
+                == row.execution_id)
+        );
+        fixture.retire().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unread_retained_selection_evidence_holds_admission_for_bounded_retry() {
+    let fixture = Fixture::new();
+    let id = fixture.create().await;
+    let schedule = fixture.schedules(true).await;
+    fixture.blocked(&id, "unread-limit", AgentId::Claude).await;
+    fixture
+        .service
+        .reconcile_usage_limit_schedule(&id)
+        .await
+        .unwrap();
+    let row = schedule.open(&id.to_string()).await.unwrap().unwrap();
+    schedule.claim_due(row.due_at_ms, 8).await.unwrap();
+    assert!(schedule
+        .begin_submit(&row.execution_id, row.due_at_ms)
+        .await
+        .unwrap());
+    schedule.release_submit(&row.execution_id).await.unwrap();
+    let connection =
+        Connection::open(fixture._directory.path().join("gateway/scheduled.sqlite3")).unwrap();
+    let now = i64::try_from(TestClock.unix_milliseconds()).unwrap();
+    connection
+        .execute(
+            "UPDATE message SET due_at_ms=?1, fence_until_ms=?1-1 WHERE execution_id=?2",
+            nessa_local_database::rusqlite::params![now, row.execution_id],
+        )
+        .unwrap();
+    connection
+        .execute_batch("DROP TABLE usage_limit_invalidation;")
+        .unwrap();
+    assert_eq!(fixture.service.deliver_due_scheduled().await, Some(1_000));
+    let state: (String, i64, i64) = connection
+        .query_row(
+            "SELECT status,retry_at_ms,retry_failures FROM message WHERE execution_id=?1",
+            [&row.execution_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(state, ("submitting".into(), now + 1_000, 1));
+    assert!(fixture
+        .storage
+        .open_creation(row.principal_id.clone(), row.execution_id.clone(), false)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(
+        !fixture.snapshot(&id).await.invocations.iter().any(|inv| inv
+            .request
+            .execution_id
+            .as_str()
+            == row.execution_id)
+    );
     fixture.retire().await;
 }

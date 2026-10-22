@@ -5,6 +5,7 @@ mod mutation;
 mod scheduled_messages;
 mod thread_reports;
 mod workspace_windows;
+use self::mutation::SubmissionPermit;
 use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::source_permits::SourcePermits;
@@ -3632,7 +3633,7 @@ impl ConversationService {
         mode: SubmissionMode,
         writer: Writer,
         held: bool,
-        selection: Option<Arc<mutation::SubmissionPermit>>,
+        selection: Option<Arc<SubmissionPermit>>,
     ) -> Result<SubmissionReceipt, SubmitFailure> {
         // A message that reaches an agent between a failed turn and its
         // recovery is refused with nothing taken (`Halt::Again`): the agent
@@ -3722,7 +3723,7 @@ impl ConversationService {
         writer: Writer,
         held: bool,
         carried: Carried,
-        selection: Option<Arc<mutation::SubmissionPermit>>,
+        selection: Option<Arc<SubmissionPermit>>,
     ) -> (
         Arc<AtomicBool>,
         impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,

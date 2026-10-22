@@ -38,7 +38,10 @@ pub(crate) const CATCH_UP_RETRY_MAX_MS: u64 = 60_000;
 /// How long renewal waits after `renew_fence` returns an error.
 pub(crate) const FENCE_RENEW_RETRY_MS: u64 = 1_000;
 
-use super::{ConversationCaller, ConversationError, ConversationId, ConversationService};
+use super::{
+    mutation::SubmissionPermit, ConversationCaller, ConversationError, ConversationId,
+    ConversationService,
+};
 use crate::conversation::application::usage_limit_policy::{
     UsageLimitPreferenceDecision, UsageLimitPreferenceFacts, UsageLimitPreferencePolicyEvaluator,
 };
@@ -78,6 +81,12 @@ impl SelectionChange {
         match self {
             Self::Model => "model",
             Self::Agent => "agent",
+        }
+    }
+    fn refusal_plan(self) -> MutationPlan {
+        match self {
+            Self::Agent => MutationPlan::AgentChanged,
+            Self::Model => MutationPlan::ModelChanged,
         }
     }
     pub(crate) fn cause(self) -> ContinuationCause {
@@ -567,6 +576,13 @@ pub trait ScheduledMessageStore: Send + Sync {
         let _ = (request, conversation);
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
+    /// Retained selection invalidation for this row's original causal turn.
+    /// Agent invalidation takes precedence when both kinds remain without a
+    /// command receipt; this does not infer historical request order.
+    fn invalidated_selection(
+        &self,
+        execution_id: &str,
+    ) -> ConversationFuture<'_, Option<SelectionChange>>;
     /// Seal `token` when it is still current. A different revision writes
     /// nothing, including the fence. A later position, a different
     /// incarnation, or a different agent or model replaces the fence only
@@ -1038,10 +1054,7 @@ impl ConversationService {
             {
                 let commands = self.commands().ok_or(ConversationError::Unavailable)?;
                 let binding = scheduled_submit_binding(id, &row)?;
-                let plan = match change {
-                    SelectionChange::Model => MutationPlan::ModelChanged,
-                    SelectionChange::Agent => MutationPlan::AgentChanged,
-                };
+                let plan = change.refusal_plan();
                 match MutationCoordinator::new(commands)
                     .execute(binding, Arc::new(CancelUnattemptedSubmission(plan)))
                     .await
@@ -1873,7 +1886,7 @@ impl ConversationService {
         if self.inner.retirement.get().is_some() {
             return DeliveredStep::Held;
         }
-        let selection = Arc::new(super::mutation::SubmissionPermit {
+        let selection = Arc::new(SubmissionPermit {
             _admission: admission,
             _selection: self.inner.mode_changes.lock(&id).await,
         });
@@ -1950,7 +1963,7 @@ impl ConversationService {
         id: ConversationId,
         row: &ScheduledMessage,
         lease_until: u64,
-        selection: Arc<super::mutation::SubmissionPermit>,
+        selection: Arc<SubmissionPermit>,
     ) -> bool {
         let lost = Arc::new(AtomicBool::new(false));
         let renew = {
@@ -2029,6 +2042,29 @@ impl ConversationService {
                     Err(_) => return !self.hold_submit_retry(&store, row).await,
                 }
             }
+        }
+        // Old writers could apply an away/back selection without sealing a
+        // submitting command. Matching current strings does not erase that
+        // original causal invalidation (the pre-fix recovery regression).
+        let invalidated = store.invalidated_selection(&row.execution_id).await;
+        if lost.load(Ordering::SeqCst) {
+            return false;
+        }
+        match invalidated {
+            Ok(Some(change)) => {
+                return self
+                    .retire_scheduled_submission(
+                        &store,
+                        commands,
+                        id,
+                        row,
+                        &lost,
+                        change.refusal_plan(),
+                    )
+                    .await
+            }
+            Ok(None) => {}
+            Err(_) => return !self.hold_submit_retry(&store, row).await,
         }
         match store.preference().await {
             Ok(reading) if !reading.enabled => {

@@ -15,6 +15,7 @@ use nessa_sdk::application::agent_execution::providers::ProviderSessionState;
 use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation, InvocationStage};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
+use tokio::sync::{OwnedMutexGuard, OwnedRwLockReadGuard};
 
 impl ConversationService {
     /// Bind the shared principal command store. A second bind is ignored.
@@ -296,8 +297,8 @@ pub struct SubmittedCommand {
 
 /// Owns admission and selection ordering through detached scheduled submission.
 pub(super) struct SubmissionPermit {
-    pub(super) _admission: tokio::sync::OwnedRwLockReadGuard<()>,
-    pub(super) _selection: tokio::sync::OwnedMutexGuard<()>,
+    pub(super) _admission: OwnedRwLockReadGuard<()>,
+    pub(super) _selection: OwnedMutexGuard<()>,
 }
 
 struct SubmitTarget {

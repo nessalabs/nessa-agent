@@ -4,9 +4,10 @@
 //! Schedule and cancellation audits commit with the status change. The
 //! delivery audit commits in the transaction that records the outcome, which
 //! runs only after `begin_submit` has moved the row to `submitting` and taken
-//! a lease. Cancel, defer, and a model change match `scheduled` and
-//! `delivering` only, so they cannot land once that transition has, and the
-//! transition fails once they have. If the outcome transaction fails, the row
+//! a lease. Cancel and defer match `scheduled` and `delivering`. Selection
+//! invalidation also retains the original causal turn while a row is submitting;
+//! application admission reads that evidence before admitting unattempted work.
+//! If the outcome transaction fails, the row
 //! stays `submitting` and keeps its execution id. Another process adopts that
 //! row only after the lease expires. A preference allow and a preference deny
 //! each commit their own audit, with the policy ids, before the command result.
@@ -15,8 +16,8 @@ use crate::conversation::application::{
     ConversationError, ConversationFuture, PlanToken, PreferenceCommandOutcome,
     PreferenceCommandReceipt, PreferenceReading, PreferenceUpdate, ReconcileRetry,
     RecordedPreference, ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledCommandEvidence,
-    ScheduledMessage, ScheduledMessageStore, SelectionRequest, UnsettledEnable, UsageLimitSnapshot,
-    FENCE_LEASE_MS,
+    ScheduledMessage, ScheduledMessageStore, SelectionChange, SelectionRequest, UnsettledEnable,
+    UsageLimitSnapshot, FENCE_LEASE_MS,
 };
 use crate::conversation::domain::ContinuationCause;
 use nessa_local_database::{
@@ -1086,6 +1087,39 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         let change = request.change;
         self.run(move |connection| {
             connection.query_row("SELECT causal_execution FROM usage_limit_invalidation WHERE conversation = ?1 AND request_id = ?2 AND selection_kind = ?3", params![conversation, request_id, change.as_str()], |row| row.get(0)).optional().map_err(failed)
+        })
+    }
+
+    fn invalidated_selection(
+        &self,
+        execution_id: &str,
+    ) -> ConversationFuture<'_, Option<SelectionChange>> {
+        let execution_id = execution_id.to_owned();
+        self.run(move |connection| {
+            // A renewed acceptance may reuse the execution identity. Its latest
+            // committed scheduled audit bounds which invalidations still apply.
+            let mut statement = connection.prepare(
+                "SELECT i.selection_kind, MAX(a.id), (SELECT MAX(s.id) FROM audit s WHERE s.execution_id=m.execution_id AND s.after_status='scheduled') FROM message m LEFT JOIN usage_limit_invalidation i ON m.conversation=i.conversation AND m.causal_execution=i.causal_execution LEFT JOIN audit a ON a.conversation=i.conversation AND a.causal_execution=i.causal_execution AND a.after_status='invalidated' AND a.cause=CASE i.selection_kind WHEN ?2 THEN ?3 WHEN ?4 THEN ?5 END WHERE m.execution_id=?1 GROUP BY i.selection_kind ORDER BY i.selection_kind",
+            ).map_err(failed)?;
+            let evidence = statement.query_map(
+                params![execution_id, SelectionChange::Agent.as_str(), SelectionChange::Agent.cause().as_str(), SelectionChange::Model.as_str(), SelectionChange::Model.cause().as_str()],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<i64>>(1)?, row.get::<_, Option<i64>>(2)?)),
+            ).map_err(failed)?.collect::<Result<Vec<_>, _>>().map_err(failed)?;
+            let mut invalidated = None;
+            for (kind, invalidation, scheduled) in evidence {
+                let scheduled = scheduled.ok_or(ConversationError::Metadata)?;
+                let Some(kind) = kind else { continue };
+                let change = match kind.as_str() {
+                    "agent" => SelectionChange::Agent,
+                    "model" => SelectionChange::Model,
+                    _ => return Err(ConversationError::Metadata),
+                };
+                let invalidation = invalidation.ok_or(ConversationError::Metadata)?;
+                if invalidation > scheduled && invalidated.is_none() {
+                    invalidated = Some(change);
+                }
+            }
+            Ok(invalidated)
         })
     }
 
@@ -4242,5 +4276,154 @@ mod tests {
                 .causal_execution,
             "newest"
         );
+    }
+    #[tokio::test]
+    async fn retained_invalidation_is_row_scoped_with_agent_precedence() {
+        for changes in [
+            [SelectionChange::Model, SelectionChange::Agent],
+            [SelectionChange::Agent, SelectionChange::Model],
+        ] {
+            let store = enabled_store().await;
+            let row = draft("conversation", "causal", "exec-1", 50);
+            store.accept(row.clone(), 1).await.unwrap().unwrap();
+            store
+                .accept(
+                    draft("other-conversation", "causal", "other-execution", 50),
+                    2,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            store.claim_due(50, 8).await.unwrap();
+            assert!(store.begin_submit("exec-1", 50).await.unwrap());
+            let current = sealed_token(&store, "conversation", row.history, 1).await;
+            assert_eq!(store.invalidated_selection("exec-1").await.unwrap(), None);
+            for (index, change) in changes.into_iter().enumerate() {
+                assert!(store
+                    .invalidate_usage_limit(
+                        SelectionRequest {
+                            change,
+                            id: change.as_str()
+                        },
+                        "conversation",
+                        Some("causal"),
+                        &current,
+                        person(),
+                        51
+                    )
+                    .await
+                    .unwrap());
+                assert_eq!(
+                    store.invalidated_selection("exec-1").await.unwrap(),
+                    Some(if index == 0 {
+                        change
+                    } else {
+                        SelectionChange::Agent
+                    })
+                );
+            }
+            assert_eq!(
+                store
+                    .invalidated_selection("unrelated-execution")
+                    .await
+                    .unwrap(),
+                None
+            );
+            assert_eq!(
+                store
+                    .invalidated_selection("other-execution")
+                    .await
+                    .unwrap(),
+                None
+            );
+        }
+    }
+    #[tokio::test]
+    async fn an_older_invalidation_does_not_refuse_a_reaccepted_incarnation() {
+        let store = enabled_store().await;
+        let row = draft("conversation", "causal", "exec-1", 50);
+        store.accept(row.clone(), 1).await.unwrap().unwrap();
+        store.set_preference(false, person(), 2).await.unwrap();
+        let revision = store.preference().await.unwrap().revision;
+        let current = sealed_token(&store, "conversation", row.history.clone(), revision).await;
+        assert!(store
+            .invalidate_usage_limit(
+                SelectionRequest {
+                    change: SelectionChange::Model,
+                    id: "old-model"
+                },
+                "conversation",
+                Some("causal"),
+                &current,
+                person_as("old-model"),
+                3
+            )
+            .await
+            .unwrap());
+        store.set_preference(true, person(), 4).await.unwrap();
+        let mut replacement = row;
+        replacement.preference_revision = store.preference().await.unwrap().revision;
+        replacement.history.incarnation = "replacement-history".into();
+        replacement.history.generation = store.history_generation("conversation").await.unwrap();
+        let replacement_history = replacement.history.clone();
+        assert!(store.accept(replacement, 5).await.unwrap().is_some());
+        store.claim_due(50, 8).await.unwrap();
+        assert!(store.begin_submit("exec-1", 50).await.unwrap());
+        assert_eq!(store.invalidated_selection("exec-1").await.unwrap(), None);
+        let revision = store.preference().await.unwrap().revision;
+        let current = sealed_token(&store, "conversation", replacement_history, revision).await;
+        assert!(store
+            .invalidate_usage_limit(
+                SelectionRequest {
+                    change: SelectionChange::Model,
+                    id: "new-model"
+                },
+                "conversation",
+                Some("causal"),
+                &current,
+                person_as("new-model"),
+                51,
+            )
+            .await
+            .unwrap());
+        assert_eq!(
+            store.invalidated_selection("exec-1").await.unwrap(),
+            Some(SelectionChange::Model)
+        );
+    }
+    #[tokio::test]
+    async fn incomplete_invalidation_audit_evidence_is_unavailable() {
+        for missing in ["scheduled", "invalidated"] {
+            let store = enabled_store().await;
+            let row = draft("conversation", "causal", "exec-1", 50);
+            store.accept(row.clone(), 1).await.unwrap().unwrap();
+            store.claim_due(50, 8).await.unwrap();
+            assert!(store.begin_submit("exec-1", 50).await.unwrap());
+            let current = sealed_token(&store, "conversation", row.history, 1).await;
+            assert!(store
+                .invalidate_usage_limit(
+                    SelectionRequest {
+                        change: SelectionChange::Model,
+                        id: "model"
+                    },
+                    "conversation",
+                    Some("causal"),
+                    &current,
+                    person(),
+                    51,
+                )
+                .await
+                .unwrap());
+            store
+                .connection
+                .lock()
+                .unwrap()
+                .execute("DELETE FROM audit WHERE after_status=?1", [missing])
+                .unwrap();
+            assert!(matches!(
+                store.invalidated_selection("exec-1").await,
+                Err(ConversationError::Metadata)
+            ));
+        }
     }
 }

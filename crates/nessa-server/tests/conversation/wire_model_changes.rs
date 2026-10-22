@@ -4,7 +4,7 @@ use crate::agents_test_support::StubAgentProbe;
 use crate::conversation::application::{
     ConversationError, ConversationFuture, PlanToken, PreferenceReading, RecordedPreference,
     ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
-    SelectionRequest,
+    SelectionChange, SelectionRequest,
 };
 use crate::conversation::domain::ContinuationCause;
 use crate::conversation_test_support::mode_fixture;
@@ -528,6 +528,10 @@ fn schedule_unavailable<'a, T: Send + 'static>() -> ConversationFuture<'a, T> {
 }
 
 impl ScheduledMessageStore for ScheduleReads {
+    fn invalidated_selection(&self, _: &str) -> ConversationFuture<'_, Option<SelectionChange>> {
+        schedule_unavailable()
+    }
+
     // This double exercises unrelated store behavior; model invalidation has
     // dedicated tests against LocalScheduledMessages.
     fn invalidate_usage_limit(

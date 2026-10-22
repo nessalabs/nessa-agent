@@ -1,7 +1,9 @@
 //! Scheduler application and durable-adapter recovery regressions.
 
+use super::super::mutation::SubmissionPermit;
 use super::fold_catalogue_page;
 use crate::conversation::application::ConversationError;
+use tokio::sync::Notify;
 
 #[test]
 fn enabling_the_preference_reads_past_the_list_bound() {
@@ -284,6 +286,10 @@ fn refused<T: Send + 'static>() -> ConversationFuture<'static, T> {
 }
 
 impl ScheduledMessageStore for RecordingStore {
+    fn invalidated_selection(&self, _: &str) -> ConversationFuture<'_, Option<SelectionChange>> {
+        Box::pin(async { Ok(None) })
+    }
+
     // This double exercises unrelated store behavior; model invalidation has
     // dedicated tests against LocalScheduledMessages.
     fn invalidate_usage_limit(
@@ -792,6 +798,10 @@ struct NotifyOnDue {
 }
 
 impl ScheduledMessageStore for NotifyOnDue {
+    fn invalidated_selection(&self, _: &str) -> ConversationFuture<'_, Option<SelectionChange>> {
+        Box::pin(async { Ok(None) })
+    }
+
     // This double exercises unrelated store behavior; model invalidation has
     // dedicated tests against LocalScheduledMessages.
     fn invalidate_usage_limit(
@@ -1206,7 +1216,7 @@ async fn the_outcome_clock_is_read_after_submission() {
             ConversationId::new(conversation).unwrap(),
             &row,
             u64::MAX,
-            Arc::new(super::super::mutation::SubmissionPermit {
+            Arc::new(SubmissionPermit {
                 _admission: service.inner.admission.clone().read_owned().await,
                 _selection: service
                     .inner
@@ -1298,7 +1308,7 @@ async fn a_failed_execution_read_does_not_settle_the_submission() {
             ConversationId::new(conversation).unwrap(),
             &row,
             1_700_000_000_123 + 60_000,
-            Arc::new(super::super::mutation::SubmissionPermit {
+            Arc::new(SubmissionPermit {
                 _admission: service.inner.admission.clone().read_owned().await,
                 _selection: service
                     .inner
@@ -2388,6 +2398,10 @@ fn store_error() -> ConversationFuture<'static, bool> {
 }
 
 impl ScheduledMessageStore for ScriptedSchedule {
+    fn invalidated_selection(&self, _: &str) -> ConversationFuture<'_, Option<SelectionChange>> {
+        Box::pin(async { Ok(None) })
+    }
+
     // This double exercises unrelated store behavior; model invalidation has
     // dedicated tests against LocalScheduledMessages.
     fn invalidate_usage_limit(
@@ -3950,8 +3964,8 @@ async fn a_selection_lock_blocks_the_durable_submit_claim() {
 }
 
 struct GatedCommandAdmission {
-    entered: tokio::sync::Notify,
-    release: tokio::sync::Notify,
+    entered: Notify,
+    release: Notify,
 }
 impl CreationStorage for GatedCommandAdmission {
     fn open_creation(
@@ -3978,13 +3992,13 @@ async fn a_detached_scheduled_command_keeps_its_submission_permit() {
         Arc::new(TestClock),
     );
     let id = ConversationId::new("11111111-1111-4111-8111-111111111111").unwrap();
-    let permit = Arc::new(super::super::mutation::SubmissionPermit {
+    let permit = Arc::new(SubmissionPermit {
         _admission: service.inner.admission.clone().read_owned().await,
         _selection: service.inner.mode_changes.lock(&id).await,
     });
     let commands = Arc::new(GatedCommandAdmission {
-        entered: tokio::sync::Notify::new(),
-        release: tokio::sync::Notify::new(),
+        entered: Notify::new(),
+        release: Notify::new(),
     });
     let waiting = service.submit_command_permitted(
         commands.clone(),
