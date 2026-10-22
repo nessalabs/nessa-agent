@@ -101,14 +101,17 @@ pub fn create_protected_subdirectory_at(parent: &File, name: &OsStr) -> io::Resu
 }
 
 fn create_directory_at(parent: &File, name: &OsStr, sharing: u32) -> io::Result<File> {
-    let descriptor = append_descriptor()?;
-    unsafe {
-        check(SetSecurityDescriptorControl(
-            descriptor.0,
-            SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ,
-            SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED,
-        ))?;
-    }
+    let file = create_readonly_directory_at(parent, name, sharing)?;
+    modern_enable(&file)?;
+    enable_directory_append(&file)?;
+    Ok(file)
+}
+
+// Exclusive birth and current readonly ACL keep this newly owned namespace
+// empty. Only the original trusted handle has BUILD authority; actual child
+// operations still check the current readonly parent ACL (native phase tests).
+fn create_readonly_directory_at(parent: &File, name: &OsStr, sharing: u32) -> io::Result<File> {
+    let descriptor = User::current()?.descriptor_with_access(true, "FRFX")?;
     let file = relative(
         parent,
         name,
@@ -120,14 +123,62 @@ fn create_directory_at(parent: &File, name: &OsStr, sharing: u32) -> io::Result<
     )?;
     require_directory(&file)?;
     require_directory_access(&file, DIRECTORY_BUILD_ACCESS | DELETE)?;
-    if directory_control(&file)? & (SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED)
+    Ok(file)
+}
+
+// Call only on the empty, readonly directory from the private birth helper,
+// before any append grant. The provider may traverse children; none can exist
+// at this phase. Never use this provider operation after ADD becomes available.
+fn modern_enable(file: &File) -> io::Result<()> {
+    let descriptor = User::current()?.descriptor_with_access(true, "FRFX")?;
+    let mut present = 0;
+    let mut defaulted = 0;
+    let mut acl = null_mut();
+    unsafe {
+        check(GetSecurityDescriptorDacl(
+            descriptor.0,
+            &mut present,
+            &mut acl,
+            &mut defaulted,
+        ))?;
+    }
+    if present == 0 || acl.is_null() {
+        return Err(unsafe_file());
+    }
+    let status = unsafe {
+        SetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            acl,
+            null_mut(),
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    require_directory(file)?;
+    require_modern_directory(file)
+}
+
+fn require_modern_directory(file: &File) -> io::Result<()> {
+    if directory_control(file)? & (SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED)
         != (SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED)
     {
         return Err(io::Error::other(
-            "created directory did not retain protected modern inheritance",
+            "directory did not retain protected modern inheritance",
         ));
     }
-    Ok(file)
+    Ok(())
+}
+
+fn enable_directory_append(file: &File) -> io::Result<()> {
+    require_modern_directory(file)?;
+    set_directory_descriptor(file, append_descriptor()?)?;
+    require_directory(file)?;
+    require_modern_directory(file)
 }
 
 fn append_descriptor() -> io::Result<LocalAllocation> {
@@ -859,6 +910,157 @@ mod tests {
             )
         };
         assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn readonly_initialization_denies_actual_additions_until_verified_modern_append() {
+        let _ordinary = token::OrdinaryToken::enter();
+        let root = tempfile::tempdir().unwrap();
+        let ancestor = full_parent(root.path());
+        let ordinary_external = root.path().join("ordinary-external");
+        std::fs::write(&ordinary_external, b"ordinary movable bytes").unwrap();
+        std::fs::rename(
+            &ordinary_external,
+            root.path().join("ordinary-external-moved"),
+        )
+        .expect("ordinary full-ACL source actually relocates in a full parent");
+        std::fs::rename(
+            root.path().join("ordinary-external-moved"),
+            &ordinary_external,
+        )
+        .unwrap();
+        let external = create_protected_file_at(&ancestor, OsStr::new("external")).unwrap();
+        rename_handle_at(&external, &ancestor, OsStr::new("external-moved"))
+            .expect("positive control: external inode can actually relocate in a full parent");
+        rename_handle_at(&external, &ancestor, OsStr::new("external")).unwrap();
+        let directory = create_readonly_directory_at(
+            &ancestor,
+            OsStr::new("phases"),
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+        )
+        .unwrap();
+        let preacquired = directory.try_clone().unwrap();
+        let deny = |phase: &str, ordinary: Option<&File>| {
+            for held in [&directory, &preacquired].into_iter().chain(ordinary) {
+                assert_eq!(
+                    create_protected_file_at(held, OsStr::new("blocked-file"))
+                        .unwrap_err()
+                        .raw_os_error(),
+                    Some(ERROR_ACCESS_DENIED as i32),
+                    "original/preacquired ADD cannot create a file: {phase}"
+                );
+                assert_eq!(
+                    create_protected_subdirectory_at(held, OsStr::new("blocked-dir"))
+                        .unwrap_err()
+                        .raw_os_error(),
+                    Some(ERROR_ACCESS_DENIED as i32),
+                    "original/preacquired ADD cannot create a directory: {phase}"
+                );
+                assert_eq!(
+                    rename_handle_at(&external, held, OsStr::new("blocked-rename"))
+                        .unwrap_err()
+                        .raw_os_error(),
+                    Some(ERROR_ACCESS_DENIED as i32),
+                    "original/preacquired ADD cannot receive an external rename: {phase}"
+                );
+            }
+            assert!(
+                relative(
+                    &ancestor,
+                    OsStr::new("phases"),
+                    FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | SYNCHRONIZE,
+                    FILE_OPEN,
+                    FILE_OPEN_REPARSE_POINT,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    None
+                )
+                .is_err(),
+                "ordinary opener cannot gain ADD authority: {phase}"
+            );
+            assert!(
+                std::fs::write(root.path().join("phases/ordinary-file"), b"forbidden").is_err()
+            );
+            assert!(std::fs::create_dir(root.path().join("phases/ordinary-dir")).is_err());
+            assert!(std::fs::rename(
+                &ordinary_external,
+                root.path().join("phases/ordinary-rename")
+            )
+            .is_err());
+            assert!(root.path().join("external").is_file());
+            assert_eq!(
+                std::fs::read(&ordinary_external).unwrap(),
+                b"ordinary movable bytes"
+            );
+            assert!(relative_names(&directory).unwrap().is_empty());
+        };
+        deny("readonly-birth", None);
+        modern_enable(&directory).unwrap();
+        require_modern_directory(&directory).unwrap();
+        deny("readonly-modern-before-append", None);
+        enable_directory_append(&directory).unwrap();
+        let ordinary = relative(
+            &ancestor,
+            OsStr::new("phases"),
+            FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | SYNCHRONIZE,
+            FILE_OPEN,
+            FILE_OPEN_REPARSE_POINT,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+        )
+        .expect("ordinary caller gains actual ADD only after verified modern append");
+        for held in [&directory, &preacquired, &ordinary] {
+            let file = create_protected_file_at(held, OsStr::new("allowed-file")).unwrap();
+            remove_handle(&file).unwrap();
+            drop(file);
+            let child = create_protected_subdirectory_at(held, OsStr::new("allowed-dir")).unwrap();
+            remove_handle(&child).unwrap();
+            drop(child);
+            rename_handle_at(&external, held, OsStr::new("allowed-rename"))
+                .expect("same retained ADD authority receives relocation after modern append");
+            rename_handle_at(&external, &ancestor, OsStr::new("external")).unwrap();
+        }
+        std::fs::write(
+            root.path().join("phases/ordinary-file"),
+            b"ordinary created bytes",
+        )
+        .expect("same ordinary file creation succeeds after append");
+        std::fs::create_dir(root.path().join("phases/ordinary-dir"))
+            .expect("same ordinary directory creation succeeds after append");
+        std::fs::rename(
+            &ordinary_external,
+            root.path().join("phases/ordinary-rename"),
+        )
+        .expect("same ordinary full-ACL source relocates after append");
+        std::fs::rename(
+            root.path().join("phases/ordinary-rename"),
+            &ordinary_external,
+        )
+        .unwrap();
+        // Disposable ordinary children may inherit no DELETE. Grant cleanup
+        // authority on these exact empty fixture objects, never on the parent.
+        for (name, is_directory) in [("ordinary-file", false), ("ordinary-dir", true)] {
+            let path = root.path().join("phases").join(name);
+            let metadata = std::fs::OpenOptions::new()
+                .access_mode(GENERIC_READ | WRITE_DAC)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(&path)
+                .unwrap();
+            let descriptor = User::current().unwrap().descriptor(is_directory).unwrap();
+            unsafe {
+                set_native_descriptor(&metadata, descriptor.0).unwrap();
+            }
+            drop(metadata);
+            if is_directory {
+                std::fs::remove_dir(path).unwrap();
+            } else {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+        seal_directory_writes(&directory).unwrap();
+        deny("sealed-after-append", Some(&ordinary));
+        remove_handle(&external).unwrap();
+        remove_handle(&directory).unwrap();
     }
 
     #[test]
