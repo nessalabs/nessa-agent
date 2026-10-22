@@ -25,6 +25,10 @@ use std::{
 };
 use tokio::process::Command;
 
+/// The provider name every session this binding opens records in its
+/// history, as its provider identity.
+pub const PROVIDER_NAME: &str = "opencode-acp";
+
 /// What an Opencode session launched by this binding is allowed to do, as the
 /// `OPENCODE_PERMISSION` value its process is started with.
 ///
@@ -260,7 +264,7 @@ impl OpencodeAcpProvider {
         }
         let capabilities =
             capabilities(model, limits, config.tools_enabled, config.images.is_some())?;
-        ProviderIdentity::new("opencode-acp", capabilities.model().model_id(), "")?;
+        ProviderIdentity::new(PROVIDER_NAME, capabilities.model().model_id(), "")?;
         Ok(Self {
             config,
             capabilities,
@@ -469,7 +473,7 @@ impl AgentProvider for OpencodeAcpProvider {
     }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(
-            "opencode-acp",
+            PROVIDER_NAME,
             self.capabilities.model().model_id(),
             // `None`: there is no prompt to hash, and hashing one that never
             // reached the process would tie restoration to text it never saw.

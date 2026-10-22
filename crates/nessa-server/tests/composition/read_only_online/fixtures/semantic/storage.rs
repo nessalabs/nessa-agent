@@ -134,6 +134,7 @@ async fn confirmed_producer_snapshot_changes_only_after_successful_save() {
         queue_history: vec![],
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     };
     let receipt = lease

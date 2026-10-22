@@ -152,6 +152,8 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
         open_fresh_context: AtomicBool::new(false),
+        handoff: std::sync::Mutex::new(None),
+        switching: std::sync::Mutex::new(None),
     });
     manager.begin_dispatch(&active_id);
     let waiting = manager.clone();
@@ -255,6 +257,8 @@ async fn measure_growing_history_message_commit_latency() {
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
         open_fresh_context: AtomicBool::new(false),
+        handoff: std::sync::Mutex::new(None),
+        switching: std::sync::Mutex::new(None),
     };
     manager.begin_dispatch(&active_id);
     let mut latencies = Vec::new();
@@ -342,6 +346,7 @@ async fn measure_save_cost_as_history_grows() {
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
+            handoffs: Vec::new(),
             notes: Vec::new(),
             id: id.clone(),
             provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
@@ -411,6 +416,8 @@ async fn measure_save_cost_as_history_grows() {
             dispatched: RwLock::new(HashMap::new()),
             attachment: Arc::new(AttachmentLease::empty()),
             open_fresh_context: AtomicBool::new(false),
+            handoff: std::sync::Mutex::new(None),
+            switching: std::sync::Mutex::new(None),
         };
         manager.begin_dispatch(&active_id);
         let mut saves = Vec::new();
@@ -501,6 +508,8 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
         open_fresh_context: AtomicBool::new(false),
+        handoff: std::sync::Mutex::new(None),
+        switching: std::sync::Mutex::new(None),
     };
     manager.begin_dispatch(&active_id);
     for _ in 0..7 {
@@ -635,6 +644,7 @@ fn invocation(id: &str, complete: bool) -> InvocationRecord {
         actor: ActionContext::new("user", "test", "invoke").unwrap(),
         initiation: Initiation::owner(),
         notes: Vec::new(),
+        handoff: None,
         acknowledgement: SubmissionAcknowledgement::Pending,
         events: if complete {
             vec![ExecutionEvent::new(
@@ -672,6 +682,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         queue_history: Vec::new(),
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
         id: id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
@@ -730,6 +741,8 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
         open_fresh_context: AtomicBool::new(false),
+        handoff: std::sync::Mutex::new(None),
+        switching: std::sync::Mutex::new(None),
     };
     manager.begin_dispatch(&active_id);
     (manager, lease, active_id)
@@ -1335,6 +1348,7 @@ fn a_restored_tool_call_that_changes_its_mcp_identity_is_corrupt() {
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
+            handoffs: Vec::new(),
             notes: Vec::new(),
         }
     };

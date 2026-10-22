@@ -1172,10 +1172,16 @@ impl Agent {
             .await
             .map_err(|cause| AgentInitializationError::new(cause, None))?;
         let traces = provider.traces();
-        let saved_configuration = session_manager
-            .snapshot()
-            .await
-            .and_then(|snapshot| snapshot.current_configuration);
+        // A switch leaves the earlier provider's settings behind: they name
+        // that provider, which the new native session never had.
+        let saved_configuration = if session_manager.switching() {
+            None
+        } else {
+            session_manager
+                .snapshot()
+                .await
+                .and_then(|snapshot| snapshot.current_configuration)
+        };
         let provider = match saved_configuration.as_ref() {
             Some(record)
                 if provider.approval_mode() == record.after().approval_mode()
@@ -1776,7 +1782,8 @@ impl Agent {
     }
 
     /// `input` as the provider is given it: with the notes its saved turn
-    /// took, when it took any.
+    /// took, when it took any, and the earlier turns, when it is the first
+    /// after a fork or an agent switch.
     async fn with_taken_notes(
         &self,
         index: usize,
@@ -1788,14 +1795,23 @@ impl Agent {
             .taken_notes(index)
             .await
             .map_err(AgentError::Storage)?;
-        if notes.is_empty() {
+        let history = self
+            .inner
+            .manager
+            .carried_history(index)
+            .await
+            .map_err(AgentError::Storage)?;
+        if notes.is_empty() && history.is_none() {
             return Ok(input.clone());
         }
-        let user_message = input
+        let mut user_message = input
             .user_message
             .clone()
             .with_notes(notes)
             .map_err(|error| AgentError::Storage(StorageError::Corrupt(error.to_string())))?;
+        if let Some(history) = history {
+            user_message = user_message.with_history(history);
+        }
         Ok(ExecutionRequest {
             user_message,
             ..input.clone()

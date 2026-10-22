@@ -479,6 +479,34 @@ export function renameSession({
 }
 
 /**
+ * Forks a session, saying who asked for the source's record, and opens the
+ * new one in the focused pane once its summary has arrived. The new
+ * session's transcript, its copied turns and the line after them, is the
+ * source's to say. A session the source has not spoken of is not asked.
+ */
+export function forkSession({
+  sessionId,
+  initiator,
+}: {
+  sessionId: string
+  initiator: Initiator
+}): WorkspaceCommand<Promise<ChangeOutcome>> {
+  return async (dispatch, getState, { workspace }) => {
+    const session = sessionOf(getState().workspace, sessionId)
+    if (!session || !knownToSource(session)) return "not-asked"
+    try {
+      const forked = await workspace.fork(sessionId, initiator)
+      dispatch(workspaceActions.openSession({ sessionId: forked }))
+      return "sent"
+    } catch (error) {
+      const reason = failureReason(error)
+      console.warn("Could not fork a session", sessionId, reason)
+      return outcomeOf(reason)
+    }
+  }
+}
+
+/**
  * Deletes a session for good, saying who asked for the source's record. As
  * for an archive, the source's removal takes it out of the lists; a session
  * the source has not spoken of is not asked, and a refusal leaves it where it

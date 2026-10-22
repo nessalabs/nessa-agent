@@ -168,6 +168,8 @@ export interface GatewayClient {
     | "stop"
     | "setApprovalMode"
     | "setModel"
+    | "switchAgent"
+    | "fork"
     | "read"
     | "archive"
     | "rename"
@@ -1586,8 +1588,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             })
           throw new WorkspaceModelError("unavailable", true)
         }
-        if (current.provider !== provider)
-          throw new WorkspaceModelError("not-supported", false)
+        // Another provider is another agent: the gateway carries the
+        // conversation on under it (`conversation.switchAgent`), and the
+        // transcript draws the line where it did.
+        const switching = current.provider !== provider
+        const agent = switching ? agentForProvider(provider) : undefined
+        if (switching && !agent) throw new WorkspaceModelError("not-supported", false)
         // Read reconciles a lost native receipt. Refollow uses the existing
         // bounded frame owner; the read or ACK does not fabricate a frame.
         const reconcile = async () => {
@@ -1612,10 +1618,36 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         let receipt: Awaited<ReturnType<GatewayClient["conversation"]["setModel"]>>
         try {
           await reconcile()
-          receipt = await dispatch(live, (connected) => {
-            held(sessionId)
-            return connected.conversation.setModel(sessionId, modelId, { requestId })
-          })
+          if (agent) {
+            const switched = await dispatch(live, (connected) => {
+              held(sessionId)
+              return connected.conversation.switchAgent(sessionId, agent, modelId, {
+                requestId,
+              })
+            })
+            // The gateway answers once the switch was made or found not to
+            // be: one not made leaves the conversation on its agent.
+            if (!switched.applied)
+              throw new WorkspaceModelError("not-supported", false, {
+                message: "model_change_not_applied",
+                code: "model_change_not_applied",
+              })
+            // The receipt carries the approval mode the session already
+            // had: a switch keeps it. With no view to say what that is,
+            // the change is not confirmed.
+            const approvalMode = reads.get(sessionId)?.view?.approvalMode
+            if (!approvalMode) throw new WorkspaceModelError("unavailable", true)
+            receipt = {
+              requestId: switched.requestId,
+              model: modelId,
+              approvalMode,
+              effect: "nextTurn",
+            }
+          } else
+            receipt = await dispatch(live, (connected) => {
+              held(sessionId)
+              return connected.conversation.setModel(sessionId, modelId, { requestId })
+            })
         } catch (error) {
           if (error instanceof WorkspaceModelError) throw error
           const refused = refusalOf(error)
@@ -1691,6 +1723,38 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           if (renaming.get(sessionId) === asked) renaming.delete(sessionId)
         })
         await turn
+      }),
+    // The gateway lists the fork as it lists the conversation it was made
+    // from, under its title and last words, not running and not archived
+    // (`ConversationSummary::after_forking`), so the row is said at once, in
+    // the list's turn (W6); the list frames after it say it again with the
+    // gateway's own times. The fork itself is asked outside that turn: it
+    // opens an agent, and a rename or archive meanwhile does not wait on it.
+    fork: (sessionId) =>
+      within(async (live) => {
+        const conversationId = crypto.randomUUID()
+        await dispatch(live, (connected) => {
+          held(sessionId)
+          return connected.conversation.fork(sessionId, { conversationId })
+        })
+        const { turn, settled } = inTurn(listing, async () => {
+          const source = rows.get(sessionId)
+          if (source && !rows.has(conversationId) && !takenOut(conversationId)) {
+            const at = Date.now()
+            rows.set(conversationId, {
+              ...source,
+              conversationId,
+              createdAtMs: at,
+              updatedAtMs: at,
+              running: false,
+              archived: false,
+            })
+            publish(conversationId)
+          }
+        })
+        listing = settled
+        await turn
+        return conversationId
       }),
     // As an archive, in the list's turn (W6), and the window's apps forget it.
     delete: (sessionId) =>

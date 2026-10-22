@@ -210,7 +210,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 78,
+          "maxItems": 80,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -1645,6 +1645,12 @@
           "maxItems": 64,
           "description": "Notes left in the conversation (conversation.message), the newest 64 in the order they were left; empty before any was. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response."
         },
+        "handoffs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversationHandoff" },
+          "maxItems": 256,
+          "description": "Switches to another agent or model, and the fork the conversation began as, in the order they were recorded; empty before any."
+        },
         "unreadable": {
           "type": "array",
           "items": { "$ref": "#/$defs/ConversationUnreadable" },
@@ -1715,6 +1721,7 @@
         "questions",
         "artifacts",
         "notes",
+        "handoffs",
         "unreadable",
         "unreadableTruncated",
         "approvalMode",
@@ -6323,6 +6330,103 @@
       },
       "required": ["kind", "surface"]
     },
+    "ConversationHandoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A point after which the conversation's agent ran in a new session that had not seen the turns before it: a switch to another agent or model (conversation.switchAgent), or the fork the conversation began as (conversation.fork). The first turn after it was given those turns as text. Show it as a line in the transcript, after the turn it follows.",
+      "properties": {
+        "handoffId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "x-utf8MaxBytes": 64,
+          "description": "The conversation's own name for the handoff."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["switch", "fork"],
+          "description": "A switch to another agent or model, or the fork the conversation began as."
+        },
+        "atMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When it was recorded, in milliseconds since the Unix epoch, on the gateway's clock."
+        },
+        "afterExecutionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The last turn the conversation held when it was recorded, which it is shown after; absent before any turn, as a fork always is."
+        },
+        "from": {
+          "$ref": "#/$defs/ConversationHandoffAgent",
+          "description": "A switch's agent and model before it; present exactly for a switch."
+        },
+        "to": {
+          "$ref": "#/$defs/ConversationHandoffAgent",
+          "description": "A switch's agent and model after it; present exactly for a switch."
+        },
+        "turns": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversationCarriedTurn" },
+          "maxItems": 256,
+          "description": "A fork's copied turns, oldest first, shown before everything the conversation said itself. Absent for a switch, and when the view left them all out."
+        },
+        "omittedTurns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295,
+          "description": "Copied turns left out, by the copy's own bounds or by this view's; absent when none were."
+        }
+      },
+      "required": ["handoffId", "kind", "atMs"]
+    },
+    "ConversationHandoffAgent": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An agent and model a switch left or went to.",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "x-utf8MaxBytes": 32,
+          "description": "The agent, as agents.list names it; absent when the history's provider is one this gateway has no agent for."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The model, as the agent's catalog names it."
+        }
+      },
+      "required": ["model"]
+    },
+    "ConversationCarriedTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One turn a fork copied, as the new conversation's agent was given it: what was said, and the agent's final reply. Text only.",
+      "properties": {
+        "said": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "What was said in the turn, when it said anything in text."
+        },
+        "reply": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "The agent's final reply, when it gave one."
+        }
+      },
+      "required": []
+    },
     "ConversationMessageParams": {
       "type": "object",
       "additionalProperties": false,
@@ -6908,6 +7012,71 @@
         }
       },
       "required": ["conversationId", "requestId", "model"]
+    },
+    "ConversationSwitchAgentParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Carry the conversation on under another agent, in a new session of it that is given the conversation's earlier turns as text with its next message; the transcript shows a handoff line where it happened. Refused busy while a turn runs or waits; refused invalid_request for the agent the conversation already runs on (use conversation.setModel). applied is false when the switch was not made, and the conversation stays on its agent.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "x-utf8MaxBytes": 32,
+          "description": "The agent to carry on under, as agents.list names it."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Exact model identifier within that agent's catalog."
+        }
+      },
+      "required": ["conversationId", "requestId", "agent", "model"]
+    },
+    "ConversationForkParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Start a new conversation from a copy of another's turns, on the same agent, model, approval preset and environment. The new conversation's agent is given the copied turns as text with its first message, and its transcript shows them first. Idempotent for a retry of one request; the conversation identity is the caller's, as for conversation.create.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The new conversation, a fresh canonical lowercase hyphenated UUID."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "sourceConversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The conversation to copy, which must be the caller's own."
+        }
+      },
+      "required": ["conversationId", "requestId", "sourceConversationId"]
     },
     "ConversationSetModelResult": {
       "type": "object",

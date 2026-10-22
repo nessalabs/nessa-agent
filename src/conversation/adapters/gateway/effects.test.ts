@@ -53,6 +53,7 @@ function gatewayView(): ConversationView {
     notes: [],
     unreadable: [],
     unreadableTruncated: false,
+    handoffs: [],
     conversationId: "00000000-0000-4000-8000-000000000001",
     title: null,
     revision: "capabilities",

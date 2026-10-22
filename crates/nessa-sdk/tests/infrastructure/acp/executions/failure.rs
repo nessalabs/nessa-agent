@@ -334,6 +334,7 @@ async fn finalized_provider_and_local_recipes_survive_storage_reload_exactly() {
                 actor: actor.clone(),
                 initiation: Initiation::owner(),
                 notes: Vec::new(),
+                handoff: None,
                 acknowledgement: SubmissionAcknowledgement::Acknowledged,
                 events: Vec::new(),
                 scheduling: Vec::new(),
@@ -348,6 +349,7 @@ async fn finalized_provider_and_local_recipes_survive_storage_reload_exactly() {
             }],
             lease: None,
             artifacts: Vec::new(),
+            handoffs: Vec::new(),
             notes: Vec::new(),
         };
         let storage = InMemoryStorage::new();

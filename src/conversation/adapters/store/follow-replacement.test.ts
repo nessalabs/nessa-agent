@@ -20,6 +20,7 @@ function gatewayView(): ConversationView {
     notes: [],
     unreadable: [],
     unreadableTruncated: false,
+    handoffs: [],
     conversationId: "server",
     title: null,
     revision: "capabilities",

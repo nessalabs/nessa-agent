@@ -695,6 +695,7 @@ async fn initialization_unit_left_unfinished_is_completed_by_the_next_prepare() 
         queue_history: Vec::new(),
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     };
     assert_eq!(
