@@ -494,10 +494,34 @@ async fn a_fork_starts_a_new_conversation_from_the_sources_turns() {
     assert!(matches!(
         fixture
             .service
-            .fork(store, source.clone(), caller("self"), source.clone())
+            .fork(
+                store.clone(),
+                source.clone(),
+                caller("self"),
+                source.clone()
+            )
             .await,
         Err(CreationFailure::Target(ConversationError::InvalidInput))
     ));
+    // A retry after the source is gone is still answered by the creation the
+    // fork made: the source is not read again once the fork is saved.
+    let deleted = fixture
+        .service
+        .delete(source.clone(), caller("delete"))
+        .await;
+    assert!(
+        matches!(
+            deleted,
+            Ok(_) | Err(ConversationError::DeletionIncomplete(_))
+        ),
+        "{deleted:?}"
+    );
+    fixture
+        .service
+        .fork(store, fork.clone(), caller("fork"), source.clone())
+        .await
+        .unwrap();
+    assert_eq!(fixture.snapshot(&fork).await.handoffs.len(), 1);
     fixture.retire().await;
 }
 

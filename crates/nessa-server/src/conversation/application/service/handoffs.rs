@@ -410,6 +410,60 @@ impl ConversationService {
         if id == source {
             return Err(target(ConversationError::InvalidInput));
         }
+        // A fork's target is a conversation this request creates: a new one,
+        // or this request's own after a stop. Any other conversation is
+        // refused, never reopened as if it were the fork. This request's own
+        // is seeded again only while it has said nothing, so an opening after
+        // its fork was saved is never given a second one.
+        match load_conversation(self.inner.metadata.as_ref(), &id)
+            .await
+            .map_err(target)?
+        {
+            None => {}
+            Some(existing)
+                if existing.creation_action() != caller.action_id
+                    || existing.creator_surface() != caller.surface_id =>
+            {
+                return Err(CreationFailure::Conflict);
+            }
+            Some(existing) => {
+                let said = self
+                    .committed_if_present_with_order(&id)
+                    .await
+                    .map_err(target)?
+                    .and_then(|(committed, _)| {
+                        committed.snapshot().map(|snapshot| {
+                            !snapshot.invocations.is_empty() || !snapshot.handoffs.is_empty()
+                        })
+                    })
+                    .unwrap_or(false);
+                if said {
+                    // Its fork is saved: a retry is answered by the creation
+                    // it made, asked for as it was then. The source is not
+                    // read again, so a source deleted, closed to the caller
+                    // or moved to another model since cannot change it.
+                    let environment = self
+                        .inner
+                        .environment
+                        .placement(&id)
+                        .await
+                        .map_err(target)?;
+                    return self
+                        .create_command(
+                            storage,
+                            id,
+                            caller,
+                            RequestedConversation {
+                                agent: existing.agent().map(RequestedAgent::Known),
+                                model: Some(existing.model().as_str().into()),
+                                approval_mode: Some(existing.approval_mode()),
+                                environment,
+                            },
+                        )
+                        .await;
+                }
+            }
+        }
         let record = load_conversation(self.inner.metadata.as_ref(), &source)
             .await
             .map_err(target)?
@@ -438,74 +492,42 @@ impl ConversationService {
             .map_err(target)?;
         let actor = caller.actor().map_err(target)?;
         let at_ms = self.inner.clock.unix_milliseconds();
-        // A fork's target is a conversation this request creates: a new one,
-        // or this request's own after a stop. Any other conversation is
-        // refused, never reopened as if it were the fork. This request's own
-        // is seeded again only while it has said nothing, so an opening after
-        // its fork was saved is never given a second one.
-        let unsaid = match load_conversation(self.inner.metadata.as_ref(), &id)
-            .await
-            .map_err(target)?
-        {
-            None => true,
-            Some(existing)
-                if existing.creation_action() != caller.action_id
-                    || existing.creator_surface() != caller.surface_id =>
-            {
-                return Err(CreationFailure::Conflict);
-            }
-            Some(_) => self
-                .committed_if_present_with_order(&id)
-                .await
-                .map_err(target)?
-                .and_then(|(committed, _)| {
-                    committed.snapshot().map(|snapshot| {
-                        snapshot.invocations.is_empty() && snapshot.handoffs.is_empty()
-                    })
-                })
-                .unwrap_or(true),
-        };
         let request = caller.action_id.clone();
-        // The seed this call placed, if any: only it is let go below.
-        let mut seeded = None;
-        if unsaid {
-            // One fork into an id at a time: another request's seed is never
-            // replaced, so an opening records the fork its creation asked for.
-            match self
-                .inner
-                .forks
-                .lock()
-                .expect("fork seeds")
-                .entry(id.clone())
-            {
-                // This request's own, still waiting, is a retry while the
-                // first runs: answered as a request still running is, never
-                // a creation of its own that could open the target without
-                // the seed once the first has let it go.
-                std::collections::hash_map::Entry::Occupied(seed) => {
-                    let own =
-                        seed.get().request == request && seed.get().surface == caller.surface_id;
-                    return Err(if own {
-                        CreationFailure::Storage(CreationStorageError::Storage(StorageError::Busy))
-                    } else {
-                        CreationFailure::Conflict
-                    });
-                }
-                std::collections::hash_map::Entry::Vacant(seed) => {
-                    let token = NEXT_SEED.fetch_add(1, Ordering::Relaxed);
-                    seeded = Some(token);
-                    seed.insert(ForkSeed {
-                        token,
-                        request: request.clone(),
-                        surface: caller.surface_id.clone(),
-                        intent: HandoffIntent::Fork {
-                            source: super::conversation_session(&source),
-                            history,
-                            actor,
-                            at_ms,
-                        },
-                    });
-                }
+        // The seed this call places: only it is let go below.
+        let seeded = NEXT_SEED.fetch_add(1, Ordering::Relaxed);
+        // One fork into an id at a time: another request's seed is never
+        // replaced, so an opening records the fork its creation asked for.
+        match self
+            .inner
+            .forks
+            .lock()
+            .expect("fork seeds")
+            .entry(id.clone())
+        {
+            // This request's own, still waiting, is a retry while the
+            // first runs: answered as a request still running is, never
+            // a creation of its own that could open the target without
+            // the seed once the first has let it go.
+            std::collections::hash_map::Entry::Occupied(seed) => {
+                let own = seed.get().request == request && seed.get().surface == caller.surface_id;
+                return Err(if own {
+                    CreationFailure::Storage(CreationStorageError::Storage(StorageError::Busy))
+                } else {
+                    CreationFailure::Conflict
+                });
+            }
+            std::collections::hash_map::Entry::Vacant(seed) => {
+                seed.insert(ForkSeed {
+                    token: seeded,
+                    request: request.clone(),
+                    surface: caller.surface_id.clone(),
+                    intent: HandoffIntent::Fork {
+                        source: super::conversation_session(&source),
+                        history,
+                        actor,
+                        at_ms,
+                    },
+                });
             }
         }
         let created = self
@@ -525,9 +547,9 @@ impl ConversationService {
         // seed for a later one: a retry of this fork seeds it again.
         // Only this call's own: once an opening took it, a retry may have
         // placed another, which is that retry's to let go.
-        if let Some(token) = seeded {
+        {
             let mut seeds = self.inner.forks.lock().expect("fork seeds");
-            if seeds.get(&id).is_some_and(|seed| seed.token == token) {
+            if seeds.get(&id).is_some_and(|seed| seed.token == seeded) {
                 seeds.remove(&id);
             }
         }
