@@ -72,3 +72,105 @@ forbid (
     resource is NessaBackup::Inventory
 )
 when { principal.kind == "worker" };
+
+// A person or the gateway surface may stage, accept, or fetch a deferred
+// conversation when they are the operator. A device, peer, environment
+// peer, or worker may not.
+
+@id("restore.stage.person")
+permit (
+    principal is NessaBackup::Principal,
+    action == NessaBackup::Action::"backup.restore.stage",
+    resource is NessaBackup::Restore
+)
+when {
+    principal.kind == "person" &&
+    context.cause == "operator"
+};
+
+@id("restore.stage.surface")
+permit (
+    principal is NessaBackup::Principal,
+    action == NessaBackup::Action::"backup.restore.stage",
+    resource is NessaBackup::Restore
+)
+when {
+    principal.kind == "surface" &&
+    context.cause == "operator"
+};
+
+@id("restore.accept.person")
+permit (
+    principal is NessaBackup::Principal,
+    action == NessaBackup::Action::"backup.restore.accept",
+    resource is NessaBackup::Restore
+)
+when {
+    principal.kind == "person" &&
+    context.cause == "operator"
+};
+
+@id("restore.accept.surface")
+permit (
+    principal is NessaBackup::Principal,
+    action == NessaBackup::Action::"backup.restore.accept",
+    resource is NessaBackup::Restore
+)
+when {
+    principal.kind == "surface" &&
+    context.cause == "operator"
+};
+
+@id("restore.fetch.person")
+permit (
+    principal is NessaBackup::Principal,
+    action == NessaBackup::Action::"backup.deferred.fetch",
+    resource is NessaBackup::Restore
+)
+when {
+    principal.kind == "person" &&
+    context.cause == "operator"
+};
+
+@id("restore.fetch.surface")
+permit (
+    principal is NessaBackup::Principal,
+    action == NessaBackup::Action::"backup.deferred.fetch",
+    resource is NessaBackup::Restore
+)
+when {
+    principal.kind == "surface" &&
+    context.cause == "operator"
+};
+
+@id("restore.refuse.device")
+forbid (
+    principal is NessaBackup::Principal,
+    action,
+    resource is NessaBackup::Restore
+)
+when { principal.kind == "device" };
+
+@id("restore.refuse.peer")
+forbid (
+    principal is NessaBackup::Principal,
+    action,
+    resource is NessaBackup::Restore
+)
+when { principal.kind == "peer" };
+
+@id("restore.refuse.environment-peer")
+forbid (
+    principal is NessaBackup::Principal,
+    action,
+    resource is NessaBackup::Restore
+)
+when { principal.kind == "environment-peer" };
+
+@id("restore.refuse.worker")
+forbid (
+    principal is NessaBackup::Principal,
+    action,
+    resource is NessaBackup::Restore
+)
+when { principal.kind == "worker" };
