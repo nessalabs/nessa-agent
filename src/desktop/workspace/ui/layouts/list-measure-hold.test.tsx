@@ -41,9 +41,11 @@ it.each(["split beside", "close stacked pane"] as const)(
     workspace.innerHTML =
       '<section class="workspace-list"><div class="workspace-list-inner"><div class="desktop-column-bar"><svg></svg><h2>desktop-app</h2></div></div></section><div class="hold-owner"></div>'
     document.body.append(workspace)
-    const root = createRoot(workspace.querySelector(".hold-owner")!)
-    const bar = workspace.querySelector(".desktop-column-bar")!
-    const inner = workspace.querySelector(".workspace-list-inner")!
+    const owner = workspace.querySelector(".hold-owner")
+    const bar = workspace.querySelector(".desktop-column-bar")
+    const inner = workspace.querySelector(".workspace-list-inner")
+    if (!owner || !bar || !inner) throw new Error("list hold fixture is incomplete")
+    const root = createRoot(owner)
     const bodyPadding = getComputedStyle(inner).paddingLeft
     try {
       await act(async () =>
