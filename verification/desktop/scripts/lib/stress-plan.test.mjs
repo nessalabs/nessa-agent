@@ -144,7 +144,6 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         fresh: "0",
         renames: "0",
         deletes: "0",
-        handoffs: "0",
       },
       {},
     ),
