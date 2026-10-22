@@ -123,9 +123,10 @@ fn append_descriptor() -> io::Result<LocalAllocation> {
 
 /// Original maximum-access handle for an existing private directory.
 ///
-/// SetSecurityInfo documents no child ACE propagation for a handle originally
-/// opened MAXIMUM_ALLOWED. This constructor owns that provenance; no later
-/// reopen or inferred origin flag can substitute for its retained authority.
+/// The original maximum-access handle admits the required build/control rights
+/// without delete sharing. Parent ACL isolation additionally depends on native
+/// full-descriptor updates preserving inheritance-model controls; the MAX open
+/// alone did not establish isolation in the 303 native qualification receipt.
 #[derive(Debug)]
 pub struct MaxAccessDirectory {
     file: File,
@@ -136,8 +137,7 @@ impl MaxAccessDirectory {
     /// Original required ADD/control rights are checked before any ACL change.
     pub fn open_at(parent: &File, name: &OsStr) -> io::Result<Self> {
         // relative() uses synchronous native I/O, so request SYNCHRONIZE with
-        // MAXIMUM_ALLOWED. The foreign-ACL native witness exercises this exact
-        // combined mode; no no-propagation claim follows from docs alone.
+        // MAXIMUM_ALLOWED. Role admission is checked before any ACL effect.
         let file = relative(
             parent,
             name,
@@ -159,29 +159,24 @@ impl MaxAccessDirectory {
 
     /// Permit additions during fetch without changing existing child ACLs.
     pub fn append(&self) -> io::Result<()> {
-        let descriptor = append_descriptor()?;
-        unsafe {
-            self.assign(descriptor.0)?;
-        }
+        set_directory_descriptor(&self.file, append_descriptor()?)?;
         require_directory(&self.file)
     }
 
     /// Deny further additions before final target validation.
     pub fn seal(&self) -> io::Result<()> {
-        let descriptor = User::current()?.descriptor_with_access(true, "FRFX")?;
-        unsafe {
-            self.assign(descriptor.0)?;
-        }
+        set_directory_descriptor(
+            &self.file,
+            User::current()?.descriptor_with_access(true, "FRFX")?,
+        )?;
         require_directory(&self.file)
     }
 
     /// Restore this same directory's captured ACL with exact control readback.
     pub fn restore(&self, original: &DirectoryAcl) -> io::Result<()> {
-        original.restore_with(&self.file, |descriptor| unsafe { self.assign(descriptor) })
-    }
-
-    unsafe fn assign(&self, descriptor: PSECURITY_DESCRIPTOR) -> io::Result<()> {
-        unsafe { set_directory_security(&self.file, descriptor) }
+        original.restore_with(&self.file, |descriptor| unsafe {
+            set_directory_security(&self.file, descriptor)
+        })
     }
 }
 
@@ -294,8 +289,13 @@ impl DirectoryAcl {
             ))?;
             assign((&mut descriptor as *mut SECURITY_DESCRIPTOR).cast())?;
         }
-        if Self::capture(file)? != *self {
-            return Err(io::Error::other("original directory ACL was not restored"));
+        let restored = Self::capture(file)?;
+        if restored != *self {
+            return Err(io::Error::other(format!(
+                "original directory ACL was not restored (dacl_equal={}, control={:#06x}->{:#06x}, acl_bytes={}->{})",
+                restored.words == self.words && restored.length == self.length,
+                self.control, restored.control, self.length, restored.length
+            )));
         }
         Ok(())
     }
@@ -521,41 +521,79 @@ pub fn release_file_writes(file: &File) -> io::Result<()> {
     set_descriptor(file, User::current()?.descriptor(false)?)
 }
 
-fn set_directory_descriptor(file: &File, descriptor: LocalAllocation) -> io::Result<()> {
-    unsafe { set_directory_security(file, descriptor.0) }
-}
-
-// Every directory caller retains original MAX provenance from creation, typed
-// existing-parent acquisition, or verified ACL reopening. No origin is inferred
-// from granted rights; those checks merely preserve the requested role access.
-unsafe fn set_directory_security(file: &File, descriptor: PSECURITY_DESCRIPTOR) -> io::Result<()> {
-    let mut present = 0;
-    let mut defaulted = 0;
-    let mut acl = null_mut();
-    unsafe {
-        check(GetSecurityDescriptorDacl(
-            descriptor,
-            &mut present,
-            &mut acl,
-            &mut defaulted,
-        ))?;
-    }
-    if present == 0 || acl.is_null() {
-        return Err(unsafe_file());
-    }
+fn directory_control(file: &File) -> io::Result<SECURITY_DESCRIPTOR_CONTROL> {
+    let mut descriptor = null_mut();
     let code = unsafe {
-        SetSecurityInfo(
+        GetSecurityInfo(
             file.as_raw_handle(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            DACL_SECURITY_INFORMATION,
             null_mut(),
             null_mut(),
-            acl,
             null_mut(),
+            null_mut(),
+            &mut descriptor,
         )
     };
     if code != 0 {
         return Err(io::Error::from_raw_os_error(code as i32));
+    }
+    let _owned = LocalAllocation(descriptor);
+    let mut control = 0;
+    let mut revision = 0;
+    unsafe {
+        check(GetSecurityDescriptorControl(
+            descriptor,
+            &mut control,
+            &mut revision,
+        ))?;
+    }
+    Ok(control)
+}
+
+fn set_directory_descriptor(file: &File, descriptor: LocalAllocation) -> io::Result<()> {
+    // D:P alone drops AUTO_INHERITED model metadata. Preserve the current
+    // model on temporary changes; AUTO_INHERIT_REQ would request propagation
+    // and is deliberately absent. Exact restoration bypasses this preparation.
+    let current = directory_control(file)?;
+    if current & SE_DACL_PROTECTED == 0 {
+        return Err(unsafe_file());
+    }
+    unsafe {
+        check(SetSecurityDescriptorControl(
+            descriptor.0,
+            SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ,
+            current & (SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED),
+        ))?;
+        set_directory_security(file, descriptor.0)
+    }
+}
+
+// Directory-only full-SD assignment: temporary callers supply current model
+// controls; restore supplies the exact captured controls. Files do not enter
+// this path, so its fallible preparation/readback cannot escape an FRFW window.
+unsafe fn set_directory_security(file: &File, descriptor: PSECURITY_DESCRIPTOR) -> io::Result<()> {
+    let before = directory_control(file)?;
+    let mut input = 0;
+    let mut revision = 0;
+    unsafe {
+        check(GetSecurityDescriptorControl(
+            descriptor,
+            &mut input,
+            &mut revision,
+        ))?;
+    }
+    let status =
+        unsafe { NtSetSecurityObject(file.as_raw_handle(), DACL_SECURITY_INFORMATION, descriptor) };
+    if status < 0 {
+        return Err(io::Error::from_raw_os_error(
+            unsafe { RtlNtStatusToDosError(status) } as i32,
+        ));
+    }
+    let after = directory_control(file)?;
+    let model = SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED;
+    if input & model != after & model {
+        return Err(io::Error::other(format!("directory ACL control changed (before={before:#06x}, input={input:#06x}, after={after:#06x})")));
     }
     Ok(())
 }
@@ -579,16 +617,14 @@ fn set_descriptor(file: &File, descriptor: LocalAllocation) -> io::Result<()> {
     Ok(())
 }
 
-// File-only mechanics. Every directory uses the documented maximum-origin
-// Win32 mechanism instead: ordinary ADD authority can inject unprotected children
-// even into an owned root before sealing. Legacy native tests retain that hazard.
+// File-only mechanics. Directory full-SD assignment separately preserves
+// inheritance-model metadata and never enters the writable-file window.
 unsafe fn set_native_descriptor(file: &File, descriptor: PSECURITY_DESCRIPTOR) -> io::Result<()> {
     // Protection is carried in the full descriptor itself. Neither bc6's
     // high-bit selector nor 09c's low selector established foreign-child
     // preservation; production uses this path only for regular files.
-    // Generated SDDL prepares protected D:P without auto-inheritance requests;
-    // exact restore supplies its saved DACL control. All descriptor preparation
-    // stays outside this syscall and before writable permission windows.
+    // File descriptors are prepared before writable permission windows;
+    // directory model preparation/readback never enters this file-only path.
     let status =
         unsafe { NtSetSecurityObject(file.as_raw_handle(), DACL_SECURITY_INFORMATION, descriptor) };
     if status < 0 {
@@ -695,24 +731,96 @@ mod tests {
         .collect()
     }
 
-    fn inject_foreign_children(
-        root: &std::path::Path,
-        owned: &std::path::Path,
-        source: &str,
-    ) -> Vec<File> {
-        let incoming = root.join(source);
-        crate::create_directory_exclusive(&incoming).unwrap();
-        // Produce genuine inherited, unprotected legacy ACLs under a full-access
-        // private source. Close every descendant before moving the directory.
-        drop(foreign_children(&incoming));
-        std::fs::rename(incoming.join("other-chat"), owned.join("other-chat"))
-            .expect("ordinary ADD authority injects a foreign file before seal");
-        std::fs::rename(
-            incoming.join("foreign-directory"),
-            owned.join("foreign-directory"),
-        )
-        .expect("ordinary ADD authority injects a foreign directory before seal");
+    fn inject_foreign_children(owned: &std::path::Path) -> Vec<File> {
+        // Native 303 showed that moving an entry can protect it. Establish the
+        // actual required state under this root instead: ordinary creation,
+        // then explicit disposable-fixture ACL setup through held handles.
+        drop(foreign_children(owned));
+        for (name, directory) in [
+            ("foreign-directory", true),
+            ("other-chat", false),
+            ("foreign-directory/grandchild", false),
+        ] {
+            let handle = std::fs::OpenOptions::new()
+                .access_mode(GENERIC_READ | WRITE_DAC)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(owned.join(name))
+                .unwrap();
+            let descriptor = User::current().unwrap().descriptor(directory).unwrap();
+            let mut acl = null_mut();
+            let mut present = 0;
+            let mut defaulted = 0;
+            unsafe {
+                check(GetSecurityDescriptorDacl(
+                    descriptor.0,
+                    &mut present,
+                    &mut acl,
+                    &mut defaulted,
+                ))
+                .unwrap();
+            }
+            assert_ne!(present, 0);
+            assert!(!acl.is_null());
+            let status = unsafe {
+                SetSecurityInfo(
+                    handle.as_raw_handle(),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION,
+                    null_mut(),
+                    null_mut(),
+                    acl,
+                    null_mut(),
+                )
+            };
+            assert_eq!(status, 0);
+            assert_eq!(
+                acl_receipt(&handle).1 & SE_DACL_PROTECTED,
+                0,
+                "test setup must produce a genuinely unprotected foreign object"
+            );
+        }
+        for name in ["other-chat", "foreign-directory/grandchild"] {
+            std::fs::write(owned.join(name), b"other chat unchanged").expect(
+                "unprotected foreign fixture has actual full existing-file write authority",
+            );
+        }
         foreign_handles(owned)
+    }
+
+    fn acl_shape(bytes: &[u8]) -> Vec<(u8, u8, u32)> {
+        let mut entries = Vec::new();
+        let mut offset = 8usize;
+        while entries.len() < 16 && offset + 8 <= bytes.len() {
+            let size = u16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]) as usize;
+            if size < 8 || size > bytes.len() - offset {
+                break;
+            }
+            entries.push((
+                bytes[offset],
+                bytes[offset + 1],
+                u32::from_le_bytes([
+                    bytes[offset + 4],
+                    bytes[offset + 5],
+                    bytes[offset + 6],
+                    bytes[offset + 7],
+                ]),
+            ));
+            offset += size;
+        }
+        entries
+    }
+
+    fn diagnose_foreign_difference(
+        before: &[(Vec<u8>, SECURITY_DESCRIPTOR_CONTROL)],
+        after: &[(Vec<u8>, SECURITY_DESCRIPTOR_CONTROL)],
+    ) {
+        for (index, (old, new)) in before.iter().zip(after).enumerate() {
+            if old != new {
+                eprintln!("native-foreign-acl child={index} dacl_equal={} control={:#06x}->{:#06x} acl_bytes={}->{} ace_type_flags_masks={:?}->{:?}",
+                    old.0 == new.0, old.1, new.1, old.0.len(), new.0.len(), acl_shape(&old.0), acl_shape(&new.0));
+            }
+        }
     }
 
     fn legacy_directory_assignment(file: &File, descriptor: LocalAllocation) {
@@ -762,11 +870,15 @@ mod tests {
             Some(&descriptor),
         )
         .unwrap();
-        let children = inject_foreign_children(
-            root.path(),
-            &root.path().join("legacy-owned"),
-            "legacy-incoming",
+        // Put this causal control in the modern inheritance model before any
+        // foreign object exists. Observe that state, rather than infer it from FA.
+        legacy_directory_assignment(&directory, append_descriptor().unwrap());
+        let parent_before = directory_control(&directory).unwrap();
+        assert!(
+            parent_before & SE_DACL_AUTO_INHERITED != 0,
+            "legacy causal setup must actually establish the modern inheritance model"
         );
+        let children = inject_foreign_children(&root.path().join("legacy-owned"));
         let before: Vec<_> = children.iter().map(acl_receipt).collect();
         for (_, control) in &before {
             assert_eq!(
@@ -783,6 +895,10 @@ mod tests {
             set_native_descriptor(&directory, sealed.0).unwrap();
         }
         let after: Vec<_> = children.iter().map(acl_receipt).collect();
+        if after == before {
+            let parent_after = directory_control(&directory).unwrap();
+            eprintln!("native-legacy-causal control_before={parent_before:#06x} input_model={:#06x} control_after={parent_after:#06x} foreign_changed=false", SE_DACL_PROTECTED);
+        }
         assert!(
             after != before,
             "legacy native directory seal must demonstrate the injected-child mutation hazard"
@@ -799,8 +915,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let ancestor = full_parent(root.path());
         let directory = create_protected_directory_at(&ancestor, OsStr::new("max-owned")).unwrap();
-        let children =
-            inject_foreign_children(root.path(), &root.path().join("max-owned"), "max-incoming");
+        let children = inject_foreign_children(&root.path().join("max-owned"));
         let before: Vec<_> = children.iter().map(acl_receipt).collect();
         for (_, control) in &before {
             assert_eq!(
@@ -809,8 +924,14 @@ mod tests {
                 "injected production children must actually be unprotected"
             );
         }
+        let parent_before = directory_control(&directory).unwrap();
         let assert_foreign = |transition: &str| {
-            assert!(children.iter().map(acl_receipt).collect::<Vec<_>>() == before,
+            let after: Vec<_> = children.iter().map(acl_receipt).collect();
+            if after != before {
+                diagnose_foreign_difference(&before, &after);
+                eprintln!("native-owned-parent transition={transition} original_control={parent_before:#06x} current_control={:#06x}", directory_control(&directory).unwrap());
+            }
+            assert!(after == before,
                 "MAX-created directory must preserve exact injected child ACL/control: {transition}");
             for relative in ["other-chat", "foreign-directory/grandchild"] {
                 let path = root.path().join("max-owned").join(relative);
@@ -898,8 +1019,12 @@ mod tests {
             );
         }
         let assert_foreign = |transition: &str| {
-            eprintln!("native-parent-acl transition={transition}");
-            assert!(children.iter().map(acl_receipt).collect::<Vec<_>>() == before,
+            let after: Vec<_> = children.iter().map(acl_receipt).collect();
+            if after != before {
+                diagnose_foreign_difference(&before, &after);
+                eprintln!("native-parent-acl transition={transition} original_control={:#06x} current_control={:#06x}", original.control, directory_control(directory.file()).unwrap());
+            }
+            assert!(after == before,
                 "parent-only assignment must preserve exact foreign DACL and security control immediately: {transition}");
             for relative in ["other-chat", "foreign-directory/grandchild"] {
                 let path = root.path().join("sessions").join(relative);

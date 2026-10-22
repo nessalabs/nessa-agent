@@ -156,14 +156,14 @@ pub fn relative_names(directory: &File) -> io::Result<Vec<OsString>> {
 
 fn open_directory_cursor(directory: &File) -> io::Result<File> {
     let expected = NativeObjectId::capture(directory)?;
-    // A native self-open creates a new file object and enumeration position.
-    // The fixed dot resolves from retained directory authority, even after its
-    // former pathname has been replaced. No caller-controlled name enters here.
-    let mut dot = [b'.' as u16];
+    // A native relative empty-name open selects the related file object itself,
+    // with a new file object and enumeration position. A dot is a literal NT
+    // path component, not Win32's self-directory normalization. No pathname or
+    // caller-controlled component enters this reopen after an ancestor rename.
     let mut name = UNICODE_STRING {
-        Length: 2,
-        MaximumLength: 2,
-        Buffer: dot.as_mut_ptr(),
+        Length: 0,
+        MaximumLength: 0,
+        Buffer: null_mut(),
     };
     let attributes = OBJECT_ATTRIBUTES {
         Length: size_of::<OBJECT_ATTRIBUTES>() as u32,

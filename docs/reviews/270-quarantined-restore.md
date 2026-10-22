@@ -233,9 +233,15 @@ publication candidates and failed zeroing or sync still return `Retained`.
 
 Windows qualification preserves failures rather than treating cross compilation
 as native proof. Native results disproved the DACL-selector and synchronization-only
-corrections. The next candidate uses a typed original MAXIMUM_ALLOWED directory
-open for documented non-propagating SetSecurityInfo changes, preserves captured
-ACL control bits, and opens independent native self-directory enumeration cursors.
+corrections. Native `3030429` also disproved the MAXIMUM_ALLOWED / SetSecurityInfo
+isolation candidate: child ACL/control changes and exact restoration failures
+remain open. Passing only the DACL to SetSecurityInfo discards the reconstructed
+security-descriptor control bits. The next directory-only correction must retain
+the current inheritance model through temporary transitions and the exact saved
+model through restoration, with unchanged-child and legacy mutation controls.
+The cursor correction uses a native empty counted name rooted in the retained
+directory, following the Microsoft filesystem sample; the prior literal dot
+returned InvalidFilename 123. Independent-cursor native proof remains required.
 Native assertions retain exact foreign-child ACL comparisons and
 actual write, rename, and deletion controls. Fixtures distinguish Windows'
 open-descendant directory-rename refusal from successful Unix ancestor swaps.
