@@ -2583,7 +2583,51 @@ async function mergedTabStays(run, besideId, failures) {
     failures.push("opening a new tab changed the merged tab")
   if (fresh && (await group.locator(`[data-session-tab="${fresh}"]`).count()) > 0)
     failures.push("a new tab joined the merged tab")
+  // At rest — once the selection's fade has run — a merged group is drawn
+  // as a plain tab is: no fill of its own.
+  const restFill = () =>
+    tabs.evaluate((list) => {
+      const fill = (e) => (e ? getComputedStyle(e).backgroundColor : null)
+      const group = list.querySelector('[role="group"]:not([data-active])')
+      const plain = list.querySelector(
+        ":scope > .workspace-window-tab:not([data-active])",
+      )
+      return { group: fill(group), plain: fill(plain) ?? "rgba(0, 0, 0, 0)" }
+    })
+  if (
+    !(await waitFor(async () => {
+      const { group, plain } = await restFill()
+      return group === plain
+    }, 2_000))
+  ) {
+    const { group, plain } = await restFill()
+    failures.push(`an unselected merged tab is filled ${group}, a plain one ${plain}`)
+  }
+  // Each frame after the click: the panes go from the one tab's layout to
+  // the other's in one step, never through another.
+  const sampling = run.page.evaluate(
+    (pane) =>
+      new Promise((done) => {
+        const seen = []
+        const step = () => {
+          seen.push(
+            [...document.querySelectorAll(pane)]
+              .map((p) => Math.round(p.getBoundingClientRect().width))
+              .join(","),
+          )
+          if (seen.length < 30) requestAnimationFrame(step)
+          else done(seen)
+        }
+        requestAnimationFrame(step)
+      }),
+    css.pane,
+  )
   await group.locator(`[data-session-tab="${besideId}"] [role="tab"]`).click()
+  const frames = [...new Set(await sampling)]
+  if (frames.length > 2)
+    failures.push(
+      `switching tabs passed through ${frames.length - 2} other layouts: ${frames.join(" → ")}`,
+    )
   if (
     !(await waitFor(async () => (await run.page.locator(css.pane).count()) === 2, 10_000))
   ) {

@@ -164,6 +164,12 @@ function play(root: HTMLElement, from: Rects) {
 export class FlipScope extends Component<{
   /** What the layout looks like, ignoring sizes; motion plays when it changes. */
   shape: string
+  /**
+   * A change of this is a cut, not a move: another layout taking the place
+   * of the one shown — another window tab, say — lands at once, with no
+   * flight from where the last one's panes stood.
+   */
+  cut?: string
   root: RefObject<HTMLElement | null>
   children: ReactNode
 }> {
@@ -184,9 +190,12 @@ export class FlipScope extends Component<{
     this.scope = null
   }
 
-  getSnapshotBeforeUpdate(previous: Readonly<{ shape: string }>): Snapshot | null {
+  getSnapshotBeforeUpdate(
+    previous: Readonly<{ shape: string; cut?: string }>,
+  ): Snapshot | null {
     const root = this.props.root.current
     if (previous.shape === this.props.shape || !root) return null
+    if (previous.cut !== this.props.cut) return null
     // Reduced motion makes the flight's duration zero: nothing to measure for.
     if (durationToken(root, "--desktop-flight") === 0) return null
     // Read mid-flight too: a change during a flight starts from where things are now.

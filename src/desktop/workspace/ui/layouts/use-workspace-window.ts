@@ -50,6 +50,7 @@ import {
   selectColumnCount,
   selectDraft,
   selectFocusedPaneKey,
+  selectActiveTab,
   selectPaneShape,
   selectPanes,
   selectSession,
@@ -418,6 +419,8 @@ export interface WorkspaceWindowModel {
   frame: WorkspaceFrame
   peek: EdgePeekControls
   shape: string
+  /** The window tab shown: its change is a cut, not a flight (`FlipScope`). */
+  tab: string
   splitPanes: SplitPanesSource
   railOffered: boolean
   railDrawn: boolean
@@ -474,6 +477,8 @@ export function useWorkspaceWindow({
   const [escapeScopes] = useState<EscapeScopes>(() => new Map())
   useWidgetEscape({ store, root, scopes: escapeScopes })
   const shape = useMotionShape(chrome.sidebarOpen, chrome.listOpen, chrome.railDrawn)
+  // Painted with the boxes, as the shape is: another tab's layout is a cut.
+  const tab = usePaintedWithPanes(selectActiveTab, paneBoxFrame)
   const dispatch = useWorkspaceDispatch()
   const onToggleSidebar = useCallback(() => dispatch(toggleSidebar()), [dispatch])
   const onToggleSessionList = useCallback(() => dispatch(toggleSessionList()), [dispatch])
@@ -503,6 +508,7 @@ export function useWorkspaceWindow({
     frame: switching.frame,
     peek,
     shape,
+    tab,
     splitPanes,
     railOffered: chrome.railOffered,
     railDrawn: chrome.railDrawn,

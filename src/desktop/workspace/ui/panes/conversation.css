@@ -323,6 +323,21 @@
   }
 }
 
+/* In the window's corner a home's picture stops below the titlebar row, as
+   before: up behind the tabs it would be drawn under the traffic lights
+   (ADR 238). */
+.workspace[data-panes-alone]
+  .workspace-pane:is(
+    [data-split-corner]:not([data-drag-corner="no"]),
+    [data-drag-corner="yes"]
+  )
+  .workspace-pane-home
+  > .desktop-home {
+  --workspace-home-reach: calc(
+    var(--desktop-control-size) + 2 * var(--desktop-control-inset)
+  );
+}
+
 /* Behind the tabs the picture is quieter, not gone: it melts into the
    titlebar's band instead of starting under a clear edge. */
 .workspace-pane-home > .desktop-home:not([data-page]) .desktop-header-image {

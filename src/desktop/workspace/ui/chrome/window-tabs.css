@@ -25,6 +25,33 @@
   display: none;
 }
 
+/*
+ * One look for every state:
+ *   - at rest, a tab or a merged group is plain text on the band: no fill, no
+ *     rim — a group only adds its merge glyph and faint dividers;
+ *   - hovered, a light fill;
+ *   - selected, one opaque pill: the tab, or the whole merged group, with the
+ *     focused chat inside marked by brightness alone, never a second pill.
+ * The pill is opaque so header art behind the row never shows through its
+ * text. It fades between tabs in the window's base duration, which reduced
+ * motion makes zero (`styles.css`).
+ */
+.workspace-tab-list {
+  --tab-pill-fill: color-mix(in oklab, var(--foreground) 11%, var(--background));
+  --tab-pill-edge:
+    inset 0 0.5px 0 color-mix(in oklab, white 14%, transparent),
+    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent),
+    0 1px 2px rgb(0 0 0 / 18%);
+  --tab-hover-fill: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+html:not(.dark) .workspace-tab-list {
+  --tab-pill-fill: color-mix(in oklab, white 80%, var(--background));
+  --tab-pill-edge:
+    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent),
+    0 1px 2px rgb(0 0 0 / 8%);
+}
+
 .workspace-window-tab {
   display: flex;
   align-items: center;
@@ -35,9 +62,9 @@
   border-radius: var(--desktop-radius-sm);
   color: var(--desktop-muted);
   transition:
-    background-color var(--desktop-base) ease,
-    color var(--desktop-base) ease,
-    box-shadow var(--desktop-base) ease;
+    background-color var(--desktop-base) var(--desktop-out),
+    color var(--desktop-base) var(--desktop-out),
+    box-shadow var(--desktop-base) var(--desktop-out);
 }
 
 .workspace-window-tab > [role="tab"] {
@@ -54,8 +81,7 @@
   color: inherit;
   white-space: nowrap;
   font: inherit;
-  /* Every title the same: selected or not, merged or not. Selection shows
-     only as the tab's fill. */
+  /* Every title the same: selected or not, merged or not. */
   font-size: var(--desktop-text-body);
   font-weight: 500;
 }
@@ -67,87 +93,74 @@
 
 .workspace-window-tab:hover {
   color: var(--foreground);
-  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+  background: var(--tab-hover-fill);
 }
 
-/*
- * The selected tab is a lozenge of glass over whatever runs up behind the
- * titlebar — the sidebar's material, a pane's header art — rather than a
- * filled block with a rule under the row: a lit top edge, a soft fill that
- * lets the art through, and a shadow that lifts it off the band.
- */
-.workspace-window-tab[data-active] {
+/* A plain tab, selected: the pill. */
+.workspace-tab-list > .workspace-window-tab[data-active] {
   color: var(--foreground);
-  background: color-mix(in oklab, var(--foreground) 9%, transparent);
-  box-shadow:
-    inset 0 0.5px 0 color-mix(in oklab, white 22%, transparent),
-    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent),
-    0 1px 2px rgb(0 0 0 / 18%),
-    0 4px 14px -6px rgb(0 0 0 / 30%);
+  background: var(--tab-pill-fill);
+  box-shadow: var(--tab-pill-edge);
 }
 
-html:not(.dark) .workspace-window-tab[data-active] {
-  background: color-mix(in oklab, white 70%, transparent);
-  box-shadow:
-    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent),
-    0 1px 2px rgb(0 0 0 / 8%),
-    0 4px 14px -6px rgb(0 0 0 / 14%);
-}
-
-/*
- * Chats open side by side read as one merged tab: a shared capsule with a
- * merge glyph at its head, its chats inside it divided by hairlines. The
- * focused chat inside is lit as any selected tab is.
- */
+/* A merged group: one unit, quiet at rest — its glyph, its chats, faint dividers. */
 .workspace-tab-group {
   display: flex;
   align-items: stretch;
   flex: 0 1 auto;
   min-width: 0;
-  gap: 2px;
-  padding: 2px;
-  padding-left: 0;
-  /* Gentle corners; a tab inside is rounder by less, by the group's 2px inset. */
+  gap: 1px;
   border-radius: var(--desktop-radius-sm);
-  background: color-mix(in oklab, var(--foreground) 5%, transparent);
-  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 9%, transparent);
+  transition:
+    background-color var(--desktop-base) var(--desktop-out),
+    box-shadow var(--desktop-base) var(--desktop-out);
+}
+
+/* Selected, the whole group is the pill. */
+.workspace-tab-group[data-active] {
+  background: var(--tab-pill-fill);
+  box-shadow: var(--tab-pill-edge);
 }
 
 .workspace-tab-group-glyph {
   flex: none;
   align-self: center;
-  margin: 0 2px 0 10px;
+  margin: 0 0 0 10px;
+  color: var(--desktop-muted);
+  transition: color var(--desktop-base) var(--desktop-out);
+}
+
+.workspace-tab-group[data-active] > .workspace-tab-group-glyph {
   color: color-mix(
     in oklab,
     var(--desktop-light-edge, var(--foreground)) 70%,
     var(--foreground)
   );
-  opacity: 0.85;
 }
 
 .workspace-tab-group > .workspace-window-tab {
   flex-basis: 168px;
   width: 168px;
-  border-radius: var(--desktop-radius-xs);
+}
+
+/* Inside the selected group the pill is the group's: the focused chat is
+   brighter, the others stay quiet, and hovering adds no second fill. */
+.workspace-tab-group[data-active] > .workspace-window-tab:hover {
+  background: transparent;
+}
+
+.workspace-tab-group[data-active] > .workspace-window-tab[data-active] {
+  color: var(--foreground);
 }
 
 .workspace-tab-group > .workspace-window-tab + .workspace-window-tab::before {
   content: "";
   position: absolute;
   left: -1px;
-  top: 25%;
-  bottom: 25%;
+  top: 30%;
+  bottom: 30%;
   width: 1px;
-  background: color-mix(in oklab, var(--foreground) 12%, transparent);
-  transition: opacity var(--desktop-base) ease;
-}
-
-/* No divider beside a lit tab: its glass is its edge. */
-.workspace-tab-group > .workspace-window-tab[data-active]::before,
-.workspace-tab-group
-  > .workspace-window-tab[data-active]
-  + .workspace-window-tab::before {
-  opacity: 0;
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
 }
 
 .workspace-window-tab > .desktop-icon-button {
@@ -174,13 +187,4 @@ html:not(.dark) .workspace-window-tab[data-active] {
   .workspace-window-tab > .desktop-icon-button {
     opacity: 1;
   }
-}
-
-/* A merged tab in the background reads quieter than the one in front. */
-.workspace-tab-group:not([data-active]) {
-  background: color-mix(in oklab, var(--foreground) 3%, transparent);
-}
-
-.workspace-tab-group:not([data-active]) > .workspace-tab-group-glyph {
-  opacity: 0.55;
 }
