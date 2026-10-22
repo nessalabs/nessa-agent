@@ -10,6 +10,13 @@
   flex: none;
   min-height: 0;
   padding-top: var(--desktop-titlebar-height);
+  /* Its edge with the chat: the same fading hairline as the sidebar's. */
+  background: linear-gradient(
+      to bottom,
+      transparent calc(var(--desktop-titlebar-height) * 0.5),
+      var(--desktop-rim) calc(var(--desktop-titlebar-height) + 40px)
+    )
+    right top / 1px 100% no-repeat;
   overflow: hidden;
   transition:
     opacity var(--desktop-base) ease,

@@ -20,9 +20,12 @@
   flex: 1;
   min-height: 0;
   padding-top: 0;
-  /* The room the pane's title row takes above the home, and the picture's own height. */
+  /* The room the pane's title row takes above the home — and, in the top row,
+     the titlebar's too, so the picture runs up behind the tabs to the
+     window's edge — and the picture's own height. */
   --workspace-home-reach: calc(
-    var(--desktop-control-size) + 2 * var(--desktop-control-inset)
+    var(--desktop-control-size) + 2 * var(--desktop-control-inset) +
+      max(0, 1 - var(--ri, 1)) * var(--desktop-titlebar-height)
   );
   --workspace-home-picture: clamp(120px, 32cqh, 290px);
 }
@@ -318,4 +321,12 @@
     flex-wrap: wrap;
     row-gap: 4px;
   }
+}
+
+/* Behind the tabs the picture is quieter, not gone: it melts into the
+   titlebar's band instead of starting under a clear edge. */
+.workspace-pane-home > .desktop-home:not([data-page]) .desktop-header-image {
+  mask-image:
+    linear-gradient(to right, transparent, black 8%, black 92%, transparent),
+    linear-gradient(to bottom, rgb(0 0 0 / 40%), black 28%, black 72%, transparent);
 }

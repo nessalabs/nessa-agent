@@ -1165,16 +1165,18 @@ html:not(.dark) [data-surface] {
   top: 0;
   left: 0;
   width: 100%;
-  height: min(calc(var(--desktop-titlebar-height) + 56px), 24cqh);
-  justify-content: flex-end;
+  /* From the window's top edge, behind the tabs, so the art and the toolbar
+     read as one band rather than a bar stacked on a picture. */
+  height: min(calc(var(--desktop-titlebar-height) + 150px), 36cqh);
+  justify-content: center;
   overflow: clip;
-  opacity: 0.38;
-  filter: saturate(0.7);
+  opacity: 0.56;
+  filter: saturate(0.85);
   pointer-events: none;
   transition: opacity var(--desktop-base) ease;
   mask-image:
-    linear-gradient(to right, transparent, black 12%, black 88%, transparent),
-    linear-gradient(to bottom, black 20%, transparent);
+    linear-gradient(to right, transparent, black 8%, black 92%, transparent),
+    linear-gradient(to bottom, black 35%, rgb(0 0 0 / 45%) 70%, transparent);
   mask-composite: intersect;
 }
 
@@ -1202,7 +1204,7 @@ html:not(.dark) [data-surface] {
 .split-panes-grid[data-split-multi]
   .workspace-pane:not([data-focused])
   .desktop-header[data-sliver] {
-  opacity: 0.24;
+  opacity: 0.3;
 }
 
 @container workspace-pane (max-height: 219px) {

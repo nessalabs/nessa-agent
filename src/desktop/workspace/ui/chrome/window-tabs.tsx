@@ -1,6 +1,7 @@
 /** The window's open documents, above the same split-pane workspace (#1077). */
 import { memo, useLayoutEffect, useMemo, useRef, type KeyboardEvent } from "react"
 import { panesOf } from "../../../split-panes/model/pane-layout"
+import { paneIds } from "../../application/workspace-state"
 import { DesktopIcon } from "../../../ui/icons"
 import { IconButton } from "../../../ui/icon-button"
 import {
@@ -55,6 +56,12 @@ export const WindowTabs = memo(function WindowTabs() {
       panes ? panesOf(panes).filter((p) => paneItemOf(p.item)?.kind === "widget") : [],
     [panes],
   )
+  // Chats open side by side are one merged view: their tabs travel together.
+  const shown = useMemo(() => paneIds(panes), [panes])
+  const merged = useMemo(
+    () => (shown.length > 1 ? shown.filter((id) => ids.includes(id)) : []),
+    [shown, ids],
+  )
   const list = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({
@@ -72,9 +79,24 @@ export const WindowTabs = memo(function WindowTabs() {
         aria-label="Open views"
         onKeyDown={moveTab}
       >
-        {ids.map((id) => (
-          <SessionTab key={id} sessionId={id} />
-        ))}
+        {ids.map((id) => {
+          if (!merged.includes(id)) return <SessionTab key={id} sessionId={id} />
+          if (id !== ids.find((each) => merged.includes(each))) return null
+          return (
+            <div
+              key="merged"
+              className="workspace-tab-group"
+              role="group"
+              aria-label={`${merged.length} chats side by side`}
+              title={`${merged.length} chats side by side`}
+            >
+              <MergedGlyph />
+              {merged.map((each) => (
+                <SessionTab key={each} sessionId={each} />
+              ))}
+            </div>
+          )
+        })}
         {widgets.map((pane) => (
           <div
             key={pane.key}
@@ -154,5 +176,29 @@ function SessionTab({ sessionId }: { sessionId: string }) {
         onClick={() => dispatch(closeSessionTab({ sessionId }))}
       />
     </div>
+  )
+}
+
+/** Two lines meeting in one: the chats in this group share the window. */
+function MergedGlyph() {
+  return (
+    <svg
+      className="workspace-tab-group-glyph"
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="4" cy="3.5" r="1.75" />
+      <circle cx="4" cy="12.5" r="1.75" />
+      <circle cx="12" cy="8" r="1.75" />
+      <path d="M4 5.25v5.5" />
+      <path d="M4 5.25c0 2.75 2.5 2.75 6.25 2.75" />
+    </svg>
   )
 }
