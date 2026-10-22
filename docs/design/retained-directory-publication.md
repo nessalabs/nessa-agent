@@ -130,14 +130,23 @@ writer occupying the temporary permission window, and unchanged unrelated
 replacement bytes/ACLs. The [ReOpenFile contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-reopenfile)
 requires compatible sharing; compilation alone does not qualify those mechanics.
 
-| A01 | Append/seal/restore a guarded existing sessions directory containing foreign unprotected inherited files/directories | Use one handle-bound NtSetSecurityObject setter, without a Win32 recursive inheritance walk. Compare every foreign DACL byte and security-control bit immediately after append, seal, restore, and failure cleanup; other-chat writes remain usable |
+| A01 | Append/seal/restore a guarded existing sessions directory containing foreign unprotected inherited files/directories | Retain a typed handle originally opened with MAXIMUM_ALLOWED and no DELETE sharing; verify the required granted rights before mutation. Use SetSecurityInfo through that same handle, whose documented MAXIMUM_ALLOWED behavior prevents child propagation. Compare every foreign DACL byte and security-control bit immediately after append, seal, restore, and failure cleanup; other-chat writes remain usable |
 | A02 | Root destination-parent rename requires internal FILE_WRITE_DATA/SYNCHRONIZE open | Root shares READ/WRITE, never DELETE. Actual pre-acquired root ADD creates/rename succeed before seal and fail after seal; fresh root DELETE and path moves stay refused. Existing exclusive occupied-target mapping remains conditional on observed occupancy |
+| A03 | An archive directory needs independent enumeration cursors after its ancestor spelling changes | Open the fixed self-relative native directory name beneath the retained handle, require synchronous directory-query rights, and compare object identity. Interleaving two cursors must preserve each cursor's continuation; no pathname or shared-cursor fallback |
 
-The [NtSetSecurityObject contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntsetsecurityobject)
-specifies mutation through the target handle; unlike SetSecurityInfo its contract
-does not describe a recursive child update. Parent-only behavior remains a
-native qualification requirement, including existing unprotected descendants.
-No enumeration of existing child protection can substitute for that proof.
+| M06 | Ordinary ADD authority inserts an unprotected foreign child into a newly created owned root before seal | Original creation and every later verified directory ACL reopen use MAXIMUM_ALLOWED plus required synchronous/role access, with granted-rights checks. All directory ACL mutation uses SetSecurityInfo on those original MAX handles; ownership alone does not imply protected children. A legacy Nt setter control must change injected foreign ACLs, while production MAX seal/release preserves exact ACL/control and actual writes. Files retain their separate native setter and unconditional FR reseal ordering |
+
+Native qualification disproved both the NtSetSecurityObject-only child-isolation
+hypothesis and a ReOpenFile synchronization-only directory-cursor correction.
+The [SetSecurityInfo contract](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo)
+explicitly prevents child propagation when the original open requested
+MAXIMUM_ALLOWED. A typed handle owns that construction and its granted-rights
+admission; an arbitrary existing file handle cannot assert that origin.
+The [NtOpenFile contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntopenfile)
+supports native directory opens; enumeration retains its original directory
+authority and validates the newly opened self object's identity.
+Both mechanisms still require native proof. No enumeration of existing child
+protection can substitute for unchanged-child assertions.
 
 The threat boundary excludes an administrator, process-handle duplication and
 an owner deliberately changing the DACL, as Unix directory mode protection also

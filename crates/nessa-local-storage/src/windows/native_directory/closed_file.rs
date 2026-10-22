@@ -53,18 +53,14 @@ pub fn open_verified_directory_at(
     let file = relative(
         parent,
         name,
-        FILE_LIST_DIRECTORY
-            | FILE_TRAVERSE
-            | FILE_READ_ATTRIBUTES
-            | READ_CONTROL
-            | WRITE_DAC
-            | SYNCHRONIZE,
+        super::MAXIMUM_ALLOWED | SYNCHRONIZE,
         FILE_OPEN,
         FILE_OPEN_REPARSE_POINT,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         None,
     )?;
     require_directory(&file)?;
+    super::require_directory_access(&file, super::DIRECTORY_METADATA_ACCESS)?;
     expected.require(&file)?;
     Ok(file)
 }

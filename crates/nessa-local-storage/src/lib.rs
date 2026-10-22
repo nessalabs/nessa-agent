@@ -23,16 +23,6 @@ use windows as platform;
 
 #[cfg(windows)]
 pub use platform::create_no_writers;
-#[cfg(windows)]
-pub use platform::{
-    append_directory_writes, create_protected_directory_at, create_protected_file_at,
-    create_protected_subdirectory_at, open_directory_at, open_file_at, open_relative_directory,
-    open_relative_file, open_verified_directory_at, open_verified_file_at,
-    reacquire_exclusive_file, relative_entry_kind, relative_names, release_directory_writes,
-    release_file_writes, remove_handle, rename_handle_at, rename_relative_entry_at,
-    retain_directory_at, seal_directory_writes, seal_file_writes, DirectoryAcl, NativeObjectId,
-    RelativeEntryKind,
-};
 pub use platform::{
     create_directory, create_directory_beneath, create_directory_exclusive, open, open_beneath,
     remove_directory_beneath, remove_file_beneath, replace, replace_beneath, sync_directory,
@@ -41,6 +31,15 @@ pub use platform::{
 #[cfg(unix)]
 pub use platform::{
     create_private_directory_path, create_shared_directory_path, verify_shared_directory_file,
+};
+#[cfg(windows)]
+pub use platform::{
+    create_protected_directory_at, create_protected_file_at, create_protected_subdirectory_at,
+    open_directory_at, open_file_at, open_relative_directory, open_relative_file,
+    open_verified_directory_at, open_verified_file_at, reacquire_exclusive_file,
+    relative_entry_kind, relative_names, release_directory_writes, release_file_writes,
+    remove_handle, rename_handle_at, rename_relative_entry_at, seal_directory_writes,
+    seal_file_writes, DirectoryAcl, MaxAccessDirectory, NativeObjectId, RelativeEntryKind,
 };
 pub use retained_directory::{
     PrivateDirectory, PrivateDirectoryEntries, PrivateDirectoryEntry, PrivateDirectoryTempFile,

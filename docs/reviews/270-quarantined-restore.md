@@ -232,9 +232,11 @@ primary source refusal. Empty external scratch names can remain. Named
 publication candidates and failed zeroing or sync still return `Retained`.
 
 Windows qualification preserves failures rather than treating cross compilation
-as native proof. Corrections use the native DACL selector, preserve captured ACL
-control bits, and request synchronization access for independent enumeration
-cursors. Native assertions retain exact foreign-child ACL comparisons and
+as native proof. Native results disproved the DACL-selector and synchronization-only
+corrections. The next candidate uses a typed original MAXIMUM_ALLOWED directory
+open for documented non-propagating SetSecurityInfo changes, preserves captured
+ACL control bits, and opens independent native self-directory enumeration cursors.
+Native assertions retain exact foreign-child ACL comparisons and
 actual write, rename, and deletion controls. Fixtures distinguish Windows'
 open-descendant directory-rename refusal from successful Unix ancestor swaps.
 

@@ -3,7 +3,7 @@
 //! on already authenticated public archive bytes. Publication uses the protected
 //! constructors in the parent module instead.
 
-use super::{relative, FILE_OPEN, FILE_OPEN_REPARSE_POINT};
+use super::{relative, NativeObjectId, FILE_OPEN, FILE_OPEN_REPARSE_POINT};
 use crate::{unsafe_file, OpenMode};
 use std::{
     ffi::{OsStr, OsString},
@@ -14,9 +14,19 @@ use std::{
         ffi::OsStringExt,
         io::{AsRawHandle, FromRawHandle},
     },
+    ptr::{null, null_mut},
 };
-use windows_sys::Wdk::Storage::FileSystem::{FILE_CREATE, FILE_OPEN_IF};
-use windows_sys::Win32::{Foundation::*, Storage::FileSystem::*};
+use windows_sys::Wdk::{
+    Foundation::OBJECT_ATTRIBUTES,
+    Storage::FileSystem::{
+        NtOpenFile, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_OPEN_IF, FILE_SYNCHRONOUS_IO_NONALERT,
+    },
+};
+use windows_sys::Win32::{
+    Foundation::*,
+    Storage::FileSystem::*,
+    System::IO::{IO_STATUS_BLOCK, IO_STATUS_BLOCK_0},
+};
 
 /// Type of a no-follow child entry observed through a retained parent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,21 +155,53 @@ pub fn relative_names(directory: &File) -> io::Result<Vec<OsString>> {
 }
 
 fn open_directory_cursor(directory: &File) -> io::Result<File> {
-    let handle = unsafe {
-        ReOpenFile(
-            directory.as_raw_handle(),
-            // Directory enumeration uses synchronous queries on this fresh
-            // cursor. Keep the synchronization access requested by the retained
-            // directory open; listing access alone cannot authorize its wait.
+    let expected = NativeObjectId::capture(directory)?;
+    // A native self-open creates a new file object and enumeration position.
+    // The fixed dot resolves from retained directory authority, even after its
+    // former pathname has been replaced. No caller-controlled name enters here.
+    let mut dot = [b'.' as u16];
+    let mut name = UNICODE_STRING {
+        Length: 2,
+        MaximumLength: 2,
+        Buffer: dot.as_mut_ptr(),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: directory.as_raw_handle(),
+        ObjectName: &mut name,
+        Attributes: 0,
+        SecurityDescriptor: null(),
+        SecurityQualityOfService: null_mut(),
+    };
+    let mut status = IO_STATUS_BLOCK {
+        Anonymous: IO_STATUS_BLOCK_0 { Status: 0 },
+        Information: 0,
+    };
+    let mut handle = null_mut();
+    // The counted name and attributes remain live for this synchronous open.
+    let result = unsafe {
+        NtOpenFile(
+            &mut handle,
             FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            &attributes,
+            &mut status,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
         )
     };
-    if handle == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
+    if result < 0 {
+        return Err(io::Error::from_raw_os_error(
+            unsafe { RtlNtStatusToDosError(result) } as i32,
+        ));
     }
-    Ok(unsafe { File::from_raw_handle(handle) })
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return Err(unsafe_file());
+    }
+    let cursor = unsafe { File::from_raw_handle(handle) };
+    if NativeObjectId::capture(&cursor)? != expected {
+        return Err(unsafe_file());
+    }
+    Ok(cursor)
 }
 
 fn names_from_cursor(cursor: &File) -> io::Result<Vec<OsString>> {
@@ -250,7 +292,7 @@ mod tests {
 
     fn observed_names(directory: &File) -> Vec<OsString> {
         let cursor = open_directory_cursor(directory)
-            .expect("ReOpenFile creates a fresh synchronous directory cursor");
+            .expect("NtOpenFile opens the same retained directory with an independent cursor");
         super::super::super::information(&cursor)
             .expect("GetFileInformationByHandle reads the reopened cursor's metadata");
         names_from_cursor(&cursor)
@@ -310,12 +352,90 @@ mod tests {
             expected.push(name);
         }
         expected.sort();
+        let original_id = NativeObjectId::capture(&directory).unwrap();
         let mut before_rename = observed_names(&directory);
         before_rename.sort();
         assert_eq!(before_rename, expected);
         fs::rename(root.path().join("original"), root.path().join("moved")).unwrap();
         fs::create_dir(root.path().join("original")).unwrap();
         fs::write(root.path().join("original/unrelated"), b"keep").unwrap();
+        // The tempting pathname reopen actually selects the replacement. Keep
+        // this wrong-object control beside the retained authority assertions.
+        let replacement = locator(&root.path().join("original"));
+        let replacement_cursor = open_directory_cursor(&replacement).unwrap();
+        assert_ne!(
+            NativeObjectId::capture(&replacement_cursor).unwrap(),
+            original_id
+        );
+        assert_eq!(
+            names_from_cursor(&replacement_cursor).unwrap(),
+            [OsString::from("unrelated")]
+        );
+        // Force a cursor interleaving without sleeps: the first query cannot
+        // contain all 80 entry headers. Draining a second cursor must not drain
+        // the first cursor's continuation (a duplicated handle would share it).
+        let cursor_a = open_directory_cursor(&directory).unwrap();
+        let cursor_b = open_directory_cursor(&directory).unwrap();
+        assert_eq!(NativeObjectId::capture(&cursor_a).unwrap(), original_id);
+        assert_eq!(NativeObjectId::capture(&cursor_b).unwrap(), original_id);
+        let mut chunk = [0u64; 1024];
+        let chunk_bytes = size_of::<[u64; 1024]>();
+        assert!(expected.len() * offset_of!(FILE_ID_BOTH_DIR_INFO, FileName) > chunk_bytes);
+        super::super::super::check(unsafe {
+            GetFileInformationByHandleEx(
+                cursor_a.as_raw_handle(),
+                FileIdBothDirectoryRestartInfo,
+                chunk.as_mut_ptr().cast(),
+                chunk_bytes as u32,
+            )
+        })
+        .expect("the first independent cursor has a partial directory batch");
+        let mut complete_b = names_from_cursor(&cursor_b).unwrap();
+        complete_b.sort();
+        assert_eq!(complete_b, expected);
+        super::super::super::check(unsafe {
+            GetFileInformationByHandleEx(
+                cursor_a.as_raw_handle(),
+                FileIdBothDirectoryInfo,
+                chunk.as_mut_ptr().cast(),
+                chunk_bytes as u32,
+            )
+        })
+        .expect("draining another cursor preserves the first cursor's continuation");
+        // Exercise the bad primitive itself: DuplicateHandle (try_clone) keeps
+        // the same file object's enumeration state. Draining B consumes A's
+        // continuation, unlike the independent native self-opens above.
+        let shared_a = open_directory_cursor(&directory).unwrap();
+        let shared_b = shared_a.try_clone().unwrap();
+        super::super::super::check(unsafe {
+            GetFileInformationByHandleEx(
+                shared_a.as_raw_handle(),
+                FileIdBothDirectoryRestartInfo,
+                chunk.as_mut_ptr().cast(),
+                chunk_bytes as u32,
+            )
+        })
+        .expect("the shared-cursor control begins with a partial directory batch");
+        let mut shared_names = names_from_cursor(&shared_b).unwrap();
+        shared_names.sort();
+        assert_eq!(shared_names, expected);
+        let continuation = unsafe {
+            GetFileInformationByHandleEx(
+                shared_a.as_raw_handle(),
+                FileIdBothDirectoryInfo,
+                chunk.as_mut_ptr().cast(),
+                chunk_bytes as u32,
+            )
+        };
+        let continuation_error = io::Error::last_os_error();
+        assert_eq!(
+            continuation, 0,
+            "the duplicated handle must share the exhausted cursor"
+        );
+        assert_eq!(
+            continuation_error.raw_os_error(),
+            Some(ERROR_NO_MORE_FILES as i32)
+        );
         let left = directory.try_clone().unwrap();
         let right = directory.try_clone().unwrap();
         let left_expected = expected.clone();

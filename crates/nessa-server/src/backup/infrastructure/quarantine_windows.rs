@@ -5,7 +5,7 @@
 //! The shared lifecycle owns final validation, publication and audit ordering.
 
 use super::{duplicate, EntryKind, RestoreFault};
-use nessa_local_storage::{self as storage, DirectoryAcl, OpenMode};
+use nessa_local_storage::{self as storage, DirectoryAcl, MaxAccessDirectory, OpenMode};
 use std::{
     ffi::{OsStr, OsString},
     fs::File,
@@ -101,44 +101,51 @@ pub(super) fn release_copy_directory(directory: &File) -> Result<(), RestoreFaul
     storage::release_directory_writes(directory).map_err(|_| RestoreFault::Retained)
 }
 
-enum SessionPermissions {
-    Existing(DirectoryAcl),
-    NewPrivate,
+enum SessionAuthority {
+    Existing {
+        directory: MaxAccessDirectory,
+        original: DirectoryAcl,
+    },
+    NewPrivate(File),
 }
 
 /// Session directory retained without delete sharing before any leaf is created.
-/// A first fetch creates it with that handle policy from birth; an existing
-/// directory is snapshotted before temporary append permissions are installed.
+/// Existing ACL effects use only the original typed MAXIMUM_ALLOWED handle.
+/// New directories retain the initial native constructor's authority.
 pub(super) struct SessionDirectory {
-    directory: File,
-    permissions: SessionPermissions,
+    authority: SessionAuthority,
     armed: bool,
 }
 
 impl SessionDirectory {
     pub(super) fn begin(parent: &File, name: &OsStr) -> Result<Self, RestoreFault> {
-        let directory = match storage::retain_directory_at(parent, name) {
+        let directory = match MaxAccessDirectory::open_at(parent, name) {
             Ok(directory) => directory,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                // Do not create, close and reopen: retain the initial root
-                // authority. A concurrent occupant is refused, not adopted.
                 let directory = storage::create_protected_directory_at(parent, name)
                     .map_err(|_| RestoreFault::Retained)?;
                 return Ok(Self {
-                    directory,
-                    permissions: SessionPermissions::NewPrivate,
+                    authority: SessionAuthority::NewPrivate(directory),
                     armed: true,
                 });
             }
             Err(_) => return Err(RestoreFault::Retained),
         };
-        let original = DirectoryAcl::capture(&directory).map_err(|_| RestoreFault::Unreadable)?;
+        let original =
+            DirectoryAcl::capture(directory.file()).map_err(|_| RestoreFault::Unreadable)?;
         let mut guard = Self {
-            directory,
-            permissions: SessionPermissions::Existing(original),
+            authority: SessionAuthority::Existing {
+                directory,
+                original,
+            },
             armed: true,
         };
-        if storage::append_directory_writes(&guard.directory).is_err() {
+        let appended = match &guard.authority {
+            SessionAuthority::Existing { directory, .. } => directory.append(),
+            // NewPrivate constructors already grant append authority atomically.
+            SessionAuthority::NewPrivate(_) => Ok(()),
+        };
+        if appended.is_err() {
             guard.release()?;
             return Err(RestoreFault::Unreadable);
         }
@@ -146,7 +153,10 @@ impl SessionDirectory {
     }
 
     pub(super) fn directory(&self) -> &File {
-        &self.directory
+        match &self.authority {
+            SessionAuthority::Existing { directory, .. } => directory.file(),
+            SessionAuthority::NewPrivate(directory) => directory,
+        }
     }
 
     /// Complete setup before transferring this guard into a fetch attempt.
@@ -160,15 +170,22 @@ impl SessionDirectory {
     }
 
     pub(super) fn seal(&self) -> Result<(), RestoreFault> {
-        storage::seal_directory_writes(&self.directory).map_err(|_| RestoreFault::Unreadable)
+        match &self.authority {
+            SessionAuthority::Existing { directory, .. } => directory.seal(),
+            SessionAuthority::NewPrivate(directory) => storage::seal_directory_writes(directory),
+        }
+        .map_err(|_| RestoreFault::Unreadable)
     }
 
     pub(super) fn release(&mut self) -> Result<(), RestoreFault> {
         if self.armed {
-            match &self.permissions {
-                SessionPermissions::Existing(original) => original.restore(&self.directory),
-                SessionPermissions::NewPrivate => {
-                    storage::release_directory_writes(&self.directory)
+            match &self.authority {
+                SessionAuthority::Existing {
+                    directory,
+                    original,
+                } => directory.restore(original),
+                SessionAuthority::NewPrivate(directory) => {
+                    storage::release_directory_writes(directory)
                 }
             }
             .map_err(|_| RestoreFault::Retained)?;

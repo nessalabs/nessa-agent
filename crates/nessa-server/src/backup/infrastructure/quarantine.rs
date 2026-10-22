@@ -4695,7 +4695,7 @@ fn a_write_through_the_temp_inode_does_not_change_the_published_file() {
     let published = fs::read(live.join(relative)).unwrap();
     assert_eq!(
         DirectoryQuarantine
-            .session_cut(&live.join(relative), "conv")
+            .session_cut_relative(&anchored, relative, "conv")
             .unwrap()
             .digest,
         digest
@@ -4705,7 +4705,7 @@ fn a_write_through_the_temp_inode_does_not_change_the_published_file() {
     assert_eq!(fs::read(live.join(relative)).unwrap(), published);
     assert_eq!(
         DirectoryQuarantine
-            .session_cut(&live.join(relative), "conv")
+            .session_cut_relative(&anchored, relative, "conv")
             .unwrap()
             .digest,
         digest
@@ -5640,7 +5640,7 @@ fn windows_real_session_publication_does_not_claim_directory_durability() {
     let published = fs::read(&output).unwrap();
     assert_eq!(
         DirectoryQuarantine
-            .session_cut(&output, "conv")
+            .session_cut_relative(&anchored, "sessions/conv.sqlite3", "conv")
             .unwrap()
             .digest,
         digest
@@ -5650,13 +5650,20 @@ fn windows_real_session_publication_does_not_claim_directory_durability() {
     assert_eq!(fs::read(&output).unwrap(), published);
     assert_eq!(
         DirectoryQuarantine
-            .session_cut(&output, "conv")
+            .session_cut_relative(&anchored, "sessions/conv.sqlite3", "conv")
             .unwrap()
             .digest,
         digest
     );
     drop(attempt);
     fs::OpenOptions::new().write(true).open(&output).unwrap();
+    assert_eq!(
+        DirectoryQuarantine
+            .session_cut(&output, "conv")
+            .unwrap()
+            .digest,
+        digest
+    );
 }
 
 #[cfg(windows)]
