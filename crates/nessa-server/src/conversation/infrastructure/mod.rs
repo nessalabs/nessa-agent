@@ -51,6 +51,8 @@
 //! `DurableExecutionAudit` serializes admitted physical writes through the shared
 //! local-storage Worker; its injected `ExecutionAuditFileWriter` owns private-file
 //! commit/sync. Observer loss retains the physical slot through input cleanup.
+//! `audit_diagnostics` preserves phase, I/O kind and raw OS error in the existing
+//! stderr log without audit contents, path strings or error Display text.
 //! `DurableConversationModeAudit` keeps application and recovery evidence in
 //! separate immutable files keyed by the conversation, request and phase.
 //! `DurableMcpAppAudit` does the same for each step of an MCP App's call, keyed
@@ -174,6 +176,7 @@ mod review_notice_audit;
 pub use review_notice_audit::{DurableReviewNoticeAudit, MonotonicReviewNoticeClock};
 
 mod audit;
+mod audit_diagnostics;
 mod audit_mapping;
 pub use audit::{DurableExecutionAudit, ExecutionAuditFileWriter};
 

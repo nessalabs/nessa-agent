@@ -172,6 +172,7 @@ export async function startGatewayStack(
     limits,
     native,
     runtimes,
+    evidence,
   }).catch((error) => {
     // What it said as it failed, on stderr; the result keeps one line.
     if (error.gatewayLog) log(error.gatewayLog.slice(-4000))
