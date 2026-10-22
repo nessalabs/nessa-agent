@@ -2,11 +2,13 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import {
   stressProfile,
+  selectStressFixture,
   requireStressCapabilities,
   elevatedAccessAfter,
 } from "./stress-profile.mjs"
 import { knobsFrom, plan } from "./stress-plan.mjs"
 import { scriptedLaunch } from "./gateway-stack.mjs"
+import { CannotRun } from "./cli.mjs"
 
 const row = (modelId, modes) => ({ modelId, approvalModes: modes.map((id) => ({ id })) })
 test("explicit scenario and exact model never silently replace the shared defaults", () => {
@@ -35,6 +37,18 @@ test("explicit scenario and exact model never silently replace the shared defaul
     () => stressProfile({ agent: "codex", accessScenario: "automatic" }),
     /scenario/,
   )
+})
+test("only pre-workload incompatible fixtures are classified unavailable", () => {
+  const full = stressProfile({ agent: "codex", model: "gpt-6-astra" })
+  const agents = [{ agent: "codex", models: [row(full.model, ["ask"])] }]
+  assert.throws(() => selectStressFixture(full, agents), CannotRun)
+  assert.throws(() => selectStressFixture(full, []), CannotRun)
+  assert.throws(
+    () => requireStressCapabilities(full, agents[0].models[0]),
+    (error) => !(error instanceof CannotRun),
+  )
+  agents[0].models[0] = row(full.model, ["ask", "auto", "full"])
+  assert.equal(selectStressFixture(full, agents).model, full.model)
 })
 test("fixture admission requires the exact published scenario capabilities and identity", () => {
   const full = stressProfile({ agent: "codex", model: "gpt-6-astra" })
@@ -116,7 +130,7 @@ test("Ask-only stress keeps all counted work and witnesses each refusal with an 
 const record = (params, method = "session/set_config_option") =>
   JSON.stringify({
     direction: "to-agent",
-    frame: { jsonrpc: "2.0", id: 1, method, params },
+    frame: { jsonrpc: "2.0", id: 1, method, params: { sessionId: "native", ...params } },
   }) + "\n"
 test("refusal side-effect evidence rejects elevated provider configuration and damaged recording", () => {
   const before = record({ configId: "mode", value: "read-only" })
@@ -143,4 +157,40 @@ test("refusal side-effect evidence rejects elevated provider configuration and d
   assert.throws(() => elevatedAccessAfter(before, ""), /recording/)
   assert.throws(() => elevatedAccessAfter(before, before + "{"), /recording/)
   assert.throws(() => elevatedAccessAfter(before, before + "{}\n"), /recording/)
+  assert.throws(() => elevatedAccessAfter("", ""), /recording/)
+  for (const frame of [
+    { jsonrpc: "2.0" },
+    { jsonrpc: "2.0", id: 1 },
+    { jsonrpc: "2.0", id: 1, result: {}, error: {} },
+    {
+      jsonrpc: "2.0",
+      method: "session/set_config_option",
+      params: { configId: "mode", value: "agent-full-access" },
+    },
+    {
+      jsonrpc: "2.0",
+      method: "session/set_config_option",
+      params: { sessionId: "native", configId: "mode" },
+    },
+    { jsonrpc: "2.0", method: "session/set_mode", params: { sessionId: "native" } },
+  ])
+    assert.throws(
+      () =>
+        elevatedAccessAfter(
+          before,
+          before + JSON.stringify({ direction: "to-agent", frame }) + "\n",
+        ),
+      /ACP/,
+    )
+  for (const frame of [
+    { jsonrpc: "2.0", id: 1, result: {} },
+    { jsonrpc: "2.0", method: "session/update", params: {} },
+  ])
+    assert.equal(
+      elevatedAccessAfter(
+        before,
+        before + JSON.stringify({ direction: "from-agent", frame }) + "\n",
+      ),
+      false,
+    )
 })

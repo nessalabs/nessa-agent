@@ -179,6 +179,7 @@ import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
 import {
   stressProfile,
+  selectStressFixture,
   requireStressCapabilities,
   elevatedAccessAfter,
 } from "./lib/stress-profile.mjs"
@@ -1894,6 +1895,16 @@ const steps = {
       await run.page.keyboard.press(keys.newSession)
       const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
       await home.locator(css.field).waitFor({ timeout: 15_000 })
+      // Home has its own selection. Pick the named fixture through the window,
+      // never inherit an unrelated default agent or substitute another model.
+      const model = catalog.models.find((row) => row.modelId === run.stack.profile.model)
+      await home.locator(css.modelChip).click()
+      const choice = run.page
+        .locator(css.modelOption)
+        .filter({ hasText: model.displayName })
+      if ((await choice.count()) !== 1)
+        throw new Error("the exact fixture model is not uniquely offered in Home")
+      await choice.click()
       await home.locator(css.field).fill(text)
       await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
       const conversationId = await waitFor(
@@ -1904,7 +1915,16 @@ const steps = {
         failures.push("the conversation started in the window was never listed")
       } else {
         run.checked.push(conversationId)
-        await settled(run, conversationId, new Set(), text, "completed", failures)
+        const { view } = await settled(
+          run,
+          conversationId,
+          new Set(),
+          text,
+          "completed",
+          failures,
+        )
+        if (view?.runtime?.model !== run.stack.profile.model)
+          failures.push("the new window conversation did not use the exact fixture model")
         await expectShown(run.page, `${SAYS.echo}${text}`, failures)
       }
       // Answered or not, a send the window took and then failed says so in
@@ -2838,10 +2858,7 @@ async function startStack(options) {
       native: { enabled: false, listenAddress: nativeAddress },
     })
     const { agents } = await stack.client.agents.list()
-    const model = agents
-      .find((row) => row.agent === profile.agent)
-      ?.models.find((row) => row.modelId === profile.model)
-    stack.profile = requireStressCapabilities(profile, model)
+    stack.profile = selectStressFixture(profile, agents)
   } catch (error) {
     await stack?.close()
     rmSync(directory, { recursive: true, force: true })
