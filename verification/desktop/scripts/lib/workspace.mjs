@@ -378,7 +378,11 @@ export async function recordFrames(page) {
     const tick = (t) => {
       const ghost = document.querySelector(sel.dragGhost)
       const grid = document.querySelector(sel.paneGrid)
+      const outline = document.querySelector(sel.dragPlaceholder)
+      const bar = document.querySelector(sel.titlebar)
       window.__dragFrames.push({
+        placeholder: outline ? rect(outline) : null,
+        barBottom: bar ? bar.getBoundingClientRect().bottom : null,
         t,
         pointer: window.__verifyPointer ?? null,
         ghost:
