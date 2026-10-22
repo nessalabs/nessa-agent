@@ -36,7 +36,8 @@ Opt-in. Not part of `run-all`. The contract is
   checkpoint, closes that source, and replays to the identical opaque cursor.
   Quiet, an intermediate empty batch, and a matching event count do not prove
   completion. Capture and replay share the existing 60-second overall deadline;
-  stalled or ended streams fail, and every source closes. Ordered event identity
+  stalled or ended streams fail, and closure is requested for every source;
+  the client's abort gate owns late opens and close acknowledgements. Ordered event identity
   and count assertions remain unchanged.
   _Check:_ `lib/stress-followers.test.mjs` includes late, missing, empty, terminal,
   shared-deadline and late-open controls; `conversation-stress.mjs` uses it.

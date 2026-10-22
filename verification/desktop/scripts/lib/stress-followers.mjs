@@ -43,11 +43,12 @@ export async function replayEvents(client, conversationId) {
   let head
   let cursor
   let ended = null
+  let phase = "head capture"
   let timer
   const deadline = new Promise((_, reject) => {
     timer = setTimeout(() => {
       const failure = new Error(
-        `a replay of ${conversationId} did not ${head === undefined ? "capture" : "reach"} its committed head within 60000 ms`,
+        `a replay of ${conversationId} did not complete ${phase} within 60000 ms`,
       )
       controller.abort(failure)
       reject(failure)
@@ -83,9 +84,11 @@ export async function replayEvents(client, conversationId) {
       },
     })
     await wait(() => head !== undefined)
+    phase = "head capture cleanup"
     await capture.close()
     opened.delete(capture)
     signal.throwIfAborted()
+    phase = "replay to captured head"
     const subscription = await open(
       {
         batch(batch) {
@@ -100,6 +103,7 @@ export async function replayEvents(client, conversationId) {
       { replay: true },
     )
     await wait(() => cursor === head)
+    phase = "replay cleanup"
     await subscription.close()
     opened.delete(subscription)
     return ids
