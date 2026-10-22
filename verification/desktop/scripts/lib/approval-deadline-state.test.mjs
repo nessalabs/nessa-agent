@@ -10,7 +10,7 @@ const { conversationView } = await tsImport(
   "../../../../packages/nessa-client/src/protocol/conversation-validate.ts",
   import.meta.url,
 )
-const { shownReview } = await tsImport(
+const { reviewKey } = await tsImport(
   "../../../../src/desktop/workspace/adapters/gateway/fake-gateway.ts",
   import.meta.url,
 )
@@ -22,10 +22,8 @@ test("the actual deadline fixture publishes its armed wait and typed expired not
   assert.equal(waitMs, 10_000)
   assert.equal(pending.messages[0].status, "running")
   assert.equal(pending.messages[0].parts.length, 0)
-  const listedReview = shownReview(pending.permissions[0].review)
-  assert.ok(listedReview)
-  assert.equal(listedReview.permissionId, review.permissionId)
-  assert.deepEqual(listedReview.deadline, {
+  assert.equal(pending.permissions[0].review, reviewKey(review))
+  assert.deepEqual(review.deadline, {
     waitMs,
     dueAtMs: gatewayNow + waitMs,
     effect: "deny",
