@@ -176,9 +176,13 @@ export async function startGatewayStack(
   }).catch((error) => {
     // What it said as it failed, on stderr; the result keeps one line.
     if (error.gatewayLog) log(error.gatewayLog.slice(-4000))
-    if (evidence && error.gatewayLog)
-      writeFileSync(join(evidence, "gateway.log"), error.gatewayLog)
-    throw new CannotRun(`the gateway did not start: ${error.message.split("\n")[0]}`)
+    // The gateway owner already attempted evidence retention before cleanup.
+    // A second write here can erase both startup and retention failures.
+    const failure = new CannotRun(
+      `the gateway did not start: ${error.message.split("\n")[0]}`,
+    )
+    failure.cause = error
+    throw failure
   })
   timings.gatewayMs = Date.now() - started
   let dev = null
@@ -194,10 +198,12 @@ export async function startGatewayStack(
       try {
         stopped = await gateway.stop()
       } finally {
-        // After the stop: its last lines are in the log, and the directory
-        // they are not stored in is gone. The evidence copy is this process's.
-        if (evidence) writeFileSync(join(evidence, "gateway.log"), gateway.log())
-        if (!stopped) log(`the gateway (pid ${gateway.server.pid}) did not exit`)
+        if (
+          !stopped &&
+          gateway.server.exitCode === null &&
+          gateway.server.signalCode === null
+        )
+          log(`the gateway (pid ${gateway.server.pid}) did not exit`)
       }
     }
   }
