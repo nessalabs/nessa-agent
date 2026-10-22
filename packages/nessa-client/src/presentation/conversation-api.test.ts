@@ -25,6 +25,7 @@ const view: ConversationView = {
   notes: [],
   unreadable: [],
   unreadableTruncated: false,
+  handoffs: [],
   approvalMode: "ask",
   model: "claude-sonnet-5",
   approvalModes: [
@@ -395,6 +396,42 @@ it("renames a conversation with the title as given and its own request identity"
   // An answer for another request is not this rename's.
   request.mockResolvedValueOnce({ requestId: "other", applied: true })
   await expect(api.rename(conversationId, "Lisbon")).rejects.toThrow()
+})
+it("switches a conversation's agent under its own request identity", async () => {
+  const request = vi.fn(async (_method: string, params: unknown) => ({
+    requestId: (params as { requestId: string }).requestId,
+    applied: true,
+  }))
+  const api = createConversationApi({ request }, () => "switch")
+  await expect(
+    api.switchAgent(conversationId, "codex", "gpt-5.5-codex"),
+  ).resolves.toEqual({ requestId: "switch", applied: true })
+  expect(request).toHaveBeenCalledWith("conversation.switchAgent", {
+    conversationId,
+    requestId: "switch",
+    agent: "codex",
+    model: "gpt-5.5-codex",
+  })
+  expect(() => api.switchAgent("not-a-uuid", "codex", "m")).toThrow(TypeError)
+  request.mockResolvedValueOnce({ requestId: "other", applied: true })
+  await expect(api.switchAgent(conversationId, "codex", "m")).rejects.toThrow()
+})
+it("forks a conversation into the identity it was given", async () => {
+  const forked = "6f1c1c4e-2b0a-4f0e-9a51-0d7f7b0f3a11"
+  const request = vi.fn(async (_method: string, params: unknown) => ({
+    conversationId: (params as { conversationId: string }).conversationId,
+  }))
+  const api = createConversationApi({ request }, () => forked)
+  await expect(api.fork(conversationId)).resolves.toEqual({ conversationId: forked })
+  expect(request).toHaveBeenCalledWith("conversation.fork", {
+    conversationId: forked,
+    requestId: forked,
+    sourceConversationId: conversationId,
+  })
+  expect(() => api.fork("not-a-uuid")).toThrow(TypeError)
+  // An answer naming another conversation is not this fork's.
+  request.mockResolvedValueOnce({ conversationId })
+  await expect(api.fork(conversationId)).rejects.toThrow()
 })
 it("stops the named turn without closing the attachment", async () => {
   const request = vi.fn(async () => ({

@@ -1,8 +1,9 @@
 //! Conservatively account owned continuation allocations, using payload owners' byte accounting.
 use super::{
-    ArtifactRecord, CurrentLease, CurrentLeaseState, FetchOutcome, InvocationCancellationEvent,
-    InvocationRecord, InvocationSchedulingEvent, LeaseRecord, NoteId, NoteRecord,
-    QueueHistoryRecord, SessionChange, SessionSnapshot, StorageError, SubmissionAcknowledgement,
+    ArtifactRecord, CurrentLease, CurrentLeaseState, FetchOutcome, HandoffKind, HandoffRecord,
+    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, LeaseRecord, NoteId,
+    NoteRecord, QueueHistoryRecord, SessionChange, SessionSnapshot, StorageError,
+    SubmissionAcknowledgement,
 };
 use crate::{
     application::agent_execution::{
@@ -59,6 +60,9 @@ pub(super) fn snapshot(value: &SessionSnapshot) -> usize {
     for record in &value.notes {
         bytes = bytes.saturating_add(note(record));
     }
+    for record in &value.handoffs {
+        bytes = bytes.saturating_add(handoff(record));
+    }
     bytes.saturating_add(lease(value.lease.as_ref()))
 }
 
@@ -77,6 +81,40 @@ pub(super) fn note(record: &NoteRecord) -> usize {
                 .as_ref()
                 .map_or(0, |turn| turn.as_str().len()),
         )
+}
+
+/// One handoff's payload beyond its slot in the list: its identities, a
+/// switch's two provider identities, and a fork's copied turns.
+pub(super) fn handoff(record: &HandoffRecord) -> usize {
+    let kind = match &record.kind {
+        HandoffKind::Switch { before, after } => [before, after]
+            .into_iter()
+            .map(|identity| {
+                identity
+                    .name()
+                    .len()
+                    .saturating_add(identity.model_id().len())
+                    .saturating_add(identity.context().len())
+            })
+            .fold(0usize, usize::saturating_add),
+        HandoffKind::Fork { source, history } => source
+            .as_str()
+            .len()
+            .saturating_add(std::mem::size_of_val(history.turns()))
+            .saturating_add(history.text_bytes()),
+    };
+    record
+        .id
+        .as_str()
+        .len()
+        .saturating_add(actor(&record.actor))
+        .saturating_add(
+            record
+                .after_execution
+                .as_ref()
+                .map_or(0, |turn| turn.as_str().len()),
+        )
+        .saturating_add(kind)
 }
 
 /// One artifact record's payload beyond its slot in the list.
@@ -277,6 +315,12 @@ fn snapshot_slots(value: &SessionSnapshot) -> usize {
                 .capacity()
                 .saturating_mul(size_of::<NoteRecord>()),
         )
+        .saturating_add(
+            value
+                .handoffs
+                .capacity()
+                .saturating_mul(size_of::<HandoffRecord>()),
+        )
 }
 
 pub(super) fn invocation(record: &InvocationRecord) -> usize {
@@ -349,6 +393,7 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
                         .fold(0usize, usize::saturating_add),
                 ),
         )
+        .saturating_add(record.handoff.as_ref().map_or(0, |id| id.as_str().len()))
         .saturating_add(record.cancellation.as_ref().map_or(0, stop))
         .saturating_add(record.local_cancellation.as_ref().map_or(0, stop))
         .saturating_add(acknowledgment)
@@ -417,7 +462,8 @@ pub(super) fn touched(
         SessionChange::Opened { .. }
         | SessionChange::ModelChanged(_)
         | SessionChange::ConfigurationChanged(_)
-        | SessionChange::ProviderIdentityChanged { .. } => snapshot_header(snapshot),
+        | SessionChange::ProviderIdentityChanged { .. }
+        | SessionChange::Handoff(_) => snapshot_header(snapshot),
         SessionChange::InputAccepted(_) => {
             if include_input {
                 record.map_or(0, invocation)
@@ -469,6 +515,7 @@ pub(super) fn append_payload(change: &SessionChange) -> usize {
         SessionChange::ProviderObservation(event) => observation_payload(event),
         SessionChange::Artifact(record) => artifact(record),
         SessionChange::Note(record) => note(record),
+        SessionChange::Handoff(record) => handoff(record),
         _ => 0,
     }
 }

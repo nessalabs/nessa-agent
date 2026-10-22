@@ -210,7 +210,7 @@ it("a row's More menu holds what the row can do, less the ways to open it, and R
   const store = await shown(source)
   const { row, id } = quietRow()
   await more(row)
-  expect(menuWords()).toEqual(["Rename", "Pin to Sidebar", "Archive", "Delete…"])
+  expect(menuWords()).toEqual(["Rename", "Pin to Sidebar", "Fork", "Archive", "Delete…"])
   expect(row.getAttribute("data-actions")).toBe("true")
 
   // Rename edits the title in place: Escape keeps what was there, ↩ what was typed.

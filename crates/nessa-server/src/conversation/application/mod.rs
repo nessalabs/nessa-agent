@@ -172,6 +172,7 @@ mod locks;
 mod mcp_apps;
 mod metadata_target;
 pub(crate) use metadata_target::load_conversation;
+mod agent_switches;
 mod model_changes;
 mod owner_phone_policy;
 pub(crate) use metadata_target::ConversationMetadataReader;
@@ -276,6 +277,7 @@ pub(crate) use placement::{
     ConversationBindings, ConversationPlacements, PlacementError, WorkerBinding,
 };
 // For the paired environment adapter, which lives with the Unix-only SSH one.
+pub use agent_switches::{ConversationAgentSwitch, ConversationAgentSwitchState};
 pub(crate) use drive_tools::MAX_ADMITTED_POLICIES;
 pub use drive_tools::{DriveToolAudit, DriveToolAuditRecord, DriveTools};
 pub use model_changes::{

@@ -210,6 +210,17 @@ impl ConversationSummary {
             ..self.clone()
         }
     }
+    /// A fork's summary, made when it is created from `source`'s: what was
+    /// said there was copied, so it is listed as that conversation is, under
+    /// its title and with its last words, as of `at_ms`, and not archived.
+    pub fn after_forking(source: &Self, at_ms: u64) -> Self {
+        Self {
+            title: source.title.clone(),
+            preview: source.preview.clone(),
+            updated_at_ms: at_ms.min(LATEST_TIME_MS),
+            archived: false,
+        }
+    }
     pub fn title(&self) -> Option<&ConversationTitle> {
         self.title.as_ref()
     }

@@ -33,6 +33,10 @@ use std::{
 };
 use tokio::process::Command;
 
+/// The provider name every session this binding opens records in its
+/// history, as its provider identity.
+pub const PROVIDER_NAME: &str = "codex-acp";
+
 /// Immutable composition factory; opening twice creates independent process scopes.
 #[derive(Clone)]
 pub struct CodexAcpProvider {
@@ -147,7 +151,7 @@ impl CodexAcpProvider {
                 "selected model does not support tools".into(),
             ));
         }
-        ProviderIdentity::new("codex-acp", capabilities.model().model_id(), "")?;
+        ProviderIdentity::new(PROVIDER_NAME, capabilities.model().model_id(), "")?;
         Ok(Self {
             config,
             capabilities,
@@ -336,7 +340,7 @@ impl AgentProvider for CodexAcpProvider {
     }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(
-            "codex-acp",
+            PROVIDER_NAME,
             self.capabilities.model().model_id(),
             identity::fingerprint(
                 &self.config,

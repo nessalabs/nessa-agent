@@ -198,7 +198,12 @@ export interface WorkspaceSource {
    * records the stop as this window's authenticated caller.
    */
   stop(sessionId: string, initiator: Initiator): Promise<void>
-  /** Same-provider model control; the subscription owns confirmed display. */
+  /**
+   * Model control. A model of the session's own provider is changed in its
+   * agent; one of another provider carries the conversation on under that
+   * provider's agent, and its transcript draws the line where it did
+   * (`HandoffMessage`). The subscription owns confirmed display.
+   */
   setModel(
     sessionId: string,
     model: ModelRef,
@@ -237,6 +242,15 @@ export interface WorkspaceSource {
    * title to change and is refused `unknown-session`.
    */
   rename(sessionId: string, title: string, initiator: Initiator): Promise<void>
+  /**
+   * Starts a new session from a copy of this one's turns, on its model and
+   * access, and answers its id once its summary has reached subscribers.
+   * Its transcript shows the copied turns first, then the line saying they
+   * were copied (`HandoffMessage`); its agent is given them with its first
+   * message. A session the source has not spoken of has nothing to copy and
+   * is refused `unknown-session`.
+   */
+  fork(sessionId: string, initiator: Initiator): Promise<string>
   /**
    * Deletes a session for good: its conversation, uploads and summary are
    * erased where the source keeps them. Resolves once its `session-removed`

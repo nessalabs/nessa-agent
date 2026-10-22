@@ -727,6 +727,35 @@ async fn an_eraser_answering_capacity_is_a_failure_not_a_slot_wait() {
 /// A repository whose tombstone writes all fail.
 struct Unfenceable(Arc<MemoryRepository>);
 impl ConversationRepository for Unfenceable {
+    fn begin_agent_switch(
+        &self,
+        request: crate::conversation::application::ConversationAgentSwitch,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        self.0.begin_agent_switch(request)
+    }
+    fn pending_agent_switch(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        self.0.pending_agent_switch(id)
+    }
+    fn agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        self.0.agent_switch(id, request_id)
+    }
+    fn finish_agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: crate::conversation::application::ConversationAgentSwitchState,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        self.0.finish_agent_switch(id, request_id, state)
+    }
     fn begin_model_change(
         &self,
         request: ConversationModelRequest,
@@ -912,6 +941,35 @@ impl Faulty {
     }
 }
 impl ConversationRepository for Faulty {
+    fn begin_agent_switch(
+        &self,
+        request: crate::conversation::application::ConversationAgentSwitch,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        self.repository.begin_agent_switch(request)
+    }
+    fn pending_agent_switch(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        self.repository.pending_agent_switch(id)
+    }
+    fn agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        self.repository.agent_switch(id, request_id)
+    }
+    fn finish_agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: crate::conversation::application::ConversationAgentSwitchState,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        self.repository.finish_agent_switch(id, request_id, state)
+    }
     fn begin_model_change(
         &self,
         request: ConversationModelRequest,
@@ -2046,6 +2104,35 @@ struct PausingRepository {
     pause: StdMutex<Option<LoadPause>>,
 }
 impl ConversationRepository for PausingRepository {
+    fn begin_agent_switch(
+        &self,
+        request: crate::conversation::application::ConversationAgentSwitch,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        self.inner.begin_agent_switch(request)
+    }
+    fn pending_agent_switch(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        self.inner.pending_agent_switch(id)
+    }
+    fn agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<crate::conversation::application::ConversationAgentSwitch>>
+    {
+        self.inner.agent_switch(id, request_id)
+    }
+    fn finish_agent_switch(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: crate::conversation::application::ConversationAgentSwitchState,
+    ) -> ConversationFuture<'_, crate::conversation::application::ConversationAgentSwitch> {
+        self.inner.finish_agent_switch(id, request_id, state)
+    }
     fn begin_model_change(
         &self,
         request: ConversationModelRequest,

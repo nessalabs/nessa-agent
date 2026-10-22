@@ -32,11 +32,17 @@ impl Server {
                 if let Ok((mut stream, _)) = listener.accept() {
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
                     let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
-                    let mut request = [0; 8192];
-                    if let Ok(length) = stream.read(&mut request) {
-                        if request[..length].starts_with(b"GET /control.html ") {
-                            observed.store(true, Ordering::Release);
-                        }
+                    // WebKit can open a connection before it has a request
+                    // for it. Answering one that sent nothing would hand the
+                    // control page over a socket the fixture never saw asked,
+                    // so the whole request head is read first, and a
+                    // connection that sent none is closed unanswered.
+                    let Some(request) = request_head(&mut stream) else {
+                        thread::sleep(Duration::from_millis(5));
+                        continue;
+                    };
+                    if request.starts_with(b"GET /control.html ") {
+                        observed.store(true, Ordering::Release);
                     }
                     let body =
                         "<!doctype html><title>Allowed origin</title><p>Native control loaded.</p>";
@@ -55,6 +61,20 @@ impl Server {
             worker: Some(worker),
         })
     }
+}
+
+/// The request head `stream` sent, up to its blank line; `None` when it sent
+/// nothing before closing or going quiet.
+fn request_head(stream: &mut std::net::TcpStream) -> Option<Vec<u8>> {
+    let mut head = Vec::new();
+    let mut chunk = [0; 4096];
+    while !head.windows(4).any(|end| end == b"\r\n\r\n") && head.len() < 8192 {
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(length) => head.extend_from_slice(&chunk[..length]),
+        }
+    }
+    (!head.is_empty()).then_some(head)
 }
 
 impl Drop for Server {

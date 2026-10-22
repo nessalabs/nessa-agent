@@ -328,6 +328,7 @@ fn turn_record(
         actor: ActionContext::new("bench", "bench", format!("turn-{turn}"))?,
         initiation: Initiation::owner(),
         notes: Vec::new(),
+        handoff: None,
         acknowledgement: SubmissionAcknowledgement::Pending,
         events: vec![
             ExecutionEvent::new(

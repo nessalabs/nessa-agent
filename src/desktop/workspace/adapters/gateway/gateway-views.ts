@@ -246,6 +246,16 @@ export const noteId = (messageId: string) => `/note:${encodeId(messageId)}`
  */
 export const unreadableId = (id: string) => `/unreadable:${encodeId(id)}`
 
+/**
+ * The line where the agent ran on in a new session, under the handoff's own
+ * name: `/handoff:` and no other `/`. A fork's copied turns are under its
+ * name and their place in the copy, `/handoff:<name>/<n>` for what was said
+ * and `/handoff:<name>/<n>/reply` for the reply, which no other id can be.
+ */
+export const handoffId = (id: string) => `/handoff:${encodeId(id)}`
+const carriedId = (id: string, index: number, reply: boolean) =>
+  `${handoffId(id)}/${index}${reply ? "/reply" : ""}`
+
 /** The final line when the gap list was cut. Not a record position. */
 export const unreadableOverflowId = "/unreadable-more"
 
@@ -326,7 +336,9 @@ function inputParts(
  * the turn it followed, or the input still waiting it followed; one left
  * before any turn, or after a turn the bounded view left out, is first
  * (`placeNotes`). A record this read could not apply is a line of its own
- * in the same places.
+ * in the same places, and so is a switch to another agent. A fork's copied
+ * turns come first of all, as the turns they were, then the line saying
+ * they were copied.
  *
  * The view's `truncated` and `transcriptState` are carried as `history`.
  * This surface does not fold committed records to fill in what the view
@@ -358,7 +370,53 @@ export function transcriptFrom(
   const latestInputId = unlisted.at(-1)?.executionId ?? view.messages.at(-1)?.executionId
   const notes = placeNotes(view.notes, listed, waitingIds)
   const unreadable = placeNotes(view.unreadable, listed, waitingIds)
+  // A switch goes where a note would; a fork is how the conversation began.
+  const switches = placeNotes(
+    view.handoffs.filter((handoff) => handoff.kind === "switch"),
+    listed,
+    waitingIds,
+  )
   const messages: Message[] = []
+  const pushHandoffs = (left: readonly ConversationView["handoffs"][number][]) => {
+    for (const handoff of left) {
+      const id = handoffId(handoff.handoffId)
+      messages.push({
+        id,
+        role: "handoff",
+        at: seen(id),
+        parts: [],
+        handoff:
+          handoff.kind === "switch" && handoff.from && handoff.to
+            ? { kind: "switch", from: handoff.from, to: handoff.to }
+            : { kind: "fork", omittedTurns: handoff.omittedTurns ?? 0 },
+      })
+    }
+  }
+  // A fork's copied turns are drawn as the turns they were, before the line
+  // that says they were copied, and before anything the fork said itself.
+  for (const fork of view.handoffs.filter((handoff) => handoff.kind === "fork")) {
+    ;(fork.turns ?? []).forEach((turn, index) => {
+      if (turn.said !== undefined) {
+        const id = carriedId(fork.handoffId, index, false)
+        messages.push({
+          id,
+          role: "user",
+          at: seen(id),
+          parts: [{ kind: "text", text: turn.said }],
+        })
+      }
+      if (turn.reply !== undefined) {
+        const id = carriedId(fork.handoffId, index, true)
+        messages.push({
+          id,
+          role: "agent",
+          at: seen(id),
+          parts: [{ kind: "text", text: turn.reply }],
+        })
+      }
+    })
+    pushHandoffs([fork])
+  }
   const pushNotes = (left: readonly ConversationView["notes"][number][]) => {
     for (const note of left) {
       const id = noteId(note.messageId)
@@ -384,6 +442,7 @@ export function transcriptFrom(
   }
   pushUnreadable(unreadable.before)
   pushNotes(notes.before)
+  pushHandoffs(switches.before)
   if (published.before.length > 0)
     messages.push({
       id: publishedBeforeId,
@@ -456,6 +515,7 @@ export function transcriptFrom(
     } else messages.push(marked ? { ...user, ...marked } : user)
     pushUnreadable(unreadable.byExecution.get(turn.executionId) ?? [])
     pushNotes(notes.byExecution.get(turn.executionId) ?? [])
+    pushHandoffs(switches.byExecution.get(turn.executionId) ?? [])
     // A turn at work with nothing streaming yet: what it is doing, and since it was asked.
     if (working && parts[parts.length - 1]?.kind !== "text")
       activity = { label: lastTool?.title || "Thinking", since: seen(input) }
@@ -479,6 +539,7 @@ export function transcriptFrom(
     })
     pushUnreadable(unreadable.byWaiting.get(waiting.executionId) ?? [])
     pushNotes(notes.byWaiting.get(waiting.executionId) ?? [])
+    pushHandoffs(switches.byWaiting.get(waiting.executionId) ?? [])
   }
   if (view.unreadableTruncated)
     messages.push({

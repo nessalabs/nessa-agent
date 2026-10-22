@@ -19,4 +19,4 @@
 mod binding;
 mod deletion;
 mod profile;
-pub use binding::CodexAcpProvider;
+pub use binding::{CodexAcpProvider, PROVIDER_NAME};

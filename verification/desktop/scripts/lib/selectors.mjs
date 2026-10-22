@@ -237,6 +237,9 @@ export const css = {
   modelPicker: '[data-slot="model-picker-content"]', // its list, a model each role="option"
   modelOption: '.desktop-model-picker [role="option"]', // class: a model in the picker
   modelProviderTab: '.desktop-model-picker [role="tab"]', // class: a provider's tab in the picker
+  // The line where a conversation's agent ran on in a new session
+  // (src/desktop/workspace/ui/transcript/message.tsx); data-handoff is switch or fork
+  handoffLine: '[data-role="handoff"]',
   thinkingSlider: '[role="dialog"][aria-label="Thinking"] [role="slider"]',
   thinkingTrack: ".desktop-thinking-slider", // class: the slider's pointer room; data-ultra when the model has Ultra
   thinkingFast: '[role="dialog"][aria-label="Thinking"] button[aria-label="Fast mode"]',
