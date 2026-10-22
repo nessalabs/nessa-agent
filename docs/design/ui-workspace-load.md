@@ -37,6 +37,21 @@ focus taken during target search.
 | Mounted sliver already moving | Replace its store with one focused elsewhere | Before paint the replacement reflects its own focus; its later focus change still waits for its requested frame. |
 | Pane focus or sliver owner replaced while its paint is queued | Replace the store or layout with the same pane key, then deliver the cancelled paint | The replacement's focus and sliver are unchanged; its own later focus change still applies. `pane-focus-mark.test.tsx` covers both replacements. |
 
+## Sidebar action during a fold
+
+The pane arrangement may keep the sidebar's space until its new boxes paint.
+That hold does not keep the sidebar's action painted: a closed sidebar's bar
+hides immediately, including while a previously started slide is still running.
+`chrome.test.ts` checks the actual stylesheet cascade; `drag.mjs`'s
+`command-mid-drag` checks the painted reserved corner throughout Cmd+W.
+
+| State | Event ordering | Required observation |
+| --- | --- | --- |
+| Open sidebar | A pane closes during a drag; sidebar closes while spare space is held | The sidebar may remain painted, but its bar, New Session button and icon are hidden immediately. |
+| Closed sidebar, space held | The hold ends while the slide continues | The bar remains hidden; no action crosses the reserved corner. |
+| Closed sidebar | Person reveals the edge peek | The existing reveal delay governs the bar; the fold rule does not suppress the peek. |
+| Closed sidebar | Sidebar opens again | The open bar remains available after its existing reveal ordering. |
+
 ## What load coverage exists
 
 | Check | What it drives | Scale | Evidence |
