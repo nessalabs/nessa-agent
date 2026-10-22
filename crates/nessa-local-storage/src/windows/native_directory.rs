@@ -805,6 +805,81 @@ mod tests {
         (bytes, control)
     }
 
+    fn native_acl_receipt(file: &File) -> (Vec<u8>, SECURITY_DESCRIPTOR_CONTROL) {
+        // NtQuerySecurityObject guarantees a 64KiB buffer suffices for NTFS SDs.
+        // Align the self-relative descriptor, and query only READ_CONTROL data.
+        let mut buffer = vec![0usize; 65536 / size_of::<usize>()];
+        let mut needed = 0;
+        let descriptor = buffer.as_mut_ptr().cast();
+        let status = unsafe {
+            windows_sys::Wdk::Storage::FileSystem::NtQuerySecurityObject(
+                file.as_raw_handle(),
+                DACL_SECURITY_INFORMATION,
+                descriptor,
+                65536,
+                &mut needed,
+            )
+        };
+        assert!(
+            status >= 0,
+            "native security receipt failed: status={status:#010x}"
+        );
+        assert!(needed as usize <= 65536);
+        let mut acl = null_mut();
+        let mut present = 0;
+        let mut defaulted = 0;
+        let mut control = 0;
+        let mut revision = 0;
+        unsafe {
+            check(GetSecurityDescriptorDacl(
+                descriptor,
+                &mut present,
+                &mut acl,
+                &mut defaulted,
+            ))
+            .unwrap();
+            check(GetSecurityDescriptorControl(
+                descriptor,
+                &mut control,
+                &mut revision,
+            ))
+            .unwrap();
+        }
+        assert_ne!(present, 0);
+        assert!(!acl.is_null());
+        let bytes = unsafe {
+            std::slice::from_raw_parts(acl.cast::<u8>(), (*acl).AclSize as usize).to_vec()
+        };
+        (bytes, control)
+    }
+
+    fn log_acl_receipt(
+        phase: &str,
+        receipt: &(Vec<u8>, SECURITY_DESCRIPTOR_CONTROL),
+        baseline: &(Vec<u8>, SECURITY_DESCRIPTOR_CONTROL),
+    ) {
+        eprintln!("native-link-query phase={phase} exact_baseline={} control={:#06x} acl_bytes={} ace_type_flags_masks={:?}",
+            receipt == baseline, receipt.1, receipt.0.len(), acl_shape(&receipt.0));
+    }
+
+    fn log_native_pair(
+        phase: &str,
+        held: &File,
+        target: Option<&File>,
+        baseline: &(Vec<u8>, SECURITY_DESCRIPTOR_CONTROL),
+    ) {
+        let original = native_acl_receipt(held);
+        log_acl_receipt(&format!("{phase}/native-held"), &original, baseline);
+        if let Some(target) = target {
+            let target = native_acl_receipt(target);
+            log_acl_receipt(&format!("{phase}/native-target"), &target, baseline);
+            eprintln!(
+                "native-link-query phase={phase} native_held_target_equal={}",
+                original == target
+            );
+        }
+    }
+
     fn foreign_children(path: &std::path::Path) -> Vec<File> {
         std::fs::write(path.join("other-chat"), b"other chat unchanged").unwrap();
         std::fs::create_dir(path.join("foreign-directory")).unwrap();
@@ -1282,6 +1357,7 @@ mod tests {
                 .open(&alias)
                 .unwrap();
             let before = acl_receipt(&external);
+            log_native_pair("multi/baseline", &external, None, &before);
             assert_eq!(
                 before.1 & (SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED),
                 0,
@@ -1299,17 +1375,57 @@ mod tests {
             let destination = root.path().join("owned/destination");
             std::fs::hard_link(&alias, destination.join("foreign-link"))
                 .expect("ordinary ADD_FILE must actually introduce the legacy inode");
+            log_native_pair(
+                "multi/after-link-before-target-open",
+                &external,
+                None,
+                &before,
+            );
             let linked = std::fs::OpenOptions::new()
                 .read(true)
                 .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
                 .open(destination.join("foreign-link"))
                 .unwrap();
             assert_eq!(NativeObjectId::capture(&linked).unwrap(), external_id);
+            log_native_pair(
+                "multi/after-open-before-provider",
+                &external,
+                Some(&linked),
+                &before,
+            );
+            let held_before_target = acl_receipt(&external);
+            log_acl_receipt(
+                "multi/provider-held-before-target",
+                &held_before_target,
+                &before,
+            );
+            log_native_pair(
+                "multi/before-first-target-provider",
+                &external,
+                Some(&linked),
+                &before,
+            );
+            let first_target = acl_receipt(&linked);
+            log_acl_receipt("multi/first-target-provider", &first_target, &before);
+            log_native_pair(
+                "multi/after-first-target-provider",
+                &external,
+                Some(&linked),
+                &before,
+            );
+            let held_after_target = acl_receipt(&external);
+            log_acl_receipt("multi/repeated-held-provider", &held_after_target, &before);
+            log_native_pair(
+                "multi/after-repeated-held-provider",
+                &external,
+                Some(&linked),
+                &before,
+            );
             assert!(
-                acl_receipt(&external) == before,
+                held_before_target == before,
                 "hard-link admission itself preserves ACL/control"
             );
-            assert!(acl_receipt(&linked) == before);
+            assert!(first_target == before);
             std::fs::create_dir(root.path().join("legacy/empty-directory")).unwrap();
             let moved = std::fs::OpenOptions::new()
                 .access_mode(GENERIC_READ | DELETE)
@@ -1404,6 +1520,7 @@ mod tests {
                 .unwrap();
             let identity = NativeObjectId::capture(&external).unwrap();
             let before = acl_receipt(&external);
+            log_native_pair("single/baseline", &external, None, &before);
             assert_eq!(
                 before.1 & (SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED),
                 0,
@@ -1420,6 +1537,7 @@ mod tests {
             let directory_id = NativeObjectId::capture(&directory).unwrap();
             let target = root.path().join("owned-single/destination/foreign");
             std::fs::hard_link(&external_name, &target).unwrap();
+            log_native_pair("single/after-link-before-unlink", &external, None, &before);
             assert_eq!(information(&external).unwrap().nNumberOfLinks, 2);
             assert!(
                 acl_receipt(&external) == before,
@@ -1427,6 +1545,18 @@ mod tests {
             );
             std::fs::remove_file(&external_name)
                 .expect("ordinary unlink removes only the external name before sealing");
+            log_native_pair(
+                "single/after-unlink-before-target-open",
+                &external,
+                None,
+                &before,
+            );
+            let held_after_unlink = acl_receipt(&external);
+            log_acl_receipt(
+                "single/provider-held-after-unlink",
+                &held_after_unlink,
+                &before,
+            );
             let linked = std::fs::OpenOptions::new()
                 .read(true)
                 .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
@@ -1438,9 +1568,45 @@ mod tests {
                 1,
                 "remaining foreign name is genuinely single-link before validation"
             );
-            eprintln!(
-                "native-single-link-foreign private_file_admitted={}",
-                verify_file(&linked).is_ok()
+            log_native_pair(
+                "single/after-open-before-target-provider",
+                &external,
+                Some(&linked),
+                &before,
+            );
+            let first_target = acl_receipt(&linked);
+            log_acl_receipt("single/first-target-provider", &first_target, &before);
+            log_native_pair(
+                "single/after-first-target-provider",
+                &external,
+                Some(&linked),
+                &before,
+            );
+            let repeated_held = acl_receipt(&external);
+            log_acl_receipt("single/repeated-held-provider", &repeated_held, &before);
+            log_native_pair(
+                "single/before-verify-file",
+                &external,
+                Some(&linked),
+                &before,
+            );
+            let admitted = verify_file(&linked).is_ok();
+            eprintln!("native-single-link-foreign private_file_admitted={admitted}");
+            log_native_pair(
+                "single/after-verify-file",
+                &external,
+                Some(&linked),
+                &before,
+            );
+            log_acl_receipt(
+                "single/provider-held-after-verify",
+                &acl_receipt(&external),
+                &before,
+            );
+            log_acl_receipt(
+                "single/provider-target-after-verify",
+                &acl_receipt(&linked),
+                &before,
             );
             let check = |phase: &str| {
                 assert!(
