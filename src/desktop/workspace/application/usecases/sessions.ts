@@ -229,8 +229,9 @@ export function unsentDiscarded(
 /**
  * A model picked in a session's composer. A draft starts on it. An
  * established session only stages it: nothing is asked of the source until
- * the next message is sent (`model-commands.ts`), and picking the model the
- * session runs takes the staged one back. Never overrides the summary.
+ * the next message is sent (`model-commands.ts`). Picking the model the
+ * session runs takes a switch back, since that send then asks nothing.
+ * Never overrides the summary.
  */
 export function chooseModel(
   state: WorkspaceState,
@@ -244,18 +245,13 @@ export function chooseModel(
   // A new pick is the person's newer word: an earlier one the source refused
   // is no longer said. One not known to be settled stays, so the next send
   // still checks it (`modelUnsettled`).
-  const choice = entry(state.modelChoices, sessionId)?.state
-  const refused = choice === "refused"
-  // Taking a pick back to the model the summary shows only drops it when no
-  // earlier change can still land; one that may stays staged, so a late
-  // summary of that change cannot decide the next send's model.
-  const unsettled = choice === "acknowledged" || choice === "recovery_required"
+  const refused = entry(state.modelChoices, sessionId)?.state === "refused"
+  // Even the model the summary shows stays staged: that model may still be
+  // moving (a change of this window's or another client's can land late), so
+  // only the send decides. A send whose pick the chat settled on asks nothing.
   return {
     ...state,
-    stagedModels:
-      sameModel(model, session.model) && !unsettled
-        ? without(state.stagedModels, sessionId)
-        : { ...state.stagedModels, [sessionId]: model },
+    stagedModels: { ...state.stagedModels, [sessionId]: model },
     modelChoices: refused ? without(state.modelChoices, sessionId) : state.modelChoices,
   }
 }

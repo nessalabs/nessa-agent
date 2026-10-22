@@ -294,9 +294,9 @@ describe("what the person changes", () => {
     expect(modelForNextTurn(state, "a")).toEqual(state.sessions.a.model)
     expect(modelForNextTurn(state, "missing")).toBeUndefined()
     expect(chooseModel(state, { sessionId: "missing", model: astra })).toBe(state)
-    // Its own model again takes the pick back.
+    // Its own model again stays staged: the send then asks nothing.
     const back = chooseModel(chosen, { sessionId: "a", model: state.sessions.a.model })
-    expect(back.stagedModels.a).toBeUndefined()
+    expect(back.stagedModels.a).toEqual(state.sessions.a.model)
     expect(modelForNextTurn(back, "a")).toEqual(state.sessions.a.model)
     // A newer summary that runs another model leaves the pick waiting for a send.
     const other = updateReceived(chosen, {

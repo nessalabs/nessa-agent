@@ -153,11 +153,10 @@ export interface WorkspaceState {
   readonly chosenModels: Readonly<Record<string, ModelRef>>
   /**
    * The model the person picked in an established session's composer, by
-   * session, that its conversation does not run yet: only a choice until the
-   * next message is sent, which asks the source for it first
-   * (`model-commands.ts`). Picking the session's own model again takes it
-   * back; only the send that makes it settles it, so a summary from another
-   * client passing through the same model does not.
+   * session: only a choice until the next message is sent, which asks the
+   * source for it first (`model-commands.ts`), or asks nothing when the
+   * session settled on it. Only that send settles it, so a summary passing
+   * through the same model, from this window or another client, does not.
    */
   readonly stagedModels: Readonly<Record<string, ModelRef>>
   /**

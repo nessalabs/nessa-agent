@@ -81,11 +81,13 @@ describe("model choices", () => {
     const { source, store } = await ready()
     store.dispatch(changeModel({ sessionId: "a", model: astra }))
     store.dispatch(changeModel({ sessionId: "a", model: { ...opus } }))
-    expect(store.getState().workspace.stagedModels.a).toBeUndefined()
+    expect(store.getState().workspace.stagedModels.a).toEqual(opus)
     expect(selectNextModel(store.getState(), "a")).toEqual(opus)
     expect(await send(store, "on the same agent")).toBe("sent")
     expect(asked(source, "setModel")).toHaveLength(0)
     expect(asked(source, "send")[0]?.[1]).toMatchObject({ model: opus })
+    // The send that found nothing to change settles the pick.
+    expect(store.getState().workspace.stagedModels.a).toBeUndefined()
   })
 
   it("applies the staged pick when the next message is sent, then sends on it", async () => {
@@ -183,7 +185,7 @@ describe("model choices", () => {
     expect(store.getState().workspace.modelChoices.a?.state).toBe("refused")
     store.dispatch(changeModel({ sessionId: "a", model: opus }))
     expect(store.getState().workspace.modelChoices.a).toBeUndefined()
-    expect(store.getState().workspace.stagedModels.a).toBeUndefined()
+    expect(selectNextModel(store.getState(), "a")).toEqual(opus)
   })
 
   it("keeps a send behind a change on its way, and the text with it", async () => {
@@ -325,6 +327,41 @@ describe("model choices", () => {
     expect(await send(store, "back on opus")).toBe("sent")
     expect(source.setModel).toHaveBeenCalledWith("a", opus, expect.any(String), "person")
     expect(asked(source, "send").at(-1)?.[1]).toMatchObject({ model: opus })
+  })
+
+  it("keeps a take-back staged while the source holds another change", async () => {
+    const { source, store } = await ready()
+    store.dispatch(changeModel({ sessionId: "a", model: astra }))
+    source.emit({
+      kind: "transcript",
+      transcript: {
+        ...emptyTranscript("a"),
+        revision: 2,
+        modelControl: {
+          pending: {
+            requestId: "other",
+            requestedModel: next.modelId,
+            status: "changing",
+          },
+        },
+      },
+    })
+    await settle()
+    store.dispatch(changeModel({ sessionId: "a", model: opus }))
+    // Another client's change lands; the take-back still decides the next send.
+    source.emit({
+      kind: "transcript",
+      transcript: { ...emptyTranscript("a"), revision: 3 },
+    })
+    source.emit({
+      kind: "session",
+      session: summary("a", "desktop", 1000, "idle", { model: next, revision: 400 }),
+    })
+    await settle()
+    expect(selectNextModel(store.getState(), "a")).toEqual(opus)
+    source.setModel = vi.fn(reconciles(source))
+    expect(await send(store, "back on opus")).toBe("sent")
+    expect(source.setModel).toHaveBeenCalledWith("a", opus, expect.any(String), "person")
   })
 
   it("holds a send while the source says a model change is pending", async () => {
