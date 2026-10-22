@@ -23,6 +23,7 @@ import { workspaceActions } from "./slice"
 import { modelChanging, modelRequesting, modelUnsettled } from "./model-commands"
 import { selectNextModel } from "./selectors"
 import type { ModelReceipt } from "../../model/model-choice"
+import type { ModelRef } from "../../model/workspace-index"
 
 const next = { provider: opus.provider, modelId: "claude-sonnet-5" }
 const receipt = (requestId: string): ModelReceipt => ({
@@ -40,6 +41,20 @@ async function ready() {
   await settle()
   return { source, store }
 }
+/** A control the source makes, saying the chat runs it before it answers. */
+let revision = 10
+const reconciles =
+  (source: ReturnType<typeof fakeSource>) =>
+  async (sessionId: string, model: ModelRef, id: string): Promise<ModelReceipt> => {
+    source.emit({
+      kind: "session",
+      session: summary(sessionId, "desktop", 1000, "idle", {
+        model,
+        revision: ++revision,
+      }),
+    })
+    return { ...receipt(id), model: model.modelId, sourceReconciled: true }
+  }
 const asked = (source: ReturnType<typeof fakeSource>, method: string) =>
   source.calls.filter((call) => call[0] === method)
 const send = (
@@ -102,18 +117,14 @@ describe("model choices", () => {
 
   it("no longer stages a pick once made, so a later change elsewhere is not undone", async () => {
     const { source, store } = await ready()
-    source.setModel = vi.fn(async (_id, model, id) => ({
-      ...receipt(id),
-      model: model.modelId,
-      sourceReconciled: true,
-    }))
+    source.setModel = vi.fn(reconciles(source))
     store.dispatch(changeModel({ sessionId: "a", model: next }))
     expect(await send(store, "first on next")).toBe("sent")
     expect(store.getState().workspace.stagedModels.a).toBeUndefined()
     // Another client moves the chat on; the next send asks nothing back.
     source.emit({
       kind: "session",
-      session: summary("a", "desktop", 1000, "idle", { model: astra, revision: 5 }),
+      session: summary("a", "desktop", 1000, "idle", { model: astra, revision: 100 }),
     })
     await settle()
     expect(selectNextModel(store.getState(), "a")).toEqual(astra)
@@ -154,11 +165,7 @@ describe("model choices", () => {
     store.dispatch(changeModel({ sessionId: "a", model: astra }))
     expect(await send(store, "unknown")).toBe("unknown")
     expect(store.getState().workspace.stagedModels.a).toEqual(astra)
-    source.setModel = vi.fn(async (_id, model, id) => ({
-      ...receipt(id),
-      model: model.modelId,
-      sourceReconciled: true,
-    }))
+    source.setModel = vi.fn(reconciles(source))
     expect(await send(store, "checked")).toBe("sent")
     expect(source.setModel).toHaveBeenCalledWith("a", astra, expect.any(String), "person")
     expect(store.getState().workspace.stagedModels.a).toBeUndefined()
@@ -241,11 +248,7 @@ describe("model choices", () => {
     // Taken back to the chat's own model: still checked before anything goes.
     store.dispatch(changeModel({ sessionId: "a", model: opus }))
     expect(store.getState().workspace.modelChoices.a?.state).toBe("recovery_required")
-    source.setModel = vi.fn(async (_id, model, id) => ({
-      ...receipt(id),
-      model: model.modelId,
-      sourceReconciled: true,
-    }))
+    source.setModel = vi.fn(reconciles(source))
     expect(modelUnsettled(store.getState().workspace, "a")).toBe(true)
     expect(await send(store, "checked first")).toBe("sent")
     expect(source.setModel).toHaveBeenCalledWith("a", opus, expect.any(String), "person")
@@ -253,6 +256,22 @@ describe("model choices", () => {
       model: opus,
       text: "checked first",
     })
+  })
+
+  it("does not send when the source reconciles to another client's model", async () => {
+    const { source, store } = await ready()
+    source.setModel = async (_id, _model, id) => {
+      source.emit({
+        kind: "session",
+        session: summary("a", "desktop", 1000, "idle", { model: astra, revision: 3 }),
+      })
+      return { ...receipt(id), sourceReconciled: true }
+    }
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    expect(await send(store, "raced")).toBe("unknown")
+    expect(asked(source, "send")).toHaveLength(0)
+    expect(store.getState().workspace.stagedModels.a).toEqual(next)
+    expect(modelChanging(store.getState().workspace, "a")).toBe(false)
   })
 
   it("holds a send while the source says a model change is pending", async () => {

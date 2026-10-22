@@ -150,6 +150,8 @@ describe("sending", () => {
 
   it("applies a staged model before an agent's message, and sends on it", async () => {
     const { store, source } = await ready()
+    // Following the source, as the window does: its summary says the model is made.
+    store.dispatch(followWorkspace())
     store.dispatch(chooseModel({ sessionId: "a", model: astra }))
     await store.dispatch(sendMessage({ initiator: "agent", sessionId: "a", text: "hi" }))
     const order = source.calls.map((call) => call[0])

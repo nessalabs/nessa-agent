@@ -13,7 +13,7 @@ import {
   type WorkspaceState,
 } from "../../application/workspace-state"
 import type { FailureDiagnostic, WorkspaceFailureReason } from "../../model/failure"
-import type { ModelRef } from "../../model/workspace-index"
+import { sameModel, type ModelRef } from "../../model/workspace-index"
 import type { WorkspaceCommand } from "./commands"
 import { workspaceActions } from "./slice"
 
@@ -128,6 +128,12 @@ export function applyStagedModel(
         throw new WorkspaceSourceError("unavailable")
       if (receipt.sourceReconciled) {
         dispatch(workspaceActions.modelChoiceCleared({ sessionId, requestId }))
+        // Reconciled is a settled frame, not this target: another client may
+        // have moved the chat on meanwhile. Only the model the source now
+        // says it runs is sent on; another keeps the pick for the next send.
+        const running = sessionOf(getState().workspace, sessionId)?.model
+        if (!running || !sameModel(running, target))
+          return { applied: false, reason: "unavailable" }
         dispatch(workspaceActions.stagedModelSettled({ sessionId, model: target }))
         return { applied: true, model: target }
       }
