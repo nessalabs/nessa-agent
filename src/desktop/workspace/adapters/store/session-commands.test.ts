@@ -148,16 +148,16 @@ describe("sending", () => {
     ])
   })
 
-  it("sends the source-owned model after a refused local model change", async () => {
+  it("applies a staged model before an agent's message, and sends on it", async () => {
     const { store, source } = await ready()
+    // Following the source, as the window does: its summary says the model is made.
+    store.dispatch(followWorkspace())
     store.dispatch(chooseModel({ sessionId: "a", model: astra }))
     await store.dispatch(sendMessage({ initiator: "agent", sessionId: "a", text: "hi" }))
+    const order = source.calls.map((call) => call[0])
+    expect(order.indexOf("setModel")).toBeLessThan(order.indexOf("send"))
     const sent = source.calls.find((call) => call[0] === "send")?.[1]
-    expect(sent).toMatchObject({
-      sessionId: "a",
-      model: store.getState().workspace.sessions.a.model,
-      initiator: "agent",
-    })
+    expect(sent).toMatchObject({ sessionId: "a", model: astra, initiator: "agent" })
     expect(sent).not.toHaveProperty("start", expect.anything())
   })
 

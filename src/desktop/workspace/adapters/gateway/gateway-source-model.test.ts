@@ -89,6 +89,25 @@ describe("same-provider gateway control", () => {
     source.dispose()
   })
 
+  it("asks nothing for the model the settled conversation already runs", async () => {
+    const { gateway, source } = await ready()
+    const result = await source.setModel(
+      "a",
+      { provider: "anthropic", modelId: old },
+      "again",
+      "person",
+    )
+    expect(result).toMatchObject({
+      requestId: "again",
+      model: old,
+      approvalMode: "ask",
+      sourceReconciled: true,
+    })
+    expect(gateway.count("setModel")).toBe(0)
+    expect(gateway.count("switchAgent")).toBe(0)
+    source.dispose()
+  })
+
   it("refuses a switch the gateway did not make, and a provider no agent runs", async () => {
     const { gateway, source } = await ready()
     gateway.once("switchAgent", () =>
