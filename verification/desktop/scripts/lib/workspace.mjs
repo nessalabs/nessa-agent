@@ -2,7 +2,8 @@
  * Driving and reading the workspace: pane rects and order, opening panes
  * beside through the quick switcher (the same in both layouts), the side
  * columns, the drop zone the drag announces, whether one rect is inside
- * another, and a model module's rule or value read in the page.
+ * another, whether the panes are one flat surface, and a model module's rule
+ * or value read in the page.
  */
 import { CannotRun } from "./cli.mjs"
 import { css, keys, names, preferenceEvents, storage } from "./selectors.mjs"
@@ -505,4 +506,92 @@ export async function hoverPeekEdge(page, y, within = css.workspace) {
     .catch(() => null)
   const x = strip && strip.width > 0 ? strip.x + strip.width / 2 : 3
   await page.mouse.move(x, y)
+}
+
+/**
+ * What breaks the flat chat surface (`panes.css`), as it stands now: the
+ * surface reaches the window's top, right and bottom and is filled; no pane
+ * draws a fill or shadow of its own; each column hairline is 1px, mid-gutter
+ * between two panes, from the window's top to its bottom; each row hairline
+ * is 1px and ends at the surface's side, the window's edge or a column
+ * hairline. Empty when it holds. Its own `::after` is read, so the computed
+ * ends are the engine's, not this script's.
+ */
+export function flatSurfaceFailures(page) {
+  return page.evaluate(
+    ({ chat, pane, edge }) => {
+      const failures = []
+      const near = (a, b) => Math.abs(a - b) <= 1
+      const clear = "rgba(0, 0, 0, 0)"
+      const surface = document.querySelector(chat)
+      if (!surface) return ["no chat surface"]
+      const s = surface.getBoundingClientRect()
+      if (!near(s.top, 0) || !near(s.right, innerWidth) || !near(s.bottom, innerHeight))
+        failures.push(
+          `the surface stops short of the window: ${JSON.stringify(s.toJSON())} in ${innerWidth}x${innerHeight}`,
+        )
+      if (getComputedStyle(surface).backgroundColor === clear)
+        failures.push("the surface has no fill")
+      const panes = [...document.querySelectorAll(pane)].map((element) => {
+        const style = getComputedStyle(element)
+        if (style.backgroundColor !== clear || style.boxShadow !== "none")
+          failures.push(
+            `a pane draws its own card: ${style.backgroundColor} ${style.boxShadow}`,
+          )
+        return element.getBoundingClientRect()
+      })
+      const line = (element) => {
+        const after = getComputedStyle(element, "::after")
+        const b = element.getBoundingClientRect()
+        return {
+          axis: element.dataset.axis,
+          content: after.content,
+          fill: after.backgroundColor,
+          thick: element.dataset.axis === "x" ? after.width : after.height,
+          // Across the line: where the hairline itself stands, from its own inset.
+          middle:
+            element.dataset.axis === "x"
+              ? b.left + parseFloat(after.left) + parseFloat(after.width) / 2
+              : b.top + parseFloat(after.top) + parseFloat(after.height) / 2,
+          // Its insets reach past the edge's own box.
+          start:
+            element.dataset.axis === "x"
+              ? b.top + parseFloat(after.top)
+              : b.left + parseFloat(after.left),
+          end:
+            element.dataset.axis === "x"
+              ? b.bottom - parseFloat(after.bottom)
+              : b.right - parseFloat(after.right),
+        }
+      }
+      const lines = [...surface.querySelectorAll(edge)].map(line)
+      const columns = lines.filter((l) => l.axis === "x")
+      for (const l of lines) {
+        if (l.content === "none" || l.thick !== "1px" || l.fill === clear)
+          failures.push(`a ${l.axis} hairline is not drawn: ${JSON.stringify(l)}`)
+      }
+      for (const l of columns) {
+        if (!near(l.start, 0) || !near(l.end, innerHeight))
+          failures.push(
+            `a column hairline runs ${l.start}…${l.end}, not the window's height`,
+          )
+        const before = panes.filter((p) => p.right <= l.middle)
+        const after = panes.filter((p) => p.left >= l.middle)
+        if (
+          !before.some((p) => after.some((q) => near(l.middle, (p.right + q.left) / 2)))
+        )
+          failures.push(`a column hairline at ${l.middle} is not mid-gutter`)
+      }
+      for (const l of lines.filter((l) => l.axis === "y")) {
+        const meets = (x, sides) =>
+          sides.some((side) => near(x, side)) || columns.some((c) => near(x, c.middle))
+        if (!meets(l.start, [s.left]) || !meets(l.end, [s.right]))
+          failures.push(
+            `a row hairline runs ${l.start}…${l.end}, meeting neither the surface's side nor a column hairline`,
+          )
+      }
+      return failures
+    },
+    { chat: css.chat, pane: css.pane, edge: css.paneEdge },
+  )
 }

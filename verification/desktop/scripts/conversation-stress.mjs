@@ -37,7 +37,11 @@
  *               what the window shows: it is the focused pane on the right,
  *               the main conversation on the left, the sidebar closed; that
  *               pane is closed with ⌘W and the sidebar shown again, and the
- *               main conversation, asked in its composer, is the whole window
+ *               main conversation, asked in its composer, is the whole window;
+ *               beside, the panes are regions of one flat chat surface that
+ *               reaches the window's top, right and bottom edges: no pane
+ *               draws a fill or rim of its own, and a hairline down the
+ *               middle of the gutter between them divides them
  *   long        another conversation takes `--long` turns of long streamed
  *               answers through the gateway; the last answer is whole, and
  *               still whole after its agent is closed and its history opened
@@ -177,6 +181,7 @@ import {
 } from "./lib/stress-conversation.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
+import { flatSurfaceFailures } from "./lib/workspace.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
 
 const INSTANCE = "conversation-stress"
@@ -498,7 +503,8 @@ function railLayout(page) {
         probe.remove()
         return width
       }
-      // The workspace's first card: the rounded panel at its left edge.
+      // The workspace's first column: the rounded box at its left edge (the
+      // docked sidebar, drawn flat but still cornered for its peek).
       const card = (inside) => {
         const left = inside.getBoundingClientRect().left
         const x = left + length(inside, "--desktop-gutter") + 2
@@ -1734,6 +1740,7 @@ const steps = {
       )
       return
     }
+    await flatPanes(run.page, failures)
     // Asked in the composer of the pane beside, the focused one.
     const beside = await windowRead(
       run,
@@ -2512,6 +2519,22 @@ const steps = {
     await expectShown(run.page, `${SAYS.echo}${last}`, failures)
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
+}
+
+/**
+ * Two panes side by side are regions of one flat chat surface, not cards
+ * (`flatSurfaceFailures`): one hairline between them, mid-gutter.
+ */
+async function flatPanes(page, failures) {
+  const now = async () => ({
+    panes: await page.locator(css.pane).count(),
+    hairlines: await page.locator(`${css.chat} ${css.paneEdge}[data-axis="x"]`).count(),
+    broken: await flatSurfaceFailures(page),
+  })
+  const holds = (state) =>
+    state.panes === 2 && state.hairlines === 1 && state.broken.length === 0
+  if (await waitFor(async () => holds(await now()), 10_000)) return
+  failures.push(`the panes are not one flat surface: ${JSON.stringify(await now())}`)
 }
 
 /**

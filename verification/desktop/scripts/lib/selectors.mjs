@@ -154,6 +154,7 @@ export const css = {
   sidebar: ".workspace-sidebar", // class
   sessionList: ".workspace-list", // class
   chat: ".workspace-chat", // class: the chat area, the panes' column
+  paneEdge: ".split-panes-pane-edge", // class: the edge between two panes; data-axis, its hairline is ::after
   sideRail: ".side-rail", // class: the rail beside the workspace
   workspaceWindow: ".workspace-window", // class: the frame holding the rail and the workspace; data-rail, data-sidebar
   titlebar: ".workspace-titlebar", // class: the window's titlebar row, 48px tall
@@ -198,7 +199,7 @@ export const css = {
   overviewRowItem: ".agents-row-item", // class: a listed row's item
   overviewEdge: ".agents-overview-edge", // class: the resize edge between the list and the peek beside it (role=separator)
   overviewSide: ".agents-overview-side", // class: the list's side of the overview, whose right is the edge
-  overviewSurface: ".agents-overview-surface", // class: the overview's card, holding the list and the peek
+  overviewSurface: ".agents-overview-surface", // class: the overview's surface, holding the list and the peek
   overviewSaid: ".agents-overview-said", // class: the overview's live region, which says what became of an answer
   overviewRow: ".agents-row", // class
   overviewReplyPill: ".agents-reply-pill", // class

@@ -332,7 +332,7 @@ it("drops the composer's blur while a drag is carried and keeps the sidebar trea
     .slice(styles.indexOf(":root[data-drag-pressing] .desktop-grain {"))
     .split("}")[0]
   expect(grain).toMatch(/visibility:\s*hidden/)
-  // The resting shadow stays rather than changing on release.
+  // The sidebar's look stays rather than changing on release.
   expect(styles).not.toContain(":root[data-drag-pressing] .workspace-sidebar {")
   const rows = readFileSync(
     new URL("./workspace/ui/source-list/source-list.css", import.meta.url),
@@ -389,7 +389,7 @@ it("does not paint a carried pane's conversation on the frame it lifts", () => {
   expect(slot).toMatch(/transition:\s*none/)
 })
 
-it("keeps conversation content and pane fill visible while a layout moves", () => {
+it("keeps conversation content and the pane's look visible while a layout moves", () => {
   const sheet = readFileSync(
     new URL("./workspace/ui/panes/panes.css", import.meta.url),
     "utf8",
