@@ -126,16 +126,17 @@ test("a frame that does not fit is still a failure and is not followed again", (
 })
 
 async function flushed() {
-  for (let turn = 0; turn < 12; turn++) await Promise.resolve()
+  for (let turn = 0; turn < 20; turn++) await Promise.resolve()
 }
 
 function replayFixture(
   t,
-  { capture = true, delayedOpen = false, stalledClose = -1 } = {},
+  { capture = true, heads = ["head"], delayedOpen = false, stalledClose = -1 } = {},
 ) {
   t.mock.timers.enable({ apis: ["setTimeout"] })
   const calls = []
-  let release
+  let release,
+    lastHead = "head"
   const client = {
     subscriptions: {
       async events(id, handlers, options) {
@@ -154,8 +155,10 @@ function replayFixture(
             return closing
           },
         }
-        if (calls.length === 1 && capture)
-          handlers.batch({ cursor: "captured-head", events: [] })
+        if (!options.replay && options.after === undefined && capture) {
+          lastHead = heads.shift() ?? lastHead
+          handlers.batch({ cursor: lastHead, events: [] })
+        }
         if (calls.length === 1 && delayedOpen)
           return new Promise((resolve) => {
             release = () => resolve(subscription)
@@ -168,37 +171,41 @@ function replayFixture(
   return { calls, pending, release: () => release() }
 }
 
-test("reference replay waits through quiet and all pages until the captured head", async (t) => {
+const batch = (call, cursor, ids = []) =>
+  call.handlers.batch({ cursor, events: ids.map((id) => ({ id })) })
+
+async function advanced(t, ms = 100) {
+  t.mock.timers.tick(ms)
+  await flushed()
+}
+
+test("reference replay waits through quiet and every page until fresh-head convergence", async (t) => {
   const { calls, pending } = replayFixture(t)
   let completed = false
   void pending.then(() => {
     completed = true
   })
   await flushed()
-  assert.equal(calls.length, 2)
-  assert.equal(calls[0].options.replay, undefined)
-  assert.equal(calls[0].closed, 1, "head capture releases before replay opens")
-  assert.equal(calls[1].options.replay, true)
-  const first = Array.from({ length: 31 }, (_, index) => ({ id: `event-${index}` }))
-  calls[1].handlers.batch({ cursor: "first-page", events: first })
-  t.mock.timers.tick(2000)
-  await flushed()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].options.replay, true)
+  const first = Array.from({ length: 31 }, (_, index) => `event-${index}`)
+  batch(calls[0], "first-page", first)
+  await advanced(t, 2000)
   assert.equal(completed, false, "silence after a prefix is not completion")
-  const last = Array.from({ length: 24 }, (_, index) => ({ id: `event-${index + 31}` }))
-  calls[1].handlers.batch({ cursor: "last-event", events: last })
-  t.mock.timers.tick(100)
-  await flushed()
-  assert.equal(completed, false, "last semantic event is not the outer-save head")
-  calls[1].handlers.batch({ cursor: "captured-head", events: [] })
-  t.mock.timers.tick(100)
-  assert.deepEqual(
-    await pending,
-    [...first, ...last].map((event) => event.id),
-  )
+  const last = Array.from({ length: 24 }, (_, index) => `event-${index + 31}`)
+  batch(calls[0], "last-event", last)
+  await advanced(t)
+  assert.equal(completed, false, "event count is not the outer-save head")
+  batch(calls[0], "head")
+  await advanced(t)
+  assert.deepEqual(await pending, [...first, ...last])
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].closed, 1)
+  assert.equal(calls[1].options.replay, undefined)
   assert.equal(calls[1].closed, 1)
 })
 
-test("an empty checkpoint other than the captured head does not complete replay", async (t) => {
+test("an intermediate empty checkpoint resumes instead of claiming completion", async (t) => {
   const { calls, pending } = replayFixture(t)
   let completed = false
   void pending.then(
@@ -208,87 +215,130 @@ test("an empty checkpoint other than the captured head does not complete replay"
     () => {},
   )
   await flushed()
-  calls[1].handlers.batch({ cursor: "other-head", events: [] })
-  t.mock.timers.tick(100)
-  await flushed()
+  batch(calls[0], "intermediate", ["first"])
+  batch(calls[0], "intermediate")
+  await advanced(t)
   assert.equal(completed, false)
-  t.mock.timers.tick(59_900)
-  await assert.rejects(
+  assert.equal(calls[2].options.after, "intermediate")
+  assert.equal(calls[2].options.replay, undefined)
+  const failed = assert.rejects(
     pending,
-    /did not complete replay to captured head within 60000 ms/,
+    /did not complete replay to checkpoint within 60000 ms/,
   )
-  assert.equal(calls[1].options.signal.aborted, true)
-  assert.equal(calls[1].closed, 1)
+  t.mock.timers.tick(59_900)
+  await failed
+  assert.equal(calls[2].options.signal.aborted, true)
+  assert.equal(calls[2].closed, 1)
 })
 
-test("a stalled prefix fails at the existing overall deadline instead of passing a count", async (t) => {
+test("head growth resumes after the applied candidate without duplicating late callbacks", async (t) => {
+  const { calls, pending } = replayFixture(t, { heads: ["new-head", "new-head"] })
+  await flushed()
+  batch(calls[0], "last-old-event", ["one", "two"])
+  batch(calls[0], "old-head")
+  batch(calls[0], "late-frame", ["three"])
+  await advanced(t)
+  assert.equal(calls.length, 3)
+  assert.equal(calls[2].options.after, "old-head")
+  assert.equal(calls[2].options.replay, undefined)
+  assert.equal(calls[1].closed, 1, "capture releases before resumed replay")
+  batch(calls[0], "retired-frame", ["three"])
+  batch(calls[2], "new-event", ["three"])
+  batch(calls[2], "new-head")
+  await advanced(t)
+  assert.deepEqual(await pending, ["one", "two", "three"])
+  assert.ok(calls.every((call) => call.closed === 1))
+})
+
+test("a stalled prefix fails at the existing overall deadline", async (t) => {
   const { calls, pending } = replayFixture(t)
   const failed = assert.rejects(
     pending,
-    /did not complete replay to captured head within 60000 ms/,
+    /did not complete replay to checkpoint within 60000 ms/,
   )
   await flushed()
-  calls[1].handlers.batch({ cursor: "prefix", events: [{ id: "first" }] })
-  t.mock.timers.tick(59_999)
-  await flushed()
-  assert.equal(calls[1].closed, 0)
+  batch(calls[0], "prefix", ["first"])
+  await advanced(t, 59_999)
+  assert.equal(calls[0].closed, 0)
   t.mock.timers.tick(1)
   await failed
-  assert.equal(calls[1].closed, 1)
+  assert.equal(calls[0].closed, 1)
 })
 
-test("an empty history completes only with the matching captured checkpoint", async (t) => {
+test("empty history still requires matching fresh-head authority", async (t) => {
   const { calls, pending } = replayFixture(t)
   await flushed()
-  calls[1].handlers.batch({ cursor: "captured-head", events: [] })
-  t.mock.timers.tick(100)
+  batch(calls[0], "head")
+  await advanced(t)
   assert.deepEqual(await pending, [])
+  assert.equal(calls.length, 2)
 })
 
-test("head capture and replay share one deadline", async (t) => {
+test("capture and growing-head resumes share the original deadline", async (t) => {
   const { calls, pending } = replayFixture(t, { capture: false })
   const failed = assert.rejects(
     pending,
-    /did not complete replay to captured head within 60000 ms/,
+    /did not complete replay to checkpoint within 60000 ms/,
   )
-  t.mock.timers.tick(59_000)
   await flushed()
-  calls[0].handlers.batch({ cursor: "captured-head", events: [] })
-  t.mock.timers.tick(100)
-  await flushed()
+  await advanced(t, 59_000)
+  batch(calls[0], "old-head", ["one"])
+  batch(calls[0], "old-head")
+  await advanced(t)
   assert.equal(calls.length, 2)
-  t.mock.timers.tick(900)
+  batch(calls[1], "new-head")
+  await advanced(t)
+  assert.equal(calls.length, 3)
+  assert.equal(calls[2].options.after, "old-head")
+  t.mock.timers.tick(800)
+  await failed
+  assert.equal(calls[2].closed, 1)
+})
+
+test("a missing head capture fails rather than accepting an empty candidate", async (t) => {
+  const { calls, pending } = replayFixture(t, { capture: false })
+  const failed = assert.rejects(pending, /did not complete head capture within 60000 ms/)
+  await flushed()
+  batch(calls[0], "candidate")
+  await advanced(t)
+  t.mock.timers.tick(59_900)
   await failed
   assert.equal(calls[1].closed, 1)
 })
 
-test("missing capture and a late opening both fail and release their sources", async (t) => {
-  const { calls, pending, release } = replayFixture(t, {
-    capture: false,
-    delayedOpen: true,
-  })
-  const failed = assert.rejects(pending, /did not complete head capture within 60000 ms/)
+test("a late opening after deadline releases its source without starting a capture", async (t) => {
+  const { calls, pending, release } = replayFixture(t, { delayedOpen: true })
+  const failed = assert.rejects(
+    pending,
+    /did not complete replay to checkpoint within 60000 ms/,
+  )
   t.mock.timers.tick(60_000)
   await failed
   release()
   await flushed()
   assert.equal(calls[0].closed, 1)
-  assert.equal(calls.length, 1, "no replay starts after deadline")
+  assert.equal(calls.length, 1)
 })
 
-test("terminal replay failure stays a failure before convergence", async (t) => {
-  const { calls, pending } = replayFixture(t)
-  const failed = assert.rejects(pending, /ended refused/)
-  await flushed()
-  calls[1].handlers.ended({ reason: "refused", code: "audit_unavailable" })
-  t.mock.timers.tick(100)
-  await failed
-  assert.equal(calls[1].closed, 1)
-})
+for (const target of ["replay", "head capture"]) {
+  test(`a terminal ${target} refusal stays a failure`, async (t) => {
+    const { calls, pending } = replayFixture(t, { capture: false })
+    const failed = assert.rejects(pending, /ended refused/)
+    await flushed()
+    if (target === "head capture") {
+      batch(calls[0], "candidate")
+      await advanced(t)
+    }
+    calls.at(-1).handlers.ended({ reason: "refused", code: "audit_unavailable" })
+    t.mock.timers.tick(100)
+    await failed
+    assert.ok(calls.every((call) => call.closed === 1))
+  })
+}
 
 for (const [stalledClose, phase] of [
-  [0, "head capture cleanup"],
-  [1, "replay cleanup"],
+  [0, "replay cleanup"],
+  [1, "head capture cleanup"],
 ]) {
   test(`a stalled ${phase} fails without misreporting convergence`, async (t) => {
     const { calls, pending } = replayFixture(t, { stalledClose })
@@ -297,12 +347,9 @@ for (const [stalledClose, phase] of [
       new RegExp(`did not complete ${phase} within 60000 ms`),
     )
     await flushed()
-    if (stalledClose === 1) {
-      calls[1].handlers.batch({ cursor: "captured-head", events: [] })
-      t.mock.timers.tick(100)
-      await flushed()
-    }
-    t.mock.timers.tick(60_000)
+    batch(calls[0], "head")
+    await advanced(t)
+    t.mock.timers.tick(59_900)
     await failed
     assert.equal(calls[stalledClose].closed, 1)
     assert.equal(calls[stalledClose].options.signal.aborted, true)

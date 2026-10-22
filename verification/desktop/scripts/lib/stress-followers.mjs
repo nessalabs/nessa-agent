@@ -34,16 +34,14 @@ const isRefusal = (error) =>
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** Replay to the captured committed checkpoint, never treating quiet as completion. */
+/** Replay until its applied checkpoint equals a freshly captured committed head. */
 export async function replayEvents(client, conversationId) {
   const ids = []
   const controller = new AbortController()
   const { signal } = controller
   const opened = new Set()
-  let head
-  let cursor
   let ended = null
-  let phase = "head capture"
+  let phase = "replay to checkpoint"
   let timer
   const deadline = new Promise((_, reject) => {
     timer = setTimeout(() => {
@@ -72,41 +70,51 @@ export async function replayEvents(client, conversationId) {
     if (ended) throw new Error(`a replay of ${conversationId} ended ${ended.reason}`)
   }
   const replay = async () => {
-    // The default event start is Now: its first batch checkpoints the captured
-    // committed head. SDK Idle emits that outer-save boundary after replay too.
-    // Compare opaque cursors unchanged; neither a page nor silence proves Idle.
-    const capture = await open({
-      batch(batch) {
-        head ??= batch.cursor
-      },
-      ended(end) {
-        ended = end
-      },
-    })
-    await wait(() => head !== undefined)
-    phase = "head capture cleanup"
-    await capture.close()
-    opened.delete(capture)
-    signal.throwIfAborted()
-    phase = "replay to captured head"
-    const subscription = await open(
-      {
+    let after
+    while (true) {
+      signal.throwIfAborted()
+      phase = "replay to checkpoint"
+      let candidate
+      const subscription = await open(
+        {
+          batch(batch) {
+            if (signal.aborted || candidate !== undefined) return
+            for (const event of batch.events) ids.push(event.id)
+            // Empty is only a candidate, not proof of reaching the current head.
+            if (batch.events.length === 0) candidate = batch.cursor
+          },
+          ended(end) {
+            ended = end
+          },
+        },
+        after === undefined ? { replay: true } : { after },
+      )
+      await wait(() => candidate !== undefined)
+      phase = "replay cleanup"
+      await subscription.close()
+      opened.delete(subscription)
+      signal.throwIfAborted()
+      phase = "head capture"
+      let head
+      // Default Now emits the certified outer-save head. Capture it after the
+      // candidate: idle parking can write even after all turns are at rest.
+      const capture = await open({
         batch(batch) {
-          if (signal.aborted || cursor === head) return
-          for (const event of batch.events) ids.push(event.id)
-          cursor = batch.cursor
+          head ??= batch.cursor
         },
         ended(end) {
           ended = end
         },
-      },
-      { replay: true },
-    )
-    await wait(() => cursor === head)
-    phase = "replay cleanup"
-    await subscription.close()
-    opened.delete(subscription)
-    return ids
+      })
+      await wait(() => head !== undefined)
+      phase = "head capture cleanup"
+      await capture.close()
+      opened.delete(capture)
+      if (candidate === head) return ids
+      // Freeze callbacks at the applied candidate and resume strictly after it.
+      // A growing head shares the same overall deadline, never a fresh budget.
+      after = candidate
+    }
   }
   try {
     return await Promise.race([replay(), deadline])

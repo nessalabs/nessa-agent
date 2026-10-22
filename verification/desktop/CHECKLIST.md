@@ -32,8 +32,10 @@ Opt-in. Not part of `run-all`. The contract is
 ## Alpha startup and stress
 
 - [ ] **Follower reference replay reaches its captured head.** After background
-  turns settle, the verifier captures the default event subscription's committed
-  checkpoint, closes that source, and replays to the identical opaque cursor.
+  turns settle, the verifier replays to a checkpoint candidate, closes that
+  source, and captures the default event subscription's current committed head.
+  Exact opaque cursor equality proves convergence; otherwise it resumes strictly
+  after the applied candidate, preserving every ordered event through idle parking.
   Quiet, an intermediate empty batch, and a matching event count do not prove
   completion. Capture and replay share the existing 60-second overall deadline;
   stalled or ended streams fail, and closure is requested for every source;
