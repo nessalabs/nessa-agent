@@ -41,6 +41,7 @@ import { css, keys, selectorFor, storage } from "./lib/selectors.mjs"
 import {
   flatSurfaceFailures,
   frames,
+  hideColumns,
   openPanes,
   paneCountIs,
   settled,
@@ -893,7 +894,8 @@ const body = {
    * A non-last draft is dropped in the close, and the box stays three
    * frames. The next frame still shows that home and the unsent text.
    */
-  "draft-held": async ({ page }) => {
+  "draft-held": async ({ page, layout }) => {
+    await hideColumns(page, layout)
     const text = "unsent line"
     const before = await page.locator(css.pane).count()
     await page.keyboard.press(keys.newSessionBeside)

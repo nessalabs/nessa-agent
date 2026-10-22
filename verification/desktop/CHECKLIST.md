@@ -901,7 +901,9 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   session that is not the last pane drops the draft and its composer text
   at once and keeps the box. On the next frame that box still shows the
   home, labelled New session, with the unsent text. After the box goes,
-  the pane count is what it was before the split.
+  the pane count is what it was before the split. The check makes room for the
+  second readable pane before splitting; in columns layout it hides the session
+  list. Refusal of a split with no room remains the command's contract.
   _Check:_ `columns.mjs --only draft-held`.
 - [ ] **A removed session keeps its unsent reply until the box goes.** The
   source taking an established session out of two panes drops its composer
@@ -1316,7 +1318,9 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
   system's), and script motion follows. _Check:_ `safe-area.mjs --reduced-motion`
   and by hand; with less motion, a drag moves only the copy: `drag.mjs`
   (`reduced-motion`), and `drag.mjs --reduced-motion` for every drag check
-  with the system's reduced motion on.
+  with the system's reduced motion on. The reduced-motion landing recorder
+  retains every frame through the expected committed order, within the existing
+  3 s settlement budget; intermediate geometry and final residue still fail.
 
 ## Themes, zoom and sizes
 

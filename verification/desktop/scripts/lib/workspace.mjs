@@ -582,7 +582,41 @@ export function flatSurfaceFailures(page) {
         )
           failures.push(`a column hairline at ${l.middle} is not mid-gutter`)
       }
+      const rowGutters = panes.flatMap((above) => {
+        const below = panes
+          .filter(
+            (p) =>
+              near(p.left, above.left) &&
+              near(p.right, above.right) &&
+              p.top >= above.bottom,
+          )
+          .sort((a, b) => a.top - b.top)[0]
+        return below
+          ? [
+              {
+                middle: (above.bottom + below.top) / 2,
+                start: Math.max(
+                  s.left,
+                  ...columns.map((c) => c.middle).filter((x) => x < above.left),
+                ),
+                end: Math.min(
+                  s.right,
+                  ...columns.map((c) => c.middle).filter((x) => x > above.right),
+                ),
+              },
+            ]
+          : []
+      })
       for (const l of lines.filter((l) => l.axis === "y")) {
+        if (
+          !rowGutters.some(
+            (g) =>
+              near(l.middle, g.middle) && near(l.start, g.start) && near(l.end, g.end),
+          )
+        )
+          failures.push(
+            `a row hairline at ${l.middle} is not mid-gutter between adjoining panes`,
+          )
         const meets = (x, sides) =>
           sides.some((side) => near(x, side)) || columns.some((c) => near(x, c.middle))
         if (!meets(l.start, [s.left]) || !meets(l.end, [s.right]))
