@@ -918,7 +918,9 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   session that is not the last pane drops the draft and its composer text
   at once and keeps the box. On the next frame that box still shows the
   home, labelled New session, with the unsent text. After the box goes,
-  the pane count is what it was before the split.
+  the pane count is what it was before the split. The check closes the side
+  columns before splitting, so a narrow window still has room for the second
+  readable pane; refusal of a split with no room remains the command's contract.
   _Check:_ `columns.mjs --only draft-held`.
 - [ ] **A removed session keeps its unsent reply until the box goes.** The
   source taking an established session out of two panes drops its composer

@@ -37,7 +37,7 @@ import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { css, keys, selectorFor, storage } from "./lib/selectors.mjs"
-import { frames, settled, openPanes } from "./lib/workspace.mjs"
+import { frames, settled, openPanes, hideColumns } from "./lib/workspace.mjs"
 
 const checks = [
   "no-overlap",
@@ -862,7 +862,8 @@ const body = {
    * A non-last draft is dropped in the close, and the box stays three
    * frames. The next frame still shows that home and the unsent text.
    */
-  "draft-held": async ({ page }) => {
+  "draft-held": async ({ page, layout }) => {
+    await hideColumns(page, layout)
     const text = "unsent line"
     const before = await page.locator(css.pane).count()
     await page.keyboard.press(keys.newSessionBeside)
