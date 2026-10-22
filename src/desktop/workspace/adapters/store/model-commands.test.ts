@@ -294,6 +294,18 @@ describe("model choices", () => {
     expect(asked(source, "send").at(-1)?.[1]).toMatchObject({ model: next })
   })
 
+  it("holds a send with a staged pick while this window's access change is on its way", async () => {
+    const { source, store } = await ready()
+    store.dispatch(changeModel({ sessionId: "a", model: astra }))
+    store.dispatch(workspaceActions.accessChanging({ sessionId: "a", mode: "auto" }))
+    store.dispatch(setComposerText({ sessionId: "a", text: "waits" }))
+    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
+    expect(await send(store, "waits")).toBe("not-asked")
+    expect(store.getState().workspace.composerText.a).toBe("waits")
+    expect(store.getState().workspace.outbox.a ?? []).toEqual([])
+    expect(asked(source, "setModel")).toHaveLength(0)
+  })
+
   it("holds a send while the source says a model change is pending", async () => {
     const { source, store } = await ready()
     source.emit({

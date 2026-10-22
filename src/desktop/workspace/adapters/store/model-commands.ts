@@ -27,10 +27,15 @@ import { workspaceActions } from "./slice"
 export function modelChanging(state: WorkspaceState, sessionId: string): boolean {
   const choice = entry(state.modelChoices, sessionId)
   const source = entry(state.transcripts, sessionId)
+  // A model still to be asked for waits for this window's own access change
+  // too, which the source cannot say is on its way until it answers.
+  const applying =
+    !!entry(state.stagedModels, sessionId) || modelUnsettled(state, sessionId)
   return (
     choice?.state === "asking" ||
     !!source?.modelControl?.pending ||
-    !!source?.access?.changing
+    !!source?.access?.changing ||
+    (applying && entry(state.accessChoices, sessionId)?.state === "changing")
   )
 }
 
