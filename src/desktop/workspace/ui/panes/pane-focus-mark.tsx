@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from "react"
+import { useLayoutEffect, useState } from "react"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
 import { HeaderSliver } from "../../../ui/header-art"
 import { focusedPaneAttribute } from "../../adapters/dom/focus"
@@ -54,10 +54,13 @@ export function FocusedSliver({ paneKey }: { paneKey: PaneKey }) {
   const [moving, setMoving] = useState(
     () => selectFocusedPaneKey(store.getState()) === paneKey,
   )
-  useEffect(() => {
+  useLayoutEffect(() => {
     let active = true
     let frame = 0
     let movingNow = selectFocusedPaneKey(store.getState()) === paneKey
+    // A replacement owner starts from its own focus before paint. Later
+    // changes still wait for their requested frame.
+    setMoving(movingNow)
     const unsubscribe = store.subscribe(() => {
       const next = selectFocusedPaneKey(store.getState()) === paneKey
       if (next === movingNow) return

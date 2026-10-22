@@ -127,3 +127,36 @@ it.each(["store", "layout"])(
     }
   },
 )
+
+it("initializes a replacement store's sliver before its later focus paint", async () => {
+  const previous = await twoPanes()
+  previous.dispatch(focusPane({ pane: 2 }))
+  await act(async () =>
+    root.render(
+      <Provider store={previous}>
+        <Page />
+      </Provider>,
+    ),
+  )
+  expect(marked()).toBe(true)
+  expect(moving()).toBe("true")
+  const replacement = await twoPanes()
+  await act(async () =>
+    root.render(
+      <Provider store={replacement}>
+        <Page />
+      </Provider>,
+    ),
+  )
+  expect(marked()).toBe(false)
+  expect(moving()).toBe("false")
+  expect(frames.pending()).toBe(0)
+  await act(async () => {
+    replacement.dispatch(focusPane({ pane: 2 }))
+  })
+  expect(marked()).toBe(false)
+  expect(moving()).toBe("false")
+  await act(async () => frames.runFrame())
+  expect(marked()).toBe(true)
+  expect(moving()).toBe("true")
+})
