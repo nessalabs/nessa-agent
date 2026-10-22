@@ -160,6 +160,8 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `agents.subscribe` | `subscription` | Ordinary | ConnectionOwned | FollowAgents |
 | `agents.unsubscribe` | `subscription` | Ordinary | ConnectionOwned | UnsubscribeAgents |
 | `conversation.setApprovalMode` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
+| `conversation.switchAgent` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
+| `conversation.fork` | `conversation` | Ordinary | Requests | Request(CatalogueWrite), then Act on the source (its owner only) |
 | `agents.installOptions` | `agent_install` | Ordinary | Requests | Manifest |
 | `agents.install` | `agent_install` | Ordinary | Requests | Request(CatalogueWrite) |
 | `conversation.catalogueHead` | `catalogue_read` | Record | RecordReads | PassiveCatalogue |

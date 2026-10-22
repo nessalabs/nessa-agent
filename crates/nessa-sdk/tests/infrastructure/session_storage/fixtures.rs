@@ -41,6 +41,7 @@ pub(super) fn input_record(name: &str, bytes: usize) -> InvocationRecord {
         actor: ActionContext::new("user", "phone", "send").unwrap(),
         initiation: Initiation::owner(),
         notes: Vec::new(),
+        handoff: None,
         acknowledgement: SubmissionAcknowledgement::Pending,
         events: Vec::new(),
         scheduling: Vec::new(),

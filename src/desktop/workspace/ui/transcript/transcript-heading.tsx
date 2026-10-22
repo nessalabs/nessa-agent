@@ -2,7 +2,8 @@ import { conversationLeasePlace, conversationLeaseStatus } from "@nessa/client"
 import type { RefObject } from "react"
 import type { TranscriptLease } from "../../model/transcript"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
-import { selectChannel, selectSession } from "../../adapters/store/selectors"
+import { selectChannel } from "../../adapters/store/selectors"
+import { useRememberedSession } from "../../adapters/store/remembered-session"
 import { revealSession } from "../../adapters/store/commands"
 import { useNow } from "../../../../clock"
 import { startedLabel } from "../../model/time-labels"
@@ -38,7 +39,7 @@ export function TranscriptHeading({
 }) {
   const dispatch = useWorkspaceDispatch()
   const frame = useWorkspaceFrame()
-  const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
+  const session = useRememberedSession(sessionId)
   const channel = useWorkspaceSelector((state) =>
     session ? selectChannel(state, session.channelId) : undefined,
   )

@@ -277,6 +277,8 @@ export async function startLocalGateway(o) {
               model: o.model,
               toolsEnabled: true,
             },
+            // Other agents the gateway may carry a conversation on under.
+            ...o.runtimes,
           },
         },
         ...(o.limits ? { limits: o.limits } : {}),

@@ -7,11 +7,11 @@ use nessa_sdk::{
             IncomingElicitationCapability, ModelSwitchReportingCapability,
             NativeHookSuppressionCapability, OperationCapabilities, PermissionDeferralCapability,
             PermissionDenialCapability, PolicyCloseSessionCapability, PolicyEndTurnCapability,
-            PreToolPolicyCapability,
+            PreToolPolicyCapability, ProviderIdentity,
         },
         sessions::{
-            ArtifactRecord, CommittedViewState, NoteDelivery, NoteRecord, NoteRetirementReason,
-            NoteState, SessionSnapshot,
+            ArtifactRecord, CommittedViewState, HandoffKind, HandoffRecord, NoteDelivery,
+            NoteRecord, NoteRetirementReason, NoteState, SessionSnapshot,
         },
     },
     domain::agent_execution::{
@@ -85,6 +85,10 @@ pub struct ConversationView {
     /// [`MAX_VIEW_NOTES`](super::projection::MAX_VIEW_NOTES) in the order
     /// they were left. Empty before any was left.
     pub notes: Vec<ConversationNote>,
+    /// Switches and the fork the conversation began as, in the order they
+    /// were recorded, at most [`MAX_VIEW_HANDOFFS`](super::projection::MAX_VIEW_HANDOFFS),
+    /// the newest. Empty before any.
+    pub handoffs: Vec<ConversationHandoff>,
     /// Records this read could not apply, oldest first, at most 32. Empty
     /// when every record could be read. Always sent, including when empty,
     /// and a chat with no turns may still list these.
@@ -1026,6 +1030,106 @@ pub enum ConversationNoteRetiredReason {
     Expired,
     PermissionLost,
 }
+/// A point after which the conversation's agent ran in a native session that
+/// had not seen the turns before it: a switch to another agent or model, or
+/// the fork the conversation began as. The first turn after it was given
+/// those turns as text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationHandoff {
+    pub handoff_id: String,
+    pub kind: ConversationHandoffKind,
+    pub at_ms: u64,
+    /// The last turn the conversation held when it was recorded, which it is
+    /// shown after; absent before any turn, as a fork always is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_execution_id: Option<String>,
+    /// A switch's agent and model before and after it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<ConversationHandoffAgent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<ConversationHandoffAgent>,
+    /// A fork's copied turns, oldest first; empty for a switch.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<ConversationCarriedTurn>,
+    /// Copied turns left out: by the copy's own bounds, or by this view's.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub omitted_turns: u32,
+}
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+impl ConversationHandoff {
+    /// `handoff` as a view shows it.
+    pub fn of(handoff: &HandoffRecord) -> Self {
+        let agent = |identity: &ProviderIdentity| ConversationHandoffAgent {
+            agent: AgentId::of_provider(identity.name()).map(|agent| agent.name().into()),
+            model: identity.model_id().into(),
+        };
+        let (kind, from, to, turns, omitted_turns) = match &handoff.kind {
+            HandoffKind::Switch { before, after } => (
+                ConversationHandoffKind::Switch,
+                Some(agent(before)),
+                Some(agent(after)),
+                Vec::new(),
+                0,
+            ),
+            HandoffKind::Fork { history, .. } => (
+                ConversationHandoffKind::Fork,
+                None,
+                None,
+                history
+                    .turns()
+                    .iter()
+                    .map(|turn| ConversationCarriedTurn {
+                        said: turn.said().map(Into::into),
+                        reply: turn.reply().map(Into::into),
+                    })
+                    .collect(),
+                history.omitted(),
+            ),
+        };
+        Self {
+            handoff_id: handoff.id.as_str().into(),
+            kind,
+            at_ms: handoff.at_ms,
+            after_execution_id: handoff
+                .after_execution
+                .as_ref()
+                .map(|turn| turn.as_str().into()),
+            from,
+            to,
+            turns,
+            omitted_turns,
+        }
+    }
+}
+/// Which handoff it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationHandoffKind {
+    Switch,
+    Fork,
+}
+/// An agent and model a switch left or went to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationHandoffAgent {
+    /// The agent, when the history's provider is one Nessa has.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    pub model: String,
+}
+/// One turn a fork copied: what was said, and the agent's final reply.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationCarriedTurn {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub said: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+}
+
 /// Who left a note: under which authority, from which surface.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

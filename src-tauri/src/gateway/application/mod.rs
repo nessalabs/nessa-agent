@@ -16,6 +16,8 @@ pub(crate) use ports::testing;
 pub use ports::GatewayLifecycleRecovery;
 #[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
 pub use ports::GatewayStopProofToken;
+#[cfg(any(target_os = "macos", test))]
+pub(crate) use ports::StageMessage;
 pub use ports::{
     ClaudeConfigurationChangeError, ClaudeDirectoryReplacement, ClaudeDirectorySettings,
     ClaudeSettingsPublishError, GatewayError, GatewayHost, GatewayPhysicalResult,
@@ -28,5 +30,7 @@ pub use ports::{
     ReconciledGateway, StartupStep, SystemMonotonicClock,
 };
 #[cfg(any(target_os = "macos", test))]
-pub use ports::{DeferredStageLaunch, DeferredStageReporter};
+pub use ports::{
+    DeferredStageLaunch, DeferredStageReporter, RuntimeCopyPhase, RuntimeCopyProgress,
+};
 pub use service::{Gateway, GatewayRuntimeDependencies};

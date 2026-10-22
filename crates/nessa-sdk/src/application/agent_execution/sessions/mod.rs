@@ -66,6 +66,9 @@
 //! evidence; snapshots expose only committed state. Adapters choose its encoding.
 //! `app_sources` owns which apps a message may name: MCP tool calls the
 //! session recorded before it, asked at admission and of restored history.
+//! `handoffs` owns forks and agent switches: the point after which the agent
+//! runs in a native session that has not seen the turns before it, the turn
+//! that takes it, and the earlier turns that turn is given.
 //! `steering_position` owns where a steered message stands in its target turn:
 //! taken at admission from the target's saved events, and read once from saved
 //! history for restoration, replay, `app_sources` and provider correlation
@@ -84,6 +87,7 @@ pub use events::{
     EventReadLimits, EventStart,
 };
 mod fetches;
+mod handoffs;
 mod leases;
 mod manager;
 mod message_commit_clock;
@@ -107,6 +111,7 @@ pub use transcript::{
 pub(crate) mod validation;
 pub use artifacts::{ArtifactName, ArtifactRecord, ArtifactValueError, PublishedFile};
 pub use fetches::{EnvironmentFetchRefusal, EnvironmentPath, FetchOutcome, FetchRefusalReason};
+pub use handoffs::{HandoffId, HandoffIntent, HandoffKind, HandoffRecord};
 pub use leases::{CurrentLease, CurrentLeaseState, LeaseRecord};
 pub use manager::{
     ArtifactRecordError, LeaseCommit, LeaseRecordError, NoteRecordError, SessionManager,

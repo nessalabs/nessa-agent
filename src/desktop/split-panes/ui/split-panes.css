@@ -68,7 +68,8 @@
   min-width: 0;
 }
 
-/* A pane at its placement: the frame's custom properties, as the grid's fractions. */
+/* A pane at its placement: the frame's custom properties, as the grid's
+   fractions. `paneBox` in model/pane-sizing.ts computes this same box. */
 .split-panes-grid > [data-pane-key] {
   position: absolute;
   left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g));
@@ -198,6 +199,11 @@
    copy rasters it under the glass blur (`styles.test.ts`). */
 .split-panes-ghost:not([data-drag-waiting]) {
   will-change: transform;
+}
+
+/* The night scene is a full-window raster. The copy moves without painting it. */
+.split-panes-ghost .desktop-night-scene {
+  content-visibility: hidden;
 }
 
 /* Made as the press begins, it waits on the page unseen until the press becomes a drag. */

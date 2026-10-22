@@ -78,6 +78,7 @@ pub(super) fn turn(id: &str, message: UserMessage, tools: Vec<ToolCallUpdate>) -
         actor: ActionContext::new("user", "test", "invoke").unwrap(),
         initiation: Initiation::owner(),
         notes: Vec::new(),
+        handoff: None,
         acknowledgement: SubmissionAcknowledgement::Pending,
         events,
         scheduling: Vec::new(),
@@ -99,6 +100,7 @@ pub(super) fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
         queue_history: Vec::new(),
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     }
 }

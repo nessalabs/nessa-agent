@@ -7,6 +7,7 @@ import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
 import { sharedPackages, viteAliases } from "./scripts/nessa-ui-paths.mjs"
+import { limitGroupSelectors } from "./src/desktop/limit-group-selectors"
 import { appSandbox } from "./src/desktop/widgets/app/sandbox/serve"
 import { embedLoadFallback } from "./src/host/load-fallback.mjs"
 import { gatewayOrigin, parseStage } from "./src/env/gateway-ports"
@@ -87,6 +88,18 @@ export default defineConfig({
     },
     react(),
     tailwindcss(),
+    // After Tailwind. A group variant's `*` restyles every descendant of a
+    // hovered pane; the utility is the subject instead (`limit-group-selectors.ts`).
+    {
+      name: "limit-group-selectors",
+      transform(code, id) {
+        if (!id.includes(".css")) return
+        if (!code.includes(":is(:where(")) return
+        const next = limitGroupSelectors(code)
+        if (next === code) return
+        return { code: next, map: null }
+      },
+    },
     // The MCP Apps sandbox proxy's own origin, beside the dev server.
     appSandbox(
       readFileSync(

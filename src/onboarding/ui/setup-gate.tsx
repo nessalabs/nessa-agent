@@ -5,6 +5,7 @@ import { Onboarding, SETUP_HEADING_ID } from "./onboarding"
 import { SetupChrome } from "./setup-chrome"
 import { useIntroSound } from "./use-intro-sound"
 import { useOnboarding } from "./use-onboarding"
+import { useRuntimeCopy } from "./use-runtime-copy"
 import { useSetupHandoff } from "./use-setup-handoff"
 import type { AgentApiKeySink, AgentReadinessSource } from "../application/ports"
 import type { SetupRecovery } from "../application/setup-recovery"
@@ -144,6 +145,7 @@ export function SetupGate({
   onHandOver?: (agent: string) => void
 }) {
   const onboarding = useOnboarding(agents)
+  const runtimeCopy = useRuntimeCopy()
   useIntroSound(onboarding.active)
   // What the end of setup does to this window, and what it leaves on screen.
   // Kept out here so everything below is a function of what it reports, and
@@ -240,6 +242,7 @@ export function SetupGate({
           gatewayStartup={onboarding.gatewayStartup}
           checking={onboarding.checking}
           platform={onboarding.platform}
+          runtimeCopy={runtimeCopy}
         />
       </div>
     </div>

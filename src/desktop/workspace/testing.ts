@@ -326,6 +326,14 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
           session: { ...session, title, revision: session.revision + 1 },
         })
       }),
+    fork: (sessionId, initiator) =>
+      answer("fork", [sessionId, initiator], () => {
+        const session = summaries.get(sessionId)
+        if (!session) throw new WorkspaceSourceError("unknown-session")
+        const forked = `${sessionId}-fork`
+        emit({ kind: "session", session: { ...session, id: forked, revision: 1 } })
+        return forked
+      }),
     delete: (sessionId, initiator) =>
       answer("delete", [sessionId, initiator], () => {
         const session = summaries.get(sessionId)

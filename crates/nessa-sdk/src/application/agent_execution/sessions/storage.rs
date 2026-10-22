@@ -3,8 +3,8 @@
 
 use super::{
     ArtifactRecord, CommittedEventReader, CommittedStatus, CommittedViewState, CurrentLease,
-    EventFuture, EventReadError, EventStart, LeaseRecord, NoteDelivery, NoteId, NoteRecord,
-    NoteRetiredRecord, NoteState,
+    EventFuture, EventReadError, EventStart, HandoffId, HandoffRecord, LeaseRecord, NoteDelivery,
+    NoteId, NoteRecord, NoteRetiredRecord, NoteState,
 };
 use crate::application::agent_execution::agents::{AgentError, DiagnosticTreeLimits};
 use crate::application::agent_execution::executions::{
@@ -451,6 +451,9 @@ pub struct SessionSnapshot {
     /// Notes left in the conversation, oldest first: append-only, at most
     /// [`NoteRecord::MAX_PER_CONVERSATION`].
     pub notes: Vec<NoteRecord>,
+    /// Forks and agent switches, oldest first: append-only, at most
+    /// [`HandoffRecord::MAX_PER_CONVERSATION`].
+    pub handoffs: Vec<HandoffRecord>,
 }
 
 /// One SDK decision retained for an atomic semantic-record save.
@@ -579,6 +582,12 @@ pub enum SessionChange {
     /// against the notes before it is committed and again when it is read
     /// back.
     NoteRetired(NoteRetiredRecord),
+    /// A fork or an agent switch: from here on the agent runs in a native
+    /// session that has not seen the turns before it. A switch also moves
+    /// [`SessionSnapshot::provider`] to its `after` and clears the earlier
+    /// provider's model and configuration choices. Checked against the
+    /// handoffs before it is committed and again when it is read back.
+    Handoff(HandoffRecord),
 }
 impl SessionSnapshot {
     pub(crate) fn retained_bytes(&self) -> usize {
@@ -686,6 +695,10 @@ pub struct InvocationRecord {
     /// saving this record. The conversation chooses them at admission; a
     /// retry finds them here and chooses nothing again.
     pub notes: Vec<NoteId>,
+    /// The handoff this turn took, assigned by saving this record: the first
+    /// turn admitted after a fork or an agent switch takes it, and is given
+    /// the turns before it when it is dispatched. A retry finds it here.
+    pub handoff: Option<HandoffId>,
     /// Independent audit and durable-write acknowledgement for admission or
     /// confirmed native injection. This fact is retained even when delivery or
     /// execution has no terminal result.
@@ -1276,6 +1289,7 @@ mod committed_tests {
                 actor: ActionContext::new("user", "surface", "request").unwrap(),
                 initiation: Initiation::owner(),
                 notes: Vec::new(),
+                handoff: None,
                 acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling: Vec::new(),
@@ -1288,6 +1302,7 @@ mod committed_tests {
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
+            handoffs: Vec::new(),
             notes: Vec::new(),
         };
         let before = super::super::retained::snapshot(&snapshot);

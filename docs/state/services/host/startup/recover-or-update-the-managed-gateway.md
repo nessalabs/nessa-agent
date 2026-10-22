@@ -32,7 +32,7 @@ diagramLinks: {}
 
 The native host starts or reconciles the configured gateway. It reports starting, ready or failed. Ready requires a matching service process and live gateway identity, rather than just an HTTP response.
 
-Panel and setup credential loads check readiness again. The desktop window only reads the ready startup snapshot; it does not reconcile the gateway. If that snapshot is starting or failed, its read is refused. Recovery observes recorded progress before repeating effects, and old processes must be safely retired. A failure can preserve the existing service for investigation. Browser and unmanaged debug paths have no native service owner. Configuration-change handling exists as a test path, not a live settings subscription.
+Panel and setup credential loads check readiness again. The desktop window only reads the ready startup snapshot; it does not reconcile the gateway. While the snapshot is starting, its read is held until it is ready, up to a bounded wait; a failed snapshot, or one still starting when the wait ends, is refused. Recovery observes recorded progress before repeating effects, and old processes must be safely retired. A failure can preserve the existing service for investigation. Browser and unmanaged debug paths have no native service owner. Configuration-change handling exists as a test path, not a live settings subscription.
 
 ```mermaid
 stateDiagram-v2

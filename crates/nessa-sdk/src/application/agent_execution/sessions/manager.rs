@@ -5,11 +5,12 @@ use super::{
     notes::{NoteAdmission, NoteRefusal, NoteSelection},
     records::{continuation::Continuation, AppliedUnits},
     steering_position::SteeringPosition,
-    ArtifactRecord, CurrentLease, InvocationCancellationEvent, InvocationRecord,
-    InvocationSchedulingEvent, LeaseRecord, MessageCommitClock, MessageCommitSleep, NoteCandidates,
-    NoteRecord, NoteRequest, ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState,
-    SessionSaveGeneration, SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease,
-    StorageError, StorageFuture, SubmissionAcknowledgement,
+    ArtifactRecord, CurrentLease, HandoffId, HandoffIntent, HandoffRecord,
+    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, LeaseRecord,
+    MessageCommitClock, MessageCommitSleep, NoteCandidates, NoteRecord, NoteRequest,
+    ProviderContext, QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveGeneration,
+    SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+    StorageFuture, SubmissionAcknowledgement,
 };
 use crate::application::agent_execution::agents::OwnedCleanupScope;
 use crate::application::agent_execution::{
@@ -34,7 +35,7 @@ use crate::domain::agent_execution::{
         QueueOrderChange, SchedulingCause,
     },
     permissions::PermissionRequest,
-    prompts::NoteContext,
+    prompts::{CarriedHistory, NoteContext},
     sessions::SessionId,
 };
 use std::{
@@ -256,6 +257,11 @@ pub struct SessionManager {
     // a crash before that save leaves the durable identity unchanged, so the
     // next open takes the same path (docs/design/restoration-fingerprint.md, S6).
     open_fresh_context: AtomicBool,
+    // What the host asked the next preparation to record (`expect_handoff`),
+    // taken by prepare. A switch it accepted waits here for attach, which
+    // saves it with the new native session's id (docs/design/conversation-handoffs.md).
+    handoff: std::sync::Mutex<Option<HandoffIntent>>,
+    switching: std::sync::Mutex<Option<(ActionContext, u64)>>,
 }
 #[derive(Clone, Copy)]
 enum ObservationAuthority {
@@ -387,7 +393,30 @@ impl SessionManager {
             dispatched: RwLock::new(HashMap::new()),
             attachment: Arc::new(AttachmentLease::empty()),
             open_fresh_context: AtomicBool::new(false),
+            handoff: std::sync::Mutex::new(None),
+            switching: std::sync::Mutex::new(None),
         })
+    }
+    /// Ask the next preparation of this conversation to record `intent`: a
+    /// fork, for a conversation being created, or an agent switch, for one
+    /// whose history holds another provider name or model than the provider
+    /// it is prepared with. Without it, that second case is refused as
+    /// [`StorageError::IdentityMismatch`] and nothing is launched.
+    ///
+    /// A fork is saved with the conversation's first records, before any
+    /// provider opens. A switch is saved with the new native session's id
+    /// once it exists, in one write, so a crash before then leaves the
+    /// history on its earlier provider. The host finds either again with
+    /// [`SessionSnapshot::handoff`] under the intent's actor. A retry of the
+    /// same fork, on a conversation that already holds it, records nothing
+    /// again; any other existing conversation refuses a fork.
+    pub fn expect_handoff(&mut self, intent: HandoffIntent) {
+        *self.handoff.get_mut().expect("handoff intent") = Some(intent);
+    }
+    /// Whether the preparation accepted a switch that attach has not saved
+    /// yet: the history's saved settings name the earlier provider.
+    pub(crate) fn switching(&self) -> bool {
+        self.switching.lock().expect("switch").is_some()
     }
     /// Returns the local conversation key used to acquire storage access.
     pub fn id(&self) -> &SessionId {
@@ -662,31 +691,64 @@ impl SessionManager {
             saved.into_checked(&self.id).map_err(AgentError::Storage)?;
         let compacted = saved;
         let identity = provider.identity();
-        // Provider preparation follows the restoration-fingerprint table. A
-        // lease-only cleanup record neither changes provider identity nor
-        // cancels an already selected fresh-context attachment.
-        if preparation == Preparation::Provider {
+        // A different provider name or model is refused before launch (S1,
+        // S2). A fingerprint change where the saved context is not restored
+        // here is saved now (S5): the next open still cannot resume it. A
+        // fingerprint change where it would be resumed is not saved yet (S6).
+        // attach opens a new native session and writes the new fingerprint
+        // with that session's id. docs/design/restoration-fingerprint.md.
+        // Lease-only cleanup evidence cannot consume a pending handoff or
+        // cancel the fresh-context attachment selected by provider preparation.
+        let intent = if preparation == Preparation::Provider {
             self.open_fresh_context.store(false, Ordering::Relaxed);
+            *self.switching.lock().expect("switch") = None;
+            self.handoff.get_mut().expect("handoff intent").take()
+        } else {
+            None
+        };
+        // A handoff the host asked for, checked against what the history
+        // holds before anything is written (docs/design/conversation-handoffs.md).
+        match (&intent, &compacted) {
+            (Some(HandoffIntent::Switch { .. }), None) => {
+                return Err(AgentError::InvalidInput(
+                    "a conversation with no history has nothing to switch".into(),
+                ));
+            }
+            (Some(HandoffIntent::Fork { actor, .. }), Some(snapshot))
+                if !forks_into(snapshot, actor) =>
+            {
+                return Err(AgentError::InvalidInput(
+                    "only a new conversation can be forked into".into(),
+                ));
+            }
+            _ => {}
         }
         let moved = match (&compacted, preparation) {
             (Some(snapshot), Preparation::Provider) if snapshot.provider != identity => {
-                if snapshot.provider.name() != identity.name()
-                    || snapshot.provider.model_id() != identity.model_id()
-                {
-                    return Err(AgentError::Storage(StorageError::IdentityMismatch));
-                }
-                let restores = snapshot
-                    .provider_context
-                    .recorded()
-                    .is_some_and(|saved| provider.restores_saved_context(saved));
-                if restores {
+                if super::handoffs::switches(&snapshot.provider, &identity) {
+                    // S1 and S2, unless the host asked for this switch: then
+                    // a new native session is opened as in S6, and attach
+                    // saves the switch with its id.
+                    let Some(HandoffIntent::Switch { actor, at_ms }) = &intent else {
+                        return Err(AgentError::Storage(StorageError::IdentityMismatch));
+                    };
                     self.open_fresh_context.store(true, Ordering::Relaxed);
+                    *self.switching.lock().expect("switch") = Some((actor.clone(), *at_ms));
                     None
                 } else {
-                    Some(SessionChange::ProviderIdentityChanged {
-                        before: snapshot.provider.clone(),
-                        after: identity.clone(),
-                    })
+                    let restores = snapshot
+                        .provider_context
+                        .recorded()
+                        .is_some_and(|saved| provider.restores_saved_context(saved));
+                    if restores {
+                        self.open_fresh_context.store(true, Ordering::Relaxed);
+                        None
+                    } else {
+                        Some(SessionChange::ProviderIdentityChanged {
+                            before: snapshot.provider.clone(),
+                            after: identity.clone(),
+                        })
+                    }
                 }
             }
             _ => None,
@@ -709,6 +771,32 @@ impl SessionManager {
         } else {
             Vec::new()
         };
+        // A fork's copy is the first thing its conversation holds, saved with
+        // its opening, or with the first opening after one that ended before
+        // saving it. Derived from the intent alone, so a retry of this plan
+        // writes the same record.
+        let forked = observed.snapshot.as_ref().is_some_and(|snapshot| {
+            matches!(&intent, Some(HandoffIntent::Fork { actor, .. })
+                if snapshot.handoff(actor.principal_id(), actor.request_id()).is_some())
+        });
+        if let (
+            false,
+            Some(HandoffIntent::Fork {
+                source,
+                history,
+                actor,
+                at_ms,
+            }),
+        ) = (forked, intent)
+        {
+            changes.push(SessionChange::Handoff(HandoffRecord {
+                id: HandoffId::of_request(&actor),
+                kind: super::HandoffKind::Fork { source, history },
+                actor,
+                at_ms: at_ms.min(HandoffRecord::MAX_AT_MS),
+                after_execution: None,
+            }));
+        }
         changes.extend(moved);
         if restore_queue {
             changes.push(SessionChange::QueueDecision(QueueHistoryRecord {
@@ -938,11 +1026,34 @@ impl SessionManager {
             if self.open_fresh_context.load(Ordering::Relaxed) {
                 let current = provider.identity();
                 let saved = evidence.observed().expect("prepared session evidence");
-                if saved.provider != current {
-                    changes.push(SessionChange::ProviderIdentityChanged {
-                        before: saved.provider.clone(),
-                        after: current,
-                    });
+                let switching = self.switching.lock().expect("switch").clone();
+                match switching {
+                    // The switch the host asked for, and the new native
+                    // session it goes on in, are one save.
+                    Some((actor, at_ms))
+                        if super::handoffs::switches(&saved.provider, &current) =>
+                    {
+                        changes.push(SessionChange::Handoff(HandoffRecord {
+                            id: HandoffId::of_request(&actor),
+                            kind: super::HandoffKind::Switch {
+                                before: saved.provider.clone(),
+                                after: current,
+                            },
+                            actor,
+                            at_ms: at_ms.min(HandoffRecord::MAX_AT_MS),
+                            after_execution: saved
+                                .invocations
+                                .last()
+                                .map(|turn| turn.request.execution_id.clone()),
+                        }));
+                    }
+                    _ if saved.provider != current => {
+                        changes.push(SessionChange::ProviderIdentityChanged {
+                            before: saved.provider.clone(),
+                            after: current,
+                        });
+                    }
+                    _ => {}
                 }
             }
             let before = evidence
@@ -989,6 +1100,7 @@ impl SessionManager {
         // Cleared only after the save. A failed save retries this path
         // instead of resuming the saved session under the new fingerprint.
         self.open_fresh_context.store(false, Ordering::Relaxed);
+        *self.switching.lock().expect("switch") = None;
         Ok(AttachedProvider { session, events })
     }
     pub(crate) fn attachment(&self) -> Arc<AttachmentLease> {
@@ -1050,6 +1162,13 @@ impl SessionManager {
         if !request.user_message.notes().is_empty() {
             return Err(AgentError::InvalidInput(
                 "a submitted message carries no notes".into(),
+            ));
+        }
+        // Nor the earlier turns a handoff carries: those too come only from
+        // the records, so a caller cannot put words in the conversation's past.
+        if request.user_message.history().is_some() {
+            return Err(AgentError::InvalidInput(
+                "a submitted message carries no history".into(),
             ));
         }
         request.validate_message_size()?;
@@ -1120,6 +1239,9 @@ impl SessionManager {
                 actor,
                 initiation,
                 notes: taken,
+                // The first turn saved after a fork or a switch takes it,
+                // whatever its kind: it is the first to run in that session.
+                handoff: super::handoffs::select(snapshot),
                 acknowledgement: SubmissionAcknowledgement::Pending,
                 events: Vec::new(),
                 scheduling,
@@ -2095,6 +2217,33 @@ impl SessionManager {
             })
             .collect()
     }
+    /// The earlier turns the saved turn at `index` is given, when it took a
+    /// fork or an agent switch and there is anything to give: what the fork
+    /// copied, then every turn saved before it, the newest that fit. Read
+    /// from the records each time, so a retry is given the same.
+    pub(crate) async fn carried_history(
+        &self,
+        index: usize,
+    ) -> Result<Option<CarriedHistory>, StorageError> {
+        let evidence = self.evidence.lock().await;
+        let snapshot = evidence
+            .observed()
+            .ok_or_else(|| StorageError::Corrupt("a turn's history has no session".into()))?;
+        let record = snapshot
+            .invocations
+            .get(index)
+            .ok_or_else(|| StorageError::Corrupt("a turn's history has no saved turn".into()))?;
+        let Some(id) = &record.handoff else {
+            return Ok(None);
+        };
+        if !snapshot.handoffs.iter().any(|handoff| &handoff.id == id) {
+            return Err(StorageError::Corrupt(
+                "a turn takes a handoff not saved".into(),
+            ));
+        }
+        let history = super::handoffs::history_before(snapshot, index);
+        Ok((!history.is_empty()).then_some(history))
+    }
     pub(crate) fn retire_observations(&self, id: &ExecutionId) {
         if let Some(authority) = self
             .dispatched
@@ -2568,6 +2717,16 @@ where
         _ => Err(StorageError::Io(
             "session storage operation panicked".into(),
         )),
+    }
+}
+
+/// Whether a fork asked for by `actor` may go into `snapshot`: it is already
+/// recorded there, or the conversation holds nothing yet that a fork must
+/// come before (an opening that ended before saving the fork leaves just that).
+fn forks_into(snapshot: &SessionSnapshot, actor: &ActionContext) -> bool {
+    match snapshot.handoff(actor.principal_id(), actor.request_id()) {
+        Some(handoff) => matches!(handoff.kind, super::HandoffKind::Fork { .. }),
+        None => snapshot.invocations.is_empty() && snapshot.handoffs.is_empty(),
     }
 }
 

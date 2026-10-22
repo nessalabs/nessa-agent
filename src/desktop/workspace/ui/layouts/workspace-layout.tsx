@@ -32,6 +32,7 @@ import {
   WorkspaceFrameProvider,
 } from "../workspace-frame"
 import type { WorkspaceWindowModel } from "./use-workspace-window"
+import { ColumnFit, FoldMark, ListMeasureHold } from "./column-paint"
 import { ContentMark } from "./content-mark"
 import { SwitcherHost } from "./switcher-host"
 import "../chrome/chrome.css"
@@ -79,6 +80,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
     listedChannel,
     sidebarWidth,
     listWidth,
+    windowWidth,
     switcher,
     compose,
     composeShortcut,
@@ -204,6 +206,13 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       )}
                     </WorkspaceTitlebar>
                     <ContentMark root={root} />
+                    <ColumnFit
+                      windowWidth={windowWidth}
+                      sidebarWidth={sidebarWidth}
+                      listWidth={listWidth}
+                    />
+                    <ListMeasureHold root={root} />
+                    <FoldMark root={root} />
                     <Columns
                       region={region}
                       sidebarOpen={sidebarOpen}
@@ -273,7 +282,7 @@ const Columns = memo(function Columns({
   const limits = region.sidebar.limits
   return (
     <>
-      <SourceList variant={region.sidebar.variant} top={top} />
+      <SourceList variant={region.sidebar.variant} open={sidebarOpen} top={top} />
       {sidebarOpen ? (
         <ResizeEdge
           label="Resize Sidebar"

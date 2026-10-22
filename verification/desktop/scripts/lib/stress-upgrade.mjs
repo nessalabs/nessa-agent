@@ -11,6 +11,9 @@
  *   version 7   the build that added `model_requests` without raising the
  *               version, when it holds rows
  *
+ * Each needs `agent_switches` empty, which version 9 added: a file with a
+ * switch in it is left as it is, the newest build's.
+ *
  * The gateway must be stopped: this writes the file it holds.
  */
 import { readdirSync } from "node:fs"
@@ -43,9 +46,12 @@ export function asOlderBuild(path) {
   const database = new DatabaseSync(path)
   try {
     const rows = (table) => database.prepare(`SELECT count(*) AS n FROM ${table}`).get().n
+    const switches = rows("agent_switches")
+    if (switches > 0) return database.prepare("PRAGMA user_version").get().user_version
     const models = rows("model_requests")
     const turns = rows("unfinished_turns")
     database.exec("BEGIN IMMEDIATE")
+    database.exec("DROP TABLE agent_switches")
     if (models === 0) database.exec("DROP TABLE model_requests")
     if (models === 0 && turns === 0) database.exec("DROP TABLE unfinished_turns")
     const version = models === 0 && turns === 0 ? 6 : 7

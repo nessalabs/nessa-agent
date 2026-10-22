@@ -296,6 +296,15 @@ pub(super) enum ChangeUndo {
     Artifact,
     Note,
     NoteRetired(usize),
+    /// A handoff appended; a switch also carries what it replaced.
+    Handoff(Option<Box<SwitchUndo>>),
+}
+
+/// What a switch replaced in the snapshot's header.
+pub(super) struct SwitchUndo {
+    provider: ProviderIdentity,
+    model_change: Option<ModelChangeRecord>,
+    current_configuration: Option<SessionConfigurationRecord>,
 }
 
 /// Units applied to a [`continuation::Continuation`] that its owner may still
@@ -519,6 +528,7 @@ impl continuation::Continuation {
                     lease: None,
                     artifacts: Vec::new(),
                     notes: Vec::new(),
+                    handoffs: Vec::new(),
                 });
             }
             SessionChange::InputAccepted(record) => {
@@ -559,6 +569,8 @@ impl continuation::Continuation {
                 // Saving this record assigns its notes: each must be pending
                 // as the records stood when it was saved.
                 super::notes::admit_taken(snapshot, &record.notes)?;
+                // And its handoff: the latest, waiting for a turn.
+                super::handoffs::admit_taken(snapshot, record.handoff.as_ref())?;
                 if !record.events.is_empty()
                     || record.provider_report.is_some()
                     || record.local_cancellation.is_some()
@@ -1027,6 +1039,25 @@ impl continuation::Continuation {
                 snapshot.notes[index].retired = Some(record.retirement);
                 undo.push(ChangeUndo::NoteRetired(index));
             }
+            SessionChange::Handoff(record) => {
+                let snapshot = candidate
+                    .as_mut()
+                    .ok_or_else(|| corrupt("handoff record precedes session open"))?;
+                super::handoffs::admit_saved(snapshot, record)?;
+                // A switch leaves the earlier provider's choices behind: its
+                // model change and its settings name that provider, which
+                // the new native session never had.
+                let replaced = match &record.kind {
+                    super::HandoffKind::Switch { after, .. } => Some(Box::new(SwitchUndo {
+                        provider: std::mem::replace(&mut snapshot.provider, after.clone()),
+                        model_change: snapshot.model_change.take(),
+                        current_configuration: snapshot.current_configuration.take(),
+                    })),
+                    super::HandoffKind::Fork { .. } => None,
+                };
+                snapshot.handoffs.push(record.clone());
+                undo.push(ChangeUndo::Handoff(replaced));
+            }
         }
 
         Ok(())
@@ -1256,6 +1287,23 @@ impl continuation::Continuation {
             }
             ChangeUndo::NoteRetired(index) => {
                 self.snapshot.as_mut().expect("open").notes[index].retired = None;
+            }
+            ChangeUndo::Handoff(replaced) => {
+                let snapshot = self.snapshot.as_mut().expect("open");
+                let record = snapshot.handoffs.pop().expect("handoff record");
+                if let Some(replaced) = replaced {
+                    let SwitchUndo {
+                        provider,
+                        model_change,
+                        current_configuration,
+                    } = *replaced;
+                    snapshot.provider = provider;
+                    snapshot.model_change = model_change;
+                    snapshot.current_configuration = current_configuration;
+                }
+                self.snapshot_bytes = self
+                    .snapshot_bytes
+                    .saturating_sub(super::retained::handoff(&record));
             }
         }
     }

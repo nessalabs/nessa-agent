@@ -32,6 +32,15 @@ export const STRESS = {
 }
 
 /**
+ * How the first turn after a switch or a fork begins: the earlier turns the
+ * new session has not seen, as one block before the message (the SDK's
+ * `HISTORY_PREAMBLE`, `prompt_content.rs`). It quotes those turns, which can
+ * hold any phrase, so it is matched first.
+ */
+export const CARRIED =
+  "Earlier turns of this conversation, which this session has not seen"
+
+/**
  * How the gateway opens a turn it carries on after a restart. A turn the
  * check cuts off never ends on its own, so a restart can never come too late;
  * its successor is told apart by this notice and finishes.
@@ -58,6 +67,7 @@ export const SAYS = {
   long: "Long answer: ",
   window: "Window: ",
   table: "Tables: ",
+  carried: "Carried on by ",
 }
 
 /**
@@ -121,6 +131,18 @@ export function stressScenario({
   )
   return {
     turns: [
+      // Before all: the turns carried to a new session quote every phrase.
+      // It says the prompt back, so a check sees the earlier turns reached it.
+      {
+        when: CARRIED,
+        steps: [
+          {
+            do: "text",
+            chunks: [SAYS.carried, "${configuration.model}", ": ", "${prompt.text}"],
+          },
+          { do: "end" },
+        ],
+      },
       // First: a report quotes the child's reply, which can hold any phrase.
       {
         when: STRESS.report,

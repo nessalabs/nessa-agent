@@ -89,6 +89,11 @@
  *               window binds the conversation to the other, with new provider
  *               context, as the window's heading and the binding both say;
  *               both workers stop and linking is turned off again
+ *   launch      the window is reloaded while the host is still starting the
+ *               gateway: the host holds the window's read, the startup
+ *               screen never covers it, and once the gateway is up the
+ *               window lists the conversation and the message sent after
+ *               it is answered
  *   upgrade     the gateway is stopped, its conversation metadata turned
  *               back into the file an older build wrote (version 6, or 7
  *               when a newer table holds rows), and started again: it
@@ -133,6 +138,7 @@ import { basename, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
+import { MODELS } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
   SAYS,
@@ -143,7 +149,7 @@ import {
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, log } from "./lib/cli.mjs"
-import { gatewayHost } from "./lib/fake-host.mjs"
+import { gatewayHost, STARTING } from "./lib/fake-host.mjs"
 import {
   connectClient,
   panelTarget,
@@ -267,6 +273,15 @@ const LONG_CHUNK_BYTES = 300
 const FRESH_BURST = 24
 /** The clients that burst is spread over, each well within one socket's 16 requests at once. */
 const FRESH_CLIENTS = 3
+/**
+ * The `launch` step's host stays "starting" this long after the window is
+ * reloaded, well under the host's hold (`STARTING.waitMs`). A refused window
+ * covers itself with the startup screen at once, which is what the step
+ * checks; `LAUNCH_LISTED_MS` only bounds how long listing may take once the
+ * gateway is up.
+ */
+const LAUNCH_STARTING_MS = 3_000
+const LAUNCH_LISTED_MS = 10_000
 /**
  * How much longer opening the `long` conversation again may take than
  * opening one of a single long turn, both closed first so their whole saved
@@ -892,6 +907,53 @@ process.exit(result.status ?? 1)
   chmodSync(configPath, 0o600)
 }
 
+/**
+ * Whether `turn`, the first after a handoff, was the one given the earlier
+ * turns, on `model`: the scenario answers that turn alone with `SAYS.carried`
+ * and the prompt it was given, which quotes `earlier`, a message said before.
+ */
+function carriedBy(turn, model, what, earlier, failures) {
+  const said = (turn?.parts ?? [])
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("")
+  if (!said.startsWith(`${SAYS.carried}${model}: `))
+    failures.push(
+      `the first turn after ${what} said ${JSON.stringify(said.slice(0, 200))}, not that it carried the earlier turns on ${model}`,
+    )
+  else if (!said.includes(JSON.stringify(earlier)))
+    failures.push(`the first turn after ${what} was not given ${JSON.stringify(earlier)}`)
+}
+
+/**
+ * Whether the window shows, whole, the reply on `model` to `message`: it says
+ * back the prompt it answered, which ends with `message`, so no other reply
+ * quotes it, and it is shown whole once that end is.
+ */
+async function carriedShown(page, model, message) {
+  return page
+    .locator('.workspace-message[data-role="agent"]:visible')
+    .filter({ hasText: `${SAYS.carried}${model}` })
+    .filter({ hasText: message })
+    .first()
+    .waitFor({ timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false)
+}
+
+/** The scripted agent a `handoff` step switches to: the one the run does not start on. */
+function otherAgent(agent) {
+  return agent === "claude" ? "codex" : "claude"
+}
+
+/** A catalog provider's tab in the picker, as the window names it (`composer-options.ts`). */
+function providerName(provider) {
+  return (
+    { anthropic: "Anthropic", openai: "OpenAI", opencode: "OpenCode" }[provider] ??
+    provider
+  )
+}
+
 const steps = {
   async model(run, step, failures) {
     const picker = dock(run.page).locator(css.modelChip)
@@ -1464,6 +1526,66 @@ const steps = {
         return failures.length === count
       })
     })
+  },
+
+  async launch(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      const removeKey = () =>
+        page.evaluate((key) => sessionStorage.removeItem(key), STARTING.key)
+      // The window opens while the host is still starting the gateway, as at
+      // every launch: the host holds its read until the gateway is up.
+      await page.evaluate((key) => sessionStorage.setItem(key, "1"), STARTING.key)
+      let covered
+      let askedWhileStarting
+      try {
+        await page.reload()
+        // Whatever the window shows meanwhile, it is never the startup
+        // screen: the gateway did not fail, it is starting.
+        covered = await page
+          .locator(css.startupScreen)
+          .waitFor({ timeout: LAUNCH_STARTING_MS })
+          .then(() => true)
+          .catch(() => false)
+        // And the window did ask while it was starting: the hold was met.
+        askedWhileStarting = await page.evaluate(
+          () => window.__fakeHostAsked.load_gateway_endpoint,
+        )
+      } finally {
+        // Up, whatever happened: a later reload must not find it starting.
+        // A page mid-navigation refuses the evaluate; the next one may not.
+        await removeKey().catch(() => removeKey().catch(() => {}))
+      }
+      if (covered) {
+        failures.push(
+          "the window showed the startup screen while the gateway was starting",
+        )
+        return
+      }
+      if (!(askedWhileStarting > 0)) {
+        failures.push("the window did not ask for the gateway while it was starting")
+        return
+      }
+      const started = Date.now()
+      const listed = await page
+        .locator(selectorFor.sessionListRowFor(run.main.id))
+        .waitFor({ timeout: LAUNCH_LISTED_MS })
+        .then(() => true)
+        .catch(() => false)
+      if (!listed) {
+        failures.push(
+          `the window did not list the main conversation within ${LAUNCH_LISTED_MS}ms of the gateway being up`,
+        )
+        return
+      }
+      log(`launch: listed ${Date.now() - started}ms after the gateway was up`)
+      if ((await page.locator(css.startupScreen).count()) > 0) {
+        failures.push("the startup screen covers the window after the gateway was up")
+        return
+      }
+      await openStressConversation(page, run.main.id, run.main.title)
+    })
+    if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
   async rail(run, step, failures) {
@@ -2169,6 +2291,158 @@ const steps = {
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
+  /**
+   * A conversation switched to the other agent from the composer's picker,
+   * as a person does, then forked from its row's More menu. Each is talked
+   * to after: the first turn of each new session is the one given the
+   * earlier turns (`SAYS.carried`), and it runs on the agent and model
+   * asked for. The window draws a line at the switch, and the fork opens
+   * on the copied turns and a line after them.
+   */
+  async handoff(run, step, failures) {
+    const other = otherAgent(run.stack.agent)
+    const target = catalog.models.find((model) => model.modelId === MODELS[other])
+    if (!target) throw new CannotRun(`the catalog has no ${MODELS[other]}`)
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " handoff")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length || !before) return
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
+    // The other provider's tab, then its model, in the composer's picker.
+    const picker = dock(run.page).locator(css.modelChip)
+    await picker.click()
+    await run.page
+      .locator(css.modelProviderTab)
+      .filter({ hasText: providerName(target.provider) })
+      .first()
+      .click()
+    await run.page
+      .locator(css.modelOption)
+      .filter({ hasText: target.displayName })
+      .first()
+      .click()
+    const switched = await waitFor(async () => {
+      const view = await run.client.conversation.read(conversationId)
+      return view.model === target.modelId &&
+        view.handoffs.some((each) => each.kind === "switch" && each.to?.agent === other)
+        ? view
+        : null
+    }, 30_000)
+    if (!switched) {
+      failures.push(`the conversation was not switched to ${other} from the picker`)
+      return
+    }
+    const line = run.page.locator(`${css.handoffLine}[data-handoff="switch"]`)
+    if (
+      !(await line
+        .first()
+        .waitFor({ timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false))
+    )
+      failures.push("the window drew no line where the conversation was switched")
+    const afterSwitch = prompt(run, STRESS.reply, step, " after switch")
+    const seen = await send(
+      run,
+      conversationId,
+      afterSwitch,
+      failures,
+      new Set(before.messages.map((each) => each.executionId)),
+    )
+    const { turn: switchedTurn } = await settled(
+      run,
+      conversationId,
+      seen,
+      afterSwitch,
+      "completed",
+      failures,
+    )
+    carriedBy(switchedTurn, target.modelId, "the switch", first, failures)
+    if (!(await carriedShown(run.page, target.modelId, afterSwitch)))
+      failures.push("the window does not show the reply after the switch")
+    if (run.evidence)
+      await run.page.screenshot({
+        path: join(run.evidence, `handoff-${run.engine}-switch.png`),
+        scale: "css",
+      })
+    // Forked from the row: the window opens the fork, on the copied turns.
+    const listed = new Set(
+      (await run.client.conversation.list({})).conversations.map(
+        (each) => each.conversationId,
+      ),
+    )
+    await choose(run.page, conversationId, "Fork")
+    const forkId = await waitFor(async () => {
+      const { conversations } = await run.client.conversation.list({})
+      return conversations.find((each) => !listed.has(each.conversationId))
+        ?.conversationId
+    }, 15_000)
+    if (!forkId) {
+      failures.push("the gateway never listed the fork")
+      return
+    }
+    run.checked.push(forkId)
+    const forked = await run.client.conversation.read(forkId)
+    const copied = forked.handoffs.find((each) => each.kind === "fork")
+    if (forked.model !== target.modelId)
+      failures.push(`the fork runs ${forked.model}, not its source's ${target.modelId}`)
+    if (!copied || (copied.turns?.length ?? 0) !== 2)
+      failures.push(
+        `the fork copied ${copied?.turns?.length ?? "no"} turns, not the source's 2`,
+      )
+    if (forked.messages.length > 0) failures.push("the fork said something of its own")
+    if (
+      !(await run.page
+        .locator(`${css.handoffLine}[data-handoff="fork"]`)
+        .first()
+        .waitFor({ timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false))
+    )
+      failures.push("the window did not open the fork on its copied turns")
+    await expectShown(run.page, `${SAYS.echo}${first}`, failures)
+    const inFork = prompt(run, STRESS.reply, step, " in fork")
+    const forkSeen = await send(run, forkId, inFork, failures, new Set())
+    const { turn: forkTurn } = await settled(
+      run,
+      forkId,
+      forkSeen,
+      inFork,
+      "completed",
+      failures,
+    )
+    // Its own first turn ran on the same model and was given the copied turns.
+    carriedBy(forkTurn, target.modelId, "the fork", first, failures)
+    if (!(await carriedShown(run.page, target.modelId, inFork)))
+      failures.push("the window does not show the fork's own reply after the copied one")
+    if (run.evidence)
+      await run.page.screenshot({
+        path: join(run.evidence, `handoff-${run.engine}-fork.png`),
+        scale: "css",
+      })
+    // The source is as it was.
+    const source = await run.client.conversation.read(conversationId)
+    if (source.messages.length !== 2)
+      failures.push(`the fork changed its source: ${source.messages.length} turns`)
+    await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
   async delete(run, step, failures) {
     const conversationId = randomUUID()
     const first = prompt(run, STRESS.reply, step, " delete")
@@ -2849,6 +3123,8 @@ async function startStack(options) {
       model: profile.model,
       evidence: recordingDirectory,
       limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
+      // The agent a `handoff` step switches its conversation to.
+      others: knobs.handoffs > 0 ? [otherAgent(options.agent)] : [],
       // Off, at a port of its own: the `linking` step turns it on from Settings.
       native: { enabled: false, listenAddress: nativeAddress },
     })
@@ -2904,7 +3180,12 @@ await main(
         initScripts: [
           [
             gatewayHost,
-            { endpoint: stack.endpoint, credential: stack.credential, notices: true },
+            {
+              endpoint: stack.endpoint,
+              credential: stack.credential,
+              notices: true,
+              starting: STARTING,
+            },
           ],
         ],
       })

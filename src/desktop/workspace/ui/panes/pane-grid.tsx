@@ -5,10 +5,11 @@ import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
   selectFailure,
   selectFailureStages,
+  selectPaneSession,
   selectPaneWidget,
   selectWindowWidget,
 } from "../../adapters/store/selectors"
-import { paneItemKey, widgetItem } from "../../model/pane-item"
+import { paneItemKey, paneItemOf, widgetItem } from "../../model/pane-item"
 import { EmptyWorkspace } from "./empty-state"
 import { Pane } from "./pane"
 import { WidgetPane } from "./widget-pane"
@@ -54,15 +55,27 @@ const ShownPaneOf = memo(function ShownPaneOf({ placement, frame, multi }: Shown
     (state) => selectPaneWidget(state, placement.key),
     shallowEqual,
   )
-  return widget ? (
+  const sessionId = useWorkspaceSelector((state) =>
+    selectPaneSession(state, placement.key),
+  )
+  // The grid keeps a closed pane's box for three frames. The layout no
+  // longer has the key, so the box keeps the item it was placed with.
+  const held = widget === null && sessionId === null ? paneItemOf(placement.item) : null
+  const shownWidget = widget ?? (held?.kind === "widget" ? held.widget : null)
+  return shownWidget ? (
     <WidgetPane
-      key={paneItemKey(widgetItem(widget))}
+      key={paneItemKey(widgetItem(shownWidget))}
       pane={placement.key}
-      widget={widget}
+      widget={shownWidget}
       frame={frame}
       multi={multi}
     />
   ) : (
-    <Pane placement={placement} frame={frame} multi={multi} />
+    <Pane
+      placement={placement}
+      frame={frame}
+      multi={multi}
+      heldSession={held?.kind === "session" ? held.sessionId : undefined}
+    />
   )
 })

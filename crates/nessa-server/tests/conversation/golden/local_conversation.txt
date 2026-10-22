@@ -36,6 +36,7 @@ invocations: [
                 sender: Person,
                 app_model_context: [],
                 notes: [],
+                history: None,
             },
             estimated_input_tokens: 95904,
             reserved_output_tokens: 4096,
@@ -50,6 +51,7 @@ invocations: [
             tools: NotChecked,
         },
         notes: [],
+        handoff: None,
         acknowledgement: Acknowledged,
         events: [
             ExecutionEvent {

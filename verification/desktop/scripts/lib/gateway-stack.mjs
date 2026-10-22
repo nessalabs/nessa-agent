@@ -121,7 +121,9 @@ export function scriptedLaunch(
  * `as` the gateway's owner (the default) or its panel. With `scripted`, a tool
  * name, the scripted agent is the runtime and calls that tool. With
  * `scenario`, it runs that file. With `evidence`, the run's logs are written
- * there. `limits` and `native` are the gateway config's sections (`startLocalGateway`). `options.mode` `prod` previews a production build; the default is a
+ * there. With `others`, agents besides `options.agent`, each is configured
+ * as the scripted agent too, speaking its own profile, so a conversation can
+ * be switched to it. `limits` and `native` are the gateway config's sections (`startLocalGateway`). `options.mode` `prod` previews a production build; the default is a
  * dev server. Resolves with `{ url, mode, close, client, gateway, timings,
  * token }`: `url` the desktop page, `token()` the owner token, `close()`
  * stops all three. A gateway that does not start is "could not run", with
@@ -139,6 +141,7 @@ export async function startGatewayStack(
     stopChildrenOnParentStop,
     limits,
     native,
+    others = [],
   } = {},
 ) {
   const agent = options.agent
@@ -149,6 +152,23 @@ export async function startGatewayStack(
       ? scriptedLaunch(agent, { tool: scripted, scenario, evidence, model })
       : null
   const command = launch?.command ?? agentCommand(agent)
+  if (others.length > 0 && !launch)
+    throw new Error("other agents are configured only for a scripted launch")
+  const runtimes = Object.fromEntries(
+    others.map((other) => {
+      const { command: each } = scriptedLaunch(other, { tool: scripted, scenario })
+      return [
+        other,
+        {
+          command: each.argv[0],
+          stagedRuntime: each.stagedRuntime,
+          args: each.semanticArgs,
+          model: each.model,
+          toolsEnabled: true,
+        },
+      ]
+    }),
+  )
   const timings = {}
   let started = Date.now()
   const gateway = await startLocalGateway({
@@ -165,6 +185,7 @@ export async function startGatewayStack(
     stopChildrenOnParentStop,
     limits,
     native,
+    runtimes,
   }).catch((error) => {
     // What it said as it failed, on stderr; the result keeps one line.
     if (error.gatewayLog) log(error.gatewayLog.slice(-4000))

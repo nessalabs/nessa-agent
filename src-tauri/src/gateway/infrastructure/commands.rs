@@ -4,7 +4,11 @@ use super::super::application::{
     ClaudeConfigurationChangeError, ClaudeDirectorySettings, ClaudeSettingsPublishError, Gateway,
     GatewayStartup as ApplicationStartup, GatewayStartupEvents, GatewayStartupPhase, StartupStep,
 };
+#[cfg(any(target_os = "macos", test))]
+use super::super::application::{RuntimeCopyPhase, RuntimeCopyProgress};
 use crate::gateway::domain::value_objects::claude_config_directory_is_durable;
+#[cfg(any(target_os = "macos", test))]
+use crate::host::{RuntimeCopy, RuntimeCopyState, RUNTIME_COPY};
 use crate::settings::SettingsStore;
 use crate::{
     composition::HostDependencies,
@@ -15,6 +19,9 @@ use crate::{
 };
 use serde::Serialize;
 use std::sync::Arc;
+#[cfg(any(target_os = "macos", test))]
+use std::sync::Mutex;
+use std::time::Duration;
 use std::{
     io::Error as IoError,
     panic::{catch_unwind, AssertUnwindSafe},
@@ -24,9 +31,84 @@ use tauri::{AppHandle, Emitter, State, WebviewWindow};
 
 pub(super) struct HostGatewayStartupEvents {
     app: AppHandle,
+    #[cfg(any(target_os = "macos", test))]
+    copy: RetainedRuntimeCopy,
+}
+
+/// The latest copy report, written before the host emits it.
+///
+/// A poisoned lock still yields the report. The snapshot is progress, and
+/// dropping it because an earlier holder panicked would hide the copy again.
+#[cfg(any(target_os = "macos", test))]
+struct RetainedRuntimeCopy {
+    latest: Mutex<Option<RuntimeCopyProgress>>,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl Default for RetainedRuntimeCopy {
+    fn default() -> Self {
+        Self {
+            latest: Mutex::new(None),
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl RetainedRuntimeCopy {
+    /// Stores `progress`, then returns the payload the event and the snapshot
+    /// command both send. The store is updated before the return, so the emit
+    /// that follows cannot be the only copy of the report.
+    fn remember(&self, progress: &RuntimeCopyProgress) -> RuntimeCopy {
+        *self
+            .latest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(*progress);
+        runtime_copy_payload(progress)
+    }
+
+    fn latest(&self) -> Option<RuntimeCopyProgress> {
+        *self
+            .latest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn runtime_copy_payload(progress: &RuntimeCopyProgress) -> RuntimeCopy {
+    RuntimeCopy {
+        state: match progress.state {
+            RuntimeCopyPhase::Copying => RuntimeCopyState::Copying,
+            RuntimeCopyPhase::Settled => RuntimeCopyState::Settled,
+        },
+        files_completed: progress.files_completed,
+        files_total: progress.files_total,
+        bytes_completed: progress.bytes_completed,
+        bytes_total: progress.bytes_total,
+    }
 }
 
 impl GatewayStartupEvents for HostGatewayStartupEvents {
+    #[cfg(any(target_os = "macos", test))]
+    fn runtime_copy(&self, progress: &RuntimeCopyProgress) {
+        let payload = self.copy.remember(progress);
+        for (label, _) in BUNDLED_WINDOWS {
+            if let Err(error) = self.app.emit_to(label, RUNTIME_COPY, &payload) {
+                tracing::warn!(
+                    target: "nessa.launch",
+                    label,
+                    %error,
+                    "could not publish runtime copy progress"
+                );
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    fn latest_runtime_copy(&self) -> Option<RuntimeCopyProgress> {
+        self.copy.latest()
+    }
+
     fn publish(&self, startup: &ApplicationStartup) {
         log_startup_phase(startup);
         let payload = payload(startup);
@@ -67,7 +149,28 @@ fn log_startup_phase(startup: &ApplicationStartup) {
 }
 
 pub fn startup_events(app: &AppHandle) -> Arc<dyn GatewayStartupEvents> {
-    Arc::new(HostGatewayStartupEvents { app: app.clone() })
+    Arc::new(HostGatewayStartupEvents {
+        app: app.clone(),
+        #[cfg(any(target_os = "macos", test))]
+        copy: RetainedRuntimeCopy::default(),
+    })
+}
+
+fn retained_runtime_copy(gateway: Option<&Gateway>) -> Option<serde_json::Value> {
+    #[cfg(any(target_os = "macos", test))]
+    {
+        gateway.and_then(|gateway| {
+            gateway.runtime_copy().map(|progress| {
+                serde_json::to_value(runtime_copy_payload(&progress))
+                    .expect("a runtime copy report is a plain value")
+            })
+        })
+    }
+    #[cfg(not(any(target_os = "macos", test)))]
+    {
+        let _ = gateway;
+        None
+    }
 }
 
 fn payload(startup: &ApplicationStartup) -> GatewayStartup {
@@ -105,17 +208,41 @@ pub(crate) fn bundled_window(label: &str) -> Result<BundledSurface, String> {
         .ok_or_else(|| "Only a bundled Nessa surface can access the gateway".into())
 }
 
+/// How long one desktop window read of the gateway waits for a startup that
+/// is still running: `desktopStartupWaitMs` in `src/host/startup-timing.json`,
+/// the one number the window's tests and the stress check's fake host read
+/// too. A connect reads the endpoint and then the credential, and each may
+/// wait (startup can go back to starting between them, when a replacement
+/// begins), so twice this stays under the window's budget for that connect
+/// (`defaultGatewayTiming.callMs`, held by `startup-timing.test.ts`): a
+/// startup that takes longer is the window's refusal, and its retry clock
+/// asks again.
+pub(crate) fn desktop_startup_wait() -> Duration {
+    let timing: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../src/host/startup-timing.json"))
+            .expect("startup timing is JSON");
+    Duration::from_millis(
+        timing["desktopStartupWaitMs"]
+            .as_u64()
+            .expect("desktopStartupWaitMs is a whole number of milliseconds"),
+    )
+}
+
 /// Who may read the local gateway's endpoint and the surface credential, and
 /// how each waits for the gateway first (#419).
 ///
 /// The host starts the gateway at launch (`Gateway::start`), and each
 /// bundled surface waits for it to reconcile, which its load may start again,
 /// on record as the initiator. The desktop window only reads the gateway that
-/// startup brought up: it is served once startup is `Ready` and refused
-/// before that. Its arm of [`GatewayReader::ready`] reads the startup state
-/// and calls nothing that reconciles, so a window polling while it cannot
-/// connect causes no reconciliation (the desktop-window tests in
-/// `surface_credential.rs` and `gateway_endpoint`). It is no bundled surface
+/// startup brought up: it is served once startup is `Ready`. While startup is
+/// still running it waits for it, up to the wait it is given
+/// ([`desktop_startup_wait`] from the commands), so a window opened at launch
+/// connects the moment the gateway is up instead of covering itself with the
+/// startup screen; a startup that failed, or one still running when the wait
+/// ends, is refused. Its arm of [`GatewayReader::ready`] only reads the
+/// startup state and calls nothing that reconciles, so a window waiting, or
+/// asking again while it cannot connect, causes no reconciliation (the
+/// desktop-window tests in `surface_credential.rs` and `gateway_endpoint`). It is no bundled surface
 /// ([`bundled_window`]): the `gateway_startup` and `retry_gateway_startup`
 /// commands refuse it, and no startup event is published to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,16 +265,22 @@ impl GatewayReader {
     }
 
     /// Waits for the gateway as this reader may: a bundled surface until it
-    /// reconciles; the desktop window not at all — it is ready now, or the
-    /// read is refused.
-    pub(crate) async fn ready(self, gateway: &Gateway) -> Result<(), GatewayUnread> {
+    /// reconciles; the desktop window, without reconciling, while the startup
+    /// already running goes on, for at most `startup_wait`. A failed startup
+    /// is refused at once: only a bundled surface's retry starts it again.
+    pub(crate) async fn ready(
+        self,
+        gateway: &Gateway,
+        startup_wait: Duration,
+    ) -> Result<(), GatewayUnread> {
         match self {
             Self::Surface(surface) => gateway
                 .wait_ready(surface)
                 .await
                 .map_err(|error| GatewayUnread::Other(error.to_string())),
             Self::DesktopWindow => match gateway
-                .startup()
+                .settled_startup(startup_wait)
+                .await
                 .map_err(|error| GatewayUnread::Other(error.to_string()))?
                 .phase()
             {
@@ -184,6 +317,20 @@ pub fn gateway_startup(
         .transpose()
         .map(|startup| startup.unwrap_or(GatewayStartup::Unmanaged { revision: 0 }))
         .map_err(|error| error.to_string())
+}
+
+/// The latest private-runtime copy report, for a bundled window.
+///
+/// `Ok(None)` means the host has not reported. The desktop window is refused,
+/// the same way it is refused for gateway startup. This does not change
+/// readiness.
+#[tauri::command]
+pub fn runtime_copy(
+    window: WebviewWindow,
+    deps: State<'_, HostDependencies>,
+) -> Result<Option<serde_json::Value>, String> {
+    bundled_window(window.label())?;
+    Ok(retained_runtime_copy(deps.gateway.as_deref()))
 }
 
 #[tauri::command]
@@ -954,5 +1101,60 @@ mod configuration_directory {
             host.causes.lock().unwrap().as_slice(),
             [ReconciliationCause::ClaudeConfigurationChanged]
         );
+    }
+}
+
+#[cfg(test)]
+mod runtime_copy_snapshot {
+    use super::{retained_runtime_copy, runtime_copy_payload, RetainedRuntimeCopy};
+    use crate::gateway::application::testing::recording_gateway;
+    use crate::gateway::application::{RuntimeCopyPhase, RuntimeCopyProgress};
+    use crate::host::RuntimeCopyState;
+
+    fn copying() -> RuntimeCopyProgress {
+        RuntimeCopyProgress {
+            state: RuntimeCopyPhase::Copying,
+            files_completed: 1,
+            files_total: 4,
+            bytes_completed: 10,
+            bytes_total: 40,
+        }
+    }
+
+    #[test]
+    fn a_later_report_replaces_what_a_late_subscriber_reads() {
+        let retained = RetainedRuntimeCopy::default();
+        assert_eq!(retained.latest(), None);
+
+        let first = retained.remember(&copying());
+        assert_eq!(retained.latest(), Some(copying()));
+        assert_eq!(first, runtime_copy_payload(&copying()));
+        assert_eq!(first.state, RuntimeCopyState::Copying);
+
+        let settled = RuntimeCopyProgress::settled();
+        let second = retained.remember(&settled);
+        assert_eq!(retained.latest(), Some(settled));
+        assert_eq!(second, runtime_copy_payload(&settled));
+        assert_eq!(second.state, RuntimeCopyState::Settled);
+        assert_eq!(second.files_completed, 0);
+        let value = serde_json::to_value(second).unwrap();
+        assert_eq!(value["state"], "settled");
+        assert_eq!(value["filesCompleted"], 0);
+        assert_eq!(value["bytesCompleted"], 0);
+        assert_eq!(value["bytesTotal"], 0);
+    }
+
+    #[test]
+    fn a_host_without_a_managed_gateway_has_no_runtime_copy_snapshot() {
+        assert_eq!(retained_runtime_copy(None), None);
+    }
+
+    #[test]
+    fn an_unreported_gateway_has_no_runtime_copy_snapshot() {
+        let (gateway, _) = recording_gateway(Ok(
+            crate::gateway::application::testing::reconciled_registration(),
+        ));
+        assert_eq!(retained_runtime_copy(Some(&gateway)), None);
+        assert_eq!(gateway.runtime_copy(), None);
     }
 }

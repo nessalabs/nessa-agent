@@ -447,6 +447,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     "notes",
     "unreadable",
     "unreadableTruncated",
+    "handoffs",
     "title",
     "approvalMode",
     "approvalModes",
@@ -808,6 +809,12 @@ export function conversationView(value: unknown, expected: string): Conversation
     unreadIds.add(id)
   }
   flag(item, "unreadableTruncated")
+  const handoffIds = new Set<string>()
+  for (const handoff of items(item, "handoffs", 256)) {
+    const id = conversationHandoff(handoff)
+    if (handoffIds.has(id)) throw new Error("Repeated conversation handoff id")
+    handoffIds.add(id)
+  }
   const capabilities = record(item.capabilities)
   const capabilityKeys = [
     "queue",
@@ -1093,6 +1100,56 @@ function conversationUnreadable(item: Record<string, unknown>): string {
   const id = text(item, "id", 20, false)
   if (!/^(0|[1-9][0-9]*)$/.test(id)) throw new Error("Invalid conversation unreadable id")
   if (item.afterExecutionId !== undefined) identity(item, "afterExecutionId")
+  return id
+}
+
+/**
+ * A handoff the view lists: a switch carries the agent and model either side
+ * of it and no copied turns, a fork the copied turns and neither agent.
+ */
+function conversationHandoff(item: Record<string, unknown>): string {
+  exact(item, [
+    "handoffId",
+    "kind",
+    "atMs",
+    "afterExecutionId",
+    "from",
+    "to",
+    "turns",
+    "omittedTurns",
+  ])
+  const id = text(item, "handoffId", 64, false)
+  const kind = text(item, "kind")
+  oneOf(kind, ["switch", "fork"])
+  time(item, "atMs")
+  if (item.afterExecutionId !== undefined) identity(item, "afterExecutionId")
+  const switched = kind === "switch"
+  for (const key of ["from", "to"]) {
+    if ((item[key] !== undefined) !== switched)
+      throw new Error(`Invalid conversation handoff ${key}`)
+    if (item[key] === undefined) continue
+    const agent = record(item[key])
+    exact(agent, ["agent", "model"])
+    if (agent.agent !== undefined) text(agent, "agent", 32, false)
+    text(agent, "model", 256, false)
+  }
+  if (item.turns !== undefined) {
+    if (switched) throw new Error("Invalid conversation handoff turns")
+    for (const turn of items(item, "turns", 256)) {
+      exact(turn, ["said", "reply"])
+      for (const key of ["said", "reply"])
+        if (turn[key] !== undefined) text(turn, key, 8192, false)
+    }
+  }
+  if (item.omittedTurns !== undefined) {
+    const omitted = item.omittedTurns
+    if (
+      !Number.isSafeInteger(omitted) ||
+      (omitted as number) < 0 ||
+      (omitted as number) > 4294967295
+    )
+      throw new Error("Invalid conversation handoff omittedTurns")
+  }
   return id
 }
 

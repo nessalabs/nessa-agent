@@ -25,6 +25,10 @@ use crate::infrastructure::process::ProcessScope;
 use std::{collections::BTreeMap, ffi::OsString, sync::Arc};
 use tokio::process::Command;
 
+/// The provider name every session this binding opens records in its
+/// history, as its provider identity.
+pub const PROVIDER_NAME: &str = "claude-acp";
+
 /// Immutable composition factory; opening twice creates independent process scopes.
 #[derive(Clone)]
 pub struct ClaudeAcpProvider {
@@ -122,7 +126,7 @@ impl ClaudeAcpProvider {
                 "selected model does not support tools".into(),
             ));
         }
-        ProviderIdentity::new("claude-acp", capabilities.model().model_id(), "")?;
+        ProviderIdentity::new(PROVIDER_NAME, capabilities.model().model_id(), "")?;
         Ok(Self {
             config,
             capabilities,
@@ -289,7 +293,7 @@ impl AgentProvider for ClaudeAcpProvider {
     }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(
-            "claude-acp",
+            PROVIDER_NAME,
             self.capabilities.model().model_id(),
             identity::fingerprint(
                 &self.config,

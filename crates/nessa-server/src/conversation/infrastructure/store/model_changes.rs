@@ -181,6 +181,7 @@ pub(super) fn begin(
         }
         if read_request(&transaction, &request.conversation_id, None)?.is_some()
             || read_mode_request(&transaction, &request.conversation_id, None)?.is_some()
+            || super::agent_switches::read_switch(&transaction, &request.conversation_id, None)?.is_some()
             || current.model() != &request.prior_model
             || current.approval_mode() != request.prior_approval_mode
             || current.organization() != &request.organization_id

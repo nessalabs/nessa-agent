@@ -996,8 +996,8 @@ pub(super) mod build {
             agent_execution::{
                 permissions::PermissionOfferPolicy,
                 prompts::{
-                    AppModelContext, LinkedFile, McpAppSource, NoteContext, PromptSource,
-                    PromptSourceKind, SystemPrompt, SystemPromptBuilder, UserMessage,
+                    AppModelContext, CarriedHistory, LinkedFile, McpAppSource, NoteContext,
+                    PromptSource, PromptSourceKind, SystemPrompt, SystemPromptBuilder, UserMessage,
                 },
                 tools::MAX_MCP_NAME_BYTES,
             },
@@ -1067,11 +1067,14 @@ pub(super) mod build {
     ///   (8 KiB) of text, naming the surface it was left from
     ///   (`NoteContext::MAX_SURFACE_BYTES`, 256), both escaped twice:
     ///   8 × 7 × (8 192 + 256) = 473 088.
+    /// - The earlier turns the first turn after a fork or an agent switch is
+    ///   given: at most `CarriedHistory::MAX_TEXT_BYTES` (64 KiB) of text,
+    ///   escaped twice: 7 × 65 536 = 458 752.
     /// - Everything else, which none of the message's senders writes: the
     ///   request around it and every block's keys, quotes and braces, as the
-    ///   SDK measures them, `AcpConfig::LARGEST_MESSAGE_SYNTAX_BYTES`, 4 417.
+    ///   SDK measures them, `AcpConfig::LARGEST_MESSAGE_SYNTAX_BYTES`, 12 748.
     ///
-    /// 15 120 049 in all, 1 657 167 under [`MAX_FRAME_BYTES`].
+    /// 15 587 132 in all, 1 190 084 under [`MAX_FRAME_BYTES`].
     const LARGEST_MESSAGE_FRAME_BYTES: usize =
         (UserMessage::MAX_IMAGE_BYTES as usize + 2 * UserMessage::MAX_IMAGES) / 3 * 4
             + ESCAPED_ONCE * MAX_MCP_MESSAGE_BYTES
@@ -1084,10 +1087,11 @@ pub(super) mod build {
             + UserMessage::MAX_NOTES
                 * ESCAPED_TWICE
                 * (NoteContext::MAX_TEXT_BYTES + NoteContext::MAX_SURFACE_BYTES)
+            + ESCAPED_TWICE * CarriedHistory::MAX_TEXT_BYTES
             + AcpConfig::LARGEST_MESSAGE_SYNTAX_BYTES;
     const _: () = assert!(
         LARGEST_MESSAGE_FRAME_BYTES <= MAX_FRAME_BYTES,
-        "the largest message, with its images encoded and the most app context and notes it may carry, must fit one ACP frame"
+        "the largest message, with its images encoded and the most app context, notes and carried history it may carry, must fit one ACP frame"
     );
     /// What an agent may send us, which is the buffer this host can be made to
     /// allocate for one frame and has nothing to do with the prompts it writes.

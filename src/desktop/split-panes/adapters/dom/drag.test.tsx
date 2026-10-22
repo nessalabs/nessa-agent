@@ -8,6 +8,7 @@
  * workspace (`workspace/adapters/dom/split-panes-drag.test.tsx`).
  */
 import { act, useRef, useSyncExternalStore, type RefObject } from "react"
+import { SplitPanes, type ShownPane } from "../../ui/split-panes"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { Drop, SplitPanesSource } from "../../application/ports"
@@ -140,6 +141,74 @@ function FlippingHost({ fake, options }: { fake: Fake; options: SplitPanesDragOp
       <Page root={root} layout={layout} />
     </FlipScope>
   )
+}
+
+/**
+ * The grid the workspace uses: a new arrangement waits three frames. The
+ * drag's own page above paints the source at once, so it cannot show a
+ * preview outliving that wait.
+ */
+function HoldingHost({ fake, options }: { fake: Fake; options: SplitPanesDragOptions }) {
+  const root = useRef<HTMLDivElement>(null)
+  useSplitPanesDrag(root, fake.source, options)
+  return (
+    <div ref={root} data-workspace>
+      <SplitPanes
+        source={fake.source}
+        empty={null}
+        renderPane={({ placement, frame }: ShownPane) => (
+          <article {...frame} aria-label={`Pane ${placement.item}`}>
+            <header
+              data-split-keeps="top-left"
+              data-drag-pane={placement.key}
+              data-host-mark
+            >
+              {placement.item}
+            </header>
+            <div data-split-through>
+              <div data-split-scroll>
+                <div>
+                  <p>{`${placement.item} words`}</p>
+                </div>
+              </div>
+              <footer data-split-keeps="foot">composer</footer>
+            </div>
+          </article>
+        )}
+      />
+    </div>
+  )
+}
+
+/** Frames run only when `run` says so. jsdom would otherwise fire the grid's wait. */
+function holdFrames() {
+  const queued = new Map<number, FrameRequestCallback>()
+  let next = 1
+  const request = window.requestAnimationFrame
+  const cancel = window.cancelAnimationFrame
+  window.requestAnimationFrame = (callback) => {
+    const id = next++
+    queued.set(id, callback)
+    return id
+  }
+  window.cancelAnimationFrame = (id) => {
+    queued.delete(id)
+  }
+  return {
+    run() {
+      for (const id of [...queued.keys()]) {
+        const callback = queued.get(id)
+        if (callback === undefined) continue
+        queued.delete(id)
+        callback(performance.now())
+      }
+    },
+    restore() {
+      queued.clear()
+      window.requestAnimationFrame = request
+      window.cancelAnimationFrame = cancel
+    },
+  }
 }
 
 function Page({
@@ -466,8 +535,13 @@ it("previews the outcome of the layout the source holds, and commits it through 
   await liftOntoTwo()
   expect(said()).toBe("Swap with Pane b")
   pointer("pointerup", 827, 400)
-  // The pointerup turn flies the copy and does not commit: the commit lays
-  // the new arrangement out, and that layout is the next frame's.
+  // The pointerup turn flies the copy and does not commit. The callback it
+  // queues only schedules the commit: Chromium would run that callback
+  // before the pointerup frame paints.
+  expect(fake.state.drops).toEqual([])
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
   expect(fake.state.drops).toEqual([])
   await frames()
   expect(fake.state.drops).toEqual([
@@ -722,6 +796,49 @@ it.each(["full", "reduced"])("retires %s-motion previews", async (motion) => {
     await act(async () => root.unmount())
   } finally {
     delete document.documentElement.dataset.motion
+  }
+})
+
+it("keeps a pane preview until the grid paints the drop", async () => {
+  const observer = globalThis.ResizeObserver
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as typeof ResizeObserver
+  const fake = fakeSource(two())
+  const root = await mounted(fake, options(), HoldingHost)
+  await frames()
+  await liftOntoTwo()
+  const placed = () => element('[data-pane-key="2"]').style.getPropertyValue("--cx")
+  const previewLive = () =>
+    animated.some(
+      ({ element: of, cancelled }) => of === element('[data-pane-key="2"]') && !cancelled,
+    )
+  const before = placed()
+  expect(before).not.toBe("")
+  expect(previewLive()).toBe(true)
+  const stepped = holdFrames()
+  try {
+    pointer("pointerup", 827, 400)
+    // The pointerup frame, then the commit. The grid still shows the old boxes.
+    await act(async () => stepped.run())
+    await act(async () => stepped.run())
+    expect(fake.state.drops).toHaveLength(1)
+    expect(placed()).toBe(before)
+    expect(previewLive()).toBe(true)
+    await act(async () => stepped.run())
+    await act(async () => stepped.run())
+    expect(placed()).toBe(before)
+    expect(previewLive()).toBe(true)
+    // The frame that paints the new boxes lets the preview go.
+    await act(async () => stepped.run())
+    expect(previewLive()).toBe(false)
+    expect(placed()).not.toBe(before)
+    await act(async () => root.unmount())
+  } finally {
+    stepped.restore()
+    globalThis.ResizeObserver = observer
   }
 })
 

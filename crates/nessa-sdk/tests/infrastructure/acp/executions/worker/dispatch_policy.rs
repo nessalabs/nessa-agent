@@ -64,6 +64,7 @@ async fn worker_projection_after_reload(
             actor: ActionContext::new("user", "test", "invoke").unwrap(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Acknowledged,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -75,6 +76,7 @@ async fn worker_projection_after_reload(
         }],
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     };
     let storage = InMemoryStorage::new();

@@ -198,6 +198,7 @@ pub(super) async fn provider_agent_with_review(
             actor: close_action(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: vec![review],
             scheduling: Vec::new(),
@@ -209,6 +210,7 @@ pub(super) async fn provider_agent_with_review(
         }],
         lease: None,
         artifacts: Vec::new(),
+        handoffs: Vec::new(),
         notes: Vec::new(),
     };
     let mut accepted = snapshot.invocations[0].clone();

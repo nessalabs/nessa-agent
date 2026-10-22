@@ -15,7 +15,7 @@ use crate::application::agent_execution::{
     providers::{ExecutionReport, ProviderIdentity},
     sessions::{
         storage::{InvocationRecord, StorageError, SubmissionAcknowledgement},
-        NoteId,
+        HandoffId, NoteId,
     },
 };
 use crate::domain::{
@@ -201,6 +201,9 @@ pub(super) struct Metadata {
     /// The notes the turn took, in the order it took them; absent when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) notes: Vec<String>,
+    /// The handoff the turn took; absent when it took none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) handoff: Option<String>,
     pub(super) acknowledgement: Acknowledgement,
     pub(super) provider_report: Option<Settlement>,
     pub(super) local_cancellation: Option<InvocationCancellation>,
@@ -485,6 +488,7 @@ impl From<&InvocationRecord> for Metadata {
             actor: (&value.actor).into(),
             initiation: (&value.initiation).into(),
             notes: value.notes.iter().map(|id| id.as_str().into()).collect(),
+            handoff: value.handoff.as_ref().map(|id| id.as_str().into()),
             acknowledgement: (&value.acknowledgement).into(),
             provider_report: value.provider_report.clone().map(Into::into),
             local_cancellation: value.local_cancellation.as_ref().map(Into::into),
@@ -702,6 +706,7 @@ impl Metadata {
                 .into_iter()
                 .map(|id| NoteId::new(id).map_err(corrupt))
                 .collect::<Result<_, _>>()?,
+            handoff: self.handoff.map(HandoffId::new).transpose()?,
             acknowledgement: self.acknowledgement.try_into()?,
             events: Vec::new(),
             scheduling: Vec::new(),

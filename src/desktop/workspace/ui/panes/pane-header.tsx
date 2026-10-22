@@ -13,8 +13,7 @@ import { IconButton } from "../../../ui/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { PaneMenuItems } from "./pane-menu"
 import { ClosePaneButton, PaneHeaderFrame } from "./pane-header-frame"
-import { useWorkspaceSelector } from "../../adapters/store/hooks"
-import { selectSession } from "../../adapters/store/selectors"
+import { useRememberedSession } from "../../adapters/store/remembered-session"
 import { SessionAccessories } from "./session-accessories"
 import { tooltip } from "../../../ui/tooltip"
 import { useChooseHeaderPicture } from "../../../adapters/header-image"
@@ -59,7 +58,7 @@ export const PaneHeader = memo(function PaneHeader({
     const timer = window.setTimeout(() => setRefusal(null), headerImageRefusalMs)
     return () => window.clearTimeout(timer)
   }, [refusal])
-  const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
+  const session = useRememberedSession(sessionId)
   const title = session?.title ?? "New session"
   const shown = titleShown && session !== undefined
   return (

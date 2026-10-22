@@ -25,6 +25,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("large"), knobs.large)
   assert.equal(count("park"), knobs.parks)
   assert.equal(count("rename"), knobs.renames)
+  assert.equal(count("handoff"), knobs.handoffs)
   assert.equal(count("delete"), knobs.deletes)
   assert.equal(count("fresh"), knobs.fresh)
   assert.equal(count("window"), knobs.windows)
@@ -35,6 +36,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("pool"), knobs.pools)
   assert.equal(count("drift"), knobs.drifts)
   assert.equal(count("upgrade"), knobs.upgrades)
+  assert.equal(count("launch"), knobs.launches)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
   assert.equal(steps.find((step) => step.kind === "long").turns, knobs.long)
@@ -87,7 +89,17 @@ test("parent Stop appears once by default and at the raised flag or environment 
   assert.equal(count(knobsFrom({ parentstops: "0" }, {})), 0)
 })
 
-test("positive model steps retain default and raised counts, run last, and enter Ask", () => {
+test("handoffs run last of all, after every upgrade, whatever the seed", () => {
+  for (let seed = 0; seed < 50; seed += 1) {
+    const steps = plan(knobsFrom({ seed: String(seed), handoffs: "2" }, {}))
+    const first = steps.findIndex((step) => step.kind === "handoff")
+    assert.equal(steps.filter((step) => step.kind === "handoff").length, 2)
+    assert.ok(steps.slice(first).every((step) => step.kind === "handoff"))
+    assert.ok(first > steps.findLastIndex((step) => step.kind === "upgrade"))
+  }
+})
+
+test("positive model steps retain default and raised counts, run last but for handoffs, and enter Ask", () => {
   for (let seed = 0; seed < 50; seed += 1) {
     for (const count of [1, 6]) {
       const steps = plan(
@@ -95,7 +107,9 @@ test("positive model steps retain default and raised counts, run last, and enter
       )
       const first = steps.findIndex((step) => step.kind === "model")
       assert.equal(steps.filter((step) => step.kind === "model").length, count)
-      assert.ok(steps.slice(first).every((step) => step.kind === "model"))
+      assert.ok(
+        steps.slice(first).every((step) => ["model", "handoff"].includes(step.kind)),
+      )
       let mode = "ask"
       for (const step of steps) {
         if (step.kind === "switch") {
@@ -116,6 +130,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
     knobsFrom(
       {
         parentstops: "0",
+        handoffs: "0",
         windows: "0",
         linkings: "0",
         rails: "0",
@@ -124,10 +139,12 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         pools: "0",
         drifts: "0",
         upgrades: "0",
+        launches: "0",
         awaits: "0",
         fresh: "0",
         renames: "0",
         deletes: "0",
+        handoffs: "0",
       },
       {},
     ),

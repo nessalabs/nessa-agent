@@ -37,14 +37,21 @@ async function ready() {
   return { source, store }
 }
 
-describe("same-provider model choices", () => {
-  it("keeps draft choices local and refuses established cross-provider targets", async () => {
+describe("model choices", () => {
+  it("keeps draft choices local and asks the source for another provider in an established chat", async () => {
     const { source, store } = await ready()
     const draft = store.dispatch(newSession())!
     await store.dispatch(changeModel({ sessionId: draft, model: astra }))
     expect(selectNextModel(store.getState(), draft)).toEqual(astra)
-    await store.dispatch(changeModel({ sessionId: "a", model: astra }))
     expect(source.calls.some((call) => call[0] === "setModel")).toBe(false)
+    // Another provider is the source's to carry the chat on under: the
+    // confirmed model stays until its frame says otherwise.
+    source.setModel = vi.fn(async (_id, model, id) => ({
+      ...receipt(id),
+      model: model.modelId,
+    }))
+    await store.dispatch(changeModel({ sessionId: "a", model: astra }))
+    expect(source.setModel).toHaveBeenCalledWith("a", astra, expect.any(String), "person")
     expect(selectNextModel(store.getState(), "a")).toEqual(opus)
   })
 

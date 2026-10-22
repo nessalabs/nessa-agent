@@ -7,6 +7,7 @@ use super::{
     artifacts::WireArtifact,
     cancellation::Cancellation,
     errors::{Outcome, SavedError},
+    handoffs::WireHandoff,
     leases::WireLease,
     notes::{WireNote, WireNoteRetired},
     permissions::Actor,
@@ -241,6 +242,7 @@ enum WireChange<E = Event> {
     Artifact(WireArtifact),
     Note(WireNote),
     NoteRetired(WireNoteRetired),
+    Handoff(WireHandoff),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -384,6 +386,7 @@ impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
             SessionChange::Artifact(record) => Self::Artifact(record.into()),
             SessionChange::Note(record) => Self::Note(record.into()),
             SessionChange::NoteRetired(record) => Self::NoteRetired(record.into()),
+            SessionChange::Handoff(record) => Self::Handoff(record.into()),
         }
     }
 }
@@ -500,6 +503,7 @@ impl TryFrom<WireChange> for SessionChange {
             WireChange::Artifact(record) => Self::Artifact(record.decode()?),
             WireChange::Note(record) => Self::Note(record.decode()?),
             WireChange::NoteRetired(record) => Self::NoteRetired(record.decode()?),
+            WireChange::Handoff(record) => Self::Handoff(record.decode()?),
         })
     }
 }
@@ -790,6 +794,7 @@ mod tests {
             actor: ActionContext::new("user", "phone", "send").unwrap(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -966,6 +971,7 @@ mod tests {
             actor: ActionContext::new("user", "phone", "send").unwrap(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -1023,6 +1029,7 @@ mod tests {
             actor: ActionContext::new("user", "phone", "send").unwrap(),
             initiation,
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
@@ -1171,6 +1178,7 @@ mod tests {
             actor: ActionContext::new("user", "phone", "send").unwrap(),
             initiation: Initiation::owner(),
             notes: Vec::new(),
+            handoff: None,
             acknowledgement: SubmissionAcknowledgement::Pending,
             events: Vec::new(),
             scheduling: Vec::new(),
