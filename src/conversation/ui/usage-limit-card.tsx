@@ -62,7 +62,7 @@ export function UsageLimitCard({
         <input
           type="checkbox"
           checked={shown}
-          disabled={onChange === undefined}
+          disabled={onChange === undefined || pending !== null}
           onChange={(event) => {
             if (!onChange || pending !== null) {
               event.preventDefault()

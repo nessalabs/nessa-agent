@@ -87,6 +87,7 @@ it("keeps the reset line while an enable is still pending", async () => {
     box.click()
   })
   expect(box.checked).toBe(true)
+  expect(box.disabled).toBe(true)
   expect(
     host.querySelector("[data-usage-limit]")?.hasAttribute("data-usage-limit-pending"),
   ).toBe(true)
@@ -94,6 +95,7 @@ it("keeps the reset line while an enable is still pending", async () => {
   await act(async () => {
     release()
   })
+  expect(box.disabled).toBe(false)
 })
 
 it("releases the checkbox when the confirmed preference is not the pending choice", async () => {
@@ -129,6 +131,7 @@ it("releases the checkbox when the confirmed preference is not the pending choic
     release()
   })
   expect(box.checked).toBe(false)
+  expect(box.disabled).toBe(false)
   expect(
     host.querySelector("[data-usage-limit]")?.hasAttribute("data-usage-limit-pending"),
   ).toBe(false)
@@ -164,6 +167,23 @@ it("releases the checkbox when the confirmed preference is not the pending choic
   })
 })
 
+it("enables the native checkbox again when its current command rejects", async () => {
+  let reject: (error: unknown) => void = () => {}
+  const command = new Promise<void>((_, fail) => {
+    reject = fail
+  })
+  await act(async () => {
+    render(<UsageLimitCard limit={limit} enabled={false} onChange={() => command} />)
+  })
+  const box = host.querySelector("input")
+  if (!(box instanceof HTMLInputElement)) throw new Error("missing checkbox")
+  await act(async () => box.click())
+  expect(box.disabled).toBe(true)
+  await act(async () => reject(new Error("Preference unavailable")))
+  expect(box.disabled).toBe(false)
+  expect(box.checked).toBe(false)
+})
+
 it("a superseded toggle completion does not settle the next choice", async () => {
   let settleFirst: () => void = () => {}
   const first = new Promise<void>((resolve) => {
@@ -194,21 +214,25 @@ it("a superseded toggle completion does not settle the next choice", async () =>
   })
   expect(calls).toEqual([true])
   expect(pending()).toBe(true)
+  expect(box().disabled).toBe(true)
   await act(async () => {
     render(<UsageLimitCard limit={limit} enabled onChange={change} />)
   })
   expect(pending()).toBe(false)
+  expect(box().disabled).toBe(false)
   await act(async () => {
     box().click()
   })
   expect(calls).toEqual([true, false])
   expect(box().checked).toBe(false)
   expect(pending()).toBe(true)
+  expect(box().disabled).toBe(true)
   await act(async () => {
     settleFirst()
   })
   expect(box().checked).toBe(false)
   expect(pending()).toBe(true)
+  expect(box().disabled).toBe(true)
   await act(async () => {
     box().click()
   })
@@ -259,6 +283,7 @@ it("a superseded toggle rejection does not clear the next choice", async () => {
   })
   expect(box().checked).toBe(false)
   expect(pending()).toBe(true)
+  expect(box().disabled).toBe(true)
   await act(async () => {
     box().click()
   })
