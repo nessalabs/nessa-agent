@@ -19,7 +19,7 @@ export function reviewAnswerAcknowledged(receipt, acknowledgedInTime) {
   return acknowledgedInTime && receipt.outcome === "acknowledged"
 }
 
-const { bounds } = await tsImport(
+const { bounds, ConversationPermissionSelectionState } = await tsImport(
   "../../../../packages/nessa-client/src/generated/product.ts",
   import.meta.url,
 )
@@ -81,7 +81,7 @@ export function observeReviewAnswers(page, endpoint, now = Date.now) {
         active.outcome = "refused"
         if (typeof frame.error?.code === "string") active.code = frame.error.code
         const selection = frame.error?.details?.selectionState
-        if (["pending", "consumed", "unknown"].includes(selection))
+        if (Object.values(ConversationPermissionSelectionState).includes(selection))
           active.selectionState = selection
       } else {
         try {

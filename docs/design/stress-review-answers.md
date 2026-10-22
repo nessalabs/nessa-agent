@@ -25,6 +25,7 @@ post-click wait, rather than granting a second settlement interval.
 | Another socket reuses a response id | Not this command's ACK | socket identity |
 | Response envelope names another socket request despite the exact command receipt | Not this command’s ACK; the genuine response remains accepted | response envelope identity |
 | ACK names another command, or applied=false | Not an applied ACK | command identity and applied flag |
+| Refusal carries a published selection-state tag, an unknown tag or no tag | Retain only the generated protocol’s published states; refusal remains independent | refusal selection evidence consumes the published state rule |
 | Observer disposed while sockets remain | Listeners detached; no later confirmation | disposal |
 
 Historical #1039 ACP evidence proves a deadline deny reached the provider. It has

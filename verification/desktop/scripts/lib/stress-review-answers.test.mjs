@@ -1,10 +1,16 @@
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import { test } from "node:test"
+import { tsImport } from "tsx/esm/api"
 import {
   observeReviewAnswers,
   reviewAnswerAcknowledged,
 } from "./stress-review-answers.mjs"
+
+const { ConversationPermissionSelectionState } = await tsImport(
+  "../../../../packages/nessa-client/src/generated/product.ts",
+  import.meta.url,
+)
 
 const target = {
   conversationId: "conversation",
@@ -247,4 +253,36 @@ test("response envelope identity must match even with the exact command receipt"
   assert.equal(scope.acknowledged(), true)
   assert.equal(scope.finish().outcome, "acknowledged")
   f.observer.dispose()
+})
+
+test("refusal selection evidence consumes the published state rule", () => {
+  for (const selectionState of [
+    ...Object.values(ConversationPermissionSelectionState),
+    "not-a-selection-state",
+    undefined,
+  ]) {
+    const f = fixture(),
+      socket = f.socket(),
+      scope = f.observer.begin(target)
+    f.send(socket)
+    socket.emit("framereceived", {
+      payload: JSON.stringify({
+        type: "res",
+        id: "1",
+        ok: false,
+        error: {
+          code: "stale_permission",
+          message: "refused",
+          details: { selectionState },
+        },
+      }),
+    })
+    const receipt = scope.finish()
+    assert.equal(receipt.outcome, "refused")
+    assert.equal(receipt.code, "stale_permission")
+    if (Object.values(ConversationPermissionSelectionState).includes(selectionState))
+      assert.equal(receipt.selectionState, selectionState)
+    else assert.equal(Object.hasOwn(receipt, "selectionState"), false)
+    f.observer.dispose()
+  }
 })
