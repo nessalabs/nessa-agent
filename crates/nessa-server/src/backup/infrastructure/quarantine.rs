@@ -3,6 +3,10 @@
 //! The application decides what may be kept. This module reads JSON records,
 //! writes the partial tree, and streams one oversized conversation.
 
+#[cfg(windows)]
+#[path = "quarantine_closed_windows.rs"]
+mod closed_windows;
+
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -10,11 +14,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-#[cfg(any(test, windows))]
+#[cfg(test)]
 use nessa_local_storage::create_directory_exclusive;
 #[cfg(windows)]
-use nessa_local_storage::create_no_writers;
-use nessa_local_storage::{create_directory, open, publish_new, sync_directory, OpenMode};
+#[path = "quarantine_windows.rs"]
+mod windows_backend;
+
+#[cfg(test)]
+use nessa_local_storage::publish_new;
+use nessa_local_storage::{create_directory, OpenMode};
 use serde_json::{json, Value};
 
 use sha2::Digest;
@@ -22,10 +30,10 @@ use sha2::Digest;
 use crate::backup::application::{
     current_journal_is_trusted, current_staging_id, AnchoredRoot, CutMaterializer,
     DecisionAuditError, DeferredSessionSource, ExportClock, FetchProgress, JournalFields,
-    LoadedTree, MacKey, PreparedCut, Promoted, PublicationIds, QuarantineLayout, RestoreAudit,
-    RestoreEvidence, RestoreHold, SealFields, SealedInventoryReader, SessionCut,
-    SessionSourceError, Staging, StagingIds, TreeId, VerificationFormat, VerificationLimits,
-    VerificationSource,
+    LoadedTree, MacKey, PreparedCut, Promoted, PublicationIds, PublishedSession, QuarantineLayout,
+    RestoreAudit, RestoreEvidence, RestoreHold, SealFields, SealedInventoryReader, SessionAttempt,
+    SessionCut, SessionSourceError, StagedTreeOwner, Staging, StagingIds, TreeId,
+    VerificationFormat, VerificationLimits, VerificationSource,
 };
 use crate::backup::domain::{
     conversation_is_fenced, credential_is_fenced, encode_deferred, fresher_fences,
@@ -37,10 +45,9 @@ use crate::backup::domain::{
 };
 
 use super::log::{authenticate_inventory, exclusive, persist};
-#[cfg(unix)]
 use super::snapshot::inspect_open_file;
 use super::snapshot::{
-    inspect_conversation, materialize_conversation, without_fenced_conversations, MaterializeError,
+    inspect_conversation, materialize_into_file, without_fenced_conversations, MaterializeError,
 };
 
 /// Reads a later inventory that carries its own mac line.
@@ -490,6 +497,13 @@ impl QuarantineLayout for DirectoryQuarantine {
             partial_name,
             quarantine_name: name,
             armed: true,
+            files: Vec::new(),
+            directories: Vec::new(),
+            parent_spelling: quarantine
+                .path()
+                .parent()
+                .ok_or(RestoreFault::Paths)?
+                .to_path_buf(),
         }))
     }
 
@@ -518,256 +532,76 @@ impl QuarantineLayout for DirectoryQuarantine {
         quarantine: &AnchoredRoot,
         live: &AnchoredRoot,
         loaded: &LoadedTree,
+        generation: &str,
     ) -> Result<Promoted, RestoreFault> {
-        let (source_parent, source_name) = parent_of_root(quarantine)?;
-        let opened = open_dir_at(&source_parent, &source_name)?;
-        if tree_id_of(&opened)? != loaded.identity {
-            return Err(RestoreFault::Tamper);
-        }
-        let on_disk = read_file_at(&opened, OsStr::new("journal.txt"))?;
-        if on_disk != loaded.journal || content_of(&opened)? != loaded.content {
-            return Err(RestoreFault::Tamper);
-        }
-        // The live tree is a directory this attempt creates under the parent
-        // this anchor holds, and writes from those sealed bytes. The identity
-        // is that directory's open. An open descriptor on the quarantine file
-        // keeps the old inode.
-        let (live_parent, live_name) = parent_of_root(live)?;
-        let SealedDir {
-            name: sealed_name,
-            file: created,
-            identity: created_id,
-            ..
-        } = sealed_beside(&live_parent, &live_name)?;
-        // Copied bytes stay on the handles that wrote them. On Unix those
-        // inodes have no names yet, so a writer cannot open them. On Windows
-        // the names exist and the handles do not share write access.
-        let mut held = Vec::new();
-        let copied = match copy_at(&opened, &created, &mut held) {
-            Ok(token) => token,
-            Err(error) => {
-                drop(held);
-                let _ = remove_opened(&created, &created_id);
-                return Err(error);
-            }
-        };
-        let mut journal = match create_unpublished(
-            &created,
-            OsStr::new("journal.txt"),
-            "journal.txt",
-            false,
-            RestoreFault::Tamper,
-        ) {
-            Ok(file) => file,
-            Err(error) => {
-                drop(held);
-                let _ = remove_opened(&created, &created_id);
-                return Err(error);
-            }
-        };
-        if journal.store(loaded.journal.as_bytes()).is_err() || journal.sync_file().is_err() {
-            drop(held);
-            drop(journal);
-            let _ = remove_opened(&created, &created_id);
-            return Err(RestoreFault::Unreadable);
-        }
-        if copied != loaded.content || tree_id_of(&opened)? != loaded.identity {
-            drop(held);
-            drop(journal);
-            let _ = remove_opened(&created, &created_id);
-            return Err(RestoreFault::Tamper);
-        }
-        if let Err(error) =
-            held_still_sealed(&created, &created_id, loaded, &mut held, &mut journal)
-        {
-            drop(held);
-            drop(journal);
-            if tree_id_of(&created).ok().as_ref() == Some(&created_id) {
-                let _ = remove_opened(&created, &created_id);
-            }
-            return Err(error);
-        }
-        // The link is the publication of each inode. The directory rename
-        // then makes those names live. A descriptor opened on a predictable
-        // copy name is not one of these inodes.
-        if let Err(error) = publish_held(&created, &mut held, &mut journal, sync_tree_at) {
-            drop(held);
-            drop(journal);
-            let _ = remove_opened(&created, &created_id);
-            return Err(error);
-        }
-        let published = created_id;
-        // Windows will not rename a directory while a file inside it is open.
-        // The seal was re-read on these handles, and they did not share write,
-        // so a writer could not already hold them. Unix keeps the descriptors
-        // open across the rename; those inodes were unnamed until the link.
-        #[cfg(windows)]
-        {
-            drop(held);
-            drop(journal);
-        }
-        // The rename itself refuses an existing destination, including an
-        // empty directory created where a separate existence check would miss it.
-        if let Err(error) = rename_exclusive_at(
-            &live_parent,
-            &sealed_name,
-            &live_parent,
-            &live_name,
-            RestoreFault::LiveOccupied,
-        ) {
-            #[cfg(not(windows))]
-            {
-                drop(held);
-                drop(journal);
-            }
-            let _ = remove_opened(&created, &published);
-            return Err(error);
-        }
-        let live_id = open_dir_at(&live_parent, &live_name)
-            .ok()
-            .and_then(|file| tree_id_of(&file).ok());
-        let opened_id = tree_id_of(&created).ok();
-        if live_id.as_ref() != Some(&published) || opened_id.as_ref() != Some(&published) {
-            let sealed_gone = !name_exists_at(&live_parent, &sealed_name).unwrap_or(true);
-            if sealed_gone && live_id.as_ref() != Some(&published) {
-                let _ = rename_exclusive_at(
-                    &live_parent,
-                    &live_name,
-                    &live_parent,
-                    &sealed_name,
-                    RestoreFault::Tamper,
-                );
-            }
-            return if name_exists_at(&live_parent, &live_name).unwrap_or(true) {
-                Err(RestoreFault::Retained)
-            } else {
-                Err(RestoreFault::Tamper)
-            };
-        }
-        // The copy is live. Retire the source the open handle still names,
-        // even when the original path is gone.
-        // The rename already made the tree live. A parent that cannot be
-        // synced does not put it back, and does not make the promotion a
-        // refusal.
-        Ok(finish_promotion(
-            || retire_opened(&opened, &loaded.identity),
-            || {
-                let live_synced = sync_dir(&live_parent).is_ok();
-                let source_synced = sync_dir(&source_parent).is_ok();
-                live_synced && source_synced
-            },
-        ))
-    }
-
-    fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
-        if path.exists() {
-            fs::remove_dir_all(path).map_err(|_| RestoreFault::Unreadable)?;
-        }
-        Ok(())
-    }
-
-    fn remove_known(&self, path: &Path, identity: &TreeId) -> Result<(), RestoreFault> {
-        remove_same(path, identity)
+        promote_tree(quarantine, live, loaded, generation, retire_source_marker)
     }
 
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
         fs::read(path).map_err(|_| RestoreFault::Unreadable)
     }
 
-    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
-        // Parents are created beneath the held root. The partial file is not:
-        // the source creates that one name.
-        let directory = directory_under(&open_root_dir(root)?, relative)?;
-        let leaf = relative_leaf(relative)?;
-        let mut temp_name = leaf.to_os_string();
-        temp_name.push(".partial");
-        Ok(path_of_handle(&directory)?.join(temp_name))
-    }
-
-    fn publish_verified(
+    fn begin_session(
         &self,
         root: &AnchoredRoot,
-        temp: &Path,
         relative: &str,
-        conversation_id: &str,
-        digest: &Fingerprint,
-    ) -> Result<(), RestoreFault> {
-        let directory = directory_for(root, relative)?;
-        let leaf = relative_leaf(relative)?;
-        let temp_name = temp.file_name().ok_or(RestoreFault::Tamper)?;
-        // The copy has no directory entry until the session name is linked.
-        // On Windows the session name is created here and held without write
-        // share, so another open cannot change it before this handle closes.
-        let mut input = open_file_at(&directory, temp_name, OpenMode::Read)?;
-        let mut output = create_unpublished(
-            &directory,
-            &leaf,
-            relative,
-            true,
-            RestoreFault::SessionDiffers,
-        )?;
-        let mut buffer = [0u8; 8192];
-        loop {
-            let count = match input.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(count) => count,
-                Err(_) => return Err(RestoreFault::Unreadable),
-            };
-            if output.store(&buffer[..count]).is_err() {
-                return Err(RestoreFault::Unreadable);
+    ) -> Result<Box<dyn SessionAttempt + '_>, RestoreFault> {
+        let root_directory = open_root_dir(root)?;
+        #[cfg(windows)]
+        let mut session_guard = begin_session_directory(root, &root_directory, relative)?;
+        let setup = |directory: File| {
+            let name = relative_leaf(relative)?;
+            let mut publication = name.clone();
+            publication.push(".publication");
+            if name_exists_at(&directory, &publication)? {
+                return Err(RestoreFault::Retained);
             }
-        }
-        if output.sync_file().is_err() {
-            return Err(RestoreFault::Unreadable);
-        }
-        let verified = unpublished_matches(&mut output, conversation_id, digest)?;
-        // The name is linked only after the held bytes matched.
-        if !verified {
-            return Err(RestoreFault::SourceChanged);
-        }
-        output.publish_in(RestoreFault::SessionDiffers)?;
-        if sync_dir(&directory).is_err() {
-            let _ = unlink_at(&directory, &leaf);
-            return Err(RestoreFault::Unreadable);
-        }
-        // The temp inode is not the published file. Removing it does not
-        // change the bytes that matched `digest`. Close the read first:
-        // Windows will not delete a file this handle still has open.
-        drop(input);
-        let _ = self.remove_file(temp);
-        Ok(())
-    }
-
-    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
-        // Durable bytes, then the name. A read-only open cannot flush on
-        // Windows, so the writable handle is taken before the rename.
-        // The rename refuses a destination that already exists.
-        sync_writable(temp)?;
-        rename_new(temp, final_path, RestoreFault::SessionDiffers)?;
-        if let Some(parent) = final_path.parent() {
-            sync_directory(parent).map_err(|_| RestoreFault::Unreadable)?;
-        }
-        Ok(())
-    }
-
-    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
-        if publication.is_empty() || publication.bytes().any(|byte| byte <= b' ') {
-            return Err(RestoreFault::Unreadable);
-        }
-        let path = publication_file(session);
-        if path.exists() {
-            fs::remove_file(&path).map_err(|_| RestoreFault::Unreadable)?;
-        }
-        let mut file = open(&path, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)?;
-        file.write_all(publication.as_bytes())
-            .map_err(|_| RestoreFault::Unreadable)?;
-        file.write_all(b"\n")
-            .map_err(|_| RestoreFault::Unreadable)?;
-        file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
-        if let Some(parent) = path.parent() {
-            sync_directory(parent).map_err(|_| RestoreFault::Unreadable)?;
-        }
-        Ok(())
+            let mut temporary = name.clone();
+            temporary.push(".partial");
+            // An existing partial is not this attempt's inode.
+            if name_exists_at(&directory, &temporary)? {
+                return Err(RestoreFault::Retained);
+            }
+            #[cfg(any(target_os = "macos", windows))]
+            let (temporary_parent, temporary) = {
+                let (parent, mut scratch) = parent_of_root(root)?;
+                scratch.push(format!(
+                    ".session-source-{}-{}",
+                    std::process::id(),
+                    ATTEMPT.fetch_add(1, Ordering::Relaxed)
+                ));
+                (parent, scratch)
+            };
+            #[cfg(not(any(target_os = "macos", windows)))]
+            let temporary_parent = duplicate(&directory)?;
+            let temp = create_unpublished(
+                &temporary_parent,
+                &temporary,
+                relative,
+                true,
+                RestoreFault::Retained,
+            )?;
+            Ok((directory, name, temp))
+        };
+        #[cfg(windows)]
+        let (directory, name, temp) =
+            session_guard.prepare(|directory| setup(duplicate(directory)?))?;
+        #[cfg(not(windows))]
+        let (directory, name, temp) = setup(directory_under(&root_directory, relative)?)?;
+        Ok(Box::new(DirectorySessionAttempt {
+            root: root_directory,
+            root_spelling: root.path().to_path_buf(),
+            directory,
+            name,
+            relative: relative.to_owned(),
+            temp,
+            output: None,
+            sidecar: None,
+            namespace: None,
+            #[cfg(windows)]
+            session_guard,
+            expected: None,
+        }))
     }
 
     fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
@@ -781,18 +615,6 @@ impl QuarantineLayout for DirectoryQuarantine {
             return Err(RestoreFault::Tamper);
         }
         Ok(Some(id.to_owned()))
-    }
-
-    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
-        self.remove_file(&publication_file(session))
-    }
-
-    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
-        match fs::symlink_metadata(path) {
-            Ok(_) => fs::remove_file(path).map_err(|_| RestoreFault::Unreadable),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(_) => Err(RestoreFault::Unreadable),
-        }
     }
 
     fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
@@ -850,12 +672,6 @@ impl QuarantineLayout for DirectoryQuarantine {
         }))
     }
 
-    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
-        let body = marker_bytes(staging_id)?;
-        let directory = open_root_dir(root)?;
-        publish_marker_at(&directory, &body)
-    }
-
     fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
         let directory = open_root_dir(root)?;
         match kind_at(&directory, OsStr::new("accept-ready"))? {
@@ -863,29 +679,6 @@ impl QuarantineLayout for DirectoryQuarantine {
                 read_marker_bytes(&read_bytes_at(&directory, OsStr::new("accept-ready"))?)
             }
             _ => Ok(None),
-        }
-    }
-
-    fn retire_ready(&self, root: &AnchoredRoot) -> Result<(), RestoreFault> {
-        let directory = open_root_dir(root)?;
-        let name = OsStr::new("accept-ready");
-        if kind_at(&directory, name)? == EntryKind::Missing {
-            return Ok(());
-        }
-        let _ = unlink_at(&directory, name);
-        if kind_at(&directory, name)? == EntryKind::Missing {
-            return Ok(());
-        }
-        if let Ok(file) = open_file_at(&directory, name, OpenMode::ReadWrite) {
-            let _ = file.set_len(0);
-            let _ = file.sync_all();
-        }
-        match read_bytes_at(&directory, name) {
-            Ok(bytes) => match read_marker_bytes(&bytes)? {
-                Some(_) => Err(RestoreFault::Retained),
-                None => Ok(()),
-            },
-            Err(_) => Err(RestoreFault::Retained),
         }
     }
 
@@ -922,31 +715,6 @@ impl QuarantineLayout for DirectoryQuarantine {
         Ok(false)
     }
 
-    fn note_publication_relative(
-        &self,
-        root: &AnchoredRoot,
-        relative: &str,
-        publication: &str,
-    ) -> Result<(), RestoreFault> {
-        if publication.is_empty() || publication.bytes().any(|byte| byte <= b' ') {
-            return Err(RestoreFault::Unreadable);
-        }
-        let directory = directory_for(root, relative)?;
-        let mut name = relative_leaf(relative)?;
-        name.push(".publication");
-        if name_exists_at(&directory, &name)? {
-            unlink_at(&directory, &name)?;
-        }
-        let mut file = open_file_at(&directory, &name, OpenMode::CreateNew)?;
-        file.write_all(publication.as_bytes())
-            .map_err(|_| RestoreFault::Unreadable)?;
-        file.write_all(b"\n")
-            .map_err(|_| RestoreFault::Unreadable)?;
-        file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
-        sync_dir(&directory)?;
-        Ok(())
-    }
-
     fn publication_relative(
         &self,
         root: &AnchoredRoot,
@@ -967,21 +735,6 @@ impl QuarantineLayout for DirectoryQuarantine {
         Ok(Some(id.to_owned()))
     }
 
-    fn remove_publication_relative(
-        &self,
-        root: &AnchoredRoot,
-        relative: &str,
-    ) -> Result<(), RestoreFault> {
-        let directory = directory_for(root, relative)?;
-        let mut name = relative_leaf(relative)?;
-        name.push(".publication");
-        match kind_at(&directory, &name)? {
-            EntryKind::Missing => Ok(()),
-            EntryKind::File | EntryKind::Symlink => unlink_at(&directory, &name),
-            EntryKind::Directory | EntryKind::Other => Err(RestoreFault::Unreadable),
-        }
-    }
-
     fn session_cut_relative(
         &self,
         root: &AnchoredRoot,
@@ -990,30 +743,8 @@ impl QuarantineLayout for DirectoryQuarantine {
     ) -> Result<SessionCut, RestoreFault> {
         let directory = directory_for(root, relative)?;
         let leaf = relative_leaf(relative)?;
-        let file = open_file_at(&directory, &leaf, OpenMode::Read)?;
-        let path = path_of_handle(&file)?;
-        let cut = self.session_cut(&path, conversation_id)?;
-        drop(file);
-        Ok(cut)
-    }
-
-    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
-        // This fallback destroys a session the storage opener may refuse:
-        // mode is not 0600, or the Windows ACL is not the one `open` trusts.
-        // Truncate with the process file API. On Unix, make the file writable
-        // first so a read-only copy can still be emptied.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
-        }
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(path)
-            .map_err(|_| RestoreFault::Unreadable)?;
-        file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
-        Ok(())
+        let mut file = open_file_at(&directory, &leaf, OpenMode::Read)?;
+        held_session_cut(&mut file, conversation_id)
     }
 
     fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
@@ -1023,6 +754,659 @@ impl QuarantineLayout for DirectoryQuarantine {
             size: stream.size,
             digest: Fingerprint::from_digest(stream.digest),
         })
+    }
+}
+
+#[cfg(windows)]
+fn begin_session_directory(
+    root: &AnchoredRoot,
+    directory: &File,
+    relative: &str,
+) -> Result<windows_backend::SessionDirectory, RestoreFault> {
+    if !relative_path_is_safe(relative) {
+        return Err(RestoreFault::Tamper);
+    }
+    let parent = Path::new(relative).parent().ok_or(RestoreFault::Tamper)?;
+    let mut components = parent.components().collect::<Vec<_>>();
+    let Some(last) = components.pop() else {
+        let (parent, name) = parent_of_root(root)?;
+        return windows_backend::SessionDirectory::begin(&parent, &name);
+    };
+    let std::path::Component::Normal(name) = last else {
+        return Err(RestoreFault::Tamper);
+    };
+    let mut held = duplicate(directory)?;
+    for component in components {
+        let std::path::Component::Normal(part) = component else {
+            return Err(RestoreFault::Tamper);
+        };
+        held = ensure_dir_at(&held, part)?;
+    }
+    windows_backend::SessionDirectory::begin(&held, name)
+}
+
+/// Inspect the retained inode, even if its former name or ancestor is replaced.
+fn held_session_cut(file: &mut File, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+    let stream = inspect_open_file(file, conversation_id).map_err(|_| RestoreFault::Tamper)?;
+    Ok(SessionCut {
+        size: stream.size,
+        digest: Fingerprint::from_digest(stream.digest),
+    })
+}
+
+struct DirectorySessionAttempt {
+    root: File,
+    root_spelling: PathBuf,
+    directory: File,
+    name: OsString,
+    relative: String,
+    temp: Unpublished,
+    output: Option<Unpublished>,
+    sidecar: Option<Unpublished>,
+    namespace: Option<ProtectedDirectories>,
+    #[cfg(windows)]
+    session_guard: windows_backend::SessionDirectory,
+    expected: Option<(String, Fingerprint)>,
+}
+
+impl SessionAttempt for DirectorySessionAttempt {
+    fn destination(&mut self) -> Result<File, RestoreFault> {
+        duplicate(self.temp.file.as_ref().ok_or(RestoreFault::Unreadable)?)
+    }
+
+    fn inspect(&self, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        let mut file = self
+            .temp
+            .file
+            .as_ref()
+            .ok_or(RestoreFault::Unreadable)?
+            .try_clone()
+            .map_err(|_| RestoreFault::Unreadable)?;
+        let stream =
+            inspect_open_file(&mut file, conversation_id).map_err(|_| RestoreFault::Tamper)?;
+        Ok(SessionCut {
+            size: stream.size,
+            digest: Fingerprint::from_digest(stream.digest),
+        })
+    }
+
+    fn publish(&mut self, conversation_id: &str, digest: &Fingerprint) -> Result<(), RestoreFault> {
+        let mut input = self
+            .temp
+            .file
+            .as_ref()
+            .ok_or(RestoreFault::Unreadable)?
+            .try_clone()
+            .map_err(|_| RestoreFault::Unreadable)?;
+        input
+            .seek(SeekFrom::Start(0))
+            .map_err(|_| RestoreFault::Unreadable)?;
+        self.output = Some(create_unpublished(
+            &self.directory,
+            &self.name,
+            &self.relative,
+            true,
+            RestoreFault::SessionDiffers,
+        )?);
+        let output = self.output.as_mut().ok_or(RestoreFault::Unreadable)?;
+        let mut buffer = [0u8; 8192];
+        loop {
+            let count = input
+                .read(&mut buffer)
+                .map_err(|_| RestoreFault::Unreadable)?;
+            if count == 0 {
+                break;
+            }
+            output.store(&buffer[..count])?;
+        }
+        output.sync_file()?;
+        if !unpublished_matches(output, conversation_id, digest)? {
+            return Err(RestoreFault::SourceChanged);
+        }
+        output.publish_in(RestoreFault::SessionDiffers)?;
+        self.expected = Some((conversation_id.to_owned(), *digest));
+        sync_dir(&self.directory)?;
+        // Source bytes are retired by inode. On macOS its named scratch is
+        // outside the restore root and remains empty; it is not a session helper.
+        empty_owned_file(self.temp.file.as_ref().ok_or(RestoreFault::Retained)?)?;
+        Ok(())
+    }
+
+    fn note_publication(&mut self, publication: &str) -> Result<PublishedSession, RestoreFault> {
+        if publication.is_empty() || publication.bytes().any(|byte| byte <= b' ') {
+            return Err(RestoreFault::Unreadable);
+        }
+        let output = self.output.as_ref().ok_or(RestoreFault::Unreadable)?;
+        if !output.name_is_owned()? {
+            return Err(RestoreFault::Tamper);
+        }
+        let mut name = self.name.clone();
+        name.push(".publication");
+        self.sidecar = Some(create_unpublished(
+            &self.directory,
+            &name,
+            "publication",
+            true,
+            RestoreFault::SessionDiffers,
+        )?);
+        let sidecar = self.sidecar.as_mut().ok_or(RestoreFault::Unreadable)?;
+        sidecar.store(publication.as_bytes())?;
+        sidecar.store(b"\n")?;
+        sidecar.sync_file()?;
+        sidecar.publish_in(RestoreFault::SessionDiffers)?;
+        #[cfg(windows)]
+        self.session_guard.seal()?;
+        #[cfg(not(windows))]
+        {
+            self.namespace = Some(ProtectedDirectories::seal(&self.directory)?);
+        }
+        if path_of_handle(&self.root)? != self.root_spelling
+            || tree_id_of(&descend(&self.root, &self.relative, false)?)?
+                != tree_id_of(&self.directory)?
+        {
+            return Err(RestoreFault::Tamper);
+        }
+        if !self
+            .output
+            .as_ref()
+            .ok_or(RestoreFault::Unreadable)?
+            .name_is_owned()?
+            || !self
+                .sidecar
+                .as_ref()
+                .ok_or(RestoreFault::Unreadable)?
+                .name_is_owned()?
+        {
+            return Err(RestoreFault::Tamper);
+        }
+        let (conversation, digest) = self.expected.as_ref().ok_or(RestoreFault::Unreadable)?;
+        if !unpublished_matches(
+            self.output.as_mut().ok_or(RestoreFault::Unreadable)?,
+            conversation,
+            digest,
+        )? {
+            return Err(RestoreFault::SourceChanged);
+        }
+        Ok(PublishedSession {
+            durable: directory_publication_is_durable(&self.directory),
+        })
+    }
+
+    fn release(&mut self) -> Result<(), RestoreFault> {
+        if let Some(file) = self.output.as_mut() {
+            file.release()?;
+        }
+        if let Some(file) = self.sidecar.as_mut() {
+            file.release()?;
+        }
+        if let Some(namespace) = self.namespace.as_mut() {
+            if !namespace.release() {
+                return Err(RestoreFault::Retained);
+            }
+        }
+        #[cfg(windows)]
+        self.session_guard.release()?;
+        Ok(())
+    }
+
+    fn retire(&mut self) -> Result<(), RestoreFault> {
+        // Give each retained object a cleanup attempt even when another fails.
+        let temp = self.temp.retire();
+        let output = self.output.as_mut().map(Unpublished::retire).transpose();
+        let sidecar = self.sidecar.as_mut().map(Unpublished::retire).transpose();
+        #[cfg(windows)]
+        let restored = self.session_guard.release().is_ok();
+        #[cfg(not(windows))]
+        let restored = true;
+        if temp.is_err() || output.is_err() || sidecar.is_err() || !restored {
+            Err(RestoreFault::Retained)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+struct PublicationOwner {
+    files: Vec<Unpublished>,
+    journal: Option<Unpublished>,
+    directories: Vec<OwnedDirectory>,
+    namespace: ProtectedDirectories,
+    #[cfg(windows)]
+    closed: Option<closed_windows::ClosedTree>,
+}
+
+impl PublicationOwner {
+    fn prepare_rename(&mut self, root: &File) -> Result<(), RestoreFault> {
+        #[cfg(windows)]
+        {
+            let closed = closed_windows::ClosedTree::capture_publication(
+                root,
+                &self.files,
+                self.journal.as_ref().ok_or(RestoreFault::Retained)?,
+                &self.directories,
+            )?;
+            self.files.clear();
+            drop(self.journal.take());
+            self.directories.clear();
+            self.namespace.close_for_rename();
+            self.closed = Some(closed);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = root;
+            for directory in &self.directories {
+                directory.check_binding()?;
+            }
+        }
+        Ok(())
+    }
+    fn retire(&mut self, root: &File) -> RestoreFault {
+        #[cfg(windows)]
+        if let Some(closed) = &self.closed {
+            let _ = closed.retire(root);
+            return RestoreFault::Retained;
+        }
+        let _ = root;
+        abandon_sealed(&mut self.files, self.journal.as_mut())
+    }
+    fn release(&mut self, root: &File) -> bool {
+        #[cfg(windows)]
+        if let Some(closed) = &self.closed {
+            return closed.release(root);
+        }
+        let _ = root;
+        let mut complete = true;
+        for file in self.files.iter_mut().chain(self.journal.iter_mut()) {
+            if file.release().is_err() {
+                complete = false;
+            }
+        }
+        if !self.namespace.release() {
+            complete = false;
+        }
+        complete
+    }
+}
+
+fn promote_tree(
+    quarantine: &AnchoredRoot,
+    live: &AnchoredRoot,
+    loaded: &LoadedTree,
+    generation: &str,
+    retire: impl FnOnce(&File, &TreeId, &File) -> Result<(), RestoreFault>,
+) -> Result<Promoted, RestoreFault> {
+    let (source_parent, source_name) = parent_of_root(quarantine)?;
+    let opened = open_dir_at(&source_parent, &source_name)?;
+    if tree_id_of(&opened)? != loaded.identity {
+        return Err(RestoreFault::Tamper);
+    }
+    let on_disk = read_file_at(&opened, OsStr::new("journal.txt"))?;
+    if on_disk != loaded.journal || content_of(&opened)? != loaded.content {
+        return Err(RestoreFault::Tamper);
+    }
+    let mut source_marker = open_file_at(&opened, OsStr::new("accept-ready"), OpenMode::Read)?;
+    let marker_bytes_read = read_limited(&mut source_marker, MAX_NAME_BYTES as u64 + 1)?;
+    if read_marker_bytes(&marker_bytes_read)?.as_deref() != Some(generation) {
+        return Err(RestoreFault::Tamper);
+    }
+    // The live tree is a directory this attempt creates under the parent
+    // this anchor holds, and writes from those sealed bytes. The identity
+    // is that directory's open. An open descriptor on the quarantine file
+    // keeps the old inode.
+    let (live_parent, live_name) = parent_of_root(live)?;
+    let SealedDir {
+        name: sealed_name,
+        file: created,
+        identity: created_id,
+        ..
+    } = sealed_beside(&live_parent, &live_name)?;
+    // Copied bytes stay on the handles that wrote them. On Unix those
+    // inodes have no names yet, so a writer cannot open them. On Windows
+    // the names exist and the handles do not share write access.
+    let mut held = Vec::new();
+    let mut owned_directories = Vec::new();
+    let copied = match copy_at(&opened, &created, &mut held, &mut owned_directories) {
+        Ok(token) => token,
+        Err(_error) => {
+            return Err(abandon_sealed(&mut held, None));
+        }
+    };
+    let mut journal = match create_unpublished(
+        &created,
+        OsStr::new("journal.txt"),
+        "journal.txt",
+        false,
+        RestoreFault::Tamper,
+    ) {
+        Ok(file) => file,
+        Err(_error) => {
+            return Err(abandon_sealed(&mut held, None));
+        }
+    };
+    if journal.store(loaded.journal.as_bytes()).is_err() || journal.sync_file().is_err() {
+        return Err(abandon_sealed(&mut held, Some(&mut journal)));
+    }
+    if copied != loaded.content || tree_id_of(&opened).ok().as_ref() != Some(&loaded.identity) {
+        return Err(abandon_sealed(&mut held, Some(&mut journal)));
+    }
+    if let Err(_error) = held_still_sealed(&created, &created_id, loaded, &mut held, &mut journal) {
+        return Err(abandon_sealed(&mut held, Some(&mut journal)));
+    }
+    let marker = (|| {
+        source_marker
+            .seek(SeekFrom::Start(0))
+            .map_err(|_| RestoreFault::Unreadable)?;
+        let bytes = read_limited(&mut source_marker, MAX_NAME_BYTES as u64 + 1)?;
+        if read_marker_bytes(&bytes)?.as_deref() != Some(generation) {
+            return Err(RestoreFault::Tamper);
+        }
+        held.push(create_unpublished(
+            &created,
+            OsStr::new("accept-ready"),
+            "accept-ready",
+            false,
+            RestoreFault::Tamper,
+        )?);
+        let marker = held.last_mut().ok_or(RestoreFault::Retained)?;
+        marker.store(&marker_bytes(generation)?)?;
+        marker.sync_file()
+    })();
+    if marker.is_err() {
+        return Err(abandon_sealed(&mut held, Some(&mut journal)));
+    }
+    // The link is the publication of each inode. The directory rename
+    // then makes those names live. A descriptor opened on a predictable
+    // copy name is not one of these inodes.
+    if let Err(_error) = publish_held(&created, &mut held, &mut journal, sync_tree_at) {
+        return Err(abandon_sealed(&mut held, Some(&mut journal)));
+    }
+    let mut namespace = match ProtectedDirectories::seal_owned(&created, &owned_directories) {
+        Ok(guard) => guard,
+        Err(_error) => {
+            return Err(abandon_sealed(&mut held, Some(&mut journal)));
+        }
+    };
+    if let Err(_error) = published_tree_matches(&created, loaded, &held, &journal) {
+        namespace.release();
+        return Err(abandon_sealed(&mut held, Some(&mut journal)));
+    }
+    let published = created_id;
+    let mut publication = PublicationOwner {
+        files: held,
+        journal: Some(journal),
+        directories: owned_directories,
+        namespace,
+        #[cfg(windows)]
+        closed: None,
+    };
+    if publication.prepare_rename(&created).is_err() {
+        return Err(publication.retire(&created));
+    }
+    // Native Windows rename requires every descendant handle closed. Unix
+    // retains them; the same owner preserves identity and cleanup in both cases.
+    if rename_owned_at(
+        &created,
+        &live_parent,
+        &sealed_name,
+        &live_parent,
+        &live_name,
+        RestoreFault::LiveOccupied,
+    )
+    .is_err()
+    {
+        return Err(publication.retire(&created));
+    }
+    let live_id = open_dir_at(&live_parent, &live_name)
+        .ok()
+        .and_then(|file| tree_id_of(&file).ok());
+    let opened_id = tree_id_of(&created).ok();
+    if live_id.as_ref() != Some(&published) || opened_id.as_ref() != Some(&published) {
+        return Err(publication.retire(&created));
+    }
+    // The copy is live. Retire the source the open handle still names,
+    // even when the original path is gone.
+    // The rename already made the tree live. A parent that cannot be
+    // synced does not put it back, and does not make the promotion a
+    // refusal.
+    let publication_restricted = !publication.release(&created);
+    let mut promoted = finish_promotion(
+        || retire(&opened, &loaded.identity, &source_marker),
+        || {
+            let live_synced = directory_publication_is_durable(&live_parent);
+            let source_synced = directory_publication_is_durable(&source_parent);
+            live_synced && source_synced
+        },
+    );
+    promoted.publication_restricted = publication_restricted;
+    Ok(promoted)
+}
+
+fn abandon_sealed(files: &mut [Unpublished], journal: Option<&mut Unpublished>) -> RestoreFault {
+    for file in files {
+        let _ = file.retire();
+    }
+    if let Some(journal) = journal {
+        let _ = journal.retire();
+    }
+    RestoreFault::Retained
+}
+
+fn empty_owned_file(file: &File) -> Result<(), RestoreFault> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|_| RestoreFault::Retained)?;
+        if file.set_len(0).is_ok() {
+            return file.sync_all().map_err(|_| RestoreFault::Retained);
+        }
+        #[cfg(target_os = "linux")]
+        let path = {
+            use std::os::unix::io::AsRawFd;
+            PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()))
+        };
+        #[cfg(not(target_os = "linux"))]
+        let path = path_of_handle(file)?;
+        let reopened = fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .map_err(|_| RestoreFault::Retained)?;
+        if tree_id_of(&reopened)? != tree_id_of(file)? {
+            return Err(RestoreFault::Retained);
+        }
+        reopened
+            .set_len(0)
+            .and_then(|()| reopened.sync_all())
+            .map_err(|_| RestoreFault::Retained)
+    }
+    #[cfg(windows)]
+    {
+        if file.set_len(0).is_ok() {
+            return file.sync_all().map_err(|_| RestoreFault::Retained);
+        }
+        let identity = nessa_local_storage::NativeObjectId::capture(file)
+            .map_err(|_| RestoreFault::Retained)?;
+        let writable = nessa_local_storage::reacquire_exclusive_file(file, identity)
+            .map_err(|_| RestoreFault::Retained)?;
+        writable
+            .set_len(0)
+            .and_then(|()| writable.sync_all())
+            .map_err(|_| RestoreFault::Retained)
+    }
+}
+
+fn published_tree_matches(
+    directory: &File,
+    loaded: &LoadedTree,
+    held: &[Unpublished],
+    journal: &Unpublished,
+) -> Result<(), RestoreFault> {
+    for file in held.iter().chain(std::iter::once(journal)) {
+        if !file.name_is_owned()? {
+            return Err(RestoreFault::Tamper);
+        }
+    }
+    if content_of(directory)? != loaded.content
+        || read_file_at(directory, OsStr::new("journal.txt"))? != loaded.journal
+    {
+        return Err(RestoreFault::Tamper);
+    }
+    Ok(())
+}
+
+fn restrict_directory(directory: &File) -> Result<File, RestoreFault> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let retained = duplicate(directory)?;
+        retained
+            .set_permissions(fs::Permissions::from_mode(0o500))
+            .map_err(|_| RestoreFault::Unreadable)?;
+        Ok(retained)
+    }
+    #[cfg(windows)]
+    {
+        windows_backend::seal_copy_directory(directory)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn promote_with_failed_source_retirement(
+    quarantine: &AnchoredRoot,
+    live: &AnchoredRoot,
+    loaded: &LoadedTree,
+    generation: &str,
+    attempts: &[std::sync::atomic::AtomicUsize; 2],
+    durable: bool,
+) -> Result<Promoted, RestoreFault> {
+    let mut promoted = promote_tree(
+        quarantine,
+        live,
+        loaded,
+        generation,
+        |file, identity, marker| {
+            retire_source_marker_with(
+                file,
+                identity,
+                marker,
+                |_, _| {
+                    attempts[0].fetch_add(1, Ordering::Relaxed);
+                    Err(RestoreFault::Unreadable)
+                },
+                |_| {
+                    attempts[1].fetch_add(1, Ordering::Relaxed);
+                    Err(RestoreFault::Retained)
+                },
+            )
+        },
+    )?;
+    promoted.durable &= durable;
+    Ok(promoted)
+}
+
+/// A child directory created and retained by this copy, never rediscovered for
+/// metadata changes through a mutable namespace.
+struct OwnedDirectory {
+    relative: String,
+    parent: File,
+    name: OsString,
+    directory: File,
+}
+
+impl OwnedDirectory {
+    fn check_binding(&self) -> Result<(), RestoreFault> {
+        let named = open_dir_at(&self.parent, &self.name)?;
+        if tree_id_of(&named)? != tree_id_of(&self.directory)? {
+            return Err(RestoreFault::Tamper);
+        }
+        Ok(())
+    }
+}
+
+/// Protect only explicitly retained directories while final bindings are checked.
+struct ProtectedDirectories {
+    directories: Vec<(File, u32)>,
+    armed: bool,
+}
+
+impl ProtectedDirectories {
+    #[cfg(any(not(windows), test))]
+    fn seal(directory: &File) -> Result<Self, RestoreFault> {
+        Self::seal_owned(directory, &[])
+    }
+
+    fn seal_owned(directory: &File, children: &[OwnedDirectory]) -> Result<Self, RestoreFault> {
+        let mut guard = Self {
+            directories: Vec::new(),
+            armed: true,
+        };
+        guard.protect(directory)?;
+        for child in children {
+            guard.protect(&child.directory)?;
+        }
+        // Every containing directory is now sealed. A substituted child cannot
+        // be adopted, chmodded, or accepted even when its content is identical.
+        for child in children {
+            child.check_binding()?;
+        }
+        Ok(guard)
+    }
+
+    fn protect(&mut self, directory: &File) -> Result<(), RestoreFault> {
+        #[cfg(unix)]
+        let original = {
+            use std::os::unix::fs::PermissionsExt;
+            directory
+                .metadata()
+                .map_err(|_| RestoreFault::Unreadable)?
+                .permissions()
+                .mode()
+                & 0o7777
+        };
+        #[cfg(not(unix))]
+        let original = 0;
+        self.directories
+            .push((restrict_directory(directory)?, original));
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn close_for_rename(&mut self) {
+        self.armed = false;
+        self.directories.clear();
+    }
+
+    fn release(&mut self) -> bool {
+        if !self.armed {
+            return true;
+        }
+        let mut restored = true;
+        for (directory, original) in self.directories.iter().rev() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if directory
+                    .set_permissions(fs::Permissions::from_mode(*original))
+                    .is_err()
+                {
+                    restored = false;
+                }
+            }
+            #[cfg(windows)]
+            {
+                let _ = original;
+                if windows_backend::release_copy_directory(directory).is_err() {
+                    restored = false;
+                }
+            }
+        }
+        self.armed = false;
+        restored
+    }
+}
+impl Drop for ProtectedDirectories {
+    fn drop(&mut self) {
+        self.release();
     }
 }
 
@@ -1043,13 +1427,8 @@ fn finish_promotion(
     Promoted {
         durable: sync_parents(),
         source_retirement_failed,
+        publication_restricted: false,
     }
-}
-
-/// Inside the quarantine, so a later tree cannot inherit a marker that
-/// belonged to a directory already renamed away. Not part of the seal.
-fn ready_path(root: &Path) -> PathBuf {
-    root.join("accept-ready")
 }
 
 /// Beside the session file, so the publication names this copy and not an
@@ -1076,12 +1455,135 @@ fn plain_absolute(path: PathBuf) -> PathBuf {
     PathBuf::from(rest)
 }
 
+struct OwnedStageFile {
+    relative: String,
+    file: File,
+    fingerprint: Fingerprint,
+}
+
 struct PartialTree {
     directory: File,
     parent: File,
     partial_name: OsString,
     quarantine_name: OsString,
     armed: bool,
+    files: Vec<OwnedStageFile>,
+    directories: Vec<OwnedDirectory>,
+    parent_spelling: PathBuf,
+}
+
+struct OwnedStagedTree {
+    directory: File,
+    parent: File,
+    name: OsString,
+    identity: TreeId,
+    files: Vec<OwnedStageFile>,
+    marker: Option<Unpublished>,
+    parent_spelling: PathBuf,
+}
+
+impl StagedTreeOwner for OwnedStagedTree {
+    fn check_binding(&self) -> Result<(), RestoreFault> {
+        if path_of_handle(&self.parent)? != self.parent_spelling {
+            return Err(RestoreFault::Retained);
+        }
+        let named = open_dir_at(&self.parent, &self.name).map_err(|_| RestoreFault::Retained)?;
+        if tree_id_of(&named)? != self.identity {
+            return Err(RestoreFault::Retained);
+        }
+        Ok(())
+    }
+
+    fn mark_ready(&mut self, staging_id: &str) -> Result<(), RestoreFault> {
+        self.mark_ready_with(staging_id, sync_dir)
+    }
+
+    fn retire(&mut self) -> Result<(), RestoreFault> {
+        // A directory cannot be unlinked conditionally by inode on POSIX.
+        // Keep its namespace, retire only handles created by this stage, and
+        // report that named directory honestly rather than touching a lookup.
+        if let Some(marker) = self.marker.as_mut() {
+            let _ = marker.retire();
+        }
+        for file in &self.files {
+            let _ = empty_owned_file(&file.file);
+        }
+        Err(RestoreFault::Retained)
+    }
+}
+
+impl OwnedStagedTree {
+    fn mark_ready_with(
+        &mut self,
+        staging_id: &str,
+        sync: impl FnOnce(&File) -> Result<(), RestoreFault>,
+    ) -> Result<(), RestoreFault> {
+        self.check_binding()?;
+        let bytes = marker_bytes(staging_id)?;
+        self.marker = Some(create_unpublished(
+            &self.directory,
+            OsStr::new("accept-ready"),
+            "accept-ready",
+            false,
+            RestoreFault::Retained,
+        )?);
+        // Own the inode before any write, link, sync, or binding check can fail.
+        let marker = self.marker.as_mut().ok_or(RestoreFault::Retained)?;
+        marker.store(&bytes)?;
+        marker.sync_file()?;
+        marker.publish_in(RestoreFault::Retained)?;
+        sync(&self.directory)?;
+        self.check_binding()?;
+        if !self
+            .marker
+            .as_ref()
+            .ok_or(RestoreFault::Retained)?
+            .name_is_owned()?
+        {
+            return Err(RestoreFault::Retained);
+        }
+        Ok(())
+    }
+}
+
+fn staged_tree_matches(
+    root: &File,
+    files: &[OwnedStageFile],
+    directories: &[OwnedDirectory],
+) -> Result<(), RestoreFault> {
+    for entry in directories {
+        entry.check_binding()?;
+    }
+    let mut expected = Vec::new();
+    for entry in files {
+        let directory = descend(root, &entry.relative, false)?;
+        let name = relative_leaf(&entry.relative)?;
+        let named = open_file_at(&directory, &name, OpenMode::Read)?;
+        if tree_id_of(&named)? != tree_id_of(&entry.file)?
+            || hash_at(&directory, &name)? != entry.fingerprint
+        {
+            return Err(RestoreFault::Retained);
+        }
+        if entry.relative != "journal.txt" && entry.relative != "accept-ready" {
+            expected.push(format!("{} {}", entry.relative, entry.fingerprint.hex()));
+        }
+    }
+    expected.sort();
+    if content_of(root)? != Fingerprint::of(expected.join("\n").as_bytes()) {
+        return Err(RestoreFault::Retained);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn verify_reacquired_stage(root: &File, files: &[OwnedStageFile]) -> Result<(), RestoreFault> {
+    if staged_tree_matches(root, files, &[]).is_err() {
+        for file in files {
+            let _ = empty_owned_file(&file.file);
+        }
+        return Err(RestoreFault::Retained);
+    }
+    Ok(())
 }
 
 impl Staging for PartialTree {
@@ -1089,52 +1591,125 @@ impl Staging for PartialTree {
         if !relative_path_is_safe(relative) {
             return Err(RestoreFault::Tamper);
         }
-        let directory = directory_under(&self.directory, relative)?;
+        let directory = owned_directory_under(&self.directory, relative, &mut self.directories)?;
         let leaf = relative_leaf(relative)?;
         // The partial directory is the anchor. A symlink planted at a parent
         // inside it is not a directory this attempt owns.
         let mut file = open_file_at(&directory, &leaf, OpenMode::CreateNew)?;
+        self.files.push(OwnedStageFile {
+            relative: relative.to_owned(),
+            file: file.try_clone().map_err(|_| RestoreFault::Retained)?,
+            fingerprint: Fingerprint::of(bytes),
+        });
         file.write_all(bytes)
             .map_err(|_| RestoreFault::Unreadable)?;
         file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
         Ok(())
     }
 
-    fn finish(mut self: Box<Self>, journal: &str) -> Result<TreeId, RestoreFault> {
-        self.write("journal.txt", journal.as_bytes())?;
-        sync_tree_at(&self.directory)?;
-        let identity = tree_id_of(&self.directory)?;
-        rename_exclusive_at(
-            &self.parent,
-            &self.partial_name,
-            &self.parent,
-            &self.quarantine_name,
-            RestoreFault::QuarantineOccupied,
-        )?;
-        self.armed = false;
-        let published = open_dir_at(&self.parent, &self.quarantine_name)?;
-        if tree_id_of(&published)? != identity {
-            return Err(RestoreFault::Tamper);
-        }
-        if sync_dir(&self.parent).is_err() {
-            return match remove_opened(&published, &identity) {
-                Ok(()) => Err(RestoreFault::Unreadable),
-                Err(_) => Err(RestoreFault::Retained),
+    fn finish(
+        mut self: Box<Self>,
+        journal: &str,
+    ) -> Result<Box<dyn StagedTreeOwner>, RestoreFault> {
+        let result = (|| {
+            self.write("journal.txt", journal.as_bytes())?;
+            sync_tree_at(&self.directory)?;
+            let identity = tree_id_of(&self.directory)?;
+            #[cfg(windows)]
+            let mut namespace =
+                ProtectedDirectories::seal_owned(&self.directory, &self.directories)?;
+            staged_tree_matches(&self.directory, &self.files, &self.directories)?;
+            #[cfg(windows)]
+            let closed = {
+                let closed = closed_windows::ClosedTree::capture_stage(
+                    &self.directory,
+                    &self.files,
+                    &self.directories,
+                )?;
+                self.files.clear();
+                self.directories.clear();
+                namespace.close_for_rename();
+                closed
             };
+            if rename_owned_at(
+                &self.directory,
+                &self.parent,
+                &self.partial_name,
+                &self.parent,
+                &self.quarantine_name,
+                RestoreFault::QuarantineOccupied,
+            )
+            .is_err()
+            {
+                #[cfg(windows)]
+                {
+                    let _ = closed.retire(&self.directory);
+                }
+                return Err(RestoreFault::Retained);
+            }
+            #[cfg(windows)]
+            {
+                self.files = match closed.reacquire_stage(&self.directory) {
+                    Ok(files) => files,
+                    Err(error) => {
+                        let _ = closed.retire(&self.directory);
+                        return Err(error);
+                    }
+                };
+                verify_reacquired_stage(&self.directory, &self.files)?;
+                if !closed.release(&self.directory) {
+                    for file in &self.files {
+                        let _ = empty_owned_file(&file.file);
+                    }
+                    return Err(RestoreFault::Retained);
+                }
+            }
+            let owner = OwnedStagedTree {
+                directory: duplicate(&self.directory)?,
+                parent: duplicate(&self.parent)?,
+                name: self.quarantine_name.clone(),
+                identity,
+                files: std::mem::take(&mut self.files),
+                marker: None,
+                parent_spelling: self.parent_spelling.clone(),
+            };
+            let mut owner = owner;
+            if owner.check_binding().is_err() || sync_dir(&self.parent).is_err() {
+                let _ = owner.retire();
+                return Err(RestoreFault::Retained);
+            }
+            Ok(Box::new(owner) as Box<dyn StagedTreeOwner>)
+        })();
+        match result {
+            Ok(owner) => {
+                self.armed = false;
+                Ok(owner)
+            }
+            Err(_) => {
+                for file in &self.files {
+                    let _ = empty_owned_file(&file.file);
+                }
+                self.armed = false;
+                Err(RestoreFault::Retained)
+            }
         }
-        Ok(identity)
     }
 
     fn discard(mut self: Box<Self>) -> Result<(), RestoreFault> {
         self.armed = false;
-        remove_opened_tree(&self.directory)
+        for file in &self.files {
+            let _ = empty_owned_file(&file.file);
+        }
+        Err(RestoreFault::Retained)
     }
 }
 
 impl Drop for PartialTree {
     fn drop(&mut self) {
         if self.armed {
-            let _ = remove_opened_tree(&self.directory);
+            for file in &self.files {
+                let _ = empty_owned_file(&file.file);
+            }
         }
     }
 }
@@ -1148,96 +1723,14 @@ fn marker_bytes(staging_id: &str) -> Result<Vec<u8>, RestoreFault> {
     Ok(body)
 }
 
-fn read_marker_id(path: &Path) -> Result<Option<String>, RestoreFault> {
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let bytes = fs::read(path).map_err(|_| RestoreFault::Unreadable)?;
-    let Some(text) = bytes.strip_suffix(b"\n") else {
-        return Ok(None);
-    };
-    let Ok(id) = std::str::from_utf8(text) else {
-        return Ok(None);
-    };
-    if staging_id_is_usable(id) {
-        Ok(Some(id.to_owned()))
-    } else {
-        Ok(None)
-    }
-}
-
-/// Remove a readiness file. `Retained` means it still names a staging id.
-fn retire_marker(path: &Path) -> Result<(), RestoreFault> {
-    retire_marker_with(
-        path,
-        |path| fs::remove_file(path),
-        |path| {
-            let file = fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(path)?;
-            file.sync_all()
-        },
-    )
-}
-
-fn retire_marker_with(
-    path: &Path,
-    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
-    mut spoil: impl FnMut(&Path) -> std::io::Result<()>,
-) -> Result<(), RestoreFault> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let _ = remove(path);
-    if !path.exists() {
-        return Ok(());
-    }
-    let _ = spoil(path);
-    match read_marker_id(path) {
-        Ok(Some(_)) => Err(RestoreFault::Retained),
-        _ => Ok(()),
-    }
-}
-
 /// Rename `from` onto `to` only when `to` does not exist.
+#[cfg(test)]
 fn rename_new(from: &Path, to: &Path, occupied: RestoreFault) -> Result<(), RestoreFault> {
     match publish_new(from, to) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(occupied),
         Err(_) => Err(RestoreFault::Rename),
     }
-}
-
-/// Remove `path` when it is still `identity`. A different directory stays.
-///
-/// Children are removed through the open that matched `identity`. A rename
-/// of that directory does not make `path` the object that is deleted.
-fn remove_same(path: &Path, identity: &TreeId) -> Result<(), RestoreFault> {
-    match symlink_metadata_dir(path) {
-        Ok(false) => Ok(()),
-        Ok(true) => {
-            let file = open_directory(path, false).map_err(|_| RestoreFault::Unreadable)?;
-            if tree_id_of(&file)? != *identity {
-                return Err(RestoreFault::Tamper);
-            }
-            remove_opened(&file, identity)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-/// Delete the directory `file` names. The path is the handle's path, not a
-/// later lookup of the caller's path.
-fn remove_opened(file: &File, identity: &TreeId) -> Result<(), RestoreFault> {
-    if tree_id_of(file)? != *identity {
-        return Err(RestoreFault::Tamper);
-    }
-    let current = path_of_handle(file)?;
-    if tree_id(&current)? != *identity {
-        return Err(RestoreFault::Tamper);
-    }
-    fs::remove_dir_all(&current).map_err(|_| RestoreFault::Unreadable)
 }
 
 /// Where the open directory is now. A replacement at the caller's path is a
@@ -1306,53 +1799,35 @@ fn path_of_handle_windows(file: &File) -> Result<PathBuf, RestoreFault> {
     Ok(plain_absolute(PathBuf::from(text)))
 }
 
-/// Remove the source tree when it is still `identity`. When that tree remains
-/// and still names a readiness id, the promotion is retained.
-#[cfg(test)]
-fn retire_source(path: &Path, identity: &TreeId) -> Result<(), RestoreFault> {
-    retire_source_after(path, identity, remove_same)
-}
-
-/// Retire the directory `file` still names. A missing original path is not
-/// success while this handle names the tree.
-fn retire_opened(file: &File, identity: &TreeId) -> Result<(), RestoreFault> {
-    match remove_opened(file, identity) {
-        Ok(()) => Ok(()),
-        Err(RestoreFault::Tamper) => Ok(()),
-        Err(_) => {
-            if tree_id_of(file).ok().as_ref() != Some(identity) {
-                return Ok(());
-            }
-            let current = path_of_handle(file)?;
-            retire_marker(&ready_path(&current))
-        }
-    }
-}
-
-#[cfg(test)]
-fn retire_source_after(
-    path: &Path,
+/// Namespace removal of a source is unsupported without an exact native
+/// directory capability. The captured marker is enough to make it unready.
+fn retire_source_marker(
+    directory: &File,
     identity: &TreeId,
-    remove: impl FnOnce(&Path, &TreeId) -> Result<(), RestoreFault>,
+    marker: &File,
 ) -> Result<(), RestoreFault> {
-    match remove(path, identity) {
-        Ok(()) => Ok(()),
-        Err(RestoreFault::Tamper) => Ok(()),
-        Err(_) => {
-            if tree_id(path).ok().as_ref() != Some(identity) {
-                return Ok(());
-            }
-            retire_marker(&ready_path(path))
-        }
-    }
+    retire_source_marker_with(
+        directory,
+        identity,
+        marker,
+        |_, _| Err(RestoreFault::Retained),
+        empty_owned_file,
+    )
 }
 
-fn symlink_metadata_dir(path: &Path) -> Result<bool, RestoreFault> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.is_dir() => Ok(true),
-        Ok(_) => Err(RestoreFault::Tamper),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(_) => Err(RestoreFault::Unreadable),
+fn retire_source_marker_with(
+    directory: &File,
+    identity: &TreeId,
+    marker: &File,
+    remove: impl FnOnce(&File, &TreeId) -> Result<(), RestoreFault>,
+    retire_marker: impl FnOnce(&File) -> Result<(), RestoreFault>,
+) -> Result<(), RestoreFault> {
+    if tree_id_of(directory)? != *identity {
+        return Err(RestoreFault::Retained);
+    }
+    match remove(directory, identity) {
+        Ok(()) => Ok(()),
+        Err(_) => retire_marker(marker),
     }
 }
 
@@ -1430,48 +1905,6 @@ fn directory_is_empty(path: &Path) -> Result<bool, RestoreFault> {
         Some(Ok(_)) => Ok(false),
         Some(Err(_)) => Err(RestoreFault::Unreadable),
     }
-}
-
-/// Write the readiness marker, rename it into place, then sync `root`.
-///
-/// A failed directory sync clears the marker. A partial file is not readiness.
-#[cfg(test)]
-fn publish_marker(
-    root: &Path,
-    body: &[u8],
-    mut sync_root: impl FnMut(&Path) -> Result<(), RestoreFault>,
-) -> Result<(), RestoreFault> {
-    let path = ready_path(root);
-    let temp = root.join("accept-ready.partial");
-    if temp.exists() {
-        fs::remove_file(&temp).map_err(|_| RestoreFault::Unreadable)?;
-    }
-    if path.exists() {
-        fs::remove_file(&path).map_err(|_| RestoreFault::Unreadable)?;
-    }
-    let mut file = open(&temp, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)?;
-    let synced = file.write_all(body).and_then(|_| file.sync_all());
-    drop(file);
-    if synced.is_err() {
-        return retire_both(&temp, &path, RestoreFault::Unreadable);
-    }
-    if rename_new(&temp, &path, RestoreFault::Unreadable).is_err() {
-        return retire_both(&temp, &path, RestoreFault::Unreadable);
-    }
-    if sync_root(root).is_err() {
-        return retire_both(&temp, &path, RestoreFault::Unreadable);
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn retire_both(temp: &Path, path: &Path, cleared: RestoreFault) -> Result<(), RestoreFault> {
-    let temp_gone = retire_marker(temp);
-    let path_gone = retire_marker(path);
-    if temp_gone.is_err() || path_gone.is_err() {
-        return Err(RestoreFault::Retained);
-    }
-    Err(cleared)
 }
 
 #[cfg(test)]
@@ -1571,18 +2004,18 @@ fn claim_partial_locked(
         if paths_conflict_on(&partial_path, live, quarantine_probe, live_probe).is_err() {
             continue;
         }
-        match mkdir_exclusive_at(parent, &partial_name) {
-            Ok(()) => {
-                let directory = open_dir_at(parent, &partial_name)?;
+        match create_directory_handle(parent, &partial_name, true) {
+            Ok(directory) => {
                 return Ok((directory, partial_name));
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => return Err(RestoreFault::Unreadable),
+            Err(_) => return Err(RestoreFault::Retained),
         }
     }
     Err(RestoreFault::Unreadable)
 }
 
+#[cfg(test)]
 fn tree_id(path: &Path) -> Result<TreeId, RestoreFault> {
     #[cfg(windows)]
     refuse_reparse(path)?;
@@ -1596,6 +2029,7 @@ fn tree_id(path: &Path) -> Result<TreeId, RestoreFault> {
 /// directory open needs no extra flag. Windows `CreateFileW` refuses a
 /// directory unless `FILE_FLAG_BACKUP_SEMANTICS` is set. `follow` false also
 /// sets `FILE_FLAG_OPEN_REPARSE_POINT`, so the handle is the link itself.
+#[cfg(any(test, windows))]
 fn open_directory(path: &Path, follow: bool) -> std::io::Result<File> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -1686,6 +2120,7 @@ fn relative_leaf(relative: &str) -> Result<OsString, RestoreFault> {
 }
 
 /// Parents of `relative`, created when they are missing. The leaf is not opened.
+#[cfg(not(windows))]
 fn directory_under(root: &File, relative: &str) -> Result<File, RestoreFault> {
     descend(root, relative, true)
 }
@@ -1715,11 +2150,138 @@ fn descend(root: &File, relative: &str, create: bool) -> Result<File, RestoreFau
     Ok(directory)
 }
 
+fn create_directory_handle(parent: &File, name: &OsStr, root: bool) -> std::io::Result<File> {
+    #[cfg(windows)]
+    {
+        windows_backend::create_directory(parent, name, root)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = root;
+        mkdir_exclusive_at(parent, name)?;
+        capture_created_directory(parent, name)
+            .map_err(|_| std::io::Error::other("created directory capture refused"))
+    }
+}
+
+fn owned_directory_under(
+    root: &File,
+    relative: &str,
+    owned: &mut Vec<OwnedDirectory>,
+) -> Result<File, RestoreFault> {
+    if !relative_path_is_safe(relative) {
+        return Err(RestoreFault::Tamper);
+    }
+    let mut directory = duplicate(root)?;
+    let mut prefix = String::new();
+    if let Some(parent) = Path::new(relative).parent() {
+        for part in parent.components() {
+            let std::path::Component::Normal(name) = part else {
+                return Err(RestoreFault::Tamper);
+            };
+            prefix = child_relative(&prefix, name)?;
+            if let Some(existing) = owned.iter().find(|entry| entry.relative == prefix) {
+                existing.check_binding()?;
+                directory = duplicate(&existing.directory)?;
+            } else {
+                if kind_at(&directory, name)? != EntryKind::Missing {
+                    return Err(RestoreFault::Unreadable);
+                }
+                let created = create_directory_handle(&directory, name, false)
+                    .map_err(|_| RestoreFault::Retained)?;
+                owned.push(OwnedDirectory {
+                    relative: prefix.clone(),
+                    parent: duplicate(&directory)?,
+                    name: name.to_os_string(),
+                    directory: duplicate(&created)?,
+                });
+                directory = created;
+            }
+        }
+    }
+    Ok(directory)
+}
+
+/// Directory authority starts at descriptor capture, not at a claim of atomic
+/// inode birth. Refuse a substituted nonempty or nonprivate object untouched.
+#[cfg(not(windows))]
+fn capture_created_directory(parent: &File, name: &OsStr) -> Result<File, RestoreFault> {
+    let file = open_dir_at(parent, name).map_err(|_| RestoreFault::Retained)?;
+    validate_captured_directory(&file)?;
+    Ok(file)
+}
+
+#[cfg(not(windows))]
+fn validate_captured_directory(directory: &File) -> Result<(), RestoreFault> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = directory.metadata().map_err(|_| RestoreFault::Retained)?;
+        if !metadata.is_dir()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o7777 != 0o700
+        {
+            return Err(RestoreFault::Retained);
+        }
+        if !captured_directory_is_empty(directory)? {
+            return Err(RestoreFault::Retained);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = directory;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn captured_directory_is_empty(directory: &File) -> Result<bool, RestoreFault> {
+    use std::os::unix::io::AsRawFd;
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            c".".as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(RestoreFault::Retained);
+    }
+    let stream = unsafe { libc::fdopendir(fd) };
+    if stream.is_null() {
+        unsafe { libc::close(fd) };
+        return Err(RestoreFault::Retained);
+    }
+    let result = loop {
+        #[cfg(target_os = "linux")]
+        unsafe {
+            *libc::__errno_location() = 0;
+        }
+        #[cfg(target_os = "macos")]
+        unsafe {
+            *libc::__error() = 0;
+        }
+        let entry = unsafe { libc::readdir(stream) };
+        if entry.is_null() {
+            break if std::io::Error::last_os_error().raw_os_error() == Some(0) {
+                Ok(true)
+            } else {
+                Err(RestoreFault::Retained)
+            };
+        }
+        let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+        if name != b"." && name != b".." {
+            break Ok(false);
+        }
+    };
+    unsafe { libc::closedir(stream) };
+    result
+}
+
 fn ensure_dir_at(parent: &File, name: &OsStr) -> Result<File, RestoreFault> {
     match kind_at(parent, name)? {
         EntryKind::Missing => {
-            mkdir_exclusive_at(parent, name).map_err(|_| RestoreFault::Unreadable)?;
-            open_dir_at(parent, name)
+            create_directory_handle(parent, name, false).map_err(|_| RestoreFault::Retained)
         }
         EntryKind::Directory => open_dir_at(parent, name),
         EntryKind::File | EntryKind::Symlink | EntryKind::Other => Err(RestoreFault::Unreadable),
@@ -1839,9 +2401,10 @@ fn copy_at(
     source: &File,
     dest: &File,
     held: &mut Vec<Unpublished>,
+    directories: &mut Vec<OwnedDirectory>,
 ) -> Result<Fingerprint, RestoreFault> {
     let mut lines = Vec::new();
-    copy_entries(source, dest, "", &mut lines, held)?;
+    copy_entries(source, dest, "", &mut lines, held, directories)?;
     lines.sort();
     Ok(Fingerprint::of(lines.join("\n").as_bytes()))
 }
@@ -1852,14 +2415,22 @@ fn copy_entries(
     prefix: &str,
     lines: &mut Vec<String>,
     held: &mut Vec<Unpublished>,
+    directories: &mut Vec<OwnedDirectory>,
 ) -> Result<(), RestoreFault> {
     for name in list_names(source)? {
         let relative = child_relative(prefix, &name)?;
         match kind_at(source, &name)? {
             EntryKind::Directory => {
                 let child = open_dir_at(source, &name)?;
-                let created = ensure_dir_at(dest, &name)?;
-                copy_entries(&child, &created, &relative, lines, held)?;
+                let created = create_directory_handle(dest, &name, false)
+                    .map_err(|_| RestoreFault::Retained)?;
+                directories.push(OwnedDirectory {
+                    relative: relative.clone(),
+                    parent: duplicate(dest)?,
+                    name: name.clone(),
+                    directory: duplicate(&created)?,
+                });
+                copy_entries(&child, &created, &relative, lines, held, directories)?;
             }
             EntryKind::File => {
                 if relative == "journal.txt" || relative == "accept-ready" {
@@ -1883,7 +2454,9 @@ fn copy_bytes_at(
     held: &mut Vec<Unpublished>,
 ) -> Result<Fingerprint, RestoreFault> {
     let mut input = open_file_at(source, name, OpenMode::Read)?;
-    let mut output = create_unpublished(dest, name, relative, false, RestoreFault::Tamper)?;
+    let output = create_unpublished(dest, name, relative, false, RestoreFault::Tamper)?;
+    held.push(output);
+    let output = held.last_mut().ok_or(RestoreFault::Unreadable)?;
     let mut hasher = sha2::Sha256::new();
     let mut buffer = [0u8; 8192];
     loop {
@@ -1899,28 +2472,107 @@ fn copy_bytes_at(
     output.sync_file()?;
     let fingerprint = Fingerprint::from_digest(hasher.finalize().into());
     output.fingerprint = fingerprint;
-    held.push(output);
     Ok(fingerprint)
 }
 
 /// A file this attempt wrote and still holds.
 ///
-/// On Linux and macOS it has no directory entry until [`Unpublished::publish_in`].
-/// On Windows it is `name` in `parent`, and the handle does not share write
-/// access, so another open cannot change the bytes.
+/// Linux keeps the inode unnamed until [`Unpublished::publish_in`]. Other
+/// Unix systems create its final name with mode0400 and retain the only trusted
+/// writer. Windows retains a handle that does not share write access.
 struct Unpublished {
     parent: File,
     name: OsString,
     relative: String,
     file: Option<File>,
     fingerprint: Fingerprint,
-    /// Windows created `name`. Unix did not.
+    /// Creation already installed `name` (all platforms except Linux).
     named: bool,
     /// The name is the one publication keeps. Drop must not remove it.
     published: bool,
+    protected: bool,
 }
 
 impl Unpublished {
+    /// Check whether the final name still denotes this retained inode.
+    fn name_is_owned(&self) -> Result<bool, RestoreFault> {
+        let held = self.file.as_ref().ok_or(RestoreFault::Unreadable)?;
+        match kind_at(&self.parent, &self.name)? {
+            EntryKind::Missing => Ok(false),
+            EntryKind::File => Ok(tree_id_of(&open_file_at(
+                &self.parent,
+                &self.name,
+                OpenMode::Read,
+            )?)? == tree_id_of(held)?),
+            _ => Ok(false),
+        }
+    }
+
+    fn retire(&mut self) -> Result<(), RestoreFault> {
+        let Some(file) = self.file.as_ref() else {
+            return Ok(());
+        };
+        let emptied = empty_owned_file(file).is_ok();
+        // Name removal cannot be made conditional on an inode atomically on
+        // Unix. Leave the namespace alone; the retained bytes are now empty.
+        // A replacement name is not this inode; emptying still retires any
+        // descriptor retained by the source, even when it was renamed aside.
+        if !emptied || self.published || self.named {
+            Err(RestoreFault::Retained)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn protect(&mut self) -> Result<(), RestoreFault> {
+        if self.protected {
+            return Ok(());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let file = self.file.as_ref().ok_or(RestoreFault::Unreadable)?;
+            file.set_permissions(fs::Permissions::from_mode(0o400))
+                .map_err(|_| RestoreFault::Unreadable)?;
+            file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
+            #[cfg(target_os = "linux")]
+            {
+                use std::os::unix::io::AsRawFd;
+                let readonly = File::open(format!("/proc/self/fd/{}", file.as_raw_fd()))
+                    .map_err(|_| RestoreFault::Unreadable)?;
+                if tree_id_of(&readonly)? != tree_id_of(file)? {
+                    return Err(RestoreFault::Tamper);
+                }
+                self.file = Some(readonly);
+            }
+        }
+        self.protected = true;
+        Ok(())
+    }
+
+    fn release(&mut self) -> Result<(), RestoreFault> {
+        if !self.protected {
+            return Ok(());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            self.file
+                .as_ref()
+                .ok_or(RestoreFault::Unreadable)?
+                .set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|_| RestoreFault::Unreadable)?;
+        }
+        #[cfg(windows)]
+        {
+            nessa_local_storage::release_file_writes(
+                self.file.as_ref().ok_or(RestoreFault::Retained)?,
+            )
+            .map_err(|_| RestoreFault::Retained)?;
+        }
+        self.protected = false;
+        Ok(())
+    }
     fn file_mut(&mut self) -> Result<&mut File, RestoreFault> {
         self.file.as_mut().ok_or(RestoreFault::Unreadable)
     }
@@ -1965,57 +2617,22 @@ impl Unpublished {
         Ok(bytes)
     }
 
-    /// Path SQLite can open while this handle denies other writers.
-    #[cfg(not(unix))]
-    fn bytes_path(&self) -> Result<PathBuf, RestoreFault> {
-        #[cfg(target_os = "linux")]
-        {
-            use std::os::unix::io::AsRawFd;
-            let file = self.file.as_ref().ok_or(RestoreFault::Unreadable)?;
-            Ok(PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd())))
-        }
-        #[cfg(all(unix, not(target_os = "linux")))]
-        {
-            use std::os::unix::io::AsRawFd;
-            let file = self.file.as_ref().ok_or(RestoreFault::Unreadable)?;
-            Ok(PathBuf::from(format!("/dev/fd/{}", file.as_raw_fd())))
-        }
-        #[cfg(windows)]
-        {
-            Ok(path_of_handle(&self.parent)?.join(&self.name))
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = self;
-            Err(RestoreFault::Unreadable)
-        }
-    }
-
     /// Give `name` to this inode. On Windows the name already exists.
     fn publish_in(&mut self, occupied: RestoreFault) -> Result<(), RestoreFault> {
-        #[cfg(unix)]
+        self.protect()?;
+        #[cfg(target_os = "linux")]
         {
             let file = self.file.as_ref().ok_or(RestoreFault::Unreadable)?;
             link_unpublished(file, &self.parent, &self.name, occupied)?;
         }
-        #[cfg(windows)]
+        #[cfg(not(target_os = "linux"))]
         {
-            let _ = occupied;
+            if !self.name_is_owned()? {
+                return Err(occupied);
+            }
         }
         self.published = true;
         Ok(())
-    }
-}
-
-impl Drop for Unpublished {
-    fn drop(&mut self) {
-        // Close first. A Windows handle that does not share delete cannot be
-        // removed while it is still open.
-        self.file.take();
-        if self.published || !self.named {
-            return;
-        }
-        let _ = unlink_at(&self.parent, &self.name);
     }
 }
 
@@ -2024,23 +2641,10 @@ fn unpublished_matches(
     conversation_id: &str,
     digest: &Fingerprint,
 ) -> Result<bool, RestoreFault> {
-    #[cfg(unix)]
-    {
-        let matched = match inspect_open_file(output.file_mut()?, conversation_id) {
-            Ok(stream) if Fingerprint::from_digest(stream.digest) == *digest => true,
-            Ok(_) | Err(_) => false,
-        };
-        Ok(matched)
-    }
-    #[cfg(not(unix))]
-    {
-        let staged = output.bytes_path()?;
-        let matched = match inspect_conversation(&staged, conversation_id) {
-            Ok(stream) if Fingerprint::from_digest(stream.digest) == *digest => true,
-            Ok(_) | Err(_) => false,
-        };
-        Ok(matched)
-    }
+    Ok(matches!(
+        inspect_open_file(output.file_mut()?,conversation_id),
+        Ok(stream) if Fingerprint::from_digest(stream.digest)==*digest
+    ))
 }
 
 fn create_unpublished(
@@ -2073,41 +2677,28 @@ fn create_unpublished(
     };
     #[cfg(all(unix, not(target_os = "linux")))]
     let file = {
-        let mut temp_name = OsString::from(".held-");
-        temp_name.push(std::process::id().to_string());
-        temp_name.push("-");
-        temp_name.push(ATTEMPT.fetch_add(1, Ordering::Relaxed).to_string());
-        let created = open_file_at(&parent, &temp_name, OpenMode::CreateNew)?;
-        unlink_at(&parent, &temp_name)?;
+        // The inode is read-only to every fresh namespace open from birth.
+        // This private writable descriptor is never delegated to the source
+        // when constructing a publication; publication always copies it.
+        let created = open_at(
+            &parent,
+            name,
+            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o400,
+        )?;
+        if !created
+            .metadata()
+            .map_err(|_| RestoreFault::Retained)?
+            .is_file()
+        {
+            return Err(RestoreFault::Retained);
+        }
         created
     };
     #[cfg(windows)]
     let file = {
-        let path = path_of_handle(&parent)?.join(name);
-        let opened = if private {
-            create_no_writers(&path)
-        } else {
-            use std::os::windows::fs::OpenOptionsExt;
-            const FILE_SHARE_READ: u32 = 0x0000_0001;
-            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-            fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .share_mode(FILE_SHARE_READ)
-                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-                .open(&path)
-        };
-        match opened {
-            Ok(file) => {
-                let _ = windows_file_id(&file)?;
-                file
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(occupied);
-            }
-            Err(_) => return Err(RestoreFault::Unreadable),
-        }
+        let _ = private;
+        windows_backend::protected_file(&parent, name, occupied)?
     };
     #[cfg(not(any(unix, windows)))]
     let file = {
@@ -2120,8 +2711,9 @@ fn create_unpublished(
         relative: relative.to_owned(),
         file: Some(file),
         fingerprint: Fingerprint::of(b""),
-        named: cfg!(windows),
+        named: !cfg!(target_os = "linux"),
         published: false,
+        protected: false,
     })
 }
 
@@ -2147,29 +2739,6 @@ fn link_unpublished(
         )
     };
     if linked != 0 {
-        let error = std::io::Error::last_os_error();
-        return if error.kind() == std::io::ErrorKind::AlreadyExists {
-            Err(occupied)
-        } else {
-            Err(RestoreFault::Unreadable)
-        };
-    }
-    Ok(())
-}
-
-#[cfg(all(unix, not(target_os = "linux")))]
-fn link_unpublished(
-    file: &File,
-    parent: &File,
-    name: &OsStr,
-    occupied: RestoreFault,
-) -> Result<(), RestoreFault> {
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::io::AsRawFd;
-    let target = std::ffi::CString::new(name.as_bytes()).map_err(|_| RestoreFault::Unreadable)?;
-    let cloned =
-        unsafe { libc::fclonefileat(file.as_raw_fd(), parent.as_raw_fd(), target.as_ptr(), 0) };
-    if cloned != 0 {
         let error = std::io::Error::last_os_error();
         return if error.kind() == std::io::ErrorKind::AlreadyExists {
             Err(occupied)
@@ -2293,6 +2862,20 @@ fn sync_tree_at(directory: &File) -> Result<(), RestoreFault> {
 
 /// Directory durability. Windows has no directory fsync; a read-only handle
 /// fails `FlushFileBuffers`, so this is the same no-op as `sync_directory`.
+/// A lifecycle acknowledgement is not proof of directory-entry durability.
+/// Windows has no qualified directory-sync primitive in this adapter.
+fn directory_publication_is_durable(directory: &File) -> bool {
+    #[cfg(windows)]
+    {
+        let _ = directory;
+        false
+    }
+    #[cfg(not(windows))]
+    {
+        sync_dir(directory).is_ok()
+    }
+}
+
 fn sync_dir(directory: &File) -> Result<(), RestoreFault> {
     #[cfg(windows)]
     {
@@ -2309,13 +2892,9 @@ fn sealed_beside(parent: &File, live_name: &OsStr) -> Result<SealedDir, RestoreF
     for attempt in 0..32 {
         let mut name = live_name.to_os_string();
         name.push(format!(".sealed-{}-{attempt}", std::process::id()));
-        match mkdir_exclusive_at(parent, &name) {
-            Ok(()) => {
-                let file = open_dir_at(parent, &name)?;
-                let identity = tree_id_of(&file)?;
-                if !list_names(&file)?.is_empty() {
-                    return Err(RestoreFault::Tamper);
-                }
+        match create_directory_handle(parent, &name, true) {
+            Ok(file) => {
+                let identity = tree_id_of(&file).map_err(|_| RestoreFault::Retained)?;
                 #[cfg(test)]
                 let path = path_of_handle(&file)?;
                 return Ok(SealedDir {
@@ -2327,58 +2906,10 @@ fn sealed_beside(parent: &File, live_name: &OsStr) -> Result<SealedDir, RestoreF
                 });
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => return Err(RestoreFault::Unreadable),
+            Err(_) => return Err(RestoreFault::Retained),
         }
     }
     Err(RestoreFault::Unreadable)
-}
-
-fn remove_opened_tree(file: &File) -> Result<(), RestoreFault> {
-    let current = path_of_handle(file)?;
-    match fs::remove_dir_all(&current) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) if !current.exists() => Ok(()),
-        Err(_) => Err(RestoreFault::Retained),
-    }
-}
-
-fn publish_marker_at(directory: &File, body: &[u8]) -> Result<(), RestoreFault> {
-    let partial = OsStr::new("accept-ready.partial");
-    let marker = OsStr::new("accept-ready");
-    if name_exists_at(directory, partial)? {
-        unlink_at(directory, partial)?;
-    }
-    if name_exists_at(directory, marker)? {
-        unlink_at(directory, marker)?;
-    }
-    let mut file = open_file_at(directory, partial, OpenMode::CreateNew)?;
-    let synced = file.write_all(body).and_then(|_| file.sync_all());
-    drop(file);
-    if synced.is_err() {
-        let _ = unlink_at(directory, partial);
-        return Err(RestoreFault::Unreadable);
-    }
-    if rename_exclusive_at(
-        directory,
-        partial,
-        directory,
-        marker,
-        RestoreFault::Unreadable,
-    )
-    .is_err()
-    {
-        let _ = unlink_at(directory, partial);
-        let _ = unlink_at(directory, marker);
-        return Err(RestoreFault::Unreadable);
-    }
-    if sync_dir(directory).is_err() {
-        return match unlink_at(directory, marker) {
-            Ok(()) => Err(RestoreFault::Unreadable),
-            Err(_) => Err(RestoreFault::Retained),
-        };
-    }
-    Ok(())
 }
 
 fn read_marker_bytes(bytes: &[u8]) -> Result<Option<String>, RestoreFault> {
@@ -2522,23 +3053,7 @@ fn open_dir_at(parent: &File, name: &OsStr) -> Result<File, RestoreFault> {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_SHARE_READ: u32 = 0x0000_0001;
-        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
-        const FILE_SHARE_DELETE: u32 = 0x0000_0004;
-        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        let path = path_of_handle(parent)?.join(name);
-        // Delete share lets this attempt rename or remove the directory while
-        // the handle is open. The ancestor handle does not share delete.
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(path)
-            .map_err(|_| RestoreFault::Unreadable)?;
-        let _ = windows_file_id(&file)?;
-        Ok(file)
+        windows_backend::open_directory(parent, name)
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -2567,26 +3082,7 @@ fn open_file_at(parent: &File, name: &OsStr, mode: OpenMode) -> Result<File, Res
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_SHARE_READ: u32 = 0x0000_0001;
-        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        let path = path_of_handle(parent)?.join(name);
-        let mut options = fs::OpenOptions::new();
-        options
-            .read(true)
-            .write(!matches!(mode, OpenMode::Read | OpenMode::ReadNonblocking))
-            .create(matches!(mode, OpenMode::OpenOrCreate))
-            .create_new(matches!(mode, OpenMode::CreateNew))
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-        let file = options.open(path).map_err(|_| RestoreFault::Unreadable)?;
-        let _ = windows_file_id(&file)?;
-        let meta = file.metadata().map_err(|_| RestoreFault::Unreadable)?;
-        if !meta.is_file() {
-            return Err(RestoreFault::Tamper);
-        }
-        Ok(file)
+        windows_backend::open_file(parent, name, mode)
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -2614,6 +3110,7 @@ fn open_at(parent: &File, name: &OsStr, flags: i32, mode: u32) -> Result<File, R
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
+#[cfg(not(windows))]
 fn mkdir_exclusive_at(parent: &File, name: &OsStr) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -2625,11 +3122,6 @@ fn mkdir_exclusive_at(parent: &File, name: &OsStr) -> std::io::Result<()> {
             return Err(std::io::Error::last_os_error());
         }
         Ok(())
-    }
-    #[cfg(windows)]
-    {
-        let path = path_of_handle(parent).map_err(|_| std::io::Error::other("directory handle"))?;
-        create_directory_exclusive(&path.join(name))
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -2679,19 +3171,7 @@ fn kind_at(parent: &File, name: &OsStr) -> Result<EntryKind, RestoreFault> {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-        let path = path_of_handle(parent)?.join(name);
-        match fs::symlink_metadata(path) {
-            Ok(meta) if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
-                Ok(EntryKind::Symlink)
-            }
-            Ok(meta) if meta.is_dir() => Ok(EntryKind::Directory),
-            Ok(meta) if meta.is_file() => Ok(EntryKind::File),
-            Ok(_) => Ok(EntryKind::Other),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(EntryKind::Missing),
-            Err(_) => Err(RestoreFault::Unreadable),
-        }
+        windows_backend::entry_kind(parent, name)
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -2739,13 +3219,7 @@ fn list_names(directory: &File) -> Result<Vec<OsString>, RestoreFault> {
     }
     #[cfg(windows)]
     {
-        let path = path_of_handle(directory)?;
-        let mut names = Vec::new();
-        for entry in fs::read_dir(path).map_err(|_| RestoreFault::Unreadable)? {
-            let entry = entry.map_err(|_| RestoreFault::Unreadable)?;
-            names.push(entry.file_name());
-        }
-        Ok(names)
+        windows_backend::names(directory)
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -2754,6 +3228,7 @@ fn list_names(directory: &File) -> Result<Vec<OsString>, RestoreFault> {
     }
 }
 
+#[cfg(test)]
 fn unlink_at(parent: &File, name: &OsStr) -> Result<(), RestoreFault> {
     #[cfg(unix)]
     {
@@ -2787,6 +3262,27 @@ fn unlink_at(parent: &File, name: &OsStr) -> Result<(), RestoreFault> {
     }
 }
 
+fn rename_owned_at(
+    source: &File,
+    from_parent: &File,
+    from: &OsStr,
+    to_parent: &File,
+    to: &OsStr,
+    occupied: RestoreFault,
+) -> Result<(), RestoreFault> {
+    #[cfg(windows)]
+    {
+        let _ = (from_parent, from);
+        windows_backend::rename_owned(source, to_parent, to, occupied)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = source;
+        rename_exclusive_at(from_parent, from, to_parent, to, occupied)
+    }
+}
+
+#[cfg(any(not(windows), test))]
 fn rename_exclusive_at(
     from_dir: &File,
     from: &OsStr,
@@ -2839,9 +3335,7 @@ fn rename_exclusive_at(
     }
     #[cfg(windows)]
     {
-        let from_path = path_of_handle(from_dir)?.join(from);
-        let to_path = path_of_handle(to_dir)?.join(to);
-        rename_new(&from_path, &to_path, occupied)
+        windows_backend::rename_entry(from_dir, from, to_dir, to, occupied)
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -3014,7 +3508,7 @@ fn windows_file_id(file: &File) -> Result<(u64, u64), RestoreFault> {
     Ok((u64::from(info.volume_serial), index))
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn refuse_reparse(path: &Path) -> Result<(), RestoreFault> {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
@@ -3150,16 +3644,6 @@ fn mkdir_exclusive(path: &Path) -> std::io::Result<()> {
     create_directory_exclusive(path)
 }
 
-fn sync_writable(path: &Path) -> Result<(), RestoreFault> {
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .map_err(|_| RestoreFault::Unreadable)?;
-    file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
-    Ok(())
-}
-
 fn symlink_exists(path: &Path) -> Result<bool, RestoreFault> {
     match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
@@ -3209,6 +3693,7 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
             "policies": evidence.policies,
             "attestations": evidence.attestations,
             "journalDigest": evidence.journal_digest,
+            "rootGeneration": evidence.root_generation,
             "observedAtMs": self.clock.unix_ms(),
         }))
         .map_err(|_| DecisionAuditError::NotStored)?;
@@ -3266,7 +3751,7 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
         let _file = exclusive(&self.directory).map_err(|_| DecisionAuditError::NotStored)?;
         let lines = read_restore_audit(&self.path)?;
         Ok(current_staging_id(
-            lines.iter().map(restore_seal_fields),
+            lines.iter().map(restore_journal_fields),
             target,
             digest,
         ))
@@ -3285,10 +3770,7 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
         let _file = exclusive(&self.directory).map_err(|_| DecisionAuditError::NotStored)?;
         let lines = read_restore_audit(&self.path)?;
         Ok(current_journal_is_trusted(
-            lines.iter().map(|value| JournalFields {
-                seal: restore_seal_fields(value),
-                journal_digest: restore_audit_field(value, "journalDigest"),
-            }),
+            lines.iter().map(restore_journal_fields),
             target,
             digest,
             staging_id,
@@ -3309,6 +3791,14 @@ fn read_restore_audit(path: &Path) -> Result<Vec<Value>, DecisionAuditError> {
 
 fn restore_audit_field<'a>(value: &'a Value, name: &str) -> &'a str {
     value.get(name).and_then(Value::as_str).unwrap_or("")
+}
+
+fn restore_journal_fields(value: &Value) -> JournalFields<'_> {
+    JournalFields {
+        seal: restore_seal_fields(value),
+        journal_digest: restore_audit_field(value, "journalDigest"),
+        root_generation: restore_audit_field(value, "rootGeneration"),
+    }
 }
 
 fn restore_seal_fields(value: &Value) -> SealFields<'_> {
@@ -3375,25 +3865,13 @@ impl DeferredSessionSource for SqliteDeferredSource {
     fn write_session(
         &self,
         conversation_id: &str,
-        destination: &Path,
+        destination: &mut File,
         progress: &mut dyn FetchProgress,
     ) -> Result<(), SessionSourceError> {
         let mut report = |read, total| progress.report(read, total);
-        materialize_conversation(&self.source, conversation_id, destination, &mut report)
+        materialize_into_file(&self.source, conversation_id, destination, &mut report)
             .map(|_| ())
             .map_err(materialize_error)
-    }
-
-    fn inspect(
-        &self,
-        conversation_id: &str,
-        path: &Path,
-    ) -> Result<SessionCut, SessionSourceError> {
-        let stream = inspect_conversation(path, conversation_id).map_err(materialize_error)?;
-        Ok(SessionCut {
-            size: stream.size,
-            digest: Fingerprint::from_digest(stream.digest),
-        })
     }
 }
 
@@ -3431,6 +3909,9 @@ fn a_symlink_parent_is_not_a_staging_directory() {
         partial_name: OsString::from("partial"),
         quarantine_name: OsString::from("quarantine"),
         armed: false,
+        files: Vec::new(),
+        directories: Vec::new(),
+        parent_spelling: root.path().to_path_buf(),
     };
     assert_eq!(
         staging.write("records/note", b"one").unwrap_err(),
@@ -3447,42 +3928,62 @@ fn a_symlink_parent_is_not_a_staging_directory() {
 
 #[cfg(unix)]
 #[test]
-fn a_dangling_symlink_is_removed_without_creating_its_target() {
+fn a_dangling_symlink_is_left_without_creating_its_target() {
     let root = tempfile::tempdir().unwrap();
+    let live = root.path().join("live");
+    mkdir_exclusive(&live).unwrap();
+    fs::create_dir(live.join("sessions")).unwrap();
     let outside = root.path().join("outside");
-    let link = root.path().join("session.partial");
+    let link = live.join("sessions/conv.sqlite3.partial");
     std::os::unix::fs::symlink(&outside, &link).unwrap();
-    DirectoryQuarantine.remove_file(&link).unwrap();
+    let anchored = DirectoryQuarantine.anchor(&live).unwrap();
+    assert!(matches!(
+        DirectoryQuarantine.begin_session(&anchored, "sessions/conv.sqlite3"),
+        Err(RestoreFault::Retained)
+    ));
     assert!(!outside.exists());
-    assert!(fs::symlink_metadata(&link).is_err());
+    assert!(fs::symlink_metadata(link).unwrap().file_type().is_symlink());
 }
 
 #[test]
 fn a_different_published_directory_is_not_removed() {
     let root = tempfile::tempdir().unwrap();
-    let quarantine = root.path().join("q");
+    let q = root.path().join("q");
     let live = root.path().join("live");
-    fs::create_dir(&live).unwrap();
-    let quarantine = DirectoryQuarantine.anchor(&quarantine).unwrap();
-    let live = DirectoryQuarantine.anchor(&live).unwrap();
-    let mut staging = DirectoryQuarantine.begin(&quarantine, &live).unwrap();
-    staging.write("records/note", b"one").unwrap();
-    let published = staging.finish("sealed\n").unwrap();
-    let saved = quarantine.with_extension("saved");
-    fs::rename(&quarantine, &saved).unwrap();
-    fs::create_dir(&quarantine).unwrap();
-    fs::write(quarantine.join("sentinel"), b"keep").unwrap();
-    assert_eq!(
-        DirectoryQuarantine
-            .remove_known(&quarantine, &published)
-            .unwrap_err(),
-        RestoreFault::Tamper
-    );
-    assert_eq!(fs::read(quarantine.join("sentinel")).unwrap(), b"keep");
-    DirectoryQuarantine
-        .remove_known(&saved, &published)
-        .unwrap();
-    assert!(!saved.exists());
+    let qroot = DirectoryQuarantine.anchor(&q).unwrap();
+    let liveroot = DirectoryQuarantine.anchor(&live).unwrap();
+    let mut staging = DirectoryQuarantine.begin(&qroot, &liveroot).unwrap();
+    staging.write("records/note", b"owned").unwrap();
+    let mut owner = staging.finish("journal").unwrap();
+    owner.mark_ready("stage-1").unwrap();
+    let saved = root.path().join("saved");
+    #[cfg(windows)]
+    {
+        let error = fs::rename(&q, &saved).unwrap_err();
+        assert!(matches!(error.raw_os_error(), Some(5 | 32)));
+        assert!(!saved.exists());
+        assert_eq!(fs::read(q.join("records/note")).unwrap(), b"owned");
+        assert_eq!(fs::read(q.join("journal.txt")).unwrap(), b"journal");
+        assert_eq!(fs::read(q.join("accept-ready")).unwrap(), b"stage-1\n");
+        owner.check_binding().unwrap();
+        assert_eq!(owner.retire(), Err(RestoreFault::Retained));
+        for relative in ["records/note", "journal.txt", "accept-ready"] {
+            assert!(fs::read(q.join(relative)).unwrap().is_empty());
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(&q, &saved).unwrap();
+        fs::create_dir(&q).unwrap();
+        fs::write(q.join("sentinel"), b"keep").unwrap();
+        assert_eq!(owner.check_binding(), Err(RestoreFault::Retained));
+        assert_eq!(owner.retire(), Err(RestoreFault::Retained));
+        assert_eq!(fs::read(q.join("sentinel")).unwrap(), b"keep");
+        assert!(fs::read(saved.join("records/note")).unwrap().is_empty());
+        assert!(fs::read(saved.join("journal.txt")).unwrap().is_empty());
+        assert!(fs::read(saved.join("accept-ready")).unwrap().is_empty());
+        assert!(saved.is_dir());
+    }
 }
 
 #[test]
@@ -3535,61 +4036,82 @@ fn a_replaced_sealed_directory_is_not_published() {
         copy_still_sealed(&dest, &created, &created_id, &loaded).unwrap_err(),
         RestoreFault::Tamper
     );
-    if tree_id(&dest).ok().as_ref() == Some(&created_id) {
-        let _ = remove_same(&dest, &created_id);
-    }
     assert_eq!(fs::read(dest.join("sentinel")).unwrap(), b"keep");
     assert_eq!(fs::read(aside.join("note")).unwrap(), b"one");
 }
 
 #[test]
-fn a_renamed_directory_is_removed_by_its_handle() {
+fn a_renamed_staged_ancestor_retires_only_its_owned_files() {
     let root = tempfile::tempdir().unwrap();
-    let dir = root.path().join("tree");
-    fs::create_dir(&dir).unwrap();
-    fs::write(dir.join("note"), b"one").unwrap();
-    let opened = open_directory(&dir, false).unwrap();
-    let identity = tree_id_of(&opened).unwrap();
+    let parent = root.path().join("parent");
+    fs::create_dir(&parent).unwrap();
+    let q = parent.join("q");
+    let live = root.path().join("live");
+    let qroot = DirectoryQuarantine.anchor(&q).unwrap();
+    let liveroot = DirectoryQuarantine.anchor(&live).unwrap();
+    let mut staging = DirectoryQuarantine.begin(&qroot, &liveroot).unwrap();
+    staging.write("note", b"owned").unwrap();
+    let mut owner = staging.finish("journal").unwrap();
     let aside = root.path().join("aside");
-    fs::rename(&dir, &aside).unwrap();
-    fs::create_dir(&dir).unwrap();
-    fs::write(dir.join("sentinel"), b"keep").unwrap();
-    remove_opened(&opened, &identity).unwrap();
-    assert_eq!(fs::read(dir.join("sentinel")).unwrap(), b"keep");
-    assert!(!aside.exists());
+    #[cfg(windows)]
+    {
+        let error = fs::rename(&parent, &aside).unwrap_err();
+        assert!(matches!(error.raw_os_error(), Some(5 | 32)));
+        assert!(!aside.exists());
+        assert_eq!(fs::read(q.join("note")).unwrap(), b"owned");
+        assert_eq!(fs::read(q.join("journal.txt")).unwrap(), b"journal");
+        owner.check_binding().unwrap();
+        assert_eq!(owner.retire(), Err(RestoreFault::Retained));
+        assert!(fs::read(q.join("note")).unwrap().is_empty());
+        assert!(fs::read(q.join("journal.txt")).unwrap().is_empty());
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(&parent, &aside).unwrap();
+        fs::create_dir(&parent).unwrap();
+        fs::create_dir(parent.join("q")).unwrap();
+        fs::write(parent.join("q/sentinel"), b"other").unwrap();
+        assert_eq!(owner.check_binding(), Err(RestoreFault::Retained));
+        assert_eq!(owner.mark_ready("stage-1"), Err(RestoreFault::Retained));
+        assert_eq!(owner.retire(), Err(RestoreFault::Retained));
+        assert!(fs::read(aside.join("q/note")).unwrap().is_empty());
+        assert_eq!(fs::read(parent.join("q/sentinel")).unwrap(), b"other");
+    }
 }
 
 #[test]
 fn a_source_that_remains_loses_its_readiness_marker() {
     let root = tempfile::tempdir().unwrap();
-    let dir = root.path().join("quarantine");
-    fs::create_dir(&dir).unwrap();
-    fs::write(dir.join("note"), b"one").unwrap();
-    fs::write(dir.join("accept-ready"), b"stage-1\n").unwrap();
-    let identity = tree_id(&dir).unwrap();
-    let saved = dir.with_extension("saved");
-    fs::rename(&dir, &saved).unwrap();
-    fs::create_dir(&dir).unwrap();
-    fs::write(dir.join("sentinel"), b"keep").unwrap();
-    fs::write(dir.join("accept-ready"), b"stage-1\n").unwrap();
-    retire_source(&dir, &identity).unwrap();
-    assert_eq!(fs::read(dir.join("sentinel")).unwrap(), b"keep");
-    assert_eq!(fs::read(dir.join("accept-ready")).unwrap(), b"stage-1\n");
-    retire_source(&saved, &identity).unwrap();
-    assert!(!saved.exists());
+    let q = root.path().join("q");
+    fs::create_dir(&q).unwrap();
+    fs::write(q.join("note"), b"one").unwrap();
+    fs::write(q.join("accept-ready"), b"stage-1\n").unwrap();
+    let directory = open_directory(&q, false).unwrap();
+    let marker = open_file_at(&directory, OsStr::new("accept-ready"), OpenMode::Read).unwrap();
+    let id = tree_id_of(&directory).unwrap();
+    let saved = root.path().join("saved");
+    fs::rename(&q, &saved).unwrap();
+    fs::create_dir(&q).unwrap();
+    fs::write(q.join("accept-ready"), b"replacement\n").unwrap();
+    retire_source_marker(&directory, &id, &marker).unwrap();
+    assert!(fs::read(saved.join("accept-ready")).unwrap().is_empty());
+    assert_eq!(fs::read(saved.join("note")).unwrap(), b"one");
+    assert_eq!(fs::read(q.join("accept-ready")).unwrap(), b"replacement\n");
 }
 
 #[test]
 fn a_remaining_source_is_not_left_acceptable() {
     let root = tempfile::tempdir().unwrap();
-    let dir = root.path().join("quarantine");
-    fs::create_dir(&dir).unwrap();
-    fs::write(dir.join("note"), b"one").unwrap();
-    fs::write(dir.join("accept-ready"), b"stage-1\n").unwrap();
-    let identity = tree_id(&dir).unwrap();
-    retire_source_after(&dir, &identity, |_, _| Err(RestoreFault::Unreadable)).unwrap();
-    assert_eq!(fs::read(dir.join("note")).unwrap(), b"one");
-    assert!(read_marker_id(&ready_path(&dir)).unwrap().is_none());
+    let q = root.path().join("q");
+    fs::create_dir(&q).unwrap();
+    fs::write(q.join("note"), b"one").unwrap();
+    fs::write(q.join("accept-ready"), b"stage-1\n").unwrap();
+    let directory = open_directory(&q, false).unwrap();
+    let marker = open_file_at(&directory, OsStr::new("accept-ready"), OpenMode::Read).unwrap();
+    let id = tree_id_of(&directory).unwrap();
+    retire_source_marker(&directory, &id, &marker).unwrap();
+    assert_eq!(fs::read(q.join("note")).unwrap(), b"one");
+    assert!(fs::read(q.join("accept-ready")).unwrap().is_empty());
 }
 
 #[test]
@@ -3712,6 +4234,7 @@ fn a_restore_audit_waits_for_the_directory_lock() {
             policies: &[],
             attestations: "lease-1 stopped\n",
             journal_digest: "",
+            root_generation: "",
         });
         finished.send(stored).unwrap();
     });
@@ -3739,6 +4262,7 @@ fn a_restore_audit_waits_for_the_directory_lock() {
             policies: &[],
             attestations: "",
             journal_digest: "",
+            root_generation: "",
         })
         .unwrap();
     let text = fs::read_to_string(directory.join("restore.jsonl")).unwrap();
@@ -3772,6 +4296,22 @@ fn a_sealed_audit_names_the_journal_digest() {
             policies: &[],
             attestations: &attestation,
             journal_digest: "",
+            root_generation: "",
+        })
+        .unwrap();
+    assert!(audit.sealed("quarantine", "digest-a").unwrap().is_none());
+    audit
+        .append(&RestoreEvidence {
+            target: "quarantine",
+            before: "verified",
+            after: "ready",
+            cause: "ready",
+            initiator: "person",
+            decision: "effect",
+            policies: &[],
+            attestations: "",
+            journal_digest: "digest-a",
+            root_generation: "stage-1",
         })
         .unwrap();
     assert_eq!(
@@ -3791,6 +4331,7 @@ fn a_sealed_audit_names_the_journal_digest() {
             policies: &[],
             attestations: "stage-1",
             journal_digest: "",
+            root_generation: "",
         })
         .unwrap();
     assert!(audit.sealed("quarantine", "digest-a").unwrap().is_none());
@@ -3804,12 +4345,11 @@ fn journal_trust_survives_audit_reopen_and_tracks_the_latest_generation() {
             1
         }
     }
-
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join("audit");
     let reopen = || FileRestoreAudit::open(&directory, Clock).unwrap();
     let audit = reopen();
-    let record = |before, after, cause, attestations, journal_digest| {
+    let record = |before, after, cause, attestations, journal_digest, generation| {
         audit
             .append(&RestoreEvidence {
                 target: "root",
@@ -3821,94 +4361,144 @@ fn journal_trust_survives_audit_reopen_and_tracks_the_latest_generation() {
                 policies: &[],
                 attestations,
                 journal_digest,
+                root_generation: generation,
             })
             .unwrap();
     };
-    assert!(!reopen().trusted_journal("root", "digest-a", None).unwrap());
     let attestation = crate::backup::domain::seal_attestation("digest-a", "stage-1");
-    record("absent", "verified", "sealed", &attestation, "");
+    record("absent", "verified", "sealed", &attestation, "", "stage-1");
+    assert!(!reopen()
+        .trusted_journal("root", "digest-a", Some("stage-1"))
+        .unwrap());
+    record("verified", "ready", "ready", "", "digest-a", "stage-1");
+    assert!(reopen()
+        .trusted_journal("root", "digest-a", Some("stage-1"))
+        .unwrap());
+    assert!(!reopen().trusted_journal("root", "digest-a", None).unwrap());
+    record("verified", "spent", "spent", "stage-1", "", "stage-1");
+    assert!(!reopen()
+        .trusted_journal("root", "digest-a", Some("stage-1"))
+        .unwrap());
+    record(
+        "verified",
+        "promoting",
+        "accepting",
+        "",
+        "digest-a",
+        "stage-1",
+    );
+    record("verified", "live", "accepted", "", "digest-a", "stage-1");
     assert!(reopen()
         .trusted_journal("root", "digest-a", Some("stage-1"))
         .unwrap());
     assert!(!reopen().trusted_journal("root", "digest-a", None).unwrap());
     assert!(!reopen()
-        .trusted_journal("root", "digest-a", Some("stage-other"))
+        .trusted_journal("other", "digest-a", Some("stage-1"))
         .unwrap());
-    record("verified", "spent", "spent", "stage-1", "");
+    record(
+        "verified",
+        "promoting",
+        "accepting",
+        "",
+        "digest-a",
+        "stage-2",
+    );
     assert!(!reopen()
         .trusted_journal("root", "digest-a", Some("stage-1"))
         .unwrap());
-    record("verified", "live", "accepted", "", "digest-a");
-    assert!(reopen().trusted_journal("root", "digest-a", None).unwrap());
-    assert!(!reopen().trusted_journal("other", "digest-a", None).unwrap());
-    assert!(!reopen().trusted_journal("root", "digest-b", None).unwrap());
-    record("verified", "live", "unsynced", "", "digest-b");
-    assert!(reopen().trusted_journal("root", "digest-b", None).unwrap());
-    assert!(!reopen().trusted_journal("root", "digest-a", None).unwrap());
-    let attestation = crate::backup::domain::seal_attestation("digest-c", "stage-2");
-    record("absent", "verified", "sealed", &attestation, "");
-    assert!(!reopen().trusted_journal("root", "digest-b", None).unwrap());
-    assert!(!reopen().trusted_journal("root", "digest-c", None).unwrap());
-    assert!(reopen()
-        .trusted_journal("root", "digest-c", Some("stage-2"))
-        .unwrap());
-    record("verified", "spent", "spent", "stage-2", "");
     assert!(!reopen()
-        .trusted_journal("root", "digest-c", Some("stage-2"))
+        .trusted_journal("root", "digest-a", Some("stage-2"))
         .unwrap());
-    assert!(!reopen().trusted_journal("root", "digest-b", None).unwrap());
-    record("verified", "live", "retained", "", "digest-d");
-    assert!(reopen().trusted_journal("root", "digest-d", None).unwrap());
+    record("verified", "live", "retained", "", "digest-a", "stage-2");
+    assert!(reopen()
+        .trusted_journal("root", "digest-a", Some("stage-2"))
+        .unwrap());
+    assert!(!reopen()
+        .trusted_journal("root", "digest-a", Some("stage-1"))
+        .unwrap());
     let text = fs::read_to_string(directory.join("restore.jsonl")).unwrap();
-    assert!(text.contains("\"journalDigest\":\"digest-d\""));
+    assert!(text.contains("\"journalDigest\":\"digest-a\""));
+    assert!(text.contains("\"rootGeneration\":\"stage-2\""));
+}
+
+#[cfg(test)]
+fn owned_stage_for_test(path: &Path) -> OwnedStagedTree {
+    mkdir_exclusive(path).unwrap();
+    let mut note = fs::File::create(path.join("note")).unwrap();
+    note.write_all(b"owned").unwrap();
+    let directory = open_directory(path, false).unwrap();
+    let identity = tree_id_of(&directory).unwrap();
+    let parent = path.parent().unwrap();
+    OwnedStagedTree {
+        directory,
+        parent: open_directory(parent, false).unwrap(),
+        name: path.file_name().unwrap().to_owned(),
+        identity,
+        files: vec![OwnedStageFile {
+            relative: "note".into(),
+            file: note,
+            fingerprint: Fingerprint::of(b"owned"),
+        }],
+        marker: None,
+        parent_spelling: parent.to_path_buf(),
+    }
 }
 
 #[test]
 fn a_partial_readiness_file_is_not_the_marker() {
     let root = tempfile::tempdir().unwrap();
-    let tree = root.path().join("quarantine");
-    fs::create_dir(&tree).unwrap();
-    fs::write(tree.join("accept-ready.partial"), b"ready\n").unwrap();
-    let anchored = DirectoryQuarantine.anchor(&tree).unwrap();
-    assert!(DirectoryQuarantine.ready(&anchored).unwrap().is_none());
-    DirectoryQuarantine
-        .mark_ready(&anchored, "stage-1")
-        .unwrap();
+    let q = root.path().join("q");
+    let mut owner = owned_stage_for_test(&q);
+    fs::write(q.join("accept-ready.partial"), b"other occupant").unwrap();
+    owner.mark_ready("stage-1").unwrap();
     assert_eq!(
-        DirectoryQuarantine.ready(&anchored).unwrap().as_deref(),
+        read_marker_bytes(&fs::read(q.join("accept-ready")).unwrap())
+            .unwrap()
+            .as_deref(),
         Some("stage-1")
     );
-    assert!(!tree.join("accept-ready.partial").exists());
-    retire_marker(&tree.join("accept-ready")).unwrap();
-    assert!(DirectoryQuarantine.ready(&anchored).unwrap().is_none());
+    assert_eq!(
+        fs::read(q.join("accept-ready.partial")).unwrap(),
+        b"other occupant"
+    );
+    assert_eq!(owner.retire(), Err(RestoreFault::Retained));
+    assert!(fs::read(q.join("accept-ready")).unwrap().is_empty());
 }
 
 #[test]
 fn a_readiness_directory_sync_failure_clears_the_marker() {
     let root = tempfile::tempdir().unwrap();
-    let tree = root.path().join("quarantine");
-    fs::create_dir(&tree).unwrap();
-    let error = publish_marker(&tree, b"stage-1\n", |_| Err(RestoreFault::Unreadable)).unwrap_err();
-    assert_eq!(error, RestoreFault::Unreadable);
-    assert!(!tree.join("accept-ready").exists());
-    assert!(!tree.join("accept-ready.partial").exists());
-    let anchored = DirectoryQuarantine.anchor(&tree).unwrap();
-    assert!(DirectoryQuarantine.ready(&anchored).unwrap().is_none());
+    let q = root.path().join("q");
+    let mut owner = owned_stage_for_test(&q);
+    assert_eq!(
+        owner.mark_ready_with("stage-1", |_| Err(RestoreFault::Unreadable)),
+        Err(RestoreFault::Unreadable)
+    );
+    assert_eq!(owner.retire(), Err(RestoreFault::Retained));
+    assert!(fs::read(q.join("accept-ready")).unwrap().is_empty());
+    assert!(q.exists());
 }
 
 #[test]
 fn a_marker_that_cannot_be_cleared_is_retained() {
     let root = tempfile::tempdir().unwrap();
-    let marker = root.path().join("accept-ready");
-    fs::write(&marker, b"stage-1\n").unwrap();
-    let error = retire_marker_with(
-        &marker,
-        |_| Err(std::io::Error::other("remove")),
-        |_| Err(std::io::Error::other("spoil")),
-    )
-    .unwrap_err();
-    assert_eq!(error, RestoreFault::Retained);
-    assert_eq!(fs::read(&marker).unwrap(), b"stage-1\n");
+    let q = root.path().join("q");
+    fs::create_dir(&q).unwrap();
+    fs::write(q.join("accept-ready"), b"stage-1\n").unwrap();
+    let directory = open_directory(&q, false).unwrap();
+    let marker = open_file_at(&directory, OsStr::new("accept-ready"), OpenMode::Read).unwrap();
+    let id = tree_id_of(&directory).unwrap();
+    assert_eq!(
+        retire_source_marker_with(
+            &directory,
+            &id,
+            &marker,
+            |_, _| Err(RestoreFault::Retained),
+            |_| Err(RestoreFault::Retained)
+        ),
+        Err(RestoreFault::Retained)
+    );
+    assert_eq!(fs::read(q.join("accept-ready")).unwrap(), b"stage-1\n");
 }
 
 #[cfg(unix)]
@@ -4015,14 +4605,13 @@ fn a_write_through_the_temp_inode_does_not_change_the_published_file() {
     let anchored = DirectoryQuarantine.anchor(&live).unwrap();
     let relative = "sessions/conv.sqlite3";
     let (bytes, digest) = one_conversation("conv", b"verified-bytes");
-    let temp = DirectoryQuarantine
-        .session_temp(&anchored, relative)
+    let mut attempt = DirectoryQuarantine
+        .begin_session(&anchored, relative)
         .unwrap();
-    fs::write(&temp, &bytes).unwrap();
-    let mut writer = fs::OpenOptions::new().write(true).open(&temp).unwrap();
-    DirectoryQuarantine
-        .publish_verified(&anchored, &temp, relative, "conv", &digest)
-        .unwrap();
+    let mut writer = attempt.destination().unwrap();
+    writer.write_all(&bytes).unwrap();
+    writer.sync_all().unwrap();
+    attempt.publish("conv", &digest).unwrap();
     writer.write_all(b"tampered-bytes!!").unwrap();
     writer.sync_all().unwrap();
     assert_eq!(fs::read(live.join(relative)).unwrap(), bytes);
@@ -4102,6 +4691,212 @@ fn a_linked_tree_sync_failure_refuses_publication() {
 
 #[cfg(unix)]
 #[test]
+fn linked_files_and_their_directory_refuse_writes_until_live() {
+    let root = tempfile::tempdir().unwrap();
+    let sealed = root.path().join("sealed");
+    mkdir_exclusive(&sealed).unwrap();
+    let directory = open_directory(&sealed, false).unwrap();
+    // This is the attacker's directory descriptor, acquired before sealing.
+    let previous_directory = open_directory(&sealed, false).unwrap();
+    let mut file = create_unpublished(
+        &directory,
+        OsStr::new("note"),
+        "note",
+        false,
+        RestoreFault::Tamper,
+    )
+    .unwrap();
+    file.store(b"sealed").unwrap();
+    file.sync_file().unwrap();
+    file.publish_in(RestoreFault::Tamper).unwrap();
+    for (read, truncate) in [(false, false), (true, false), (false, true)] {
+        assert!(fs::OpenOptions::new()
+            .read(read)
+            .write(true)
+            .truncate(truncate)
+            .open(sealed.join("note"))
+            .is_err());
+    }
+    let mut guard = ProtectedDirectories::seal(&directory).unwrap();
+    assert!(file.name_is_owned().unwrap());
+    assert!(unlink_at(&previous_directory, OsStr::new("note")).is_err());
+    assert!(open_file_at(&previous_directory, OsStr::new("new"), OpenMode::CreateNew).is_err());
+    assert!(fs::rename(sealed.join("note"), sealed.join("aside")).is_err());
+    let live = root.path().join("live");
+    rename_new(&sealed, &live, RestoreFault::LiveOccupied).unwrap();
+    assert_eq!(fs::read(live.join("note")).unwrap(), b"sealed");
+    file.release().unwrap();
+    assert!(guard.release());
+    fs::OpenOptions::new()
+        .write(true)
+        .open(live.join("note"))
+        .unwrap()
+        .write_all(b"usable")
+        .unwrap();
+    assert_eq!(fs::read(live.join("note")).unwrap(), b"usable");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_extra_name_before_namespace_sealing_is_not_promoted() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source");
+    mkdir_exclusive(&source).unwrap();
+    fs::write(source.join("journal.txt"), b"journal").unwrap();
+    fs::write(source.join("note"), b"sealed").unwrap();
+    let loaded = DirectoryQuarantine
+        .load(&DirectoryQuarantine.anchor(&source).unwrap())
+        .unwrap();
+    let dest = root.path().join("dest");
+    mkdir_exclusive(&dest).unwrap();
+    let directory = open_directory(&dest, false).unwrap();
+    let mut note = create_unpublished(
+        &directory,
+        OsStr::new("note"),
+        "note",
+        false,
+        RestoreFault::Tamper,
+    )
+    .unwrap();
+    note.store(b"sealed").unwrap();
+    let mut journal = create_unpublished(
+        &directory,
+        OsStr::new("journal.txt"),
+        "journal.txt",
+        false,
+        RestoreFault::Tamper,
+    )
+    .unwrap();
+    journal.store(b"journal").unwrap();
+    let mut held = vec![note];
+    publish_held(&directory, &mut held, &mut journal, sync_tree_at).unwrap();
+    fs::write(dest.join("unsealed-extra"), b"not in the cut").unwrap();
+    let mut namespace = ProtectedDirectories::seal(&directory).unwrap();
+    assert_eq!(
+        published_tree_matches(&directory, &loaded, &held, &journal),
+        Err(RestoreFault::Tamper)
+    );
+    assert!(namespace.release());
+    fs::remove_file(dest.join("unsealed-extra")).unwrap();
+    let mut namespace = ProtectedDirectories::seal(&directory).unwrap();
+    published_tree_matches(&directory, &loaded, &held, &journal).unwrap();
+    assert!(namespace.release());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pre_seal_leaf_substitution_is_refused_by_inode_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = open_directory(root.path(), false).unwrap();
+    let mut file = create_unpublished(
+        &directory,
+        OsStr::new("note"),
+        "note",
+        false,
+        RestoreFault::Tamper,
+    )
+    .unwrap();
+    file.store(b"sealed").unwrap();
+    file.publish_in(RestoreFault::Tamper).unwrap();
+    fs::rename(root.path().join("note"), root.path().join("aside")).unwrap();
+    fs::write(root.path().join("note"), b"substitute").unwrap();
+    let mut guard = ProtectedDirectories::seal(&directory).unwrap();
+    assert!(!file.name_is_owned().unwrap());
+    assert!(guard.release());
+    assert_eq!(fs::read(root.path().join("note")).unwrap(), b"substitute");
+}
+
+#[test]
+fn dropping_a_named_reservation_does_not_unlink_its_replacement() {
+    let root = tempfile::tempdir().unwrap();
+    let name = root.path().join("reserved");
+    fs::write(&name, b"owned").unwrap();
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&name)
+        .unwrap();
+    let reservation = Unpublished {
+        parent: open_directory(root.path(), false).unwrap(),
+        name: OsString::from("reserved"),
+        relative: "reserved".into(),
+        file: Some(file),
+        fingerprint: Fingerprint::of(b"owned"),
+        named: true,
+        published: false,
+        protected: false,
+    };
+    fs::rename(&name, root.path().join("owned-aside")).unwrap();
+    fs::write(&name, b"other occupant").unwrap();
+    drop(reservation);
+    assert_eq!(fs::read(name).unwrap(), b"other occupant");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_existing_publication_prevents_a_new_session_reservation() {
+    let root = tempfile::tempdir().unwrap();
+    let live = root.path().join("live");
+    mkdir_exclusive(&live).unwrap();
+    fs::create_dir(live.join("sessions")).unwrap();
+    let sidecar = live.join("sessions/conv.sqlite3.publication");
+    fs::write(&sidecar, b"pub-previous\n").unwrap();
+    let anchored = DirectoryQuarantine.anchor(&live).unwrap();
+    assert!(matches!(
+        DirectoryQuarantine.begin_session(&anchored, "sessions/conv.sqlite3"),
+        Err(RestoreFault::Retained)
+    ));
+    assert!(!live.join("sessions/conv.sqlite3").exists());
+    assert!(!live.join("sessions/conv.sqlite3.partial").exists());
+    assert_eq!(fs::read(sidecar).unwrap(), b"pub-previous\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_session_attempt_keeps_namespace_protected_until_release() {
+    let root = tempfile::tempdir().unwrap();
+    let live = root.path().join("live");
+    mkdir_exclusive(&live).unwrap();
+    let anchored = DirectoryQuarantine.anchor(&live).unwrap();
+    let (bytes, digest) = one_conversation("conv", b"sealed");
+    let mut attempt = DirectoryQuarantine
+        .begin_session(&anchored, "sessions/conv.sqlite3")
+        .unwrap();
+    attempt.destination().unwrap().write_all(&bytes).unwrap();
+    attempt.publish("conv", &digest).unwrap();
+    attempt.note_publication("pub-test").unwrap();
+    let path = live.join("sessions/conv.sqlite3");
+    assert!(fs::rename(&path, live.join("sessions/swapped")).is_err());
+    assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
+    attempt.release().unwrap();
+    fs::OpenOptions::new().write(true).open(&path).unwrap();
+    assert_eq!(fs::read(path).unwrap(), bytes);
+}
+
+#[cfg(unix)]
+#[test]
+fn attempt_retirement_empties_only_the_owned_inode_after_a_name_swap() {
+    let root = tempfile::tempdir().unwrap();
+    let live = root.path().join("live");
+    mkdir_exclusive(&live).unwrap();
+    let anchored = DirectoryQuarantine.anchor(&live).unwrap();
+    let (bytes, digest) = one_conversation("conv", b"sealed");
+    let mut attempt = DirectoryQuarantine
+        .begin_session(&anchored, "sessions/conv.sqlite3")
+        .unwrap();
+    attempt.destination().unwrap().write_all(&bytes).unwrap();
+    attempt.publish("conv", &digest).unwrap();
+    let path = live.join("sessions/conv.sqlite3");
+    let aside = live.join("sessions/owned-aside");
+    fs::rename(&path, &aside).unwrap();
+    fs::write(&path, b"other occupant").unwrap();
+    assert_eq!(attempt.retire(), Err(RestoreFault::Retained));
+    assert!(fs::read(aside).unwrap().is_empty());
+    assert_eq!(fs::read(path).unwrap(), b"other occupant");
+}
+
+#[cfg(unix)]
+#[test]
 fn a_held_file_is_not_a_directory_entry_until_publication() {
     let root = tempfile::tempdir().unwrap();
     let parent = open_directory(root.path(), false).unwrap();
@@ -4171,7 +4966,7 @@ fn a_held_file_rejects_a_second_writer() {
         .write(true)
         .open(root.path().join("note"))
         .unwrap_err();
-    assert_eq!(error.raw_os_error(), Some(32));
+    assert_eq!(error.raw_os_error(), Some(5));
     drop(held);
 }
 
@@ -4184,13 +4979,11 @@ fn a_different_byte_is_not_published() {
     let relative = "sessions/conv.sqlite3";
     let (bytes, _) = one_conversation("conv", b"other-bytes");
     let (_, digest) = one_conversation("conv", b"verified-bytes");
-    let temp = DirectoryQuarantine
-        .session_temp(&anchored, relative)
+    let mut attempt = DirectoryQuarantine
+        .begin_session(&anchored, relative)
         .unwrap();
-    fs::write(&temp, &bytes).unwrap();
-    let error = DirectoryQuarantine
-        .publish_verified(&anchored, &temp, relative, "conv", &digest)
-        .unwrap_err();
+    attempt.destination().unwrap().write_all(&bytes).unwrap();
+    let error = attempt.publish("conv", &digest).unwrap_err();
     assert_eq!(error, RestoreFault::SourceChanged);
     assert!(!live.join(relative).exists());
     assert!(fs::read_dir(live.join("sessions"))
@@ -4252,17 +5045,18 @@ fn source_retirement_and_parent_sync_failures_are_kept_together() {
 #[test]
 fn a_renamed_source_is_retired_through_its_handle() {
     let root = tempfile::tempdir().unwrap();
-    let dir = root.path().join("quarantine");
-    fs::create_dir(&dir).unwrap();
-    fs::write(dir.join("accept-ready"), b"stage-1\n").unwrap();
-    fs::write(dir.join("note"), b"one").unwrap();
-    let opened = open_directory(&dir, false).unwrap();
-    let identity = tree_id_of(&opened).unwrap();
-    let aside = root.path().join("aside");
-    fs::rename(&dir, &aside).unwrap();
-    retire_opened(&opened, &identity).unwrap();
-    assert!(!aside.exists());
-    assert!(!dir.exists());
+    let q = root.path().join("q");
+    fs::create_dir(&q).unwrap();
+    fs::write(q.join("accept-ready"), b"stage-1\n").unwrap();
+    let directory = open_directory(&q, false).unwrap();
+    let marker = open_file_at(&directory, OsStr::new("accept-ready"), OpenMode::Read).unwrap();
+    let id = tree_id_of(&directory).unwrap();
+    let saved = root.path().join("saved");
+    fs::rename(&q, &saved).unwrap();
+    retire_source_marker(&directory, &id, &marker).unwrap();
+    assert!(saved.is_dir());
+    assert!(fs::read(saved.join("accept-ready")).unwrap().is_empty());
+    assert!(!q.exists());
 }
 
 #[test]
@@ -4295,4 +5089,456 @@ fn an_interrupted_lease_line_is_the_ledger_ended_record() {
     };
     let expected = serde_json::to_value(&entry).unwrap();
     assert_eq!(parsed, expected);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn mac_session_source_scratch_stays_outside_the_sealed_tree() {
+    let root = tempfile::tempdir().unwrap();
+    let live = root.path().join("live");
+    mkdir_exclusive(&live).unwrap();
+    let anchored = DirectoryQuarantine.anchor(&live).unwrap();
+    let (bytes, digest) = one_conversation("conv", b"sealed");
+    let mut attempt = DirectoryQuarantine
+        .begin_session(&anchored, "sessions/conv.sqlite3")
+        .unwrap();
+    let mut source = attempt.destination().unwrap();
+    let scratch = path_of_handle(&source).unwrap();
+    assert_eq!(
+        scratch.parent(),
+        Some(live.parent().unwrap().canonicalize().unwrap().as_path())
+    );
+    source.write_all(&bytes).unwrap();
+    attempt.publish("conv", &digest).unwrap();
+    assert_eq!(source.metadata().unwrap().len(), 0);
+    assert!(!live.join("sessions/conv.sqlite3.partial").exists());
+    source.seek(SeekFrom::Start(0)).unwrap();
+    source.write_all(b"later source writer").unwrap();
+    let output = live.join("sessions/conv.sqlite3");
+    assert_eq!(fs::read(&output).unwrap(), bytes);
+    assert!(fs::OpenOptions::new().write(true).open(&output).is_err());
+    assert_eq!(attempt.retire(), Err(RestoreFault::Retained));
+    assert_eq!(source.metadata().unwrap().len(), 0);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn mac_named_output_refuses_other_writers_from_creation() {
+    let root = tempfile::tempdir().unwrap();
+    let parent = open_directory(root.path(), false).unwrap();
+    let mut output = create_unpublished(
+        &parent,
+        OsStr::new("note"),
+        "note",
+        true,
+        RestoreFault::Retained,
+    )
+    .unwrap();
+    let identity = tree_id_of(output.file.as_ref().unwrap()).unwrap();
+    let path = root.path().join("note");
+    assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
+    output.store(b"private writer").unwrap();
+    output.publish_in(RestoreFault::Retained).unwrap();
+    assert_eq!(tree_id(&path).unwrap(), identity);
+    assert_eq!(fs::read(&path).unwrap(), b"private writer");
+    assert!(fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .is_err());
+    output.release().unwrap();
+    fs::OpenOptions::new().write(true).open(&path).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn namespace_sealing_never_adopts_a_substituted_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source");
+    mkdir_exclusive(&source).unwrap();
+    mkdir_exclusive(&source.join("nested")).unwrap();
+    fs::write(source.join("nested/note"), b"sealed").unwrap();
+    let dest = root.path().join("dest");
+    mkdir_exclusive(&dest).unwrap();
+    let source_handle = open_directory(&source, false).unwrap();
+    let destination = open_directory(&dest, false).unwrap();
+    let mut held = Vec::new();
+    let mut directories = Vec::new();
+    copy_at(&source_handle, &destination, &mut held, &mut directories).unwrap();
+    assert_eq!(directories.len(), 1);
+    let original = dest.join("nested");
+    let aside = root.path().join("owned-aside");
+    fs::rename(&original, &aside).unwrap();
+    let foreign = root.path().join("foreign");
+    mkdir_exclusive(&foreign).unwrap();
+    fs::write(foreign.join("note"), b"sealed").unwrap();
+    fs::set_permissions(&foreign, fs::Permissions::from_mode(0o750)).unwrap();
+    fs::rename(&foreign, &original).unwrap();
+    assert!(matches!(
+        ProtectedDirectories::seal_owned(&destination, &directories),
+        Err(RestoreFault::Tamper)
+    ));
+    assert_eq!(
+        fs::metadata(&original).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+    assert_eq!(fs::read(original.join("note")).unwrap(), b"sealed");
+    assert_eq!(
+        fs::metadata(&aside).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    // Positive control: the same retained directory is accepted once its
+    // expected name is restored; an unrelated inserted subtree stays untouched.
+    fs::rename(&original, &foreign).unwrap();
+    fs::rename(&aside, &original).unwrap();
+    let unexpected = dest.join("unexpected");
+    mkdir_exclusive(&unexpected).unwrap();
+    fs::set_permissions(&unexpected, fs::Permissions::from_mode(0o550)).unwrap();
+    let mut guard = ProtectedDirectories::seal_owned(&destination, &directories).unwrap();
+    assert_eq!(
+        fs::metadata(&original).unwrap().permissions().mode() & 0o777,
+        0o500
+    );
+    assert_eq!(
+        fs::metadata(&unexpected).unwrap().permissions().mode() & 0o777,
+        0o550
+    );
+    assert!(guard.release());
+    assert_eq!(
+        fs::metadata(&original).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&unexpected).unwrap().permissions().mode() & 0o777,
+        0o550
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_single_directory_guard_preserves_modes_and_ignores_children() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    mkdir_exclusive(&sessions).unwrap();
+    let foreign = sessions.join("foreign");
+    mkdir_exclusive(&foreign).unwrap();
+    fs::set_permissions(&foreign, fs::Permissions::from_mode(0o550)).unwrap();
+    fs::set_permissions(&sessions, fs::Permissions::from_mode(0o750)).unwrap();
+    let directory = open_directory(&sessions, false).unwrap();
+    let mut guard = ProtectedDirectories::seal(&directory).unwrap();
+    assert_eq!(
+        fs::metadata(&foreign).unwrap().permissions().mode() & 0o777,
+        0o550
+    );
+    assert!(guard.release());
+    assert_eq!(
+        fs::metadata(&sessions).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+    assert_eq!(
+        fs::metadata(&foreign).unwrap().permissions().mode() & 0o777,
+        0o550
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn all_retained_directory_guards_restore_their_captured_modes() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let child = root.path().join("owned-child");
+    mkdir_exclusive(&child).unwrap();
+    let parent = open_directory(root.path(), false).unwrap();
+    let directory = open_directory(&child, false).unwrap();
+    let owned = vec![OwnedDirectory {
+        relative: "owned-child".into(),
+        parent: duplicate(&parent).unwrap(),
+        name: OsString::from("owned-child"),
+        directory,
+    }];
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o750)).unwrap();
+    fs::set_permissions(&child, fs::Permissions::from_mode(0o550)).unwrap();
+    let mut guard = ProtectedDirectories::seal_owned(&parent, &owned).unwrap();
+    assert_eq!(
+        fs::metadata(&child).unwrap().permissions().mode() & 0o777,
+        0o500
+    );
+    assert!(guard.release());
+    assert_eq!(
+        fs::metadata(root.path()).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+    assert_eq!(
+        fs::metadata(&child).unwrap().permissions().mode() & 0o777,
+        0o550
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_session_parent_symlink_is_refused_before_writing_outside() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let live = root.path().join("live");
+    mkdir_exclusive(&live).unwrap();
+    let outside = root.path().join("outside");
+    mkdir_exclusive(&outside).unwrap();
+    fs::write(outside.join("sentinel"), b"untouched").unwrap();
+    symlink(&outside, live.join("sessions")).unwrap();
+    let anchored = DirectoryQuarantine.anchor(&live).unwrap();
+    assert!(DirectoryQuarantine
+        .begin_session(&anchored, "sessions/conv.sqlite3")
+        .is_err());
+    assert!(fs::symlink_metadata(live.join("sessions"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"untouched");
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn captured_directories_must_be_private_owned_and_empty() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let candidate = root.path().join("candidate");
+    mkdir_exclusive(&candidate).unwrap();
+    let parent = open_directory(root.path(), false).unwrap();
+    let name = OsStr::new("candidate");
+    let directory = capture_created_directory(&parent, name).unwrap();
+    assert!(captured_directory_is_empty(&directory).unwrap());
+    fs::write(candidate.join("sentinel"), b"foreign").unwrap();
+    assert!(matches!(
+        capture_created_directory(&parent, name),
+        Err(RestoreFault::Retained)
+    ));
+    assert_eq!(fs::read(candidate.join("sentinel")).unwrap(), b"foreign");
+    assert_eq!(
+        fs::metadata(&candidate).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    fs::remove_file(candidate.join("sentinel")).unwrap();
+    fs::set_permissions(&candidate, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        capture_created_directory(&parent, name),
+        Err(RestoreFault::Retained)
+    ));
+    assert_eq!(
+        fs::metadata(&candidate).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert!(fs::read_dir(&candidate).unwrap().next().is_none());
+    fs::set_permissions(&candidate, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(capture_created_directory(&parent, name).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_held_session_cut_survives_unlink_and_ancestor_replacement() {
+    let root = tempfile::tempdir().unwrap();
+    let ancestor = root.path().join("parent");
+    mkdir_exclusive(&ancestor).unwrap();
+    let original_path = ancestor.join("conv.sqlite3");
+    let (original, original_digest) = one_conversation("conv", b"retained original");
+    let (replacement, replacement_digest) = one_conversation("conv", b"different replacement");
+    assert_ne!(original_digest, replacement_digest);
+    fs::write(&original_path, &original).unwrap();
+    let directory = open_directory(&ancestor, false).unwrap();
+    let mut held = open_file_at(&directory, OsStr::new("conv.sqlite3"), OpenMode::Read).unwrap();
+    fs::remove_file(&original_path).unwrap();
+    fs::rename(&ancestor, root.path().join("aside")).unwrap();
+    mkdir_exclusive(&ancestor).unwrap();
+    fs::write(&original_path, &replacement).unwrap();
+    // The pathname is a valid different session, rather than an invalid fixture.
+    assert_eq!(
+        DirectoryQuarantine
+            .session_cut(&original_path, "conv")
+            .unwrap()
+            .digest,
+        replacement_digest
+    );
+    assert_eq!(
+        held_session_cut(&mut held, "conv").unwrap().digest,
+        original_digest
+    );
+    assert_eq!(fs::read(&original_path).unwrap(), replacement);
+}
+
+#[cfg(windows)]
+#[test]
+fn closed_stage_tokens_reacquire_the_exact_files_after_root_rename() {
+    let temp = tempfile::tempdir().unwrap();
+    let parent = open_ancestor(temp.path()).unwrap();
+    let root = create_directory_handle(&parent, OsStr::new("partial"), true).unwrap();
+    let mut directories = Vec::new();
+    let directory = owned_directory_under(&root, "nested/note", &mut directories).unwrap();
+    let mut file = open_file_at(&directory, OsStr::new("note"), OpenMode::CreateNew).unwrap();
+    file.write_all(b"owned bytes").unwrap();
+    file.sync_all().unwrap();
+    let mut files = vec![OwnedStageFile {
+        relative: "nested/note".into(),
+        file,
+        fingerprint: Fingerprint::of(b"owned bytes"),
+    }];
+    drop(directory);
+    let mut namespace = ProtectedDirectories::seal_owned(&root, &directories).unwrap();
+    staged_tree_matches(&root, &files, &directories).unwrap();
+    let closed = closed_windows::ClosedTree::capture_stage(&root, &files, &directories).unwrap();
+    files.clear();
+    directories.clear();
+    namespace.close_for_rename();
+    rename_owned_at(
+        &root,
+        &parent,
+        OsStr::new("partial"),
+        &parent,
+        OsStr::new("staged"),
+        RestoreFault::QuarantineOccupied,
+    )
+    .unwrap();
+    let files = closed.reacquire_stage(&root).unwrap();
+    assert_eq!(files.len(), 1);
+    // Audit failure after finish must still retire the originally staged inode.
+    empty_owned_file(&files[0].file).unwrap();
+    assert!(closed.release(&root));
+    assert!(fs::read(temp.path().join("staged/nested/note"))
+        .unwrap()
+        .is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn closed_tree_identity_mismatch_does_not_release_or_empty_another_tree() {
+    let temp = tempfile::tempdir().unwrap();
+    let parent = open_ancestor(temp.path()).unwrap();
+    let original = create_directory_handle(&parent, OsStr::new("original"), true).unwrap();
+    let other = create_directory_handle(&parent, OsStr::new("other"), true).unwrap();
+    let mut original_file =
+        open_file_at(&original, OsStr::new("note"), OpenMode::CreateNew).unwrap();
+    original_file.write_all(b"original").unwrap();
+    let mut other_file = open_file_at(&other, OsStr::new("note"), OpenMode::CreateNew).unwrap();
+    other_file.write_all(b"unrelated").unwrap();
+    let files = vec![OwnedStageFile {
+        relative: "note".into(),
+        file: original_file,
+        fingerprint: Fingerprint::of(b"original"),
+    }];
+    let closed = closed_windows::ClosedTree::capture_stage(&original, &files, &[]).unwrap();
+    let before = nessa_local_storage::DirectoryAcl::capture(&other).unwrap();
+    assert!(!closed.release(&other));
+    assert!(closed.reacquire_stage(&other).is_err());
+    assert_eq!(closed.retire(&other), Err(RestoreFault::Retained));
+    assert_eq!(
+        nessa_local_storage::DirectoryAcl::capture(&other).unwrap(),
+        before
+    );
+    let mut bytes = Vec::new();
+    other_file.seek(SeekFrom::Start(0)).unwrap();
+    other_file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"unrelated");
+    empty_owned_file(&files[0].file).unwrap();
+    empty_owned_file(&other_file).unwrap();
+    nessa_local_storage::release_file_writes(&files[0].file).unwrap();
+    nessa_local_storage::release_file_writes(&other_file).unwrap();
+    nessa_local_storage::release_directory_writes(&original).unwrap();
+    nessa_local_storage::release_directory_writes(&other).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_real_session_publication_does_not_claim_directory_durability() {
+    let temp = tempfile::tempdir().unwrap();
+    let live = temp.path().join("live");
+    let parent = open_ancestor(temp.path()).unwrap();
+    let root = create_directory_handle(&parent, OsStr::new("live"), true).unwrap();
+    nessa_local_storage::release_directory_writes(&root).unwrap();
+    drop(root);
+    let anchored = DirectoryQuarantine.anchor(&live).unwrap();
+    let (bytes, digest) = one_conversation("conv", b"publication");
+    let mut attempt = DirectoryQuarantine
+        .begin_session(&anchored, "sessions/conv.sqlite3")
+        .unwrap();
+    attempt.destination().unwrap().write_all(&bytes).unwrap();
+    attempt.publish("conv", &digest).unwrap();
+    assert!(!attempt.note_publication("pub-durability").unwrap().durable);
+    attempt.release().unwrap();
+    assert_eq!(fs::read(live.join("sessions/conv.sqlite3")).unwrap(), bytes);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_real_promotion_keeps_live_bytes_without_claiming_directory_durability() {
+    let temp = tempfile::tempdir().unwrap();
+    let quarantine = DirectoryQuarantine
+        .anchor(&temp.path().join("quarantine"))
+        .unwrap();
+    let live = DirectoryQuarantine
+        .anchor(&temp.path().join("live"))
+        .unwrap();
+    let mut stage = DirectoryQuarantine.begin(&quarantine, &live).unwrap();
+    stage.write("note", b"publication").unwrap();
+    let mut owner = stage.finish("journal").unwrap();
+    owner.mark_ready("stage-durability").unwrap();
+    drop(owner);
+    let loaded = DirectoryQuarantine.load(&quarantine).unwrap();
+    let promoted = DirectoryQuarantine
+        .promote(&quarantine, &live, &loaded, "stage-durability")
+        .unwrap();
+    assert!(!promoted.durable);
+    assert!(!promoted.publication_restricted);
+    assert!(!promoted.source_retirement_failed);
+    assert_eq!(fs::read(live.join("note")).unwrap(), b"publication");
+    assert!(fs::read(quarantine.join("accept-ready"))
+        .unwrap()
+        .is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn reacquired_stage_content_is_rechecked_before_permissions_are_released() {
+    let temp = tempfile::tempdir().unwrap();
+    let parent = open_ancestor(temp.path()).unwrap();
+    let root = create_directory_handle(&parent, OsStr::new("partial"), true).unwrap();
+    let mut file = open_file_at(&root, OsStr::new("note"), OpenMode::CreateNew).unwrap();
+    file.write_all(b"expected").unwrap();
+    file.sync_all().unwrap();
+    let mut files = vec![OwnedStageFile {
+        relative: "note".into(),
+        file,
+        fingerprint: Fingerprint::of(b"expected"),
+    }];
+    let mut namespace = ProtectedDirectories::seal_owned(&root, &[]).unwrap();
+    staged_tree_matches(&root, &files, &[]).unwrap();
+    verify_reacquired_stage(&root, &files).unwrap();
+    let closed = closed_windows::ClosedTree::capture_stage(&root, &files, &[]).unwrap();
+    // Model changed bytes between capture and exclusive reacquisition. Native
+    // storage separately proves an ordinary writer can write and close during
+    // its temporary FRFW permission window before trusted reacquisition wins.
+    files[0].file.seek(SeekFrom::Start(0)).unwrap();
+    files[0].file.write_all(b"changed!").unwrap();
+    files[0].file.sync_all().unwrap();
+    files.clear();
+    namespace.close_for_rename();
+    rename_owned_at(
+        &root,
+        &parent,
+        OsStr::new("partial"),
+        &parent,
+        OsStr::new("staged"),
+        RestoreFault::QuarantineOccupied,
+    )
+    .unwrap();
+    let files = closed.reacquire_stage(&root).unwrap();
+    assert_eq!(
+        verify_reacquired_stage(&root, &files),
+        Err(RestoreFault::Retained)
+    );
+    assert!(fs::read(temp.path().join("staged/note"))
+        .unwrap()
+        .is_empty());
+    // Explicit fixture cleanup happens only after the retained/zero assertions.
+    assert!(closed.release(&root));
 }

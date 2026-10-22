@@ -17,7 +17,7 @@ use std::{
     os::windows::fs::OpenOptionsExt,
     path::Path,
 };
-use windows_sys::Win32::Storage::FileSystem::*;
+use windows_sys::Win32::{Foundation::GENERIC_READ, Storage::FileSystem::*};
 
 fn refused_namespace_writer(error: &std::io::Error) {
     use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION};
@@ -52,6 +52,12 @@ fn writer(path: &Path, access: u32) -> std::io::Result<File> {
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
+}
+
+// Releasing a private ACL first verifies its descriptor and native attributes.
+// This is trusted owner authority, separate from competing write/DELETE probes.
+fn acl_authority(path: &Path) -> std::io::Result<File> {
+    writer(path, GENERIC_READ | WRITE_DAC)
 }
 
 fn assert_leaf_mutation_refused(path: &Path) {
@@ -115,7 +121,7 @@ fn sealed_directory_refuses_actual_additions_after_initial_handle_closes() {
     let error = fs::create_dir(root.path().join("sealed/injected-directory"))
         .expect_err("sealed directory must refuse actual directory creation");
     refused_namespace_writer(&error);
-    let cleanup = writer(&root.path().join("sealed"), WRITE_DAC).unwrap();
+    let cleanup = acl_authority(&root.path().join("sealed")).unwrap();
     release_directory_writes(&cleanup).unwrap();
 }
 
@@ -241,7 +247,7 @@ fn protected_root_blocks_competing_delete_but_renames_through_its_own_handle() {
     let error = writer(&root.path().join("live"), DELETE)
         .expect_err("root remains pinned under its live name until initial authority closes");
     refused_namespace_writer(&error);
-    let acl = writer(&root.path().join("live/payload"), WRITE_DAC).unwrap();
+    let acl = acl_authority(&root.path().join("live/payload")).unwrap();
     release_file_writes(&acl).unwrap();
     release_directory_writes(&directory).unwrap();
 }
@@ -263,7 +269,7 @@ fn protected_child_refuses_delete_and_write_until_post_publication_release() {
     // writer threat boundary. Reopen ACL control only after protected publication.
     seal_directory_writes(&directory).unwrap();
     rename_handle_at(&directory, &authority, OsStr::new("live")).unwrap();
-    let acl = writer(&root.path().join("live/payload"), WRITE_DAC).unwrap();
+    let acl = acl_authority(&root.path().join("live/payload")).unwrap();
     release_file_writes(&acl).unwrap();
     release_directory_writes(&directory).unwrap();
     drop((acl, directory));
@@ -366,7 +372,7 @@ fn original_privilege_profile_explains_directory_creation_counterexample() {
         }
         assert!(!token::privilege_enabled("SeRestorePrivilege").unwrap());
     }
-    let cleanup = writer(&root.path().join("sealed"), WRITE_DAC).unwrap();
+    let cleanup = acl_authority(&root.path().join("sealed")).unwrap();
     release_directory_writes(&cleanup).unwrap();
 }
 
@@ -400,7 +406,7 @@ fn nested_directory_handles_must_close_before_retained_root_rename() {
     );
     assert!(root.path().join("live/child").is_dir());
     drop(root_duplicate);
-    let child = writer(&root.path().join("live/child"), WRITE_DAC).unwrap();
+    let child = acl_authority(&root.path().join("live/child")).unwrap();
     release_directory_writes(&child).unwrap();
     release_directory_writes(&directory).unwrap();
 }

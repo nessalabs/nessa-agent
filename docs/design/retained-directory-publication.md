@@ -89,9 +89,9 @@ test permission is changed on a guess. Backup activation stays unavailable.
 | Order | Operation | Required result / failure |
 | --- | --- | --- |
 | N01 | Create one absent child with `NtCreateFile(FILE_CREATE)` and protected read/search plus ADD_FILE/ADD_SUBDIRECTORY user DACL, without DELETE_CHILD | Return initial ADD/DELETE/WRITE_DAC authority; collision preserves the existing object |
-| N02 | Another process attempts actual root rename/removal, nested-directory removal or leaf mutation | Root initially shares only READ; nested directories share DELETE but neither their own ACL nor their parent grants DELETE. Leaves have read-only user ACLs from creation; no DELETE_CHILD exists in the copied tree |
+| N02 | Another process attempts actual root rename/removal, nested-directory removal or leaf mutation | Root shares READ and WRITE but not DELETE, permitting the native rename destination-parent internal write open; nested directories share DELETE but neither their own ACL nor their parent grants DELETE. Leaves have read-only user ACLs from creation; no DELETE_CHILD exists in the copied tree |
 | N03 | Create children relative to retained append-only directory; seal every directory read/search-only before final enumeration and content/identity verification | Child creation works before seal; the original N03 create is denied after seal, including through pre-acquired ADD_FILE/ADD_SUBDIRECTORY handles. Pre-acquired ADD authority cannot rename an external source into the sealed tree. Any unexpected entry fails final validation |
-| N04 | Rename retained child handles before sealing, without replacement; after seal and final validation, close descendant handles and rename root through its initial DELETE handle | Preserve occupied destinations. Never reopen source for DELETE. An attempted directory rename with open descendants must return AccessDenied, per FILE_RENAME_INFORMATION. Post-close mutation refusals must hold before publication; no root ACL DELETE grant is added speculatively |
+| N04 | Rename retained child handles before sealing, without replacement; after seal and final validation, close descendant handles and rename root through its initial DELETE handle | Preserve occupied destinations. When native rename returns a sharing error, classify AlreadyExists only if a no-follow retained-relative probe confirms an occupied target; absent or unreadable targets preserve the sharing error. Never reopen source for DELETE. An attempted directory rename with open descendants must return AccessDenied, per FILE_RENAME_INFORMATION. Post-close mutation refusals must hold before publication; no root ACL DELETE grant is added speculatively |
 | N05 | Delete through the exact retained object handle | Remove that object only; a replacement at its old name is not cleanup authority |
 | N06 | Successful root promotion, then reopen descendants read/control-only relative to the retained root and release temporary restrictions; retain root WRITE_DAC authority | Restore ordinary private owner ACLs only after live rename; failure remains an explicit error |
 | N07 | Any create/rename/delete fails | Return the OS error; no path fallback, automatic ACL relaxation, or success claim |
@@ -115,6 +115,29 @@ Directory rename with open descendants is independently unsupported by the
 [kernel rename contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information).
 [CreateRestrictedToken](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-createrestrictedtoken)
 provides the privilege-only test boundary; source user and groups remain checked.
+
+| C01 | Capture opaque NativeObjectId through each initially owned descriptor | Common lifecycle records relative component chains and IDs; names do not confer cleanup authority |
+| C02 | Reopen sealed directories and leaves retained-relative, requesting read and WRITE_DAC | Verify private no-follow object type and saved ID before returning ACL authority; mismatches leave unrelated bytes and ACL unchanged |
+| C03 | Stage source handle was closed, or cleanup retains only a READ marker whose name changed | ReOpenFile upgrades metadata on the SAME object, checks saved ID before any ACL change; no old-path fallback |
+| C04 | Prepare restrictive FR and temporary FRFW descriptors before any permission change; verified leaf then grants user FRFW and same-object ReOpenFile requests RW + WRITE_DAC with READ/DELETE sharing and no WRITE sharing | Existing ordinary writable descriptor forces failure. Reapply the already-owned FR descriptor on success and failure before propagating the result; no later token lookup/allocation may bypass resealing. Never grant DELETE in this window |
+| C04b | Ordinary writer writes and closes entirely inside the temporary FRFW window, before trusted exclusive reacquisition | Exclusive reopen may succeed with the same inode ID and changed bytes. Exclusivity is not content evidence: common lifecycle rechecks exact staged tree contents after reacquisition and before ACL release |
+| C05 | Exclusive reacquisition and FR restoration succeeded | Recheck same ID, return retained writable authority; exact truncate/sync targets recorded inode while future ordinary writes remain refused |
+| C06 | Live restricted tree reopens saved components and restores permissions | Verified leaf ACLs, then child-directory ACLs, then root ACL; failure preserves live effect and restriction evidence |
+
+The native closed-file tests require actual ReOpenFile interoperability with
+NtCreateFile-created objects, retained READ metadata upgrades, rejection of a
+writer occupying the temporary permission window, and unchanged unrelated
+replacement bytes/ACLs. The [ReOpenFile contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-reopenfile)
+requires compatible sharing; compilation alone does not qualify those mechanics.
+
+| A01 | Append/seal/restore a guarded existing sessions directory containing foreign unprotected inherited files/directories | Use one handle-bound NtSetSecurityObject setter, without a Win32 recursive inheritance walk. Compare every foreign DACL byte and security-control bit immediately after append, seal, restore, and failure cleanup; other-chat writes remain usable |
+| A02 | Root destination-parent rename requires internal FILE_WRITE_DATA/SYNCHRONIZE open | Root shares READ/WRITE, never DELETE. Actual pre-acquired root ADD creates/rename succeed before seal and fail after seal; fresh root DELETE and path moves stay refused. Existing exclusive occupied-target mapping remains conditional on observed occupancy |
+
+The [NtSetSecurityObject contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntsetsecurityobject)
+specifies mutation through the target handle; unlike SetSecurityInfo its contract
+does not describe a recursive child update. Parent-only behavior remains a
+native qualification requirement, including existing unprotected descendants.
+No enumeration of existing child protection can substitute for that proof.
 
 The threat boundary excludes an administrator, process-handle duplication and
 an owner deliberately changing the DACL, as Unix directory mode protection also

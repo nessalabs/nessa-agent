@@ -15,12 +15,23 @@ use std::{
     },
     ptr::{null, null_mut},
 };
+mod closed_file;
+mod relative;
+pub use closed_file::{
+    open_verified_directory_at, open_verified_file_at, reacquire_exclusive_file, seal_file_writes,
+    NativeObjectId,
+};
+pub use relative::{
+    open_relative_directory, open_relative_file, relative_entry_kind, relative_names,
+    rename_relative_entry_at, RelativeEntryKind,
+};
+
 use windows_sys::Wdk::{
     Foundation::OBJECT_ATTRIBUTES,
     Storage::FileSystem::{
-        FileRenameInformation, NtCreateFile, NtSetInformationFile, FILE_CREATE,
-        FILE_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION,
-        FILE_SYNCHRONOUS_IO_NONALERT,
+        FileRenameInformation, NtCreateFile, NtSetInformationFile, NtSetSecurityObject,
+        FILE_CREATE, FILE_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT,
+        FILE_RENAME_INFORMATION, FILE_SYNCHRONOUS_IO_NONALERT,
     },
 };
 use windows_sys::Win32::{
@@ -34,9 +45,10 @@ use windows_sys::Win32::{
 ///
 /// Its user ACL omits DELETE_CHILD from creation. The initial handle does not
 /// share DELETE, protecting this root even when its parent grants DELETE_CHILD.
-/// Seal every copied directory before final identity and content validation.
+/// WRITE sharing permits the native rename destination-parent internal open;
+/// seal every copied directory before final identity and content validation.
 pub fn create_protected_directory_at(parent: &File, name: &OsStr) -> io::Result<File> {
-    create_directory_at(parent, name, FILE_SHARE_READ)
+    create_directory_at(parent, name, FILE_SHARE_READ | FILE_SHARE_WRITE)
 }
 
 /// Create one append-only child directory. Its parent must also omit DELETE_CHILD.
@@ -171,19 +183,26 @@ impl DirectoryAcl {
         if identity.dwVolumeSerialNumber != self.volume || index != self.index {
             return Err(unsafe_file());
         }
-        let result = unsafe {
-            SetSecurityInfo(
-                file.as_raw_handle(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                null_mut(),
-                null_mut(),
+        // A stack descriptor references the retained exact ACL bytes. Native
+        // target-only assignment avoids propagating inheritable ACEs to chats.
+        let mut descriptor = SECURITY_DESCRIPTOR::default();
+        unsafe {
+            check(InitializeSecurityDescriptor(
+                (&mut descriptor as *mut SECURITY_DESCRIPTOR).cast(),
+                1,
+            ))?;
+            check(SetSecurityDescriptorDacl(
+                (&mut descriptor as *mut SECURITY_DESCRIPTOR).cast(),
+                1,
                 self.words.as_ptr().cast::<ACL>().cast_mut(),
-                null_mut(),
-            )
-        };
-        if result != 0 {
-            return Err(io::Error::from_raw_os_error(result as i32));
+                0,
+            ))?;
+            check(SetSecurityDescriptorControl(
+                (&mut descriptor as *mut SECURITY_DESCRIPTOR).cast(),
+                SE_DACL_PROTECTED,
+                SE_DACL_PROTECTED,
+            ))?;
+            set_native_descriptor(file, (&mut descriptor as *mut SECURITY_DESCRIPTOR).cast())?;
         }
         if Self::capture(file)? != *self {
             return Err(io::Error::other("original directory ACL was not restored"));
@@ -325,6 +344,7 @@ fn relative(
 /// Requires DELETE on `source`; an occupied destination is left intact.
 /// Windows refuses directory rename while descendant handles remain open.
 pub fn rename_handle_at(source: &File, destination: &File, name: &OsStr) -> io::Result<()> {
+    let native_name = name;
     let name = name_units(name)?;
     let name_bytes = name.len().checked_mul(2).ok_or_else(unsafe_file)?;
     let bytes = offset_of!(FILE_RENAME_INFORMATION, FileName)
@@ -354,9 +374,18 @@ pub fn rename_handle_at(source: &File, destination: &File, name: &OsStr) -> io::
             FileRenameInformation,
         );
         if result < 0 {
-            Err(io::Error::from_raw_os_error(
-                RtlNtStatusToDosError(result) as i32
-            ))
+            let code = RtlNtStatusToDosError(result);
+            // An occupied target with an exclusive writer can produce a sharing
+            // error before the kernel reports name collision. Observe only that
+            // retained-relative target; a missing/unreadable target keeps the
+            // original failure, including unrelated sharing conflicts.
+            if code == ERROR_SHARING_VIOLATION
+                && matches!(relative_entry_kind(destination, native_name), Ok(Some(_)))
+            {
+                Err(io::Error::from_raw_os_error(ERROR_ALREADY_EXISTS as i32))
+            } else {
+                Err(io::Error::from_raw_os_error(code as i32))
+            }
         } else {
             Ok(())
         }
@@ -414,18 +443,26 @@ fn set_descriptor(file: &File, descriptor: LocalAllocation) -> io::Result<()> {
         if present == 0 || acl.is_null() {
             return Err(unsafe_file());
         }
-        let result = SetSecurityInfo(
+        set_native_descriptor(file, descriptor.0)?;
+    }
+    Ok(())
+}
+
+// This native syscall updates the retained object; generated ACLs and exact
+// original ACL restoration share this one mechanism. Native A01 verifies that
+// existing unprotected descendants remain byte-for-byte unchanged.
+unsafe fn set_native_descriptor(file: &File, descriptor: PSECURITY_DESCRIPTOR) -> io::Result<()> {
+    let status = unsafe {
+        NtSetSecurityObject(
             file.as_raw_handle(),
-            SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            null_mut(),
-            null_mut(),
-            acl,
-            null_mut(),
-        );
-        if result != 0 {
-            return Err(io::Error::from_raw_os_error(result as i32));
-        }
+            descriptor,
+        )
+    };
+    if status < 0 {
+        return Err(io::Error::from_raw_os_error(
+            unsafe { RtlNtStatusToDosError(status) } as i32,
+        ));
     }
     Ok(())
 }
@@ -458,6 +495,199 @@ mod tests {
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             None,
         )
+    }
+
+    fn acl_receipt(file: &File) -> (Vec<u8>, SECURITY_DESCRIPTOR_CONTROL) {
+        let mut acl = null_mut();
+        let mut descriptor = null_mut();
+        let code = unsafe {
+            GetSecurityInfo(
+                file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                &mut acl,
+                null_mut(),
+                &mut descriptor,
+            )
+        };
+        assert_eq!(code, 0);
+        let _owned = LocalAllocation(descriptor);
+        assert!(!acl.is_null());
+        let mut control = 0;
+        let mut revision = 0;
+        unsafe {
+            check(GetSecurityDescriptorControl(
+                descriptor,
+                &mut control,
+                &mut revision,
+            ))
+            .unwrap();
+        }
+        let bytes = unsafe {
+            std::slice::from_raw_parts(acl.cast::<u8>(), (*acl).AclSize as usize).to_vec()
+        };
+        (bytes, control)
+    }
+
+    fn foreign_children(path: &std::path::Path) -> Vec<File> {
+        std::fs::write(path.join("other-chat"), b"other chat unchanged").unwrap();
+        std::fs::create_dir(path.join("foreign-directory")).unwrap();
+        std::fs::write(
+            path.join("foreign-directory/grandchild"),
+            b"other chat unchanged",
+        )
+        .unwrap();
+        [
+            path.join("other-chat"),
+            path.join("foreign-directory"),
+            path.join("foreign-directory/grandchild"),
+        ]
+        .iter()
+        .map(|path| {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(path)
+                .unwrap()
+        })
+        .collect()
+    }
+
+    fn legacy_directory_assignment(file: &File, descriptor: LocalAllocation) {
+        let mut present = 0;
+        let mut defaulted = 0;
+        let mut acl = null_mut();
+        unsafe {
+            check(GetSecurityDescriptorDacl(
+                descriptor.0,
+                &mut present,
+                &mut acl,
+                &mut defaulted,
+            ))
+            .unwrap();
+        }
+        assert_ne!(present, 0);
+        assert!(!acl.is_null());
+        let code = unsafe {
+            SetSecurityInfo(
+                file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                acl,
+                null_mut(),
+            )
+        };
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn legacy_directory_assignment_mutates_unprotected_foreign_descendants_positive_control() {
+        let _ordinary = token::OrdinaryToken::enter();
+        let root = tempfile::tempdir().unwrap();
+        crate::create_directory_exclusive(&root.path().join("legacy")).unwrap();
+        let ancestor = full_parent(root.path());
+        let directory = retain_directory_at(&ancestor, OsStr::new("legacy")).unwrap();
+        let children = foreign_children(&root.path().join("legacy"));
+        let before: Vec<_> = children.iter().map(acl_receipt).collect();
+        for (_, control) in &before {
+            assert_eq!(
+                control & SE_DACL_PROTECTED,
+                0,
+                "legacy control must be unprotected"
+            );
+        }
+        legacy_directory_assignment(&directory, append_descriptor().unwrap());
+        let after_append: Vec<_> = children.iter().map(acl_receipt).collect();
+        for (old, new) in before.iter().zip(&after_append) {
+            assert_ne!(
+                old, new,
+                "legacy append must demonstrate the foreign-child inheritance hazard"
+            );
+        }
+        legacy_directory_assignment(
+            &directory,
+            User::current()
+                .unwrap()
+                .descriptor_with_access(true, "FRFX")
+                .unwrap(),
+        );
+        let after_seal: Vec<_> = children.iter().map(acl_receipt).collect();
+        for (old, new) in before.iter().zip(&after_seal) {
+            assert_ne!(
+                old, new,
+                "legacy seal must demonstrate the foreign-child inheritance hazard"
+            );
+        }
+        legacy_directory_assignment(
+            &directory,
+            User::current().unwrap().descriptor(true).unwrap(),
+        );
+    }
+
+    #[test]
+    fn native_parent_assignment_preserves_unprotected_foreign_acls_at_every_transition_and_cleanup()
+    {
+        let _ordinary = token::OrdinaryToken::enter();
+        let root = tempfile::tempdir().unwrap();
+        crate::create_directory_exclusive(&root.path().join("sessions")).unwrap();
+        let ancestor = full_parent(root.path());
+        let directory = retain_directory_at(&ancestor, OsStr::new("sessions")).unwrap();
+        let original = DirectoryAcl::capture(&directory).unwrap();
+        let children = foreign_children(&root.path().join("sessions"));
+        let before: Vec<_> = children.iter().map(acl_receipt).collect();
+        for (_, control) in &before {
+            assert_eq!(
+                control & SE_DACL_PROTECTED,
+                0,
+                "foreign descendants must actually be unprotected"
+            );
+        }
+        let assert_foreign = || {
+            assert_eq!(children.iter().map(acl_receipt).collect::<Vec<_>>(),before,
+                "parent-only assignment must preserve exact foreign DACL and security control immediately");
+            for relative in ["other-chat", "foreign-directory/grandchild"] {
+                let path = root.path().join("sessions").join(relative);
+                std::fs::write(&path, b"other chat unchanged")
+                    .expect("other chat keeps actual existing-file write authority");
+                assert_eq!(std::fs::read(path).unwrap(), b"other chat unchanged");
+            }
+        };
+        append_directory_writes(&directory).unwrap();
+        assert_foreign();
+        seal_directory_writes(&directory).unwrap();
+        assert_foreign();
+        original.restore(&directory).unwrap();
+        assert_foreign();
+        struct RestoreGuard<'a> {
+            directory: &'a File,
+            original: &'a DirectoryAcl,
+        }
+        impl Drop for RestoreGuard<'_> {
+            fn drop(&mut self) {
+                self.original
+                    .restore(self.directory)
+                    .expect("native failure cleanup restores original parent ACL");
+            }
+        }
+        let failed = (|| -> io::Result<()> {
+            let _guard = RestoreGuard {
+                directory: &directory,
+                original: &original,
+            };
+            append_directory_writes(&directory)?;
+            assert_foreign();
+            seal_directory_writes(&directory)?;
+            assert_foreign();
+            Err(io::Error::other("forced failure after seal"))
+        })();
+        assert!(failed.is_err());
+        assert_foreign();
+        assert_eq!(DirectoryAcl::capture(&directory).unwrap(), original);
     }
 
     #[test]
@@ -680,6 +910,66 @@ mod tests {
         drop(external);
         remove_handle(&child).unwrap();
         drop(child);
+        remove_handle(&directory).unwrap();
+    }
+
+    #[test]
+    fn root_sealing_refuses_actual_mutations_through_preacquired_add_handles() {
+        let _ordinary = token::OrdinaryToken::enter();
+        let root = tempfile::tempdir().unwrap();
+        let ancestor = std::fs::OpenOptions::new()
+            .access_mode(FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(root.path())
+            .unwrap();
+        let directory = create_protected_directory_at(&ancestor, OsStr::new("sealed")).unwrap();
+        // Acquire real ADD rights while copying permits additions. RootDirectory
+        // retains this same object after its ACL changes; no path reopening occurs.
+        let preacquired = relative(
+            &ancestor,
+            OsStr::new("sealed"),
+            FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_OPEN,
+            FILE_OPEN_REPARSE_POINT,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+        )
+        .unwrap();
+        let before = create_protected_file_at(&preacquired, OsStr::new("before"))
+            .expect("positive control: pre-acquired ADD_FILE performs creation before seal");
+        remove_handle(&before).unwrap();
+        drop(before);
+        let before_directory =
+            create_protected_subdirectory_at(&preacquired, OsStr::new("before-directory"))
+                .expect("positive control: pre-acquired ADD_SUBDIRECTORY works before seal");
+        remove_handle(&before_directory).unwrap();
+        drop(before_directory);
+        let external = create_protected_file_at(&ancestor, OsStr::new("external")).unwrap();
+        rename_handle_at(&external, &preacquired, OsStr::new("before-rename"))
+            .expect("positive control: pre-acquired ADD_FILE admits a rename before seal");
+        rename_handle_at(&external, &ancestor, OsStr::new("external")).unwrap();
+
+        seal_directory_writes(&directory).unwrap();
+        for error in [
+            create_protected_file_at(&preacquired, OsStr::new("injected")).unwrap_err(),
+            create_protected_subdirectory_at(&preacquired, OsStr::new("injected-directory"))
+                .unwrap_err(),
+            rename_handle_at(&external, &preacquired, OsStr::new("injected-rename")).unwrap_err(),
+        ] {
+            assert_eq!(
+                error.raw_os_error(),
+                Some(ERROR_ACCESS_DENIED as i32),
+                "current sealed parent ACL must refuse actual mutation through retained ADD rights"
+            );
+        }
+        assert!(root.path().join("external").is_file());
+        assert!(!root.path().join("sealed/injected").exists());
+        assert!(!root.path().join("sealed/injected-directory").exists());
+        assert!(!root.path().join("sealed/injected-rename").exists());
+        drop(preacquired);
+        remove_handle(&external).unwrap();
+        drop(external);
         remove_handle(&directory).unwrap();
     }
 

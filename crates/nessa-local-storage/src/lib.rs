@@ -26,9 +26,12 @@ pub use platform::create_no_writers;
 #[cfg(windows)]
 pub use platform::{
     append_directory_writes, create_protected_directory_at, create_protected_file_at,
-    create_protected_subdirectory_at, open_directory_at, open_file_at, release_directory_writes,
-    release_file_writes, remove_handle, rename_handle_at, retain_directory_at,
-    seal_directory_writes, DirectoryAcl,
+    create_protected_subdirectory_at, open_directory_at, open_file_at, open_relative_directory,
+    open_relative_file, open_verified_directory_at, open_verified_file_at,
+    reacquire_exclusive_file, relative_entry_kind, relative_names, release_directory_writes,
+    release_file_writes, remove_handle, rename_handle_at, rename_relative_entry_at,
+    retain_directory_at, seal_directory_writes, seal_file_writes, DirectoryAcl, NativeObjectId,
+    RelativeEntryKind,
 };
 pub use platform::{
     create_directory, create_directory_beneath, create_directory_exclusive, open, open_beneath,

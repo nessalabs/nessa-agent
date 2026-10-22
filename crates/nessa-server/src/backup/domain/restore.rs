@@ -45,6 +45,8 @@ pub enum RestoreFault {
     FencedBody,
     /// The session file is still readable and could not be removed, moved, or emptied.
     Retained,
+    /// This platform cannot protect every directory entry through publication.
+    PublicationUnsupported,
 }
 
 impl RestoreFault {
@@ -70,6 +72,7 @@ impl RestoreFault {
             Self::Paths => "paths",
             Self::FencedBody => "fenced-body",
             Self::Retained => "retained",
+            Self::PublicationUnsupported => "publication-unsupported",
         }
     }
 }

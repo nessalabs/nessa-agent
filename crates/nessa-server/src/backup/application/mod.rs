@@ -38,6 +38,6 @@ pub(crate) use restore::ordered_roots;
 pub use restore::{
     accept_quarantine, open_deferred_conversation, root_posture, stage_quarantine, AcceptReport,
     AcceptRequest, AnchoredRoot, CutMaterializer, LoadedTree, OpenReport, OpenRequest, PreparedCut,
-    Promoted, QuarantineLayout, RestoreHold, SealedInventoryReader, StageReport, StageRequest,
-    Staging, TreeId,
+    Promoted, PublishedSession, QuarantineLayout, RestoreHold, SealedInventoryReader,
+    SessionAttempt, StageReport, StageRequest, StagedTreeOwner, Staging, TreeId,
 };

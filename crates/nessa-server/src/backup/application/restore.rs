@@ -102,6 +102,35 @@ pub struct Promoted {
     /// The source could neither be removed nor confirmed unready. False also
     /// covers a source whose bytes remain after its marker was retired.
     pub source_retirement_failed: bool,
+    /// At least one live file could not have its temporary protection released.
+    pub publication_restricted: bool,
+}
+
+/// The session sidecar name was committed. A failed parent-directory sync is
+/// a durability fact after that commit, rather than a publication refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PublishedSession {
+    pub durable: bool,
+}
+
+/// One deferred fetch's retained directory and exact reserved/published files.
+/// All writes, validation, publication and retirement stay with this owner even
+/// when an ancestor or a file name is replaced during the operation.
+pub trait SessionAttempt {
+    /// A writable handle to the empty inode reserved for this source write.
+    fn destination(&mut self) -> Result<File, RestoreFault>;
+    /// Read the reserved inode, rather than reopening the source's pathname.
+    fn inspect(&self, conversation_id: &str) -> Result<SessionCut, RestoreFault>;
+    /// Publish a distinct file only after its copied stream still matches.
+    fn publish(&mut self, conversation_id: &str, digest: &Fingerprint) -> Result<(), RestoreFault>;
+    /// Store the id beside this owned session, refusing a replaced session.
+    fn note_publication(&mut self, publication: &str) -> Result<PublishedSession, RestoreFault>;
+    /// Release protection after both names have been bound and checked, before
+    /// the final availability audit acknowledges this publication.
+    fn release(&mut self) -> Result<(), RestoreFault>;
+    /// Retire this attempt's exact bytes and sidecar, leaving replacement
+    /// objects alone. Unconfirmed retirement returns [`RestoreFault::Retained`].
+    fn retire(&mut self) -> Result<(), RestoreFault>;
 }
 
 /// Filesystem effects of a quarantine. Tests substitute a layout that fails.
@@ -112,58 +141,27 @@ pub trait QuarantineLayout {
         live: &AnchoredRoot,
     ) -> Result<Box<dyn Staging>, RestoreFault>;
     fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault>;
-    /// `Err` means the rename did not happen. [`Promoted`] means the live path
-    /// owns the tree.
+    /// [`Promoted`] means the live path owns the tree. An ordinary error is a
+    /// refusal before publication; [`RestoreFault::Retained`] also covers an
+    /// uncertain post-rename identity and must not be recorded as unchanged.
     fn promote(
         &self,
         quarantine: &AnchoredRoot,
         live: &AnchoredRoot,
         loaded: &LoadedTree,
+        generation: &str,
     ) -> Result<Promoted, RestoreFault>;
-    fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault>;
-    /// Remove `path` only when it is still `identity`.
-    ///
-    /// The default ignores `identity` so a test layout that already fails
-    /// `remove_tree` keeps that failure. The directory adapter checks the object.
-    fn remove_known(&self, path: &Path, identity: &TreeId) -> Result<(), RestoreFault> {
-        let _ = identity;
-        self.remove_tree(path)
-    }
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault>;
     /// Read `relative` through the directory `root` holds.
     fn read_relative(&self, root: &AnchoredRoot, relative: &str) -> Result<Vec<u8>, RestoreFault> {
         self.read_bytes(&join_relative(root.path(), relative)?)
     }
-    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault>;
-    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault>;
-    /// Publish a new file of the session whose stream hashed to `digest`.
-    ///
-    /// The default renames `temp`. The directory adapter writes the bytes into
-    /// an inode it still holds, checks that inode, and only then gives it the
-    /// session name. A descriptor opened on `temp`, or on a name that existed
-    /// before that link, is not the published file. On Windows the session
-    /// name is held without write share until the check has passed.
-    fn publish_verified(
-        &self,
-        root: &AnchoredRoot,
-        temp: &Path,
-        relative: &str,
-        conversation_id: &str,
-        digest: &Fingerprint,
-    ) -> Result<(), RestoreFault> {
-        let _ = (root, conversation_id, digest);
-        self.publish_file(temp, &join_relative(root.path(), relative)?)
-    }
-    /// Record `publication` beside the session file this publish just created.
-    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault>;
-    fn note_publication_relative(
+    /// Reserve one fetch beneath the directory retained by this attempt.
+    fn begin_session(
         &self,
         root: &AnchoredRoot,
         relative: &str,
-        publication: &str,
-    ) -> Result<(), RestoreFault> {
-        self.note_publication(&join_relative(root.path(), relative)?, publication)
-    }
+    ) -> Result<Box<dyn SessionAttempt + '_>, RestoreFault>;
     /// The publication stored beside `session`. `None` means this file has none.
     fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault>;
     fn publication_relative(
@@ -173,16 +171,6 @@ pub trait QuarantineLayout {
     ) -> Result<Option<String>, RestoreFault> {
         self.publication(&join_relative(root.path(), relative)?)
     }
-    /// Remove the publication stored beside `session`, if one is there.
-    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault>;
-    fn remove_publication_relative(
-        &self,
-        root: &AnchoredRoot,
-        relative: &str,
-    ) -> Result<(), RestoreFault> {
-        self.remove_publication(&join_relative(root.path(), relative)?)
-    }
-    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault>;
     fn exists(&self, path: &Path) -> Result<bool, RestoreFault>;
     /// Whether the root name exists under the directory this anchor holds.
     fn occupied(&self, root: &AnchoredRoot) -> Result<bool, RestoreFault> {
@@ -207,21 +195,8 @@ pub trait QuarantineLayout {
     }
     /// One lock for this root, held across publication and the audit that records it.
     fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault>;
-    /// Record that the sealed audit for `staging_id` was stored. Accept refuses without it.
-    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault>;
-    /// The staging id stored by [`QuarantineLayout::mark_ready`], when the marker is intact.
+    /// The staging id stored by [`StagedTreeOwner::mark_ready`], when the marker is intact.
     fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault>;
-    /// Remove the readiness marker. [`RestoreFault::Retained`] means it still names an id.
-    fn retire_ready(&self, root: &AnchoredRoot) -> Result<(), RestoreFault> {
-        let marker = join_relative(root.path(), "accept-ready")?;
-        let _ = self.remove_file(&marker);
-        match self.ready(root) {
-            Ok(None) => Ok(()),
-            Ok(Some(_)) | Err(_) => Err(RestoreFault::Retained),
-        }
-    }
-    /// Make a published session unreadable in place.
-    fn spoil(&self, path: &Path) -> Result<(), RestoreFault>;
     /// Stream size and fingerprint of one session file.
     fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault>;
     fn session_cut_relative(
@@ -240,10 +215,22 @@ pub trait QuarantineLayout {
 /// Dropping it without discard or [`Staging::finish`] removes it on a best-effort basis.
 pub trait Staging {
     fn write(&mut self, relative: &str, bytes: &[u8]) -> Result<(), RestoreFault>;
-    /// Publish the partial directory and return the object that was published.
-    fn finish(self: Box<Self>, journal: &str) -> Result<TreeId, RestoreFault>;
+    /// Publish the partial directory and retain ownership through readiness or cleanup.
+    fn finish(self: Box<Self>, journal: &str) -> Result<Box<dyn StagedTreeOwner>, RestoreFault>;
     /// Remove the partial directory. [`RestoreFault::Retained`] means it is still there.
     fn discard(self: Box<Self>) -> Result<(), RestoreFault>;
+}
+
+/// The exact directory and files published by one staging attempt.
+/// Readiness and retirement use those retained objects rather than a later
+/// lookup of the quarantine path. A named directory left behind is retained.
+pub trait StagedTreeOwner {
+    /// Confirm the intended quarantine name still identifies the owned directory.
+    fn check_binding(&self) -> Result<(), RestoreFault>;
+    /// Publish readiness inside the owned directory and verify its final binding.
+    fn mark_ready(&mut self, staging_id: &str) -> Result<(), RestoreFault>;
+    /// Retire all owned bytes and readiness, leaving substituted objects alone.
+    fn retire(&mut self) -> Result<(), RestoreFault>;
 }
 
 /// What [`QuarantineLayout::load`] observed. `files` are the sealed set.
@@ -306,6 +293,9 @@ pub struct OpenReport {
     pub size: u64,
     pub digest: Fingerprint,
     pub already_present: bool,
+    /// Sidecar directory-sync result of this publication: `Some(true)` was
+    /// confirmed, `Some(false)` failed after commit. Cached opens return `None`.
+    pub durable: Option<bool>,
 }
 
 pub struct StageRequest<'a> {
@@ -360,6 +350,7 @@ pub fn stage_quarantine(
         initiator: kind,
         policies: &policies,
         journal_digest: "",
+        root_generation: "",
     };
     if let Err(error) = roots_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
@@ -415,8 +406,8 @@ pub fn stage_quarantine(
             return Err(abandon(staging, &recorded, error));
         }
     }
-    let published = match staging.finish(&journal) {
-        Ok(identity) => identity,
+    let mut published = match staging.finish(&journal) {
+        Ok(owner) => owner,
         // A rename whose cleanup could not delete the tree left it unready.
         // Any other finish error means this attempt did not leave a tree.
         Err(error) if error == RestoreFault::Retained => {
@@ -424,7 +415,7 @@ pub fn stage_quarantine(
                 .write("absent", "unready", error.cause(), "effect")
                 .is_err()
             {
-                return Err(RestoreFault::Audit);
+                return Err(RestoreFault::Retained);
             }
             return Err(error);
         }
@@ -434,54 +425,77 @@ pub fn stage_quarantine(
     let staging_id = match ids.staging_id() {
         Ok(id) if staging_id_is_usable(&id) => id,
         Ok(_) => {
-            return Err(remove_published(
-                layout,
-                quarantine.path(),
-                &published,
+            return Err(retire_staged(
+                published.as_mut(),
                 &recorded,
+                "absent",
+                "",
                 RestoreFault::Unreadable,
             ))
         }
         Err(error) => {
-            return Err(remove_published(
-                layout,
-                quarantine.path(),
-                &published,
+            return Err(retire_staged(
+                published.as_mut(),
                 &recorded,
+                "absent",
+                "",
                 error,
             ))
         }
     };
+    if let Err(error) = published.check_binding() {
+        return Err(retire_staged(
+            published.as_mut(),
+            &recorded,
+            "absent",
+            &staging_id,
+            error,
+        ));
+    }
     let attestation = seal_attestation(&digest, &staging_id);
     if recorded
         .record("absent", "verified", "sealed", "effect", &attestation)
         .is_err()
     {
-        match layout.remove_known(quarantine.path(), &published) {
-            Ok(()) | Err(RestoreFault::Tamper) => {}
-            Err(_) => {
-                let _ = layout.remove_file(&quarantine.join("journal.txt"));
-            }
-        }
-        return Err(RestoreFault::Audit);
+        return Err(retire_staged(
+            published.as_mut(),
+            &recorded,
+            "absent",
+            &staging_id,
+            RestoreFault::Audit,
+        ));
     }
-    if let Err(error) = layout.mark_ready(&quarantine, &staging_id) {
-        // The id is spent either way. A marker that remains is not a later accept.
-        // A different directory at this path is left in place.
-        let removed = layout.remove_known(quarantine.path(), &published).is_ok();
-        let after = if removed { "absent" } else { "unready" };
-        if recorded
-            .record("verified", after, error.cause(), "effect", &staging_id)
-            .is_err()
-        {
-            // The spend line was the only record that this id is finished.
-            // Without it, a marker that still names the id can be promoted.
-            if !removed {
-                layout.retire_ready(&quarantine)?;
-            }
-            return Err(RestoreFault::Audit);
-        }
-        return Err(error);
+    if let Err(error) = published.mark_ready(&staging_id) {
+        return Err(retire_staged(
+            published.as_mut(),
+            &recorded,
+            "verified",
+            &staging_id,
+            error,
+        ));
+    }
+    if let Err(error) = published.check_binding() {
+        return Err(retire_staged(
+            published.as_mut(),
+            &recorded,
+            "verified",
+            &staging_id,
+            error,
+        ));
+    }
+    if recorded
+        .with_journal(&digest)
+        .with_generation(&staging_id)
+        .record("verified", "ready", "ready", "effect", "")
+        .is_err()
+    {
+        return Err(retire_staged(
+            published.as_mut(),
+            &recorded,
+            "verified",
+            &staging_id,
+            RestoreFault::Audit,
+        ));
     }
     Ok(StageReport {
         leases: prepared.leases,
@@ -501,7 +515,8 @@ pub struct AcceptRequest<'a> {
 /// # Errors
 /// The seal does not match, a receipt is missing, the live path exists, or
 /// the rename fails. An audit failure after a successful rename returns
-/// [`RestoreFault::Audit`] and leaves the tree at the live path.
+/// [`RestoreFault::Audit`] and leaves the tree at the live path. Once source
+/// consumption is stored, any later failure requires a fresh stage before retry.
 pub fn accept_quarantine(
     request: &AcceptRequest<'_>,
     policy: &dyn RestorePolicyEvaluator,
@@ -535,6 +550,7 @@ pub fn accept_quarantine(
         initiator: kind,
         policies: &policies,
         journal_digest: "",
+        root_generation: "",
     };
     if let Err(error) = roots_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
@@ -588,37 +604,35 @@ pub fn accept_quarantine(
         Ok(false) => {}
         Err(error) => return Err(recorded.stop(error)),
     }
-    let promoted = match layout.promote(&quarantine, &live, &loaded) {
+    // Consume this source generation before publication. Once stored, even a
+    // failed live intent or retained source requires a fresh stage to retry.
+    recorded.record("verified", "spent", "spent", "effect", &staging_id)?;
+    recorded
+        .at(&live_label)
+        .with_journal(&digest)
+        .with_generation(&staging_id)
+        .record("verified", "promoting", "accepting", "effect", "")?;
+    let promoted = match layout.promote(&quarantine, &live, &loaded, &staging_id) {
         Ok(promoted) => promoted,
         Err(RestoreFault::Retained) => return Err(RestoreFault::Retained),
         Err(error) => return Err(recorded.stop(error)),
     };
-    // The rename has happened. Spend the staging id on the quarantine path
-    // before the live line, so a later tree at that path cannot reuse it.
-    if recorded
-        .record("verified", "spent", "spent", "effect", &staging_id)
-        .is_err()
-    {
-        return Err(RestoreFault::Audit);
-    }
-    let cause = if promoted.source_retirement_failed && !promoted.durable {
-        "retained-unsynced"
-    } else if promoted.source_retirement_failed {
-        "retained"
-    } else if promoted.durable {
-        "accepted"
-    } else {
-        "unsynced"
-    };
+    let cause = super::ports::PromotionCause::from_effects(
+        promoted.durable,
+        promoted.source_retirement_failed,
+        promoted.publication_restricted,
+    )
+    .as_str();
     if recorded
         .at(&live_label)
         .with_journal(&digest)
+        .with_generation(&staging_id)
         .record("verified", "live", cause, "effect", &attestations)
         .is_err()
     {
         return Err(RestoreFault::Audit);
     }
-    if promoted.source_retirement_failed {
+    if promoted.source_retirement_failed || promoted.publication_restricted {
         return Err(RestoreFault::Retained);
     }
     Ok(AcceptReport {
@@ -666,6 +680,7 @@ pub fn open_deferred_conversation(
         initiator: kind,
         policies: &policies,
         journal_digest: "",
+        root_generation: "",
     };
     let _hold = match layout.hold(&root) {
         Ok(hold) => hold,
@@ -704,10 +719,6 @@ pub fn open_deferred_conversation(
         Ok(relative) => relative,
         Err(error) => return Err(recorded.stop(error)),
     };
-    let final_path = match join_relative(&root, &relative) {
-        Ok(path) => path,
-        Err(error) => return Err(recorded.stop(error)),
-    };
     let present = match layout.exists_relative(&root, &relative) {
         Ok(present) => present,
         Err(error) => return Err(recorded.stop(error)),
@@ -732,39 +743,41 @@ pub fn open_deferred_conversation(
                         size: cut.size,
                         digest: cut.digest,
                         already_present: true,
+                        durable: None,
                     })
                 }
                 Ok(_) => Err(recorded.stop(RestoreFault::SessionDiffers)),
                 Err(error) => Err(recorded.stop(error)),
             };
         }
-        if !retire_session(layout, &final_path) {
-            return Err(RestoreFault::Retained);
-        }
+        // An unaudited existing file is not owned by this attempt.
+        return Err(RestoreFault::Retained);
     }
-    let temp = match layout.session_temp(&root, &relative) {
-        Ok(temp) => temp,
+    let mut attempt = match layout.begin_session(&root, &relative) {
+        Ok(attempt) => attempt,
+        Err(RestoreFault::Retained) => return Err(RestoreFault::Retained),
         Err(error) => return Err(recorded.stop(error)),
     };
-    if let Err(error) = layout.remove_file(&temp) {
-        return Err(recorded.stop(error));
-    }
-    if let Err(error) = source.write_session(request.conversation_id, &temp, progress) {
-        return Err(refuse_unpublished(
-            layout,
-            &temp,
+    let mut destination = match attempt.destination() {
+        Ok(destination) => destination,
+        Err(error) => return Err(refuse_attempt(attempt.as_mut(), &recorded, error)),
+    };
+    let written = source.write_session(request.conversation_id, &mut destination, progress);
+    drop(destination);
+    if let Err(error) = written {
+        return Err(refuse_attempt(
+            attempt.as_mut(),
             &recorded,
             source_fault(error),
         ));
     }
-    let cut = match layout.session_cut(&temp, request.conversation_id) {
+    let cut = match attempt.inspect(request.conversation_id) {
         Ok(cut) => cut,
-        Err(error) => return Err(refuse_unpublished(layout, &temp, &recorded, error)),
+        Err(error) => return Err(refuse_attempt(attempt.as_mut(), &recorded, error)),
     };
     if cut.size != expected.size || cut.digest != expected.digest {
-        return Err(refuse_unpublished(
-            layout,
-            &temp,
+        return Err(refuse_attempt(
+            attempt.as_mut(),
             &recorded,
             RestoreFault::SourceChanged,
         ));
@@ -773,49 +786,44 @@ pub fn open_deferred_conversation(
         .write("deferred", "held", "matched", "effect")
         .is_err()
     {
-        return Err(retire_or_audit(layout, &temp));
+        return Err(retire_attempt_or_audit(attempt.as_mut()));
     }
-    if let Err(error) = layout.publish_verified(
-        &root,
-        &temp,
-        &relative,
-        request.conversation_id,
-        &cut.digest,
-    ) {
-        // The rename may have happened before the error. Retire each name
-        // on its own: a failure for the temp must still retire the final path.
-        let retired_temp = retire_session(layout, &temp);
-        let retired_final = retire_session(layout, &final_path);
-        if !retired_temp || !retired_final {
-            return Err(RestoreFault::Retained);
-        }
-        return Err(recorded.stop(error));
+    if let Err(error) = attempt.publish(request.conversation_id, &cut.digest) {
+        return Err(refuse_attempt(attempt.as_mut(), &recorded, error));
     }
     let publication = match ids.publication_id() {
         Ok(publication) => publication,
-        Err(error) => {
-            if !retire_session(layout, &final_path) {
-                return Err(RestoreFault::Retained);
-            }
-            return Err(recorded.stop(error));
-        }
+        Err(error) => return Err(refuse_attempt(attempt.as_mut(), &recorded, error)),
     };
-    if let Err(error) = layout.note_publication_relative(&root, &relative, &publication) {
-        if !retire_session(layout, &final_path) {
-            return Err(RestoreFault::Retained);
+    match audit.available(request.conversation_id, &publication) {
+        Ok(false) => {}
+        Ok(true) => {
+            return Err(refuse_attempt(
+                attempt.as_mut(),
+                &recorded,
+                RestoreFault::Tamper,
+            ))
         }
-        return Err(recorded.stop(error));
+        Err(_) => return Err(retire_attempt_or_audit(attempt.as_mut())),
+    }
+    let committed = match attempt.note_publication(&publication) {
+        Ok(committed) => committed,
+        Err(error) => return Err(refuse_attempt(attempt.as_mut(), &recorded, error)),
+    };
+    if let Err(error) = attempt.release() {
+        return Err(refuse_attempt(attempt.as_mut(), &recorded, error));
     }
     if recorded
         .record("held", "available", "fetched", "effect", &publication)
         .is_err()
     {
-        return Err(retire_or_audit(layout, &final_path));
+        return Err(retire_attempt_or_audit(attempt.as_mut()));
     }
     Ok(OpenReport {
         size: cut.size,
         digest: cut.digest,
         already_present: false,
+        durable: Some(committed.durable),
     })
 }
 
@@ -995,30 +1003,32 @@ fn roots_are_distinct(quarantine: &AnchoredRoot, live: &AnchoredRoot) -> Result<
     Ok(())
 }
 
-/// The quarantine directory is already published. Removing it keeps the caller's
-/// error. Leaving it records the tree as unready and returns retained.
-fn remove_published(
-    layout: &dyn QuarantineLayout,
-    quarantine: &Path,
-    identity: &TreeId,
+/// Keep cleanup with the published objects. An uncertain retirement remains
+/// retained even when its audit also fails; no stale path is an authority here.
+fn retire_staged(
+    owner: &mut dyn StagedTreeOwner,
     recorded: &Recorded<'_>,
+    before: &str,
+    staging_id: &str,
     error: RestoreFault,
 ) -> RestoreFault {
-    if layout.remove_known(quarantine, identity).is_ok() {
-        return recorded.stop(error);
-    }
-    if recorded
-        .write(
-            "absent",
-            "unready",
-            RestoreFault::Retained.cause(),
+    let retired = owner.retire().is_ok();
+    let stored = recorded
+        .record(
+            before,
+            if retired { "absent" } else { "unready" },
+            error.cause(),
             "effect",
+            staging_id,
         )
-        .is_err()
-    {
-        return RestoreFault::Audit;
+        .is_ok();
+    if !retired {
+        RestoreFault::Retained
+    } else if !stored {
+        RestoreFault::Audit
+    } else {
+        error
     }
-    RestoreFault::Retained
 }
 
 fn hold_roots(
@@ -1091,6 +1101,7 @@ fn resolve_root(
                 initiator: facts.kind,
                 policies: &policies,
                 journal_digest: "",
+                root_generation: "",
             }
             .stop(error))
         }
@@ -1105,45 +1116,35 @@ fn abandon(
 ) -> RestoreFault {
     match staging.discard() {
         Ok(()) => recorded.stop(error),
-        Err(RestoreFault::Retained) => {
+        Err(_) => {
             if recorded
-                .write(
-                    "absent",
-                    "unready",
-                    RestoreFault::Retained.cause(),
-                    "effect",
-                )
+                .write("absent", "unready", error.cause(), "effect")
                 .is_err()
             {
-                return RestoreFault::Audit;
+                return RestoreFault::Retained;
             }
             RestoreFault::Retained
         }
-        Err(discarded) => recorded.stop(discarded),
     }
 }
 
-/// Retire an unpublished session name. A name that remains is retained, and
-/// that outcome is not recorded as unchanged.
-fn refuse_unpublished(
-    layout: &dyn QuarantineLayout,
-    temp: &Path,
+/// A refusal can claim unchanged only after the exact attempt was retired.
+fn refuse_attempt(
+    attempt: &mut dyn SessionAttempt,
     recorded: &Recorded<'_>,
     error: RestoreFault,
 ) -> RestoreFault {
-    match clear_unpublished(layout, temp) {
+    match attempt.retire() {
         Ok(()) => recorded.stop(error),
-        Err(retained) => retained,
+        Err(_) => RestoreFault::Retained,
     }
 }
 
-fn clear_unpublished(layout: &dyn QuarantineLayout, temp: &Path) -> Result<(), RestoreFault> {
-    if !retire_session(layout, temp) {
-        return Err(RestoreFault::Retained);
-    }
-    match layout.exists(temp) {
-        Ok(false) => Ok(()),
-        Ok(true) | Err(_) => Err(RestoreFault::Retained),
+fn retire_attempt_or_audit(attempt: &mut dyn SessionAttempt) -> RestoreFault {
+    if attempt.retire().is_ok() {
+        RestoreFault::Audit
+    } else {
+        RestoreFault::Retained
     }
 }
 
@@ -1153,36 +1154,6 @@ fn entry_facts<'a>(facts: &RestoreFacts<'a>, action: RestoreAction) -> RestoreFa
         cause: facts.cause,
         action,
     }
-}
-
-/// `Audit` when the file is gone. `Retained` when it is still readable.
-fn retire_or_audit(layout: &dyn QuarantineLayout, path: &Path) -> RestoreFault {
-    if retire_session(layout, path) {
-        RestoreFault::Audit
-    } else {
-        RestoreFault::Retained
-    }
-}
-
-/// Remove the published session, or move it aside, or empty it.
-/// The publication beside it is cleared in every case. The layout owns that file.
-fn retire_session(layout: &dyn QuarantineLayout, path: &Path) -> bool {
-    let retired = retire_bytes(layout, path);
-    let _ = layout.remove_publication(path);
-    retired
-}
-
-fn retire_bytes(layout: &dyn QuarantineLayout, path: &Path) -> bool {
-    if layout.remove_file(path).is_ok() {
-        return true;
-    }
-    let mut rejected = path.as_os_str().to_owned();
-    rejected.push(".rejected");
-    let rejected = PathBuf::from(rejected);
-    if layout.remove_file(&rejected).is_ok() && layout.publish_file(path, &rejected).is_ok() {
-        return true;
-    }
-    layout.spoil(path).is_ok()
 }
 
 fn decide(
@@ -1204,6 +1175,7 @@ fn decide(
         initiator: facts.kind,
         policies: &policies,
         journal_digest: "",
+        root_generation: "",
     }
     .write(before, after, "decision", name)?;
     if denied {
@@ -1226,9 +1198,16 @@ struct Recorded<'a> {
     initiator: &'a str,
     policies: &'a [String],
     journal_digest: &'a str,
+    root_generation: &'a str,
 }
 
 impl Recorded<'_> {
+    fn with_generation<'a>(&'a self, root_generation: &'a str) -> Recorded<'a> {
+        Recorded {
+            root_generation,
+            ..*self
+        }
+    }
     fn with_journal<'a>(&'a self, journal_digest: &'a str) -> Recorded<'a> {
         Recorded {
             journal_digest,
@@ -1278,6 +1257,7 @@ impl Recorded<'_> {
                 policies: self.policies,
                 attestations,
                 journal_digest: self.journal_digest,
+                root_generation: self.root_generation,
             })
             .map_err(|_| RestoreFault::Audit)
     }

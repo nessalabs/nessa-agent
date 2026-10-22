@@ -169,9 +169,8 @@ impl OrdinaryToken {
             _thread: PhantomData,
         };
         let effective = effective_token()?;
-        assert_eq!(
-            principal(effective.as_raw_handle())?,
-            expected,
+        assert!(
+            principal(effective.as_raw_handle())? == expected,
             "privilege-only fixture preserves user and all group attributes"
         );
         assert!(!privilege_enabled("SeBackupPrivilege")?);

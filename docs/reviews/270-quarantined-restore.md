@@ -104,31 +104,119 @@ The application and adapter corrections are:
   retirement failure with parent-sync success and failure. Both facts are
   preserved as `retained` or `retained-unsynced`; the caller gets `Retained`.
 
-The combined backup suite passed 263 tests on Linux with Rust 1.99.1. Final
-aggregate checks and filesystem negative controls are recorded on the PR.
+That earlier combined backup suite passed 263 tests on Linux with Rust 1.99.1.
+It does not qualify the continuation changes below. Final aggregate checks and
+filesystem negative controls are recorded on the PR against their tested tree.
 
-Remaining limits requiring further work:
+## Continuation contracts, 2026-10-22
 
-- On Unix, `inspect_open_file` allocates a private SQLite image of the whole
-  session database. An oversized recovery is not bounded-memory end to end.
-- The checked files become writable directory entries during `publish_held`,
-  before the sealed directory is renamed live. A same-account writer can open
-  such an entry after its link and modify the inode through the rename. Holding
-  the original file descriptor does not exclude that writer on Unix. A Linux
-  primitive probe using `O_TMPFILE`, `linkat`, a second writable open, and
-  `pwrite` demonstrated this property; no full promotion race test was run.
-  The internal-sealing guarantee needs a clear threat boundary or a stronger
-  publication design; an extra hash check would leave another race.
-- Desktop and `conversation.read` do not call these use cases. `identity.txt`
-  and `replay.blocked` have no runtime consumers. This PR supplies backup
-  primitives, not completion of the user-facing restore and fetch-on-open
-  requirements in #270 and #854.
-- Journal authority still identifies a live generation by its audited path and
-  digest. If a later replacement at a reused live path succeeds but cannot store
-  its live audit, the old live record remains the latest durable evidence.
-  Rolling all bytes back to that older digest is outside the new rewrite tests;
-  the implementation does not establish an independent rollback-proof root
-  identity. No complete runtime reproduction of this combined failure was run.
+The next review identified a reused-path rollback after a live rename whose
+completion could not be audited, namespace replacement during fetch cleanup,
+the post-link writable-open interval, and the full-memory held-file inspector.
+The design table was extended before the corresponding implementation changes.
+
+- A durable live-target acceptance intent precedes promotion and invalidates
+  earlier root authority. Its completion and the promoted marker must agree on
+  the staging identity and journal digest. The fold fails closed for an orphan,
+  conflicting, or missing completion, including after every byte of an older
+  tree has been restored. Isolated contract regressions are
+  `pending_acceptance_invalidates_an_older_live_generation`,
+  `live_authority_requires_intent_digest_and_marker_agreement`, and
+  `malformed_or_same_digest_new_intent_does_not_restore_old_authority`.
+- Stage readiness has its own completion boundary. A sealed receipt creates
+  only a pending stage; marker publication and the retained StageOwner's binding
+  check precede the matching ready receipt. A marker left behind by a failed
+  readiness operation cannot authorize acceptance or fetch when retirement and
+  audit invalidation also fail. Four isolated generation regressions cover
+  missing, orphaned, mismatched, superseded, and spent ready receipts. Their
+  final execution is recorded with the combined tree.
+- `PromotionCause` owns the mapping of three independent post-rename facts:
+  parent durability, source retirement, and publication protection release.
+  `every_promoted_outcome_retains_its_independent_facts_in_the_receipt` crosses
+  all eight combinations and verifies that the receipt reader recognizes the
+  same meanings. Lease attestations remain separate from generation identity.
+- The deferred source receives the reserved file handle instead of a path.
+  Partial and published cleanup retain the owning directory and inode through
+  source writing, inspection, publication, sidecar writing, and audit storage.
+  A replacement at the original name is not cleanup's target. Uncertain
+  retirement returns `Retained` without an unchanged audit claim.
+- Cached relative session inspection and publication verification read the held
+  file on every platform. Converting its descriptor back to a pathname would
+  reopen a lookup race. The regression unlinks the held session, replaces its
+  ancestor and original name with a valid different database, and distinguishes
+  the retained original digest from the pathname replacement.
+- Publication protects each inode before other writers can acquire it: Linux
+  keeps it unnamed until linking, while macOS uses an exclusive read-only name
+  from birth. It keeps that protection through directory sync and the live rename, and
+  releases it afterward. The threat boundary includes namespace replacement
+  and ordinary writable opens; trusted ownership, permission metadata, and audit
+  storage are stated in the design. A held writable descriptor by itself was
+  not protection against a second writable open after linking.
+- Retirement keeps exact-file ownership rather than recursively removing an
+  old directory path. Failed stage cleanup can leave named empty files and
+  directories and returns `Retained`. Successful acceptance empties and syncs
+  the captured source readiness marker; the original quarantine's other bytes
+  remain unready. On macOS an emptied source scratch sibling can remain outside
+  the restored tree after fetch. These are stored leftovers, not claims of
+  deletion or automatic disk reclamation.
+- The held-file inspection adapter uses positional SQLite file I/O, a configured
+  one-MiB page cache, and no memory mapping; it no longer deserializes the whole
+  session image. Payload reads use 64-KiB chunks and record heads are visited one
+  at a time. Stored metadata is guarded before Rust extraction, generated columns
+  and physical-rowid shadows are refused, and integer guards precede stream-key
+  comparison. Temporary sorts request files; the held VFS refuses those opens.
+  Final validation belongs to the combined tree, not the earlier streaming
+  source-copy test. This is a bound on these image-copy, page-cache, payload,
+  metadata, and sorter paths, not a universal bound on SQLite's parser or global
+  heap for an arbitrary hostile database schema.
+
+These continuation changes require their final combined regressions, negative
+controls, and aggregate checks before qualification. A check has not passed
+merely because its contract or test is listed here.
+
+Ten isolated continuation negative controls executed on 2026-10-22 failed as
+running tests at their intended assertions: premature stage authority, reused
+older live authority, availability before release, skipped owned fetch cleanup,
+writable linked output, an unsealed namespace, stale-path recursive retirement,
+whole-image held-file deserialization, unguarded metadata, and eager record-head
+collection. Exact source hashes were restored after each. The deserialization
+control ran the 4-GiB sparse fixture in a child capped at a 1-GiB address space;
+the bounded inspector had passed that fixture. The later retained-read regression
+also passed in the 302-test focused backup suite, failed when its production
+helper was changed back to pathname reopening, and had its exact source restored.
+These controls do not establish native Windows protection or final aggregate
+success; the PR records those separate receipts.
+
+The aggregate process checks need a child reaper. The same compiled binaries
+passed under the documented `/usr/local/bin/docker-init -s --` execution context;
+the original failures remain failed receipts. The storage checks likewise have
+a separate passing receipt in the supported root-UID context outside the UID
+namespace. Those diagnoses do not establish a passing final aggregate on the
+continuation tree.
+
+## Product scope still open
+
+ADR 270 describes a library slice. The production gateway, desktop, and
+`conversation.read` do not invoke stage, acceptance, or deferred fetch. There is
+no user flow that lists the restored deferred conversations, starts this fetch
+when one is opened, or displays its progress and errors. `identity.txt` and
+`replay.blocked` are stored declarations with no runtime consumers; a test that
+checks those marker bytes does not prove identity replacement, re-pairing, or
+replay suppression in a running gateway. This PR does not complete the product
+requirements of #270 or #854, and both issues remain open. Their independent
+freshness, authority, identity, and user-facing integration acceptance work is
+not waived by the backup primitive tests.
 
 These limits are not waived by a passing unit suite or prior-head CI. No
 external review agent was contacted during this review.
+
+
+The retained-source replay investigation reproduced a second successful acceptance
+at another live target when both source-retirement operations failed and the
+post-rename source-spend append was lost. The regression
+`a_failed_postpromotion_audit_cannot_publish_a_retained_generation_twice` uses the
+actual promotion adapter and rejects every append after the live intent. Source
+consumption now precedes that intent and all filesystem effects under the root
+locks. A consumption-audit failure leaves the source retryable without promotion;
+a later intent failure leaves it spent and requires a fresh stage. The shared
+root-authority fold's existing staging-id invalidation owns this decision.
