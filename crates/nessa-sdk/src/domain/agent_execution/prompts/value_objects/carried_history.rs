@@ -129,7 +129,8 @@ impl CarriedHistory {
         let kept = turns.split_off(dropped);
         Self {
             turns: kept.into_boxed_slice(),
-            omitted: omitted.saturating_add(u32::try_from(dropped).unwrap_or(u32::MAX)),
+            omitted: u32::try_from(dropped)
+                .map_or(u32::MAX, |dropped| omitted.saturating_add(dropped)),
         }
     }
 
