@@ -1600,7 +1600,10 @@ Before cleanup, the fixture saves both A completion/observation results and C's
 absent/same/replaced cycle identity, captured stop flag, sync state, connection
 count and elapsed phases. A coarse sync state does not expose C's exact
 termination reason; that reason remains unknown without correlated evidence.
-It then releases both sources and joins physical work before asserting. A's
+It then releases both sources, stops the listeners and explicitly shuts down
+both record-source owners before asserting. Native listener join does not
+join these externally composed source workers: the omission-of-release mutation
+must block the source shutdown, even if native join already returned. A's
 completion assertions precede the live-C assertion, so the ended-C negative
 control cannot pass by masking an unrelated A failure.
 
