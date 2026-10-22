@@ -52,8 +52,9 @@ fence the cut has, and an accept that writes into an existing live root.
 - Restoration: fetch is a separate publish with its own temp file.
 - Audit: target, before, after, cause, initiator, policy ids. A failed sink
   is a failed transition.
-- Bounds: deferred payload is streamed in chunks; it is not a second
-  in-memory snapshot.
+- Bounds: source copying streams payload chunks. The Unix held-inode
+  verifier subsequently deserializes the entire SQLite image into memory
+  (`inspect_open_file`); recovery does not yet have a bounded-memory contract.
 - Organization: the work stays in the backup context. No new top-level crate.
 
 ## Findings folded into the design before code
@@ -71,5 +72,63 @@ fence the cut has, and an accept that writes into an existing live root.
 4. Giving the plan command a destination would break its inspection
    contract. It is unchanged.
 
-No code finding is open. Implementation follows this table; a row without
-the named test is unfinished.
+That review covered the design, not the implementation. Implementation
+qualification and remaining findings are recorded below.
+
+## Implementation review, 2026-10-21
+
+The review started at `dc49b2f53a3c62939932c0eb7c7f8a131bf52cc4`, against
+merge base `cf5c5200818d0e2217e8e0666696e5af61fc358d` (33 changed files).
+Independent reviewers inspected application failure and audit recovery,
+filesystem races and durability, and domain/API authorization contracts.
+
+The application and adapter corrections are:
+
+- Bind deferred fetch to durable journal authority, including readiness for a
+  staged root. Rewriting both `deferred.txt` and `journal.txt` is refused.
+  `a_resealed_deferred_line_is_not_fetched_in_quarantine` and
+  `a_resealed_deferred_line_is_not_fetched_after_acceptance` both failed before
+  the correction by publishing the replacement session.
+- Hash the exact deferred metadata read for the operation, rather than trusting
+  an earlier directory scan. `a_deferred_line_changed_after_loading_is_not_fetched`
+  failed before the correction by publishing the replacement session.
+- Use one root-generation fold for acceptance and fetch. A newer live generation
+  supersedes an earlier stage at the same path, and a newer stage supersedes an
+  earlier live generation. The generation regression failed when live
+  supersession was deliberately disabled and passed after restoration.
+- Sync nested directory entries after linking the checked files, before the live
+  rename. `sealed_names_are_linked_before_the_tree_is_synced` checks that order;
+  `a_linked_tree_sync_failure_refuses_publication` checks the typed failure.
+- Preserve the live effect when source retirement fails after the rename.
+  `a_retained_source_does_not_make_the_live_rename_unchanged` crosses source
+  retirement failure with parent-sync success and failure. Both facts are
+  preserved as `retained` or `retained-unsynced`; the caller gets `Retained`.
+
+The combined backup suite passed 263 tests on Linux with Rust 1.99.1. Final
+aggregate checks and filesystem negative controls are recorded on the PR.
+
+Remaining limits requiring further work:
+
+- On Unix, `inspect_open_file` allocates a private SQLite image of the whole
+  session database. An oversized recovery is not bounded-memory end to end.
+- The checked files become writable directory entries during `publish_held`,
+  before the sealed directory is renamed live. A same-account writer can open
+  such an entry after its link and modify the inode through the rename. Holding
+  the original file descriptor does not exclude that writer on Unix. A Linux
+  primitive probe using `O_TMPFILE`, `linkat`, a second writable open, and
+  `pwrite` demonstrated this property; no full promotion race test was run.
+  The internal-sealing guarantee needs a clear threat boundary or a stronger
+  publication design; an extra hash check would leave another race.
+- Desktop and `conversation.read` do not call these use cases. `identity.txt`
+  and `replay.blocked` have no runtime consumers. This PR supplies backup
+  primitives, not completion of the user-facing restore and fetch-on-open
+  requirements in #270 and #854.
+- Journal authority still identifies a live generation by its audited path and
+  digest. If a later replacement at a reused live path succeeds but cannot store
+  its live audit, the old live record remains the latest durable evidence.
+  Rolling all bytes back to that older digest is outside the new rewrite tests;
+  the implementation does not establish an independent rollback-proof root
+  identity. No complete runtime reproduction of this combined failure was run.
+
+These limits are not waived by a passing unit suite or prior-head CI. No
+external review agent was contacted during this review.

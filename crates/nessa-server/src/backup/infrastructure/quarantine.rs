@@ -20,9 +20,10 @@ use serde_json::{json, Value};
 use sha2::Digest;
 
 use crate::backup::application::{
-    current_staging_id, AnchoredRoot, CutMaterializer, DecisionAuditError, ExportClock,
-    FetchProgress, LoadedTree, MacKey, PreparedCut, Promoted, PublicationIds, QuarantineLayout,
-    RestoreAudit, RestoreEvidence, RestoreHold, SealFields, SealedInventoryReader, SessionCut,
+    current_journal_is_trusted, current_staging_id, AnchoredRoot, CutMaterializer,
+    DecisionAuditError, DeferredSessionSource, ExportClock, FetchProgress, JournalFields,
+    LoadedTree, MacKey, PreparedCut, Promoted, PublicationIds, QuarantineLayout, RestoreAudit,
+    RestoreEvidence, RestoreHold, SealFields, SealedInventoryReader, SessionCut,
     SessionSourceError, Staging, StagingIds, TreeId, VerificationFormat, VerificationLimits,
     VerificationSource,
 };
@@ -576,12 +577,6 @@ impl QuarantineLayout for DirectoryQuarantine {
             let _ = remove_opened(&created, &created_id);
             return Err(RestoreFault::Tamper);
         }
-        if sync_tree_at(&created).is_err() {
-            drop(held);
-            drop(journal);
-            let _ = remove_opened(&created, &created_id);
-            return Err(RestoreFault::Unreadable);
-        }
         if let Err(error) =
             held_still_sealed(&created, &created_id, loaded, &mut held, &mut journal)
         {
@@ -595,7 +590,7 @@ impl QuarantineLayout for DirectoryQuarantine {
         // The link is the publication of each inode. The directory rename
         // then makes those names live. A descriptor opened on a predictable
         // copy name is not one of these inodes.
-        if let Err(error) = publish_held(&mut held, &mut journal) {
+        if let Err(error) = publish_held(&created, &mut held, &mut journal, sync_tree_at) {
             drop(held);
             drop(journal);
             let _ = remove_opened(&created, &created_id);
@@ -651,18 +646,17 @@ impl QuarantineLayout for DirectoryQuarantine {
         }
         // The copy is live. Retire the source the open handle still names,
         // even when the original path is gone.
-        retire_opened(&opened, &loaded.identity)?;
         // The rename already made the tree live. A parent that cannot be
         // synced does not put it back, and does not make the promotion a
         // refusal.
-        let mut durable = true;
-        if sync_dir(&live_parent).is_err() {
-            durable = false;
-        }
-        if sync_dir(&source_parent).is_err() {
-            durable = false;
-        }
-        Ok(Promoted { durable })
+        Ok(finish_promotion(
+            || retire_opened(&opened, &loaded.identity),
+            || {
+                let live_synced = sync_dir(&live_parent).is_ok();
+                let source_synced = sync_dir(&source_parent).is_ok();
+                live_synced && source_synced
+            },
+        ))
     }
 
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
@@ -1038,6 +1032,19 @@ struct RootHold {
 }
 
 impl RestoreHold for RootHold {}
+
+/// The live rename already happened. Retirement and durability are separate
+/// facts about that live copy, rather than pre-rename refusal errors.
+fn finish_promotion(
+    retire: impl FnOnce() -> Result<(), RestoreFault>,
+    sync_parents: impl FnOnce() -> bool,
+) -> Promoted {
+    let source_retirement_failed = retire().is_err();
+    Promoted {
+        durable: sync_parents(),
+        source_retirement_failed,
+    }
+}
 
 /// Inside the quarantine, so a later tree cannot inherit a marker that
 /// belonged to a directory already renamed away. Not part of the seal.
@@ -2173,11 +2180,20 @@ fn link_unpublished(
     Ok(())
 }
 
-fn publish_held(held: &mut [Unpublished], journal: &mut Unpublished) -> Result<(), RestoreFault> {
+fn publish_held(
+    directory: &File,
+    held: &mut [Unpublished],
+    journal: &mut Unpublished,
+    sync: impl FnOnce(&File) -> Result<(), RestoreFault>,
+) -> Result<(), RestoreFault> {
     for file in held.iter_mut() {
         file.publish_in(RestoreFault::Tamper)?;
     }
-    journal.publish_in(RestoreFault::Tamper)
+    journal.publish_in(RestoreFault::Tamper)?;
+    // File sync happened while these inodes were unnamed on Unix. Persist
+    // their directory entries after linking, including entries below the root,
+    // before the directory rename can make the tree live.
+    sync(directory)
 }
 
 fn held_still_sealed(
@@ -3192,6 +3208,7 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
             "decision": evidence.decision,
             "policies": evidence.policies,
             "attestations": evidence.attestations,
+            "journalDigest": evidence.journal_digest,
             "observedAtMs": self.clock.unix_ms(),
         }))
         .map_err(|_| DecisionAuditError::NotStored)?;
@@ -3247,36 +3264,61 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
             .lock()
             .map_err(|_| DecisionAuditError::NotStored)?;
         let _file = exclusive(&self.directory).map_err(|_| DecisionAuditError::NotStored)?;
-        if !self.path.is_file() {
-            return Ok(None);
-        }
-        let text = fs::read_to_string(&self.path).map_err(|_| DecisionAuditError::NotStored)?;
-        let mut lines = Vec::new();
-        for line in text.lines().filter(|line| !line.is_empty()) {
-            let value: Value =
-                serde_json::from_str(line).map_err(|_| DecisionAuditError::NotStored)?;
-            let field = |name: &str| value.get(name).and_then(Value::as_str).unwrap_or("");
-            lines.push((
-                field("target").to_owned(),
-                field("before").to_owned(),
-                field("after").to_owned(),
-                field("cause").to_owned(),
-                field("decision").to_owned(),
-                field("attestations").to_owned(),
-            ));
-        }
+        let lines = read_restore_audit(&self.path)?;
         Ok(current_staging_id(
-            lines.iter().map(|line| SealFields {
-                target: &line.0,
-                before: &line.1,
-                after: &line.2,
-                cause: &line.3,
-                decision: &line.4,
-                attestations: &line.5,
-            }),
+            lines.iter().map(restore_seal_fields),
             target,
             digest,
         ))
+    }
+
+    fn trusted_journal(
+        &self,
+        target: &str,
+        digest: &str,
+        staging_id: Option<&str>,
+    ) -> Result<bool, DecisionAuditError> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| DecisionAuditError::NotStored)?;
+        let _file = exclusive(&self.directory).map_err(|_| DecisionAuditError::NotStored)?;
+        let lines = read_restore_audit(&self.path)?;
+        Ok(current_journal_is_trusted(
+            lines.iter().map(|value| JournalFields {
+                seal: restore_seal_fields(value),
+                journal_digest: restore_audit_field(value, "journalDigest"),
+            }),
+            target,
+            digest,
+            staging_id,
+        ))
+    }
+}
+
+fn read_restore_audit(path: &Path) -> Result<Vec<Value>, DecisionAuditError> {
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let text = fs::read_to_string(path).map_err(|_| DecisionAuditError::NotStored)?;
+    text.lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_str(line).map_err(|_| DecisionAuditError::NotStored))
+        .collect()
+}
+
+fn restore_audit_field<'a>(value: &'a Value, name: &str) -> &'a str {
+    value.get(name).and_then(Value::as_str).unwrap_or("")
+}
+
+fn restore_seal_fields(value: &Value) -> SealFields<'_> {
+    SealFields {
+        target: restore_audit_field(value, "target"),
+        before: restore_audit_field(value, "before"),
+        after: restore_audit_field(value, "after"),
+        cause: restore_audit_field(value, "cause"),
+        decision: restore_audit_field(value, "decision"),
+        attestations: restore_audit_field(value, "attestations"),
     }
 }
 
@@ -3329,7 +3371,7 @@ impl SqliteDeferredSource {
     }
 }
 
-impl crate::backup::application::DeferredSessionSource for SqliteDeferredSource {
+impl DeferredSessionSource for SqliteDeferredSource {
     fn write_session(
         &self,
         conversation_id: &str,
@@ -3669,6 +3711,7 @@ fn a_restore_audit_waits_for_the_directory_lock() {
             decision: "effect",
             policies: &[],
             attestations: "lease-1 stopped\n",
+            journal_digest: "",
         });
         finished.send(stored).unwrap();
     });
@@ -3695,6 +3738,7 @@ fn a_restore_audit_waits_for_the_directory_lock() {
             decision: "effect",
             policies: &[],
             attestations: "",
+            journal_digest: "",
         })
         .unwrap();
     let text = fs::read_to_string(directory.join("restore.jsonl")).unwrap();
@@ -3727,6 +3771,7 @@ fn a_sealed_audit_names_the_journal_digest() {
             decision: "effect",
             policies: &[],
             attestations: &attestation,
+            journal_digest: "",
         })
         .unwrap();
     assert_eq!(
@@ -3745,9 +3790,77 @@ fn a_sealed_audit_names_the_journal_digest() {
             decision: "effect",
             policies: &[],
             attestations: "stage-1",
+            journal_digest: "",
         })
         .unwrap();
     assert!(audit.sealed("quarantine", "digest-a").unwrap().is_none());
+}
+
+#[test]
+fn journal_trust_survives_audit_reopen_and_tracks_the_latest_generation() {
+    struct Clock;
+    impl ExportClock for Clock {
+        fn unix_ms(&self) -> u64 {
+            1
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    let reopen = || FileRestoreAudit::open(&directory, Clock).unwrap();
+    let audit = reopen();
+    let record = |before, after, cause, attestations, journal_digest| {
+        audit
+            .append(&RestoreEvidence {
+                target: "root",
+                before,
+                after,
+                cause,
+                initiator: "person",
+                decision: "effect",
+                policies: &[],
+                attestations,
+                journal_digest,
+            })
+            .unwrap();
+    };
+    assert!(!reopen().trusted_journal("root", "digest-a", None).unwrap());
+    let attestation = crate::backup::domain::seal_attestation("digest-a", "stage-1");
+    record("absent", "verified", "sealed", &attestation, "");
+    assert!(reopen()
+        .trusted_journal("root", "digest-a", Some("stage-1"))
+        .unwrap());
+    assert!(!reopen().trusted_journal("root", "digest-a", None).unwrap());
+    assert!(!reopen()
+        .trusted_journal("root", "digest-a", Some("stage-other"))
+        .unwrap());
+    record("verified", "spent", "spent", "stage-1", "");
+    assert!(!reopen()
+        .trusted_journal("root", "digest-a", Some("stage-1"))
+        .unwrap());
+    record("verified", "live", "accepted", "", "digest-a");
+    assert!(reopen().trusted_journal("root", "digest-a", None).unwrap());
+    assert!(!reopen().trusted_journal("other", "digest-a", None).unwrap());
+    assert!(!reopen().trusted_journal("root", "digest-b", None).unwrap());
+    record("verified", "live", "unsynced", "", "digest-b");
+    assert!(reopen().trusted_journal("root", "digest-b", None).unwrap());
+    assert!(!reopen().trusted_journal("root", "digest-a", None).unwrap());
+    let attestation = crate::backup::domain::seal_attestation("digest-c", "stage-2");
+    record("absent", "verified", "sealed", &attestation, "");
+    assert!(!reopen().trusted_journal("root", "digest-b", None).unwrap());
+    assert!(!reopen().trusted_journal("root", "digest-c", None).unwrap());
+    assert!(reopen()
+        .trusted_journal("root", "digest-c", Some("stage-2"))
+        .unwrap());
+    record("verified", "spent", "spent", "stage-2", "");
+    assert!(!reopen()
+        .trusted_journal("root", "digest-c", Some("stage-2"))
+        .unwrap());
+    assert!(!reopen().trusted_journal("root", "digest-b", None).unwrap());
+    record("verified", "live", "retained", "", "digest-d");
+    assert!(reopen().trusted_journal("root", "digest-d", None).unwrap());
+    let text = fs::read_to_string(directory.join("restore.jsonl")).unwrap();
+    assert!(text.contains("\"journalDigest\":\"digest-d\""));
 }
 
 #[test]
@@ -3917,6 +4030,78 @@ fn a_write_through_the_temp_inode_does_not_change_the_published_file() {
 
 #[cfg(unix)]
 #[test]
+fn sealed_names_are_linked_before_the_tree_is_synced() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = open_directory(root.path(), false).unwrap();
+    let records = ensure_dir_at(&directory, OsStr::new("records")).unwrap();
+    let notes = ensure_dir_at(&records, OsStr::new("notes")).unwrap();
+    let mut note = create_unpublished(
+        &notes,
+        OsStr::new("note"),
+        "records/notes/note",
+        false,
+        RestoreFault::Tamper,
+    )
+    .unwrap();
+    note.store(b"sealed note").unwrap();
+    note.sync_file().unwrap();
+    let mut journal = create_unpublished(
+        &directory,
+        OsStr::new("journal.txt"),
+        "journal.txt",
+        false,
+        RestoreFault::Tamper,
+    )
+    .unwrap();
+    journal.store(b"sealed journal").unwrap();
+    journal.sync_file().unwrap();
+    assert!(!root.path().join("records/notes/note").exists());
+    let mut synced = false;
+    publish_held(&directory, &mut [note], &mut journal, |tree| {
+        assert_eq!(
+            fs::read(root.path().join("records/notes/note")).unwrap(),
+            b"sealed note"
+        );
+        assert_eq!(
+            fs::read(root.path().join("journal.txt")).unwrap(),
+            b"sealed journal"
+        );
+        sync_tree_at(tree)?;
+        synced = true;
+        Ok(())
+    })
+    .unwrap();
+    assert!(synced);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_tree_sync_failure_refuses_publication() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = open_directory(root.path(), false).unwrap();
+    let mut journal = create_unpublished(
+        &directory,
+        OsStr::new("journal.txt"),
+        "journal.txt",
+        false,
+        RestoreFault::Tamper,
+    )
+    .unwrap();
+    journal.store(b"sealed journal").unwrap();
+    journal.sync_file().unwrap();
+    let error = publish_held(&directory, &mut [], &mut journal, |_| {
+        assert_eq!(
+            fs::read(root.path().join("journal.txt")).unwrap(),
+            b"sealed journal"
+        );
+        Err(RestoreFault::Unreadable)
+    })
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Unreadable);
+}
+
+#[cfg(unix)]
+#[test]
 fn a_held_file_is_not_a_directory_entry_until_publication() {
     let root = tempfile::tempdir().unwrap();
     let parent = open_directory(root.path(), false).unwrap();
@@ -4015,6 +4200,53 @@ fn a_different_byte_is_not_published() {
             .file_name()
             .to_string_lossy()
             .contains("verified-")));
+}
+
+#[test]
+fn a_failed_source_retirement_preserves_the_live_copy_and_syncs() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("quarantine");
+    let live = root.path().join("live");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("accept-ready"), b"stage-1\n").unwrap();
+    fs::create_dir(&live).unwrap();
+    fs::write(live.join("note"), b"sealed bytes").unwrap();
+    let parent = open_directory(root.path(), false).unwrap();
+    let mut synced = false;
+    let promoted = finish_promotion(
+        || {
+            assert_eq!(fs::read(live.join("note")).unwrap(), b"sealed bytes");
+            Err(RestoreFault::Unreadable)
+        },
+        || {
+            sync_dir(&parent).unwrap();
+            synced = true;
+            true
+        },
+    );
+    assert!(promoted.source_retirement_failed);
+    assert!(promoted.durable);
+    assert!(synced);
+    assert_eq!(fs::read(live.join("note")).unwrap(), b"sealed bytes");
+    assert_eq!(fs::read(source.join("accept-ready")).unwrap(), b"stage-1\n");
+}
+
+#[test]
+fn source_retirement_and_parent_sync_failures_are_kept_together() {
+    let mut sync_attempted = false;
+    let promoted = finish_promotion(
+        || Err(RestoreFault::Retained),
+        || {
+            sync_attempted = true;
+            false
+        },
+    );
+    assert!(promoted.source_retirement_failed);
+    assert!(!promoted.durable);
+    assert!(sync_attempted);
+    let promoted = finish_promotion(|| Ok(()), || true);
+    assert!(!promoted.source_retirement_failed);
+    assert!(promoted.durable);
 }
 
 #[test]

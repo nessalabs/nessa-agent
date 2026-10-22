@@ -24,13 +24,13 @@ pub use verification::{
 pub use deletion_inventory::{capture_fences, capture_inventory, CaptureError, InventoryFailure};
 pub use export::{capture_export, ExportFailure, ExportRequest};
 pub use ports::{
-    current_staging_id, effect_names_seal, fetch_names_conversation, AdmissionFailure,
+    current_journal_is_trusted, current_staging_id, fetch_names_conversation, AdmissionFailure,
     AdmissionLease, Authenticator, CopiedStore, DecisionAuditError, DeferredSessionSource,
     DeletionLogStore, ExportClock, ExportSource, FenceSource, FetchProgress, InventoryAction,
     InventoryCapturePolicyEvaluator, InventoryCause, InventoryDecision, InventoryDecisionAudit,
-    InventoryDenial, InventoryFacts, InventoryReconciliationLease, LeaseReceipts, LogStoreError,
-    MacError, MacKey, ManifestPublisher, MutationAdmission, PinnedStore, PublicationIds,
-    PublishedRecord, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
+    InventoryDenial, InventoryFacts, InventoryReconciliationLease, JournalFields, LeaseReceipts,
+    LogStoreError, MacError, MacKey, ManifestPublisher, MutationAdmission, PinnedStore,
+    PublicationIds, PublishedRecord, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
     RestorePolicyEvaluator, SealFields, SessionCut, SessionSourceError, StagingIds,
 };
 #[cfg(test)]

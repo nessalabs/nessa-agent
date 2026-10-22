@@ -12,20 +12,21 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 
-use crate::backup::application::Authenticator;
 use crate::backup::application::{
     accept_quarantine, current_staging_id, open_deferred_conversation, ordered_roots, root_posture,
-    stage_quarantine, AcceptRequest, AnchoredRoot, DecisionAuditError, DeferredSessionSource,
-    ExportClock, FetchProgress, InventoryCause, InventoryDecision, LeaseReceipts, LoadedTree,
-    MacKey, ManifestPublisher, MutationAdmission, OpenRequest, Promoted, PublicationIds,
-    QuarantineLayout, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
-    RestorePolicyEvaluator, SealFields, SessionCut, SessionSourceError, StageRequest, Staging,
-    StagingIds, TreeId, VerificationFailure, VerificationLimits, VerificationSource,
+    stage_quarantine, AcceptRequest, AdmissionFailure, AdmissionLease, AnchoredRoot, Authenticator,
+    DecisionAuditError, DeferredSessionSource, ExportClock, FetchProgress, InventoryCause,
+    InventoryDecision, JournalFields, LeaseReceipts, LoadedTree, MacKey, ManifestPublisher,
+    MutationAdmission, OpenReport, OpenRequest, Promoted, PublicationIds, PublishedRecord,
+    QuarantineLayout, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestoreHold,
+    RestorePolicyEvaluator, SealFields, SessionCut, SessionSourceError, StageReport, StageRequest,
+    Staging, StagingIds, TreeId, VerificationFailure, VerificationLimits, VerificationSource,
 };
 use crate::backup::domain::{
     encode_journal, read_journal, seal_staging_id, AuthenticatedManifest, CapturedRecord,
-    CredentialKind, DeferredEntry, DeletionFence, DeletionLog, Fingerprint, GrantRole, Manifest,
-    Posture, RestoreFault, Sensitivity, SourceCut, StoreKind, Watermark, WRITER_INVENTORY,
+    CredentialKind, DeferredEntry, DeletionFence, DeletionLog, Fingerprint, Freshness, GrantRole,
+    Manifest, Posture, RestoreFault, Sensitivity, SourceCut, StoreKind, VolumeCase, Watermark,
+    WRITER_INVENTORY,
 };
 use crate::backup::infrastructure::snapshot::SESSION_EXPORT_LIMIT;
 use crate::backup::infrastructure::{
@@ -96,11 +97,14 @@ struct AuditLine {
     decision: String,
     policies: Vec<String>,
     attestations: String,
+    journal_digest: String,
 }
 
 struct MemoryAudit {
     fail_at: Option<usize>,
     lines: Mutex<Vec<AuditLine>>,
+    history: Vec<AuditLine>,
+    trust_unavailable: bool,
 }
 
 impl MemoryAudit {
@@ -108,6 +112,8 @@ impl MemoryAudit {
         Self {
             fail_at: None,
             lines: Mutex::new(Vec::new()),
+            history: Vec::new(),
+            trust_unavailable: false,
         }
     }
 
@@ -115,6 +121,28 @@ impl MemoryAudit {
         Self {
             fail_at: Some(count),
             lines: Mutex::new(Vec::new()),
+            history: Vec::new(),
+            trust_unavailable: false,
+        }
+    }
+
+    /// Start a new assertion/failure-injection window while retaining actual
+    /// stage/accept records as the journal authority for later opens.
+    fn checkpoint(&self) -> Self {
+        let mut history = self.history.clone();
+        history.extend(self.lines());
+        Self {
+            fail_at: None,
+            lines: Mutex::new(Vec::new()),
+            history,
+            trust_unavailable: false,
+        }
+    }
+
+    fn failing_after(&self, count: usize) -> Self {
+        Self {
+            fail_at: Some(count),
+            ..self.checkpoint()
         }
     }
 
@@ -141,6 +169,7 @@ impl RestoreAudit for MemoryAudit {
             decision: evidence.decision.to_owned(),
             policies: evidence.policies.to_vec(),
             attestations: evidence.attestations.to_owned(),
+            journal_digest: evidence.journal_digest.to_owned(),
         });
         Ok(())
     }
@@ -154,7 +183,7 @@ impl RestoreAudit for MemoryAudit {
             .lines
             .lock()
             .map_err(|_| DecisionAuditError::NotStored)?;
-        Ok(lines.iter().any(|line| {
+        Ok(self.history.iter().chain(lines.iter()).any(|line| {
             line.after == "available"
                 && line.decision == "effect"
                 && line.attestations == publication
@@ -171,16 +200,53 @@ impl RestoreAudit for MemoryAudit {
             .lock()
             .map_err(|_| DecisionAuditError::NotStored)?;
         Ok(current_staging_id(
-            lines.iter().map(|line| SealFields {
-                target: &line.target,
-                before: &line.before,
-                after: &line.after,
-                cause: &line.cause,
-                decision: &line.decision,
-                attestations: &line.attestations,
-            }),
+            self.history
+                .iter()
+                .chain(lines.iter())
+                .map(|line| SealFields {
+                    target: &line.target,
+                    before: &line.before,
+                    after: &line.after,
+                    cause: &line.cause,
+                    decision: &line.decision,
+                    attestations: &line.attestations,
+                }),
             target,
             digest,
+        ))
+    }
+
+    fn trusted_journal(
+        &self,
+        target: &str,
+        digest: &str,
+        staging_id: Option<&str>,
+    ) -> Result<bool, DecisionAuditError> {
+        if self.trust_unavailable {
+            return Err(DecisionAuditError::NotStored);
+        }
+        let lines = self
+            .lines
+            .lock()
+            .map_err(|_| DecisionAuditError::NotStored)?;
+        Ok(crate::backup::application::current_journal_is_trusted(
+            self.history
+                .iter()
+                .chain(lines.iter())
+                .map(|line| JournalFields {
+                    seal: SealFields {
+                        target: &line.target,
+                        before: &line.before,
+                        after: &line.after,
+                        cause: &line.cause,
+                        decision: &line.decision,
+                        attestations: &line.attestations,
+                    },
+                    journal_digest: &line.journal_digest,
+                }),
+            target,
+            digest,
+            staging_id,
         ))
     }
 }
@@ -197,19 +263,14 @@ struct OpenAdmission;
 
 #[async_trait]
 impl MutationAdmission for OpenAdmission {
-    async fn hold(
-        &self,
-    ) -> Result<
-        Box<dyn crate::backup::application::AdmissionLease + Send + Sync>,
-        crate::backup::application::AdmissionFailure,
-    > {
+    async fn hold(&self) -> Result<Box<dyn AdmissionLease + Send + Sync>, AdmissionFailure> {
         Ok(Box::new(OpenHold))
     }
 }
 
 struct OpenHold;
 
-impl crate::backup::application::AdmissionLease for OpenHold {
+impl AdmissionLease for OpenHold {
     fn retirement_signaled(&self) -> bool {
         false
     }
@@ -243,7 +304,7 @@ async fn publish(
     for row in rows {
         let record = match &row.bytes {
             Bytes::Public(bytes) => {
-                published.push(crate::backup::application::PublishedRecord {
+                published.push(PublishedRecord {
                     store: row.store,
                     identity: row.identity.clone(),
                     bytes: bytes.clone(),
@@ -263,7 +324,7 @@ async fn publish(
     }
     if let Some(log) = &inventory {
         let bytes = log.canonical().into_bytes();
-        published.push(crate::backup::application::PublishedRecord {
+        published.push(PublishedRecord {
             store: StoreKind::DeletionInventory,
             identity: "log".into(),
             bytes: bytes.clone(),
@@ -351,7 +412,7 @@ fn stage(
     audit: &dyn RestoreAudit,
     facts: RestoreFacts<'_>,
     later: Option<&str>,
-) -> Result<crate::backup::application::StageReport, RestoreFault> {
+) -> Result<StageReport, RestoreFault> {
     let source = DirectoryVerificationSource::open(bundle.root.clone()).unwrap();
     stage_quarantine(
         &StageRequest {
@@ -588,10 +649,7 @@ impl QuarantineLayout for StickyQuarantine {
         DirectoryQuarantine.anchor(path)
     }
 
-    fn hold(
-        &self,
-        root: &AnchoredRoot,
-    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
 
@@ -607,11 +665,7 @@ impl QuarantineLayout for StickyQuarantine {
         DirectoryQuarantine.spoil(path)
     }
 
-    fn session_cut(
-        &self,
-        path: &Path,
-        conversation_id: &str,
-    ) -> Result<crate::backup::application::SessionCut, RestoreFault> {
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
         DirectoryQuarantine.session_cut(path, conversation_id)
     }
 }
@@ -684,10 +738,7 @@ impl QuarantineLayout for KeepsSession {
         DirectoryQuarantine.anchor(path)
     }
 
-    fn hold(
-        &self,
-        root: &AnchoredRoot,
-    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
 
@@ -703,11 +754,7 @@ impl QuarantineLayout for KeepsSession {
         DirectoryQuarantine.spoil(path)
     }
 
-    fn session_cut(
-        &self,
-        path: &Path,
-        conversation_id: &str,
-    ) -> Result<crate::backup::application::SessionCut, RestoreFault> {
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
         DirectoryQuarantine.session_cut(path, conversation_id)
     }
 }
@@ -828,10 +875,7 @@ impl QuarantineLayout for SpendMissed {
         DirectoryQuarantine.anchor(path)
     }
 
-    fn hold(
-        &self,
-        root: &AnchoredRoot,
-    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
 
@@ -848,11 +892,7 @@ impl QuarantineLayout for SpendMissed {
         DirectoryQuarantine.spoil(path)
     }
 
-    fn session_cut(
-        &self,
-        path: &Path,
-        conversation_id: &str,
-    ) -> Result<crate::backup::application::SessionCut, RestoreFault> {
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
         DirectoryQuarantine.session_cut(path, conversation_id)
     }
 }
@@ -1197,7 +1237,6 @@ fn a_changed_quarantine_file_is_not_promoted() {
 
 #[test]
 fn a_folding_volume_locks_spellings_in_one_order() {
-    use crate::backup::domain::VolumeCase;
     let (first, second, third, fourth) = folding_lock_spellings();
     let (earlier, later) =
         ordered_roots(&first, VolumeCase::Unicode, &second, VolumeCase::Unicode).unwrap();
@@ -1443,7 +1482,7 @@ fn stage_with_id(
     live: &Path,
     audit: &dyn RestoreAudit,
     ids: &dyn StagingIds,
-) -> Result<crate::backup::application::StageReport, RestoreFault> {
+) -> Result<StageReport, RestoreFault> {
     let source = DirectoryVerificationSource::open(bundle.root.clone()).unwrap();
     stage_quarantine(
         &StageRequest {
@@ -1930,10 +1969,7 @@ impl QuarantineLayout for ReportsOccupied {
     fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
-    fn hold(
-        &self,
-        root: &AnchoredRoot,
-    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
     fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
@@ -2043,10 +2079,7 @@ impl QuarantineLayout for ReadyFails {
     fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
-    fn hold(
-        &self,
-        root: &AnchoredRoot,
-    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
     fn mark_ready(&self, _root: &AnchoredRoot, _staging_id: &str) -> Result<(), RestoreFault> {
@@ -2170,7 +2203,7 @@ async fn a_newer_fence_omits_the_grant() {
         Some(&later),
     )
     .unwrap();
-    assert_eq!(report.freshness, crate::backup::domain::Freshness::Superset);
+    assert_eq!(report.freshness, Freshness::Superset);
     assert!(!holds(&place.quarantine, grant));
     assert!(place.quarantine.join("journal.txt").is_file());
 }
@@ -2337,7 +2370,7 @@ async fn a_fenced_deferred_conversation_is_not_listed() {
     assert!(!text.contains("conv-bulk"));
     accept(&place, &audit, &NoReceipts).unwrap();
     let source = FakeSource::unused();
-    let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
+    let error = open_one(&place, "conv-bulk", &source, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::NotDeferred);
     assert_eq!(*source.writes.lock().unwrap(), 0);
 }
@@ -2498,7 +2531,7 @@ fn deferred_rows(conversation_id: &str, size: u64, digest: Fingerprint) -> Vec<D
     ]
 }
 
-async fn deferred_bundle(lines: Vec<DeferredEntry>) -> (Bundle, Roots) {
+async fn deferred_bundle(lines: Vec<DeferredEntry>) -> (Bundle, Roots, MemoryAudit) {
     let bundle = publish(note_bundle_rows(), lines, None).await;
     let place = roots();
     let audit = MemoryAudit::open();
@@ -2512,7 +2545,7 @@ async fn deferred_bundle(lines: Vec<DeferredEntry>) -> (Bundle, Roots) {
     )
     .unwrap();
     accept(&place, &audit, &NoReceipts).unwrap();
-    (bundle, place)
+    (bundle, place, audit.checkpoint())
 }
 
 fn mark_available(audit: &MemoryAudit, root: &Path, conversation_id: &str) {
@@ -2533,6 +2566,7 @@ fn mark_available(audit: &MemoryAudit, root: &Path, conversation_id: &str) {
             decision: "effect",
             policies: &[],
             attestations: publication,
+            journal_digest: "",
         })
         .unwrap();
 }
@@ -2542,7 +2576,7 @@ fn open_one(
     conversation_id: &str,
     source: &dyn DeferredSessionSource,
     audit: &dyn RestoreAudit,
-) -> Result<crate::backup::application::OpenReport, RestoreFault> {
+) -> Result<OpenReport, RestoreFault> {
     open_deferred_conversation(
         &OpenRequest {
             facts: person(RestoreAction::Fetch),
@@ -2558,13 +2592,115 @@ fn open_one(
     )
 }
 
+fn replace_deferred_session(root: &Path, session: &SealedSession) {
+    let deferred_path = root.join("deferred.txt");
+    let mut lines =
+        crate::backup::domain::decode_deferred(&fs::read_to_string(&deferred_path).unwrap())
+            .unwrap();
+    for line in &mut lines {
+        line.size = session.size;
+        line.digest = session.digest;
+    }
+    let deferred = crate::backup::domain::encode_deferred(&lines).unwrap();
+    fs::write(&deferred_path, &deferred).unwrap();
+    let journal_path = root.join("journal.txt");
+    let journal = read_journal(&fs::read_to_string(&journal_path).unwrap()).unwrap();
+    let mut files = journal.files;
+    let sealed = files
+        .iter_mut()
+        .find(|file| file.path == "deferred.txt")
+        .unwrap();
+    sealed.fingerprint = Fingerprint::of(deferred.as_bytes());
+    fs::write(
+        journal_path,
+        encode_journal(journal.freshness, &journal.leases, &files).unwrap(),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_resealed_deferred_line_is_not_fetched_in_quarantine() {
+    let original = sealed_session(b"session-v1");
+    let replacement = sealed_session(b"session-v2");
+    assert_ne!(original.digest, replacement.digest);
+    let bundle = publish(
+        note_bundle_rows(),
+        deferred_rows("conv-bulk", original.size, original.digest),
+        None,
+    )
+    .await;
+    let place = roots();
+    let audit = MemoryAudit::open();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &audit,
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap();
+    replace_deferred_session(&place.quarantine, &replacement);
+    let source = FakeSource::matching(&replacement);
+    let result = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.quarantine,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &audit,
+        &DirectoryQuarantine,
+        &source,
+        &OsPublicationIds,
+        &mut Quiet,
+    );
+    assert_eq!(result.unwrap_err(), RestoreFault::Tamper);
+    assert_eq!(*source.writes.lock().unwrap(), 0);
+    assert!(!place.quarantine.join("sessions/conv-bulk.sqlite3").exists());
+    assert!(!audit.lines().iter().any(|line| line.after == "available"));
+}
+
+#[tokio::test]
+async fn a_resealed_deferred_line_is_not_fetched_after_acceptance() {
+    let original = sealed_session(b"session-v1");
+    let replacement = sealed_session(b"session-v2");
+    assert_ne!(original.digest, replacement.digest);
+    let bundle = publish(
+        note_bundle_rows(),
+        deferred_rows("conv-bulk", original.size, original.digest),
+        None,
+    )
+    .await;
+    let place = roots();
+    let audit = MemoryAudit::open();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &audit,
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap();
+    accept(&place, &audit, &NoReceipts).unwrap();
+    replace_deferred_session(&place.live, &replacement);
+    let source = FakeSource::matching(&replacement);
+    assert_eq!(
+        open_one(&place, "conv-bulk", &source, &audit).unwrap_err(),
+        RestoreFault::Tamper,
+    );
+    assert_eq!(*source.writes.lock().unwrap(), 0);
+    assert!(!place.live.join("sessions/conv-bulk.sqlite3").exists());
+    assert!(!audit.lines().iter().any(|line| line.after == "available"));
+}
+
 #[tokio::test]
 async fn an_opened_deferred_conversation_matches_the_recorded_fingerprint() {
     let session = sealed_session(b"session-v1");
-    let (_bundle, place) =
+    let (_bundle, place, audit) =
         deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let source = FakeSource::matching(&session);
-    let audit = MemoryAudit::open();
     let report = open_one(&place, "conv-bulk", &source, &audit).unwrap();
     assert_eq!(report.size, session.size);
     assert_eq!(report.digest, session.digest);
@@ -2617,10 +2753,9 @@ impl PublicationIds for NoIds {
 #[tokio::test]
 async fn a_port_supplied_publication_id_is_the_one_the_audit_names() {
     let session = sealed_session(b"session-v1");
-    let (_bundle, place) =
+    let (_bundle, place, audit) =
         deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let source = FakeSource::matching(&session);
-    let audit = MemoryAudit::open();
     open_deferred_conversation(
         &OpenRequest {
             facts: person(RestoreAction::Fetch),
@@ -2653,7 +2788,7 @@ async fn a_port_supplied_publication_id_is_the_one_the_audit_names() {
 #[tokio::test]
 async fn a_failed_publication_id_retires_the_published_session() {
     let session = sealed_session(b"session-v1");
-    let (_bundle, place) =
+    let (_bundle, place, audit) =
         deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let source = FakeSource::matching(&session);
     let error = open_deferred_conversation(
@@ -2663,7 +2798,7 @@ async fn a_failed_publication_id_retires_the_published_session() {
             conversation_id: "conv-bulk",
         },
         &policy(),
-        &MemoryAudit::open(),
+        &audit,
         &DirectoryQuarantine,
         &source,
         &NoIds,
@@ -2678,13 +2813,13 @@ async fn a_failed_publication_id_retires_the_published_session() {
 #[tokio::test]
 async fn a_changed_deferred_line_is_not_fetched() {
     let digest = Fingerprint::of(b"session-v1");
-    let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
+    let (_bundle, place, audit) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
     let path = place.live.join("deferred.txt");
     let mut text = fs::read_to_string(&path).unwrap();
     text = text.replace("11", "12");
     fs::write(&path, text).unwrap();
     let source = FakeSource::unused();
-    let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
+    let error = open_one(&place, "conv-bulk", &source, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::Tamper);
     assert_eq!(*source.writes.lock().unwrap(), 0);
     assert!(!place.live.join("sessions/conv-bulk.sqlite3").exists());
@@ -2693,10 +2828,10 @@ async fn a_changed_deferred_line_is_not_fetched() {
 #[tokio::test]
 async fn a_failed_fetch_audit_removes_the_session() {
     let session = sealed_session(b"session-v1");
-    let (_bundle, place) =
+    let (_bundle, place, audit) =
         deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let source = FakeSource::matching(&session);
-    let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::fail_after(1)).unwrap_err();
+    let error = open_one(&place, "conv-bulk", &source, &audit.failing_after(1)).unwrap_err();
     assert_eq!(error, RestoreFault::Audit);
     assert!(!place.live.join("sessions/conv-bulk.sqlite3").exists());
     assert!(partial_names(&place.live).is_empty());
@@ -2705,7 +2840,7 @@ async fn a_failed_fetch_audit_removes_the_session() {
 #[tokio::test]
 async fn a_failed_fetch_cleanup_moves_the_session() {
     let session = sealed_session(b"session-v1");
-    let (_bundle, place) =
+    let (_bundle, place, audit) =
         deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let source = FakeSource::matching(&session);
     let error = open_deferred_conversation(
@@ -2715,7 +2850,7 @@ async fn a_failed_fetch_cleanup_moves_the_session() {
             conversation_id: "conv-bulk",
         },
         &policy(),
-        &MemoryAudit::fail_after(2),
+        &audit.failing_after(2),
         &KeepsSession,
         &source,
         &OsPublicationIds,
@@ -2733,13 +2868,13 @@ async fn a_failed_fetch_cleanup_moves_the_session() {
 #[tokio::test]
 async fn a_changed_source_is_refused_and_other_conversations_stay() {
     let session = sealed_session(b"session-v1");
-    let (_bundle, place) =
+    let (_bundle, place, audit) =
         deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let other = place.live.join("records/notes/note-1");
     let before = fs::read(&other).unwrap();
     let mut source = FakeSource::matching(&session);
     source.mode = "changed";
-    let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
+    let error = open_one(&place, "conv-bulk", &source, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::SourceChanged);
     assert!(!place.live.join("sessions/conv-bulk.sqlite3").is_file());
     assert!(partial_names(&place.live).is_empty());
@@ -2749,12 +2884,12 @@ async fn a_changed_source_is_refused_and_other_conversations_stay() {
 #[tokio::test]
 async fn a_missing_source_is_refused_and_other_conversations_stay() {
     let digest = Fingerprint::of(b"session-v1");
-    let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
+    let (_bundle, place, audit) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
     let other = place.live.join("records/notes/note-1");
     let before = fs::read(&other).unwrap();
     let mut source = FakeSource::unused();
     source.mode = "missing";
-    let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
+    let error = open_one(&place, "conv-bulk", &source, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::SourceMissing);
     assert_eq!(fs::read(&other).unwrap(), before);
     assert!(!place.live.join("sessions/conv-bulk.sqlite3").exists());
@@ -2763,10 +2898,10 @@ async fn a_missing_source_is_refused_and_other_conversations_stay() {
 #[tokio::test]
 async fn an_interrupted_fetch_leaves_no_partial_session() {
     let digest = Fingerprint::of(b"session-v1");
-    let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
+    let (_bundle, place, audit) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
     let mut source = FakeSource::unused();
     source.mode = "interrupted";
-    let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
+    let error = open_one(&place, "conv-bulk", &source, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::Interrupted);
     assert!(partial_names(&place.live).is_empty());
     assert!(!place.live.join("sessions/conv-bulk.sqlite3").exists());
@@ -2779,10 +2914,9 @@ async fn an_interrupted_fetch_leaves_no_partial_session() {
 #[tokio::test]
 async fn an_interrupted_fetch_that_cannot_be_removed_is_retained() {
     let digest = Fingerprint::of(b"session-v1");
-    let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
+    let (_bundle, place, audit) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
     let mut source = FakeSource::unused();
     source.mode = "interrupted";
-    let audit = MemoryAudit::open();
     let error = open_deferred_conversation(
         &OpenRequest {
             facts: person(RestoreAction::Fetch),
@@ -2803,7 +2937,7 @@ async fn an_interrupted_fetch_that_cannot_be_removed_is_retained() {
         .join("sessions/conv-bulk.sqlite3.partial")
         .is_file());
     assert!(audit.lines().iter().all(|line| line.after != "unchanged"));
-    let later = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
+    let later = open_one(&place, "conv-bulk", &source, &audit).unwrap_err();
     assert_eq!(later, RestoreFault::Tamper);
 }
 
@@ -2901,10 +3035,7 @@ impl QuarantineLayout for KeepsPartialSession {
     fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
-    fn hold(
-        &self,
-        root: &AnchoredRoot,
-    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
     fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
@@ -3002,10 +3133,7 @@ impl QuarantineLayout for LeavesPartialTree {
     fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
-    fn hold(
-        &self,
-        root: &AnchoredRoot,
-    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
     fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
@@ -3063,9 +3191,9 @@ async fn a_partial_directory_that_survives_a_failed_write_is_unready() {
 #[tokio::test]
 async fn an_unknown_conversation_is_not_fetched() {
     let digest = Fingerprint::of(b"session-v1");
-    let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
+    let (_bundle, place, audit) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
     let source = FakeSource::unused();
-    let error = open_one(&place, "conv-other", &source, &MemoryAudit::open()).unwrap_err();
+    let error = open_one(&place, "conv-other", &source, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::NotDeferred);
     assert_eq!(*source.writes.lock().unwrap(), 0);
 }
@@ -3082,9 +3210,9 @@ async fn disagreeing_deferred_lines_are_refused() {
         .unwrap(),
         DeferredEntry::new(StoreKind::Notes, "conv-bulk", 12, Fingerprint::of(b"two")).unwrap(),
     ];
-    let (_bundle, place) = deferred_bundle(lines).await;
+    let (_bundle, place, audit) = deferred_bundle(lines).await;
     let source = FakeSource::unused();
-    let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
+    let error = open_one(&place, "conv-bulk", &source, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::Fingerprint);
     assert_eq!(*source.writes.lock().unwrap(), 0);
 }
@@ -3092,13 +3220,12 @@ async fn disagreeing_deferred_lines_are_refused() {
 #[tokio::test]
 async fn a_matching_session_is_not_fetched_again() {
     let session = sealed_session(b"session-v1");
-    let (_bundle, place) =
+    let (_bundle, place, audit) =
         deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let path = place.live.join("sessions/conv-bulk.sqlite3");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, &session.bytes).unwrap();
     let source = FakeSource::matching(&session);
-    let audit = MemoryAudit::open();
     mark_available(&audit, &place.live, "conv-bulk");
     let report = open_one(&place, "conv-bulk", &source, &audit).unwrap();
     assert!(report.already_present);
@@ -3110,13 +3237,12 @@ async fn a_matching_session_is_not_fetched_again() {
 async fn a_different_session_file_is_not_replaced() {
     let session = sealed_session(b"session-v1");
     let other = sealed_session(b"other-payload");
-    let (_bundle, place) =
+    let (_bundle, place, audit) =
         deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let path = place.live.join("sessions/conv-bulk.sqlite3");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, &other.bytes).unwrap();
     let source = FakeSource::matching(&session);
-    let audit = MemoryAudit::open();
     mark_available(&audit, &place.live, "conv-bulk");
     let error = open_one(&place, "conv-bulk", &source, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::SessionDiffers);
@@ -3690,10 +3816,7 @@ impl QuarantineLayout for KeepsTree {
     fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
-    fn hold(
-        &self,
-        root: &AnchoredRoot,
-    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
     fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
@@ -3746,7 +3869,7 @@ async fn a_failed_stage_cleanup_still_refuses_acceptance() {
 #[tokio::test]
 async fn a_failed_fetch_fallback_empties_the_session() {
     let session = sealed_session(b"session-v1");
-    let (_bundle, place) =
+    let (_bundle, place, audit) =
         deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let source = FakeSource::matching(&session);
     let error = open_deferred_conversation(
@@ -3756,7 +3879,7 @@ async fn a_failed_fetch_fallback_empties_the_session() {
             conversation_id: "conv-bulk",
         },
         &policy(),
-        &MemoryAudit::fail_after(2),
+        &audit.failing_after(2),
         &KeepsTree,
         &source,
         &OsPublicationIds,
@@ -3834,10 +3957,7 @@ impl QuarantineLayout for KeepsBytes {
     fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
-    fn hold(
-        &self,
-        root: &AnchoredRoot,
-    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
     fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
@@ -3857,7 +3977,7 @@ impl QuarantineLayout for KeepsBytes {
 #[tokio::test]
 async fn a_failed_fetch_that_cannot_be_retired_is_not_served() {
     let session = sealed_session(b"session-v1");
-    let (_bundle, place) =
+    let (_bundle, place, audit) =
         deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let source = FakeSource::matching(&session);
     let error = open_deferred_conversation(
@@ -3867,7 +3987,7 @@ async fn a_failed_fetch_that_cannot_be_retired_is_not_served() {
             conversation_id: "conv-bulk",
         },
         &policy(),
-        &MemoryAudit::fail_after(2),
+        &audit.failing_after(2),
         &KeepsBytes,
         &source,
         &OsPublicationIds,
@@ -3884,7 +4004,7 @@ async fn a_failed_fetch_that_cannot_be_retired_is_not_served() {
             conversation_id: "conv-bulk",
         },
         &policy(),
-        &MemoryAudit::open(),
+        &audit,
         &KeepsBytes,
         &source,
         &OsPublicationIds,
@@ -3901,7 +4021,7 @@ async fn a_failed_fetch_that_cannot_be_retired_is_not_served() {
         .unwrap()
         .expect("the failed fetch still wrote its publication");
     assert_ne!(publication, "pub-earlier");
-    let earlier = MemoryAudit::open();
+    let earlier = audit.checkpoint();
     earlier
         .append(&RestoreEvidence {
             target: &target,
@@ -3912,6 +4032,7 @@ async fn a_failed_fetch_that_cannot_be_retired_is_not_served() {
             decision: "effect",
             policies: &[],
             attestations: "pub-earlier",
+            journal_digest: "",
         })
         .unwrap();
     let later = open_deferred_conversation(
@@ -3996,7 +4117,10 @@ impl QuarantineLayout for ReportsUnsynced {
         loaded: &LoadedTree,
     ) -> Result<Promoted, RestoreFault> {
         DirectoryQuarantine.promote(quarantine, live, loaded)?;
-        Ok(Promoted { durable: false })
+        Ok(Promoted {
+            durable: false,
+            source_retirement_failed: false,
+        })
     }
     fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
         DirectoryQuarantine.remove_tree(path)
@@ -4031,10 +4155,7 @@ impl QuarantineLayout for ReportsUnsynced {
     fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
-    fn hold(
-        &self,
-        root: &AnchoredRoot,
-    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
     fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
@@ -4054,10 +4175,9 @@ impl QuarantineLayout for ReportsUnsynced {
 #[tokio::test]
 async fn an_alias_of_the_live_root_reuses_the_fetched_session() {
     let session = sealed_session(b"session-v1");
-    let (_bundle, place) =
+    let (_bundle, place, audit) =
         deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let mut source = FakeSource::matching(&session);
-    let audit = MemoryAudit::open();
     let first = open_one(&place, "conv-bulk", &source, &audit).unwrap();
     assert!(!first.already_present);
     let sibling = place.live.parent().unwrap().join("other");
@@ -4192,7 +4312,7 @@ async fn an_unaudited_session_is_not_promoted() {
             conversation_id: "conv-bulk",
         },
         &policy(),
-        &MemoryAudit::fail_after(2),
+        &audit.failing_after(2),
         &KeepsBytes,
         &source,
         &OsPublicationIds,
@@ -4276,10 +4396,7 @@ impl QuarantineLayout for ExistsFailsAfterPublish {
     fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
-    fn hold(
-        &self,
-        root: &AnchoredRoot,
-    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
     fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
@@ -4299,7 +4416,7 @@ impl QuarantineLayout for ExistsFailsAfterPublish {
 #[tokio::test]
 async fn a_failed_publish_retires_the_final_name_when_the_temp_is_already_gone() {
     let session = sealed_session(b"session-v1");
-    let (_bundle, place) =
+    let (_bundle, place, audit) =
         deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let source = FakeSource::matching(&session);
     let layout = ExistsFailsAfterPublish {
@@ -4312,7 +4429,7 @@ async fn a_failed_publish_retires_the_final_name_when_the_temp_is_already_gone()
             conversation_id: "conv-bulk",
         },
         &policy(),
-        &MemoryAudit::open(),
+        &audit,
         &layout,
         &source,
         &OsPublicationIds,
@@ -4401,10 +4518,7 @@ impl QuarantineLayout for RetainsFinish {
     fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
         DirectoryQuarantine.anchor(path)
     }
-    fn hold(
-        &self,
-        root: &AnchoredRoot,
-    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
     }
     fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
@@ -4487,4 +4601,431 @@ async fn an_unreadable_session_body_is_not_sealed_when_a_conversation_is_fenced(
     assert_eq!(error, RestoreFault::FencedBody);
     assert!(!place.quarantine.exists());
     assert!(!place.live.exists());
+}
+
+struct SwapsDeferredAfterLoad {
+    replacement: Vec<u8>,
+}
+
+impl QuarantineLayout for SwapsDeferredAfterLoad {
+    fn begin(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
+        DirectoryQuarantine.begin(quarantine, live)
+    }
+
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
+        let loaded = DirectoryQuarantine.load(root)?;
+        fs::write(root.join("deferred.txt"), &self.replacement)
+            .map_err(|_| RestoreFault::Unreadable)?;
+        Ok(loaded)
+    }
+
+    fn promote(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+        loaded: &LoadedTree,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, loaded)
+    }
+
+    fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_tree(path)
+    }
+
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
+        DirectoryQuarantine.read_bytes(path)
+    }
+
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.session_temp(root, relative)
+    }
+
+    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_publication(session)
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_file(path)
+    }
+
+    fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.exists(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.canonicalize(path)
+    }
+
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
+        DirectoryQuarantine.anchor(path)
+    }
+
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root, staging_id)
+    }
+
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.spoil(path)
+    }
+
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        DirectoryQuarantine.session_cut(path, conversation_id)
+    }
+}
+
+#[tokio::test]
+async fn a_deferred_line_changed_after_loading_is_not_fetched() {
+    let original = sealed_session(b"original");
+    let replacement = sealed_session(b"replacement");
+    let bundle = publish(
+        note_bundle_rows(),
+        deferred_rows("conv-bulk", original.size, original.digest),
+        None,
+    )
+    .await;
+    let place = roots();
+    let audit = MemoryAudit::open();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &audit,
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap();
+    accept(&place, &audit, &NoReceipts).unwrap();
+    let mut lines = crate::backup::domain::decode_deferred(
+        &fs::read_to_string(place.live.join("deferred.txt")).unwrap(),
+    )
+    .unwrap();
+    for line in &mut lines {
+        line.size = replacement.size;
+        line.digest = replacement.digest;
+    }
+    let layout = SwapsDeferredAfterLoad {
+        replacement: crate::backup::domain::encode_deferred(&lines)
+            .unwrap()
+            .into_bytes(),
+    };
+    let source = FakeSource::matching(&replacement);
+    let result = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.live,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &audit,
+        &layout,
+        &source,
+        &OsPublicationIds,
+        &mut Quiet,
+    );
+    assert_eq!(result.unwrap_err(), RestoreFault::Tamper);
+    assert_eq!(*source.writes.lock().unwrap(), 0);
+    assert!(!place.live.join("sessions/conv-bulk.sqlite3").exists());
+    assert!(!audit.lines().iter().any(|line| line.after == "available"));
+}
+
+/// Model the adapter's typed report after the live rename and a failed source retirement.
+struct ReportsRetainedSource {
+    durable: bool,
+}
+
+impl QuarantineLayout for ReportsRetainedSource {
+    fn begin(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+    ) -> Result<Box<dyn Staging>, RestoreFault> {
+        DirectoryQuarantine.begin(quarantine, live)
+    }
+    fn load(&self, root: &AnchoredRoot) -> Result<LoadedTree, RestoreFault> {
+        DirectoryQuarantine.load(root)
+    }
+    fn promote(
+        &self,
+        quarantine: &AnchoredRoot,
+        live: &AnchoredRoot,
+        loaded: &LoadedTree,
+    ) -> Result<Promoted, RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live, loaded)?;
+        fs::create_dir(quarantine.path()).unwrap();
+        fs::write(quarantine.join("retained-source"), b"retained").unwrap();
+        Ok(Promoted {
+            durable: self.durable,
+            source_retirement_failed: true,
+        })
+    }
+    fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_tree(path)
+    }
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
+        DirectoryQuarantine.read_bytes(path)
+    }
+    fn session_temp(&self, root: &AnchoredRoot, relative: &str) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.session_temp(root, relative)
+    }
+    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn note_publication(&self, session: &Path, publication: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.note_publication(session, publication)
+    }
+    fn publication(&self, session: &Path) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.publication(session)
+    }
+    fn remove_publication(&self, session: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_publication(session)
+    }
+    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_file(path)
+    }
+    fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.exists(path)
+    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.canonicalize(path)
+    }
+    fn anchor(&self, path: &Path) -> Result<AnchoredRoot, RestoreFault> {
+        DirectoryQuarantine.anchor(path)
+    }
+    fn hold(&self, root: &AnchoredRoot) -> Result<Box<dyn RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+    fn mark_ready(&self, root: &AnchoredRoot, staging_id: &str) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root, staging_id)
+    }
+    fn ready(&self, root: &AnchoredRoot) -> Result<Option<String>, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.spoil(path)
+    }
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        DirectoryQuarantine.session_cut(path, conversation_id)
+    }
+}
+
+#[tokio::test]
+async fn a_retained_source_does_not_make_the_live_rename_unchanged() {
+    for durable in [true, false] {
+        let bundle = publish(note_bundle_rows(), vec![], None).await;
+        let place = roots();
+        let audit = MemoryAudit::open();
+        stage(
+            &bundle,
+            &place.quarantine,
+            &place.live,
+            &audit,
+            person(RestoreAction::Stage),
+            None,
+        )
+        .unwrap();
+        let result = accept_quarantine(
+            &AcceptRequest {
+                facts: person(RestoreAction::Accept),
+                quarantine: &place.quarantine,
+                live: &place.live,
+                receipts: &NoReceipts,
+            },
+            &policy(),
+            &audit,
+            &ReportsRetainedSource { durable },
+        );
+        assert_eq!(result.unwrap_err(), RestoreFault::Retained);
+        assert!(place.live.join("journal.txt").is_file());
+        assert_eq!(
+            fs::read(place.quarantine.join("retained-source")).unwrap(),
+            b"retained"
+        );
+        let lines = audit.lines();
+        let live = lines.iter().find(|line| line.after == "live").unwrap();
+        assert_eq!(live.before, "verified");
+        assert_eq!(
+            live.cause,
+            if durable {
+                "retained"
+            } else {
+                "retained-unsynced"
+            }
+        );
+        assert_eq!(live.decision, "effect");
+        assert_eq!(
+            live.target,
+            DirectoryQuarantine
+                .anchor(&place.live)
+                .unwrap()
+                .display()
+                .to_string()
+        );
+        assert!(lines.iter().any(|line| line.after == "spent"));
+        assert!(!lines
+            .iter()
+            .any(|line| line.before == "unchanged" && line.after == "unchanged"));
+    }
+}
+
+#[test]
+fn a_live_generation_supersedes_an_earlier_staging_at_the_same_path() {
+    let audit = MemoryAudit::open();
+    let digest_a = Fingerprint::of(b"journal-a").hex();
+    let digest_b = Fingerprint::of(b"journal-b").hex();
+    let attestation = crate::backup::domain::seal_attestation(&digest_a, "stage-first");
+    let sealed = RestoreEvidence {
+        target: "/restore",
+        before: "absent",
+        after: "verified",
+        cause: "sealed",
+        initiator: "person",
+        decision: "effect",
+        policies: &[],
+        attestations: &attestation,
+        journal_digest: "",
+    };
+    audit.append(&sealed).unwrap();
+    assert_eq!(
+        audit.sealed("/restore", &digest_a).unwrap().as_deref(),
+        Some("stage-first")
+    );
+    assert!(audit
+        .trusted_journal("/restore", &digest_a, Some("stage-first"))
+        .unwrap());
+    audit
+        .append(&RestoreEvidence {
+            before: "verified",
+            after: "live",
+            cause: "accepted",
+            attestations: "",
+            journal_digest: &digest_b,
+            ..sealed
+        })
+        .unwrap();
+    assert_eq!(audit.sealed("/restore", &digest_a).unwrap(), None);
+    assert!(!audit
+        .trusted_journal("/restore", &digest_a, Some("stage-first"))
+        .unwrap());
+    assert!(audit.trusted_journal("/restore", &digest_b, None).unwrap());
+    audit.append(&sealed).unwrap();
+    assert!(!audit.trusted_journal("/restore", &digest_b, None).unwrap());
+    assert!(audit
+        .trusted_journal("/restore", &digest_a, Some("stage-first"))
+        .unwrap());
+    audit
+        .append(&RestoreEvidence {
+            before: "verified",
+            after: "unready",
+            cause: "unreadable",
+            attestations: "stage-first",
+            ..sealed
+        })
+        .unwrap();
+    assert_eq!(audit.sealed("/restore", &digest_a).unwrap(), None);
+    assert!(!audit
+        .trusted_journal("/restore", &digest_a, Some("stage-first"))
+        .unwrap());
+    assert!(!audit.trusted_journal("/restore", &digest_b, None).unwrap());
+}
+
+#[tokio::test]
+async fn a_missing_or_unavailable_journal_audit_does_not_fetch() {
+    let session = sealed_session(b"session-v1");
+    let (_bundle, place, mut audit) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+    let source = FakeSource::matching(&session);
+    assert_eq!(
+        open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err(),
+        RestoreFault::Tamper,
+    );
+    audit.trust_unavailable = true;
+    assert_eq!(
+        open_one(&place, "conv-bulk", &source, &audit).unwrap_err(),
+        RestoreFault::Audit,
+    );
+    assert_eq!(*source.writes.lock().unwrap(), 0);
+    assert!(!place.live.join("sessions/conv-bulk.sqlite3").exists());
+    audit.trust_unavailable = false;
+    assert!(
+        !open_one(&place, "conv-bulk", &source, &audit)
+            .unwrap()
+            .already_present
+    );
+    assert_eq!(*source.writes.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn a_failed_stage_without_readiness_does_not_fetch() {
+    let session = sealed_session(b"session-v1");
+    let bundle = publish(
+        note_bundle_rows(),
+        deferred_rows("conv-bulk", session.size, session.digest),
+        None,
+    )
+    .await;
+    let place = roots();
+    let audit = MemoryAudit::fail_after(2);
+    let source = DirectoryVerificationSource::open(bundle.root.clone()).unwrap();
+    assert_eq!(
+        stage_quarantine(
+            &StageRequest {
+                facts: person(RestoreAction::Stage),
+                bundle: &source,
+                format: &ExportFormat,
+                verifier: &bundle.key,
+                limits: VerificationLimits::default(),
+                later_inventory: None,
+                quarantine: &place.quarantine,
+                live: &place.live,
+            },
+            &policy(),
+            &audit,
+            &SpendMissed { keep_marker: false },
+            &DirectoryMaterializer,
+            &KeyedInventory::new(bundle.key),
+            &OsStagingIds,
+        )
+        .unwrap_err(),
+        RestoreFault::Audit
+    );
+    assert!(place.quarantine.join("journal.txt").is_file());
+    assert!(!place.quarantine.join("accept-ready").exists());
+    let source = FakeSource::matching(&session);
+    let result = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.quarantine,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &audit.checkpoint(),
+        &DirectoryQuarantine,
+        &source,
+        &OsPublicationIds,
+        &mut Quiet,
+    );
+    assert_eq!(result.unwrap_err(), RestoreFault::Tamper);
+    assert_eq!(*source.writes.lock().unwrap(), 0);
+    assert!(!place.quarantine.join("sessions/conv-bulk.sqlite3").exists());
 }

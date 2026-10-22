@@ -284,6 +284,9 @@ pub struct RestoreEvidence<'a> {
     /// the staging id. A later effect that names that id spends it. Empty for
     /// every other transition.
     pub attestations: &'a str,
+    /// Journal bytes authorized by a completed live rename.
+    /// Empty on records that do not establish a root's journal authority.
+    pub journal_digest: &'a str,
 }
 
 /// Persist one restore transition. Failure means the effect must not be
@@ -311,9 +314,20 @@ pub trait RestoreAudit: Send + Sync {
     /// the id spends it. An older seal does not stay current. The readiness
     /// marker is not this evidence.
     fn sealed(&self, target: &str, digest: &str) -> Result<Option<String>, DecisionAuditError>;
+
+    /// Whether this root's latest generation authorizes these journal bytes.
+    /// A staged generation also requires its current readiness marker. A live
+    /// generation is bound to the digest stored after its rename.
+    fn trusted_journal(
+        &self,
+        target: &str,
+        digest: &str,
+        staging_id: Option<&str>,
+    ) -> Result<bool, DecisionAuditError>;
 }
 
 /// One audit line reduced to the fields a seal lookup reads.
+#[derive(Clone, Copy)]
 pub struct SealFields<'a> {
     pub target: &'a str,
     pub before: &'a str,
@@ -323,54 +337,83 @@ pub struct SealFields<'a> {
     pub attestations: &'a str,
 }
 
+/// Fields used to identify the latest authorized journal at one root.
+pub struct JournalFields<'a> {
+    pub seal: SealFields<'a>,
+    pub journal_digest: &'a str,
+}
+
 /// The latest unspent staging id for this journal digest at `target`.
 pub fn current_staging_id<'a>(
     lines: impl IntoIterator<Item = SealFields<'a>>,
     target: &str,
     digest: &str,
 ) -> Option<String> {
-    let mut latest: Option<(String, bool)> = None;
-    for line in lines {
-        if line.target != target {
-            continue;
-        }
-        if line.before == "absent"
-            && line.after == "verified"
-            && line.cause == "sealed"
-            && line.decision == "effect"
-        {
-            latest = crate::backup::domain::seal_staging_id(line.attestations, digest)
-                .map(|id| (id, false));
-            continue;
-        }
-        if line.decision == "effect" {
-            if let Some((id, spent)) = &mut latest {
-                if crate::backup::domain::attestation_mentions(line.attestations, id) {
-                    *spent = true;
-                }
-            }
-        }
-    }
-    match latest {
-        Some((id, false)) => Some(id),
-        _ => None,
+    match current_root_authority(
+        lines.into_iter().map(|seal| JournalFields {
+            seal,
+            journal_digest: "",
+        }),
+        target,
+        digest,
+    ) {
+        RootAuthority::Staged(id) => Some(id),
+        RootAuthority::Untrusted | RootAuthority::Live(_) => None,
     }
 }
 
-/// The sealed effect names this journal digest and a staging id.
-pub fn effect_names_seal(
-    before: &str,
-    after: &str,
-    cause: &str,
-    decision: &str,
-    attestations: &str,
+/// A newer stage or live rename supersedes the previous root generation.
+/// Only a current staged generation additionally requires its readiness id.
+pub fn current_journal_is_trusted<'a>(
+    lines: impl IntoIterator<Item = JournalFields<'a>>,
+    target: &str,
     digest: &str,
+    staging_id: Option<&str>,
 ) -> bool {
-    before == "absent"
-        && after == "verified"
-        && cause == "sealed"
-        && decision == "effect"
-        && crate::backup::domain::seal_staging_id(attestations, digest).is_some()
+    match current_root_authority(lines, target, digest) {
+        RootAuthority::Staged(id) => Some(id.as_str()) == staging_id,
+        RootAuthority::Live(authorized_digest) => authorized_digest == digest,
+        RootAuthority::Untrusted => false,
+    }
+}
+
+enum RootAuthority<'a> {
+    Untrusted,
+    Staged(String),
+    Live(&'a str),
+}
+
+/// Both acceptance and fetching consume this one fold of root generations.
+fn current_root_authority<'a>(
+    lines: impl IntoIterator<Item = JournalFields<'a>>,
+    target: &str,
+    digest: &str,
+) -> RootAuthority<'a> {
+    let mut authority = RootAuthority::Untrusted;
+    for line in lines {
+        let fields = line.seal;
+        if fields.target != target || fields.decision != "effect" {
+            continue;
+        }
+        if fields.before == "absent" && fields.after == "verified" && fields.cause == "sealed" {
+            authority = crate::backup::domain::seal_staging_id(fields.attestations, digest)
+                .map(RootAuthority::Staged)
+                .unwrap_or(RootAuthority::Untrusted);
+        } else if fields.before == "verified"
+            && fields.after == "live"
+            && matches!(
+                fields.cause,
+                "accepted" | "unsynced" | "retained" | "retained-unsynced"
+            )
+        {
+            authority = RootAuthority::Live(line.journal_digest);
+        } else if let RootAuthority::Staged(id) = &authority {
+            if crate::backup::domain::attestation_mentions(fields.attestations, id) {
+                authority = RootAuthority::Untrusted;
+            }
+        }
+    }
+    authority
 }
 
 /// Names the publication written beside one fetched session.
@@ -412,7 +455,7 @@ pub enum SessionSourceError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SessionCut {
     pub size: u64,
-    pub digest: crate::backup::domain::Fingerprint,
+    pub digest: Fingerprint,
 }
 
 /// The store that can still serve a deferred conversation's exact stream.

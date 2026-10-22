@@ -78,10 +78,16 @@ supplies the id.
 | Rename not done | The quarantine, when it still exists. The live path is unchanged | `unchanged → unchanged` | The error |
 | Rename done, the staging id recorded spent, then the live line stored | The live path. That staging id is spent | `verified → spent`, cause `spent`, then `verified → live` | Live |
 | Rename done, a parent sync failed, and the id was spent | The live path | `verified → live`, cause `unsynced` | Live |
+| Rename done, then source retirement failed | The live path holds the checked copy; the source may remain acceptable until its id is spent | Spend the staging id, then `verified → live`, cause `retained` | Retained. The live rename is preserved and both parent syncs are attempted |
 | Rename done, the spend line not stored | The live path. The id may still be unspent | The spend line is missing | Audit. The tree stays live |
 | Rename done, live audit not stored | The live path. The id is spent | The live line is missing | Audit failure. The tree stays live |
 | Fetch publish not done | No session file | The refusal, or the match line only | The error |
 | File and publication stored, and the available line names that publication | That publication | `held → available`. Attestations are the publication. Target is the anchored root and the conversation | The session |
+| A newer stage or completed live rename reuses an earlier root path | One audit-generation fold owns both accept and fetch. A new generation replaces the previous authority; spending it leaves no fallback to an older generation | The old staging id and journal digest are refused | Tamper |
+| Journal and deferred metadata are rewritten together before open | The bytes no longer name the journal recorded by stage or acceptance | Refused before reading the session source | Tamper |
+| Deferred metadata changes after the layout hashes the tree | The second read must still match the journal's deferred-file fingerprint | Refused before reading the session source | Tamper |
+| Open on a staged root whose readiness was retired | No current ready staging id, even if its sealed audit remains | Refused before reading the session source | Tamper |
+| Live rename completed but source retirement failed | The live directory owns the validated copy; source retirement remains uncertain | The staging id is spent, then `verified → live`, cause `retained` (or `retained-unsynced` when a parent sync also failed), with the journal digest and lease receipts | Retained; no unchanged refusal |
 | Available line not stored, and the file was removed or emptied | No readable publication | The available line is absent | Audit |
 | Available line not stored, and the file is still readable | The file. Not a publication the audit named | No available line for this publication | Retained. A later open does not serve it |
 | Open through another spelling of the same root | The publication already stored for that anchored root | The same target as the first open | Already present |
@@ -114,7 +120,8 @@ supplies the id.
 | The ancestor is renamed and a symlink takes its name after the root is anchored | The held ancestor. The symlink's target is not created | The symlink target is unchanged | The lock and the partial directory are created under the held ancestor |
 | A writer still holds the temp session and writes after the matching bytes were copied | The new session file. The temp inode is not that file | `held → available` names the copied bytes | The published file is those bytes. A different byte is not published |
 | A writer opens the predictable verified name after the stream matches | That name is not a file. The session name is the inode that was checked | `held → available` names that inode | The published file is those bytes |
-| A writer opens a file under the predictable sealed directory after the seal check | Those bytes have no name until they are linked for the rename. The live file is that inode | The live path, when the rename finishes | The live file is the sealed bytes |
+| A writer tries to open a file under the predictable sealed directory before its link | Those bytes have no name until they are linked for the rename | No live effect yet | The pre-link open cannot acquire that inode. After the link, same-account mutation before the directory rename remains an open implementation finding (see the implementation review) |
+| Sealed files are linked into their nested directories | The new sealed tree, before its live rename | No live effect yet | Each directory is synced after its file names exist; a sync failure removes the copy and refuses promotion |
 | The quarantine directory is renamed aside and the original path is gone | The directory the open handle names, removed, including its readiness marker | `verified → spent` when that retirement succeeds | The missing original path is not success |
 | mountinfo encodes a space in the mount point | That mount's filesystem, after the octal escape is decoded | One lock order for the two spellings | The case rule of that filesystem, not of `/` |
 | Two restores whose roots differ only by case on a folding volume | One lock order, from the folded identity | Each waits for the same first lock | Neither deadlocks on the other spelling |
@@ -165,6 +172,12 @@ supplies the id.
   `a_replaced_sealed_directory_is_not_published`,
   `the_sealed_copy_is_created_beside_live`,
   `a_held_file_is_not_a_directory_entry_until_publication`
+- The sealed tree's file names are linked before its directories are synced.
+  The recursive sync includes the nested directories that own those names;
+  syncing an empty directory before the links does not persist them. A failed
+  sync refuses promotion before the live rename.
+  `sealed_names_are_linked_before_the_tree_is_synced`,
+  `a_linked_tree_sync_failure_refuses_publication`
 - Cleanup deletes the directory the open handle names. A directory renamed
   aside is the one removed. A replacement at the old path stays.
   `a_renamed_directory_is_removed_by_its_handle`

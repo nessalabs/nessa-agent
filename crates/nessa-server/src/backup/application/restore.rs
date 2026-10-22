@@ -99,6 +99,9 @@ impl AsRef<Path> for AnchoredRoot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Promoted {
     pub durable: bool,
+    /// The source could neither be removed nor confirmed unready. False also
+    /// covers a source whose bytes remain after its marker was retired.
+    pub source_retirement_failed: bool,
 }
 
 /// Filesystem effects of a quarantine. Tests substitute a layout that fails.
@@ -356,6 +359,7 @@ pub fn stage_quarantine(
         target: &label,
         initiator: kind,
         policies: &policies,
+        journal_digest: "",
     };
     if let Err(error) = roots_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
@@ -530,6 +534,7 @@ pub fn accept_quarantine(
         target: &label,
         initiator: kind,
         policies: &policies,
+        journal_digest: "",
     };
     if let Err(error) = roots_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
@@ -552,7 +557,7 @@ pub fn accept_quarantine(
         Ok(None) => return Err(recorded.stop(RestoreFault::Tamper)),
         Err(_) => return Err(RestoreFault::Audit),
     };
-    let deferred = match deferred_lines(layout, &quarantine) {
+    let deferred = match deferred_lines(layout, &quarantine, &journal) {
         Ok(lines) => lines,
         Err(error) => return Err(recorded.stop(error)),
     };
@@ -596,17 +601,25 @@ pub fn accept_quarantine(
     {
         return Err(RestoreFault::Audit);
     }
-    let cause = if promoted.durable {
+    let cause = if promoted.source_retirement_failed && !promoted.durable {
+        "retained-unsynced"
+    } else if promoted.source_retirement_failed {
+        "retained"
+    } else if promoted.durable {
         "accepted"
     } else {
         "unsynced"
     };
     if recorded
         .at(&live_label)
+        .with_journal(&digest)
         .record("verified", "live", cause, "effect", &attestations)
         .is_err()
     {
         return Err(RestoreFault::Audit);
+    }
+    if promoted.source_retirement_failed {
+        return Err(RestoreFault::Retained);
     }
     Ok(AcceptReport {
         leases: journal.leases,
@@ -652,6 +665,7 @@ pub fn open_deferred_conversation(
         target: &label,
         initiator: kind,
         policies: &policies,
+        journal_digest: "",
     };
     let _hold = match layout.hold(&root) {
         Ok(hold) => hold,
@@ -665,7 +679,17 @@ pub fn open_deferred_conversation(
         Ok(journal) => journal,
         Err(_) => return Err(recorded.stop(RestoreFault::Tamper)),
     };
-    let lines = match deferred_lines(layout, &root) {
+    let digest = Fingerprint::of(loaded.journal.as_bytes()).hex();
+    let ready = match layout.ready(&root) {
+        Ok(ready) => ready,
+        Err(error) => return Err(recorded.stop(error)),
+    };
+    match audit.trusted_journal(&root_label, &digest, ready.as_deref()) {
+        Ok(true) => {}
+        Ok(false) => return Err(recorded.stop(RestoreFault::Tamper)),
+        Err(_) => return Err(RestoreFault::Audit),
+    }
+    let lines = match deferred_lines(layout, &root, &journal) {
         Ok(lines) => lines,
         Err(error) => return Err(recorded.stop(error)),
     };
@@ -846,8 +870,17 @@ fn seal_matches(
 fn deferred_lines(
     layout: &dyn QuarantineLayout,
     root: &AnchoredRoot,
+    journal: &Journal,
 ) -> Result<Vec<DeferredLine>, RestoreFault> {
     let bytes = layout.read_relative(root, "deferred.txt")?;
+    let expected = journal
+        .files
+        .iter()
+        .find(|file| file.path == "deferred.txt")
+        .ok_or(RestoreFault::Tamper)?;
+    if Fingerprint::of(&bytes) != expected.fingerprint {
+        return Err(RestoreFault::Tamper);
+    }
     let text = std::str::from_utf8(&bytes).map_err(|_| RestoreFault::Tamper)?;
     decode_deferred(text)
 }
@@ -1057,6 +1090,7 @@ fn resolve_root(
                 target: &label,
                 initiator: facts.kind,
                 policies: &policies,
+                journal_digest: "",
             }
             .stop(error))
         }
@@ -1169,6 +1203,7 @@ fn decide(
         target,
         initiator: facts.kind,
         policies: &policies,
+        journal_digest: "",
     }
     .write(before, after, "decision", name)?;
     if denied {
@@ -1190,9 +1225,16 @@ struct Recorded<'a> {
     target: &'a str,
     initiator: &'a str,
     policies: &'a [String],
+    journal_digest: &'a str,
 }
 
 impl Recorded<'_> {
+    fn with_journal<'a>(&'a self, journal_digest: &'a str) -> Recorded<'a> {
+        Recorded {
+            journal_digest,
+            ..*self
+        }
+    }
     fn at<'a>(&'a self, target: &'a str) -> Recorded<'a> {
         Recorded { target, ..*self }
     }
@@ -1235,6 +1277,7 @@ impl Recorded<'_> {
                 decision,
                 policies: self.policies,
                 attestations,
+                journal_digest: self.journal_digest,
             })
             .map_err(|_| RestoreFault::Audit)
     }
