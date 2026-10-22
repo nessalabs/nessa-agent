@@ -2038,7 +2038,7 @@ row.
   _Check:_ `hover`. Away from the row its time shows and no button does;
   under it the two show at 26 px and the time does not.
 - [ ] **More holds what the row can do, less the ways to open it; Rename
-  edits the title where it stood.** _Check:_ `more`. Rename, Pin to Sidebar,
+  edits the title where it stood.** _Check:_ `more`. Rename, Pin to Sidebar, Fork,
   (Share…,) Archive, Delete…; the row keeps its buttons while the menu is
   open; the field takes focus and ↩ keeps "Rain plan".
 - [ ] **Delete asks first.** _Check:_ `delete`. Cancel deletes nothing, and

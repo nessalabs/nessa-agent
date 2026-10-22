@@ -6,6 +6,7 @@
  * uncovers Archive and Delete as Mail's rows do, while a mouse drag stays the
  * drag to a pane and a right-click stays the row's menu.
  */
+import { sessionRowMenuMatches } from "./lib/session-row-menu.mjs"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 import { openPage, need, withEngines } from "./lib/browser.mjs"
@@ -22,7 +23,7 @@ await main(
 Checks, per engine:
   hover     away from a row its time shows and its buttons do not; under the
             pointer Archive and More take the time's place, 26 px each
-  more      More lists Rename, Pin, Archive and Delete…, and the row keeps its
+  more      More lists Rename, Pin, Fork, Archive and Delete…, and the row keeps its
             buttons while it is open; Rename edits the title in place and ↩
             keeps it
   delete    Delete… asks first; Cancel deletes nothing and the menu opens
@@ -71,9 +72,7 @@ Checks, per engine:
         const failures = []
         await openMore(page, row)
         const words = await page.locator(css.menuItem).allInnerTexts()
-        // Share… is there for a session the window may share.
-        const asked = words.filter((word) => word !== "Share…").join("|")
-        if (asked !== "Rename|Pin to Sidebar|Archive|Delete…")
+        if (!sessionRowMenuMatches(words))
           failures.push(`the menu read ${JSON.stringify(words)}`)
         if ((await row.getAttribute("data-actions")) !== "true")
           failures.push("the row let its buttons go while its menu was open")
