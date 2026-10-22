@@ -4098,6 +4098,70 @@ async fn a_detached_scheduled_command_keeps_its_submission_permit() {
 }
 
 #[tokio::test]
+async fn a_retained_schedule_intent_does_not_relabel_a_distinct_person_command() {
+    let directory = tempfile::tempdir().unwrap();
+    let (service, schedule, commands, _clock, row) =
+        disabled_recovery_fixture(directory.path(), "test").await;
+    let id = ConversationId::new(&row.conversation).unwrap();
+    service
+        .create(
+            id.clone(),
+            caller_as("create-distinct-person"),
+            RequestedConversation {
+                model: Some(row.model.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(schedule
+        .command_evidence(&row.conversation, &row.execution_id)
+        .await
+        .unwrap()
+        .is_some());
+    // The schedule crossed its original begin_submit but its process died
+    // before SDK admission. This is a different real person action, not an
+    // exact retry of the automatic command's original request identity.
+    let person = caller_as("distinct-person-request");
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        service.submit_command(
+            commands.clone(),
+            id.clone(),
+            person.clone(),
+            Initiation::owner(),
+            false,
+            row.execution_id.clone(),
+            SubmittedMessage {
+                text: row.prompt.clone(),
+                ..Default::default()
+            },
+            SubmissionMode::Queue,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let committed = commands
+        .read_committed(super::super::conversation_session(&id))
+        .await
+        .unwrap()
+        .unwrap();
+    let history = committed.snapshot().unwrap().invocations.clone();
+    let people = service.person_turns(&id, &person, &history).await.unwrap();
+    service.shutdown().await.unwrap();
+    drop(service);
+    commands.shutdown().await.unwrap();
+    assert_eq!(
+        people
+            .iter()
+            .map(|(_, execution)| execution.as_str())
+            .collect::<Vec<_>>(),
+        [row.execution_id.as_str()]
+    );
+}
+
+#[tokio::test]
 async fn an_admitted_scheduled_continuation_is_not_an_explicit_person_turn() {
     let directory = tempfile::tempdir().unwrap();
     // Real SQLite schedule accept -> claim_due -> begin_submit -> close/reopen;
