@@ -73,6 +73,8 @@ export const marks = {
 /** The module's own elements a host may style or find. */
 export const classes = {
   grid: "split-panes-grid",
+  /** The edge between two panes, which resizes them; `data-axis` says which way it runs. */
+  paneEdge: "split-panes-pane-edge",
   /** The carried copy; the host styles its own content inside it. */
   ghost: "split-panes-ghost",
   /** The layer everything carried is drawn in. */
