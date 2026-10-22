@@ -37,6 +37,7 @@ it.each(["split beside", "close stacked pane"] as const)(
     const workspace = document.createElement("div")
     workspace.className = "workspace"
     workspace.dataset.sidebar = action === "split beside" ? "open" : "closed"
+    workspace.dataset.sidebarRow = workspace.dataset.sidebar
     workspace.dataset.list = "open"
     workspace.innerHTML =
       '<section class="workspace-list"><div class="workspace-list-inner"><div class="desktop-column-bar"><svg></svg><h2>desktop-app</h2></div></div></section><div class="hold-owner"></div>'
@@ -71,6 +72,7 @@ it.each(["split beside", "close stacked pane"] as const)(
         if (action === "split beside") {
           workspace.toggleAttribute("data-spare-held", frame < 3)
           if (frame === 2) workspace.dataset.sidebar = "closed"
+          if (frame === 3) workspace.dataset.sidebarRow = "closed"
         }
         await act(async () => frames.runFrame())
         expect(workspace.hasAttribute("data-list-held")).toBe(true)

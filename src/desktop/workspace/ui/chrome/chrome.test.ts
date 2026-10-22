@@ -18,6 +18,7 @@ beforeEach(() => {
   workspace = document.createElement("main")
   workspace.className = "workspace"
   workspace.dataset.sidebar = "open"
+  workspace.dataset.sidebarRow = "open"
   workspace.innerHTML = `<aside class="workspace-sidebar"><div class="desktop-column-bar"><span class="desktop-column-action"><button class="desktop-icon-button" aria-label="New Session"><svg></svg></button></span></div></aside>`
   document.body.append(workspace)
   sidebar = workspace.querySelector("aside")!

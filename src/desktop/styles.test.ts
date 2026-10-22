@@ -122,7 +122,7 @@ it("starts an inline column title after the window's controls wherever they stan
       read("./workspace/ui/session-list/session-list.css"),
       // The header takes its safe inset once the sidebar leaves the row,
       // even while the list body's measurement is still held.
-      `.workspace[data-sidebar="closed"]:not([data-spare-held])
+      `.workspace[data-sidebar="closed"]:not([data-spare-held][data-sidebar-row="open"])
   .workspace-list
   .desktop-column-bar {`,
     ],
