@@ -130,6 +130,45 @@ fn a_cycle_gives_back_the_turn_as_it_clears_itself() {
     assert_eq!(busy, 0, "the turn was found taken with no cycle to stop");
 }
 
+/// Test history must not make a later cycle look like the first after a
+/// normal turn removal, whether or not that first cycle was explicitly stopped.
+#[test]
+fn first_cycle_evidence_outlives_removed_turns_and_replacements() {
+    let directory = tempfile::tempdir().unwrap();
+    let commands = commands(&directory.path().join("root"));
+    for stopped in [false, true] {
+        let key = DeviceKey::new([if stopped { 2 } else { 1 }; 32]);
+        assert!(commands.first_read_stop(&key).is_none());
+        let first = CycleStop::new();
+        let turn = commands.try_cycle_turn(key, &first).unwrap();
+        let rejected = CycleStop::new();
+        assert!(commands.try_cycle_turn(key, &rejected).is_none());
+        assert!(Arc::ptr_eq(
+            &commands.first_read_stop(&key).unwrap(),
+            first.read()
+        ));
+        if stopped {
+            first.stop();
+        }
+        drop(turn);
+        assert_eq!(peer_turns(&commands), 0, "test history retained a turn");
+        assert!(commands.active_read_stop(&key).is_none());
+        let replacement = CycleStop::new();
+        let turn = commands.try_cycle_turn(key, &replacement).unwrap();
+        let saved = commands.first_read_stop(&key).unwrap();
+        assert!(Arc::ptr_eq(&saved, first.read()));
+        assert_eq!(saved.is_stopped(), stopped);
+        assert!(Arc::ptr_eq(
+            &commands.active_read_stop(&key).unwrap(),
+            replacement.read()
+        ));
+        assert!(!Arc::ptr_eq(&saved, replacement.read()));
+        assert!(commands.first_read_stop(&DeviceKey::new([3; 32])).is_none());
+        drop(turn);
+        assert_eq!(peer_turns(&commands), 0);
+    }
+}
+
 /// Two peers' turns are independent, and the record set is a third: a cycle
 /// of one peer does not take the other's turn or the record set.
 #[test]

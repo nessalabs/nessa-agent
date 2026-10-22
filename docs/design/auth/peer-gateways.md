@@ -1571,20 +1571,30 @@ original stop assertions are unchanged.
 
 The R29b fixture prepares both peers through the real enrollment, approval and
 sharing commands before starting the poller. Both record sources are held at the
-existing post-authentication source gate. Once both gates have been entered, it
-captures C's actual `ReadStop` identity and verifies that A has not completed its
+existing post-authentication source gate. Once C's gate has been entered, it
+captures C's retained first `ReadStop` identity and verifies that A has not completed its
 first sync. Only then is A's source released. A must complete its first sync
 before the final observer begins; C must still own the same unstopped cycle,
 with no additional relay connection. R29 retains enrollment while another peer's
 silent handshake is held; R29b isolates first-sync completion and observation.
 
-The source-entry and A-completion phases share one absolute deadline starting
-before the poller. Its budget is derived from the published server passive-read
-deadline, minus the unchanged short observation window and the existing prompt
-margin. The test asserts the total stays strictly below the server, client and
-poller read budgets. The client request floor includes delivery allowance and
-is not the server source deadline. Production clocks, deadlines, read policy,
-A's completion/timestamp checks and the final observation window are unchanged.
+C's authenticated source entry has the existing bounded `WAIT` bootstrap,
+including poller startup. The unchanged critical budget starts after that
+entry; A's entry and completion share this one absolute deadline. The budget
+is derived from the published server passive-read deadline minus the unchanged
+observation window and prompt margin. This arithmetic is not a promise of a
+fresh server or source-work deadline at entry: those clocks start earlier.
+The final live-cycle and A-result assertions enforce the actual overlap.
+Production clocks, deadlines, read policy and the observation window stay fixed.
+
+The fixture retains C's first registered cycle in a test-only history under
+`PeerTurns`' existing lock, independently of removable turns. At admission and
+final observation the retained first token must equal the active token and
+remain unstopped. A stored source-entry notification cannot certify a newer
+cycle after the first ended, whether it stopped explicitly or cleared normally.
+The commands controls also check failed acquisition, key isolation and normal
+turn removal. A six-second pre-poller-delay control demonstrates why startup is
+outside the critical overlap; it does not identify the historical Windows cause.
 
 Before cleanup, the fixture saves both A completion/observation results and C's
 absent/same/replaced cycle identity, captured stop flag, sync state, connection
@@ -1597,7 +1607,11 @@ control cannot pass by masking an unrelated A failure.
 | R29b fixture ordering | Expected evidence |
 | --- | --- |
 | Real enrollment, approvals and grants complete | Prepare both held record sources before the timed poller phase |
-| Both authenticated source gates entered | A has not synced; capture the active C cycle |
+| C authenticated source entered within bounded bootstrap | Capture retained first C token; reject absent, stopped or replaced first cycle |
+| A source entry and completion within one unchanged critical budget | A has not synced before release; no new allowance after A entry |
+| Startup delayed before any poller exists | Critical overlap still has its own budget; production clocks are unchanged |
+| Stored source notification after first C cycle ended | Reject even if another current cycle is live; history survives turn removal |
+| Source admission times out | Keep per-gate phase evidence, release both gates and join physical work before asserting |
 | Release A while C remains held | A completes its first sync before final observation begins |
 | Final observation | A's saved Synced timestamp, same unstopped C cycle and no extra C connection |
 | C ended before A release | A must still complete; reject C's concurrency proof |

@@ -1838,24 +1838,71 @@ impl TwoPeers {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_first_sync_completed_before_observation_is_not_lost() {
-    first_sync_before_observation(false, true).await;
+    first_sync_before_observation(false, true, FirstSyncStart::Ready).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[should_panic(expected = "C's captured read remained active while A completed")]
 async fn an_ended_peer_read_cannot_prove_concurrent_first_sync() {
-    first_sync_before_observation(true, true).await;
+    first_sync_before_observation(true, true, FirstSyncStart::Ready).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[should_panic(expected = "A's first sync did not complete before observation")]
 async fn an_unfinished_a_cannot_be_hidden_by_an_ended_c() {
-    first_sync_before_observation(true, false).await;
+    first_sync_before_observation(true, false, FirstSyncStart::Ready).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn startup_before_cs_source_does_not_spend_the_overlap_budget() {
+    first_sync_before_observation(false, true, FirstSyncStart::DelayedPoller).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[should_panic(expected = "C source admission failed")]
+async fn expired_source_admission_releases_and_joins_the_held_sources() {
+    first_sync_before_observation(false, true, FirstSyncStart::ExpiredAdmission).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[should_panic(expected = "C source admission failed")]
+async fn an_old_source_notification_cannot_certify_a_replacement_cycle() {
+    first_sync_before_observation(false, true, FirstSyncStart::ReplacedC).await;
+}
+
+enum FirstSyncStart {
+    Ready,
+    DelayedPoller,
+    ExpiredAdmission,
+    ReplacedC,
+}
+
+/// Release held source workers before joining their owners, on every phase outcome.
+async fn finish_first_sync(mut peers: TwoPeers, poller: PeerPoller) -> (bool, String) {
+    peers.a.record_hold.as_ref().unwrap().release();
+    peers.c.record_hold.as_ref().unwrap().release();
+    let poller = tokio::time::timeout(WAIT, poller.join()).await;
+    let mut a = peers.a.running.take().unwrap();
+    let mut c = peers.c.running.take().unwrap();
+    a.signal_stop();
+    c.signal_stop();
+    let (a, c) = tokio::join!(
+        tokio::time::timeout(WAIT, a.join()),
+        tokio::time::timeout(WAIT, c.join()),
+    );
+    (
+        poller.is_ok() && matches!(a, Ok(Ok(()))) && matches!(c, Ok(Ok(()))),
+        format!("cleanup poller={poller:?} A={a:?} C={c:?}"),
+    )
 }
 
 /// Prepare enrollment outside C's server source deadline, then force A's
 /// first completion to happen beside C's actual live read, before observation.
-async fn first_sync_before_observation(end_c_before_observation: bool, release_a: bool) {
+async fn first_sync_before_observation(
+    end_c_before_observation: bool,
+    release_a: bool,
+    start: FirstSyncStart,
+) {
     let directory = tempfile::tempdir().unwrap();
     let mut peers = TwoPeers::start_with_held_records(directory.path(), true).await;
     let hold_a = peers.a.record_hold.as_ref().unwrap().clone();
@@ -1886,25 +1933,106 @@ async fn first_sync_before_observation(end_c_before_observation: bool, release_a
         Duration::from_millis(nessa_protocol::product::generated::PASSIVE_MIN_REQUEST_TIMEOUT_MS);
     let critical = source.checked_sub(observation + PROMPT).unwrap().min(WAIT);
     assert!(critical + observation < source.min(request).min(policy.read_budget));
+    let (startup, bootstrap) = match start {
+        FirstSyncStart::DelayedPoller => (HANDSHAKE + Duration::from_secs(1), WAIT),
+        FirstSyncStart::ExpiredAdmission => (Duration::from_millis(1), Duration::ZERO),
+        FirstSyncStart::Ready | FirstSyncStart::ReplacedC => (Duration::ZERO, WAIT),
+    };
     let started = tokio::time::Instant::now();
-    let deadline = started + critical;
+    let bootstrap_deadline = started + bootstrap;
+    // Test-only startup control: no production read clock exists yet.
+    tokio::time::sleep(startup).await;
+    let before = (peers.relay_a.accepted(), peers.relay_c.accepted());
     let poller = peers.b.poller(policy);
-    tokio::time::timeout_at(deadline, async {
-        tokio::join!(hold_a.entered(), hold_c.entered());
-    })
-    .await
-    .expect("both authenticated record reads reached their sources");
+    let mut a_entered = None;
+    let mut a_entry = Box::pin(async {
+        hold_a.entered().await;
+        started.elapsed()
+    });
+    let mut c_entry = Box::pin(hold_c.entered());
+    let c_entered = if tokio::time::Instant::now() >= bootstrap_deadline {
+        None
+    } else {
+        tokio::time::timeout_at(bootstrap_deadline, async {
+            loop {
+                tokio::select! {
+                    at = &mut a_entry, if a_entered.is_none() => a_entered = Some(at),
+                    _ = &mut c_entry => return started.elapsed(),
+                }
+            }
+        })
+        .await
+        .ok()
+    };
+    // Consume the old source event, end its cycle, and wait for another
+    // active token. This deliberately supplies the stale-notification case.
+    let replacement_ready = if matches!(start, FirstSyncStart::ReplacedC) {
+        if let Some(first) = peers.b.peers.first_read_stop(&key_c) {
+            first.stop();
+            tokio::time::timeout_at(bootstrap_deadline, async {
+                loop {
+                    if peers
+                        .b
+                        .peers
+                        .active_read_stop(&key_c)
+                        .is_some_and(|active| !Arc::ptr_eq(&first, &active) && !active.is_stopped())
+                    {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .is_ok()
+        } else {
+            false
+        }
+    } else {
+        true
+    };
+    // A stored gate notification is not a cycle identity. Retain the first
+    // registered C token even if a later cycle has replaced its removed turn.
+    let first = peers.b.peers.first_read_stop(&key_c);
+    let active = peers.b.peers.active_read_stop(&key_c);
+    let admitted = c_entered.is_some()
+        && first.as_ref().is_some_and(|first| {
+            !first.is_stopped()
+                && active
+                    .as_ref()
+                    .is_some_and(|active| Arc::ptr_eq(first, active))
+        });
+    let critical_started = tokio::time::Instant::now();
+    let deadline = critical_started + critical;
+    if admitted && a_entered.is_none() {
+        a_entered = tokio::time::timeout_at(deadline, &mut a_entry).await.ok();
+    }
+    if !admitted || a_entered.is_none() {
+        let evidence = format!(
+            "entry_observed A={a_entered:?} C={c_entered:?}; first_C={:?} active_C={:?} stopped={:?}; \
+             sync A={:?} C={:?}; connections={before:?}->{:?}; elapsed={:?} \
+             budgets bootstrap={bootstrap:?} critical={critical:?}; exact_termination_reason=unknown",
+            first.as_ref().map(Arc::as_ptr), active.as_ref().map(Arc::as_ptr),
+            first.as_ref().map(|first| first.is_stopped()),
+            sync_of(&peers.b, &key_a).await, sync_of(&peers.b, &key_c).await,
+            (peers.relay_a.accepted(), peers.relay_c.accepted()), started.elapsed(),
+        );
+        eprintln!("peer first-sync admission evidence: {evidence}");
+        let (clean, cleanup) = finish_first_sync(peers, poller).await;
+        assert!(clean, "source admission failed; {evidence}; {cleanup}");
+        assert!(
+            replacement_ready,
+            "replacement control could not arrange its history; {evidence}; {cleanup}"
+        );
+        assert!(admitted, "C source admission failed; {evidence}; {cleanup}");
+        panic!("A source admission failed; {evidence}; {cleanup}");
+    }
     let entered_at = started.elapsed();
-    let captured = peers
-        .b
-        .peers
-        .active_read_stop(&key_c)
-        .expect("C's held read still owns its cycle");
+    let captured = first.expect("admitted first C identity");
     let connections = peers.relay_c.accepted();
     let a_was_incomplete = sync_of(&peers.b, &key_a)
         .await
         .is_none_or(|sync| sync.state != SyncState::Synced);
-    if end_c_before_observation {
+    let negative_c_ended = if end_c_before_observation {
         hold_c.release();
         tokio::time::timeout_at(deadline, async {
             while peers.b.peers.active_read_stop(&key_c).is_some() {
@@ -1912,8 +2040,10 @@ async fn first_sync_before_observation(end_c_before_observation: bool, release_a
             }
         })
         .await
-        .expect("the negative control's C read ended");
-    }
+        .is_ok()
+    } else {
+        true
+    };
 
     let since = SystemClock.unix_milliseconds();
     if release_a {
@@ -1962,7 +2092,8 @@ async fn first_sync_before_observation(end_c_before_observation: bool, release_a
          C captured={:p} active={:?} identity={identity} stopped={stopped} sync={:?} \
          connections={connections}->{after} exact_termination_reason=unknown; \
          elapsed entered={entered_at:?} completed={completed_at:?} observed={:?}; \
-         budgets critical={critical:?} observation={observation:?} server={source:?} \
+         entry_observed A={a_entered:?} C={c_entered:?}; critical_elapsed={:?}; negative_c_ended={negative_c_ended}; \
+         budgets bootstrap={bootstrap:?} critical={critical:?} observation={observation:?} server={source:?} \
          client={request:?} read={:?}",
         completed.is_ok(),
         synced.is_ok(),
@@ -1973,16 +2104,14 @@ async fn first_sync_before_observation(end_c_before_observation: bool, release_a
             .map(|value| format!("{:p}", Arc::as_ptr(value))),
         sync_of(&peers.b, &key_c).await,
         started.elapsed(),
+        critical_started.elapsed(),
         policy.read_budget,
     );
     eprintln!("peer first-sync evidence: {evidence}");
     // Shutdown itself stops cycles. Save both results first, then release and
     // join all physical work before positive or negative assertions.
-    hold_a.release();
-    hold_c.release();
-    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
-    stop(peers.a).await;
-    stop(peers.c).await;
+    let (clean, cleanup) = finish_first_sync(peers, poller).await;
+    assert!(clean, "{evidence}; {cleanup}");
     assert!(
         a_was_incomplete,
         "A completed before its source release; {evidence}"
@@ -1994,6 +2123,10 @@ async fn first_sync_before_observation(end_c_before_observation: bool, release_a
     assert!(
         synced.is_ok(),
         "A was not read while C's read was held; {evidence}"
+    );
+    assert!(
+        negative_c_ended,
+        "the negative control's C read did not end; {evidence}"
     );
     assert!(
         same_read,
