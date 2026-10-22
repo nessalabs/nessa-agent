@@ -161,6 +161,20 @@ Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read
 geometry; that read is not on the product path these issues measure.
 
+The session-list body's measure stays held through the list frame. The
+header's safe inset follows the painted sidebar position instead: once the
+sidebar leaves the row, the list meets the window edge and its native controls,
+even if the body is still held. The `session-list.css` header selector ignores
+`data-list-held` while retaining `data-spare-held`; `list-measure-hold.test.tsx`
+drives the actual hold through both fold and same-column close orderings.
+
+| Header inset ordering | Expected paint and regression |
+| --- | --- |
+| A pane change folds an open sidebar | Before the boxes, the spare hold keeps the sidebar in the row; after the boxes, the header takes the safe inset while the body stays held |
+| Sidebar already closed, then a stacked pane closes | Keep the header inset on every held frame; a list-body hold cannot authorize controls in the native corner |
+| Sidebar retained in the row during its fold animation | Keep the existing header measure until the spare hold ends; body timing and transition durations stay unchanged |
+| A shape change reverses before the hold frame | Cancel the queued mark; no held attribute after the gate ends (`layouts.test.tsx`) |
+
 ## Frames
 
 Before this change, the input that splits or drops and the layout of the
