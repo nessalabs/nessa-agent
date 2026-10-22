@@ -135,8 +135,11 @@ The classic shell uses one titlebar over its split view, with the sidebar
 control after the native traffic lights and the right-panel control at the
 trailing edge. The workspace keeps navigation in the window's top row; New Session remains
 available through its keyboard shortcut.
-Conversation and widget cards begin below it, with their own pane actions inside
-the card, so folding the sidebar cannot put a card behind the navigation.
+Its row holds the window's tabs: each tab is one conversation or a merged group
+of panes with its own layout (`workspace/model/window-tabs.ts`). The chat
+surface and the sidebar run up behind that row; a top-row pane's content starts
+below it, so folding the sidebar cannot put a pane's actions behind the
+navigation.
 Column titles clear that group, moving below only where they cannot fit. The side rail (Settings › Advanced › Experimental) is a compact 48px
 column below that bar on every host, independent of the native traffic lights.
 Its toggle stays at the bottom-left control edge. When the rail folds, the
