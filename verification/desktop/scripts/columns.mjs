@@ -33,6 +33,7 @@
  *
  * Every check but rail-off runs with the rail turned on.
  */
+import { sessionRowForRemoval } from "./lib/session-row-target.mjs"
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
@@ -942,16 +943,6 @@ const body = {
     if (typed !== text) throw new CannotRun(`the composer reads "${typed}"`)
     await settled(page)
     await frames(page, 2)
-    const place = await page.evaluate((title) => {
-      const titled = (item) =>
-        item.querySelector(".desktop-list-row-label")?.textContent === title
-      const rows = [...document.querySelectorAll("[data-session-row]")]
-      const listed = rows.find((item) => item.closest(".workspace-list") && titled(item))
-      const row = listed ?? rows.find(titled)
-      const id = row?.getAttribute("data-session-row")
-      return id ? { id, list: listed === row } : null
-    }, label)
-    if (!place) throw new CannotRun(`no session row titled ${label}`)
     await page.evaluate((pane) => {
       window.__heldReply = null
       window.addEventListener(
@@ -972,9 +963,7 @@ const body = {
         true,
       )
     }, css.pane)
-    const row = place.list
-      ? page.locator(`.workspace-list [data-session-row="${place.id}"]`)
-      : page.locator(`[data-session-row="${place.id}"]`).first()
+    const row = await sessionRowForRemoval(page, label)
     await row.hover()
     const archive = row.locator('[data-session-action="archive"]')
     if ((await archive.count()) > 0) await archive.click()
@@ -1011,19 +1000,7 @@ const body = {
     const title = "Split panes for the chat workspace"
     const activity = "Editing workspace-panes.tsx"
     const before = await page.locator(css.pane).count()
-    const place = await page.evaluate((wanted) => {
-      const titled = (item) =>
-        item.querySelector(".desktop-list-row-label")?.textContent === wanted
-      const rows = [...document.querySelectorAll("[data-session-row]")]
-      const listed = rows.find((item) => item.closest(".workspace-list") && titled(item))
-      const row = listed ?? rows.find(titled)
-      const id = row?.getAttribute("data-session-row")
-      return id ? { id, list: listed === row } : null
-    }, title)
-    if (!place) throw new CannotRun(`no session row titled ${title}`)
-    const row = place.list
-      ? page.locator(`.workspace-list [data-session-row="${place.id}"]`)
-      : page.locator(`[data-session-row="${place.id}"]`).first()
+    let row = await sessionRowForRemoval(page, title)
     await row.click()
     await page.waitForFunction(
       ({ pane, turn }) =>
@@ -1073,6 +1050,7 @@ const body = {
         true,
       )
     }, css.pane)
+    row = await sessionRowForRemoval(page, title)
     await row.hover()
     const archive = row.locator('[data-session-action="archive"]')
     if ((await archive.count()) > 0) await archive.click()

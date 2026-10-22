@@ -1111,7 +1111,7 @@ html:not(.dark) [data-surface] {
  * below 520px of content the scene would need type smaller than 6px.
  */
 @container (max-height: 520px) {
-  .desktop-header {
+  .desktop-header:not([data-sliver]) {
     display: none;
   }
 }

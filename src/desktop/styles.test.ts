@@ -520,6 +520,10 @@ it("keeps a conversation's sliver of the header still, beneath the text, and out
   expect(styles).toMatch(
     /\.desktop-night-scene\[data-still\] \.desktop-night-scene-rain > span,\s*\.desktop-night-scene\[data-still\] \.desktop-night-scene-steam > span \{\s*animation:\s*none/,
   )
+  // The general short-home rule must not hide this sliver at 520px.
+  expect(styles).toMatch(
+    /@container \(max-height: 520px\) \{\s*\.desktop-header:not\(\[data-sliver\]\) \{\s*display:\s*none/,
+  )
   // Gone from a pane shorter than 220px.
   expect(styles).toMatch(
     /@container workspace-pane \(max-height: 219px\) \{\s*\.desktop-header\[data-sliver\] \{\s*display:\s*none/,

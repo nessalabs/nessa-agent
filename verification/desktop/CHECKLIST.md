@@ -273,7 +273,7 @@ _ADR 238 › One fit rule for every change of layout_.
   field and a row's highlight are as far from what is on their left — the
   sidebar's card, or with the sidebar away the window's edge — as from the
   panes on their right. _Check:_ `responsive.mjs --only list-gutter`
-  (Chromium and WebKit, sidebar open and closed).
+  (Chromium and WebKit, sidebar open and closed, including reserved scrollbars).
 - [ ] **Side columns fold first for room, and come back when there is room.**
   _ADR 238 › Side columns_ table. _Check:_ `safe-area.mjs --only resize-breakpoints`
   exercises it; watch with `--headed`.
@@ -2169,3 +2169,12 @@ with a typed failure.
   and a real review on the following permission turn. Incompatible model/scenario
   pairs fail setup without fallback. Run defaults and raised counts for each
   applicable profile; label the model and scenario in the evidence.
+
+- [ ] **Layout observations follow actual geometry.** A swipe settles only after
+  its finite geometry animations finish, within the original three-second bound;
+  repeated pixels during a paused width transition are not settlement. Filled
+  conversation slivers remain in 220–520 px panes; the short-home cutoff does not
+  hide them. Removal checks reveal and reacquire the visible session row after a
+  fold, then retain their next-frame reply and Stop assertions. _Check:_
+  `session-rows.mjs`, `responsive.mjs --only list-gutter`, and
+  `columns.mjs --only content-visible,reply-held,stop-held --sizes 760x700`.
