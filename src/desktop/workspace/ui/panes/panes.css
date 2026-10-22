@@ -255,10 +255,17 @@
 }
 
 .workspace-chat .split-panes-pane-edge[data-axis="x"]::after {
-  top: calc(-1 * var(--workspace-edge-start));
-  bottom: calc(-1 * var(--workspace-edge-end));
+  /* The window's height, as the panes beside it run: up behind the tabs,
+     where it fades out so no rule crosses them, and down to the bottom. */
+  top: 0;
+  bottom: 0;
   left: calc(50% - 0.5px);
   width: 1px;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent calc(var(--desktop-titlebar-height) * 0.6),
+    black calc(var(--desktop-titlebar-height) + 48px)
+  );
 }
 
 .workspace-chat .split-panes-pane-edge[data-axis="y"]::after {

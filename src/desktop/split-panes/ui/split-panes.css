@@ -99,14 +99,13 @@
 }
 
 /*
- * The one line between two panes: an even 1px hairline down the middle of
- * their gutter, with no glow. It fades in below the tabs, so nothing rules
- * across the titlebar, and only brightens — evenly, along its whole length —
- * while the pointer is on it or it is dragged.
+ * No glow: while the pointer is on an edge, or it is dragged, an even 1px
+ * line down the middle of the gutter brightens along its whole length. At
+ * rest it is clear; the host draws the hairline itself (`panes.css`).
  */
 .split-panes-grid > .split-panes-pane-edge::before {
   opacity: 1;
-  background: var(--desktop-rim);
+  background: transparent;
   transition: background-color var(--desktop-base) ease;
 }
 

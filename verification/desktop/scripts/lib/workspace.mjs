@@ -530,8 +530,11 @@ export function flatSurfaceFailures(page) {
         failures.push(
           `the surface stops short of the window: ${JSON.stringify(s.toJSON())} in ${innerWidth}x${innerHeight}`,
         )
-      if (getComputedStyle(surface).backgroundColor === clear)
-        failures.push("the surface has no fill")
+      // The surface is the window's own ground — clear, so the header art
+      // runs up behind the tabs — never a card: no rim, no corner.
+      const surfaceStyle = getComputedStyle(surface)
+      if (surfaceStyle.boxShadow !== "none" || parseFloat(surfaceStyle.borderRadius) > 0)
+        failures.push(`the surface draws a card: ${surfaceStyle.boxShadow}`)
       const panes = [...document.querySelectorAll(pane)].map((element) => {
         const style = getComputedStyle(element)
         if (style.backgroundColor !== clear || style.boxShadow !== "none")
