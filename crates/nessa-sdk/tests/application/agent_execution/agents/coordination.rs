@@ -75,6 +75,74 @@ impl ExecutionAudit for CountingAudit {
         Box::pin(async { Ok(()) })
     }
 }
+
+#[derive(Default)]
+struct RecordingStartAudit(StateMutex<Vec<ExecutionAuditRecord>>);
+impl ExecutionAudit for RecordingStartAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        self.0.lock().unwrap().push(record);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn close_before_the_attachment_worker_joins_its_actual_started_audit() {
+    let backend = Arc::new(Backend::default());
+    let audit = Arc::new(RecordingStartAudit::default());
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = Agent::prepare(Arc::new(Provider(backend.clone())), manager, audit.clone())
+        .await
+        .unwrap();
+    let original = actor();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(original.clone()))
+        .unwrap();
+    let attachment = agent.start_attachment(authorization).unwrap();
+    let generation = agent.attachment_status().generation();
+    let closer = ActionContext::new("person", "panel", "close-before-worker").unwrap();
+    // Current-thread scheduling: neither the attachment nor shutdown worker
+    // can run between these synchronous lifecycle decisions.
+    let _shutdown = agent.start_shutdown(SessionCloseRequest::Explicit(closer.clone()));
+    let closed = timeout(Duration::from_secs(5), agent.close(closer.clone()))
+        .await
+        .unwrap();
+    assert_eq!(closed, Ok(CloseOutcome { forced: false }));
+    assert_eq!(attachment.wait().await, Err(AgentError::Closed));
+    assert_eq!(backend.opens.load(Ordering::SeqCst), 0);
+    assert!(backend.closes.lock().unwrap().is_empty());
+    let records = audit.0.lock().unwrap();
+    let started: Vec<_> = records
+        .iter()
+        .filter_map(|record| match record {
+            ExecutionAuditRecord::Attachment(record)
+                if record.after() == AttachmentAuditStage::Starting =>
+            {
+                Some(record)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0].before(), AttachmentAuditStage::Waiting);
+    assert_eq!(started[0].generation(), generation);
+    assert_eq!(started[0].actor(), Some(&original));
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| matches!(record,
+            ExecutionAuditRecord::Attachment(record)
+                if record.after() == AttachmentAuditStage::Absent
+                    && record.actor() == Some(&closer)))
+            .count(),
+        1
+    );
+}
 fn capabilities_ref() -> &'static EffectiveCapabilities {
     static CAPABILITIES: std::sync::OnceLock<EffectiveCapabilities> = std::sync::OnceLock::new();
     CAPABILITIES.get_or_init(|| {
