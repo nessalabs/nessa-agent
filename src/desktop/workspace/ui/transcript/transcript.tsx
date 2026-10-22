@@ -1,4 +1,4 @@
-import { historyNotices } from "../../../../conversation"
+import { historyNotices, UsageLimitCard } from "../../../../conversation"
 import {
   offersAuthenticationRecovery,
   signInProvider,
@@ -15,7 +15,7 @@ import {
 } from "react"
 import { curveToken, durationToken } from "../../../adapters/motion"
 import { IconButton } from "../../../ui/icon-button"
-import { retryTranscript } from "../../adapters/store/commands"
+import { retryTranscript, setUsageLimitAutoContinue } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectOutbox, selectTranscriptFailure } from "../../adapters/store/selectors"
 import {
@@ -46,6 +46,26 @@ function shownWhileRecovery(message: MessageValue, refusalId: string): MessageVa
     return message
   if (message.executionId !== refusalId) return message
   return { ...message, terminal: undefined }
+}
+
+/**
+ * A pure usage limit keeps its mark on the transcript. The pane draws that
+ * mark only when independent required work also failed. The card is the
+ * limit's own notice.
+ */
+function shownWhileUsageLimit(message: MessageValue, executionId: string): MessageValue {
+  if (message.role === "note" || !message.terminal || message.requiredWorkFailed === true)
+    return message
+  if (message.executionId !== executionId) return message
+  return { ...message, terminal: undefined }
+}
+
+function latestTurn(messages: readonly MessageValue[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message && (message.role === "user" || message.role === "agent")) return message
+  }
+  return undefined
 }
 
 /** How close to the end the reader must be for a growing reply to keep them there. */
@@ -213,11 +233,21 @@ export const Transcript = memo(function Transcript({
   // The source's conversation, then what the person sent that it does not hold yet.
   const held = transcript?.messages ?? noMessages
   const refusalId = recoveryShown ? transcript?.authenticationRefusal : undefined
+  // A message still on its way is the latest turn, so the card follows it.
+  const usageLimitTurn = latestTurn(outbox.length > 0 ? outbox : held)
+  const usageLimit = usageLimitTurn?.usageLimit === undefined ? undefined : usageLimitTurn
   const messages = useMemo(() => {
     const combined = outbox.length === 0 ? held : [...held, ...outbox]
-    if (refusalId === undefined) return combined
-    return combined.map((message) => shownWhileRecovery(message, refusalId))
-  }, [held, outbox, refusalId])
+    const recovered =
+      refusalId === undefined
+        ? combined
+        : combined.map((message) => shownWhileRecovery(message, refusalId))
+    if (usageLimit === undefined || usageLimit.requiredWorkFailed === true)
+      return recovered
+    return recovered.map((message) =>
+      shownWhileUsageLimit(message, usageLimit.executionId ?? ""),
+    )
+  }, [held, outbox, refusalId, usageLimit])
   if (stayPut.current === null && transcript) {
     // Initial content and messages already shown while the read was pending
     // stay put. Later additions have their own entrance.
@@ -279,6 +309,15 @@ export const Transcript = memo(function Transcript({
               isNew={stayPut.current !== null && !stayPut.current.has(message.id)}
             />
           ))}
+          {usageLimit?.usageLimit ? (
+            <UsageLimitCard
+              limit={usageLimit.usageLimit}
+              enabled={transcript?.usageLimitAutoContinue === true}
+              onChange={(enabled) =>
+                dispatch(setUsageLimitAutoContinue({ enabled, initiator: "person" }))
+              }
+            />
+          ) : null}
           {recoveryShown && provider ? (
             <ProviderSignIn key={provider} provider={provider} />
           ) : null}

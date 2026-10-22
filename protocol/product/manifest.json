@@ -150,6 +150,10 @@
       "params": "ConversationSetApprovalModeParams",
       "grant": "conversation.write"
     },
+    "conversation.setUsageLimitAutoContinue": {
+      "params": "ConversationSetUsageLimitAutoContinueParams",
+      "grant": "credential.manage"
+    },
     "agents.installOptions": {
       "params": null,
       "grant": "server.read"

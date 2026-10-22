@@ -17,6 +17,8 @@
  *   large       one review larger than the old 16 KB display limit
  *   stop        Send turns into Stop while the turn runs; Stop cancels it
  *   fail        the turn fails; the next message is sent in the same conversation
+ *   usageLimit  the turn ends in a usage limit; the card shows, the project
+ *               preference is turned on and back off, and the turn is not resumed
  *   switch      the access shield picks another mode, sometimes mid-turn,
  *               where the change waits for the turn to end
  *   restart     the gateway is killed (crash) or stopped (shutdown) mid-turn
@@ -890,6 +892,21 @@ function otherAgent(agent) {
   return agent === "claude" ? "codex" : "claude"
 }
 
+/** Picks `model` in a composer's picker: its provider's tab, then the model. */
+async function pickModel(page, picker, model) {
+  await picker.click()
+  await page
+    .locator(css.modelProviderTab)
+    .filter({ hasText: providerName(model.provider) })
+    .first()
+    .click()
+  await page
+    .locator(css.modelOption)
+    .filter({ hasText: model.displayName })
+    .first()
+    .click()
+}
+
 /** A catalog provider's tab in the picker, as the window names it (`composer-options.ts`). */
 function providerName(provider) {
   return (
@@ -944,14 +961,8 @@ const steps = {
       })
     const options = run.page.locator(css.modelOption)
     await options.filter({ hasText: target.displayName }).first().click()
-    const confirmed = await waitFor(async () => {
-      const view = await readWithReviews(run.client, run.main.id)
-      return view.runtime?.model === target.modelId && !view.modelChange ? view : null
-    }, 15_000)
-    if (!confirmed) {
-      failures.push("the window's model choice was not confirmed by the gateway")
-      return
-    }
+    // Picking only stages the model: the picker shows it, and the gateway is
+    // asked for nothing until the next message is sent.
     if (
       !(await waitFor(
         async () =>
@@ -959,15 +970,24 @@ const steps = {
         5_000,
       ))
     )
-      failures.push("the picker did not show the source-confirmed model")
+      failures.push("the picker did not show the staged model")
+    const asked = await waitFor(async () => {
+      const view = await readWithReviews(run.client, run.main.id)
+      return view.runtime?.model !== current.modelId || view.modelChange ? view : null
+    }, 2_000)
+    if (asked) {
+      failures.push("picking a model changed the conversation before a message was sent")
+      return
+    }
+    const staged = await readWithReviews(run.client, run.main.id)
     if (photograph) {
       await run.page.screenshot({
-        path: join(run.evidence, `model-${run.engine}-confirmed-review-draft.png`),
+        path: join(run.evidence, `model-${run.engine}-staged-review-draft.png`),
         scale: "css",
       })
       run.modelPhotographed = true
     }
-    const unchanged = confirmed.permissions.map((review) => ({
+    const unchanged = staged.permissions.map((review) => ({
       review: review.review,
       executionId: review.executionId,
       options: review.options,
@@ -986,7 +1006,16 @@ const steps = {
     await settled(run, run.main.id, seen, text, "completed", failures)
     if ((await box.inputValue()) !== draft)
       failures.push("answering the original review lost the model-change draft")
+    // Sending applies the staged model first, and the message runs on it.
     const next = await send(run, run.main.id, draft, failures)
+    const confirmed = await waitFor(async () => {
+      const view = await readWithReviews(run.client, run.main.id)
+      return view.runtime?.model === target.modelId && !view.modelChange ? view : null
+    }, 15_000)
+    if (!confirmed) {
+      failures.push("sending did not apply the staged model")
+      return
+    }
     await settled(run, run.main.id, next, draft, "completed", failures)
     await expectShown(run.page, `${SAYS.model}${target.modelId}`, failures)
     if (run.evidence)
@@ -1077,6 +1106,44 @@ const steps = {
     const seen = await send(run, run.main.id, text, failures)
     await settled(run, run.main.id, seen, text, "failed", failures)
     await expectShown(run.page, SAYS.beforeFailure, failures)
+  },
+
+  async usageLimit(run, step, failures) {
+    const text = prompt(run, STRESS.limit, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const settledTurn = await settled(run, run.main.id, seen, text, "failed", failures)
+    if (!settledTurn.turn) return
+    const limit = settledTurn.turn.usageLimit
+    if (!limit || limit.provider !== "claude" || limit.recovery !== "unknown")
+      failures.push(
+        `the turn is not an unknown Claude usage limit: ${JSON.stringify(limit)}`,
+      )
+    if (settledTurn.turn.error)
+      failures.push(`a usage limit kept a diagnostic: ${settledTurn.turn.error}`)
+    const early = "Your last turn on this request ended early"
+    if ((await pageText(run.page)).includes(early))
+      failures.push("a usage limit resumed the turn")
+    await expectShown(run.page, "Usage limit reached", failures)
+    await expectShown(run.page, "Reset time unknown", failures)
+    const box = run.page.getByRole("checkbox", {
+      name: "Auto-continue this project's threads when limits reset",
+    })
+    await box.check()
+    if (
+      !(await waitFor(async () => {
+        const view = await run.client.conversation.read(run.main.id)
+        return view.usageLimitAutoContinue === true
+      }, 15_000))
+    )
+      failures.push("the gateway did not turn usage-limit continuation on")
+    await box.uncheck()
+    if (
+      !(await waitFor(async () => {
+        const view = await run.client.conversation.read(run.main.id)
+        return view.usageLimitAutoContinue === false
+      }, 15_000))
+    )
+      failures.push("the gateway did not turn usage-limit continuation off")
   },
 
   async switch(run, step, failures) {
@@ -2057,7 +2124,9 @@ const steps = {
 
   /**
    * A conversation switched to the other agent from the composer's picker,
-   * as a person does, then forked from its row's More menu. Each is talked
+   * as a person does: the pick is only staged (taken back once, then picked
+   * again), and the next message sent makes the switch. Then forked from
+   * its row's More menu. Each is talked
    * to after: the first turn of each new session is the one given the
    * earlier turns (`SAYS.carried`), and it runs on the agent and model
    * asked for. The window draws a line at the switch, and the fork opens
@@ -2088,39 +2157,45 @@ const steps = {
       conversationId,
       await titleOf(run, conversationId),
     )
-    // The other provider's tab, then its model, in the composer's picker.
+    // Picking another provider's model only stages it: nothing is switched,
+    // and no line is drawn, until a message is sent. Picking the
+    // conversation's own model again takes the pick back.
     const picker = dock(run.page).locator(css.modelChip)
-    await picker.click()
-    await run.page
-      .locator(css.modelProviderTab)
-      .filter({ hasText: providerName(target.provider) })
-      .first()
-      .click()
-    await run.page
-      .locator(css.modelOption)
-      .filter({ hasText: target.displayName })
-      .first()
-      .click()
-    const switched = await waitFor(async () => {
-      const view = await run.client.conversation.read(conversationId)
-      return view.model === target.modelId &&
-        view.handoffs.some((each) => each.kind === "switch" && each.to?.agent === other)
-        ? view
-        : null
-    }, 30_000)
-    if (!switched) {
-      failures.push(`the conversation was not switched to ${other} from the picker`)
-      return
-    }
+    const own = catalog.models.find((model) => model.modelId === before.model)
+    if (!own) throw new CannotRun(`the catalog has no ${before.model}`)
     const line = run.page.locator(`${css.handoffLine}[data-handoff="switch"]`)
-    if (
-      !(await line
-        .first()
-        .waitFor({ timeout: 10_000 })
-        .then(() => true)
-        .catch(() => false))
-    )
-      failures.push("the window drew no line where the conversation was switched")
+    const unswitched = async (what) => {
+      if (
+        !(await waitFor(
+          async () =>
+            (await picker.getAttribute("aria-label"))?.includes(what.displayName),
+          5_000,
+        ))
+      )
+        failures.push(`the picker did not show ${what.displayName} once picked`)
+      const moved = await waitFor(async () => {
+        const view = await run.client.conversation.read(conversationId)
+        return view.model !== before.model || view.handoffs.length > 0
+      }, 2_000)
+      if (moved)
+        failures.push(
+          `picking ${what.displayName} switched the conversation before a send`,
+        )
+      if (await line.count())
+        failures.push(`picking ${what.displayName} drew a switch line before a send`)
+    }
+    await pickModel(run.page, picker, target)
+    await unswitched(target)
+    if (run.evidence)
+      await run.page.screenshot({
+        path: join(run.evidence, `handoff-${run.engine}-staged.png`),
+        scale: "css",
+      })
+    await pickModel(run.page, picker, own)
+    await unswitched(own)
+    await pickModel(run.page, picker, target)
+    await unswitched(target)
+    if (failures.length) return
     const afterSwitch = prompt(run, STRESS.reply, step, " after switch")
     const seen = await send(
       run,
@@ -2129,6 +2204,26 @@ const steps = {
       failures,
       new Set(before.messages.map((each) => each.executionId)),
     )
+    const switched = await waitFor(async () => {
+      const view = await run.client.conversation.read(conversationId)
+      return view.model === target.modelId &&
+        view.handoffs.filter((each) => each.kind === "switch").length === 1 &&
+        view.handoffs.some((each) => each.kind === "switch" && each.to?.agent === other)
+        ? view
+        : null
+    }, 30_000)
+    if (!switched) {
+      failures.push(`sending did not switch the conversation to ${other} once`)
+      return
+    }
+    if (
+      !(await line
+        .first()
+        .waitFor({ timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false))
+    )
+      failures.push("the window drew no line where the conversation was switched")
     const { turn: switchedTurn } = await settled(
       run,
       conversationId,

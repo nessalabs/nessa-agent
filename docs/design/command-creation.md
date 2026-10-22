@@ -85,6 +85,7 @@ identity, schema version and payload equality.
 | M3 | Same request with different bytes, target, turn, origin, or a creation receipt | Typed conflict before enqueue | `a_submit_identity_conflicts_with_changed_bytes_or_a_creation_request` |
 | M4 | Crash after durable submit `Attempted` | Restart returns `Interrupted`; no second enqueue | `an_interrupted_submit_does_not_enqueue_again` |
 | M5 | Deleted target on submit or read-only lookup, including after restart | Deletion refusal; control history remains | `deletion_refuses_submit_lookup_after_reopen` |
+| M6 | Consent withdrawn before the submit is attempted, including a delayed original caller | Under the command lease, classification saves `Settled(RefusedBeforeAttempt)` from `Accepted`; the delayed caller replays it without enqueue. An existing `Attempted` remains interrupted | `a_no_effect_classification_fences_a_delayed_submit_and_survives_reopen`, `a_no_effect_classification_preserves_an_attempted_submit_as_interrupted` |
 
 ## Exact-turn Stop
 

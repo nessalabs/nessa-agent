@@ -29,6 +29,12 @@ owns the #324 ordering table and platform evidence boundaries.
 | `src/unix/retained_directory.rs` | Retained root and child directory descriptors with cloned captured ancestry, safe absolute locator ancestry, independent `openat(".")` enumeration cursors, identity checks, exclusive publication, atomic replacement, cleanup, and directory sync. |
 | `src/windows.rs` | Path-based private Win32 storage and the shared handle rename encoder: exclusive publication or POSIX replacement that retains delete-sharing readers. |
 | `src/windows/retained_directory.rs` | Top-down non-delete-sharing root/child directory handles, retained ancestry clones, transient identity probes, handle enumeration, delegation to the shared rename encoder, and handle disposition cleanup. |
+| `src/windows/native_directory.rs` | Windows-only candidate for append-only restore directory creation, post-copy sealing, relative native child acquisition, retained-object rename and exact handle cleanup. Includes native pre-acquired ADD authority and nested deletion tests; kept separate from existing publication until native qualification. |
+| `src/windows/native_directory/relative.rs` | Retained-relative archive reads, kind inspection, independent native enumeration, protected initial staging creation, and ordinary native relative rename. |
+| `src/windows/native_directory/closed_file.rs` | Opaque native inode IDs, verified read/ACL reopen, same-object exclusive writable reacquisition and immediate resealing after descendants close. |
+| `tests/support/windows_token.rs` | Test-only thread impersonation: privilege-only ordinary-writer token, exact prior-token restoration, unchanged user/groups and actual full-ACL positive controls. |
+| `tests/support/windows_permissions.rs` | Bounded effective-thread-token and DACL diagnostics for native qualification; no process privilege mutation. |
+| `tests/windows_protected_directory.rs` | Native qualification of creation, actual mutation refusal after sealing, relative operations, occupied destinations and exact-object cleanup; preserves the original read-only-parent child-create refusal (#270). |
 | `tests/retained_directory.rs` | Cross-platform root/child acquisition, authority, enumeration, publication, cleanup, replacement, and native Windows handle-lifetime coverage. |
 | `tests/windows_replacement.rs` | Native Windows path-based replacement with retained readers, denied delete sharing, and read-only destinations (#874). |
 

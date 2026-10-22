@@ -27,7 +27,10 @@
 //! not publish a bundle. The domain decides what a cut
 //! may contain. The application runs that order. Infrastructure reads
 //! stores and writes the bundle. Export takes admission and never a per-grant
-//! gate. Restore and quarantine are not here.
+//! gate. Restore is a separate use case in this module: stage into a quarantine
+//! directory, accept by renaming onto an empty live path, and fetch one deferred
+//! conversation when it is opened. It does not take admission and it does not
+//! start a harness.
 //!
 //! The ordering table is [the export cut](../../../../docs/design/export-cut.md).
 //! The standalone reader enters through `entrypoint`, verifies through
@@ -36,6 +39,8 @@
 //! Offline restore planning reuses that verifier and reports unresolved prerequisites
 //! and proposed ordering without importing, quarantining or activating a gateway.
 //! Its contract is [offline planning](../../../../docs/design/offline-restore-planning.md).
+//! Quarantine, acceptance, and deferred fetch are
+//! [quarantined restore](../../../../docs/design/quarantined-restore.md).
 
 pub mod application;
 pub mod domain;
@@ -81,3 +86,7 @@ mod verification_metadata_tests;
 #[cfg(test)]
 #[path = "../../tests/backup/restore_planning.rs"]
 mod restore_planning_tests;
+
+#[cfg(test)]
+#[path = "../../tests/backup/restore.rs"]
+mod restore_tests;

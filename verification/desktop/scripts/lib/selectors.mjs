@@ -818,6 +818,16 @@ export const appReview = {
   title: "Nessa: an app's review",
 }
 
+/** Usage-limit card on the desktop transcript and the panel (#1075). */
+export const usageLimit = {
+  page: "verification/desktop/fixtures/usage-limit/index.html",
+  desktop: "#desktop",
+  panel: "#panel",
+  card: "[data-usage-limit]",
+  detail: "[data-usage-limit-detail]",
+  toggle: "Auto-continue this project's threads when limits reset",
+}
+
 /** Provider recovery fixture and accessible controls (#501). */
 export const providerSignIn = {
   page: "verification/desktop/fixtures/provider-sign-in/index.html",

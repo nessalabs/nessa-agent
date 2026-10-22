@@ -1,0 +1,69 @@
+{
+  "checkboxRaces": [
+    {
+      "before": "RPC completion preceded authoritative source publication",
+      "proof": "Four adapter regressions failed against the RPC-only implementation.",
+      "correction": "Each existing subscription owner applies a fresh snapshot before command completion; old opens are fenced and live close ACKs are awaited."
+    },
+    {
+      "before": "Native control remained enabled while its pending admission guard rejected changes",
+      "capturedFailedUncheck": {
+        "checked": false,
+        "disabled": false,
+        "pending": true
+      },
+      "correction": "Native disabled state reflects the existing pending guard; confirmation, current completion, or current failure releases it."
+    }
+  ],
+  "regressionProbes": [
+    {
+      "change": "Authoritative publication barrier",
+      "beforeFailed": 4,
+      "beforeTotal": 4
+    },
+    {
+      "change": "Live subscription close ACK barrier",
+      "beforeFailed": 1,
+      "beforeTotal": 7
+    },
+    {
+      "change": "Live close rejection propagation",
+      "beforeFailed": 1,
+      "beforeTotal": 8
+    },
+    {
+      "change": "Native pending disabled state",
+      "beforeFailed": 2,
+      "beforeTotal": 7
+    },
+    {
+      "change": "Retirement interruption of an auxiliary capacity probe",
+      "beforeFailed": 1,
+      "beforeTotal": 7,
+      "afterPassed": 7
+    }
+  ],
+  "priorFrozenStress": {
+    "passed": 43,
+    "total": 44,
+    "allFortyPlannedStepsPassed": true,
+    "failure": "Auxiliary follower capacity probe received conversation_closed before its capacity boundary.",
+    "capacityRefusalsStillObserved": [22, 20],
+    "limitation": "The original probe failure did not record the target conversation. Retirement compatibility is established by the server contract and a deterministic regression, rather than an exact target trace from that run."
+  },
+  "retirementContract": {
+    "owner": "crates/nessa-server/src/conversation/application/service.rs: readable_slot",
+    "regression": "crates/nessa-server/tests/conversation/approval_mode.rs: retained_stopping_publication_refuses_current_reads_until_confirmed_cleanup",
+    "existingScenario": "verification/desktop/scripts/conversation-stress.mjs: pool step waits for the drained conversation to become readable again.",
+    "probeCorrection": "Abandon only the interrupted auxiliary probe, close every temporary view, and take no capacity credit. The next healthy probe must still receive subscription_capacity exactly beyond the published limit.",
+    "preservedFailures": [
+      "unexpected refusal",
+      "subscription_duplicate",
+      "subscription_capacity before the limit",
+      "accepted subscription beyond the limit"
+    ],
+    "activeFollowerSemanticsChanged": false
+  },
+  "finalRaisedStressPassed": true,
+  "timeoutsOrCountsWeakened": false
+}

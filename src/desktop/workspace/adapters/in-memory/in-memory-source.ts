@@ -105,6 +105,7 @@ export interface AuditEntry {
     | "decline-question"
     | "stop"
     | "set-access"
+    | "usage-limit-auto-continue"
   /** The approval answered, or let go. */
   readonly approvalId?: string
   /** The question answered or declined, and the execution it belongs to. */
@@ -695,6 +696,19 @@ export function inMemorySource(
           access: { mode, modes: ["ask", "auto", "full"] },
         }).revision
       }),
+    setUsageLimitAutoContinue: (enabled, initiator) =>
+      audited(
+        { sessionId: "gateway", action: "usage-limit-auto-continue", initiator },
+        () => {
+          let revision = 0
+          for (const transcript of transcripts.values())
+            revision = putTranscript({
+              ...transcript,
+              usageLimitAutoContinue: enabled,
+            }).revision
+          return revision
+        },
+      ),
     setPinned: (sessionId, pinned, initiator) =>
       audited(
         { sessionId, action: pinned ? "pin" : "unpin", initiator },

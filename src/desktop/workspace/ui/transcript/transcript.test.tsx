@@ -1964,3 +1964,45 @@ it("offers the way back to the latest only half a screen from the end, and retur
     Object.assign(globalThis, { ResizeObserver: previous })
   }
 })
+
+describe("usage limit card", () => {
+  it("shows the reset and the project preference, and hides a pure failure mark", async () => {
+    const transcript = transcriptFrom(
+      view("b", {
+        usageLimitAutoContinue: true,
+        messages: [
+          {
+            executionId: "m1",
+            userText: "Hello",
+            attachments: [],
+            files: [],
+            status: "failed",
+            usageLimit: {
+              provider: "claude",
+              recovery: "timed_reset",
+              resetsAtMs: Date.UTC(2026, 9, 21, 16, 0, 0),
+              autoResuming: true,
+            },
+            parts: [],
+          },
+        ],
+      }),
+      1,
+      () => 1,
+      GATEWAY_NOW_MS,
+    )
+    await shown(fakeSource(), transcript)
+    const card = host.querySelector("[data-usage-limit]")
+    expect(card?.textContent).toContain("Usage limit reached")
+    expect(card?.textContent).toContain(
+      "Auto-continue this project's threads when limits reset",
+    )
+    expect(host.querySelector("[data-usage-limit-detail]")?.textContent).toMatch(
+      /^Auto-resuming /,
+    )
+    expect(host.querySelector("[data-turn-terminal]")).toBeNull()
+    expect(
+      host.querySelector<HTMLInputElement>("[data-usage-limit] input")?.checked,
+    ).toBe(true)
+  })
+})

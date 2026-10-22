@@ -76,6 +76,7 @@ type Method =
   | "stop"
   | "withdraw"
   | "setApprovalMode"
+  | "setUsageLimitAutoContinue"
   | "setModel"
   | "switchAgent"
   | "fork"
@@ -750,6 +751,13 @@ export function fakeGateway(
           const current = views.get(conversationId)
           if (current) views.set(conversationId, { ...current, approvalMode: mode })
           return { requestId: "set-approval-mode", mode }
+        }) as never,
+      setUsageLimitAutoContinue: (...args) =>
+        answer("setUsageLimitAutoContinue", args, () => {
+          const enabled = args[0] === true
+          for (const [id, current] of views)
+            views.set(id, { ...current, usageLimitAutoContinue: enabled })
+          return { requestId: "usage-limit", enabled }
         }) as never,
       archive: (...args) =>
         answer("archive", args, () => {

@@ -14,7 +14,7 @@
 export const KNOBS = {
   modelSwitches: {
     default: 1,
-    what: "same-provider model choices through the actual composer picker",
+    what: "same-provider model choices through the actual composer picker, applied by the next send",
   },
   seed: { default: 1, what: "the plan's seed; the same seed gives the same plan" },
   rounds: {
@@ -33,6 +33,10 @@ export const KNOBS = {
   switches: { default: 3, what: "access mode changes from the composer's shield" },
   stops: { default: 2, what: "turns stopped with the composer's Stop" },
   fails: { default: 1, what: "turns that fail, each followed by another message" },
+  usageLimits: {
+    default: 1,
+    what: "turns a usage limit ends, each showing the card and followed by another message",
+  },
   reviews: {
     default: 20,
     what: "reviews one turn asks in a row (past the old limit of 16)",
@@ -71,7 +75,7 @@ export const KNOBS = {
   },
   handoffs: {
     default: 1,
-    what: "conversations switched to the other agent from the composer's picker, then forked from a row's More menu, each talked to after",
+    what: "conversations switched to the other agent from the composer's picker (staged, taken back, picked again, made by the next send), then forked from a row's More menu, each talked to after",
   },
   deletes: {
     default: 1,
@@ -170,6 +174,7 @@ export function plan(knobs) {
   }
   add(knobs.stops, () => ({ kind: "stop" }))
   add(knobs.fails, () => ({ kind: "fail" }))
+  add(knobs.usageLimits, () => ({ kind: "usageLimit" }))
   add(knobs.restarts, () => ({ kind: "restart" }))
   add(knobs.threads, () => ({ kind: "delegate" }))
   add(knobs.awaits, () => ({ kind: "await" }))
@@ -234,7 +239,8 @@ export function plan(knobs) {
     } else {
       out.push(step)
     }
-    if (step.kind === "fail") out.push({ kind: "reply", after: "fail" })
+    if (step.kind === "fail" || step.kind === "usageLimit")
+      out.push({ kind: "reply", after: step.kind })
     // Whether the agent asks is how a switch is seen to have reached it.
     if (step.kind === "switch")
       out.push({

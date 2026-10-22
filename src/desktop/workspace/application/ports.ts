@@ -222,6 +222,15 @@ export interface WorkspaceSource {
    */
   setAccess(sessionId: string, mode: AccessMode, initiator: Initiator): Promise<void>
   /**
+   * Turns this gateway's usage-limit continuation preference on or off.
+   * It is shared by every conversation. Resolves after a fresh authoritative
+   * snapshot has reached subscribers for every currently followed conversation.
+   * That snapshot may include a newer choice from another client. A refresh
+   * failure rejects rather than projecting the receipt as a conversation.
+   * The gateway records the change as this window's caller.
+   */
+  setUsageLimitAutoContinue(enabled: boolean, initiator: Initiator): Promise<void>
+  /**
    * Pins or unpins a session. Resolves once the session's changed summary has
    * reached subscribers: the window shows the pin from that update alone.
    */

@@ -37,6 +37,7 @@ import {
   placeNotes,
   placePublished,
   shownNote,
+  usageLimitOnClientClock,
 } from "../../../../conversation"
 import { composerModels } from "../../../model/composer-options"
 import { encodeId } from "../../../model/id-encoding"
@@ -491,15 +492,21 @@ export function transcriptFrom(
     parts.push(...(published.byExecution.get(turn.executionId) ?? []).map(publishedPart))
     const terminal = turnTerminal(turn)
     const working = turn.status === "running" || turn.status === "queued"
-    const marked = terminal
-      ? {
-          terminal,
-          executionId: turn.executionId,
-          ...(turn.requiredWorkFailed === true
-            ? { requiredWorkFailed: true as const }
-            : {}),
-        }
-      : undefined
+    const usageLimit =
+      turn.usageLimit === undefined
+        ? undefined
+        : usageLimitOnClientClock(turn.usageLimit, view.serverNowMs, receivedAtMs)
+    const marked =
+      terminal || usageLimit
+        ? {
+            ...(terminal ? { terminal } : {}),
+            executionId: turn.executionId,
+            ...(turn.requiredWorkFailed === true
+              ? { requiredWorkFailed: true as const }
+              : {}),
+            ...(usageLimit ? { usageLimit } : {}),
+          }
+        : undefined
     if (parts.length > 0) {
       const reply = replyId(turn.executionId)
       const agent: TurnMessage = {
@@ -621,6 +628,9 @@ export function transcriptFrom(
     authenticationRefusal: latestTurn?.authenticationRequired
       ? latestTurn.executionId
       : undefined,
+    ...(view.usageLimitAutoContinue === undefined
+      ? {}
+      : { usageLimitAutoContinue: view.usageLimitAutoContinue }),
     questions: questionsFrom(view, questionDetails),
     interactionNotice: reportedText(view.interactionViewError),
     latestInputId,

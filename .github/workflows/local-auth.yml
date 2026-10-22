@@ -334,10 +334,18 @@ jobs:
         with:
           node-version: 24
       - uses: ./.github/actions/pnpm-install
-      - name: Install the pinned Chromium and its runtime dependencies
-        run: pnpm exec playwright install --with-deps chromium
+      - name: Install the pinned browsers and their runtime dependencies
+        run: pnpm exec playwright install --with-deps chromium webkit
         timeout-minutes: 15
       - run: cargo build -p nessa-server
+      # Reuse this job's gateway build and browser install. The reset-boundary
+      # regression needs both engines, including WebKit's ticking-clock path.
+      - name: Run the scripted gateway checks in both browsers
+        run: pnpm test:e2e:scripted -- --channel bundled --evidence "$STRESS_EVIDENCE/scripted"
+      - name: Verify usage-limit cards in both browsers
+        run: node verification/desktop/scripts/usage-limit.mjs --channel bundled --out "$STRESS_EVIDENCE/usage-limit.json" --shots "$STRESS_EVIDENCE/usage-limit"
+      - name: Verify pane dragging after deferred fitting in both browsers
+        run: node verification/desktop/scripts/drag.mjs --engine chromium,webkit --layout columns --channel bundled --only resize-mid-drag,return-interrupted --out "$STRESS_EVIDENCE/drag.json"
       - name: Run the conversation stress check
         shell: bash
         run: |
@@ -509,6 +517,13 @@ jobs:
       - shell: bash
         run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk
         timeout-minutes: 45
+      # Passing libtest output is normally captured. Keep these bounded native
+      # receipts visible even when a separate strict fixture precondition fails.
+      - name: Capture native retained-file security query order
+        if: runner.os == 'Windows' && !cancelled()
+        shell: bash
+        run: cargo test -p nessa-local-storage --lib fresh_hardlink_security_queries_reverse_provider_order_without_inheritance_assumptions -- --nocapture
+        timeout-minutes: 5
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk --all-targets -- -D warnings
       - run: node scripts/check-sdk-docs.mjs
       # Not on Linux: `gateway-contract` is an ubuntu-latest job and already

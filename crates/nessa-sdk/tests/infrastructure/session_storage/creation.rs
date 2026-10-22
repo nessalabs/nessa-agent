@@ -521,3 +521,182 @@ async fn direct_sdk_caller_loss_retains_the_original_initializer_and_lease() {
     assert_eq!(target.calls.load(Ordering::SeqCst), 1);
     storage.shutdown().await.unwrap();
 }
+
+struct ClassifiedMutation {
+    plan: crate::application::agent_execution::commands::MutationPlan,
+    effects: std::sync::atomic::AtomicUsize,
+}
+
+impl crate::application::agent_execution::commands::MutationTarget for ClassifiedMutation {
+    type Error = ();
+
+    fn check(
+        &self,
+        _: &MutationBinding,
+        _: Option<MutationStage>,
+    ) -> crate::application::agent_execution::commands::CreationFuture<'_, (), ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn classify(
+        &self,
+        _: &MutationBinding,
+    ) -> crate::application::agent_execution::commands::CreationFuture<
+        '_,
+        crate::application::agent_execution::commands::MutationPlan,
+        (),
+    > {
+        Box::pin(async { Ok(self.plan) })
+    }
+
+    fn effect(
+        &self,
+        _: &MutationBinding,
+    ) -> crate::application::agent_execution::commands::CreationFuture<
+        '_,
+        MutationOutcome,
+        CreationInitializationFailure<()>,
+    > {
+        Box::pin(async {
+            self.effects
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(MutationOutcome::Dispatched)
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_no_effect_classification_fences_a_delayed_submit_and_survives_reopen() {
+    use crate::application::agent_execution::commands::{MutationCoordinator, MutationPlan};
+    use std::sync::{atomic::Ordering, Arc};
+    for (plan, outcome) in [
+        (
+            MutationPlan::NoEffect,
+            MutationOutcome::RefusedBeforeAttempt,
+        ),
+        (
+            MutationPlan::ModelChanged,
+            MutationOutcome::ModelChangedBeforeAttempt,
+        ),
+        (
+            MutationPlan::AgentChanged,
+            MutationOutcome::AgentChangedBeforeAttempt,
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("records");
+        let storage = Arc::new(RecordStorage::new(&path).unwrap());
+        let binding = MutationBinding::new(
+            ActionContext::new("person", "panel", "cancelled-submit").unwrap(),
+            MutationOperation::Submit,
+            SessionId::new("target").unwrap(),
+            "turn",
+            [7; 32],
+        )
+        .unwrap();
+        let refuse = Arc::new(ClassifiedMutation {
+            plan,
+            effects: 0.into(),
+        });
+        let receipt = MutationCoordinator::new(storage.clone())
+            .execute(binding.clone(), refuse.clone())
+            .await
+            .unwrap();
+        assert_eq!(receipt.stage(), MutationStage::Settled);
+        assert_eq!(receipt.outcome(), Some(outcome));
+        assert_eq!(refuse.effects.load(Ordering::SeqCst), 0);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+        let reopened = Arc::new(RecordStorage::new(&path).unwrap());
+        let submit = Arc::new(ClassifiedMutation {
+            plan: MutationPlan::Effect,
+            effects: 0.into(),
+        });
+        assert_eq!(
+            MutationCoordinator::new(reopened.clone())
+                .execute(binding, submit.clone())
+                .await
+                .unwrap(),
+            receipt
+        );
+        assert_eq!(submit.effects.load(Ordering::SeqCst), 0);
+        reopened.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_no_effect_classification_preserves_an_attempted_submit_as_interrupted() {
+    use crate::application::agent_execution::commands::{
+        MutationCoordinator, MutationFailure, MutationPlan,
+    };
+    use std::sync::Arc;
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
+    let binding = MutationBinding::new(
+        ActionContext::new("person", "panel", "attempted-submit").unwrap(),
+        MutationOperation::Submit,
+        SessionId::new("target").unwrap(),
+        "turn",
+        [7; 32],
+    )
+    .unwrap();
+    let lease = storage
+        .open_creation("person".into(), "attempted-submit".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    let accepted = MutationReceipt::accepted(binding.clone());
+    lease.save_mutation(accepted.clone()).await.unwrap();
+    let attempted = accepted.advance(MutationStage::Attempted, None).unwrap();
+    lease.save_mutation(attempted.clone()).await.unwrap();
+    drop(lease);
+    for plan in [
+        MutationPlan::NoEffect,
+        MutationPlan::ModelChanged,
+        MutationPlan::AgentChanged,
+    ] {
+        let target = Arc::new(ClassifiedMutation {
+            plan,
+            effects: 0.into(),
+        });
+        assert!(matches!(
+            MutationCoordinator::new(storage.clone()).execute(binding.clone(), target.clone()).await,
+            Err(MutationFailure::Interrupted(receipt)) if *receipt == attempted
+        ));
+        assert_eq!(target.effects.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+    storage.shutdown().await.unwrap();
+}
+
+#[test]
+fn a_pre_attempt_refusal_cannot_replace_attempted_evidence() {
+    let binding = MutationBinding::new(
+        ActionContext::new("person", "panel", "request").unwrap(),
+        MutationOperation::Submit,
+        SessionId::new("target").unwrap(),
+        "turn",
+        [7; 32],
+    )
+    .unwrap();
+    let accepted = MutationReceipt::accepted(binding);
+    assert!(accepted
+        .advance(MutationStage::Settled, Some(MutationOutcome::NoEffect))
+        .is_err());
+    let attempted = accepted.advance(MutationStage::Attempted, None).unwrap();
+    for outcome in [
+        MutationOutcome::RefusedBeforeAttempt,
+        MutationOutcome::ModelChangedBeforeAttempt,
+        MutationOutcome::AgentChangedBeforeAttempt,
+    ] {
+        assert!(attempted
+            .advance(MutationStage::Settled, Some(outcome))
+            .is_err());
+    }
+    let refused = attempted
+        .advance(MutationStage::Settled, Some(MutationOutcome::NoEffect))
+        .unwrap();
+    assert_eq!(
+        decode_mutation(&encode_mutation(&refused).unwrap()).unwrap(),
+        refused
+    );
+}

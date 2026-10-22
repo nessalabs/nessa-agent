@@ -29,7 +29,12 @@ import {
   type ControlOutcome,
   type ConversationEffects,
 } from "../../application/ports"
-import type { CommandFailure, ConversationSelection, ReadFailure } from "../../model"
+import {
+  usageLimitOnClientClock,
+  type CommandFailure,
+  type ConversationSelection,
+  type ReadFailure,
+} from "../../model"
 import { heldFileReader } from "./held-files"
 import { shownNote } from "./notes"
 
@@ -63,6 +68,14 @@ export function conversationView(
   const asked = new Map(questionDetails.map((detail) => [detail.entry.question, detail]))
   return {
     ...value,
+    messages: value.messages.map((message) => {
+      const limit = message.usageLimit
+      if (limit?.resetsAtMs === undefined) return message
+      return {
+        ...message,
+        usageLimit: usageLimitOnClientClock(limit, serverNowMs, receivedAtMs),
+      }
+    }),
     questionsWaiting: listedQuestions.flatMap((entry) => {
       const detail = asked.get(entry.question)
       return detail?.state === "loaded"
@@ -570,6 +583,8 @@ export function gatewayEffects(
   chosenAgent: () => Promise<string | undefined> = async () => undefined,
 ): ConversationEffects {
   const creations = new Map<string, Promise<{ conversationId: string }>>()
+  // Existing follow owners publish the preference after its RPC has committed.
+  const preferenceFollows = new Set<() => Promise<void>>()
   const connected = () => {
     const current = client()
     if (
@@ -594,6 +609,15 @@ export function gatewayEffects(
     async setApprovalMode(conversationId, mode) {
       try {
         return (await api().setApprovalMode(conversationId, mode)).mode
+      } catch (error) {
+        throw controlFailure(error)
+      }
+    },
+    async setUsageLimitAutoContinue(enabled) {
+      try {
+        const stored = await api().setUsageLimitAutoContinue(enabled)
+        await Promise.all([...preferenceFollows].map((refresh) => refresh()))
+        return stored.enabled
       } catch (error) {
         throw controlFailure(error)
       }
@@ -715,6 +739,29 @@ export function gatewayEffects(
       // so following again is never refused as a duplicate of this follow.
       let giveUp: AbortController | undefined
       let cursor: ConversationViewCursor | undefined
+      let subscription: { close(): Promise<void> } | undefined
+      let closing = Promise.resolve()
+      const refreshes = new Set<{ resolve(): void; reject(error: unknown): void }>()
+      const rejectRefreshes = (error: unknown) => {
+        for (const pending of refreshes) pending.reject(error)
+        refreshes.clear()
+      }
+      const retire = () => {
+        const prior = subscription
+        subscription = undefined
+        let close: Promise<void> | undefined
+        try {
+          // Closing explicitly removes the signal listener before abort, and
+          // the next live subscribe waits for this close acknowledgement.
+          close = prior?.close()
+        } catch (error) {
+          close = Promise.reject(error)
+        }
+        giveUp?.abort()
+        const retired = Promise.all([closing, close]).then(() => undefined)
+        closing = retired.catch(() => undefined)
+        return retired
+      }
       // The last frame applied, and when it arrived: shown again once a
       // review it lists has been read.
       let last: { view: GatewayConversationView; receivedAtMs: number } | undefined
@@ -748,6 +795,7 @@ export function gatewayEffects(
         // vocabulary: from here the panel has a word of its own for it.
         const failure = readFailure(error)
         const { reason } = failure
+        rejectRefreshes(failure)
         follower.failed(reason, failure)
         // Told, the follower may have stopped it; and nothing will change for
         // a conversation somebody deleted.
@@ -758,7 +806,7 @@ export function gatewayEffects(
         if (stopped) return
         const mine = {}
         token = mine
-        giveUp?.abort()
+        const retired = retire()
         const { signal } = (giveUp = new AbortController())
         const current = () => !stopped && token === mine
         const subscribe = (after: ConversationViewCursor | undefined) =>
@@ -772,7 +820,15 @@ export function gatewayEffects(
                   last = { view: frame.view, receivedAtMs: now() }
                   reviews.follow(frame.view.permissions)
                   questions.follow(frame.view.questions)
-                  show()
+                  const applied = [...refreshes]
+                  refreshes.clear()
+                  try {
+                    show()
+                  } catch (error) {
+                    for (const pending of applied) pending.reject(error)
+                    throw error
+                  }
+                  for (const pending of applied) pending.resolve()
                 },
                 ended: (end) => {
                   if (!current()) return
@@ -788,30 +844,49 @@ export function gatewayEffects(
               after === undefined ? { signal } : { after, signal },
             ),
           )
-        subscribe(cursor)
-          .catch((error: unknown) => {
-            // Ahead of the history the gateway holds: from the start.
-            if (!(error instanceof NessaRpcError) || error.code !== "cursor_ahead")
-              throw error
-            cursor = undefined
-            return subscribe(undefined)
+        retired
+          .then(() => {
+            if (!current()) return
+            return subscribe(cursor).catch((error: unknown) => {
+              // Ahead of the history the gateway holds: from the start.
+              if (
+                !current() ||
+                !(error instanceof NessaRpcError) ||
+                error.code !== "cursor_ahead"
+              )
+                throw error
+              cursor = undefined
+              return subscribe(undefined)
+            })
           })
           .then(
             (opened) => {
+              if (!opened) return
               if (!current()) void opened.close().catch(() => undefined)
+              else subscription = opened
             },
             (error: unknown) => {
               if (current()) failed(error)
             },
           )
       }
+      const refresh = () =>
+        new Promise<void>((resolve, reject) => {
+          if (stopped) return reject(new ConversationUnavailableError())
+          refreshes.add({ resolve, reject })
+          cursor = undefined
+          open()
+        })
       const stop = () => {
         if (stopped) return
         stopped = true
-        giveUp?.abort()
+        preferenceFollows.delete(refresh)
+        rejectRefreshes(new ConversationUnavailableError())
+        void retire().catch(() => undefined)
         reviews.dispose()
         questions.dispose()
       }
+      preferenceFollows.add(refresh)
       open()
       return stop
     },

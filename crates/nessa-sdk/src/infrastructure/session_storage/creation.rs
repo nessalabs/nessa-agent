@@ -424,6 +424,9 @@ fn outcome_byte(outcome: Option<MutationOutcome>) -> u8 {
         Some(MutationOutcome::Cancelled) => 3,
         Some(MutationOutcome::AlreadyFinal) => 4,
         Some(MutationOutcome::NoEffect) => 5,
+        Some(MutationOutcome::RefusedBeforeAttempt) => 8,
+        Some(MutationOutcome::ModelChangedBeforeAttempt) => 9,
+        Some(MutationOutcome::AgentChangedBeforeAttempt) => 10,
         Some(MutationOutcome::RefusedAfterSave) => 6,
         Some(MutationOutcome::UnavailableAfterSave) => 7,
     }
@@ -523,14 +526,23 @@ fn decode_mutation(event: &NewEvent) -> Result<MutationReceipt, StorageError> {
         5 => Some(MutationOutcome::NoEffect),
         6 => Some(MutationOutcome::RefusedAfterSave),
         7 => Some(MutationOutcome::UnavailableAfterSave),
+        8 => Some(MutationOutcome::RefusedBeforeAttempt),
+        9 => Some(MutationOutcome::ModelChangedBeforeAttempt),
+        10 => Some(MutationOutcome::AgentChangedBeforeAttempt),
         _ => return Err(corrupt("unknown command outcome")),
     };
     match (stage, outcome) {
         (0, None) => Ok(accepted),
         (1, None) => accepted.advance(MutationStage::Attempted, None),
-        (2, Some(MutationOutcome::AlreadyFinal)) => {
-            accepted.advance(MutationStage::Settled, Some(MutationOutcome::AlreadyFinal))
-        }
+        (
+            2,
+            Some(
+                outcome @ (MutationOutcome::AlreadyFinal
+                | MutationOutcome::RefusedBeforeAttempt
+                | MutationOutcome::ModelChangedBeforeAttempt
+                | MutationOutcome::AgentChangedBeforeAttempt),
+            ),
+        ) => accepted.advance(MutationStage::Settled, Some(outcome)),
         (2, Some(outcome)) => accepted
             .advance(MutationStage::Attempted, None)?
             .advance(MutationStage::Settled, Some(outcome)),

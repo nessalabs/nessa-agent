@@ -49,5 +49,6 @@ mod gen_ai;
 pub(in crate::infrastructure::acp) mod prompt_content;
 pub(in crate::infrastructure::acp) mod steering;
 pub(crate) mod usage;
+mod usage_limit;
 mod wire;
 pub(crate) mod worker;

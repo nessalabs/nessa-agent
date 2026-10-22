@@ -95,6 +95,7 @@ fn settled_view(conversation: &str) -> ConversationView {
     ConversationView {
         model_change: None,
         model_change_effect: None,
+        usage_limit_auto_continue: None,
         model: "model".into(),
         conversation_id: conversation.into(),
         revision: "rev".into(),
@@ -108,6 +109,7 @@ fn settled_view(conversation: &str) -> ConversationView {
             status: ConversationMessageStatus::Completed,
             error: None,
             authentication_required: None,
+            usage_limit: None,
             required_work_failed: None,
             steering_target: None,
             parts: Vec::new(),
