@@ -167,6 +167,7 @@ import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.
 import {
   openStressConversation,
   selectedStressConversation,
+  selectStressModel,
 } from "./lib/stress-conversation.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import {
@@ -1898,13 +1899,7 @@ const steps = {
       // Home has its own selection. Pick the named fixture through the window,
       // never inherit an unrelated default agent or substitute another model.
       const model = catalog.models.find((row) => row.modelId === run.stack.profile.model)
-      await home.locator(css.modelChip).click()
-      const choice = run.page
-        .locator(css.modelOption)
-        .filter({ hasText: model.displayName })
-      if ((await choice.count()) !== 1)
-        throw new Error("the exact fixture model is not uniquely offered in Home")
-      await choice.click()
+      await selectStressModel(run.page, home.locator(css.modelChip), model.displayName)
       await home.locator(css.field).fill(text)
       await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
       const conversationId = await waitFor(
