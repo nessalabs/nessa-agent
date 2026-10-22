@@ -10,21 +10,25 @@
   flex: none;
   min-height: 0;
   padding-top: var(--desktop-titlebar-height);
-  /* Its edge with the chat: the same fading hairline as the sidebar's. */
+  overflow: hidden;
+  transition:
+    opacity var(--desktop-base) ease,
+    transform var(--desktop-drawer) var(--desktop-ease),
+    visibility 0s;
+}
+
+.workspace-list-inner {
+  /* Its edge with the chat: the same fading hairline as the sidebar's, on
+     what slides, so it travels with the list when a column folds. It reaches
+     up behind the titlebar row the list's own top leaves above it. */
+  margin-top: calc(-1 * var(--desktop-titlebar-height));
+  padding-top: var(--desktop-titlebar-height);
   background: linear-gradient(
       to bottom,
       transparent calc(var(--desktop-titlebar-height) * 0.5),
       var(--desktop-rim) calc(var(--desktop-titlebar-height) + 40px)
     )
     right top / 1px 100% no-repeat;
-  overflow: hidden;
-  transition:
-    opacity var(--desktop-base) ease,
-    transform var(--desktop-slow) var(--desktop-out),
-    visibility 0s;
-}
-
-.workspace-list-inner {
   display: flex;
   width: var(--workspace-list-width);
   flex: none;
@@ -56,8 +60,8 @@
   visibility: hidden;
   transition:
     opacity var(--desktop-base) ease,
-    transform var(--desktop-slow) var(--desktop-out),
-    visibility 0s linear var(--desktop-slow);
+    transform var(--desktop-drawer) var(--desktop-ease),
+    visibility 0s linear var(--desktop-drawer);
 }
 
 .workspace[data-sidebar="open"][data-list="closed"] .workspace-list {

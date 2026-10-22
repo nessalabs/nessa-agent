@@ -27,7 +27,22 @@ import { marks, reflectMark } from "./marks"
 import { durationToken, motionToken } from "../../../adapters/motion"
 
 type Rects = { panes: Map<string, DOMRect>; slides: Map<string, DOMRect> }
-type Snapshot = { readonly root: HTMLElement; readonly rects: Rects }
+/**
+ * What kind of change is flown: `drawer`, a side column folding or unfolding
+ * with the panes as they were — everything beside it follows on the
+ * drawer's curve (`--desktop-drawer`); `layout`, the panes themselves
+ * rearranged, on the flight's (`--desktop-flight`).
+ */
+type Motion = "drawer" | "layout"
+type Snapshot = {
+  readonly root: HTMLElement
+  readonly rects: Rects
+  readonly motion: Motion
+}
+
+/** The duration a kind of change flies for, from the window's tokens. */
+const durationOf = (root: HTMLElement, motion: Motion) =>
+  durationToken(root, motion === "drawer" ? "--desktop-drawer" : "--desktop-flight")
 
 function measure(root: HTMLElement): Rects {
   const rects: Rects = { panes: new Map(), slides: new Map() }
@@ -66,9 +81,9 @@ export function flyPane(
   { pane, to, children }: Landed,
   from: DOMRect,
   duration: number,
+  ease: (t: number) => number = (t) => 1 - Math.pow(1 - t, 3.2),
 ): Animation[] {
   const steps = 14
-  const ease = (t: number) => 1 - Math.pow(1 - t, 3.2)
   const dx = from.left + from.width / 2 - (to.left + to.width / 2)
   const dy = from.top + from.height / 2 - (to.top + to.height / 2)
   const sx = from.width / to.width
@@ -96,7 +111,35 @@ export function flyPane(
   ]
 }
 
-function play(root: HTMLElement, from: Rects) {
+/**
+ * A `cubic-bezier(x1, y1, x2, y2)` timing as a function of progress, so a
+ * flight sampled in steps keeps the curve the columns beside it move on.
+ * Anything else is ease-out.
+ */
+export function curveOf(easing: string): (t: number) => number {
+  const match = /cubic-bezier\(([^)]*)\)/.exec(easing)
+  const points = match?.[1].split(",").map(Number)
+  if (!points || points.length !== 4 || points.some(Number.isNaN))
+    return (t) => 1 - Math.pow(1 - t, 3.2)
+  const [x1, y1, x2, y2] = points
+  const at = (a: number, b: number, u: number) =>
+    3 * a * u * (1 - u) ** 2 + 3 * b * u ** 2 * (1 - u) + u ** 3
+  return (t) => {
+    if (t <= 0) return 0
+    if (t >= 1) return 1
+    // The curve's parameter whose x is `t`, by bisection: monotone in x.
+    let low = 0
+    let high = 1
+    for (let i = 0; i < 24; i++) {
+      const mid = (low + high) / 2
+      if (at(x1, x2, mid) < t) low = mid
+      else high = mid
+    }
+    return at(y1, y2, (low + high) / 2)
+  }
+}
+
+function play(root: HTMLElement, from: Rects, motion: Motion) {
   const flying: Animation[] = []
   const shifted = new Map<HTMLElement, number>()
   // Where everything landed, read before anything starts: a slide begun first
@@ -144,8 +187,13 @@ function play(root: HTMLElement, from: Rects) {
   const moving = panes.map(({ landed }) => landed.pane)
   if (slides.length === 0 && panes.length === 0) return { flying, moving }
   const ease = motionToken(root, "--desktop-ease") ?? "linear"
-  const duration = durationToken(root, "--desktop-slow")
-  const flight = durationToken(root, "--desktop-flight")
+  // A drawer moves everything on its one duration; a layout change slides
+  // the columns on the slow one and flies the panes on the flight's.
+  const duration =
+    motion === "drawer"
+      ? durationOf(root, "drawer")
+      : durationToken(root, "--desktop-slow")
+  const flight = durationOf(root, motion)
   slides.forEach(({ element, own }) => {
     flying.push(
       element.animate([{ transform: `translateX(${own}px)` }, { transform: "none" }], {
@@ -155,8 +203,10 @@ function play(root: HTMLElement, from: Rects) {
       }),
     )
   })
+  // A drawer's panes keep the columns' curve, frame for frame.
+  const curve = motion === "drawer" ? curveOf(ease) : undefined
   panes.forEach(({ landed, before }) => {
-    flying.push(...flyPane(landed, before, flight))
+    flying.push(...flyPane(landed, before, flight, curve))
   })
   return { flying, moving }
 }
@@ -164,6 +214,12 @@ function play(root: HTMLElement, from: Rects) {
 export class FlipScope extends Component<{
   /** What the layout looks like, ignoring sizes; motion plays when it changes. */
   shape: string
+  /**
+   * Which side columns are open. A change of these alone — the panes as they
+   * were — is a drawer: the columns and panes beside it follow on the
+   * drawer's curve, as the classic shell's split view does.
+   */
+  columns?: string
   /**
    * A change of this is a cut, not a move: another layout taking the place
    * of the one shown — another window tab, say — lands at once, with no
@@ -191,19 +247,23 @@ export class FlipScope extends Component<{
   }
 
   getSnapshotBeforeUpdate(
-    previous: Readonly<{ shape: string; cut?: string }>,
+    previous: Readonly<{ shape: string; columns?: string; cut?: string }>,
   ): Snapshot | null {
     const root = this.props.root.current
-    if (previous.shape === this.props.shape || !root) return null
+    const panesChanged = previous.shape !== this.props.shape
+    const columnsChanged = previous.columns !== this.props.columns
+    if ((!panesChanged && !columnsChanged) || !root) return null
     if (previous.cut !== this.props.cut) return null
-    // Reduced motion makes the flight's duration zero: nothing to measure for.
-    if (durationToken(root, "--desktop-flight") === 0) return null
+    const motion: Motion = panesChanged ? "layout" : "drawer"
+    // Zero for this kind — reduced motion, or a layout's instant landing
+    // (#914): nothing to measure for.
+    if (durationOf(root, motion) === 0) return null
     // Read mid-flight too: a change during a flight starts from where things are now.
-    return { root, rects: measure(root) }
+    return { root, rects: measure(root), motion }
   }
 
   componentDidUpdate(
-    previous: Readonly<{ shape: string }>,
+    previous: Readonly<{ shape: string; columns?: string }>,
     _state: unknown,
     snapshot: Snapshot | null,
   ) {
@@ -220,7 +280,9 @@ export class FlipScope extends Component<{
     // motion nothing is measured, but the preview goes all the same: left
     // on, it would draw the landed panes moved again.
     if (previous.shape !== this.props.shape) letGoOfDragPreview(root)
-    if (!from && previous.shape === this.props.shape) return
+    const changed =
+      previous.shape !== this.props.shape || previous.columns !== this.props.columns
+    if (!from && !changed) return
     const previousFlights = this.flights
     const previousMoving = this.moving
     this.flights = []
@@ -236,7 +298,7 @@ export class FlipScope extends Component<{
     root.setAttribute(marks.measuring, "")
     let plan: ReturnType<typeof play>
     try {
-      plan = play(root, from)
+      plan = play(root, from, snapshot?.motion ?? "layout")
       plan.moving.forEach((pane) => pane.setAttribute(marks.flying, ""))
     } finally {
       root.removeAttribute(marks.measuring)

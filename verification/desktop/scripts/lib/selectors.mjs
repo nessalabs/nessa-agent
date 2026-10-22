@@ -488,6 +488,7 @@ export const keys = {
   toggleSessionList: "Meta+Alt+KeyS",
   newSession: "Meta+KeyN",
   newSessionBeside: "Meta+Shift+KeyN",
+  splitRight: "Meta+KeyD",
   closePane: "Meta+KeyW",
   openBeside: "Meta+Backslash",
   splitDown: "Meta+Shift+Backslash",

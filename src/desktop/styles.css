@@ -98,6 +98,14 @@ body {
   --desktop-base: 180ms;
   --desktop-slow: 240ms;
   /*
+   * A side column folding or unfolding — a sidebar, the session list, a
+   * panel — and everything beside it following: the classic shell's split
+   * view and the workspace's columns move on this one curve
+   * (`--desktop-ease`), so a toggle feels the same in every layout. Reduced
+   * motion makes it instant.
+   */
+  --desktop-drawer: 340ms;
+  /*
    * Workspace bounds land immediately with content painted. The zero path
    * skips FLIP snapshots and counter-scaling; sidebar and session-list CSS
    * motion still use their independent base and slow tokens.
@@ -200,6 +208,7 @@ html:not(.dark) [data-surface] {
 :root[data-motion="reduced"] [data-surface] {
   --desktop-base: 0ms;
   --desktop-slow: 0ms;
+  --desktop-drawer: 0ms;
   --desktop-flight: 0ms;
   --desktop-arrival: 0ms;
   --desktop-stagger: 0ms;
@@ -1111,7 +1120,8 @@ html:not(.dark) [data-surface] {
  * below 520px of content the scene would need type smaller than 6px.
  */
 @container (max-height: 520px) {
-  .desktop-header {
+  /* The home's header; a conversation's band has its own floor (220px, below). */
+  .desktop-header:not([data-sliver]) {
     display: none;
   }
 }
@@ -1917,7 +1927,7 @@ html:not(.dark) .desktop-tooltip {
 }
 
 .desktop-split[data-settled] > [data-slot="split-view-panel"] {
-  transition: flex-grow 340ms var(--desktop-ease);
+  transition: flex-grow var(--desktop-drawer) var(--desktop-ease);
 }
 
 .desktop-split:has([data-resizing])

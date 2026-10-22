@@ -117,13 +117,8 @@ export const WindowTabs = memo(function WindowTabs() {
         shortcut={frame.shortcut("newSession")}
         onClick={() => dispatch(newSession())}
       />
+      {/* Splitting is a drag, ⌘D or a pane's menu: no button for it here. */}
       <div className="workspace-tabs-space" data-tauri-drag-region />
-      <IconButton
-        icon="splitRight"
-        label="Split Right"
-        shortcut={frame.shortcut("splitRight")}
-        onClick={() => dispatch(newSession({ beside: "right" }))}
-      />
     </div>
   )
 })

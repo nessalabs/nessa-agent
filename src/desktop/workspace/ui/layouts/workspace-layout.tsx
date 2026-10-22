@@ -63,6 +63,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
     frame,
     peek,
     shape,
+    openColumns,
     tab,
     splitPanes,
     railOffered,
@@ -96,7 +97,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
         <EscapeScopesProvider value={escapeScopes}>
           <ListedChannelProvider value={listedChannel}>
             <SidebarPeekProvider value={peek}>
-              <FlipScope shape={shape} cut={tab} root={root}>
+              <FlipScope shape={shape} columns={openColumns} cut={tab} root={root}>
                 <div
                   className="workspace-window"
                   data-rail={!railOffered ? "off" : railDrawn ? "open" : "closed"}

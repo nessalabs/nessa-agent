@@ -46,7 +46,7 @@
   -webkit-user-select: none;
   user-select: none;
   transition:
-    transform var(--desktop-slow) var(--desktop-out),
+    transform var(--desktop-drawer) var(--desktop-ease),
     visibility 0s;
 }
 
@@ -55,11 +55,14 @@
   top: 0;
   bottom: 0;
   left: 0;
-  transform: translateX(calc(-100% - 2 * var(--desktop-gutter) - 48px));
+  /* Exactly as far as the column beside it travels — its own width and the
+     resize edge's gutter — so the two move as one, with no gap opening
+     between them; the workspace clips what passes its edge. */
+  transform: translateX(calc(-100% - var(--desktop-gutter)));
   visibility: hidden;
   transition:
-    transform var(--desktop-slow) var(--desktop-out),
-    visibility 0s linear var(--desktop-slow);
+    transform var(--desktop-drawer) var(--desktop-ease),
+    visibility 0s linear var(--desktop-drawer);
 }
 
 /*

@@ -2159,10 +2159,11 @@ with a typed failure.
 ### Workspace document tabs (#1077)
 
 - `columns.mjs --only window-tabs` checks tabs in Chromium and WebKit: switching
-  documents retains unsent text, changing the focused split leaves its neighbor
-  and sizes intact, choosing an already visible document focuses its pane, and
-  tab closure removes the document. Home/End select and reveal tabs; overflow
-  leaves New Tab and Split Right clickable at narrow widths.
+  tabs retains unsent text; ⌘D splits the chat in front into a merged tab; a
+  single chat's tab shows it alone and going back to the merged tab restores
+  its split; tab closure removes the chat. Home/End select and reveal tabs;
+  overflow leaves New Tab clickable at narrow widths. There is no Split Right
+  button in the tab strip: splitting is a drag, ⌘D or a pane's menu.
 - The `fresh` conversation-stress step types the first message, switches away
   and back through document tabs, then sends that same text through the gateway.
 - By hand: resize and drag existing pane headers with tabs visible, and inspect

@@ -241,9 +241,9 @@
     var(--workspace-chat-lead) * var(--workspace-edge-first) + var(--desktop-gutter) / 2 *
       (1 - var(--workspace-edge-first))
   );
+  /* The panes reach the surface's right edge: there it stops with them. */
   --workspace-edge-end: calc(
-    var(--desktop-gutter) * var(--workspace-edge-last) + var(--desktop-gutter) / 2 *
-      (1 - var(--workspace-edge-last))
+    var(--desktop-gutter) / 2 * (1 - var(--workspace-edge-last))
   );
 }
 

@@ -177,10 +177,10 @@ function useWorkspaceKeys(
 }
 
 /** The shape of what moves on screen: the panes' arrangement and which columns are open. */
-function useMotionShape(...columns: boolean[]): string {
+function useMotionShape(...columns: boolean[]): { shape: string; columns: string } {
   // Painted with the new boxes, so the click does not render the window for a shape it has not drawn.
   const panes = usePaintedWithPanes(selectPaneShape, paneBoxFrame)
-  return `${panes}|${columns.join(",")}`
+  return { shape: panes, columns: columns.join(",") }
 }
 
 /** A column's width as laid out — never as a slide draws it — which a drag of its edge starts from. */
@@ -419,6 +419,8 @@ export interface WorkspaceWindowModel {
   frame: WorkspaceFrame
   peek: EdgePeekControls
   shape: string
+  /** Which side columns are open: a change of these alone is a drawer (`FlipScope`). */
+  openColumns: string
   /** The window tab shown: its change is a cut, not a flight (`FlipScope`). */
   tab: string
   splitPanes: SplitPanesSource
@@ -476,7 +478,11 @@ export function useWorkspaceWindow({
   // Each widget host on the page, by scope, for Escape to find (`widget-escape.ts`).
   const [escapeScopes] = useState<EscapeScopes>(() => new Map())
   useWidgetEscape({ store, root, scopes: escapeScopes })
-  const shape = useMotionShape(chrome.sidebarOpen, chrome.listOpen, chrome.railDrawn)
+  const { shape, columns: openColumns } = useMotionShape(
+    chrome.sidebarOpen,
+    chrome.listOpen,
+    chrome.railDrawn,
+  )
   // Painted with the boxes, as the shape is: another tab's layout is a cut.
   const tab = usePaintedWithPanes(selectActiveTab, paneBoxFrame)
   const dispatch = useWorkspaceDispatch()
@@ -508,6 +514,7 @@ export function useWorkspaceWindow({
     frame: switching.frame,
     peek,
     shape,
+    openColumns,
     tab,
     splitPanes,
     railOffered: chrome.railOffered,

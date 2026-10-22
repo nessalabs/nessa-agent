@@ -17,6 +17,11 @@
  *   rail-view-inert  under an item's full view the workspace takes no keys:
  *                    ⌘B, ⌘0 and ⌥⌘S change nothing behind it, and coming back
  *                    to Agents finds it as it was left.
+ *   sidebar-motion   ⌘B folds and unfolds the sidebar as the classic shell's
+ *                    split view does: what stands beside it (the session
+ *                    list, or the panes) and the pane's composer — its left
+ *                    edge and its centre — move over several frames, one way,
+ *                    to where they rest; with reduced motion they land at once.
  *   titlebar-steady  every frame of a rail toggle draws the titlebar's controls
  *                    between where they were and where they land.
  *   titlebar-row     the titlebar's controls are centred 24px below the window's
@@ -43,6 +48,7 @@ import {
 } from "./lib/workspace.mjs"
 
 const checks = [
+  "sidebar-motion",
   "window-tabs",
   "shell-chrome",
   "no-overlap",
@@ -246,21 +252,23 @@ const body = {
     await tabs.locator(`[data-session-tab="${draft}"] [role="tab"]`).click()
     if ((await page.locator(css.composer).inputValue()) !== "A thought kept between tabs")
       failures.push("tab switching lost an unsent draft")
-    await page.getByRole("button", { name: /^Split Right/ }).click()
+    await page.keyboard.press(keys.splitRight)
     await settled(page)
     const split = await visible()
-    if (split.length !== 2)
-      failures.push(`Split Right made ${split.length} panes, expected two`)
+    if (split.length !== 2) failures.push(`⌘D made ${split.length} panes, expected two`)
     const secondDraft = await selected().locator("..").getAttribute("data-session-tab")
+    // Each tab keeps its own layout: the first chat's tab shows it alone, and
+    // going back to the merged tab brings its split back as it was.
     await tabs.getByRole("tab", { name: firstTitle, exact: true }).click()
+    await settled(page)
+    const alone = await visible()
+    if (alone.length !== 1)
+      failures.push(`the first chat's tab shows ${alone.length} panes`)
+    await tabs.locator(`[data-session-tab="${draft}"] [role="tab"]`).click()
     await settled(page)
     const switched = await visible()
     if (JSON.stringify(split) !== JSON.stringify(switched))
-      failures.push("switching a document changed the split arrangement")
-    await tabs.locator(`[data-session-tab="${draft}"] [role="tab"]`).click()
-    await settled(page)
-    if ((await page.locator(css.pane).count()) !== 2)
-      failures.push("selecting a visible document duplicated or closed a pane")
+      failures.push("going back to a merged tab changed its split arrangement")
     await tabs
       .locator(`[data-session-tab="${secondDraft}"]`)
       .getByRole("button", { name: /^Close Tab/ })
@@ -291,7 +299,8 @@ const body = {
       return {
         list: rect(list),
         selected: rect(tab),
-        tabs: [...list.querySelectorAll(".workspace-window-tab")].map((e) => ({
+        // A plain tab's width; a merged group's chats are narrower by design.
+        tabs: [...list.querySelectorAll(":scope > .workspace-window-tab")].map((e) => ({
           width: e.getBoundingClientRect().width,
           overflow: getComputedStyle(e.querySelector('[role="tab"] > span:last-child'))
             .textOverflow,
@@ -324,7 +333,7 @@ const body = {
         (b) => !b.hit || b.right > size.width || b.left < geometry.list.right - 1,
       )
     )
-      failures.push("tab overflow covers New Tab or Split Right")
+      failures.push("tab overflow covers New Tab")
     return { split, switched, geometry, failures }
   },
 
@@ -354,14 +363,25 @@ const body = {
           const identity = sidebar?.querySelector(".workspace-identity")
           return {
             titlebar: rect(titlebar),
-            pane: rect(document.querySelector(sel.pane)),
+            // The pane runs up behind the titlebar; its header is where its content begins.
+            pane: rect(document.querySelector(`${sel.pane} ${sel.paneHeader}`)),
             toggle: rect(toggle),
             newSessionControl:
               titlebar.querySelector('[aria-label^="New Session"]') !== null,
             sidebar:
               sidebar?.getAttribute("aria-hidden") === "true" ? null : rect(sidebar),
-            footerInset: identity
-              ? parseFloat(getComputedStyle(identity).paddingLeft)
+            // Where "nessa Studio" begins, from the sidebar's content edge:
+            // the sidebar reaches the window's edge with its gutter inside it.
+            footerInset:
+              identity && sidebar
+                ? identity.getBoundingClientRect().left +
+                  parseFloat(getComputedStyle(identity).paddingLeft) -
+                  (sidebar.getBoundingClientRect().left +
+                    parseFloat(getComputedStyle(sidebar).paddingLeft))
+                : null,
+            sidebarContent: sidebar
+              ? sidebar.getBoundingClientRect().left +
+                parseFloat(getComputedStyle(sidebar).paddingLeft)
               : null,
 
             controlInset: parseFloat(
@@ -383,7 +403,7 @@ const body = {
         if (state.sidebar && state.sidebar.y !== 0)
           failures.push(`${label}: sidebar has an extra top row (${state.sidebar.y}px)`)
         if (state.pane && state.pane.y < state.titlebar.bottom)
-          failures.push(`${label}: conversation card overlaps the window toolbar`)
+          failures.push(`${label}: a pane's header sits under the window toolbar`)
         if (
           state.toggle &&
           (state.toggle.x !== 10 || state.toggle.bottom !== size.height - 10)
@@ -392,7 +412,7 @@ const body = {
         const expectedInset =
           state.drawnRail || !state.sidebar
             ? state.controlInset
-            : state.toggle.right - state.sidebar.x + state.controlInset
+            : state.toggle.right - state.sidebarContent + state.controlInset
         if (state.sidebar && state.footerInset !== expectedInset)
           failures.push(
             `${label}: footer inset ${state.footerInset}, expected ${expectedInset} for its toggle slot`,
@@ -506,6 +526,105 @@ const body = {
         await rest(page, size)
       }
     return { failures, detail: seen }
+  },
+
+  "sidebar-motion": async ({ page, layout }) => {
+    const failures = []
+    const runs = []
+    // What stands just right of the sidebar — the list's content, or the
+    // first pane — and that pane's composer: its left edge and its centre.
+    const watched = {
+      beside: layout === "columns" ? ".workspace-list-inner" : css.pane,
+      composer: css.composer,
+    }
+    const measure = () =>
+      page.evaluate((sel) => {
+        const box = (s) => document.querySelector(s)?.getBoundingClientRect()
+        const beside = box(sel.beside)
+        const composer = box(sel.composer)
+        return {
+          beside: beside?.left ?? null,
+          composer: composer?.left ?? null,
+          centre: composer ? composer.left + composer.width / 2 : null,
+        }
+      }, watched)
+    const toggle = async (step) => {
+      const before = await measure()
+      await page.evaluate((sel) => {
+        window.__sidebarFrames = []
+        const start = performance.now()
+        const box = (s) => document.querySelector(s)?.getBoundingClientRect()
+        const tick = () => {
+          const beside = box(sel.beside)
+          const composer = box(sel.composer)
+          window.__sidebarFrames.push({
+            beside: beside?.left ?? null,
+            composer: composer?.left ?? null,
+            centre: composer ? composer.left + composer.width / 2 : null,
+          })
+          if (performance.now() - start < 900) requestAnimationFrame(tick)
+        }
+        requestAnimationFrame(tick)
+      }, watched)
+      await page.keyboard.press(keys.toggleSidebar)
+      await page.waitForFunction(() => window.__sidebarFrames.length > 0)
+      await settled(page)
+      await frames(page, 4)
+      const seen = await page.evaluate(() => window.__sidebarFrames)
+      return { step, before, seen, rest: await measure() }
+    }
+    const judge = ({ step, before, seen, rest }, reduced) => {
+      const name = `${step}${reduced ? " (reduced)" : ""}`
+      for (const part of ["beside", "composer", "centre"]) {
+        const values = seen
+          .map((frame) => frame[part])
+          .filter((x) => typeof x === "number")
+        const from = before[part]
+        const to = values.at(-1)
+        if (typeof from !== "number" || typeof to !== "number") {
+          failures.push(`${name}: ${part} was not measured`)
+          continue
+        }
+        const between = new Set(
+          values
+            .filter((x) => x > Math.min(from, to) + 1 && x < Math.max(from, to) - 1)
+            .map(Math.round),
+        )
+        runs.push({
+          step,
+          reduced,
+          part,
+          from,
+          to,
+          rest: rest[part],
+          between: between.size,
+        })
+        if (Math.abs(to - rest[part]) > 1)
+          failures.push(`${name}: ${part} ended at ${to}, rests at ${rest[part]}`)
+        if (part === "beside" && Math.abs(from - to) < 40)
+          failures.push(`${name}: nothing beside the sidebar moved`)
+        if (part === "beside" && !reduced && between.size < 3)
+          failures.push(
+            `${name}: moved in ${between.size} in-between frames, not over several`,
+          )
+        if (reduced && between.size > 0)
+          failures.push(
+            `${name}: ${part} drew ${between.size} in-between frames, not at once`,
+          )
+        // One way only: never back by more than a pixel.
+        const back = values.slice(1).filter((x, i) => {
+          const previous = values[i]
+          return to > from ? x < previous - 1 : x > previous + 1
+        })
+        if (back.length) failures.push(`${name}: ${part} moved back ${back.length} times`)
+      }
+    }
+    for (const step of ["close", "open"]) judge(await toggle(step), false)
+    await page.emulateMedia({ reducedMotion: "reduce" })
+    await frames(page, 4)
+    for (const step of ["close", "open"]) judge(await toggle(step), true)
+    await page.emulateMedia({ reducedMotion: "no-preference" })
+    return { runs, failures }
   },
 
   "titlebar-steady": async ({ page, size }) => {
@@ -774,13 +893,15 @@ const body = {
         if (mounting && (result.mounted.length !== 1 || result.mountedFrames < 2))
           failures.push("split did not mount and sample one new filled pane")
         if (result.frames < 2) failures.push(`${key}: no transition frames sampled`)
-        // The toggle changes the bounds directly; no workspace FLIP owns an
-        // intermediate transform. Keep observing every independent CSS frame.
+        // A column toggle is a drawer: the panes follow it on its curve, their
+        // content painted throughout (above). A split lands at once (#914):
+        // no flight owns its intermediate frames.
         if (!mounting && result.before === result.after)
           failures.push(`${key}: the toggle changed nothing`)
         else if (!mounting && result.positions < 2)
           failures.push(`${key}: the pane bounds changed nothing`)
-        if (result.flights > 0) failures.push(`${key}: workspace bounds started a FLIP`)
+        if (mounting && result.flights > 0)
+          failures.push(`${key}: a split started a FLIP rather than landing at once`)
         failures.push(
           ...[...new Set(result.failures)].map((message) => `${key}: ${message}`),
         )
