@@ -91,13 +91,30 @@ test permission is changed on a guess. Backup activation stays unavailable.
 | N01 | Create one absent child with `NtCreateFile(FILE_CREATE)` and protected read/search plus ADD_FILE/ADD_SUBDIRECTORY user DACL, without DELETE_CHILD | Return initial ADD/DELETE/WRITE_DAC authority; collision preserves the existing object |
 | N02 | Another process attempts actual root rename/removal, nested-directory removal or leaf mutation | Root initially shares only READ; nested directories share DELETE but neither their own ACL nor their parent grants DELETE. Leaves have read-only user ACLs from creation; no DELETE_CHILD exists in the copied tree |
 | N03 | Create children relative to retained append-only directory; seal every directory read/search-only before final enumeration and content/identity verification | Child creation works before seal; the original N03 create is denied after seal, including through pre-acquired ADD_FILE/ADD_SUBDIRECTORY handles. Pre-acquired ADD authority cannot rename an external source into the sealed tree. Any unexpected entry fails final validation |
-| N04 | Rename retained child handles before sealing, without replacement; after seal and final validation rename root through its initial DELETE handle while leaf handles stay open | Preserve occupied destinations. Never reopen source for DELETE. Native qualification proves root publication works without root delete sharing; no additions or replacement survive final verification |
+| N04 | Rename retained child handles before sealing, without replacement; after seal and final validation, close descendant handles and rename root through its initial DELETE handle | Preserve occupied destinations. Never reopen source for DELETE. An attempted directory rename with open descendants must return AccessDenied, per FILE_RENAME_INFORMATION. Post-close mutation refusals must hold before publication; no root ACL DELETE grant is added speculatively |
 | N05 | Delete through the exact retained object handle | Remove that object only; a replacement at its old name is not cleanup authority |
-| N06 | Successful root promotion, then release temporary directory and file restrictions through their initial WRITE_DAC handles | Restore ordinary private owner ACLs only after live rename; failure remains an explicit error |
+| N06 | Successful root promotion, then reopen descendants read/control-only relative to the retained root and release temporary restrictions; retain root WRITE_DAC authority | Restore ordinary private owner ACLs only after live rename; failure remains an explicit error |
 | N07 | Any create/rename/delete fails | Return the OS error; no path fallback, automatic ACL relaxation, or success claim |
 | N08 | Fetch acquires an existing private sessions directory before creating any file | Acquire a no-delete-sharing handle; a pre-existing DELETE opener refuses acquisition. Snapshot its exact protected DACL through that handle before changing it |
 | N09 | Existing directory has a pre-acquired DELETE_CHILD handle; fetch changes its current DACL to append-only before creating a read-only-ACL leaf | Actual deletion/relocation of the new leaf through that pre-acquired handle must fail. A granted handle without a successful mutation is not evidence of a bypass |
 | N10 | Fetch seals current directory, validates output/sidecar identities and content, completes availability, then releases protection | Restore the exact captured DACL on its retained directory object. Verify ACL bytes; no ordinary private-default ACL substitutes for the original. On failure report retained protection |
+
+| T01 | Capture the current thread token, or its absence, before impersonation | Preserve the exact previous TokenId and restore it; an absent token is restored to absence |
+| T02 | Derive DISABLE_MAX_PRIVILEGE token, without disabling SIDs or adding restricted SIDs, and install on this thread only | Same user and group SIDs/attributes; effective backup/restore disabled; no process token mutation |
+| T03 | Full-ACL ordinary writer attempts create/write/rename/delete before protected assertions | All actual operations succeed; protected negative assertions run unchanged |
+| T04 | Spawn a competing writer | Install its own scoped ordinary token; impersonation is not inherited |
+| T05 | Test exits or unwinds | RAII restores exact prior thread token; restoration errors fail visibly |
+| P01 | Repeat post-seal subdirectory creation under original effective token, then ordinary token | Enabled backup/restore profile reproduces the privileged bypass; otherwise original refusal is asserted. Restricted refusal is asserted under both profiles; no skipped branch |
+
+Native ce5d CI 39706336820 confirmed current user is not SYSTEM, the SYSTEM ACE
+is nonmatching, and backup/restore privileges are enabled on the elevated runner.
+Its correct DACLs therefore do not establish the ordinary-writer boundary.
+The scoped tests preserve this privileged counterexample explicitly. They do
+not claim protection from an administrator using backup/restore privileges.
+Directory rename with open descendants is independently unsupported by the
+[kernel rename contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information).
+[CreateRestrictedToken](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-createrestrictedtoken)
+provides the privilege-only test boundary; source user and groups remain checked.
 
 The threat boundary excludes an administrator, process-handle duplication and
 an owner deliberately changing the DACL, as Unix directory mode protection also

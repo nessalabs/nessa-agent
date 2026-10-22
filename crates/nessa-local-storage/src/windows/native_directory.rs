@@ -40,7 +40,7 @@ pub fn create_protected_directory_at(parent: &File, name: &OsStr) -> io::Result<
 }
 
 /// Create one append-only child directory. Its parent must also omit DELETE_CHILD.
-/// Delete sharing allows the retained root to carry this open child into live.
+/// Close descendant handles after sealing and final validation, before root rename.
 pub fn create_protected_subdirectory_at(parent: &File, name: &OsStr) -> io::Result<File> {
     create_directory_at(
         parent,
@@ -323,6 +323,7 @@ fn relative(
 
 /// Exclusively rename the exact retained object to one relative destination.
 /// Requires DELETE on `source`; an occupied destination is left intact.
+/// Windows refuses directory rename while descendant handles remain open.
 pub fn rename_handle_at(source: &File, destination: &File, name: &OsStr) -> io::Result<()> {
     let name = name_units(name)?;
     let name_bytes = name.len().checked_mul(2).ok_or_else(unsafe_file)?;
@@ -430,6 +431,10 @@ fn set_descriptor(file: &File, descriptor: LocalAllocation) -> io::Result<()> {
 }
 
 #[cfg(test)]
+#[path = "../../tests/support/windows_token.rs"]
+mod token;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::os::windows::fs::OpenOptionsExt;
@@ -457,6 +462,7 @@ mod tests {
 
     #[test]
     fn an_existing_delete_opener_refuses_sessions_directory_acquisition_without_acl_changes() {
+        let _ordinary = token::OrdinaryToken::enter();
         let root = tempfile::tempdir().unwrap();
         crate::create_directory_exclusive(&root.path().join("sessions")).unwrap();
         let ancestor = full_parent(root.path());
@@ -474,6 +480,7 @@ mod tests {
     #[test]
     fn existing_directory_preacquired_delete_child_cannot_delete_a_new_readonly_leaf_after_append()
     {
+        let _ordinary = token::OrdinaryToken::enter();
         let root = tempfile::tempdir().unwrap();
         crate::create_directory_exclusive(&root.path().join("sessions")).unwrap();
         let ancestor = full_parent(root.path());
@@ -529,6 +536,7 @@ mod tests {
 
     #[test]
     fn directory_acl_restores_nondefault_append_permissions_instead_of_default_full_access() {
+        let _ordinary = token::OrdinaryToken::enter();
         let root = tempfile::tempdir().unwrap();
         let ancestor = full_parent(root.path());
         let directory = create_protected_directory_at(&ancestor, OsStr::new("append")).unwrap();
@@ -557,6 +565,7 @@ mod tests {
 
     #[test]
     fn directory_acl_refuses_another_directory_before_changing_its_acl() {
+        let _ordinary = token::OrdinaryToken::enter();
         let root = tempfile::tempdir().unwrap();
         let ancestor = full_parent(root.path());
         let append = create_protected_directory_at(&ancestor, OsStr::new("append")).unwrap();
@@ -584,6 +593,7 @@ mod tests {
 
     #[test]
     fn an_ancestor_delete_child_handle_cannot_acquire_delete_on_the_held_root() {
+        let _ordinary = token::OrdinaryToken::enter();
         let root = tempfile::tempdir().unwrap();
         // Acquire the ancestor rights before the protected child exists. They
         // remain granted even if the child receives a restrictive creation ACL.
@@ -611,6 +621,7 @@ mod tests {
 
     #[test]
     fn sealing_refuses_actual_mutations_through_preacquired_add_handles() {
+        let _ordinary = token::OrdinaryToken::enter();
         let root = tempfile::tempdir().unwrap();
         let ancestor = std::fs::OpenOptions::new()
             .access_mode(FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY)
@@ -674,6 +685,7 @@ mod tests {
 
     #[test]
     fn append_only_parent_does_not_delegate_deletion_of_its_nested_directory() {
+        let _ordinary = token::OrdinaryToken::enter();
         let root = tempfile::tempdir().unwrap();
         let ancestor = std::fs::OpenOptions::new()
             .access_mode(FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY)

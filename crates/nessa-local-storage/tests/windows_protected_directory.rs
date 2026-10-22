@@ -2,6 +2,8 @@
 
 #[path = "support/windows_permissions.rs"]
 mod permissions;
+#[path = "support/windows_token.rs"]
+mod token;
 
 use nessa_local_storage::{
     create_protected_directory_at, create_protected_file_at, open_directory_at, open_file_at,
@@ -82,6 +84,7 @@ fn assert_leaf_mutation_refused(path: &Path) {
 
 #[test]
 fn read_only_parent_acl_refuses_child_create_despite_initial_add_handle() {
+    let _ordinary = token::OrdinaryToken::enter();
     let root = tempfile::tempdir().unwrap();
     let authority = parent(root.path());
     let directory = create_protected_directory_at(&authority, OsStr::new("sealed")).unwrap();
@@ -99,6 +102,7 @@ fn read_only_parent_acl_refuses_child_create_despite_initial_add_handle() {
 
 #[test]
 fn sealed_directory_refuses_actual_additions_after_initial_handle_closes() {
+    let _ordinary = token::OrdinaryToken::enter();
     let root = tempfile::tempdir().unwrap();
     let authority = parent(root.path());
     let directory = create_protected_directory_at(&authority, OsStr::new("sealed")).unwrap();
@@ -117,12 +121,14 @@ fn sealed_directory_refuses_actual_additions_after_initial_handle_closes() {
 
 #[test]
 fn a_waiting_writer_cannot_relocate_the_created_root() {
+    let _ordinary = token::OrdinaryToken::enter();
     let root = tempfile::tempdir().unwrap();
     let authority = parent(root.path());
     let path = root.path().join("sealed");
     let ready = std::sync::Arc::new(std::sync::Barrier::new(2));
     let waiting = ready.clone();
     let contender = std::thread::spawn(move || {
+        let _ordinary = token::OrdinaryToken::enter();
         waiting.wait();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
@@ -153,6 +159,7 @@ fn a_waiting_writer_cannot_relocate_the_created_root() {
 
 #[test]
 fn relative_creation_uses_retained_parent_after_its_name_changes() {
+    let _ordinary = token::OrdinaryToken::enter();
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("original")).unwrap();
     let authority = parent(&root.path().join("original"));
@@ -172,6 +179,7 @@ fn relative_creation_uses_retained_parent_after_its_name_changes() {
 
 #[test]
 fn initial_directory_authority_creates_children_before_sealing() {
+    let _ordinary = token::OrdinaryToken::enter();
     let root = tempfile::tempdir().unwrap();
     let authority = parent(root.path());
     let directory = create_protected_directory_at(&authority, OsStr::new("sealed"))
@@ -193,6 +201,7 @@ fn initial_directory_authority_creates_children_before_sealing() {
 
 #[test]
 fn protected_root_blocks_competing_delete_but_renames_through_its_own_handle() {
+    let _ordinary = token::OrdinaryToken::enter();
     let root = tempfile::tempdir().unwrap();
     let authority = parent(root.path());
     let directory = create_protected_directory_at(&authority, OsStr::new("sealed")).unwrap();
@@ -213,25 +222,33 @@ fn protected_root_blocks_competing_delete_but_renames_through_its_own_handle() {
     file.sync_all().unwrap();
     let mut reader = open_file_at(&directory, OsStr::new("payload")).unwrap();
     seal_directory_writes(&directory).unwrap();
-    rename_handle_at(&directory, &authority, OsStr::new("live")).expect(
-        "N04: initial DELETE handle must rename its own root while child handles remain open",
+    let error = rename_handle_at(&directory, &authority, OsStr::new("live"))
+        .expect_err("N04: the kernel refuses directory rename with open descendants");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
     );
     let mut bytes = Vec::new();
     reader.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"owned");
+    drop(reader);
+    drop(file);
+    assert_leaf_mutation_refused(&root.path().join("sealed/payload"));
+    rename_handle_at(&directory, &authority, OsStr::new("live"))
+        .expect("N04: same retained root renames after protected descendants close");
     assert!(!root.path().join("sealed").exists());
     assert!(root.path().join("live/payload").is_file());
     let error = writer(&root.path().join("live"), DELETE)
         .expect_err("root remains pinned under its live name until initial authority closes");
     refused_namespace_writer(&error);
-    drop(reader);
-    remove_handle(&file).unwrap();
-    drop(file);
-    remove_handle(&directory).unwrap();
+    let acl = writer(&root.path().join("live/payload"), WRITE_DAC).unwrap();
+    release_file_writes(&acl).unwrap();
+    release_directory_writes(&directory).unwrap();
 }
 
 #[test]
 fn protected_child_refuses_delete_and_write_until_post_publication_release() {
+    let _ordinary = token::OrdinaryToken::enter();
     let root = tempfile::tempdir().unwrap();
     let authority = parent(root.path());
     let directory = create_protected_directory_at(&authority, OsStr::new("sealed")).unwrap();
@@ -243,10 +260,10 @@ fn protected_child_refuses_delete_and_write_until_post_publication_release() {
     drop(file);
     assert_leaf_mutation_refused(&root.path().join("sealed/payload"));
     // The owner retains ACL control, explicitly outside the competing namespace
-    // writer threat boundary. Retain it before rename, then release after live.
-    let acl = writer(&root.path().join("sealed/payload"), WRITE_DAC).unwrap();
+    // writer threat boundary. Reopen ACL control only after protected publication.
     seal_directory_writes(&directory).unwrap();
     rename_handle_at(&directory, &authority, OsStr::new("live")).unwrap();
+    let acl = writer(&root.path().join("live/payload"), WRITE_DAC).unwrap();
     release_file_writes(&acl).unwrap();
     release_directory_writes(&directory).unwrap();
     drop((acl, directory));
@@ -259,6 +276,7 @@ fn protected_child_refuses_delete_and_write_until_post_publication_release() {
 
 #[test]
 fn retained_relative_rename_refuses_collisions_and_cleanup_keeps_replacement() {
+    let _ordinary = token::OrdinaryToken::enter();
     let root = tempfile::tempdir().unwrap();
     let authority = parent(root.path());
     let directory = create_protected_directory_at(&authority, OsStr::new("sealed")).unwrap();
@@ -268,6 +286,11 @@ fn retained_relative_rename_refuses_collisions_and_cleanup_keeps_replacement() {
     let occupied = create_protected_file_at(&directory, OsStr::new("occupied")).unwrap();
     let error = rename_handle_at(&file, &directory, OsStr::new("occupied"))
         .expect_err("N04: occupied destination must not be replaced");
+    eprintln!(
+        "native-rename-collision raw={:?} kind={:?}",
+        error.raw_os_error(),
+        error.kind()
+    );
     assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
     rename_handle_at(&file, &directory, OsStr::new("moved"))
         .expect("N04: native relative rename must preserve initial authority");
@@ -296,6 +319,7 @@ fn retained_relative_rename_refuses_collisions_and_cleanup_keeps_replacement() {
 
 #[test]
 fn protected_directory_collision_preserves_existing_data() {
+    let _ordinary = token::OrdinaryToken::enter();
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("occupied")).unwrap();
     fs::write(root.path().join("occupied/sentinel"), b"keep").unwrap();
@@ -306,4 +330,77 @@ fn protected_directory_collision_preserves_existing_data() {
         fs::read(root.path().join("occupied/sentinel")).unwrap(),
         b"keep"
     );
+}
+
+#[test]
+fn original_privilege_profile_explains_directory_creation_counterexample() {
+    let backup = token::privilege_enabled("SeBackupPrivilege").unwrap();
+    let restore = token::privilege_enabled("SeRestorePrivilege").unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let authority = parent(root.path());
+    let directory = create_protected_directory_at(&authority, OsStr::new("sealed")).unwrap();
+    seal_directory_writes(&directory).unwrap();
+    permissions::diagnose("original-profile-causal-control", &directory);
+    drop(directory);
+    let original = fs::create_dir(root.path().join("sealed/original-profile"));
+    eprintln!("native-privileged-counterexample backup={backup} restore={restore}");
+    if restore {
+        original.expect("enabled restore privilege reproduces ce5 privileged directory-add bypass");
+    } else {
+        refused_namespace_writer(
+            &original.expect_err("ordinary original profile refuses directory addition"),
+        );
+    }
+    {
+        let _ordinary = token::OrdinaryToken::enter();
+        let error = fs::create_dir(root.path().join("sealed/restricted-profile"))
+            .expect_err("privilege-only restriction refuses actual directory addition under either original profile");
+        refused_namespace_writer(&error);
+    }
+    // Guard restoration also applies when the original token was itself an
+    // impersonation token, rather than assuming every test begins unimpersonated.
+    {
+        let _outer = token::OrdinaryToken::enter();
+        {
+            let _inner = token::OrdinaryToken::enter();
+        }
+        assert!(!token::privilege_enabled("SeRestorePrivilege").unwrap());
+    }
+    let cleanup = writer(&root.path().join("sealed"), WRITE_DAC).unwrap();
+    release_directory_writes(&cleanup).unwrap();
+}
+
+#[test]
+fn nested_directory_handles_must_close_before_retained_root_rename() {
+    let _ordinary = token::OrdinaryToken::enter();
+    let root = tempfile::tempdir().unwrap();
+    let authority = parent(root.path());
+    let directory = create_protected_directory_at(&authority, OsStr::new("sealed")).unwrap();
+    let child =
+        nessa_local_storage::create_protected_subdirectory_at(&directory, OsStr::new("child"))
+            .unwrap();
+    seal_directory_writes(&child).unwrap();
+    seal_directory_writes(&directory).unwrap();
+    let root_duplicate = directory.try_clone().unwrap();
+    let error = rename_handle_at(&directory, &authority, OsStr::new("live"))
+        .expect_err("N04: even an open directory descendant prevents root rename");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
+    );
+    drop(child);
+    let error = fs::create_dir(root.path().join("sealed/child/injected"))
+        .expect_err("closed descendant retains sealed namespace protection");
+    refused_namespace_writer(&error);
+    let error = fs::rename(root.path().join("sealed/child"), root.path().join("stolen"))
+        .expect_err("closed descendant retains deletion protection");
+    refused_namespace_writer(&error);
+    rename_handle_at(&directory, &authority, OsStr::new("live")).expect(
+        "same retained root renames after every descendant closes, with its duplicate retained",
+    );
+    assert!(root.path().join("live/child").is_dir());
+    drop(root_duplicate);
+    let child = writer(&root.path().join("live/child"), WRITE_DAC).unwrap();
+    release_directory_writes(&child).unwrap();
+    release_directory_writes(&directory).unwrap();
 }

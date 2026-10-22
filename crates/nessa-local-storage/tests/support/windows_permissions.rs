@@ -6,16 +6,13 @@ use std::{
     fs::File,
     io,
     mem::size_of,
-    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    os::windows::io::AsRawHandle,
     ptr::{null, null_mut},
 };
 use windows_sys::Win32::{
     Foundation::*,
     Security::{Authorization::*, *},
-    System::{
-        SystemServices::SE_GROUP_ENABLED,
-        Threading::{GetCurrentProcess, OpenProcessToken},
-    },
+    System::SystemServices::SE_GROUP_ENABLED,
 };
 
 struct Descriptor(*mut c_void);
@@ -51,11 +48,7 @@ pub fn diagnose(label: &str, file: &File) {
 }
 
 fn read(label: &str, file: &File) -> io::Result<()> {
-    let mut token = null_mut();
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let token = unsafe { OwnedHandle::from_raw_handle(token) };
+    let token = super::token::effective_token()?;
     let user_info = token_info(token.as_raw_handle(), TokenUser)?;
     let user = unsafe { &*user_info.as_ptr().cast::<TOKEN_USER>() };
     let groups_info = token_info(token.as_raw_handle(), TokenGroups)?;
