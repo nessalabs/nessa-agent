@@ -31,37 +31,31 @@ pub(crate) fn run(test: &str, child_env: &str, timeout: std::time::Duration, mar
                 .await;
             let (pid, output, returned) = scoped.result.unwrap();
             let cleanup = scoped.termination.unwrap();
-            let exit = supervisor.wait(pid).await.unwrap();
-            let shutdown = supervisor.shutdown().await.unwrap();
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
-            let pipes = tokio::time::timeout(std::time::Duration::from_secs(1), async {
-                loop {
-                    let snapshot = output.read();
-                    assert_eq!(snapshot.dropped_bytes, 0);
-                    assert!(snapshot.errors.is_empty(), "{:?}", snapshot.errors);
-                    for chunk in snapshot.chunks {
-                        assert!(stdout.len() + stderr.len() + chunk.bytes.len() <= 65536);
-                        match chunk.stream {
-                            shepherd::OutputStream::Stdout => stdout.extend(chunk.bytes),
-                            shepherd::OutputStream::Stderr => stderr.extend(chunk.bytes),
-                        }
-                    }
-                    if snapshot.stdout_closed && snapshot.stderr_closed {
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                }
-            })
-            .await;
-            let stdout = String::from_utf8(stdout).unwrap();
-            let stderr = String::from_utf8(stderr).unwrap();
-            eprintln!("child stdout: {stdout}");
-            eprintln!("child stderr: {stderr}");
+            let exit = supervisor.wait(pid).await;
+            let shutdown = supervisor.shutdown().await;
+            let (captured, pipes) = capture_output(|| output.read()).await;
             eprintln!(
-                "Shepherd cleanup verified: {}; exit: {exit:?}",
+                "child stdout: {}",
+                String::from_utf8_lossy(&captured.stdout)
+            );
+            eprintln!(
+                "child stderr: {}",
+                String::from_utf8_lossy(&captured.stderr)
+            );
+            eprintln!("child wait result: {returned:?}; exit: {exit:?}");
+            eprintln!(
+                "Shepherd cleanup verified: {}; cleanup: {cleanup:?}; shutdown: {shutdown:?}",
                 cleanup.all_verified()
             );
+            eprintln!(
+                "output capture: pipes={pipes:?}; closed={:?}; dropped_bytes={}; errors={:?}",
+                captured.closed, captured.dropped_bytes, captured.errors
+            );
+            captured.assert_clean();
+            let stdout = String::from_utf8(captured.stdout).unwrap();
+            let stderr = String::from_utf8(captured.stderr).unwrap();
+            let exit = exit.unwrap();
+            let shutdown = shutdown.unwrap();
             assert!(cleanup.all_verified());
             assert!(exit.outcome.is_verified());
             assert!(shutdown.scopes.iter().all(|scope| scope.all_verified()));
@@ -84,4 +78,91 @@ pub(crate) fn run(test: &str, child_env: &str, timeout: std::time::Duration, mar
             assert!(summaries[0].starts_with("test result: ok. 1 passed; 0 failed;"));
             assert!(stdout.contains(&format!("test {test} ... ok")));
         });
+}
+
+#[derive(Default)]
+struct CapturedOutput {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    dropped_bytes: u64,
+    errors: Vec<String>,
+    closed: (bool, bool),
+}
+
+impl CapturedOutput {
+    fn assert_clean(&self) {
+        assert_eq!(self.dropped_bytes, 0);
+        assert!(self.errors.is_empty(), "{:?}", self.errors);
+    }
+}
+
+async fn capture_output(
+    mut read: impl FnMut() -> shepherd::OutputSnapshot,
+) -> (CapturedOutput, Result<(), tokio::time::error::Elapsed>) {
+    let mut captured = CapturedOutput::default();
+    let pipes = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let snapshot = read();
+            captured.dropped_bytes = captured.dropped_bytes.max(snapshot.dropped_bytes);
+            // Shepherd retains cumulative errors for its two streams. Replace
+            // the last nonempty observation rather than duplicating it per read.
+            if !snapshot.errors.is_empty() {
+                captured.errors = snapshot.errors;
+            }
+            captured.closed = (snapshot.stdout_closed, snapshot.stderr_closed);
+            for chunk in snapshot.chunks {
+                assert!(captured.stdout.len() + captured.stderr.len() + chunk.bytes.len() <= 65536);
+                match chunk.stream {
+                    shepherd::OutputStream::Stdout => captured.stdout.extend(chunk.bytes),
+                    shepherd::OutputStream::Stderr => captured.stderr.extend(chunk.bytes),
+                }
+            }
+            if snapshot.stdout_closed && snapshot.stderr_closed {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    (captured, pipes)
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+    use super::*;
+
+    #[test]
+    fn incomplete_capture_retains_child_summary_before_rejecting_capture_facts() {
+        for (dropped_bytes, errors) in [
+            (0, vec!["synthetic capture failure".to_owned()]),
+            (1, Vec::new()),
+        ] {
+            let output = shepherd::OutputSnapshot {
+                chunks: vec![shepherd::OutputChunk {
+                    stream: shepherd::OutputStream::Stdout,
+                    bytes: b"test child ... ok\ntest result: ok. 1 passed; 0 failed;\n".to_vec(),
+                }],
+                tail: Vec::new(),
+                dropped_bytes,
+                stdout_closed: true,
+                stderr_closed: true,
+                errors: errors.clone(),
+            };
+            let (captured, pipes) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(capture_output(|| output.clone()));
+            assert!(pipes.is_ok());
+            assert_eq!(captured.closed, (true, true));
+            assert_eq!(captured.dropped_bytes, dropped_bytes);
+            assert_eq!(captured.errors, errors);
+            assert!(String::from_utf8_lossy(&captured.stdout)
+                .contains("test result: ok. 1 passed; 0 failed;"));
+            assert!(
+                std::panic::catch_unwind(|| captured.assert_clean()).is_err(),
+                "captured diagnostics must never turn an incomplete capture into success"
+            );
+        }
+    }
 }
