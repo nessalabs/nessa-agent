@@ -1,11 +1,11 @@
 //! The real allowed-origin control, owned only by this process.
 
-use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::io::{self, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const CONTROL_URL: &str = "http://127.0.0.1:1420/control.html";
 
@@ -30,27 +30,15 @@ impl Server {
         let worker = thread::spawn(move || {
             while !stopped.load(Ordering::Acquire) {
                 if let Ok((mut stream, _)) = listener.accept() {
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
-                    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
-                    // WebKit can open a connection before it has a request
-                    // for it. Answering one that sent nothing would hand the
-                    // control page over a socket the fixture never saw asked,
-                    // so the whole request head is read first, and a
-                    // connection that sent none is closed unanswered.
-                    let Some(request) = request_head(&mut stream) else {
-                        thread::sleep(Duration::from_millis(5));
-                        continue;
-                    };
-                    if request.starts_with(b"GET /control.html ") {
-                        observed.store(true, Ordering::Release);
+                    match serve(&mut stream) {
+                        Ok(true) => {
+                            observed.store(true, Ordering::Release);
+                        }
+                        Ok(false) => {}
+                        Err(error) => {
+                            eprintln!("page_load_acceptance: control HTTP fixture: {error}");
+                        }
                     }
-                    let body =
-                        "<!doctype html><title>Allowed origin</title><p>Native control loaded.</p>";
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    );
-                    let _ = stream.write_all(response.as_bytes());
                 }
                 thread::sleep(Duration::from_millis(5));
             }
@@ -63,18 +51,58 @@ impl Server {
     }
 }
 
-/// The request head `stream` sent, up to its blank line; `None` when it sent
-/// nothing before closing or going quiet.
-fn request_head(stream: &mut std::net::TcpStream) -> Option<Vec<u8>> {
-    let mut head = Vec::new();
-    let mut chunk = [0; 4096];
-    while !head.windows(4).any(|end| end == b"\r\n\r\n") && head.len() < 8192 {
-        match stream.read(&mut chunk) {
-            Ok(0) | Err(_) => break,
-            Ok(length) => head.extend_from_slice(&chunk[..length]),
+fn serve(stream: &mut TcpStream) -> io::Result<bool> {
+    // Darwin inherits the listener's nonblocking flag on accept. A read timeout
+    // does not clear it: the first read could fail before WebKit sends its GET.
+    // `an_inherited_nonblocking_stream_waits_for_the_request` covers this seam.
+    stream.set_nonblocking(false)?;
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut request = [0; 8192];
+    let mut length = 0;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "request deadline"));
+        }
+        stream.set_read_timeout(Some(remaining))?;
+        let read = stream.read(&mut request[length..])?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "request headers",
+            ));
+        }
+        length += read;
+        if request[..length]
+            .windows(4)
+            .any(|bytes| bytes == b"\r\n\r\n")
+        {
+            break;
+        }
+        if length == request.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "request exceeds 8192 bytes",
+            ));
         }
     }
-    (!head.is_empty()).then_some(head)
+    let control = request[..length].starts_with(b"GET /control.html HTTP/1.1\r\n")
+        || request[..length].starts_with(b"GET /control.html HTTP/1.0\r\n");
+    let (status, body) = if control {
+        (
+            "200 OK",
+            "<!doctype html><title>Allowed origin</title><p>Native control loaded.</p>",
+        )
+    } else {
+        ("404 Not Found", "No control page at this request target.")
+    };
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.set_write_timeout(Some(Duration::from_secs(1)))?;
+    stream.write_all(response.as_bytes())?;
+    Ok(control)
 }
 
 impl Drop for Server {
@@ -85,3 +113,7 @@ impl Drop for Server {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "server/tests.rs"]
+mod tests;

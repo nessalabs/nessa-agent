@@ -42,6 +42,10 @@ pub(crate) struct RpcError {
     /// something to report; classification stays with the number.
     #[serde(default)]
     pub message: Option<String>,
+    /// Structured provider data. Absent when the provider sent none.
+    /// Classification reads fields inside it; the message never decides.
+    #[serde(default)]
+    pub data: Option<Value>,
 }
 /// [`parse_within`] with the protocol's usual budget, [`MAX_JSON_ITEMS`].
 #[cfg(test)]

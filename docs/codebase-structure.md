@@ -73,6 +73,9 @@ src-tauri/src/
     contracts/            what other contexts and the frontend may see
 src-tauri/examples/
   page_load_acceptance/   disposable macOS Tauri lifecycle, deadline and origin controls
+    server/              portable real-socket regressions for its HTTP control fixture
+src-tauri/tests/
+  page_load_server.rs     runs the fixture regressions in the desktop host suite
 verification/             scripts that drive real browsers against the running app
   desktop/                the desktop window: CHECKLIST.md, scripts/, scripts/lib/
 ```
@@ -742,7 +745,9 @@ receiver holding and linkage before the shared conversation-access policy may
 see a first-party Person. Its Cedar adapter under
 `conversation/infrastructure/owner_phone_policy/cedar/` owns only purpose linkage,
 method and input restrictions; `access_policy/cedar/` remains the single actual
-conversation target and catalogue entry policy owner. The source's admitted
+conversation target and catalogue entry policy owner.
+`conversation/infrastructure/usage_limit_policy/cedar/` owns who may change the
+gateway usage-limit preference. The source's admitted
 reader and caller travel together through bounded catalogue workers. The receiver
 profile hash consumes each enforcing bundle's owning sources, so an actual
 policy change fences saved read epochs. Server fixtures split mounted discovery,
@@ -975,10 +980,32 @@ source permission or socket capacity. Its lifecycle tests live under
 `tests/core/read_workers.rs`; record-specific admission tests stay with their
 source adapter. Attachment adapters consume this owner when activated.
 
+`conversation/application/service/scheduled_messages.rs` owns continuation planning and delivery; `infrastructure/scheduled_messages.rs` and its SQL dataset own preference receipts, history fences, and per-selection-request causal invalidation. The submitting fence also retains bounded command identity and the canonical digest shared with ordinary submit. Deletion scrubs payload and grant identifiers while retaining these non-content facts for exact command-receipt recovery. `service/model_changes.rs` and `service/handoffs.rs` commit invalidation before marking a model or agent selection applied. The invalidation kind keeps model and agent requests in distinct namespaces; an old request retries its recorded invalidation rather than targeting a later limit. The dataset is new in #1075 and stays at version 1; earlier development copies are recreated, without a migration.
+
+The scheduled-continuation application and durable-adapter recovery regressions
+live in `crates/nessa-server/tests/conversation/scheduled_messages.rs`, loaded by
+the service module so they can force its lease and retry boundaries.
+
+Conversation handoffs use `conversation/application/service/handoffs.rs` for
+switch and fork orchestration, `application/agent_switches.rs` for the durable
+switch contract, and `infrastructure/store/agent_switches.rs` for its metadata
+journal. SDK `application/agent_execution/sessions/handoffs.rs` owns handoff
+identity, folding, and carried-history assembly; domain
+`agent_execution/prompts/value_objects/carried_history.rs` owns bounded carried
+values. The [handoff design](design/conversation-handoffs.md)
+maps these owners to their regressions; usage-limit invalidation belongs to
+the existing scheduler owner before an applied switch is committed.
+
 `conversation/application/metadata_target.rs` correlates existing metadata loads and creation acknowledgements with the requested identity before ownership, selection, grant admission or effects. Created receipts additionally match the admitted full immutable proposal; Existing retains original creator evidence. Current mode intent/terminal/retirement tests live in `tests/conversation/approval_mode.rs`, with unchanged-preset publication/recovery in `tests/conversation/approval_mode/unchanged.rs`; creation receipt tests in `tests/conversation/creation_metadata.rs`. Projection owns selection/runtime replacements and their revision; no display-history or paging API is added.
 
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
 `product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
+
+Usage-limit preference commands in the workspace source and classic panel's
+`src/conversation/adapters/gateway/effects.ts` complete after their existing
+follow owners apply fresh snapshots, with old subscription closes acknowledged
+before reopening. Workspace ordering regressions live in
+`gateway-source-usage-limit.test.ts`; panel regressions stay in `effects.test.ts`.
 
 `product/subscription/events.rs` follows committed semantic events through the same connection and delivery owners. `conversation/application/service/event_read.rs` owns target admission, shared `EventProgress` correlation of reader outputs with their start/prior checkpoint, and the metadata-only projection from the SDK reader; it never opens an Agent. Event consumers share that continuity validator before publishing data or retaining checkpoints. Event subscriptions retain a replay cursor rather than replacing a conversation view. Their socket regressions are `tests/product/socket/subscriptions/events.rs`, with delivery deadline tests in `tests/product/subscription_event_delivery.rs`; shared continuity and projection regressions are `tests/conversation/event_read.rs`.
 

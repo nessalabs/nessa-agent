@@ -225,8 +225,9 @@ pub enum ConversationStartupFailureCode {
 pub struct ConversationMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authentication_required: Option<bool>,
-    /// This failed authentication refusal also failed independent required work.
-    /// The person-facing diagnostic stays in `error`. Absent for a pure refusal.
+    /// This failed turn also failed independent required work, beside an
+    /// authentication refusal or a usage limit. The person-facing diagnostic
+    /// stays in `error`. Absent for a pure refusal or a pure usage limit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required_work_failed: Option<bool>,
     pub parts: Vec<ConversationPart>,
@@ -251,6 +252,47 @@ pub struct ConversationMessage {
     pub status: ConversationMessageStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// A provider usage limit on this failed turn: which harness, how it can
+    /// end, and the reset instant when the harness named a trustworthy one.
+    /// The projection publishes those facts from the saved error. Whether a
+    /// continuation is scheduled is added when the gateway publishes the view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_limit: Option<ConversationUsageLimit>,
+}
+
+/// Which harness reported a usage limit. OpenCode is not a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationUsageLimitProvider {
+    /// Claude ACP.
+    Claude,
+    /// Codex ACP.
+    Codex,
+}
+
+/// How a published usage limit can end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationUsageLimitRecovery {
+    /// `resets_at_ms` is an absolute Unix instant in milliseconds.
+    TimedReset,
+    /// The account needs a person. No reset is published.
+    UserAction,
+    /// A usage limit with no trustworthy reset instant.
+    Unknown,
+}
+
+/// The usage-limit facts a transcript card reads. `auto_resuming` is absent
+/// on the projection and set only when a schedule has been accepted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationUsageLimit {
+    pub provider: ConversationUsageLimitProvider,
+    pub recovery: ConversationUsageLimitRecovery,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resets_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_resuming: Option<bool>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

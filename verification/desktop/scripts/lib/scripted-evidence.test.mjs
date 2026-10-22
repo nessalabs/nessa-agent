@@ -10,6 +10,8 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
+import { parseArgs } from "node:util"
+import { commonOptions } from "./cli.mjs"
 
 import {
   enginesFrom,
@@ -165,6 +167,26 @@ test("a bundled Chromium channel is forwarded on the child check's argv", () => 
   })
   assert.equal(args[args.indexOf("--channel") + 1], "bundled")
   assert.equal(args.at(-1), "--scripted")
+})
+
+test("a UI check's generated argv parses without gateway-only options", () => {
+  const args = scriptedCheckArgs({
+    script: "resize-observers.mjs",
+    layout: "columns,sidebar",
+    mode: "dev",
+    channel: "bundled",
+    shots: "/tmp/evidence/shots",
+    out: "/tmp/evidence/result.json",
+  })
+  const parsed = parseArgs({
+    args: args.slice(1),
+    options: commonOptions,
+    allowPositionals: false,
+  })
+  assert.equal(parsed.values.out, "/tmp/evidence/result.json")
+  assert.equal(parsed.values.shots, "/tmp/evidence/shots")
+  assert.equal(parsed.values.engine, "chromium,webkit")
+  assert.equal(parsed.values.layout, "columns,sidebar")
 })
 
 test("the scripted command accepts --channel bundled", () => {

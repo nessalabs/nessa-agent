@@ -142,6 +142,13 @@ controls — text, icons, images, code, or decorative art — in any frame.
   the next paint, with no ResizeObserver loop error (#693).
   _Check:_ `responsive.mjs --only column-title`; drag a column edge slowly
   across the flip point by hand and watch for a flicker (the 12px hold).
+- [ ] **Pane fitting starts after resize delivery.** Its first measurement may
+  start another observer on the grid; it runs on the next animation frame,
+  coalesces notifications, and retires with the source/grid. No native
+  ErrorEvent or pageerror occurs on first load or 30 viewport changes in
+  either layout. _Check:_ `resize-observers.mjs` (Chromium and WebKit), also
+  included in `test:e2e:scripted`; the native event is checked separately
+  because Chromium does not forward this loop error as a Playwright pageerror.
 - [ ] **A column's titlebar action hides at once as it folds and shows once it
   has slid in; a pane's header stays painted as workspace bounds land.**
   _Check:_ manual, with
@@ -1742,6 +1749,26 @@ available. When the refused reference is no longer held, the transcript shows th
 existing **No longer kept** placeholder. The bounded run is
 `node verification/desktop/scripts/attachments-races.mjs --only terminal-refusal-preserved,terminal-refusal-reupload`.
 
+
+## Usage limits (#1075)
+
+`node verification/desktop/scripts/usage-limit.mjs --engine chromium,webkit`
+loads `fixtures/usage-limit/`, a dev-server page that mounts the desktop
+transcript and the panel transcript on one view. A timed reset that the
+schedule accepted says **Auto-resuming** and the same local time on both
+surfaces. An unknown reset says **Reset time unknown**. A user action says an
+account change is required and does not invent a time. A timed reset the
+schedule did not accept, with the preference on, says **Scheduling failed.**
+The checkbox label is **Auto-continue this project's threads when limits reset**.
+It shows the gateway preference, stays enabled, turns off when the person
+unchecks it, and snaps back when that change fails. A pure limit does not say
+the turn ended early and does not show the required-work sentence. At 360px
+and 1000px the card stays inside its surface.
+The scheduling-failure case holds the client clock one minute ahead of the
+gateway reset and advances only its injected clock to the translated deadline.
+Within 3 seconds both mounted cards change from **Scheduling failed.** to
+**Resets** with the original reset time, without a new conversation view
+([card clock subscription](../../src/conversation/ui/usage-limit-card.tsx)).
 
 ## Provider authentication recovery (#501)
 

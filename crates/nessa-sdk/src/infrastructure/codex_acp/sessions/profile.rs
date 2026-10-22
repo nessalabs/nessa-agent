@@ -11,7 +11,7 @@ use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::domain::model_metadata::value_objects::EffortLevel;
 use crate::infrastructure::acp::fields::string;
-use crate::infrastructure::acp::profile::AcpProfile;
+use crate::infrastructure::acp::profile::{AcpProfile, UsageLimitWire};
 use crate::infrastructure::acp::sessions::{configuration, thought_level, AcpConfig};
 use crate::infrastructure::json_rpc::protocol;
 use serde_json::{json, Value};
@@ -132,6 +132,10 @@ impl CodexProfile {
     }
 }
 impl AcpProfile for CodexProfile {
+    fn usage_limit_wire(&self) -> Option<UsageLimitWire> {
+        Some(UsageLimitWire::Codex)
+    }
+
     /// Codex steers by queue, not natively, although its adapter advertises the
     /// extension.
     ///

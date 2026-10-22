@@ -1,0 +1,64 @@
+{
+  "check": "drag",
+  "ok": true,
+  "started": "2026-10-22T00:23:44.252Z",
+  "finished": "2026-10-22T00:24:27.431Z",
+  "target": {
+    "url": "http://127.0.0.1:1438/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1438/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "return-interrupted",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900",
+      "paused": {
+        "flights": 2,
+        "copies": 1
+      },
+      "copiesAfterResize": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "resize-mid-drag",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "return-interrupted",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700",
+      "paused": {
+        "flights": 2,
+        "copies": 1
+      },
+      "copiesAfterResize": 0,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "resize-mid-drag",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1000x700",
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

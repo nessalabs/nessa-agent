@@ -1,0 +1,101 @@
+import { useEffect, useRef, useState } from "react"
+import {
+  USAGE_LIMIT_TITLE,
+  USAGE_LIMIT_TOGGLE,
+  usageLimitDetail,
+  type UsageLimitNotice,
+} from "../model/usage-limit"
+import { useNow } from "../../clock"
+import "./usage-limit-card.css"
+
+/**
+ * The usage-limit card: the title, when the limit ends, and the gateway
+ * preference. The checkbox shows the choice at once and keeps it until the
+ * refreshed view agrees, the command fails, or the command has settled and
+ * the confirmed preference is a different value. A completion applies only
+ * for the request that created the pending choice. A confirmed view or a
+ * newer click supersedes that request, and an older resolution or rejection
+ * does not change the choice that replaced it. The line under the title
+ * follows the confirmed preference, so a choice that has not landed does
+ * not read as a scheduling failure. The injected ticking clock is this
+ * client's. A reset that arrived on a view is compared through
+ * `resetsAtClientMs`, which the adapter put on that same clock.
+ */
+export function UsageLimitCard({
+  limit,
+  enabled,
+  onChange,
+}: {
+  limit: UsageLimitNotice
+  /** The gateway preference. Absent is off. */
+  enabled: boolean
+  onChange?: (enabled: boolean) => Promise<void> | void
+}) {
+  const nowMs = useNow(1000)
+  const [pending, setPending] = useState<boolean | null>(null)
+  const [settled, setSettled] = useState(false)
+  const request = useRef(0)
+  useEffect(() => {
+    if (pending === null) return
+    if (pending === enabled || settled) {
+      request.current += 1
+      setPending(null)
+      setSettled(false)
+    }
+  }, [pending, enabled, settled])
+  const shown = pending ?? enabled
+  const detail = usageLimitDetail(limit, enabled, nowMs)
+  return (
+    <section
+      className="usage-limit-card"
+      role="status"
+      aria-label={USAGE_LIMIT_TITLE}
+      data-usage-limit
+      data-usage-limit-pending={pending === null ? undefined : ""}
+    >
+      <h3>
+        <UsageLimitMark />
+        {USAGE_LIMIT_TITLE}
+      </h3>
+      <p data-usage-limit-detail>{detail}</p>
+      <label>
+        <input
+          type="checkbox"
+          checked={shown}
+          disabled={onChange === undefined || pending !== null}
+          onChange={(event) => {
+            if (!onChange || pending !== null) {
+              event.preventDefault()
+              return
+            }
+            const next = event.target.checked
+            const token = request.current + 1
+            request.current = token
+            setPending(next)
+            setSettled(false)
+            void Promise.resolve(onChange(next)).then(
+              () => {
+                setSettled((current) => (request.current === token ? true : current))
+              },
+              () => {
+                setPending((current) => (request.current === token ? null : current))
+              },
+            )
+          }}
+        />
+        <span>{USAGE_LIMIT_TOGGLE}</span>
+      </label>
+    </section>
+  )
+}
+
+function UsageLimitMark() {
+  return (
+    <svg className="usage-limit-card-mark" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M8.9 1.7a1 1 0 0 0-1.8 0L1.2 12.4A1 1 0 0 0 2.1 14h11.8a1 1 0 0 0 .9-1.6L8.9 1.7zM8 5.2a.7.7 0 0 1 .7.7v3.2a.7.7 0 0 1-1.4 0V5.9A.7.7 0 0 1 8 5.2zm0 7a.8.8 0 1 1 0-1.6.8.8 0 0 1 0 1.6z"
+      />
+    </svg>
+  )
+}

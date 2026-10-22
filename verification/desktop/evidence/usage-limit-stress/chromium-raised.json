@@ -1,0 +1,98 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-10-22T01:18:23.633Z",
+  "finished": "2026-10-22T01:21:20.458Z",
+  "command": "<verified-child-subreaper> node --import <system-chromium-preload> verification/desktop/scripts/conversation-stress.mjs --engine chromium --layout columns --channel bundled --usageLimits 3 --rounds 24 --evidence <private-evidence-dir> --out <private-result-json>",
+  "runtime": {
+    "engine": "chromium",
+    "layout": "columns",
+    "browser": "installed system Chromium",
+    "childReaper": "existing verified PS-scanning subreaper"
+  },
+  "source": {
+    "commit": "63323788f0348ea261818dd31eab564f78d14bf9",
+    "frozenFilesUnchangedDuringRun": true,
+    "sha256": {
+      "src/desktop/workspace/adapters/gateway/gateway-source.ts": "dc828d68a3acbfbffa447216a31100d98489339db04e1110f432baa44a83bbb0",
+      "src/conversation/adapters/gateway/effects.ts": "fec3768c70fb2f3af09f6094a2a7a8db5ab6f4bddf6bb4704f5e682ca4e94214",
+      "src/conversation/ui/usage-limit-card.tsx": "4d120a878cdf75314a013f766b03e709f66837789afe8ca791d42a6c21b827e6",
+      "verification/desktop/scripts/lib/stress-followers.mjs": "b732d37a597fb18788e96fba9183e204bea840f4051e951fac43308f3fe2e4ca",
+      "target/debug/nessa": "a279ea33ec9c764cdb5eaa40d368af2dad55a859b960dc4d36150effd4d32a43"
+    }
+  },
+  "knobs": {
+    "modelSwitches": 1,
+    "seed": 1,
+    "rounds": 24,
+    "asides": 2,
+    "parallel": 2,
+    "turns": 3,
+    "switches": 3,
+    "stops": 2,
+    "fails": 1,
+    "usageLimits": 3,
+    "reviews": 20,
+    "large": 1,
+    "restarts": 1,
+    "threads": 1,
+    "awaits": 1,
+    "watches": 1,
+    "followers": 2,
+    "parks": 1,
+    "renames": 1,
+    "deletes": 1,
+    "fresh": 2,
+    "windows": 1,
+    "rails": 1,
+    "linkings": 1,
+    "tables": 1,
+    "notices": 1,
+    "pools": 1,
+    "drifts": 1,
+    "upgrades": 1,
+    "launches": 1,
+    "long": 30
+  },
+  "result": {
+    "passed": 44,
+    "total": 44,
+    "plannedStepsPassed": 40,
+    "usageLimitSteps": ["014 usageLimit", "017 usageLimit", "022 usageLimit"],
+    "followingReplySteps": ["015 reply", "018 reply", "023 reply"],
+    "backgroundPassed": true,
+    "atRestPassed": true,
+    "followersPassed": true,
+    "consolePassed": true
+  },
+  "followers": [
+    {
+      "conversations": 7,
+      "churned": 147,
+      "resumed": 43,
+      "lagging": 0,
+      "refusedAsExpected": 24
+    },
+    {
+      "conversations": 7,
+      "churned": 141,
+      "resumed": 44,
+      "lagging": 0,
+      "refusedAsExpected": 21
+    }
+  ],
+  "relatedVerification": {
+    "fullFrontend": {
+      "passed": true,
+      "testFiles": 386,
+      "tests": 5086,
+      "productionBuildPassed": true
+    },
+    "workspaceAndCardTargetedTests": 186,
+    "classicPanelAdapterTests": 115,
+    "finalCardTests": 8,
+    "usageLimitBrowserChecks": 9,
+    "desktopHarnessTestsAfterProbeCorrection": 399
+  },
+  "privacy": "Raw gateway, ACP, MCP, conversation views, temporary endpoints, and credentials are excluded."
+}

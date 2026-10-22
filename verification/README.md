@@ -82,7 +82,8 @@ verification/
       gateway-window.mjs    the desktop app's window over a real gateway (#419, #574): its handshake, a conversation, a live turn, and the test server's MCP App inline (starts its own gateway and dev server; needs the agent, `--agent claude|codex`, signed in, or `--scripted` for the text-reply scenario and none; the app step needs the dev server)
       command-order.mjs     an agent's command drawn in order, bidi controls visible (#553): the card, the overview row, and the peek
       scripted-scenarios.mjs  a scenario through the gateway and the window (#510): permission, a mid-turn failure, cancel (signed out; `--mode prod` previews a production build)
-      scripted-e2e.mjs      one signed-out command: the gateway-backed checks in Chromium and WebKit, one verdict line (`pnpm test:e2e:scripted`)
+      resize-observers.mjs  native ErrorEvent and pageerror checks on initial pane fitting and viewport changes, Chromium and WebKit
+      scripted-e2e.mjs      one signed-out command: native resize and gateway-backed checks in Chromium and WebKit, one verdict line (`pnpm test:e2e:scripted`)
       drag.mjs              pane drag: pointer path, zones, cancels, selection
       focus.mjs             where the caret lands after each pane and dialog change
       lib/overview-keyboard.mjs atomic observation/action for incrementally mounted overview rows

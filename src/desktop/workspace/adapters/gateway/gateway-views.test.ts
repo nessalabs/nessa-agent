@@ -1077,6 +1077,86 @@ describe("the model a session runs on", () => {
   })
 })
 
+describe("usage limits", () => {
+  it("compares the reset on the gateway timeline", () => {
+    const reset = GATEWAY_NOW_MS + 30_000
+    const receivedAt = GATEWAY_NOW_MS + 120_000
+    const transcript = transcriptFrom(
+      view("limit", {
+        usageLimitAutoContinue: true,
+        messages: [
+          turn({
+            status: "failed",
+            usageLimit: {
+              provider: "claude",
+              recovery: "timed_reset",
+              resetsAtMs: reset,
+            },
+          }),
+        ],
+      }),
+      1,
+      at,
+      receivedAt,
+    )
+    expect(transcript.messages[0]).toMatchObject({
+      usageLimit: {
+        resetsAtMs: reset,
+        resetsAtClientMs: receivedAt + 30_000,
+      },
+    })
+    const past = GATEWAY_NOW_MS - 10_000
+    const slow = GATEWAY_NOW_MS - 120_000
+    const later = transcriptFrom(
+      view("later", {
+        messages: [
+          turn({
+            status: "failed",
+            usageLimit: {
+              provider: "claude",
+              recovery: "timed_reset",
+              resetsAtMs: past,
+            },
+          }),
+        ],
+      }),
+      1,
+      at,
+      slow,
+    )
+    expect(later.messages[0]).toMatchObject({
+      usageLimit: { resetsAtMs: past, resetsAtClientMs: slow - 10_000 },
+    })
+  })
+
+  it("keeps the classification and the gateway preference, without a diagnostic", () => {
+    const source = view("limit", {
+      usageLimitAutoContinue: false,
+      messages: [
+        turn({
+          status: "failed",
+          usageLimit: {
+            provider: "codex",
+            recovery: "unknown",
+          },
+        }),
+      ],
+    })
+    const transcript = transcriptFrom(source, 1, at, GATEWAY_NOW_MS)
+    expect(transcript.usageLimitAutoContinue).toBe(false)
+    expect(transcript.messages[0]).toMatchObject({
+      role: "user",
+      executionId: "e1",
+      usageLimit: { provider: "codex", recovery: "unknown" },
+      terminal: { status: "failed" },
+    })
+    expect(transcript.messages[0]).not.toHaveProperty("requiredWorkFailed")
+    const marked = transcript.messages[0]
+    if (marked && "terminal" in marked)
+      expect(marked.terminal).not.toHaveProperty("error")
+  })
+})
+
 describe("provider authentication recovery", () => {
   it("uses only the latest turn's typed refusal, never its diagnostic text", () => {
     const source = view("auth")

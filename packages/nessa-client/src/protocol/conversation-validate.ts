@@ -13,6 +13,7 @@ import type {
   ConversationMutationResult,
   ConversationReorderResult,
   ConversationSetApprovalModeResult,
+  ConversationSetUsageLimitAutoContinueResult,
   ConversationSetModelResult,
   ConversationShareResult,
   ConversationSharesResult,
@@ -410,6 +411,21 @@ export function conversationApprovalMode(
     throw new Error("Conversation mode result contradicts the requested change")
   return item as unknown as ConversationSetApprovalModeResult
 }
+
+/** Confirm the reply belongs to the requested preference and names that choice. */
+export function conversationUsageLimitAutoContinue(
+  value: unknown,
+  requestId: string,
+  requested: boolean,
+): ConversationSetUsageLimitAutoContinueResult {
+  const item = record(value)
+  exact(item, ["requestId", "enabled"])
+  if (identity(item, "requestId") !== requestId || item.enabled !== requested)
+    throw new Error(
+      "Conversation usage-limit preference contradicts the requested change",
+    )
+  return item as unknown as ConversationSetUsageLimitAutoContinueResult
+}
 /** Correlate the model reply before a caller can display its selection. */
 export function conversationModel(
   value: unknown,
@@ -447,6 +463,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     "notes",
     "unreadable",
     "unreadableTruncated",
+    "usageLimitAutoContinue",
     "handoffs",
     "title",
     "approvalMode",
@@ -468,6 +485,11 @@ export function conversationView(value: unknown, expected: string): Conversation
     serverNowMs < 1
   )
     throw new Error("Invalid conversation serverNowMs")
+  if (
+    item.usageLimitAutoContinue !== undefined &&
+    typeof item.usageLimitAutoContinue !== "boolean"
+  )
+    throw new Error("Conversation response has invalid usageLimitAutoContinue")
   optionalText(item, "title", bounds.maxConversationTitleBytes)
   flag(item, "truncated")
   flag(item, "queueComplete")
@@ -518,6 +540,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       "steeringTarget",
       "authenticationRequired",
       "requiredWorkFailed",
+      "usageLimit",
       "parts",
       "steeringOffset",
     ])
@@ -531,6 +554,29 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Conversation response has invalid authenticationRequired")
     if (message.authenticationRequired === true && message.status !== "failed")
       throw new Error("Conversation authentication refusal requires a failed turn")
+    if (message.usageLimit !== undefined) {
+      const limit = record(message.usageLimit)
+      exact(limit, ["provider", "recovery", "resetsAtMs", "autoResuming"])
+      oneOf(text(limit, "provider"), ["claude", "codex"])
+      const recovery = text(limit, "recovery")
+      oneOf(recovery, ["timed_reset", "user_action", "unknown"])
+      if (message.status !== "failed")
+        throw new Error("Conversation usage limit requires a failed turn")
+      if (recovery === "timed_reset") {
+        const resetsAtMs = limit.resetsAtMs
+        if (
+          typeof resetsAtMs !== "number" ||
+          !Number.isSafeInteger(resetsAtMs) ||
+          resetsAtMs < 1_704_067_200_000 ||
+          resetsAtMs > 4_102_444_800_000
+        )
+          throw new Error("Conversation usage limit has no reset instant")
+      } else if (limit.resetsAtMs !== undefined) {
+        throw new Error("Conversation usage limit carries a reset it cannot use")
+      }
+      if (limit.autoResuming !== undefined && typeof limit.autoResuming !== "boolean")
+        throw new Error("Conversation usage limit has invalid autoResuming")
+    }
     if (
       message.requiredWorkFailed !== undefined &&
       typeof message.requiredWorkFailed !== "boolean"
@@ -625,9 +671,11 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Injected conversation state is incomplete")
     if (message.error !== undefined) text(message, "error", 2048, false)
     if (message.requiredWorkFailed === true) {
-      if (message.authenticationRequired !== true || status !== "failed")
+      const typedRefusal =
+        message.authenticationRequired === true || message.usageLimit !== undefined
+      if (!typedRefusal || status !== "failed")
         throw new Error(
-          "Conversation required-work failure belongs on an authentication refusal",
+          "Conversation required-work failure belongs on a failed authentication refusal or usage limit",
         )
       if (message.error === undefined)
         throw new Error("Conversation required-work failure has no diagnostic")

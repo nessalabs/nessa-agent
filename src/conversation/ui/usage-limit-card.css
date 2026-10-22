@@ -1,0 +1,51 @@
+.usage-limit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in oklab, var(--foreground, currentColor) 14%, transparent);
+  border-radius: var(--desktop-radius-md, 12px);
+  background: color-mix(in oklab, var(--foreground, currentColor) 6%, transparent);
+  color: var(--foreground, inherit);
+}
+
+.usage-limit-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--desktop-text-body, 13px);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.usage-limit-card-mark {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--desktop-needs, #e8a317);
+}
+
+.usage-limit-card p {
+  margin: 0;
+  color: var(
+    --desktop-muted,
+    color-mix(in oklab, var(--foreground, currentColor) 62%, transparent)
+  );
+  font-size: var(--desktop-text-footnote, 13px);
+  line-height: 1.4;
+}
+
+.usage-limit-card label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--desktop-text-footnote, 13px);
+  line-height: 1.4;
+}
+
+.usage-limit-card input {
+  margin-top: 2px;
+  flex: none;
+}

@@ -210,7 +210,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 80,
+          "maxItems": 81,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -1062,6 +1062,34 @@
         "size"
       ]
     },
+    "ConversationUsageLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A provider usage limit on a failed turn. resetsAtMs is present only for a timed reset whose instant parsed. autoResuming is present only when this gateway has accepted a one-shot continuation for the turn.",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["claude", "codex"],
+          "description": "The harness that reported the limit. OpenCode is not a value."
+        },
+        "recovery": {
+          "type": "string",
+          "enum": ["timed_reset", "user_action", "unknown"],
+          "description": "How the limit can end. timed_reset carries resetsAtMs. user_action needs the person and never carries a reset. unknown is a usage limit with no trustworthy reset."
+        },
+        "resetsAtMs": {
+          "type": "integer",
+          "minimum": 1704067200000,
+          "maximum": 4102444800000,
+          "description": "Absolute Unix milliseconds when a timed reset ends, kept only inside 2024-01-01 through 2100-01-01 UTC."
+        },
+        "autoResuming": {
+          "type": "boolean",
+          "description": "True only when a continuation for this turn is scheduled or being delivered and the gateway preference is on."
+        }
+      },
+      "required": ["provider", "recovery"]
+    },
     "ConversationMessage": {
       "type": "object",
       "additionalProperties": false,
@@ -1115,7 +1143,11 @@
         },
         "requiredWorkFailed": {
           "type": "boolean",
-          "description": "This failed authentication refusal also failed independent required work. The person-facing diagnostic stays in error. Absent for a pure refusal, and absent when the failure is not an authentication refusal."
+          "description": "This failed turn also failed independent required work, beside an authentication refusal or a usage limit. The person-facing diagnostic stays in error. Absent for a pure refusal or a pure usage limit."
+        },
+        "usageLimit": {
+          "$ref": "#/$defs/ConversationUsageLimit",
+          "description": "A provider usage limit on this failed turn. Absent when the turn did not end in one. autoResuming is present only after a continuation has been scheduled."
         },
         "steeringTarget": {
           "type": "string",
@@ -1691,6 +1723,10 @@
         "modelChange": {
           "$ref": "#/$defs/ModelChange",
           "description": "Pending correlated model change; the confirmed selection remains authoritative."
+        },
+        "usageLimitAutoContinue": {
+          "type": "boolean",
+          "description": "Whether this gateway schedules one continuation when a usage limit resets. The preference is the gateway's, shared by every conversation, and defaults to false. The card copies Auto-resuming only when a schedule for that turn has been accepted."
         },
         "modelChangeEffect": {
           "$ref": "#/$defs/ModelChangeEffect",
@@ -4541,6 +4577,44 @@
         }
       },
       "required": ["agent", "defaultModel", "models"]
+    },
+    "ConversationSetUsageLimitAutoContinueParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Turn this gateway's usage-limit continuation preference on or off. The preference is shared by every conversation on this gateway. Turning it on schedules a continuation for each currently blocked eligible turn. Turning it off cancels open schedules.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "True schedules continuations when a usage limit names a future reset. False cancels open schedules. The default, before any command, is false."
+        }
+      },
+      "required": ["requestId", "enabled"]
+    },
+    "ConversationSetUsageLimitAutoContinueResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The preference now in effect for this gateway.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Original action identifier."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether continuations will be scheduled."
+        }
+      },
+      "required": ["requestId", "enabled"]
     },
     "AgentsSetNativeHooksParams": {
       "type": "object",

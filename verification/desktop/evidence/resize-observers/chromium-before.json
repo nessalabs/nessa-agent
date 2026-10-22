@@ -1,0 +1,31 @@
+{
+  "check": "resize-observers",
+  "ok": false,
+  "started": "2026-10-22T00:19:47.294Z",
+  "finished": "2026-10-22T00:19:54.555Z",
+  "target": {
+    "url": "http://127.0.0.1:1438/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1438/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "fit-after-delivery",
+      "engine": "chromium",
+      "layout": "columns",
+      "viewportChanges": 30,
+      "nativeErrorCount": 1,
+      "failures": ["ResizeObserver loop completed with undelivered notifications."],
+      "ok": false
+    }
+  ]
+}

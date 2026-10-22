@@ -334,7 +334,10 @@ fn receipt(receipt: &MutationReceipt) -> Value {
         MutationOutcome::Withdrawn => "withdrawn",
         MutationOutcome::Cancelled => "cancelled",
         MutationOutcome::AlreadyFinal => "alreadyFinal",
-        MutationOutcome::NoEffect => "noEffect",
+        MutationOutcome::NoEffect
+        | MutationOutcome::RefusedBeforeAttempt
+        | MutationOutcome::ModelChangedBeforeAttempt
+        | MutationOutcome::AgentChangedBeforeAttempt => "noEffect",
         MutationOutcome::RefusedAfterSave => "refusedAfterSave",
         MutationOutcome::UnavailableAfterSave => "unavailableAfterSave",
     });

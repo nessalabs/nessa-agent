@@ -7,6 +7,7 @@
 //! creation: Accepted -> Attempted -> Ready
 //! submit/stop: Accepted -> Attempted -> Settled
 //!              Accepted -> Settled(AlreadyFinal) when stop sends nothing
+//!              Accepted -> Settled(RefusedBeforeAttempt) when classification refuses
 //!              Attempted -> Settled(NoEffect) when the effect refuses before dispatch
 //!              Attempted -> Settled(RefusedAfterSave) when a saved steer is refused before injection
 //!              Attempted -> Settled(UnavailableAfterSave) when a saved steer cannot be checked before injection

@@ -14,12 +14,17 @@
 mod command_policy;
 mod entities;
 mod receiver;
+mod scheduled_message;
 mod value_objects;
 pub use command_policy::{program_name, CommandPolicy};
 pub use entities::{Conversation, ConversationRefusal};
 pub use receiver::{
     PairedReceiver, ReceiverBinding, ReceiverInitiator, ReceiverIntent, ReceiverTransition,
     ReceiverTransitionError,
+};
+pub use scheduled_message::{
+    observed_limit_index, plan_continuation, ContinuationCause, ContinuationPlan, InvocationLimit,
+    ObservedUsageLimit, OpenContinuation,
 };
 pub use value_objects::{
     Capabilities, Capability, CommandHosts, ConversationDeletion, DeletionContradiction,

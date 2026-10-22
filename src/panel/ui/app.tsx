@@ -592,6 +592,9 @@ export function App({
                   onOpenPaste={openPaste}
                   onProviderSignIn={onProviderSignIn}
                   canSignInToProvider={canSignInToProvider}
+                  onUsageLimitAutoContinue={(enabled) =>
+                    chat.setUsageLimitAutoContinue(enabled)
+                  }
                 />
 
                 {attachments.viewed && (

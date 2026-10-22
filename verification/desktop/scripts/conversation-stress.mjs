@@ -17,6 +17,8 @@
  *   large       one review larger than the old 16 KB display limit
  *   stop        Send turns into Stop while the turn runs; Stop cancels it
  *   fail        the turn fails; the next message is sent in the same conversation
+ *   usageLimit  the turn ends in a usage limit; the card shows, the project
+ *               preference is turned on and back off, and the turn is not resumed
  *   switch      the access shield picks another mode, sometimes mid-turn,
  *               where the change waits for the turn to end
  *   restart     the gateway is killed (crash) or stopped (shutdown) mid-turn
@@ -1073,6 +1075,44 @@ const steps = {
     const seen = await send(run, run.main.id, text, failures)
     await settled(run, run.main.id, seen, text, "failed", failures)
     await expectShown(run.page, SAYS.beforeFailure, failures)
+  },
+
+  async usageLimit(run, step, failures) {
+    const text = prompt(run, STRESS.limit, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const settledTurn = await settled(run, run.main.id, seen, text, "failed", failures)
+    if (!settledTurn.turn) return
+    const limit = settledTurn.turn.usageLimit
+    if (!limit || limit.provider !== "claude" || limit.recovery !== "unknown")
+      failures.push(
+        `the turn is not an unknown Claude usage limit: ${JSON.stringify(limit)}`,
+      )
+    if (settledTurn.turn.error)
+      failures.push(`a usage limit kept a diagnostic: ${settledTurn.turn.error}`)
+    const early = "Your last turn on this request ended early"
+    if ((await pageText(run.page)).includes(early))
+      failures.push("a usage limit resumed the turn")
+    await expectShown(run.page, "Usage limit reached", failures)
+    await expectShown(run.page, "Reset time unknown", failures)
+    const box = run.page.getByRole("checkbox", {
+      name: "Auto-continue this project's threads when limits reset",
+    })
+    await box.check()
+    if (
+      !(await waitFor(async () => {
+        const view = await run.client.conversation.read(run.main.id)
+        return view.usageLimitAutoContinue === true
+      }, 15_000))
+    )
+      failures.push("the gateway did not turn usage-limit continuation on")
+    await box.uncheck()
+    if (
+      !(await waitFor(async () => {
+        const view = await run.client.conversation.read(run.main.id)
+        return view.usageLimitAutoContinue === false
+      }, 15_000))
+    )
+      failures.push("the gateway did not turn usage-limit continuation off")
   },
 
   async switch(run, step, failures) {
