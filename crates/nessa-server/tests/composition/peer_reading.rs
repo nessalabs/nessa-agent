@@ -1870,11 +1870,18 @@ async fn an_old_source_notification_cannot_certify_a_replacement_cycle() {
     first_sync_before_observation(false, true, FirstSyncStart::ReplacedC).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[should_panic(expected = "A's first sync did not complete before observation")]
+async fn a_late_source_observation_does_not_restart_the_completion_budget() {
+    first_sync_before_observation(false, false, FirstSyncStart::LateA).await;
+}
+
 enum FirstSyncStart {
     Ready,
     DelayedPoller,
     ExpiredAdmission,
     ReplacedC,
+    LateA,
 }
 
 /// Release held source workers before joining their owners, on every phase outcome.
@@ -1936,7 +1943,9 @@ async fn first_sync_before_observation(
     let (startup, bootstrap) = match start {
         FirstSyncStart::DelayedPoller => (HANDSHAKE + Duration::from_secs(1), WAIT),
         FirstSyncStart::ExpiredAdmission => (Duration::from_millis(1), Duration::ZERO),
-        FirstSyncStart::Ready | FirstSyncStart::ReplacedC => (Duration::ZERO, WAIT),
+        FirstSyncStart::Ready | FirstSyncStart::ReplacedC | FirstSyncStart::LateA => {
+            (Duration::ZERO, WAIT)
+        }
     };
     let started = tokio::time::Instant::now();
     let bootstrap_deadline = started + bootstrap;
@@ -1956,7 +1965,7 @@ async fn first_sync_before_observation(
         tokio::time::timeout_at(bootstrap_deadline, async {
             loop {
                 tokio::select! {
-                    at = &mut a_entry, if a_entered.is_none() => a_entered = Some(at),
+                    at = &mut a_entry, if a_entered.is_none() && !matches!(start, FirstSyncStart::LateA) => a_entered = Some(at),
                     _ = &mut c_entry => return started.elapsed(),
                 }
             }
@@ -2003,6 +2012,10 @@ async fn first_sync_before_observation(
         });
     let critical_started = tokio::time::Instant::now();
     let deadline = critical_started + critical;
+    if admitted && matches!(start, FirstSyncStart::LateA) {
+        // Delay observing the notification, not the production source or clock.
+        tokio::time::sleep(critical.saturating_sub(Duration::from_secs(1))).await;
+    }
     if admitted && a_entered.is_none() {
         a_entered = tokio::time::timeout_at(deadline, &mut a_entry).await.ok();
     }
@@ -2064,6 +2077,7 @@ async fn first_sync_before_observation(
     })
     .await;
     let completed_at = started.elapsed();
+    let completion_elapsed = critical_started.elapsed();
     let synced = tokio::time::timeout(observation, async {
         loop {
             if sync_of(&peers.b, &key_a).await.is_some_and(|sync| {
@@ -2112,6 +2126,12 @@ async fn first_sync_before_observation(
     // join all physical work before positive or negative assertions.
     let (clean, cleanup) = finish_first_sync(peers, poller).await;
     assert!(clean, "{evidence}; {cleanup}");
+    if matches!(start, FirstSyncStart::LateA) {
+        assert!(
+            completion_elapsed < critical + PROMPT,
+            "A observation restarted the completion budget: {completion_elapsed:?}; {evidence}"
+        );
+    }
     assert!(
         a_was_incomplete,
         "A completed before its source release; {evidence}"

@@ -136,6 +136,7 @@ fn a_cycle_gives_back_the_turn_as_it_clears_itself() {
 fn first_cycle_evidence_outlives_removed_turns_and_replacements() {
     let directory = tempfile::tempdir().unwrap();
     let commands = commands(&directory.path().join("root"));
+    let mut previous = None;
     for stopped in [false, true] {
         let key = DeviceKey::new([if stopped { 2 } else { 1 }; 32]);
         assert!(commands.first_read_stop(&key).is_none());
@@ -145,6 +146,10 @@ fn first_cycle_evidence_outlives_removed_turns_and_replacements() {
         assert!(commands.try_cycle_turn(key, &rejected).is_none());
         assert!(Arc::ptr_eq(
             &commands.first_read_stop(&key).unwrap(),
+            first.read()
+        ));
+        assert!(Arc::ptr_eq(
+            &commands.active_read_stop(&key).unwrap(),
             first.read()
         ));
         if stopped {
@@ -164,9 +169,28 @@ fn first_cycle_evidence_outlives_removed_turns_and_replacements() {
         ));
         assert!(!Arc::ptr_eq(&saved, replacement.read()));
         assert!(commands.first_read_stop(&DeviceKey::new([3; 32])).is_none());
+        if let Some((key, token)) = previous {
+            assert!(Arc::ptr_eq(
+                &commands.first_read_stop(&key).unwrap(),
+                &token
+            ));
+        }
+        previous = Some((key, saved));
         drop(turn);
         assert_eq!(peer_turns(&commands), 0);
     }
+}
+
+#[tokio::test]
+async fn closed_commands_do_not_record_a_cycle_that_never_entered() {
+    let directory = tempfile::tempdir().unwrap();
+    let commands = commands(&directory.path().join("root"));
+    assert!(commands.close(PREEMPT).await);
+    let key = DeviceKey::new([3; 32]);
+    assert!(commands.try_cycle_turn(key, &CycleStop::new()).is_none());
+    assert!(commands.first_read_stop(&key).is_none());
+    assert!(commands.active_read_stop(&key).is_none());
+    assert_eq!(peer_turns(&commands), 0);
 }
 
 /// Two peers' turns are independent, and the record set is a third: a cycle

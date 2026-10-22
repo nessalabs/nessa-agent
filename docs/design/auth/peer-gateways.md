@@ -1609,6 +1609,7 @@ control cannot pass by masking an unrelated A failure.
 | Real enrollment, approvals and grants complete | Prepare both held record sources before the timed poller phase |
 | C authenticated source entered within bounded bootstrap | Capture retained first C token; reject absent, stopped or replaced first cycle |
 | A source entry and completion within one unchanged critical budget | A has not synced before release; no new allowance after A entry |
+| A source notification observed late, with A still held | Only the remainder of the same deadline is available; a restarted completion budget fails the bounded fixture control |
 | Startup delayed before any poller exists | Critical overlap still has its own budget; production clocks are unchanged |
 | Stored source notification after first C cycle ended | Reject even if another current cycle is live; history survives turn removal |
 | Source admission times out | Keep per-gate phase evidence, release both gates and join physical work before asserting |
