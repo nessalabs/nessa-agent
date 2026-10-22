@@ -6101,8 +6101,7 @@ fn a_readonly_existing_session_parent_is_refused_without_acl_effects() {
     let parent = open_ancestor(temp.path()).unwrap();
     let root = create_directory_handle(&parent, OsStr::new("live"), true).unwrap();
     nessa_local_storage::release_directory_writes(&root).unwrap();
-    let sessions =
-        nessa_local_storage::create_session_directory_at(&root, OsStr::new("sessions")).unwrap();
+    let sessions = create_directory_handle(&root, OsStr::new("sessions"), true).unwrap();
     nessa_local_storage::seal_directory_writes(&sessions).unwrap();
     let original = DirectoryAcl::capture(&sessions).unwrap();
     drop(sessions);

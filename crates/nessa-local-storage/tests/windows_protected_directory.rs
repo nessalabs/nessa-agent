@@ -60,6 +60,15 @@ fn acl_authority(path: &Path) -> std::io::Result<File> {
     writer(path, GENERIC_READ | WRITE_DAC)
 }
 
+// Directory transitions use original maximum-access handles, matching verified
+// production reopening. Regular-file metadata cleanup retains its narrower mask.
+fn directory_acl_authority(path: &Path) -> std::io::Result<File> {
+    writer(
+        path,
+        windows_sys::Win32::System::SystemServices::MAXIMUM_ALLOWED | SYNCHRONIZE,
+    )
+}
+
 fn assert_leaf_mutation_refused(path: &Path) {
     if let Ok(file) = writer(path, READ_CONTROL | FILE_READ_ATTRIBUTES) {
         permissions::diagnose("leaf-before-mutation", &file);
@@ -121,7 +130,7 @@ fn sealed_directory_refuses_actual_additions_after_initial_handle_closes() {
     let error = fs::create_dir(root.path().join("sealed/injected-directory"))
         .expect_err("sealed directory must refuse actual directory creation");
     refused_namespace_writer(&error);
-    let cleanup = acl_authority(&root.path().join("sealed")).unwrap();
+    let cleanup = directory_acl_authority(&root.path().join("sealed")).unwrap();
     release_directory_writes(&cleanup).unwrap();
 }
 
@@ -372,7 +381,7 @@ fn original_privilege_profile_explains_directory_creation_counterexample() {
         }
         assert!(!token::privilege_enabled("SeRestorePrivilege").unwrap());
     }
-    let cleanup = acl_authority(&root.path().join("sealed")).unwrap();
+    let cleanup = directory_acl_authority(&root.path().join("sealed")).unwrap();
     release_directory_writes(&cleanup).unwrap();
 }
 
@@ -406,7 +415,7 @@ fn nested_directory_handles_must_close_before_retained_root_rename() {
     );
     assert!(root.path().join("live/child").is_dir());
     drop(root_duplicate);
-    let child = acl_authority(&root.path().join("live/child")).unwrap();
+    let child = directory_acl_authority(&root.path().join("live/child")).unwrap();
     release_directory_writes(&child).unwrap();
     release_directory_writes(&directory).unwrap();
 }
