@@ -87,8 +87,13 @@ mod tests {
     fn a_connected_silent_proxy_read_ends_at_its_original_deadline() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let _silent = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let started = Instant::now();
-        let mut stream = Stream::accept(&listener, started + Duration::from_millis(30)).unwrap();
+        // Establish the connection before starting the read deadline. Scheduling
+        // during setup must not turn the expected read timeout into accept failure.
+        let (socket, _) = listener.accept().unwrap();
+        let mut stream = Stream {
+            socket,
+            deadline: Instant::now() + Duration::from_millis(30),
+        };
         let mut clone = stream.try_clone().unwrap();
         assert_eq!(
             stream.read(&mut [0; 1]).unwrap_err().kind(),
