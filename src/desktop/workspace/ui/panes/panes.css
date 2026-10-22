@@ -7,16 +7,35 @@
  * motion reflows text. The workspace uses zero-duration layout flights (#914).
  * What a pane looks like is here.
  */
+/*
+ * The chat area is one flat surface, from the side columns to the window's
+ * edges and up behind the titlebar: the panes are regions of it, not cards
+ * floating on the window, so no card's rim or corner stands beside the
+ * window's controls. The panes keep their gutters, which the surface fills;
+ * a hairline down the middle of each gutter between two panes is all that
+ * divides them, and one down the surface's left edge sets it apart from the
+ * columns beside it.
+ */
 .workspace-chat {
+  /* The gutter between the surface's left edge and the panes. */
+  --workspace-chat-lead: 0px;
   display: flex;
   flex: 1;
   min-width: 0;
-  padding: var(--desktop-gutter) var(--desktop-gutter) var(--desktop-gutter) 0;
+  padding: var(--desktop-gutter) var(--desktop-gutter) var(--desktop-gutter)
+    var(--workspace-chat-lead);
+  background: var(--desktop-pane-fill);
+  box-shadow: inset 1px 0 0 var(--desktop-rim);
 }
 
-/* With nothing to its left, the chat area keeps a gutter from the window's edge. */
+html:not(.dark) .workspace-chat {
+  background: color-mix(in oklab, var(--background) 60%, white);
+}
+
+/* With nothing to its left, the surface is the whole window, the panes a gutter in from its edge. */
 .workspace[data-panes-alone] .workspace-chat {
-  padding-left: var(--desktop-gutter);
+  --workspace-chat-lead: var(--desktop-gutter);
+  box-shadow: none;
 }
 
 .workspace-pane {
@@ -24,38 +43,10 @@
   min-width: 0;
   flex-direction: column;
   container: workspace-pane / size;
+  /* The lifted slot's corners (below); at rest a pane draws no edge of its own. */
   border-radius: var(--desktop-radius);
-  background: var(--desktop-pane-fill);
-  box-shadow:
-    inset 0 0 0 1px var(--desktop-rim),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent),
-    0 12px 40px -18px rgb(0 0 0 / 45%);
   overflow: hidden;
-  transition:
-    box-shadow var(--desktop-base) ease,
-    opacity var(--desktop-base) ease,
-    background-color var(--desktop-base) ease;
-}
-
-html:not(.dark) .workspace-pane {
-  background: color-mix(in oklab, var(--background) 60%, white);
-  box-shadow:
-    inset 0 0 0 1px var(--desktop-rim),
-    0 12px 32px -18px rgb(0 0 0 / 18%);
-}
-
-/* With two or more panes, the one you're in carries a slightly brighter rim. */
-.workspace-pane[data-focused] {
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 13%, transparent),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent),
-    0 12px 40px -18px rgb(0 0 0 / 45%);
-}
-
-html:not(.dark) .workspace-pane[data-focused] {
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 16%, transparent),
-    0 12px 32px -18px rgb(0 0 0 / 18%);
+  transition: opacity var(--desktop-base) ease;
 }
 
 /*
@@ -103,7 +94,6 @@ html:not(.dark) .workspace-pane[data-focused] {
 
 .workspace:is([data-split-measuring], [data-drag-reflow]) .workspace-pane,
 .workspace-pane[data-split-flying] {
-  box-shadow: inset 0 0 0 1px var(--desktop-rim);
   transition: none;
 }
 
@@ -241,6 +231,75 @@ html:not(.dark) .workspace-pane[data-focused] {
   flex-direction: column;
 }
 
+/*
+ * A pane clips what it holds, and with no edge of its own that clip would show
+ * as a line wherever a shadow reached it. So the composer's lift stays inside
+ * the room a pane leaves round it.
+ */
+.workspace-pane .desktop-composer {
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 20%),
+    0 6px 16px -8px rgb(0 0 0 / 45%);
+}
+
+/* ——— Between panes ——— */
+
+/*
+ * The hairline that divides two panes, down the middle of the gutter between
+ * them (the edge that resizes them, `split-panes.css`). It runs on through the
+ * surface's own gutter to the window's edge where it meets one, so the
+ * regions read as one surface cut in two. Where it ends is the edge's own
+ * placement (`--cx`, `--cw`, which only the edge itself holds), so it is
+ * worked out there, as lengths its hairline inherits.
+ */
+@property --workspace-edge-start {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --workspace-edge-end {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+.workspace-chat .split-panes-pane-edge[data-axis="x"] {
+  --workspace-edge-start: var(--desktop-gutter);
+  --workspace-edge-end: var(--desktop-gutter);
+}
+
+/* A row's edge reaches the surface's side only from the first or last column. */
+.workspace-chat .split-panes-pane-edge[data-axis="y"] {
+  --workspace-edge-start: calc(
+    var(--workspace-chat-lead) * (1 - min(1, var(--cx) * 10000))
+  );
+  --workspace-edge-end: calc(
+    var(--desktop-gutter) * (1 - min(1, max(0, 1 - var(--cx) - var(--cw)) * 10000))
+  );
+}
+
+.workspace-chat .split-panes-pane-edge::after {
+  content: "";
+  position: absolute;
+  background: var(--desktop-rim);
+  pointer-events: none;
+}
+
+.workspace-chat .split-panes-pane-edge[data-axis="x"]::after {
+  top: calc(-1 * var(--workspace-edge-start));
+  bottom: calc(-1 * var(--workspace-edge-end));
+  left: calc(50% - 0.5px);
+  width: 1px;
+}
+
+.workspace-chat .split-panes-pane-edge[data-axis="y"]::after {
+  top: calc(50% - 0.5px);
+  right: calc(-1 * var(--workspace-edge-end));
+  left: calc(-1 * var(--workspace-edge-start));
+  height: 1px;
+}
+
 /* ——— Empty states ——— */
 
 /* Where the workspace's empty state sits (the kit's `EmptyState`, `styles.css`): the room the panes would take. */
@@ -265,7 +324,7 @@ html:not(.dark) .workspace-pane[data-focused] {
 
 /*
  * The window (`widget-window.tsx`, ADR 326): a widget over the chat area, in
- * the chat area's own gutters, with a pane's glass. The panes stay laid out
+ * the chat area's own gutters, on its surface as a pane is. The panes stay laid out
  * beneath it — their size, scroll, caret and what is typed — unseen and out
  * of reach, so a pane command measures the room they really have and coming
  * back lays nothing out again. The session list beside it stays in reach.
@@ -283,24 +342,11 @@ html:not(.dark) .workspace-pane[data-focused] {
   top: var(--desktop-gutter);
   right: var(--desktop-gutter);
   bottom: var(--desktop-gutter);
-  left: 0;
+  left: var(--workspace-chat-lead);
   display: flex;
   min-width: 0;
   flex-direction: column;
-  border-radius: var(--desktop-radius);
-  background: var(--desktop-pane-fill);
-  box-shadow:
-    inset 0 0 0 1px var(--desktop-rim),
-    0 16px 48px -18px rgb(0 0 0 / 55%);
   overflow: hidden;
-}
-
-html:not(.dark) .workspace-widget-window {
-  background: color-mix(in oklab, var(--background) 60%, white);
-}
-
-.workspace[data-panes-alone] .workspace-widget-window {
-  left: var(--desktop-gutter);
 }
 
 /* With nothing to its left, its header steps past the window's controls, as a corner pane's does. */

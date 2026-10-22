@@ -71,7 +71,7 @@ Usage: node verification/desktop/scripts/columns.mjs [options]
   --sizes <list>   Window sizes (default 1440x900,1000x700,760x700; --quick: the first).
 
 Checks, per engine, layout and size:
-  pane-level      focus changes only the rim, not pane fill or elevation, in both themes
+  pane-level      focus changes no pane's fill or elevation, in both themes
   content-visible pane bodies and fill stay visible through toggles and a new pane mounts fully opaque at unit scale
   no-overlap       every combination of the rail, the sidebar, the session list
                    (columns layout) and the overview leaves the drawn columns in

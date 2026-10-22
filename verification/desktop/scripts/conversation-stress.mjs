@@ -35,7 +35,11 @@
  *               what the window shows: it is the focused pane on the right,
  *               the main conversation on the left, the sidebar closed; that
  *               pane is closed with ⌘W and the sidebar shown again, and the
- *               main conversation, asked in its composer, is the whole window
+ *               main conversation, asked in its composer, is the whole window;
+ *               beside, the panes are regions of one flat chat surface that
+ *               reaches the window's top, right and bottom edges: no pane
+ *               draws a fill or rim of its own, and a hairline down the
+ *               middle of the gutter between them divides them
  *   long        another conversation takes `--long` turns of long streamed
  *               answers through the gateway; the last answer is whole, and
  *               still whole after its agent is closed and its history opened
@@ -1619,6 +1623,7 @@ const steps = {
       )
       return
     }
+    await flatPanes(run.page, failures)
     // Asked in the composer of the pane beside, the focused one.
     const beside = await windowRead(
       run,
@@ -2226,6 +2231,85 @@ const steps = {
  * before the gateway has the change. Resolves with the answer that met
  * `holds`, else `null`; the window shows each answer.
  */
+/**
+ * Two panes side by side are regions of one flat chat surface (`panes.css`),
+ * not cards: the surface fills to the window's top, right and bottom edges,
+ * neither pane draws a fill or rim of its own, and the one hairline between
+ * them stands in the middle of their gutter and runs past the panes to the
+ * window's top and bottom.
+ */
+async function flatPanes(page, failures) {
+  const read = () =>
+    page.evaluate(
+      ({ chat, pane, edge }) => {
+        const box = (element) => element?.getBoundingClientRect()
+        const surface = document.querySelector(chat)
+        const panes = [...document.querySelectorAll(pane)].map((element) => {
+          const style = getComputedStyle(element)
+          return {
+            box: box(element).toJSON(),
+            fill: style.backgroundColor,
+            shadow: style.boxShadow,
+          }
+        })
+        const edges = [...document.querySelectorAll(`${chat} ${edge}[data-axis="x"]`)]
+        const lines = edges.map((element) => {
+          const line = getComputedStyle(element, "::after")
+          const b = box(element)
+          return {
+            content: line.content,
+            width: line.width,
+            fill: line.backgroundColor,
+            middle: b.left + b.width / 2,
+            // The hairline's own ends: its insets reach past the edge's box.
+            top: b.top + parseFloat(line.top),
+            bottom: b.bottom - parseFloat(line.bottom),
+          }
+        })
+        return {
+          window: { width: innerWidth, height: innerHeight },
+          surface: surface && {
+            box: box(surface).toJSON(),
+            fill: getComputedStyle(surface).backgroundColor,
+          },
+          panes,
+          lines,
+        }
+      },
+      { chat: css.chat, pane: css.pane, edge: css.paneEdge },
+    )
+  const near = (a, b) => Math.abs(a - b) <= 1
+  const flat = (now) =>
+    now.surface &&
+    now.panes.length === 2 &&
+    now.lines.length === 1 &&
+    near(now.surface.box.top, 0) &&
+    near(now.surface.box.right, now.window.width) &&
+    near(now.surface.box.bottom, now.window.height) &&
+    now.surface.fill !== "rgba(0, 0, 0, 0)" &&
+    now.panes.every((p) => p.fill === "rgba(0, 0, 0, 0)" && p.shadow === "none")
+  const between = (now) => {
+    const [left, right] = [...now.panes].sort((a, b) => a.box.left - b.box.left)
+    const line = now.lines[0]
+    return (
+      line.content !== "none" &&
+      line.width === "1px" &&
+      line.fill !== "rgba(0, 0, 0, 0)" &&
+      near(line.middle, (left.box.right + right.box.left) / 2) &&
+      near(line.top, 0) &&
+      near(line.bottom, now.window.height)
+    )
+  }
+  if (
+    await waitFor(async () => {
+      const now = await read()
+      return flat(now) && between(now)
+    }, 10_000)
+  )
+    return
+  failures.push(`the panes are not one flat surface: ${JSON.stringify(await read())}`)
+}
+
 async function windowRead(run, conversationId, step, extra, failures, holds) {
   let said
   for (let attempt = 1; attempt <= 3; attempt += 1) {

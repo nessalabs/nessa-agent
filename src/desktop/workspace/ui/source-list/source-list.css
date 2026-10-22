@@ -20,27 +20,16 @@
   flex: none;
   flex-direction: column;
   margin: var(--desktop-gutter) 0 var(--desktop-gutter) var(--desktop-gutter);
+  /* Docked, it is the window's own ground, under the window's controls, with
+     no card's rim or corner beside them: the chat surface beside it is what
+     stands apart (`panes.css`). The corners are the peek's, below. */
   border-radius: var(--desktop-radius);
-  background: var(--desktop-pane-fill);
-  /* The ambient light is already soft. Sampling the whole changing window
-     through another blur made unrelated pane transitions miss their budget. */
-  box-shadow:
-    inset 0 0 0 1px var(--desktop-rim),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 6%, transparent),
-    0 12px 40px -12px rgb(0 0 0 / 55%);
   overflow: hidden;
   -webkit-user-select: none;
   user-select: none;
   transition:
     transform var(--desktop-slow) var(--desktop-out),
     visibility 0s;
-}
-
-html:not(.dark) .workspace-sidebar {
-  box-shadow:
-    inset 0 0 0 1px var(--desktop-rim),
-    inset 0 1px 0 rgb(255 255 255 / 60%),
-    0 12px 32px -16px rgb(0 0 0 / 22%);
 }
 
 .workspace[data-sidebar="closed"] .workspace-sidebar {

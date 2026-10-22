@@ -154,6 +154,7 @@ export const css = {
   sidebar: ".workspace-sidebar", // class
   sessionList: ".workspace-list", // class
   chat: ".workspace-chat", // class: the chat area, the panes' column
+  paneEdge: ".split-panes-pane-edge", // class: the edge between two panes; data-axis, its hairline is ::after
   sideRail: ".side-rail", // class: the rail beside the workspace
   workspaceWindow: ".workspace-window", // class: the frame holding the rail and the workspace; data-rail, data-sidebar
   titlebar: ".workspace-titlebar", // class: the window's titlebar row, 48px tall

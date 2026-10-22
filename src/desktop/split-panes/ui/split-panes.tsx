@@ -291,7 +291,7 @@ const PaneEdge = memo(function PaneEdge({
       value={{ now: placement.leading * 100, min: 0, max: 100 }}
       label={axis === "x" ? "Resize Columns" : "Resize Panes"}
       axis={axis}
-      className="split-panes-pane-edge"
+      className={classes.paneEdge}
       style={
         {
           "--cx": placement.x,
