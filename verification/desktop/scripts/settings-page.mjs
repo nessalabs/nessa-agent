@@ -555,6 +555,56 @@ const checks = {
   },
 
   /** Keyboard focus on a tab and a switch shows the window's focus ring. */
+  /**
+   * "nessa Studio" at the foot of the sidebar opens Settings in every layout,
+   * the window whole beneath it, and Back returns. In the classic shell its
+   * button handed its click on as the tab to open, and the window went blank.
+   */
+  studio: async (_page, { browser, url }) => {
+    const failures = []
+    for (const layout of ["classic", "columns"]) {
+      const opened = await openPage(browser, { url, layout, width: 1000, height: 700 })
+      const errors = []
+      opened.page.on("pageerror", (error) => errors.push(error.message))
+      try {
+        await settled(opened.page)
+        const studio = opened.page.getByRole("button", { name: "nessa Studio Settings" })
+        const shown = []
+        for (const each of await studio.all())
+          if (await each.isVisible()) shown.push(each)
+        if (shown.length === 0) {
+          failures.push(`${layout}: no nessa Studio button in view`)
+          continue
+        }
+        await shown[0].click()
+        const arrived = await opened.page
+          .locator(css.settings)
+          .waitFor({ timeout: 5_000 })
+          .then(() => true)
+          .catch(() => false)
+        if (!arrived) failures.push(`${layout}: nessa Studio did not open Settings`)
+        else {
+          const box = await opened.page.locator(css.settings).boundingBox()
+          if (!box || box.width < 400 || box.height < 400)
+            failures.push(`${layout}: Settings is not shown: ${JSON.stringify(box)}`)
+          const back = opened.page.getByRole("button", { name: "Back to nessa Agent" })
+          if (!(await back.isVisible()))
+            failures.push(`${layout}: Settings has no way back`)
+          else {
+            await back.click()
+            await settled(opened.page)
+            if ((await opened.page.locator(css.settings).count()) !== 0)
+              failures.push(`${layout}: Back did not leave Settings`)
+          }
+        }
+        for (const message of errors) failures.push(`${layout}: pageerror: ${message}`)
+      } finally {
+        await opened.close()
+      }
+    }
+    return { failures }
+  },
+
   "focus-ring": async (page, { engine }) => {
     const failures = []
     // WebKit on a Mac moves Tab through fields only, as Safari does; ⌥Tab
@@ -599,7 +649,7 @@ const meta = {
 Usage: node verification/desktop/scripts/settings-page.mjs [options]
 
   --only <list>   Checks, comma-separated: masthead, condense, arrive, search,
-                  focus-ring, review-notices, remembered-rules, native-hooks,
+                  studio, focus-ring, review-notices, remembered-rules, native-hooks,
                   native-hooks-on,
                   native-hooks-unset, native-hooks-failed
 
@@ -611,6 +661,8 @@ Per engine:
               the window's controls; scrolled back, it goes
   arrive      a page's motion is at most 300ms; none under less motion
   search      Enter lands on the setting, in view and marked a moment; ⌘F
+  studio      "nessa Studio" opens Settings, whole, in the classic and
+              three-column layouts, with no page error; Back returns
   focus-ring  a tab and a switch show the window's focus ring
   review-notices  Access offers Allow and does not ask before that press
   remembered-rules  Access rests the remembered-rules row without a gateway

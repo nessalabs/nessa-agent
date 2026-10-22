@@ -353,7 +353,7 @@ function NavigationBody({
           product="Studio"
           label="nessa Studio Settings"
           shortcut={chordLabel(settingsChord, isMac)}
-          onClick={openSettings}
+          onClick={() => openSettings()}
         />
         <ThemeMenu theme={theme} onThemeChange={onThemeChange} />
       </SidebarFooter>

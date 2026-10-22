@@ -490,6 +490,11 @@ export function settingsCategory(id: SettingsCategoryId): Category {
   )
 }
 
+/** Whether `value` names one of Settings' tabs: what an opening may ask for. */
+export function isSettingsTab(value: unknown): value is SettingsTabId {
+  return typeof value === "string" && tabs.has(value as SettingsTabId)
+}
+
 export function settingsTab(id: SettingsTabId): SettingsTab {
   return found(tabs.get(id), `tab ${id}`)
 }
