@@ -171,11 +171,22 @@ function rowFailures(rows, scale, where) {
 
 /** The sidebar publishes its quiet metadata after the complete overview paint. */
 async function overviewReady(page) {
-  await page.waitForFunction((sel) => {
-    const entry = document.querySelector(sel.overviewEntry)
-    const current = [...document.querySelectorAll(`${sel.sidebar} [aria-current="page"]`)]
-    return Boolean(document.querySelector(sel.overviewListed) && entry && current.length === 1 && current[0] === entry)
-  }, css, { timeout: 2_000, polling: "raf" })
+  await page.waitForFunction(
+    (sel) => {
+      const entry = document.querySelector(sel.overviewEntry)
+      const current = [
+        ...document.querySelectorAll(`${sel.sidebar} [aria-current="page"]`),
+      ]
+      return Boolean(
+        document.querySelector(sel.overviewListed) &&
+        entry &&
+        current.length === 1 &&
+        current[0] === entry,
+      )
+    },
+    css,
+    { timeout: 2_000, polling: "raf" },
+  )
   await waitUntilSettled(page)
 }
 
@@ -543,7 +554,12 @@ const checks = {
       failures.push("choosing the pressed count again did not let it go")
     return {
       failures,
-      measured: { counts: before.options.length, hover, hoverEvidence, pressed: chosen?.fill },
+      measured: {
+        counts: before.options.length,
+        hover,
+        hoverEvidence,
+        pressed: chosen?.fill,
+      },
     }
   },
   rims: async (page) => {
