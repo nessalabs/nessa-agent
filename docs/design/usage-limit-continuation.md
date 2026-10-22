@@ -261,7 +261,7 @@ status and no audit.
 | `record_outcome` fails | `defer_submit` commits, or that write fails too | `submitting`. `retry_at_ms` is still ahead when the defer commits; otherwise the previous retry time | The next pass waits out the failure column, then records the same outcome. It does not mint an execution id. A missing row is not retried |
 | preference turns on | the owner scan finishes, or the rollback commits | preference on at the revision this request installed, unsettled, the decision audit, and the request receipt `pending` | A retry resumes the scan. It does not report success and it does not apply a second change. A scan error reverts that revision only while it is still unsettled, as the system, which cancels those rows and marks the receipt failed in that same transaction. A revert that does not commit leaves the receipt `pending`, and the next retry resumes. A scan that finishes settles the revision and only then marks the receipt stored. A request that did not install it does not turn it off; its receipt becomes failed when that write commits, and stays `pending` when the write does not. If the process dies during the scan, or the next start's scan fails, catch-up stays pending until a later pass traverses every owner |
 | preference turns off | a live lease expires | preference off; unsubmitted rows cancelled, submitting rows retain command evidence | A live lease finishes its submit. After expiry the off path recovers the original receipt or retires an unattempted command under its command lease |
-| `erase_conversation` commits | the tombstone is marked erased | prompt and identifying fields blank, one new audit per row that still held them | A crash before the commit leaves the payload. Deletion stays unfinished and the next attempt scrubs again. A second scrub writes no audit. Older audit rows stay |
+| `erase_conversation` commits | the tombstone is marked erased | Prompt and delivery/grant identifiers blank; immutable command binding retained for receipt recovery; one new audit per row that still held payload | A crash before the commit leaves the payload. Deletion stays unfinished and the next attempt scrubs again. A second scrub writes no audit. Older audit rows stay |
 | the outcome is observed | the audit timestamp is chosen | the clock is read when the saved execution or the `submit_command` result is in hand | The audit names that observation. A reading taken before the submit is not reused |
 | an applied model change finishes | the continuation plan commits | the new model is durable; the fence generation has advanced when that plan committed; an open row may still name the previous model until it does | This process keeps the conversation owed. The next open read or submit runs the plan against the token it reads then. A plan that observed the previous generation does not recreate the row, including after the model changes back. A crash drops the owed set. Catch-up, while the preference is on, traverses every owner and runs the same plan |
 
@@ -579,7 +579,10 @@ While a choice is pending, the native checkbox is disabled to reflect its
 existing admission guard. Confirmation, current completion, or current
 failure releases it; an older completion cannot enable a newer pending choice.
 
-## Review brief
+## Initial design review (2026-10-20)
+
+This records the original documents-only review. Current implementation scope
+and verification are tracked in [PR 1076](https://github.com/nessalabs/nessa-agent/pull/1076).
 
 Review the design note and ADR 1075 before implementation. Base is
 `160d994ab1455153d7207a33def78a45cf041c99`. The tree under review is this
