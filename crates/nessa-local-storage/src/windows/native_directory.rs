@@ -550,19 +550,50 @@ pub fn remove_handle(file: &File) -> io::Result<()> {
     }
 }
 
-/// Release temporary namespace protection through the retained WRITE_DAC handle.
-/// The caller owns the ordering: call only after successful live publication.
-/// Requires the original MAX handle from a protected constructor or verified
-/// directory reopen. Never call this on an existing session parent.
+/// Terminal release of one owned directory after publication or retirement.
+/// Production callers complete namespace sealing before this release; the
+/// low-level admission check requires private protected modern state.
+/// The raw assignment deliberately
+/// ends in the protected legacy model; no subsequent provider transition or
+/// retry is permitted. Exact full-access DACL and terminal controls are read back.
 pub fn release_directory_writes(file: &File) -> io::Result<()> {
-    set_directory_descriptor(file, User::current()?.descriptor(true)?)?;
-    require_directory(file)
+    require_directory(file)?;
+    require_modern_directory(file)?;
+    let descriptor = User::current()?.descriptor(true)?;
+    let mut present = 0;
+    let mut defaulted = 0;
+    let mut acl = null_mut();
+    unsafe {
+        check(GetSecurityDescriptorDacl(
+            descriptor.0,
+            &mut present,
+            &mut acl,
+            &mut defaulted,
+        ))?;
+    }
+    if present == 0 || acl.is_null() {
+        return Err(unsafe_file());
+    }
+    let expected = unsafe { std::slice::from_raw_parts(acl.cast::<u8>(), (*acl).AclSize as usize) };
+    unsafe {
+        set_native_descriptor(file, descriptor.0)?;
+    }
+    require_directory(file)?;
+    let actual = DirectoryAcl::capture(file)?;
+    let actual_bytes =
+        unsafe { std::slice::from_raw_parts(actual.words.as_ptr().cast::<u8>(), actual.length) };
+    let controls = SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ;
+    if actual_bytes != expected || actual.control & controls != SE_DACL_PROTECTED {
+        return Err(io::Error::other("terminal directory release did not retain exact full-access ACL and protected legacy controls"));
+    }
+    Ok(())
 }
 
 /// Refuse further additions before final whole-tree identity/content validation.
 /// Native tests exercise real creation/rename through pre-acquired ADD handles.
-/// Requires an original MAX handle from a protected constructor or verified
-/// directory reopen; ownership alone does not establish child ACL protection.
+/// Requires the original MAX protected-constructor handle or its duplicate.
+/// A verified reopen is not qualified for provider sealing; it is used only
+/// for terminal raw release. Ownership alone does not establish isolation.
 pub fn seal_directory_writes(file: &File) -> io::Result<()> {
     set_directory_descriptor(file, User::current()?.descriptor_with_access(true, "FRFX")?)?;
     require_directory(file)
@@ -617,9 +648,9 @@ fn set_directory_descriptor(file: &File, descriptor: LocalAllocation) -> io::Res
 }
 
 // Directory-only provider transition on an already modern, private owned
-// directory. Callers retain an original MAX constructor or verified MAX reopen
-// handle. Native qualification covers both exact access masks and inherited
-// foreign children; model-zero directories are refused before any effect.
+// directory. Callers retain the original MAX constructor handle or a duplicate.
+// Reopened handles are reserved for terminal raw release, not this provider path.
+// Model-zero directories are refused before any effect.
 // Files never enter this path or its fallible post-assignment readback.
 unsafe fn set_directory_security(file: &File, descriptor: PSECURITY_DESCRIPTOR) -> io::Result<()> {
     require_directory(file)?;
@@ -687,13 +718,14 @@ fn set_descriptor(file: &File, descriptor: LocalAllocation) -> io::Result<()> {
     Ok(())
 }
 
-// File-only mechanics. The directory provider path checks the modern model;
-// its MAX provenance is supplied by owned constructors and verified reopens.
+// Raw mechanics for file permissions and terminal directory release only.
+// The directory append/seal provider path checks the modern model;
+// its original MAX provenance is supplied by owned constructors or duplicates.
 // It never enters the writable-file window.
 unsafe fn set_native_descriptor(file: &File, descriptor: PSECURITY_DESCRIPTOR) -> io::Result<()> {
     // Protection is carried in the full descriptor itself. Neither bc6's
     // high-bit selector nor 09c's low selector established foreign-child
-    // preservation; production uses this path only for regular files.
+    // preservation. Terminal directory release has its own exact postcondition.
     // File descriptors are prepared before writable permission windows;
     // directory model preparation/readback never enters this file-only path.
     let status =
@@ -716,7 +748,7 @@ mod token;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::fs::{FileExt, OpenOptionsExt};
 
     fn full_parent(path: &std::path::Path) -> File {
         std::fs::OpenOptions::new()
@@ -1082,59 +1114,46 @@ mod tests {
     }
 
     #[test]
-    fn legacy_native_directory_seal_changes_foreign_acl_after_ordinary_injection() {
+    fn raw_assignment_mutates_genuinely_inherited_legacy_children_positive_control() {
         let _ordinary = token::OrdinaryToken::enter();
         let root = tempfile::tempdir().unwrap();
+        crate::create_directory_exclusive(&root.path().join("legacy-owned")).unwrap();
         let ancestor = full_parent(root.path());
-        let descriptor = append_descriptor().unwrap();
-        // Reproduce the original explicit-access creator, rather than silently
-        // giving this causal control the new MAX provenance.
-        let directory = relative(
-            &ancestor,
-            OsStr::new("legacy-owned"),
-            DIRECTORY_BUILD_ACCESS | DELETE,
-            FILE_CREATE,
-            FILE_DIRECTORY_FILE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            Some(&descriptor),
-        )
-        .unwrap();
-        // Put this causal control in the modern inheritance model before any
-        // foreign object exists. Observe that state, rather than infer it from FA.
-        legacy_directory_assignment(&directory, append_descriptor().unwrap());
-        let parent_before = directory_control(&directory).unwrap();
-        assert!(
-            parent_before & SE_DACL_AUTO_INHERITED != 0,
-            "legacy causal setup must actually establish the modern inheritance model"
+        let directory = open_session_directory_at(&ancestor, OsStr::new("legacy-owned")).unwrap();
+        assert_eq!(
+            directory_control(&directory).unwrap() & SE_DACL_AUTO_INHERITED,
+            0
         );
-        let children = inject_foreign_children(&root.path().join("legacy-owned"));
+        let children = foreign_children(&root.path().join("legacy-owned"));
         let before: Vec<_> = children.iter().map(acl_receipt).collect();
-        for (_, control) in &before {
+        for (bytes, control) in &before {
             assert_eq!(
-                control & SE_DACL_PROTECTED,
+                control & (SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED),
                 0,
-                "injected causal children must actually be unprotected"
+                "legacy control must have real unprotected legacy inheritance"
             );
+            assert!(acl_shape(bytes)
+                .iter()
+                .any(|(_, flags, _)| u32::from(*flags) & INHERITED_ACE != 0));
         }
-        let sealed = User::current()
+        for name in ["other-chat", "foreign-directory/grandchild"] {
+            std::fs::write(
+                root.path().join("legacy-owned").join(name),
+                b"other chat unchanged",
+            )
+            .unwrap();
+        }
+        let input = User::current()
             .unwrap()
             .descriptor_with_access(true, "FRFX")
             .unwrap();
         unsafe {
-            set_native_descriptor(&directory, sealed.0).unwrap();
+            set_native_descriptor(&directory, input.0).unwrap();
         }
         let after: Vec<_> = children.iter().map(acl_receipt).collect();
-        if after == before {
-            let parent_after = directory_control(&directory).unwrap();
-            eprintln!("native-legacy-causal control_before={parent_before:#06x} input_model={:#06x} control_after={parent_after:#06x} foreign_changed=false", SE_DACL_PROTECTED);
-        }
         assert!(
             after != before,
-            "legacy native directory seal must demonstrate the injected-child mutation hazard"
-        );
-        legacy_directory_assignment(
-            &directory,
-            User::current().unwrap().descriptor(true).unwrap(),
+            "raw assignment must demonstrate actual legacy inherited child ACL/control mutation"
         );
     }
 
@@ -1219,7 +1238,7 @@ mod tests {
     }
 
     #[test]
-    fn already_modern_nonmax_provider_assignment_mutates_the_same_foreign_fixture_max_preserves() {
+    fn verified_reopen_provider_release_mutates_modern_foreign_acls_positive_control() {
         let _ordinary = token::OrdinaryToken::enter();
         let root = tempfile::tempdir().unwrap();
         let ancestor = full_parent(root.path());
@@ -1235,36 +1254,230 @@ mod tests {
             "original mixed-MAX constructor must preserve this exact inherited fixture"
         );
         drop(child);
-        let verified =
+        let reopened =
             open_verified_directory_at(&directory, OsStr::new("child"), identity).unwrap();
-        release_directory_writes(&verified).unwrap();
-        assert!(
-            children.iter().map(acl_receipt).collect::<Vec<_>>() == before,
-            "verified MAX|SYNC reopen must preserve the same inherited fixture"
-        );
-        let explicit = relative(
-            &directory,
-            OsStr::new("child"),
-            DIRECTORY_METADATA_ACCESS,
-            FILE_OPEN,
-            FILE_OPEN_REPARSE_POINT,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            None,
-        )
-        .unwrap();
-        require_directory(&explicit).unwrap();
-        require_modern_directory(&explicit).unwrap();
+        require_modern_directory(&reopened).unwrap();
         legacy_directory_assignment(
-            &explicit,
-            User::current()
-                .unwrap()
-                .descriptor_with_access(true, "FRFX")
-                .unwrap(),
+            &reopened,
+            User::current().unwrap().descriptor(true).unwrap(),
         );
-        require_modern_directory(&explicit).unwrap();
+        require_modern_directory(&reopened).unwrap();
         let after: Vec<_> = children.iter().map(acl_receipt).collect();
         assert!(after != before,
-            "explicit non-MAX provider assignment must actually mutate inherited ACLs while model remains modern");
+            "old provider release through the actual verified MAX reopen must mutate inherited ACLs while model remains modern");
+    }
+
+    #[test]
+    fn legacy_hardlink_and_ordinary_directory_move_preserve_foreign_acls_through_terminal_release()
+    {
+        let _ordinary = token::OrdinaryToken::enter();
+        for reopen in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            crate::create_directory_exclusive(&root.path().join("legacy")).unwrap();
+            let alias = root.path().join("legacy/external");
+            std::fs::write(&alias, b"external alias unchanged").unwrap();
+            let external = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(&alias)
+                .unwrap();
+            let before = acl_receipt(&external);
+            assert_eq!(
+                before.1 & (SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED),
+                0,
+                "ordinary external source must be legacy/unprotected"
+            );
+            assert!(acl_shape(&before.0)
+                .iter()
+                .any(|(_, flags, _)| u32::from(*flags) & INHERITED_ACE != 0));
+            let external_id = NativeObjectId::capture(&external).unwrap();
+            let ancestor = full_parent(root.path());
+            let owner = create_protected_directory_at(&ancestor, OsStr::new("owned")).unwrap();
+            let directory =
+                create_protected_subdirectory_at(&owner, OsStr::new("destination")).unwrap();
+            let identity = NativeObjectId::capture(&directory).unwrap();
+            let destination = root.path().join("owned/destination");
+            std::fs::hard_link(&alias, destination.join("foreign-link"))
+                .expect("ordinary ADD_FILE must actually introduce the legacy inode");
+            let linked = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(destination.join("foreign-link"))
+                .unwrap();
+            assert_eq!(NativeObjectId::capture(&linked).unwrap(), external_id);
+            assert!(
+                acl_receipt(&external) == before,
+                "hard-link admission itself preserves ACL/control"
+            );
+            assert!(acl_receipt(&linked) == before);
+            std::fs::create_dir(root.path().join("legacy/empty-directory")).unwrap();
+            let moved = std::fs::OpenOptions::new()
+                .access_mode(GENERIC_READ | DELETE)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(root.path().join("legacy/empty-directory"))
+                .unwrap();
+            let moved_before = acl_receipt(&moved);
+            assert_eq!(
+                moved_before.1 & (SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED),
+                0
+            );
+            let moved_id = NativeObjectId::capture(&moved).unwrap();
+            rename_handle_at(&moved, &directory, OsStr::new("foreign-empty"))
+                .expect("ordinary DELETE handle actually relocates an empty legacy directory");
+            let moved_after = acl_receipt(&moved);
+            assert_eq!(NativeObjectId::capture(&moved).unwrap(), moved_id);
+            eprintln!(
+                "native-ordinary-directory-move controls={:#06x}->{:#06x} acl_changed={}",
+                moved_before.1,
+                moved_after.1,
+                moved_before.0 != moved_after.0
+            );
+            let check = |phase: &str| {
+                assert!(
+                    acl_receipt(&external) == before,
+                    "external alias ACL/control changed: {phase}"
+                );
+                assert!(
+                    acl_receipt(&linked) == before,
+                    "linked inode ACL/control changed: {phase}"
+                );
+                assert!(
+                    acl_receipt(&moved) == moved_after,
+                    "moved empty directory ACL/control changed: {phase}"
+                );
+                assert_eq!(NativeObjectId::capture(&linked).unwrap(), external_id);
+                assert_eq!(NativeObjectId::capture(&external).unwrap(), external_id);
+                assert_eq!(NativeObjectId::capture(&moved).unwrap(), moved_id);
+                assert_eq!(std::fs::read(&alias).unwrap(), b"external alias unchanged");
+                assert_eq!(
+                    std::fs::read(destination.join("foreign-link")).unwrap(),
+                    b"external alias unchanged"
+                );
+                std::fs::write(&alias, b"external alias unchanged").unwrap();
+                std::fs::write(
+                    destination.join("foreign-link"),
+                    b"external alias unchanged",
+                )
+                .unwrap();
+            };
+            check("ordinary-link-and-move");
+            seal_directory_writes(&directory).unwrap();
+            check("qualified-provider-seal");
+            let held = if reopen {
+                drop(directory);
+                open_verified_directory_at(&owner, OsStr::new("destination"), identity).unwrap()
+            } else {
+                directory
+            };
+            release_directory_writes(&held).unwrap();
+            check("terminal-publication-release");
+            assert_eq!(
+                directory_control(&held).unwrap() & (SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED),
+                SE_DACL_PROTECTED
+            );
+            let terminal = DirectoryAcl::capture(&held).unwrap();
+            assert!(seal_directory_writes(&held).is_err());
+            assert!(release_directory_writes(&held).is_err());
+            assert!(
+                DirectoryAcl::capture(&held).unwrap() == terminal,
+                "terminal model refuses later provider/release attempts before effects"
+            );
+            check("terminal-no-retry");
+        }
+    }
+
+    #[test]
+    fn legacy_single_link_foreign_inode_preserves_acl_and_bytes_through_seal_and_terminal_release()
+    {
+        let _ordinary = token::OrdinaryToken::enter();
+        for reopen in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            crate::create_directory_exclusive(&root.path().join("legacy")).unwrap();
+            let external_name = root.path().join("legacy/external");
+            let payload = b"single-link foreign unchanged";
+            std::fs::write(&external_name, payload).unwrap();
+            let external = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(&external_name)
+                .unwrap();
+            let identity = NativeObjectId::capture(&external).unwrap();
+            let before = acl_receipt(&external);
+            assert_eq!(
+                before.1 & (SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED),
+                0,
+                "ordinary source must have legacy unprotected inheritance"
+            );
+            assert!(acl_shape(&before.0)
+                .iter()
+                .any(|(_, flags, _)| u32::from(*flags) & INHERITED_ACE != 0));
+            let ancestor = full_parent(root.path());
+            let owner =
+                create_protected_directory_at(&ancestor, OsStr::new("owned-single")).unwrap();
+            let directory =
+                create_protected_subdirectory_at(&owner, OsStr::new("destination")).unwrap();
+            let directory_id = NativeObjectId::capture(&directory).unwrap();
+            let target = root.path().join("owned-single/destination/foreign");
+            std::fs::hard_link(&external_name, &target).unwrap();
+            assert_eq!(information(&external).unwrap().nNumberOfLinks, 2);
+            assert!(
+                acl_receipt(&external) == before,
+                "ordinary hard link preserves exact source ACL/control"
+            );
+            std::fs::remove_file(&external_name)
+                .expect("ordinary unlink removes only the external name before sealing");
+            let linked = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .open(&target)
+                .unwrap();
+            assert_eq!(NativeObjectId::capture(&linked).unwrap(), identity);
+            assert_eq!(
+                information(&linked).unwrap().nNumberOfLinks,
+                1,
+                "remaining foreign name is genuinely single-link before validation"
+            );
+            eprintln!(
+                "native-single-link-foreign private_file_admitted={}",
+                verify_file(&linked).is_ok()
+            );
+            let check = |phase: &str| {
+                assert!(
+                    !external_name.exists(),
+                    "test-removed external name stays absent: {phase}"
+                );
+                assert_eq!(NativeObjectId::capture(&external).unwrap(), identity);
+                assert_eq!(NativeObjectId::capture(&linked).unwrap(), identity);
+                assert_eq!(information(&external).unwrap().nNumberOfLinks, 1);
+                assert!(
+                    acl_receipt(&external) == before,
+                    "held single-link ACL/control changed: {phase}"
+                );
+                assert!(
+                    acl_receipt(&linked) == before,
+                    "target single-link ACL/control changed: {phase}"
+                );
+                let mut bytes = vec![0; payload.len()];
+                assert_eq!(external.seek_read(&mut bytes, 0).unwrap(), payload.len());
+                assert_eq!(bytes.as_slice(), payload);
+                assert_eq!(std::fs::read(&target).unwrap(), payload);
+                std::fs::write(&target, payload).expect(
+                    "same ordinary target retains actual full existing-file write authority",
+                );
+            };
+            check("after-link-and-external-unlink");
+            seal_directory_writes(&directory).unwrap();
+            check("qualified-provider-seal");
+            let held = if reopen {
+                drop(directory);
+                open_verified_directory_at(&owner, OsStr::new("destination"), directory_id).unwrap()
+            } else {
+                directory
+            };
+            release_directory_writes(&held).unwrap();
+            check("terminal-raw-release");
+        }
     }
 
     #[test]

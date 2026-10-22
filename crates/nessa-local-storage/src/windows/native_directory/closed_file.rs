@@ -45,8 +45,9 @@ impl NativeObjectId {
 
 /// Reopen one private directory for reading and ACL control, checking saved ID.
 /// Callers walk one saved native component at a time from the retained root.
-/// The original MAX|SYNCHRONIZE open is also the directory provider-transition
-/// capability; grant and identity checks precede returning ACL authority.
+/// Grant and identity checks precede returning terminal-release authority.
+/// The MAX|SYNCHRONIZE reopen is not qualified for provider append or seal;
+/// directory release uses the separate raw terminal transition.
 pub fn open_verified_directory_at(
     parent: &File,
     name: &OsStr,

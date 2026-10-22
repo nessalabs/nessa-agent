@@ -248,3 +248,5 @@ These are source-review conclusions and regression contracts. The PR records
 the passing and failing receipts against each frozen tree, including the final
 aggregate and exact-head native CI; this section does not imply pending native
 runtime checks passed.
+
+Native 0125274a reached and passed readonly-phase and leaf-pinning controls, but verified-reopen provider release changed genuine inherited child ACLs (storage53/3, directory integration11/0). The design now distinguishes qualified append/seal from a separately checked terminal raw-release candidate. Ordinary legacy hard-link and directory-move postures, external-alias preservation and failure cleanup are mandatory controls; no all-children-modern assumption or weaker ACL assertion qualifies release.

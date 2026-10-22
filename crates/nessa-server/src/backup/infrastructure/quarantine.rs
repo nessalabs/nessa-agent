@@ -6117,3 +6117,126 @@ fn a_readonly_existing_session_parent_is_refused_without_acl_effects() {
     assert!(list_names(&sessions).unwrap().is_empty());
     assert_eq!(list_names(&parent).unwrap(), vec![OsString::from("live")]);
 }
+
+#[cfg(windows)]
+#[test]
+fn failed_multilink_validation_drops_namespace_guard_without_changing_foreign_security() {
+    use nessa_local_storage::NativeObjectId;
+    use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt};
+
+    fn security_bytes(path: &Path) -> Vec<u8> {
+        #[link(name = "advapi32")]
+        extern "system" {
+            fn GetFileSecurityW(
+                name: *const u16,
+                information: u32,
+                descriptor: *mut std::ffi::c_void,
+                length: u32,
+                needed: *mut u32,
+            ) -> i32;
+        }
+        let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut needed = 0;
+        let information = 1 | 2 | 4; // Owner, group, DACL, including descriptor controls.
+        let first = unsafe {
+            GetFileSecurityW(
+                name.as_ptr(),
+                information,
+                std::ptr::null_mut(),
+                0,
+                &mut needed,
+            )
+        };
+        let error = std::io::Error::last_os_error();
+        assert_eq!(first, 0);
+        assert_eq!(error.raw_os_error(), Some(122));
+        assert!(needed > 0);
+        let mut descriptor = vec![0u32; (needed as usize).div_ceil(4)];
+        let capacity = (descriptor.len() * 4) as u32;
+        // The UTF-16 path and aligned writable descriptor remain alive for the
+        // native call, and its returned count bounds the copied raw bytes.
+        let read = unsafe {
+            GetFileSecurityW(
+                name.as_ptr(),
+                information,
+                descriptor.as_mut_ptr().cast(),
+                capacity,
+                &mut needed,
+            )
+        };
+        assert_ne!(read, 0, "{}", std::io::Error::last_os_error());
+        assert!(needed <= capacity);
+        unsafe { std::slice::from_raw_parts(descriptor.as_ptr().cast::<u8>(), needed as usize) }
+            .to_vec()
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    nessa_local_storage::create_directory_exclusive(&temp.path().join("legacy")).unwrap();
+    let external_path = temp.path().join("legacy/external");
+    let bytes = b"foreign legacy inode remains writable";
+    fs::write(&external_path, bytes).unwrap();
+    let external = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(7)
+        .open(&external_path)
+        .unwrap();
+    let before = security_bytes(&external_path);
+    let control = u16::from_le_bytes(before[2..4].try_into().unwrap());
+    assert_eq!(
+        control & (0x1000 | 0x0400),
+        0,
+        "fixture must have legacy unprotected inheritance"
+    );
+    let dacl = u32::from_le_bytes(before[16..20].try_into().unwrap()) as usize;
+    assert!(dacl > 0 && dacl + 8 <= before.len());
+    let count = u16::from_le_bytes(before[dacl + 4..dacl + 6].try_into().unwrap());
+    let mut offset = dacl + 8;
+    let mut inherited = false;
+    for _ in 0..count {
+        assert!(offset + 4 <= before.len());
+        inherited |= before[offset + 1] & 0x10 != 0;
+        let size = u16::from_le_bytes(before[offset + 2..offset + 4].try_into().unwrap()) as usize;
+        assert!(size >= 4 && offset + size <= before.len());
+        offset += size;
+    }
+    assert!(inherited, "fixture must contain genuinely inherited ACEs");
+    let identity = NativeObjectId::capture(&external).unwrap();
+    let parent = open_ancestor(temp.path()).unwrap();
+    let directory = create_directory_handle(&parent, OsStr::new("owned"), true).unwrap();
+    let linked_path = temp.path().join("owned/foreign-link");
+    fs::hard_link(&external_path, &linked_path).unwrap();
+    let linked = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(7)
+        .open(&linked_path)
+        .unwrap();
+    assert_eq!(NativeObjectId::capture(&linked).unwrap(), identity);
+    assert!(
+        nessa_local_storage::verify_file(&linked).is_err(),
+        "multilink admission must fail before ACL verification"
+    );
+    let unchanged = || {
+        for (path, handle) in [(&external_path, &external), (&linked_path, &linked)] {
+            assert_eq!(security_bytes(path), before);
+            assert_eq!(NativeObjectId::capture(handle).unwrap(), identity);
+            assert_eq!(fs::read(path).unwrap(), bytes);
+            fs::write(path, bytes).unwrap();
+            assert_eq!(security_bytes(path), before);
+        }
+    };
+    unchanged();
+    let guard = ProtectedDirectories::seal(&directory).unwrap();
+    unchanged();
+    // This is the real publication validator and its real failure: opening the
+    // linked payload rejects nNumberOfLinks > 1. Drop takes the production
+    // guard cleanup path, including release_copy_directory on the owned root.
+    assert_eq!(content_of(&directory), Err(RestoreFault::Unreadable));
+    drop(guard);
+    unchanged();
+    fs::write(
+        temp.path().join("owned/after-cleanup"),
+        b"full parent access restored",
+    )
+    .unwrap();
+    assert!(!temp.path().join("live").exists());
+}

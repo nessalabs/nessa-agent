@@ -5344,6 +5344,26 @@ fn windows_security_bytes(path: &Path) -> Vec<u8> {
 }
 
 #[cfg(windows)]
+struct SessionSourceHook<'a, F> {
+    inner: &'a FakeSource,
+    hook: Mutex<Option<F>>,
+}
+
+#[cfg(windows)]
+impl<F: FnOnce()> DeferredSessionSource for SessionSourceHook<'_, F> {
+    fn write_session(
+        &self,
+        conversation_id: &str,
+        destination: &mut fs::File,
+        progress: &mut dyn FetchProgress,
+    ) -> Result<(), SessionSourceError> {
+        self.hook.lock().unwrap().take().unwrap()();
+        self.inner
+            .write_session(conversation_id, destination, progress)
+    }
+}
+
+#[cfg(windows)]
 #[tokio::test]
 async fn final_available_audit_keeps_owned_session_names_pinned_without_changing_foreign_acls() {
     for fail in [false, true] {
@@ -5352,21 +5372,16 @@ async fn final_available_audit_keeps_owned_session_names_pinned_without_changing
             deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
         let sessions = place.live.join("sessions");
         nessa_local_storage::create_directory(&sessions).unwrap();
-        fs::create_dir_all(sessions.join("foreign-directory")).unwrap();
+        let parent_before = windows_security_bytes(&sessions);
         let foreign = sessions.join("foreign.sqlite3");
         let grandchild = sessions.join("foreign-directory/child");
-        fs::write(&foreign, b"foreign session").unwrap();
-        fs::write(&grandchild, b"foreign child").unwrap();
         let foreign_paths = [
             sessions.clone(),
             foreign.clone(),
             sessions.join("foreign-directory"),
             grandchild.clone(),
         ];
-        let before: Vec<_> = foreign_paths
-            .iter()
-            .map(|path| windows_security_bytes(path))
-            .collect();
+        let before = Mutex::new(None);
         let output = sessions.join("conv-bulk.sqlite3");
         let sidecar = output.with_extension("sqlite3.publication");
         let called = AtomicUsize::new(0);
@@ -5381,7 +5396,11 @@ async fn final_available_audit_keeps_owned_session_names_pinned_without_changing
                         .iter()
                         .map(|path| windows_security_bytes(path))
                         .collect::<Vec<_>>(),
-                    before,
+                    before
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .expect("the source captured foreign descriptors after admission"),
                 );
                 // The final audit follows owned ACL release. ERROR_SHARING_VIOLATION
                 // on a new writer proves the retained File's sharing pin still
@@ -5407,6 +5426,23 @@ async fn final_available_audit_keeps_owned_session_names_pinned_without_changing
             })),
         };
         let source = FakeSource::matching(&session);
+        let copying = SessionSourceHook {
+            inner: &source,
+            hook: Mutex::new(Some(|| {
+                // Admission has verified the empty sessions namespace and
+                // begin_session has retained its original parent authority.
+                assert_eq!(windows_security_bytes(&sessions), parent_before);
+                fs::create_dir(sessions.join("foreign-directory")).unwrap();
+                fs::write(&foreign, b"foreign session").unwrap();
+                fs::write(&grandchild, b"foreign child").unwrap();
+                *before.lock().unwrap() = Some(
+                    foreign_paths
+                        .iter()
+                        .map(|path| windows_security_bytes(path))
+                        .collect::<Vec<_>>(),
+                );
+            })),
+        };
         let result = open_deferred_conversation(
             &OpenRequest {
                 facts: person(RestoreAction::Fetch),
@@ -5416,7 +5452,7 @@ async fn final_available_audit_keeps_owned_session_names_pinned_without_changing
             &policy(),
             &hooked,
             &DirectoryQuarantine,
-            &source,
+            &copying,
             &FixedIds("pub-audit-pins"),
             &mut Quiet,
         );
@@ -5427,8 +5463,13 @@ async fn final_available_audit_keeps_owned_session_names_pinned_without_changing
                 .iter()
                 .map(|path| windows_security_bytes(path))
                 .collect::<Vec<_>>(),
-            before,
+            before
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("the source captured foreign descriptors after admission"),
         );
+        assert_eq!(windows_security_bytes(&sessions), parent_before);
         assert_eq!(fs::read(&foreign).unwrap(), b"foreign session");
         assert_eq!(fs::read(&grandchild).unwrap(), b"foreign child");
         if fail {
@@ -5464,6 +5505,56 @@ async fn final_available_audit_keeps_owned_session_names_pinned_without_changing
             }
         }
     }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn unlisted_foreign_session_entries_are_refused_before_source_and_available_audit() {
+    let session = sealed_session(b"session-v1");
+    let (_bundle, place, audit) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+    let sessions = place.live.join("sessions");
+    nessa_local_storage::create_directory(&sessions).unwrap();
+    let foreign = sessions.join("foreign.sqlite3");
+    let foreign_directory = sessions.join("foreign-directory");
+    let grandchild = foreign_directory.join("child");
+    fs::create_dir(&foreign_directory).unwrap();
+    fs::write(&foreign, b"foreign session").unwrap();
+    fs::write(&grandchild, b"foreign child").unwrap();
+    let paths = [&sessions, &foreign, &foreign_directory, &grandchild];
+    let before: Vec<_> = paths
+        .iter()
+        .map(|path| windows_security_bytes(path))
+        .collect();
+    let called = AtomicUsize::new(0);
+    let hooked = HookAudit {
+        inner: &audit,
+        cause: "fetched",
+        fail: false,
+        hook: Mutex::new(Some(|| {
+            called.fetch_add(1, Ordering::SeqCst);
+        })),
+    };
+    let source = FakeSource::matching(&session);
+    assert_eq!(
+        open_one(&place, "conv-bulk", &source, &hooked).unwrap_err(),
+        RestoreFault::Tamper
+    );
+    assert_eq!(*source.writes.lock().unwrap(), 0);
+    assert_eq!(called.load(Ordering::SeqCst), 0);
+    assert!(!sessions.join("conv-bulk.sqlite3").exists());
+    assert!(!sessions.join("conv-bulk.sqlite3.publication").exists());
+    assert_eq!(fs::read_dir(&sessions).unwrap().count(), 2);
+    assert_eq!(
+        paths
+            .iter()
+            .map(|path| windows_security_bytes(path))
+            .collect::<Vec<_>>(),
+        before
+    );
+    assert_eq!(fs::read(&foreign).unwrap(), b"foreign session");
+    assert_eq!(fs::read(&grandchild).unwrap(), b"foreign child");
+    assert!(!audit.lines().iter().any(|line| line.after == "available"));
 }
 
 impl<F: FnOnce() + Send> RestoreAudit for HookAudit<'_, F> {
