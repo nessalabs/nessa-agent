@@ -22,7 +22,7 @@ use nessa_local_storage::create_directory_exclusive;
 #[path = "quarantine_windows.rs"]
 mod windows_backend;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use nessa_local_storage::publish_new;
 use nessa_local_storage::{create_directory, OpenMode};
 use serde_json::{json, Value};
@@ -1707,7 +1707,7 @@ fn marker_bytes(staging_id: &str) -> Result<Vec<u8>, RestoreFault> {
 }
 
 /// Rename `from` onto `to` only when `to` does not exist.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn rename_new(from: &Path, to: &Path, occupied: RestoreFault) -> Result<(), RestoreFault> {
     match publish_new(from, to) {
         Ok(()) => Ok(()),
@@ -3291,7 +3291,7 @@ fn list_names(directory: &File) -> Result<Vec<OsString>, RestoreFault> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn unlink_at(parent: &File, name: &OsStr) -> Result<(), RestoreFault> {
     #[cfg(unix)]
     {
@@ -3345,7 +3345,7 @@ fn rename_owned_at(
     }
 }
 
-#[cfg(any(not(windows), test))]
+#[cfg(not(windows))]
 fn rename_exclusive_at(
     from_dir: &File,
     from: &OsStr,
@@ -3395,10 +3395,6 @@ fn rename_exclusive_at(
             };
         }
         Ok(())
-    }
-    #[cfg(windows)]
-    {
-        windows_backend::rename_entry(from_dir, from, to_dir, to, occupied)
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -6120,9 +6116,34 @@ fn a_readonly_existing_session_parent_is_refused_without_acl_effects() {
     assert_eq!(list_names(&parent).unwrap(), vec![OsString::from("live")]);
 }
 
+#[test]
+fn owned_stage_validation_rejects_an_unowned_alias() {
+    let temp = tempfile::tempdir().unwrap();
+    let parent = open_ancestor(temp.path()).unwrap();
+    let directory = create_directory_handle(&parent, OsStr::new("owned"), true).unwrap();
+    staged_tree_matches(&directory, &[], &[]).unwrap();
+    let external = temp.path().join("external");
+    let linked = temp.path().join("owned/foreign-link");
+    let bytes = b"foreign alias is readable but not owned";
+    fs::write(&external, bytes).unwrap();
+    fs::hard_link(&external, &linked).unwrap();
+    assert_eq!(
+        content_of(&directory).unwrap(),
+        Fingerprint::of(format!("foreign-link {}", Fingerprint::of(bytes).hex()).as_bytes())
+    );
+    assert_eq!(
+        staged_tree_matches(&directory, &[], &[]),
+        Err(RestoreFault::Retained)
+    );
+    assert_eq!(fs::read(&external).unwrap(), bytes);
+    fs::remove_file(linked).unwrap();
+    staged_tree_matches(&directory, &[], &[]).unwrap();
+    assert_eq!(fs::read(external).unwrap(), bytes);
+}
+
 #[cfg(windows)]
 #[test]
-fn failed_multilink_validation_drops_namespace_guard_without_changing_foreign_security() {
+fn failed_foreign_content_validation_drops_namespace_guard_without_changing_foreign_security() {
     use nessa_local_storage::NativeObjectId;
     use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt};
 
@@ -6297,6 +6318,7 @@ fn failed_multilink_validation_drops_namespace_guard_without_changing_foreign_se
     let identity = NativeObjectId::capture(&external).unwrap();
     let parent = open_ancestor(temp.path()).unwrap();
     let directory = create_directory_handle(&parent, OsStr::new("owned"), true).unwrap();
+    staged_tree_matches(&directory, &[], &[]).unwrap();
     let linked_path = temp.path().join("owned/foreign-link");
     fs::hard_link(&external_path, &linked_path).unwrap();
     let linked = fs::OpenOptions::new()
@@ -6337,10 +6359,18 @@ fn failed_multilink_validation_drops_namespace_guard_without_changing_foreign_se
     unchanged("after-link-and-open");
     let guard = ProtectedDirectories::seal(&directory).unwrap();
     unchanged("after-real-guard-seal");
-    // This is the real publication validator and its real failure: opening the
-    // linked payload rejects nNumberOfLinks > 1. Drop takes the production
-    // guard cleanup path, including release_copy_directory on the owned root.
-    assert_eq!(content_of(&directory), Err(RestoreFault::Unreadable));
+    // Ordinary authenticated archive reads permit linked regular files. The
+    // publication validator instead requires the exact owned manifest, so this
+    // unowned foreign entry must fail before promotion. Drop then takes the
+    // production guard cleanup path on the owned root.
+    assert_eq!(
+        content_of(&directory).unwrap(),
+        Fingerprint::of(format!("foreign-link {}", Fingerprint::of(bytes).hex()).as_bytes())
+    );
+    assert_eq!(
+        staged_tree_matches(&directory, &[], &[]),
+        Err(RestoreFault::Retained)
+    );
     unchanged("after-real-validation-error-before-guard-drop");
     drop(guard);
     unchanged("after-real-guard-drop");

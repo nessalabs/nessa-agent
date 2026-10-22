@@ -276,3 +276,28 @@ assertion must fail one versus two. A counterfactual stopping the captured old
 owner must fail the first row's close or released-slot evidence. These controls
 and final aggregate results must be recorded after execution, not inferred from
 source inspection.
+
+## Windows Clippy qualification: obsolete test adapters, 2026-10-22
+
+Exact-head `40057ec4b9c11c3aa2396e852f107c11a818cb7c` Windows remaining
+tests passed, including the legacy ACL and stored-protection controls. The
+following Clippy step failed on four unused helpers. `rename_new`, `unlink_at`
+and the `publish_new` import serve only the Unix namespace-sealing test and
+are now compiled only for Unix tests. `rename_exclusive_at` serves only the
+non-Windows production branch; its unused Windows arm and the corresponding
+test adapter were removed. Windows publication continues to rename through
+the retained source handle. No assertion, lint severity or public storage API
+was changed. Independent caller and platform review confirmed these boundaries;
+the corrected tree still requires aggregate and exact-head CI qualification.
+
+The same head's Windows server aggregate reached the guard-cleanup test's
+validation assertion and failed: `content_of` returned a fingerprint rather
+than `Unreadable` (2,884 passed, one failed, eight ignored). Its ordinary
+archive reader intentionally accepts linked regular files. Publication uses
+`staged_tree_matches` to require the complete owned manifest before promotion.
+The corrected fixture proves empty-manifest acceptance before injection,
+ordinary reading of the foreign alias, and actual publication refusal with
+`Retained` after sealing. Private-file multilink refusal and every native
+security, identity, byte, write and guard-drop assertion remain. A portable
+regression separately checks alias refusal and acceptance after its removal;
+this correction does not add private-file policy to authenticated archive reads.

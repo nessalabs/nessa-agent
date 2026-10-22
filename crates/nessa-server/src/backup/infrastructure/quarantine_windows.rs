@@ -89,23 +89,6 @@ pub(super) fn rename_owned(
     })
 }
 
-#[cfg(test)]
-pub(super) fn rename_entry(
-    from_parent: &File,
-    from: &OsStr,
-    to_parent: &File,
-    to: &OsStr,
-    occupied: RestoreFault,
-) -> Result<(), RestoreFault> {
-    storage::rename_relative_entry_at(from_parent, from, to_parent, to).map_err(|error| {
-        if error.kind() == io::ErrorKind::AlreadyExists {
-            occupied
-        } else {
-            RestoreFault::Rename
-        }
-    })
-}
-
 pub(super) fn seal_copy_directory(directory: &File) -> Result<File, RestoreFault> {
     let retained = duplicate(directory)?;
     storage::seal_directory_writes(&retained).map_err(|_| RestoreFault::Unreadable)?;
