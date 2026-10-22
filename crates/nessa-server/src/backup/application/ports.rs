@@ -575,8 +575,10 @@ pub struct SessionCut {
 
 /// The store that can still serve a deferred conversation's exact stream.
 pub trait DeferredSessionSource {
-    /// Write into the empty file reserved by this attempt. Its handle remains
-    /// the destination if a directory or file name is replaced during fetch.
+    /// Write only the requested conversation and its records into the empty
+    /// file reserved by this attempt. The layout independently validates that
+    /// whole image before publication. The handle remains the destination if
+    /// a directory or file name is replaced during fetch.
     fn write_session(
         &self,
         conversation_id: &str,

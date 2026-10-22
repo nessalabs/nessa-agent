@@ -220,3 +220,34 @@ consumption now precedes that intent and all filesystem effects under the root
 locks. A consumption-audit failure leaves the source retryable without promotion;
 a later intent failure leaves it spent and requires a fresh stage. The shared
 root-authority fold's existing staging-id invalidation owns this decision.
+
+## Native qualification and injected-source boundary
+
+Native qualification exposed an obsolete Unix-wide unnamed-file assumption.
+Linux retains its unnamed-inode check; macOS protected named copies instead
+require exact named inode bindings, held bytes and journal agreement, and no
+foreign entries. Source-only scratch outside the restored root is a separate
+retirement scope: exact zeroing and sync must succeed before preserving a
+primary source refusal. Empty external scratch names can remain. Named
+publication candidates and failed zeroing or sync still return `Retained`.
+
+Windows qualification preserves failures rather than treating cross compilation
+as native proof. Corrections use the native DACL selector, preserve captured ACL
+control bits, and request synchronization access for independent enumeration
+cursors. Native assertions retain exact foreign-child ACL comparisons and
+actual write, rename, and deletion controls. Fixtures distinguish Windows'
+open-descendant directory-rename refusal from successful Unix ancestor swaps.
+
+The public deferred source is not trusted to enforce the published database's
+data boundary. A deterministic source returning the exact requested stream plus
+another conversation reproduced successful whole-image publication before the
+fix. Held inspection now rejects additional stream heads, names and unrelated
+record rows. Publication reuses the canonical stream writer with a held source
+and fresh protected destination, excluding source-side tables, columns, free
+pages and trailing bytes. Separate regressions verify rejection, a one-stream
+positive control, and exclusion of stored side-data sentinel bytes.
+
+These are source-review conclusions and regression contracts. The PR records
+the passing and failing receipts against each frozen tree, including the final
+aggregate and exact-head native CI; this section does not imply pending native
+runtime checks passed.

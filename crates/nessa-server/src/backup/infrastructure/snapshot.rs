@@ -373,14 +373,36 @@ pub(crate) fn inspect_conversation(
 ///
 /// The private read-only VFS reads pages from the retained descriptor, including
 /// unnamed or unlinked files, with a one-MiB SQLite page cache. No pathname is
-/// reopened while inspecting the held inode.
+/// reopened while inspecting the held inode. The known stream tables must
+/// contain exactly this stream, without another head, name, or orphan record.
+/// Publication separately rematerializes that stream into a canonical image.
 pub(crate) fn inspect_open_file(
     file: &mut File,
     conversation_id: &str,
 ) -> Result<MaterializedStream, MaterializeError> {
     let database = HeldDatabase::open(file).map_err(|_| MaterializeError::Unreadable)?;
     let connection = database.connection();
-    let (_key, stream) = one_stream(connection, conversation_id)?;
+    let _read = stream_read(connection).map_err(|_| MaterializeError::Unreadable)?;
+    let (key, stream) = one_stream(connection, conversation_id)?;
+    // A held destination is the whole image we will publish. A matching
+    // requested stream does not authorize another stream or orphan records.
+    // Count at most two heads and inspect record ownership without loading
+    // payloads or comparing malformed non-integer keys.
+    let exclusive: bool = connection
+        .query_row(
+            "SELECT
+            (SELECT count(*) FROM (SELECT 1 FROM event_streams LIMIT 2))=1
+            AND (SELECT count(*) FROM (SELECT 1 FROM event_stream_names LIMIT 2))=1
+            AND NOT EXISTS(SELECT 1 FROM event_records WHERE CASE
+                WHEN typeof(stream_key)='integer' THEN stream_key!=?1
+                ELSE 1 END)",
+            [key],
+            |row| row.get(0),
+        )
+        .map_err(|_| MaterializeError::Unreadable)?;
+    if !exclusive {
+        return Err(MaterializeError::Unreadable);
+    }
     Ok(MaterializedStream {
         size: stream.size,
         digest: stream.digest,
@@ -402,9 +424,32 @@ pub(crate) fn materialize_into_file(
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|_| MaterializeError::Unreadable)?;
-    let (key, stream) = one_stream(&source, conversation_id)?;
+    materialize_connection_into_file(&source, conversation_id, destination, progress)
+}
+
+/// Normalize a held source image into a fresh held destination. Only the
+/// requested stream enters the canonical schema; source-side tables, columns,
+/// free pages, and trailing bytes are never copied as database-image bytes.
+pub(crate) fn materialize_held_into_file(
+    source: &mut File,
+    conversation_id: &str,
+    destination: &mut File,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<MaterializedStream, MaterializeError> {
+    let source = HeldDatabase::open(source).map_err(|_| MaterializeError::Unreadable)?;
+    materialize_connection_into_file(source.connection(), conversation_id, destination, progress)
+}
+
+fn materialize_connection_into_file(
+    source: &Connection,
+    conversation_id: &str,
+    destination: &mut File,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<MaterializedStream, MaterializeError> {
+    let _read = stream_read(source).map_err(|_| MaterializeError::Unreadable)?;
+    let (key, stream) = one_stream(source, conversation_id)?;
     let dest = HeldDatabase::writable(destination).map_err(|_| MaterializeError::Unreadable)?;
-    copy_stream_into(&source, key, &stream, dest.connection(), progress)?;
+    copy_stream_into(source, key, &stream, dest.connection(), progress)?;
     drop(dest);
     destination
         .sync_all()

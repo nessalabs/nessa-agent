@@ -47,7 +47,8 @@ use crate::backup::domain::{
 use super::log::{authenticate_inventory, exclusive, persist};
 use super::snapshot::inspect_open_file;
 use super::snapshot::{
-    inspect_conversation, materialize_into_file, without_fenced_conversations, MaterializeError,
+    inspect_conversation, materialize_held_into_file, materialize_into_file,
+    without_fenced_conversations, MaterializeError,
 };
 
 /// Reads a later inventory that carries its own mac line.
@@ -574,13 +575,7 @@ impl QuarantineLayout for DirectoryQuarantine {
             };
             #[cfg(not(any(target_os = "macos", windows)))]
             let temporary_parent = duplicate(&directory)?;
-            let temp = create_unpublished(
-                &temporary_parent,
-                &temporary,
-                relative,
-                true,
-                RestoreFault::Retained,
-            )?;
+            let temp = create_source_scratch(&temporary_parent, &temporary, relative)?;
             Ok((directory, name, temp))
         };
         #[cfg(windows)]
@@ -838,9 +833,6 @@ impl SessionAttempt for DirectorySessionAttempt {
             .ok_or(RestoreFault::Unreadable)?
             .try_clone()
             .map_err(|_| RestoreFault::Unreadable)?;
-        input
-            .seek(SeekFrom::Start(0))
-            .map_err(|_| RestoreFault::Unreadable)?;
         self.output = Some(create_unpublished(
             &self.directory,
             &self.name,
@@ -849,16 +841,13 @@ impl SessionAttempt for DirectorySessionAttempt {
             RestoreFault::SessionDiffers,
         )?);
         let output = self.output.as_mut().ok_or(RestoreFault::Unreadable)?;
-        let mut buffer = [0u8; 8192];
-        loop {
-            let count = input
-                .read(&mut buffer)
-                .map_err(|_| RestoreFault::Unreadable)?;
-            if count == 0 {
-                break;
-            }
-            output.store(&buffer[..count])?;
-        }
+        materialize_held_into_file(
+            &mut input,
+            conversation_id,
+            output.file_mut()?,
+            &mut |_, _| {},
+        )
+        .map_err(|_| RestoreFault::Unreadable)?;
         output.sync_file()?;
         if !unpublished_matches(output, conversation_id, digest)? {
             return Err(RestoreFault::SourceChanged);
@@ -2480,6 +2469,14 @@ fn copy_bytes_at(
 /// Linux keeps the inode unnamed until [`Unpublished::publish_in`]. Other
 /// Unix systems create its final name with mode0400 and retain the only trusted
 /// writer. Windows retains a handle that does not share write access.
+#[derive(Clone, Copy)]
+enum RetirementScope {
+    PublicationCandidate,
+    /// Named scratch is outside the restored root (or unnamed on Linux).
+    /// Exact zero+sync retires its source bytes; an empty scratch name may remain.
+    ExternalSourceScratch,
+}
+
 struct Unpublished {
     parent: File,
     name: OsString,
@@ -2491,6 +2488,7 @@ struct Unpublished {
     /// The name is the one publication keeps. Drop must not remove it.
     published: bool,
     protected: bool,
+    retirement_scope: RetirementScope,
 }
 
 impl Unpublished {
@@ -2509,15 +2507,26 @@ impl Unpublished {
     }
 
     fn retire(&mut self) -> Result<(), RestoreFault> {
+        self.retire_with(empty_owned_file)
+    }
+
+    fn retire_with(
+        &mut self,
+        retire: impl FnOnce(&File) -> Result<(), RestoreFault>,
+    ) -> Result<(), RestoreFault> {
         let Some(file) = self.file.as_ref() else {
             return Ok(());
         };
-        let emptied = empty_owned_file(file).is_ok();
+        let emptied = retire(file).is_ok();
         // Name removal cannot be made conditional on an inode atomically on
         // Unix. Leave the namespace alone; the retained bytes are now empty.
         // A replacement name is not this inode; emptying still retires any
         // descriptor retained by the source, even when it was renamed aside.
-        if !emptied || self.published || self.named {
+        if !emptied
+            || self.published
+            || (self.named
+                && matches!(self.retirement_scope, RetirementScope::PublicationCandidate))
+        {
             Err(RestoreFault::Retained)
         } else {
             Ok(())
@@ -2647,6 +2656,18 @@ fn unpublished_matches(
     ))
 }
 
+/// Reserved source bytes never create an entry in the restored namespace.
+/// macOS/Windows use an external sibling scratch; Linux keeps it unnamed.
+fn create_source_scratch(
+    parent: &File,
+    name: &OsStr,
+    relative: &str,
+) -> Result<Unpublished, RestoreFault> {
+    let mut scratch = create_unpublished(parent, name, relative, true, RestoreFault::Retained)?;
+    scratch.retirement_scope = RetirementScope::ExternalSourceScratch;
+    Ok(scratch)
+}
+
 fn create_unpublished(
     parent: &File,
     name: &OsStr,
@@ -2714,6 +2735,7 @@ fn create_unpublished(
         named: !cfg!(target_os = "linux"),
         published: false,
         protected: false,
+        retirement_scope: RetirementScope::PublicationCandidate,
     })
 }
 
@@ -2790,25 +2812,42 @@ fn held_still_sealed(
     if Fingerprint::of(lines.join("\n").as_bytes()) != loaded.content {
         return Err(RestoreFault::Tamper);
     }
-    // Unix files are not named yet. A named file is one this attempt did not write.
-    #[cfg(unix)]
+    // Linux O_TMPFILE inodes have no names before publication. Other
+    // supported platforms create protected final names from birth, so validate
+    // those exact bindings and reject foreign entries instead of requiring absence.
+    #[cfg(target_os = "linux")]
     if contains_file(directory)? {
         return Err(RestoreFault::Tamper);
     }
-    // Windows names the files while the handles deny writers. An extra name is
-    // not the seal. The check does not reopen the files.
-    #[cfg(windows)]
-    {
-        let mut expected: Vec<String> = held.iter().map(|file| file.relative.clone()).collect();
-        expected.push(String::from("journal.txt"));
-        if unexpected_file(directory, "", &expected)? {
+    #[cfg(not(target_os = "linux"))]
+    held_named_tree_matches(directory, held, journal)?;
+
+    Ok(())
+}
+
+#[cfg(any(test, not(target_os = "linux")))]
+fn held_named_tree_matches(
+    directory: &File,
+    held: &[Unpublished],
+    journal: &Unpublished,
+) -> Result<(), RestoreFault> {
+    let mut expected = Vec::new();
+    for file in held.iter().chain(std::iter::once(journal)) {
+        let parent = descend(directory, &file.relative, false)?;
+        let leaf = relative_leaf(&file.relative)?;
+        let named = open_file_at(&parent, &leaf, OpenMode::Read)?;
+        if tree_id_of(&named)? != tree_id_of(file.file.as_ref().ok_or(RestoreFault::Tamper)?)? {
             return Err(RestoreFault::Tamper);
         }
+        expected.push(file.relative.clone());
+    }
+    if unexpected_file(directory, "", &expected)? {
+        return Err(RestoreFault::Tamper);
     }
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(test, not(target_os = "linux")))]
 fn unexpected_file(
     directory: &File,
     prefix: &str,
@@ -2834,7 +2873,7 @@ fn unexpected_file(
     Ok(false)
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn contains_file(directory: &File) -> Result<bool, RestoreFault> {
     for name in list_names(directory)? {
         match kind_at(directory, &name)? {
@@ -4079,24 +4118,63 @@ fn a_renamed_staged_ancestor_retires_only_its_owned_files() {
     }
 }
 
+#[cfg(test)]
+fn write_private_ready_marker_for_test(path: &Path, id: &str) {
+    let directory = open_directory(path, false).unwrap();
+    let mut marker = create_unpublished(
+        &directory,
+        OsStr::new("accept-ready"),
+        "accept-ready",
+        false,
+        RestoreFault::Retained,
+    )
+    .unwrap();
+    marker.store(&marker_bytes(id).unwrap()).unwrap();
+    marker.sync_file().unwrap();
+    marker.publish_in(RestoreFault::Retained).unwrap();
+}
+
 #[test]
 fn a_source_that_remains_loses_its_readiness_marker() {
     let root = tempfile::tempdir().unwrap();
     let q = root.path().join("q");
     fs::create_dir(&q).unwrap();
     fs::write(q.join("note"), b"one").unwrap();
-    fs::write(q.join("accept-ready"), b"stage-1\n").unwrap();
+    write_private_ready_marker_for_test(&q, "stage-1");
     let directory = open_directory(&q, false).unwrap();
     let marker = open_file_at(&directory, OsStr::new("accept-ready"), OpenMode::Read).unwrap();
     let id = tree_id_of(&directory).unwrap();
     let saved = root.path().join("saved");
-    fs::rename(&q, &saved).unwrap();
-    fs::create_dir(&q).unwrap();
-    fs::write(q.join("accept-ready"), b"replacement\n").unwrap();
-    retire_source_marker(&directory, &id, &marker).unwrap();
-    assert!(fs::read(saved.join("accept-ready")).unwrap().is_empty());
-    assert_eq!(fs::read(saved.join("note")).unwrap(), b"one");
-    assert_eq!(fs::read(q.join("accept-ready")).unwrap(), b"replacement\n");
+    #[cfg(windows)]
+    {
+        let error = fs::rename(&q, &saved).unwrap_err();
+        assert!(matches!(error.raw_os_error(), Some(5 | 32)));
+        assert!(!saved.exists());
+        assert_eq!(fs::read(q.join("note")).unwrap(), b"one");
+        assert_eq!(fs::read(q.join("accept-ready")).unwrap(), b"stage-1\n");
+        retire_source_marker(&directory, &id, &marker).unwrap();
+        assert!(fs::read(q.join("accept-ready")).unwrap().is_empty());
+        assert_eq!(fs::read(q.join("note")).unwrap(), b"one");
+        drop(marker);
+        drop(directory);
+        // Closing the descendant permits the ordinary full-ACL root rename.
+        fs::rename(&q, &saved).unwrap();
+        fs::create_dir(&q).unwrap();
+        fs::write(q.join("accept-ready"), b"replacement\n").unwrap();
+        assert!(fs::read(saved.join("accept-ready")).unwrap().is_empty());
+        assert_eq!(fs::read(saved.join("note")).unwrap(), b"one");
+        assert_eq!(fs::read(q.join("accept-ready")).unwrap(), b"replacement\n");
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(&q, &saved).unwrap();
+        fs::create_dir(&q).unwrap();
+        fs::write(q.join("accept-ready"), b"replacement\n").unwrap();
+        retire_source_marker(&directory, &id, &marker).unwrap();
+        assert!(fs::read(saved.join("accept-ready")).unwrap().is_empty());
+        assert_eq!(fs::read(saved.join("note")).unwrap(), b"one");
+        assert_eq!(fs::read(q.join("accept-ready")).unwrap(), b"replacement\n");
+    }
 }
 
 #[test]
@@ -4105,7 +4183,7 @@ fn a_remaining_source_is_not_left_acceptable() {
     let q = root.path().join("q");
     fs::create_dir(&q).unwrap();
     fs::write(q.join("note"), b"one").unwrap();
-    fs::write(q.join("accept-ready"), b"stage-1\n").unwrap();
+    write_private_ready_marker_for_test(&q, "stage-1");
     let directory = open_directory(&q, false).unwrap();
     let marker = open_file_at(&directory, OsStr::new("accept-ready"), OpenMode::Read).unwrap();
     let id = tree_id_of(&directory).unwrap();
@@ -4429,9 +4507,11 @@ fn owned_stage_for_test(path: &Path) -> OwnedStagedTree {
     let directory = open_directory(path, false).unwrap();
     let identity = tree_id_of(&directory).unwrap();
     let parent = path.parent().unwrap();
+    let parent = open_directory(parent, false).unwrap();
+    let parent_spelling = path_of_handle(&parent).unwrap();
     OwnedStagedTree {
         directory,
-        parent: open_directory(parent, false).unwrap(),
+        parent,
         name: path.file_name().unwrap().to_owned(),
         identity,
         files: vec![OwnedStageFile {
@@ -4440,7 +4520,7 @@ fn owned_stage_for_test(path: &Path) -> OwnedStagedTree {
             fingerprint: Fingerprint::of(b"owned"),
         }],
         marker: None,
-        parent_spelling: parent.to_path_buf(),
+        parent_spelling,
     }
 }
 
@@ -4612,9 +4692,24 @@ fn a_write_through_the_temp_inode_does_not_change_the_published_file() {
     writer.write_all(&bytes).unwrap();
     writer.sync_all().unwrap();
     attempt.publish("conv", &digest).unwrap();
+    let published = fs::read(live.join(relative)).unwrap();
+    assert_eq!(
+        DirectoryQuarantine
+            .session_cut(&live.join(relative), "conv")
+            .unwrap()
+            .digest,
+        digest
+    );
     writer.write_all(b"tampered-bytes!!").unwrap();
     writer.sync_all().unwrap();
-    assert_eq!(fs::read(live.join(relative)).unwrap(), bytes);
+    assert_eq!(fs::read(live.join(relative)).unwrap(), published);
+    assert_eq!(
+        DirectoryQuarantine
+            .session_cut(&live.join(relative), "conv")
+            .unwrap()
+            .digest,
+        digest
+    );
 }
 
 #[cfg(unix)]
@@ -4644,7 +4739,19 @@ fn sealed_names_are_linked_before_the_tree_is_synced() {
     .unwrap();
     journal.store(b"sealed journal").unwrap();
     journal.sync_file().unwrap();
+    #[cfg(target_os = "linux")]
     assert!(!root.path().join("records/notes/note").exists());
+    #[cfg(target_os = "macos")]
+    {
+        assert_eq!(
+            fs::read(root.path().join("records/notes/note")).unwrap(),
+            b"sealed note"
+        );
+        assert!(fs::OpenOptions::new()
+            .write(true)
+            .open(root.path().join("records/notes/note"))
+            .is_err());
+    }
     let mut synced = false;
     publish_held(&directory, &mut [note], &mut journal, |tree| {
         assert_eq!(
@@ -4825,6 +4932,7 @@ fn dropping_a_named_reservation_does_not_unlink_its_replacement() {
         named: true,
         published: false,
         protected: false,
+        retirement_scope: RetirementScope::PublicationCandidate,
     };
     fs::rename(&name, root.path().join("owned-aside")).unwrap();
     fs::write(&name, b"other occupant").unwrap();
@@ -4864,13 +4972,28 @@ fn a_session_attempt_keeps_namespace_protected_until_release() {
         .unwrap();
     attempt.destination().unwrap().write_all(&bytes).unwrap();
     attempt.publish("conv", &digest).unwrap();
+    let published = fs::read(live.join("sessions/conv.sqlite3")).unwrap();
+    assert_eq!(
+        DirectoryQuarantine
+            .session_cut(&live.join("sessions/conv.sqlite3"), "conv")
+            .unwrap()
+            .digest,
+        digest
+    );
     attempt.note_publication("pub-test").unwrap();
     let path = live.join("sessions/conv.sqlite3");
     assert!(fs::rename(&path, live.join("sessions/swapped")).is_err());
     assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
     attempt.release().unwrap();
     fs::OpenOptions::new().write(true).open(&path).unwrap();
-    assert_eq!(fs::read(path).unwrap(), bytes);
+    assert_eq!(fs::read(&path).unwrap(), published);
+    assert_eq!(
+        DirectoryQuarantine
+            .session_cut(&path, "conv")
+            .unwrap()
+            .digest,
+        digest
+    );
 }
 
 #[cfg(unix)]
@@ -4895,7 +5018,7 @@ fn attempt_retirement_empties_only_the_owned_inode_after_a_name_swap() {
     assert_eq!(fs::read(path).unwrap(), b"other occupant");
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_held_file_is_not_a_directory_entry_until_publication() {
     let root = tempfile::tempdir().unwrap();
@@ -4985,7 +5108,23 @@ fn a_different_byte_is_not_published() {
     attempt.destination().unwrap().write_all(&bytes).unwrap();
     let error = attempt.publish("conv", &digest).unwrap_err();
     assert_eq!(error, RestoreFault::SourceChanged);
-    assert!(!live.join(relative).exists());
+    // The logical publication never gains a marker. Named protected outputs
+    // are retired through their exact inode, rather than deleted by pathname.
+    assert!(!live.join(format!("{relative}.publication")).exists());
+    #[cfg(target_os = "linux")]
+    {
+        assert!(!live.join(relative).exists());
+        assert_eq!(attempt.retire(), Ok(()));
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        assert!(fs::OpenOptions::new()
+            .write(true)
+            .open(live.join(relative))
+            .is_err());
+        assert_eq!(attempt.retire(), Err(RestoreFault::Retained));
+        assert!(fs::read(live.join(relative)).unwrap().is_empty());
+    }
     assert!(fs::read_dir(live.join("sessions"))
         .unwrap()
         .all(|entry| !entry
@@ -5047,16 +5186,35 @@ fn a_renamed_source_is_retired_through_its_handle() {
     let root = tempfile::tempdir().unwrap();
     let q = root.path().join("q");
     fs::create_dir(&q).unwrap();
-    fs::write(q.join("accept-ready"), b"stage-1\n").unwrap();
+    write_private_ready_marker_for_test(&q, "stage-1");
     let directory = open_directory(&q, false).unwrap();
     let marker = open_file_at(&directory, OsStr::new("accept-ready"), OpenMode::Read).unwrap();
     let id = tree_id_of(&directory).unwrap();
     let saved = root.path().join("saved");
-    fs::rename(&q, &saved).unwrap();
-    retire_source_marker(&directory, &id, &marker).unwrap();
-    assert!(saved.is_dir());
-    assert!(fs::read(saved.join("accept-ready")).unwrap().is_empty());
-    assert!(!q.exists());
+    #[cfg(windows)]
+    {
+        let error = fs::rename(&q, &saved).unwrap_err();
+        assert!(matches!(error.raw_os_error(), Some(5 | 32)));
+        assert!(!saved.exists());
+        assert!(q.is_dir());
+        assert_eq!(fs::read(q.join("accept-ready")).unwrap(), b"stage-1\n");
+        retire_source_marker(&directory, &id, &marker).unwrap();
+        assert!(fs::read(q.join("accept-ready")).unwrap().is_empty());
+        drop(marker);
+        drop(directory);
+        fs::rename(&q, &saved).unwrap();
+        assert!(saved.is_dir());
+        assert!(!q.exists());
+        assert!(fs::read(saved.join("accept-ready")).unwrap().is_empty());
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(&q, &saved).unwrap();
+        retire_source_marker(&directory, &id, &marker).unwrap();
+        assert!(saved.is_dir());
+        assert!(fs::read(saved.join("accept-ready")).unwrap().is_empty());
+        assert!(!q.exists());
+    }
 }
 
 #[test]
@@ -5110,12 +5268,27 @@ fn mac_session_source_scratch_stays_outside_the_sealed_tree() {
     );
     source.write_all(&bytes).unwrap();
     attempt.publish("conv", &digest).unwrap();
+    let output = live.join("sessions/conv.sqlite3");
+    let published = fs::read(&output).unwrap();
+    assert_eq!(
+        DirectoryQuarantine
+            .session_cut(&output, "conv")
+            .unwrap()
+            .digest,
+        digest
+    );
     assert_eq!(source.metadata().unwrap().len(), 0);
     assert!(!live.join("sessions/conv.sqlite3.partial").exists());
     source.seek(SeekFrom::Start(0)).unwrap();
     source.write_all(b"later source writer").unwrap();
-    let output = live.join("sessions/conv.sqlite3");
-    assert_eq!(fs::read(&output).unwrap(), bytes);
+    assert_eq!(fs::read(&output).unwrap(), published);
+    assert_eq!(
+        DirectoryQuarantine
+            .session_cut(&output, "conv")
+            .unwrap()
+            .digest,
+        digest
+    );
     assert!(fs::OpenOptions::new().write(true).open(&output).is_err());
     assert_eq!(attempt.retire(), Err(RestoreFault::Retained));
     assert_eq!(source.metadata().unwrap().len(), 0);
@@ -5463,9 +5636,27 @@ fn windows_real_session_publication_does_not_claim_directory_durability() {
         .unwrap();
     attempt.destination().unwrap().write_all(&bytes).unwrap();
     attempt.publish("conv", &digest).unwrap();
+    let output = live.join("sessions/conv.sqlite3");
+    let published = fs::read(&output).unwrap();
+    assert_eq!(
+        DirectoryQuarantine
+            .session_cut(&output, "conv")
+            .unwrap()
+            .digest,
+        digest
+    );
     assert!(!attempt.note_publication("pub-durability").unwrap().durable);
     attempt.release().unwrap();
-    assert_eq!(fs::read(live.join("sessions/conv.sqlite3")).unwrap(), bytes);
+    assert_eq!(fs::read(&output).unwrap(), published);
+    assert_eq!(
+        DirectoryQuarantine
+            .session_cut(&output, "conv")
+            .unwrap()
+            .digest,
+        digest
+    );
+    drop(attempt);
+    fs::OpenOptions::new().write(true).open(&output).unwrap();
 }
 
 #[cfg(windows)]
@@ -5541,4 +5732,230 @@ fn reacquired_stage_content_is_rechecked_before_permissions_are_released() {
         .is_empty());
     // Explicit fixture cleanup happens only after the retained/zero assertions.
     assert!(closed.release(&root));
+}
+
+#[cfg(unix)]
+#[test]
+fn named_copy_validation_binds_inodes_and_rejects_foreign_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    let tree = temp.path().join("tree");
+    mkdir_exclusive(&tree).unwrap();
+    let root = open_directory(&tree, false).unwrap();
+    let mut note = create_unpublished(
+        &root,
+        OsStr::new("note"),
+        "note",
+        true,
+        RestoreFault::Tamper,
+    )
+    .unwrap();
+    note.store(b"sealed").unwrap();
+    note.sync_file().unwrap();
+    let mut journal = create_unpublished(
+        &root,
+        OsStr::new("journal.txt"),
+        "journal.txt",
+        true,
+        RestoreFault::Tamper,
+    )
+    .unwrap();
+    journal.store(b"journal").unwrap();
+    journal.sync_file().unwrap();
+    let mut held = vec![note];
+    publish_held(&root, &mut held, &mut journal, sync_tree_at).unwrap();
+    held_named_tree_matches(&root, &held, &journal).unwrap();
+    let aside = temp.path().join("original");
+    fs::rename(tree.join("note"), &aside).unwrap();
+    fs::write(tree.join("note"), b"sealed").unwrap();
+    assert_eq!(
+        held_named_tree_matches(&root, &held, &journal),
+        Err(RestoreFault::Tamper)
+    );
+    assert_eq!(fs::read(tree.join("note")).unwrap(), b"sealed");
+    fs::remove_file(tree.join("note")).unwrap();
+    fs::rename(&aside, tree.join("note")).unwrap();
+    held_named_tree_matches(&root, &held, &journal).unwrap();
+    fs::write(tree.join("foreign"), b"untouched").unwrap();
+    assert_eq!(
+        held_named_tree_matches(&root, &held, &journal),
+        Err(RestoreFault::Tamper)
+    );
+    assert_eq!(fs::read(tree.join("foreign")).unwrap(), b"untouched");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn mac_named_copy_checks_held_bytes_journal_and_namespace_before_promotion() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    mkdir_exclusive(&source).unwrap();
+    fs::write(source.join("note"), b"sealed").unwrap();
+    fs::write(source.join("journal.txt"), b"journal").unwrap();
+    let loaded = DirectoryQuarantine
+        .load(&DirectoryQuarantine.anchor(&source).unwrap())
+        .unwrap();
+    let dest = temp.path().join("dest");
+    mkdir_exclusive(&dest).unwrap();
+    let root = open_directory(&dest, false).unwrap();
+    let identity = tree_id_of(&root).unwrap();
+    let source = open_directory(&source, false).unwrap();
+    let mut held = Vec::new();
+    let mut directories = Vec::new();
+    assert_eq!(
+        copy_at(&source, &root, &mut held, &mut directories).unwrap(),
+        loaded.content
+    );
+    let mut journal = create_unpublished(
+        &root,
+        OsStr::new("journal.txt"),
+        "journal.txt",
+        true,
+        RestoreFault::Tamper,
+    )
+    .unwrap();
+    journal.store(loaded.journal.as_bytes()).unwrap();
+    journal.sync_file().unwrap();
+    assert!(dest.join("note").exists());
+    assert!(fs::OpenOptions::new()
+        .write(true)
+        .open(dest.join("note"))
+        .is_err());
+    held_still_sealed(&root, &identity, &loaded, &mut held, &mut journal).unwrap();
+    held[0]
+        .file_mut()
+        .unwrap()
+        .seek(SeekFrom::Start(0))
+        .unwrap();
+    held[0].store(b"X").unwrap();
+    held[0].sync_file().unwrap();
+    assert_eq!(
+        held_still_sealed(&root, &identity, &loaded, &mut held, &mut journal),
+        Err(RestoreFault::Tamper)
+    );
+    held[0]
+        .file_mut()
+        .unwrap()
+        .seek(SeekFrom::Start(0))
+        .unwrap();
+    held[0].store(b"s").unwrap();
+    held[0].sync_file().unwrap();
+    held_still_sealed(&root, &identity, &loaded, &mut held, &mut journal).unwrap();
+    journal
+        .file_mut()
+        .unwrap()
+        .seek(SeekFrom::Start(0))
+        .unwrap();
+    journal.store(b"X").unwrap();
+    journal.sync_file().unwrap();
+    assert_eq!(
+        held_still_sealed(&root, &identity, &loaded, &mut held, &mut journal),
+        Err(RestoreFault::Tamper)
+    );
+    journal
+        .file_mut()
+        .unwrap()
+        .seek(SeekFrom::Start(0))
+        .unwrap();
+    journal.store(b"j").unwrap();
+    journal.sync_file().unwrap();
+    held_still_sealed(&root, &identity, &loaded, &mut held, &mut journal).unwrap();
+    fs::write(dest.join("foreign"), b"untouched").unwrap();
+    assert_eq!(
+        held_still_sealed(&root, &identity, &loaded, &mut held, &mut journal),
+        Err(RestoreFault::Tamper)
+    );
+    assert_eq!(fs::read(dest.join("foreign")).unwrap(), b"untouched");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn mac_protected_named_copy_can_be_promoted_and_released() {
+    let temp = tempfile::tempdir().unwrap();
+    let quarantine = DirectoryQuarantine
+        .anchor(&temp.path().join("quarantine"))
+        .unwrap();
+    let live = DirectoryQuarantine
+        .anchor(&temp.path().join("live"))
+        .unwrap();
+    let mut stage = DirectoryQuarantine.begin(&quarantine, &live).unwrap();
+    stage.write("records/note", b"sealed").unwrap();
+    let mut owner = stage.finish("journal").unwrap();
+    owner.mark_ready("stage-mac").unwrap();
+    drop(owner);
+    let loaded = DirectoryQuarantine.load(&quarantine).unwrap();
+    let promoted = DirectoryQuarantine
+        .promote(&quarantine, &live, &loaded, "stage-mac")
+        .unwrap();
+    assert!(!promoted.publication_restricted);
+    assert!(!promoted.source_retirement_failed);
+    assert_eq!(fs::read(live.join("records/note")).unwrap(), b"sealed");
+    fs::OpenOptions::new()
+        .write(true)
+        .open(live.join("records/note"))
+        .unwrap();
+    assert!(fs::read(quarantine.join("accept-ready"))
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn external_source_retirement_requires_exact_zero_and_sync_but_not_name_removal() {
+    let temp = tempfile::tempdir().unwrap();
+    let restored = temp.path().join("restored");
+    mkdir_exclusive(&restored).unwrap();
+    let parent = open_directory(temp.path(), false).unwrap();
+    let mut scratch =
+        create_source_scratch(&parent, OsStr::new("external-source"), "source").unwrap();
+    scratch.store(b"source bytes").unwrap();
+    scratch.sync_file().unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        // Give the actual anonymous Linux source an external name so this same
+        // production retirement method also exercises the named scratch case.
+        link_unpublished(
+            scratch.file.as_ref().unwrap(),
+            &parent,
+            OsStr::new("external-source"),
+            RestoreFault::Retained,
+        )
+        .unwrap();
+        scratch.named = true;
+    }
+    assert!(temp.path().join("external-source").exists());
+    assert_eq!(
+        scratch.retire_with(|_| Err(RestoreFault::Retained)),
+        Err(RestoreFault::Retained)
+    );
+    assert_eq!(scratch.read_back().unwrap(), b"source bytes");
+    assert_eq!(
+        scratch.retire_with(|file| {
+            file.set_len(0).map_err(|_| RestoreFault::Retained)?;
+            Err(RestoreFault::Retained)
+        }),
+        Err(RestoreFault::Retained)
+    );
+    assert!(scratch.read_back().unwrap().is_empty());
+    assert_eq!(scratch.retire(), Ok(()));
+    assert!(temp.path().join("external-source").exists());
+    assert!(fs::read(temp.path().join("external-source"))
+        .unwrap()
+        .is_empty());
+    assert!(fs::read_dir(&restored).unwrap().next().is_none());
+    let directory = open_directory(&restored, false).unwrap();
+    let mut candidate = create_unpublished(
+        &directory,
+        OsStr::new("candidate"),
+        "candidate",
+        true,
+        RestoreFault::Retained,
+    )
+    .unwrap();
+    candidate.store(b"candidate bytes").unwrap();
+    candidate.sync_file().unwrap();
+    candidate.publish_in(RestoreFault::Retained).unwrap();
+    assert_eq!(candidate.retire(), Err(RestoreFault::Retained));
+    assert!(fs::read(restored.join("candidate")).unwrap().is_empty());
+    candidate.release().unwrap();
+    #[cfg(windows)]
+    nessa_local_storage::release_file_writes(scratch.file.as_ref().unwrap()).unwrap();
 }

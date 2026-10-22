@@ -117,7 +117,8 @@ pub fn retain_directory_at(parent: &File, name: &OsStr) -> io::Result<File> {
 /// Snapshot an existing directory's exact DACL first; restore it after the
 /// caller's publication protocol finishes, including failure cleanup.
 pub fn append_directory_writes(file: &File) -> io::Result<()> {
-    set_descriptor(file, append_descriptor()?)
+    set_descriptor(file, append_descriptor()?)?;
+    require_directory(file)
 }
 
 /// Exact protected DACL of one retained directory, for temporary fetch guards.
@@ -126,6 +127,7 @@ pub fn append_directory_writes(file: &File) -> io::Result<()> {
 pub struct DirectoryAcl {
     words: Vec<usize>,
     length: usize,
+    control: SECURITY_DESCRIPTOR_CONTROL,
     volume: u32,
     index: u64,
 }
@@ -153,6 +155,15 @@ impl DirectoryAcl {
             return Err(io::Error::from_raw_os_error(result as i32));
         }
         let _descriptor = LocalAllocation(descriptor);
+        let mut control = 0;
+        let mut revision = 0;
+        unsafe {
+            check(GetSecurityDescriptorControl(
+                descriptor,
+                &mut control,
+                &mut revision,
+            ))?;
+        }
         if acl.is_null() {
             return Err(unsafe_file());
         }
@@ -171,6 +182,7 @@ impl DirectoryAcl {
         Ok(Self {
             words,
             length,
+            control,
             volume: identity.dwVolumeSerialNumber,
             index: (u64::from(identity.nFileIndexHigh) << 32) | u64::from(identity.nFileIndexLow),
         })
@@ -195,12 +207,14 @@ impl DirectoryAcl {
                 (&mut descriptor as *mut SECURITY_DESCRIPTOR).cast(),
                 1,
                 self.words.as_ptr().cast::<ACL>().cast_mut(),
-                0,
+                i32::from(self.control & SE_DACL_DEFAULTED != 0),
             ))?;
+            let dacl_control =
+                SE_DACL_PROTECTED | SE_DACL_AUTO_INHERIT_REQ | SE_DACL_AUTO_INHERITED;
             check(SetSecurityDescriptorControl(
                 (&mut descriptor as *mut SECURITY_DESCRIPTOR).cast(),
-                SE_DACL_PROTECTED,
-                SE_DACL_PROTECTED,
+                dacl_control,
+                self.control & dacl_control,
             ))?;
             set_native_descriptor(file, (&mut descriptor as *mut SECURITY_DESCRIPTOR).cast())?;
         }
@@ -410,13 +424,15 @@ pub fn remove_handle(file: &File) -> io::Result<()> {
 /// Release temporary namespace protection through the retained WRITE_DAC handle.
 /// The caller owns the ordering: call only after successful live publication.
 pub fn release_directory_writes(file: &File) -> io::Result<()> {
-    release_writes(file, true)
+    release_writes(file, true)?;
+    require_directory(file)
 }
 
 /// Refuse further additions before final whole-tree identity/content validation.
 /// Native tests exercise real creation/rename through pre-acquired ADD handles.
 pub fn seal_directory_writes(file: &File) -> io::Result<()> {
-    set_descriptor(file, User::current()?.descriptor_with_access(true, "FRFX")?)
+    set_descriptor(file, User::current()?.descriptor_with_access(true, "FRFX")?)?;
+    require_directory(file)
 }
 
 /// Release temporary file restrictions through the retained WRITE_DAC handle.
@@ -452,18 +468,22 @@ fn set_descriptor(file: &File, descriptor: LocalAllocation) -> io::Result<()> {
 // original ACL restoration share this one mechanism. Native A01 verifies that
 // existing unprotected descendants remain byte-for-byte unchanged.
 unsafe fn set_native_descriptor(file: &File, descriptor: PSECURITY_DESCRIPTOR) -> io::Result<()> {
-    let status = unsafe {
-        NtSetSecurityObject(
-            file.as_raw_handle(),
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            descriptor,
-        )
-    };
+    // The native DACL selector is distinct from the Win32 protection selector.
+    // Protection is carried in the full descriptor itself. In bc6, supplying
+    // the Win32 high protection bit changed direct foreign-child descriptors.
+    // Generated SDDL prepares protected D:P without auto-inheritance requests;
+    // exact restore supplies its saved DACL control. All descriptor preparation
+    // stays outside this syscall and before writable permission windows.
+    let status =
+        unsafe { NtSetSecurityObject(file.as_raw_handle(), DACL_SECURITY_INFORMATION, descriptor) };
     if status < 0 {
         return Err(io::Error::from_raw_os_error(
             unsafe { RtlNtStatusToDosError(status) } as i32,
         ));
     }
+    // Do not put fallible readback after mutation here: FRFW callers must
+    // reach their unconditional FR reseal before any further fallible work.
+    // Directory entrypoints and exact restoration own protected-ACL readback.
     Ok(())
 }
 
@@ -604,8 +624,8 @@ mod tests {
         legacy_directory_assignment(&directory, append_descriptor().unwrap());
         let after_append: Vec<_> = children.iter().map(acl_receipt).collect();
         for (old, new) in before.iter().zip(&after_append) {
-            assert_ne!(
-                old, new,
+            assert!(
+                old != new,
                 "legacy append must demonstrate the foreign-child inheritance hazard"
             );
         }
@@ -618,8 +638,8 @@ mod tests {
         );
         let after_seal: Vec<_> = children.iter().map(acl_receipt).collect();
         for (old, new) in before.iter().zip(&after_seal) {
-            assert_ne!(
-                old, new,
+            assert!(
+                old != new,
                 "legacy seal must demonstrate the foreign-child inheritance hazard"
             );
         }
@@ -647,9 +667,10 @@ mod tests {
                 "foreign descendants must actually be unprotected"
             );
         }
-        let assert_foreign = || {
-            assert_eq!(children.iter().map(acl_receipt).collect::<Vec<_>>(),before,
-                "parent-only assignment must preserve exact foreign DACL and security control immediately");
+        let assert_foreign = |transition: &str| {
+            eprintln!("native-parent-acl transition={transition}");
+            assert!(children.iter().map(acl_receipt).collect::<Vec<_>>() == before,
+                "parent-only assignment must preserve exact foreign DACL and security control immediately: {transition}");
             for relative in ["other-chat", "foreign-directory/grandchild"] {
                 let path = root.path().join("sessions").join(relative);
                 std::fs::write(&path, b"other chat unchanged")
@@ -658,11 +679,11 @@ mod tests {
             }
         };
         append_directory_writes(&directory).unwrap();
-        assert_foreign();
+        assert_foreign("append");
         seal_directory_writes(&directory).unwrap();
-        assert_foreign();
+        assert_foreign("seal");
         original.restore(&directory).unwrap();
-        assert_foreign();
+        assert_foreign("restore");
         struct RestoreGuard<'a> {
             directory: &'a File,
             original: &'a DirectoryAcl,
@@ -680,14 +701,17 @@ mod tests {
                 original: &original,
             };
             append_directory_writes(&directory)?;
-            assert_foreign();
+            assert_foreign("failure-append");
             seal_directory_writes(&directory)?;
-            assert_foreign();
+            assert_foreign("failure-seal");
             Err(io::Error::other("forced failure after seal"))
         })();
         assert!(failed.is_err());
-        assert_foreign();
-        assert_eq!(DirectoryAcl::capture(&directory).unwrap(), original);
+        assert_foreign("failure-cleanup");
+        assert!(
+            DirectoryAcl::capture(&directory).unwrap() == original,
+            "failure cleanup must restore exact original parent DACL/control"
+        );
     }
 
     #[test]

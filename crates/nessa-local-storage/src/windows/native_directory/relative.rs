@@ -140,10 +140,18 @@ pub fn relative_entry_kind(parent: &File, name: &OsStr) -> io::Result<Option<Rel
 /// Enumerate the retained directory with a fresh cursor, without resolving a path.
 /// The snapshot is non-atomic; publication validates it after namespace sealing.
 pub fn relative_names(directory: &File) -> io::Result<Vec<OsString>> {
+    let cursor = open_directory_cursor(directory)?;
+    names_from_cursor(&cursor)
+}
+
+fn open_directory_cursor(directory: &File) -> io::Result<File> {
     let handle = unsafe {
         ReOpenFile(
             directory.as_raw_handle(),
-            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+            // Directory enumeration uses synchronous queries on this fresh
+            // cursor. Keep the synchronization access requested by the retained
+            // directory open; listing access alone cannot authorize its wait.
+            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
         )
@@ -151,8 +159,11 @@ pub fn relative_names(directory: &File) -> io::Result<Vec<OsString>> {
     if handle == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
     }
-    let cursor = unsafe { File::from_raw_handle(handle) };
-    if super::super::information(&cursor)?.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+    Ok(unsafe { File::from_raw_handle(handle) })
+}
+
+fn names_from_cursor(cursor: &File) -> io::Result<Vec<OsString>> {
+    if super::super::information(cursor)?.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
         return Err(unsafe_file());
     }
     let mut names = Vec::new();
@@ -237,6 +248,15 @@ mod tests {
             .unwrap()
     }
 
+    fn observed_names(directory: &File) -> Vec<OsString> {
+        let cursor = open_directory_cursor(directory)
+            .expect("ReOpenFile creates a fresh synchronous directory cursor");
+        super::super::super::information(&cursor)
+            .expect("GetFileInformationByHandle reads the reopened cursor's metadata");
+        names_from_cursor(&cursor)
+            .expect("GetFileInformationByHandleEx enumerates the reopened directory cursor")
+    }
+
     #[test]
     fn relative_archive_reads_do_not_require_private_creation_acls_on_existing_public_files() {
         let _ordinary = super::super::token::OrdinaryToken::enter();
@@ -290,6 +310,9 @@ mod tests {
             expected.push(name);
         }
         expected.sort();
+        let mut before_rename = observed_names(&directory);
+        before_rename.sort();
+        assert_eq!(before_rename, expected);
         fs::rename(root.path().join("original"), root.path().join("moved")).unwrap();
         fs::create_dir(root.path().join("original")).unwrap();
         fs::write(root.path().join("original/unrelated"), b"keep").unwrap();
@@ -299,13 +322,13 @@ mod tests {
         let worker = std::thread::spawn(move || {
             let _ordinary = super::super::token::OrdinaryToken::enter();
             for _ in 0..8 {
-                let mut names = relative_names(&left).unwrap();
+                let mut names = observed_names(&left);
                 names.sort();
                 assert_eq!(names, left_expected);
             }
         });
         for _ in 0..8 {
-            let mut names = relative_names(&right).unwrap();
+            let mut names = observed_names(&right);
             names.sort();
             assert_eq!(names, expected);
         }

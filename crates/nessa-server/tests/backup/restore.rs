@@ -4195,6 +4195,11 @@ async fn an_alias_of_the_live_root_reuses_the_fetched_session() {
     let mut source = FakeSource::matching(&session);
     let first = open_one(&place, "conv-bulk", &source, &audit).unwrap();
     assert!(!first.already_present);
+    assert_eq!(first.size, session.size);
+    assert_eq!(first.digest, session.digest);
+    let path = place.live.join("sessions/conv-bulk.sqlite3");
+    let published = fs::read(&path).unwrap();
+    assert!(!published.is_empty());
     let sibling = place.live.parent().unwrap().join("other");
     fs::create_dir(&sibling).unwrap();
     let alias = sibling.join("..").join("live");
@@ -4214,8 +4219,9 @@ async fn an_alias_of_the_live_root_reuses_the_fetched_session() {
     .unwrap();
     assert!(again.already_present);
     assert_eq!(*source.writes.lock().unwrap(), 1);
-    let path = place.live.join("sessions/conv-bulk.sqlite3");
-    assert_eq!(fs::read(&path).unwrap(), session.bytes);
+    assert_eq!(fs::read(&path).unwrap(), published);
+    assert_eq!(again.size, session.size);
+    assert_eq!(again.digest, session.digest);
     source.mode = "missing";
     let third = open_deferred_conversation(
         &OpenRequest {
@@ -4232,6 +4238,12 @@ async fn an_alias_of_the_live_root_reuses_the_fetched_session() {
     )
     .unwrap();
     assert!(third.already_present);
+    assert_eq!(third.size, session.size);
+    assert_eq!(third.digest, session.digest);
+    assert_eq!(fs::read(&path).unwrap(), published);
+    let cut = DirectoryQuarantine.session_cut(&path, "conv-bulk").unwrap();
+    assert_eq!(cut.size, session.size);
+    assert_eq!(cut.digest, session.digest);
     assert!(path.is_file());
     assert_eq!(*source.writes.lock().unwrap(), 1);
     let anchored = DirectoryQuarantine.anchor(&place.live).unwrap();
@@ -4275,7 +4287,15 @@ async fn a_fetch_in_quarantine_stays_available_after_accept() {
     )
     .unwrap();
     assert!(!fetched.already_present);
+    assert_eq!(fetched.size, session.size);
+    assert_eq!(fetched.digest, session.digest);
+    let published = fs::read(place.quarantine.join("sessions/conv-bulk.sqlite3")).unwrap();
+    assert!(!published.is_empty());
     accept(&place, &audit, &NoReceipts).unwrap();
+    assert_eq!(
+        fs::read(place.live.join("sessions/conv-bulk.sqlite3")).unwrap(),
+        published
+    );
     source.mode = "missing";
     let again = open_deferred_conversation(
         &OpenRequest {
@@ -4295,8 +4315,15 @@ async fn a_fetch_in_quarantine_stays_available_after_accept() {
     assert_eq!(*source.writes.lock().unwrap(), 1);
     assert_eq!(
         fs::read(place.live.join("sessions/conv-bulk.sqlite3")).unwrap(),
-        session.bytes
+        published
     );
+    assert_eq!(again.size, session.size);
+    assert_eq!(again.digest, session.digest);
+    let cut = DirectoryQuarantine
+        .session_cut(&place.live.join("sessions/conv-bulk.sqlite3"), "conv-bulk")
+        .unwrap();
+    assert_eq!(cut.size, session.size);
+    assert_eq!(cut.digest, session.digest);
 }
 
 #[tokio::test]
@@ -6285,6 +6312,143 @@ async fn real_windows_publications_report_unconfirmed_directory_durability() {
             .unwrap()
             .durable,
         None
+    );
+    assert_eq!(*source.writes.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn a_deferred_source_cannot_publish_an_additional_conversation() {
+    for extra_stream in [true, false] {
+        let session = sealed_session(b"authorized-cut");
+        let (_bundle, place, audit) =
+            deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+        let mut source = FakeSource::matching(&session);
+        if extra_stream {
+            source.bytes = session_database(&[
+                ("conv-bulk", b"authorized-cut"),
+                ("conv-fenced", b"unrequested-private-record"),
+            ]);
+        } else {
+            let keep = tempfile::tempdir().unwrap();
+            let path = keep.path().join("source.sqlite3");
+            fs::write(&path, &source.bytes).unwrap();
+            let database = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+            database.execute("INSERT INTO event_records(stream_key,offset,event_id,schema_id,schema_version,payload) SELECT 999,offset,'unrequested-event',schema_id,schema_version,?1 FROM event_records LIMIT 1",[b"orphan-private-record".as_slice()]).unwrap();
+            drop(database);
+            source.bytes = fs::read(path).unwrap();
+        }
+        let result = open_one(&place, "conv-bulk", &source, &audit);
+        assert_eq!(result.unwrap_err(), RestoreFault::Tamper);
+        assert_eq!(*source.writes.lock().unwrap(), 1);
+        assert!(!place.live.join("sessions/conv-bulk.sqlite3").exists());
+        assert!(!place
+            .live
+            .join("sessions/conv-bulk.sqlite3.publication")
+            .exists());
+        assert!(!audit.lines().iter().any(|line| line.after == "available"));
+        let matching = FakeSource::matching(&session);
+        assert!(
+            !open_one(&place, "conv-bulk", &matching, &audit)
+                .unwrap()
+                .already_present
+        );
+        assert_eq!(*matching.writes.lock().unwrap(), 1);
+        let path = place.live.join("sessions/conv-bulk.sqlite3");
+        let database = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM event_streams", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM event_stream_names", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            database
+                .query_row("SELECT public_id FROM event_stream_names", [], |row| row
+                    .get::<_, String>(
+                    0
+                ))
+                .unwrap(),
+            "conv-bulk"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_deferred_source_side_data_is_excluded_from_the_published_image() {
+    let session = sealed_session(b"authorized-cut");
+    let (_bundle, place, audit) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+    let mut source = FakeSource::matching(&session);
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().join("source.sqlite3");
+    fs::write(&path, &source.bytes).unwrap();
+    let marker = b"PR1066-unrequested-private-side-data-7e40f56bd9c145d5";
+    let secret = marker.repeat(128);
+    let database = nessa_local_database::rusqlite::Connection::open(&path).unwrap();
+    database.execute_batch("CREATE TABLE private_side_data(payload BLOB); ALTER TABLE event_records ADD COLUMN unrelated BLOB;").unwrap();
+    database
+        .execute(
+            "INSERT INTO private_side_data VALUES (?1)",
+            [secret.as_slice()],
+        )
+        .unwrap();
+    database
+        .execute("UPDATE event_records SET unrelated=?1", [secret.as_slice()])
+        .unwrap();
+    drop(database);
+    source.bytes = fs::read(path).unwrap();
+    assert!(source
+        .bytes
+        .windows(marker.len())
+        .any(|bytes| bytes == marker));
+    let report = open_one(&place, "conv-bulk", &source, &audit).unwrap();
+    assert_eq!(report.size, session.size);
+    assert_eq!(report.digest, session.digest);
+    assert!(!report.already_present);
+    assert_eq!(*source.writes.lock().unwrap(), 1);
+    let published = place.live.join("sessions/conv-bulk.sqlite3");
+    let bytes = fs::read(&published).unwrap();
+    assert!(!bytes.windows(marker.len()).any(|bytes| bytes == marker));
+    let database = nessa_local_database::rusqlite::Connection::open(published).unwrap();
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name='private_side_data'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        database
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('event_records') WHERE name='unrelated'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        database
+            .query_row("SELECT count(*) FROM event_streams", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(
+        open_one(&place, "conv-bulk", &source, &audit)
+            .unwrap()
+            .already_present
     );
     assert_eq!(*source.writes.lock().unwrap(), 1);
 }
