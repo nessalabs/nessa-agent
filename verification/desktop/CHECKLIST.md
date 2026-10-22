@@ -2053,3 +2053,11 @@ with a typed failure.
   session's ACP prompts: withdrawing an older queued report can publish empty
   cancelled history, but a further provider prompt fails even if it produces
   no output. Missing or damaged recording evidence fails the check.
+
+- [ ] **Stress review answers keep their exact command ACK.** The window sends
+  the intended conversation/execution/review/permission/option, and its matching
+  command receives `applied: true`. Expiry or a lost ACK cannot become success
+  merely because the card disappears. Provider completion remains checked by
+  the existing final transcript and at-rest checks. _Check:_
+  `lib/stress-review-answers.test.mjs` and `conversation-stress.mjs` in Chromium
+  and WebKit; [ordering controls](../../docs/design/stress-review-answers.md).

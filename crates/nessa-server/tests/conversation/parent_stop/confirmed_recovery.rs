@@ -267,8 +267,53 @@ async fn a_confirmed_stop_survives_process_loss_before_turn_settlement() {
         service.mark_unfinished(&child_id).await.unwrap();
         // A non-cascading Stop never paid for the child's continuation.
         if cascade {
+            let receipts = storage.mutations("person".into()).await.unwrap();
+            let child_receipt = receipts
+                .iter()
+                .position(|receipt| {
+                    receipt.binding().operation() == MutationOperation::Stop
+                        && receipt.binding().target() == &conversation_session(&child_id)
+                        && receipt.binding().turn_id().as_str() == "child"
+                })
+                .unwrap();
+            let root_receipt = receipts
+                .iter()
+                .position(|receipt| receipt.binding().actor().request_id() == "confirmed-stop")
+                .unwrap();
+            assert!(
+                child_receipt < root_receipt,
+                "child Acceptances precede the root"
+            );
             assert!(service.resume_owed(&child_id, child_live.clone()).await);
             assert!(child_live.agent.owed_turns().await.is_empty());
+            let committed = storage
+                .read_committed(conversation_session(&child_id))
+                .await
+                .unwrap()
+                .unwrap();
+            let child = committed
+                .snapshot()
+                .unwrap()
+                .invocations
+                .iter()
+                .find(|record| record.request.execution_id.as_str() == "child")
+                .unwrap();
+            assert_eq!(
+                child.scheduling.last().unwrap().cause,
+                SchedulingCause::NotResumed
+            );
+            assert_eq!(
+                child.scheduling.last().unwrap().actor.as_ref(),
+                Some(&caller("confirmed-stop").actor().unwrap()),
+                "a recovered descendant keeps the original root Stop actor"
+            );
+            assert_eq!(
+                service
+                    .captured_stop_actor(&child_id, "child", &caller("inspect-child"))
+                    .await
+                    .unwrap(),
+                Some(caller("confirmed-stop").actor().unwrap())
+            );
         } else {
             assert!(service
                 .captured_stop_actor(&child_id, "child", &caller("inspect-child"))
@@ -295,6 +340,70 @@ async fn a_confirmed_stop_survives_process_loss_before_turn_settlement() {
         drop((live, child_live));
         retire(service, storage, metadata).await;
     }
+}
+
+#[tokio::test]
+async fn a_prefixed_standalone_stop_keeps_its_own_actor() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    bind(&service, &storage, &root, true).await;
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let held_parent = hold_turn(&service, &provider, &parent, "parent").await;
+    let target = child(&service, &parent, "parent", "create-child").await;
+    let held = hold_turn(&service, &provider, &target, "child").await;
+    // A person may use the same spelling as a derived child request. Its
+    // shape alone does not make this canonical Stop an aggregate child.
+    let origin = caller(&format!("parent-stop-{}-0000", "a".repeat(64)));
+    let receipt = service
+        .stop_command(
+            storage.clone(),
+            target.clone(),
+            origin.clone(),
+            "child".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.outcome(), Some(MutationOutcome::Cancelled));
+    assert_eq!(
+        service
+            .captured_stop_actor(&target, "child", &caller("inspect-standalone"))
+            .await
+            .unwrap(),
+        Some(origin.actor().unwrap())
+    );
+    service
+        .stop_command(
+            storage.clone(),
+            parent,
+            caller("later-cascade"),
+            "parent".into(),
+        )
+        .await
+        .unwrap();
+    assert!(service
+        .captured_stops(&caller("inspect-cascade"))
+        .await
+        .unwrap()
+        .iter()
+        .any(
+            |(root, selected)| root.actor().request_id() == "later-cascade"
+                && selected.target() == &conversation_session(&target)
+                && selected.turn_id().as_str() == "child"
+        ));
+    assert_eq!(
+        service
+            .captured_stop_actor(&target, "child", &caller("inspect-later-cascade"))
+            .await
+            .unwrap(),
+        Some(origin.actor().unwrap()),
+        "a later aggregate does not replace the earlier independent Stop actor"
+    );
+    drop((held, held_parent));
+    retire(service, storage, metadata).await;
 }
 
 #[tokio::test]

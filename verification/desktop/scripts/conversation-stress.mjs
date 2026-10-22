@@ -169,6 +169,10 @@ import {
   selectedStressConversation,
 } from "./lib/stress-conversation.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
+import {
+  observeReviewAnswers,
+  reviewAnswerAcknowledged,
+} from "./lib/stress-review-answers.mjs"
 import { parentRestarted, parentStopCheckpoint } from "./lib/stress-parent-stop.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
@@ -694,27 +698,54 @@ async function answerCard(run, conversationId, answer, failures, reason) {
       current.permissions.some((each) => !reason || each.title === reason),
     10,
   )
-  const permission =
-    view?.permissions?.find((each) => !reason || each.title === reason) ??
-    view?.permissions?.[0]
+  const permission = view?.permissions?.find((each) => !reason || each.title === reason)
   const label = offeredLabel(permission?.options, answer === "allow" ? "allow" : "deny")
   if (!label) {
     failures.push(`the review offers no ${answer}`)
     return false
   }
-  await asking
-    .first()
-    .getByRole("button", { name: label, exact: true })
-    .click({ timeout: 10_000 })
-  const gone = await waitFor(async () => {
-    const current = await readWithReviews(run.client, conversationId)
-    return !current.permissions.some((each) => each.review === permission.review)
-  }, 30_000)
+  const option = permission.options.find((each) => each.effect === answer)
+  const observation = run.reviewAnswers.begin({
+    conversationId,
+    executionId: permission.executionId,
+    review: permission.review,
+    permissionId: permission.permissionId,
+    optionId: option.id,
+  })
+  let acknowledged = false
+  let gone
+  try {
+    await asking
+      .first()
+      .getByRole("button", { name: label, exact: true })
+      .click({ timeout: 10_000 })
+    ;[acknowledged, gone] = await Promise.all([
+      waitFor(() => observation.acknowledged(), 30_000),
+      waitFor(async () => {
+        const current = await readWithReviews(run.client, conversationId)
+        return !current.permissions.some((each) => each.review === permission.review)
+      }, 30_000),
+    ])
+  } finally {
+    const evidence = observation.finish()
+    acknowledged = reviewAnswerAcknowledged(evidence, acknowledged)
+    run.reviewAnswerEvidence.push(evidence)
+    if (run.evidence)
+      writeView(
+        run.evidence,
+        `views/${run.engine}-review-answers.json`,
+        run.reviewAnswerEvidence,
+      )
+    if (!acknowledged)
+      failures.push(
+        `the answer to ${JSON.stringify(reason ?? permission.title)} was ${evidence.outcome}`,
+      )
+  }
   if (!gone)
     failures.push(
-      `the answer to ${JSON.stringify(reason ?? permission.title)} was not taken`,
+      `the answered review ${JSON.stringify(reason ?? permission.title)} is still listed`,
     )
-  return true
+  return acknowledged && gone
 }
 
 /** Picks `mode` in the open conversation's access shield. */
@@ -2745,9 +2776,11 @@ await main(
     await withEngines(options, rep, async (engine, browser) => {
       const layout = options.layouts[0]
       let restartConsole
+      let reviewAnswers
       const opened = await openPage(browser, {
         preparePage: async (page) => {
           restartConsole = observeGatewayRestarts(page, stack.endpoint)
+          reviewAnswers = observeReviewAnswers(page, stack.endpoint)
         },
         url: `${origin}/desktop.html`,
         layout,
@@ -2760,6 +2793,8 @@ await main(
         ],
       })
       const run = new Run(stack, opened, knobs, restartConsole)
+      run.reviewAnswers = reviewAnswers
+      run.reviewAnswerEvidence = []
       run.evidence = options.evidence
       run.engine = engine
       const base = { engine, layout }
@@ -2880,6 +2915,7 @@ await main(
           await opened.close()
         } finally {
           restartConsole.dispose()
+          reviewAnswers.dispose()
         }
       }
     })

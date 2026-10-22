@@ -28,6 +28,11 @@ does not change the environment or settings of another server.
 
 These tests prove cache isolation, not the cause of an earlier browser error.
 
+The conversation stress review-answer observer and its request/ACK ordering
+controls are mapped in [stress review answer evidence](../docs/design/stress-review-answers.md).
+A review disappearing does not confirm an answer, and a control ACK does not
+confirm provider tool completion.
+
 A large-workspace measurement is specified in
 [UI workspace load](../docs/design/ui-workspace-load.md). The seeded page is
 opt-in (`workspace-load.mjs`). Startup, the pane cap, and one long transcript

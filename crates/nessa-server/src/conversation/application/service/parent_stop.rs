@@ -449,6 +449,7 @@ impl ConversationService {
             .await
             .map_err(|_| ConversationError::Unavailable)?;
         let mut captured = Vec::new();
+        let mut aggregate_children = Vec::new();
         for receipt in &receipts {
             let binding = receipt.binding();
             if binding.operation() != MutationOperation::Stop {
@@ -473,10 +474,15 @@ impl ConversationService {
             }
             let selection =
                 restore(&base, receipt, &receipts).map_err(|_| ConversationError::Unavailable)?;
+            aggregate_children.extend(selection.children.iter().cloned());
             for selected in std::iter::once(selection.root).chain(selection.children) {
                 captured.push((base.clone(), selected));
             }
         }
+        // Child Acceptances precede their aggregate root. Only a validated
+        // selection identifies those canonical bindings as child aliases;
+        // suppress their standalone mapping without reordering other Stops.
+        captured.retain(|(root, target)| root != target || !aggregate_children.contains(target));
         Ok(captured)
     }
 
