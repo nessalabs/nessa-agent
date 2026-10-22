@@ -194,6 +194,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       windowWidth={windowWidth}
                       sidebarWidth={sidebarWidth}
                       listWidth={listWidth}
+                      covered={shownRailItem !== undefined}
                     />
                     <ListMeasureHold root={root} />
                     <FoldMark root={root} />

@@ -93,17 +93,24 @@ export function ColumnFit({
   windowWidth,
   sidebarWidth,
   listWidth,
+  covered = false,
 }: {
   windowWidth: number
   sidebarWidth: number
   listWidth: number
+  /** A side rail item's full view is over the workspace: nothing is fitted beneath it. */
+  covered?: boolean
 }) {
   const dispatch = useWorkspaceDispatch()
   const columns = useWorkspaceSelector(selectColumnCount)
-  useFitOnResize(windowWidth, columns, (width) =>
-    dispatch(
-      fitToWindow({ windowWidth: width, sidebarWidth, sessionListWidth: listWidth }),
-    ),
+  useFitOnResize(
+    windowWidth,
+    columns,
+    (width) =>
+      dispatch(
+        fitToWindow({ windowWidth: width, sidebarWidth, sessionListWidth: listWidth }),
+      ),
+    !covered,
   )
   return null
 }
