@@ -250,6 +250,52 @@ fn raw_open_sharing(
     }
 }
 fn verify_acl(file: &File) -> io::Result<()> {
+    let (descriptor, _) = query_stored_dacl(file)?;
+    let mut control = 0;
+    let mut revision = 0;
+    // The bounded native query returned a complete self-relative descriptor.
+    unsafe {
+        check(GetSecurityDescriptorControl(
+            descriptor.as_ptr().cast_mut().cast(),
+            &mut control,
+            &mut revision,
+        ))?;
+    }
+    if control & SE_DACL_PROTECTED == 0 {
+        return Err(unsafe_file());
+    }
+    verify_provider_acl(file)
+}
+
+fn query_stored_dacl(file: &File) -> io::Result<(Vec<u32>, usize)> {
+    // NTFS security descriptors are at most 64 KiB. Use one aligned allocation
+    // and one read-only query, with no size-driven retry or ACL repair.
+    const CAPACITY: usize = 64 * 1024;
+    let mut descriptor = vec![0u32; CAPACITY / size_of::<u32>()];
+    let mut needed = 0;
+    let status = unsafe {
+        windows_sys::Wdk::Storage::FileSystem::NtQuerySecurityObject(
+            file.as_raw_handle(),
+            DACL_SECURITY_INFORMATION,
+            descriptor.as_mut_ptr().cast(),
+            CAPACITY as u32,
+            &mut needed,
+        )
+    };
+    if status < 0 {
+        return Err(io::Error::from_raw_os_error(
+            unsafe { RtlNtStatusToDosError(status) } as i32,
+        ));
+    }
+    // The self-relative descriptor header occupies 20 bytes. Do not inspect a
+    // truncated header or accept a returned count outside the supplied buffer.
+    if !(20..=CAPACITY).contains(&(needed as usize)) {
+        return Err(unsafe_file());
+    }
+    Ok((descriptor, needed as usize))
+}
+
+fn verify_provider_acl(file: &File) -> io::Result<()> {
     unsafe {
         let handle = file.as_raw_handle();
         let mut flags = 0;
@@ -656,8 +702,136 @@ mod tests {
     use crate::{create_private_directory_tree_beneath, PrivateTempFile};
     use std::{
         io::{Read, Write},
-        os::windows::fs::symlink_file,
+        os::windows::fs::{symlink_file, FileExt, OpenOptionsExt},
     };
+
+    fn stored_dacl_receipt(file: &File) -> (Vec<u8>, SECURITY_DESCRIPTOR_CONTROL) {
+        let (descriptor, length) = query_stored_dacl(file).unwrap();
+        let mut control = 0;
+        let mut revision = 0;
+        unsafe {
+            check(GetSecurityDescriptorControl(
+                descriptor.as_ptr().cast_mut().cast(),
+                &mut control,
+                &mut revision,
+            ))
+            .unwrap();
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(descriptor.as_ptr().cast::<u8>(), length) }
+            .to_vec();
+        (bytes, control)
+    }
+
+    #[test]
+    fn stored_protection_refuses_a_single_link_inode_accepted_by_the_provider_policy() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("legacy");
+        crate::create_directory_exclusive(&legacy).unwrap();
+        let external_name = legacy.join("external");
+        let payload = b"single-link inode unchanged";
+        fs::write(&external_name, payload).unwrap();
+        let external = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&external_name)
+            .unwrap();
+        let original_id = NativeObjectId::capture(&external).unwrap();
+        let original = stored_dacl_receipt(&external);
+        assert_eq!(original.1 & SE_DACL_PROTECTED, 0);
+        let parent = raw_open(root.path(), GENERIC_READ, OPEN_EXISTING, null()).unwrap();
+        let owner = create_protected_directory_at(&parent, OsStr::new("owned")).unwrap();
+        let _destination =
+            create_protected_subdirectory_at(&owner, OsStr::new("destination")).unwrap();
+        let target_name = root.path().join("owned/destination/linked");
+        fs::hard_link(&external_name, &target_name).unwrap();
+        assert_eq!(information(&external).unwrap().nNumberOfLinks, 2);
+        assert!(verify_file(&external).is_err());
+        assert!(
+            stored_dacl_receipt(&external) == original,
+            "stored security changed after multi-link refusal"
+        );
+        fs::remove_file(&external_name).unwrap();
+        let linked = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&target_name)
+            .unwrap();
+        assert_eq!(information(&linked).unwrap().nNumberOfLinks, 1);
+        assert_eq!(NativeObjectId::capture(&linked).unwrap(), original_id);
+        assert!(
+            stored_dacl_receipt(&linked) == original,
+            "stored security changed before old provider policy"
+        );
+        // This is the actual old policy on the same inode and name. Its
+        // successful admission makes the native stored-P refusal non-vacuous.
+        verify_provider_acl(&linked).unwrap();
+        assert!(
+            stored_dacl_receipt(&linked) == original,
+            "stored security changed after old provider policy"
+        );
+        assert!(verify_file(&linked).is_err());
+        assert!(
+            stored_dacl_receipt(&linked) == original,
+            "stored security changed after stored-protection refusal"
+        );
+        assert!(
+            stored_dacl_receipt(&external) == original,
+            "stored security changed on original handle after refusal"
+        );
+        assert!(!external_name.exists());
+        assert_eq!(fs::read(&target_name).unwrap(), payload);
+        fs::write(&target_name, payload).unwrap();
+        let mut bytes = vec![0; payload.len()];
+        assert_eq!(external.seek_read(&mut bytes, 0).unwrap(), payload.len());
+        assert_eq!(bytes, payload);
+        assert_eq!(information(&linked).unwrap().nNumberOfLinks, 1);
+        assert_eq!(NativeObjectId::capture(&linked).unwrap(), original_id);
+        assert!(
+            stored_dacl_receipt(&linked) == original,
+            "stored security changed on linked handle after writes"
+        );
+        assert!(
+            stored_dacl_receipt(&external) == original,
+            "stored security changed on original handle after writes"
+        );
+    }
+
+    #[test]
+    fn stored_protection_accepts_fresh_and_existing_private_files() {
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join("private");
+        create_directory(&private).unwrap();
+        let path = private.join("owned");
+        let mut created = open(&path, OpenMode::CreateNew).unwrap();
+        created.write_all(b"private bytes").unwrap();
+        let before = stored_dacl_receipt(&created);
+        assert_ne!(before.1 & SE_DACL_PROTECTED, 0);
+        verify_provider_acl(&created).unwrap();
+        verify_file(&created).unwrap();
+        assert!(
+            stored_dacl_receipt(&created) == before,
+            "stored security changed after fresh-file verification"
+        );
+        drop(created);
+        let mut existing = open(&path, OpenMode::Read).unwrap();
+        assert!(
+            stored_dacl_receipt(&existing) == before,
+            "stored security changed after reopening private file"
+        );
+        let mut bytes = Vec::new();
+        existing.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"private bytes");
+        let directory = raw_open(&private, GENERIC_READ, OPEN_EXISTING, null()).unwrap();
+        let pinned = create_pinned_file_at(&directory, OsStr::new("pinned")).unwrap();
+        let pinned_before = stored_dacl_receipt(&pinned);
+        assert_ne!(pinned_before.1 & SE_DACL_PROTECTED, 0);
+        verify_provider_acl(&pinned).unwrap();
+        verify_file(&pinned).unwrap();
+        assert!(
+            stored_dacl_receipt(&pinned) == pinned_before,
+            "stored security changed after pinned-file verification"
+        );
+    }
 
     #[test]
     fn win32_paths_use_normalized_extended_spelling_without_namespace_bypasses() {

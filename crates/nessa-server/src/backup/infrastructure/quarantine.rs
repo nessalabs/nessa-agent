@@ -6232,40 +6232,68 @@ fn failed_multilink_validation_drops_namespace_guard_without_changing_foreign_se
 
     let temp = tempfile::tempdir().unwrap();
     nessa_local_storage::create_directory_exclusive(&temp.path().join("legacy")).unwrap();
+    let legacy_parent = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(7)
+        .custom_flags(0x02000000 | 0x00200000) // BACKUP_SEMANTICS | OPEN_REPARSE_POINT.
+        .open(temp.path().join("legacy"))
+        .unwrap();
+    let parent_security = native_security_bytes(&legacy_parent);
+    log_security_shape(
+        "native-legacy-parent-before-child-creation",
+        &parent_security,
+    );
+    let dacl = u32::from_le_bytes(parent_security[16..20].try_into().unwrap()) as usize;
+    assert!(dacl > 0 && dacl + 8 <= parent_security.len());
+    let count = u16::from_le_bytes(parent_security[dacl + 4..dacl + 6].try_into().unwrap());
+    let mut offset = dacl + 8;
+    let mut inheritable_full_access = false;
+    for _ in 0..count {
+        assert!(offset + 8 <= parent_security.len());
+        let size = u16::from_le_bytes(parent_security[offset + 2..offset + 4].try_into().unwrap())
+            as usize;
+        assert!(size >= 8 && offset + size <= parent_security.len());
+        let mask = u32::from_le_bytes(parent_security[offset + 4..offset + 8].try_into().unwrap());
+        inheritable_full_access |= parent_security[offset] == 0
+            && parent_security[offset + 1] & 3 == 3 // OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE.
+            && mask & 0x001f01ff == 0x001f01ff;
+        offset += size;
+    }
+    assert!(
+        inheritable_full_access,
+        "ordinary child must originate under actual native OI/CI full-access inheritance"
+    );
     let external_path = temp.path().join("legacy/external");
     let bytes = b"foreign legacy inode remains writable";
+    // Ordinary creation supplies no explicit security descriptor. Native 907
+    // established that its stored ACE flags are zero even when a provider
+    // synthesizes INHERITED_ACE in a name-associated descriptor copy.
     fs::write(&external_path, bytes).unwrap();
     let external = fs::OpenOptions::new()
         .read(true)
         .share_mode(7)
         .open(&external_path)
         .unwrap();
-    let native_before_named = native_security_bytes(&external);
-    log_security_shape("native-held-before-named-baseline", &native_before_named);
-    let before = security_bytes(&external_path);
-    log_security_shape("named-provider-baseline", &before);
-    let native_after_named = native_security_bytes(&external);
-    log_security_shape("native-held-after-named-baseline", &native_after_named);
-    eprintln!("guard-cleanup-security named_equals_native_before={} named_equals_native_after={} native_changed_after_named={}", before == native_before_named, before == native_after_named, native_before_named != native_after_named);
+    // This baseline is immutable and predates every child provider query,
+    // hard-link operation and namespace-protection effect.
+    let before = native_security_bytes(&external);
+    log_security_shape("native-held-immutable-baseline", &before);
     let control = u16::from_le_bytes(before[2..4].try_into().unwrap());
     assert_eq!(
         control & (0x1000 | 0x0400),
         0,
-        "fixture must have legacy unprotected inheritance"
+        "ordinary child must have stored legacy unprotected controls"
     );
-    let dacl = u32::from_le_bytes(before[16..20].try_into().unwrap()) as usize;
-    assert!(dacl > 0 && dacl + 8 <= before.len());
-    let count = u16::from_le_bytes(before[dacl + 4..dacl + 6].try_into().unwrap());
-    let mut offset = dacl + 8;
-    let mut inherited = false;
-    for _ in 0..count {
-        assert!(offset + 4 <= before.len());
-        inherited |= before[offset + 1] & 0x10 != 0;
-        let size = u16::from_le_bytes(before[offset + 2..offset + 4].try_into().unwrap()) as usize;
-        assert!(size >= 4 && offset + size <= before.len());
-        offset += size;
-    }
-    assert!(inherited, "fixture must contain genuinely inherited ACEs");
+    let named = security_bytes(&external_path);
+    log_security_shape("named-provider-diagnostic-before-link", &named);
+    eprintln!(
+        "guard-cleanup-security named_equals_stored_baseline={}",
+        named == before
+    );
+    assert!(
+        native_security_bytes(&external) == before,
+        "named diagnostic must preserve stored security before linking"
+    );
     let identity = NativeObjectId::capture(&external).unwrap();
     let parent = open_ancestor(temp.path()).unwrap();
     let directory = create_directory_handle(&parent, OsStr::new("owned"), true).unwrap();
@@ -6281,28 +6309,46 @@ fn failed_multilink_validation_drops_namespace_guard_without_changing_foreign_se
         nessa_local_storage::verify_file(&linked).is_err(),
         "multilink admission must fail before ACL verification"
     );
-    let unchanged = || {
+    let unchanged = |phase: &str| {
         for (path, handle) in [(&external_path, &external), (&linked_path, &linked)] {
-            assert_eq!(security_bytes(path), before);
+            assert!(
+                native_security_bytes(handle) == before,
+                "stored security changed: {phase}"
+            );
             assert_eq!(NativeObjectId::capture(handle).unwrap(), identity);
             assert_eq!(fs::read(path).unwrap(), bytes);
             fs::write(path, bytes).unwrap();
-            assert_eq!(security_bytes(path), before);
+            assert!(
+                native_security_bytes(handle) == before,
+                "ordinary write changed stored security: {phase}"
+            );
+            let named = security_bytes(path);
+            log_security_shape(phase, &named);
+            eprintln!(
+                "guard-cleanup-security phase={phase} named_equals_stored_baseline={}",
+                named == before
+            );
+            assert!(
+                native_security_bytes(handle) == before,
+                "named diagnostic changed stored security: {phase}"
+            );
         }
     };
-    unchanged();
+    unchanged("after-link-and-open");
     let guard = ProtectedDirectories::seal(&directory).unwrap();
-    unchanged();
+    unchanged("after-real-guard-seal");
     // This is the real publication validator and its real failure: opening the
     // linked payload rejects nNumberOfLinks > 1. Drop takes the production
     // guard cleanup path, including release_copy_directory on the owned root.
     assert_eq!(content_of(&directory), Err(RestoreFault::Unreadable));
+    unchanged("after-real-validation-error-before-guard-drop");
     drop(guard);
-    unchanged();
+    unchanged("after-real-guard-drop");
     fs::write(
         temp.path().join("owned/after-cleanup"),
         b"full parent access restored",
     )
     .unwrap();
+    unchanged("after-post-cleanup-parent-create");
     assert!(!temp.path().join("live").exists());
 }

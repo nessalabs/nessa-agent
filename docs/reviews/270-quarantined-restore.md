@@ -250,3 +250,29 @@ aggregate and exact-head native CI; this section does not imply pending native
 runtime checks passed.
 
 Native 0125274a reached and passed readonly-phase and leaf-pinning controls, but verified-reopen provider release changed genuine inherited child ACLs (storage53/3, directory integration11/0). The design now distinguishes qualified append/seal from a separately checked terminal raw-release candidate. Ordinary legacy hard-link and directory-move postures, external-alias preservation and failure cleanup are mandatory controls; no all-children-modern assumption or weaker ACL assertion qualifies release.
+
+
+## macOS aggregate qualification: desktop stop ordering, 2026-10-22
+
+Exact-head `90747960c8b779e379faec66593132ed40e8ac01` macOS server
+qualification failed `a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock`:
+provider opens were one rather than two (3,603 passed, one failed, 12 ignored).
+The receipt and submission FIFO position establish a new logical owner, but
+provider attachment runs separately. This is a test ordering gap: the SDK
+permits cancellation before provider open, as exercised by
+`close_before_attachment_task_runs_preserves_close_without_failed_transition`.
+The failed receipt remains evidence; the following test correction is not yet
+qualified on macOS.
+
+| Controlled ordering before the queued stop takes the submission lock | Required evidence |
+| --- | --- |
+| Person closes the old owner; a queued submission creates its replacement, then waits in its file-link audit while holding the lock; attachment is joined before that audit is released | Existing replacement-owner test retains its receipt, two provider opens, two provider closes, released slot and subsequent usability assertions |
+| Same FIFO and held-audit ordering, but replacement runtime readiness stays gated until the stop cancels attachment | New `a_desktop_stop_can_cancel_the_replacement_before_provider_attachment` checks the accepted receipt, one provider open and close, released slot and subsequent usability; no provider is opened merely to close the logical owner |
+
+Both cases use acknowledgements rather than sleeps to establish the attachment
+ordering. The existing cooperative-budget/FIFO checks stay in place. A
+counterfactual that prevents attachment but retains the first row's two-open
+assertion must fail one versus two. A counterfactual stopping the captured old
+owner must fail the first row's close or released-slot evidence. These controls
+and final aggregate results must be recorded after execution, not inferred from
+source inspection.
