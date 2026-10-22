@@ -2731,6 +2731,63 @@ describe("writes", () => {
     expect(updates).toHaveLength(1)
   })
 
+  it("a fork is the gateway's: the new session is listed as the one it was made from before it resolves, and opens on the copied turns", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA, { title: "Trip" }))
+    gateway.views.set(
+      conversationA,
+      view(conversationA, {
+        messages: [
+          {
+            executionId: "e1",
+            userText: "Plan a trip",
+            attachments: [],
+            files: [],
+            status: "completed" as const,
+            parts: [
+              {
+                offset: 0,
+                kind: "text" as const,
+                text: "Lisbon",
+                toolId: "",
+                noticeId: "",
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    follow()
+    await source.index()
+    updates.length = 0
+    const forked = await source.fork(conversationA, "person")
+    expect(forked).not.toBe(conversationA)
+    expect(gateway.calls).toContainEqual({
+      method: "fork",
+      args: [conversationA, { conversationId: forked }],
+    })
+    expect(updates).toEqual([
+      {
+        kind: "session",
+        session: expect.objectContaining({ id: forked, title: "Trip", revision: 1 }),
+      },
+    ])
+    const transcript = await source.transcript(forked)
+    expect(
+      transcript.messages.map((message) => [message.role, messageText(message)]),
+    ).toEqual([
+      ["user", "Plan a trip"],
+      ["agent", "Lisbon"],
+      ["handoff", ""],
+    ])
+    // The list frame that follows says it again, and the source is not taken out.
+    gateway.publishList()
+    await flush()
+    expect((await source.index()).sessions.map((session) => session.id)).toContain(
+      conversationA,
+    )
+  })
+
   it("a list frame read before a rename was stored does not say the old title after it", async () => {
     const { gateway, source, updates, follow } = started()
     gateway.rows.set(conversationA, row(conversationA))

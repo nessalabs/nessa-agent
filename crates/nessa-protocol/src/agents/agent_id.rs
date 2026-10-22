@@ -46,6 +46,27 @@ impl AgentId {
     pub fn parse(name: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|agent| agent.name() == name)
     }
+
+    /// The name this agent's provider binding gives the sessions it opens,
+    /// which a conversation's history records as its provider identity. Each
+    /// binding owns its name; this only says which binding is whose.
+    pub fn provider_name(self) -> &'static str {
+        use nessa_sdk::infrastructure::{claude_acp, codex_acp, opencode_acp};
+        match self {
+            AgentId::Claude => claude_acp::sessions::PROVIDER_NAME,
+            AgentId::Codex => codex_acp::sessions::PROVIDER_NAME,
+            AgentId::Opencode => opencode_acp::sessions::PROVIDER_NAME,
+        }
+    }
+
+    /// The agent whose binding opens sessions under `provider`, as a history
+    /// records it, or nothing for one Nessa has no agent for.
+    pub fn of_provider(provider: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|agent| agent.provider_name() == provider)
+    }
 }
 
 #[cfg(test)]

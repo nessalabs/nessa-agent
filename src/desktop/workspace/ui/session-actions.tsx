@@ -9,6 +9,7 @@ import { knownToSource } from "../model/revision"
 import {
   archiveSession,
   closePane,
+  forkSession,
   openBeside,
   openSession,
   openShare,
@@ -130,6 +131,13 @@ export function SessionMenuItems({
         }
       >
         {pinned ? "Unpin from Sidebar" : "Pin to Sidebar"}
+      </MenuItem>
+      {/* A copy of what was said, so none before it has spoken. */}
+      <MenuItem
+        disabled={!begun}
+        onSelect={() => void dispatch(forkSession({ sessionId, initiator: "person" }))}
+      >
+        Fork
       </MenuItem>
       {/* Sharing is the gateway's: a window without one offers none, and a
           session it has not spoken of has no conversation to share yet. */}

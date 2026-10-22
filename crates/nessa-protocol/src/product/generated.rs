@@ -736,6 +736,7 @@ pub struct ConversationView {
     pub lease: Option<ConversationLease>,
     pub artifacts: Vec<ConversationArtifact>,
     pub notes: Vec<ConversationNote>,
+    pub handoffs: Vec<ConversationHandoff>,
     pub unreadable: Vec<ConversationUnreadable>,
     pub unreadable_truncated: bool,
     #[serde(deserialize_with = "Option::deserialize")]
@@ -2802,6 +2803,38 @@ pub struct ConversationNoteAuthor {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationHandoff {
+    pub handoff_id: String,
+    pub kind: String,
+    pub at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<ConversationHandoffAgent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<ConversationHandoffAgent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<Vec<ConversationCarriedTurn>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omitted_turns: Option<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationHandoffAgent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    pub model: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationCarriedTurn {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub said: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationMessageParams {
     pub conversation_id: String,
     pub request_id: String,
@@ -2971,6 +3004,21 @@ pub struct ConversationSetModelParams {
     pub conversation_id: String,
     pub request_id: String,
     pub model: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSwitchAgentParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub agent: String,
+    pub model: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationForkParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub source_conversation_id: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3260,6 +3308,8 @@ pub mod product_method {
     pub const CONVERSATION_SUBSCRIBE_EVENTS: &str = "conversation.subscribeEvents";
     pub const CONVERSATION_PEEK: &str = "conversation.peek";
     pub const CONVERSATION_SET_MODEL: &str = "conversation.setModel";
+    pub const CONVERSATION_SWITCH_AGENT: &str = "conversation.switchAgent";
+    pub const CONVERSATION_FORK: &str = "conversation.fork";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -3450,7 +3500,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 78
+                items.len() <= 80
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3553,6 +3603,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.subscribeEvents",
     "conversation.peek",
     "conversation.setModel",
+    "conversation.switchAgent",
+    "conversation.fork",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -3635,7 +3687,9 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "workspace.publish"
         | "conversation.subscribeEvents"
         | "conversation.peek"
-        | "conversation.setModel" => Some("conversation.write"),
+        | "conversation.setModel"
+        | "conversation.switchAgent"
+        | "conversation.fork" => Some("conversation.write"),
         "conversation.recordsHead"
         | "conversation.recordsPage"
         | "artifact.read"

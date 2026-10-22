@@ -83,6 +83,7 @@ export {
   pinSession,
   providerLoginAvailable,
   renameSession,
+  forkSession,
   resendMessage,
   retryReview,
   sendMessage,

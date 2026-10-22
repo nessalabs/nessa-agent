@@ -1,6 +1,6 @@
 import { modelChanging, modelRequesting } from "../../adapters/store/model-commands"
 import { useRememberedValue } from "../../adapters/store/remembered-session"
-import { draftOf, entry } from "../../application/workspace-state"
+import { entry } from "../../application/workspace-state"
 import { WorkspaceSendFailure } from "../send-failure"
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
 import { playArrival, type Arrival } from "../../adapters/dom/arrival"
@@ -185,7 +185,6 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
     modelChanging(state.workspace, sessionId),
   )
   const modelBusy = useRememberedValue(sessionId, modelBusyLive)
-  const isDraft = useWorkspaceSelector((state) => !!draftOf(state.workspace, sessionId))
   const choiceCode =
     modelChoice &&
     (modelChoice.state === "refused" || modelChoice.state === "recovery_required")
@@ -220,7 +219,6 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
         onPageChange={stayCard}
         model={model}
         onModelChange={changeModel}
-        modelProvider={!isDraft ? model?.provider : undefined}
         modelDisabled={modelRequest}
         modelNotice={modelNotice}
         onSend={modelBusy ? undefined : send}

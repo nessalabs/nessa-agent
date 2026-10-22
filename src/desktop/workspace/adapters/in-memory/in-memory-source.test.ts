@@ -822,6 +822,37 @@ describe("the in-memory source", () => {
     ).rejects.toThrow(WorkspaceSourceError)
   })
 
+  it("forks a session into a new one listed as it is, its turns copied above the line, and records the fork", async () => {
+    const { source, updates } = started()
+    const before = await source.transcript("frost")
+    const said = before.messages.filter(
+      (message) => message.role === "user" || message.role === "agent",
+    )
+    const forked = await source.fork("frost", "person")
+    expect(forked).not.toBe("frost")
+    const original = (await source.index()).sessions.find((each) => each.id === "frost")
+    expect(updates.at(-1)).toMatchObject({
+      kind: "session",
+      session: { id: forked, title: original?.title, status: "idle", pinned: false },
+    })
+    const copy = await source.transcript(forked)
+    expect(copy.messages.slice(0, -1).map((message) => message.role)).toEqual(
+      said.map((message) => message.role),
+    )
+    expect(copy.messages.at(-1)).toMatchObject({
+      role: "handoff",
+      handoff: { kind: "fork", omittedTurns: 0 },
+    })
+    // The session it was made from is as it was.
+    expect((await source.transcript("frost")).messages).toEqual(before.messages)
+    expect(source.audit().map((d) => [d.sessionId, d.action, d.outcome])).toEqual([
+      ["frost", "fork", "taken"],
+    ])
+    await expect(source.fork("nobody", "person")).rejects.toMatchObject({
+      reason: "unknown-session",
+    })
+  })
+
   it("pins, archives and marks read, emitting each change", async () => {
     const { source, updates } = started()
     await source.setPinned("frost", false, "agent")

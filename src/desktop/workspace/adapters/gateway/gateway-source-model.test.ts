@@ -68,16 +68,48 @@ describe("same-provider gateway control", () => {
     source.dispose()
   })
 
-  it("refuses cross-provider before a native setting", async () => {
+  it("carries the conversation on under another provider's agent, never a native setting", async () => {
     const { gateway, source } = await ready()
+    const astra = { provider: "openai", modelId: "gpt-6-astra" }
+    const result = await source.setModel("a", astra, "switch", "person")
+    expect(result).toMatchObject({ requestId: "switch", model: astra.modelId })
+    expect(gateway.count("setModel")).toBe(0)
+    expect(gateway.calls.filter((call) => call.method === "switchAgent")).toEqual([
+      {
+        method: "switchAgent",
+        args: ["a", "codex", astra.modelId, { requestId: "switch" }],
+      },
+    ])
+    // The view read after it lists the switch, and the transcript draws it.
+    const transcript = await source.transcript("a")
+    expect(transcript.messages.at(-1)).toMatchObject({
+      role: "handoff",
+      handoff: { kind: "switch", to: { agent: "codex", model: astra.modelId } },
+    })
+    source.dispose()
+  })
+
+  it("refuses a switch the gateway did not make, and a provider no agent runs", async () => {
+    const { gateway, source } = await ready()
+    gateway.once("switchAgent", () =>
+      Promise.resolve({ requestId: "switch", applied: false }),
+    )
     await expect(
       source.setModel(
         "a",
         { provider: "openai", modelId: "gpt-6-astra" },
-        "id",
+        "switch",
         "person",
       ),
+    ).rejects.toMatchObject({
+      reason: "not-supported",
+      uncertain: false,
+      diagnostic: { code: "model_change_not_applied" },
+    })
+    await expect(
+      source.setModel("a", { provider: "nobody", modelId: "m" }, "other", "person"),
     ).rejects.toMatchObject({ reason: "not-supported" })
+    expect(gateway.count("switchAgent")).toBe(1)
     expect(gateway.count("setModel")).toBe(0)
     source.dispose()
   })
