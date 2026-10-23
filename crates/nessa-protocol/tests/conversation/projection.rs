@@ -769,7 +769,8 @@ fn a_tool_spans_from_its_first_report_to_the_one_that_settles_it_and_keeps_its_i
 #[test]
 fn a_tool_lists_the_files_it_changed_and_says_when_a_side_was_cut() {
     use crate::conversation::view::{
-        ConversationToolChange, MAX_TOOL_CHANGES, MAX_TOOL_CHANGE_SIDE_BYTES,
+        ConversationToolChange, MAX_TOOL_CHANGES, MAX_TOOL_CHANGE_PATH_BYTES,
+        MAX_TOOL_CHANGE_SIDE_BYTES,
     };
     let tool = ToolCallId::new("edit").unwrap();
     let path = |name: &str| FilePath::new(name).unwrap();
@@ -840,6 +841,26 @@ fn a_tool_lists_the_files_it_changed_and_says_when_a_side_was_cut() {
     assert!(view.tools[0].details.ends_with("[Output truncated]"));
     assert_eq!(view.tools[0].changes.len(), 1);
     assert_eq!(view.tools[0].changes[0].path, "after.ts");
+    // A path past its bound would name another file once cut, so its change
+    // is not listed, and the list says it leaves one out.
+    let long = "d/".repeat(MAX_TOOL_CHANGE_PATH_BYTES / 2) + "x.ts";
+    let view_long = committed_tool_view(&[event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(
+            ToolCallId::new("deep").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .with_content(vec![
+            ToolContent::diff(path(&long), Some("a".into()), "b"),
+            ToolContent::diff(path("short.ts"), Some("a".into()), "b"),
+        ]),
+    ))]);
+    assert_eq!(view_long.tools[0].changes.len(), 1);
+    assert_eq!(view_long.tools[0].changes[0].path, "short.ts");
+    assert!(view_long.tools[0].changes_cut);
     // A view short of room gives the list up and says so.
     let full = serde_json::to_vec(&view).unwrap().len();
     let bounded = bound_view_within(view, full - 1, true);

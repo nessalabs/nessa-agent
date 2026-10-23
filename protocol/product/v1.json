@@ -1557,7 +1557,7 @@
         },
         "changesCut": {
           "type": "boolean",
-          "description": "The call changed files changes does not list: more than 16, or the list was given up for room. A reader totalling changes knows the total is not the call's. Absent when changes lists every file the call reported."
+          "description": "The call changed files changes does not list: more than 16, one whose path is past its bound, or the list was given up for room. A reader totalling changes knows the total is not the call's. Absent when changes lists every file the call reported."
         }
       },
       "required": ["executionId", "toolId", "title", "kind", "status", "details", "input"]
@@ -1572,7 +1572,7 @@
           "minLength": 1,
           "maxLength": 4096,
           "x-utf8MaxBytes": 4096,
-          "description": "The file's path as the agent named it, unresolved; cut past 4096 bytes."
+          "description": "The file's path as the agent named it, unresolved. A change to a file whose path is longer than 4096 bytes is not listed, and changesCut says so."
         },
         "before": {
           "type": "string",

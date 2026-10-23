@@ -553,7 +553,8 @@ pub struct ConversationTool {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub changes: Vec<ConversationToolChange>,
     /// The call changed files `changes` does not list: more than
-    /// [`MAX_TOOL_CHANGES`], or the list was given up for room. A reader
+    /// [`MAX_TOOL_CHANGES`], one whose path is past
+    /// [`MAX_TOOL_CHANGE_PATH_BYTES`], or the list was given up for room. A reader
     /// totalling the changes knows the total is not the call's.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub changes_cut: bool,
@@ -566,8 +567,9 @@ pub const MAX_TOOL_CHANGES: usize = 16;
 /// so (`cut`). The schema states it again; the agreement test holds the two
 /// together.
 pub const MAX_TOOL_CHANGE_SIDE_BYTES: usize = 7000;
-/// The most bytes of a changed file's path a view carries; a longer one is
-/// cut. Stated again by the schema, held to it by the agreement test.
+/// The most bytes of a changed file's path a view carries; a change to a file
+/// with a longer path is left out of the list, and the list says it is cut.
+/// Stated again by the schema, held to it by the agreement test.
 pub const MAX_TOOL_CHANGE_PATH_BYTES: usize = 4096;
 /// One file a tool call changed: its path, and its text before and after.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

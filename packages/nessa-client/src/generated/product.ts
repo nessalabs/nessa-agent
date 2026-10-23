@@ -655,12 +655,12 @@ export interface ConversationTool {
   endedAtMs?: number
   /** The files the call changed, as the agent reported them and in its order, at most 16. The same changes are written into details as text; these are for a reader that draws them, and the first a view gives up for room, before any turn. Absent when the call reported none. */
   changes?: ConversationToolChange[]
-  /** The call changed files changes does not list: more than 16, or the list was given up for room. A reader totalling changes knows the total is not the call's. Absent when changes lists every file the call reported. */
+  /** The call changed files changes does not list: more than 16, one whose path is past its bound, or the list was given up for room. A reader totalling changes knows the total is not the call's. Absent when changes lists every file the call reported. */
   changesCut?: boolean
 }
 /** One file a tool call changed: its path, and its text before and after. */
 export interface ConversationToolChange {
-  /** The file's path as the agent named it, unresolved; cut past 4096 bytes. */
+  /** The file's path as the agent named it, unresolved. A change to a file whose path is longer than 4096 bytes is not listed, and changesCut says so. */
   path: string
   /** The text before the change, cut past 7000 bytes. Absent when the agent did not say — a file it created reads that way — which differs from an empty file. */
   before?: string

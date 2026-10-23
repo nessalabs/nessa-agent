@@ -1678,11 +1678,15 @@ impl Projection {
                                     before.as_deref().unwrap_or("(not provided)"),
                                     after
                                 );
-                                if tool.changes.len() == MAX_TOOL_CHANGES {
+                                // A path past its bound is not listed rather
+                                // than cut: a cut path names another file.
+                                if tool.changes.len() == MAX_TOOL_CHANGES
+                                    || path.as_str().len() > MAX_TOOL_CHANGE_PATH_BYTES
+                                {
                                     tool.changes_cut = true;
                                 } else {
                                     tool.changes.push(ConversationToolChange {
-                                        path: clipped(path.as_str(), MAX_TOOL_CHANGE_PATH_BYTES),
+                                        path: path.as_str().to_owned(),
                                         cut: before.as_ref().is_some_and(|before| {
                                             before.len() < old.map_or(0, str::len)
                                         }) || after.len() < new.len(),
