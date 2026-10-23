@@ -338,3 +338,159 @@ async fn coherent_auth_result_for_a_substituted_command_cannot_install_original_
     ));
     assert_eq!(f.count("registration_intents"), 0);
 }
+
+struct ChangedReservation<'a> {
+    store: &'a SqlOutbox,
+    alter: fn(&mut RegistrationIntent),
+    before: bool,
+}
+#[async_trait]
+impl RegistrationIntents for ChangedReservation<'_> {
+    async fn reserve(
+        &self,
+        mut proposed: RegistrationIntent,
+    ) -> Result<RegistrationIntent, OutboxError> {
+        if self.before {
+            (self.alter)(&mut proposed);
+        }
+        let mut selected = self.store.reserve(proposed).await?;
+        if !self.before {
+            (self.alter)(&mut selected);
+        }
+        Ok(selected)
+    }
+    async fn install(&self, intent: RegistrationIntent) -> Result<(), OutboxError> {
+        RegistrationIntents::install(self.store, intent).await
+    }
+    async fn discard(&self, id: Uuid) -> Result<(), OutboxError> {
+        self.store.discard(id).await
+    }
+}
+
+#[tokio::test]
+async fn substituted_reservation_is_rejected_before_auth_and_installation() {
+    type AlterIntent = fn(&mut RegistrationIntent);
+    let cases: [(&str, AlterIntent); 17] = [
+        ("destination", |i| {
+            i.config.destination =
+                Destination::parse("https://different-recipient.test/changed").unwrap()
+        }),
+        ("key", |i| i.config.key = Arc::new(MacKey::new([87; 32]))),
+        ("malformed_selection", |i| i.issue.credential_id.clear()),
+        ("time_projection", |i| i.issue.issued_at += 1),
+        ("request", |i| {
+            i.issue.request_id = "different-request".into()
+        }),
+        ("issuer", |i| {
+            i.issue.issuer_principal_id = "different-issuer".into()
+        }),
+        ("principal", |i| {
+            i.issue.principal.id = "different-hook".into();
+            i.issue.membership.principal_id = "different-hook".into();
+        }),
+        ("kind", |i| i.issue.principal.kind = PrincipalKindDto::Human),
+        ("membership", |i| {
+            i.issue.membership.id = "different-membership".into()
+        }),
+        ("member_principal", |i| {
+            i.issue.membership.principal_id = "different-hook".into()
+        }),
+        ("organization", |i| {
+            i.issue.membership.organization_id = "different-org".into()
+        }),
+        ("role", |i| {
+            i.issue.membership.role = MembershipRoleDto::Admin
+        }),
+        ("state", |i| {
+            i.issue.membership.state = MembershipStateDto::Disabled
+        }),
+        ("audience", |i| {
+            i.issue.audience_id = "different-gateway".into()
+        }),
+        ("expiry", |i| i.issue.expires_at = Some(99)),
+        ("grants", |i| {
+            i.issue.grants.push(grant("conversation.write"))
+        }),
+        ("purpose", |i| {
+            i.issue.purpose = CredentialIssuePurpose::Product
+        }),
+    ];
+    for (field, alter) in cases {
+        for before in [false, true] {
+            // The real reserve owner refuses these malformed proposals. Test
+            // their substitution after its valid returned selection instead.
+            if before && matches!(field, "purpose" | "malformed_selection" | "time_projection") {
+                continue;
+            }
+            let f = Registered::new();
+            let substitute = ChangedReservation {
+                store: &f.store,
+                alter,
+                before,
+            };
+            assert!(
+                matches!(
+                    f.command(&substitute).execute(f.proposed()).await,
+                    Err(RegistrationFailure::Inconsistent)
+                ),
+                "{field}, before={before}"
+            );
+            assert_eq!(f.count("registrations"), 0, "{field}");
+            assert_eq!(f.count("registration_intents"), 1, "{field}");
+            let current = f
+                .command(&f.store)
+                .credentials
+                .list(ListCredentialsRequest {
+                    organization_id: "org".into(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(current.len(), 1, "no auth issuance for {field}");
+            assert_eq!(current[0].id, "owner-key");
+        }
+    }
+}
+
+#[tokio::test]
+async fn transient_intent_scan_interruption_is_unavailable_and_unchanged_state_recovers() {
+    struct Counter {
+        steps: usize,
+        stop: usize,
+    }
+    unsafe extern "C" fn interrupt(context: *mut std::ffi::c_void) -> std::ffi::c_int {
+        let counter = unsafe { &mut *(context as *mut Counter) };
+        counter.steps += 1;
+        i32::from(counter.steps >= counter.stop)
+    }
+    let f = Registered::new();
+    f.store.reserve(f.proposed()).await.unwrap();
+    let connection = f.store.owner.connection.lock().unwrap();
+    let mut interrupted = 0;
+    for stop in 1..=150 {
+        let mut counter = Counter { steps: 0, stop };
+        unsafe {
+            nessa_local_database::rusqlite::ffi::sqlite3_progress_handler(
+                connection.handle(),
+                1,
+                Some(interrupt),
+                &mut counter as *mut Counter as *mut std::ffi::c_void,
+            );
+        }
+        let result = intents::validate(&connection);
+        unsafe {
+            nessa_local_database::rusqlite::ffi::sqlite3_progress_handler(
+                connection.handle(),
+                0,
+                None,
+                std::ptr::null_mut(),
+            );
+        }
+        match result {
+            Ok(()) => (),
+            Err(OutboxError::Unavailable) => interrupted += 1,
+            other => panic!("transient scan failed as {other:?} at step {stop}"),
+        }
+        assert_eq!(intents::validate(&connection), Ok(()));
+    }
+    assert!(interrupted > 0);
+}

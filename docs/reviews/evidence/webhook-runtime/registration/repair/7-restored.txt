@@ -1,0 +1,5 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::registration_tests::failure_tests::substituted_reservation_is_rejected_before_auth_and_installation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.12s

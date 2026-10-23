@@ -85,18 +85,6 @@ fn read(connection: &Connection, id: Uuid) -> Result<Option<RegistrationIntent>,
         .transpose()
 }
 
-fn same_config(left: &RegistrationConfig, right: &RegistrationConfig) -> bool {
-    left.destination == right.destination
-        && bool::from(left.key.expose_bytes().ct_eq(right.key.expose_bytes()))
-}
-
-fn same_intent(left: &RegistrationIntent, right: &RegistrationIntent) -> bool {
-    left.id == right.id
-        && left.issue == right.issue
-        && left.observed_at_ms == right.observed_at_ms
-        && same_config(&left.config, &right.config)
-}
-
 fn same_registration(left: &Registration, right: &Registration) -> bool {
     left.id == right.id
         && left.target == right.target
@@ -108,20 +96,14 @@ fn same_registration(left: &Registration, right: &Registration) -> bool {
 impl RegistrationIntents for SqlOutbox {
     async fn reserve(
         &self,
-        mut proposed: RegistrationIntent,
+        proposed: RegistrationIntent,
     ) -> Result<RegistrationIntent, OutboxError> {
         self.run(move |connection, _| {
             if proposed.issue.purpose != CredentialIssuePurpose::Webhook { return Err(OutboxError::Invalid); }
             proposed.registration()?;
             let saved=connection.query_row(&format!("{SELECT} WHERE issuer=?1 AND request=?2"),params![proposed.issue.issuer_principal_id,proposed.issue.request_id],Saved::row).optional().map_err(super::cursor::row_error)?.map(Saved::checked).transpose()?;
             if let Some(saved)=saved {
-                // These two fields are selected by the server rather than the
-                // retrying caller. Auth still owns its own receipt decision.
-                proposed.id=saved.id;
-                proposed.issue.credential_id=saved.issue.credential_id.clone();
-                proposed.issue.issued_at=saved.issue.issued_at;
-                proposed.observed_at_ms=saved.observed_at_ms;
-                return if same_intent(&saved,&proposed) { Ok(saved) } else { Err(OutboxError::Conflict) };
+                return saved.resolve(&proposed);
             }
             let count:i64=connection.query_row("SELECT count(*) FROM registration_intents",[],|r|r.get(0)).map_err(unavailable)?;
             if count>=MAX_REGISTRATIONS as i64 { return Err(OutboxError::Capacity); }
@@ -138,7 +120,7 @@ impl RegistrationIntents for SqlOutbox {
     async fn install(&self, intent: RegistrationIntent) -> Result<(), OutboxError> {
         self.run(move |connection, audit| {
             let saved = read(connection, intent.id)?.ok_or(OutboxError::Conflict)?;
-            if !same_intent(&saved, &intent) {
+            if !saved.same_values(&intent) {
                 return Err(OutboxError::Conflict);
             }
             let expected = saved.registration()?;
@@ -210,7 +192,7 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
     let mut statement = connection.prepare(SELECT).map_err(unavailable)?;
     let rows = statement.query_map([], Saved::row).map_err(unavailable)?;
     for row in rows {
-        let intent = row.map_err(invalid)?.checked()?;
+        let intent = row.map_err(super::cursor::row_error)?.checked()?;
         let registration = connection
             .query_row(
                 &format!("{} FROM registrations WHERE id=?1", registry::SELECT),
