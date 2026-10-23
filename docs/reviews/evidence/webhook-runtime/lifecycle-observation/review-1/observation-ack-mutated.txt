@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::owner_expiry_observation_survives_failed_stop_and_later_canonical_revocation' (146640) panicked at /tmp/nessa-expiry-observation-independent-review/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/lifecycle.rs:262:5:
+assertion `left == right` failed
+  left: Err(Invalid)
+ right: Err(Unavailable)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::owner_expiry_observation_survives_failed_stop_and_later_canonical_revocation ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::owner_expiry_observation_survives_failed_stop_and_later_canonical_revocation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 111 filtered out; finished in 0.01s

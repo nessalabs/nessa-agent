@@ -311,7 +311,7 @@ stateDiagram-v2
 
 The current revocation input covers a known principal. Offline and supersession provenance still require the existing auth journal to expose its original revocation fact under the same authority hold; the coordinator must not invent an actor. This remains pending composition.
 
-The immutable registration lifecycle value owns legal replacements; its shared decoder validates restored phase and fact together. Audit decoding uses that same transition owner, and contextual restoration correlates observation, stop and retirement records against the retained original fact before publication. One observation per already-bounded registration adds no unbounded history.
+The immutable registration lifecycle value owns legal replacements and its decoder checks local phase/fact combinations. However, [fresh independent review M1](../../../reviews/evidence/webhook-runtime/lifecycle-observation/review-1/report.md) found missing contextual phase/acknowledgement/work relationships: a substituted Stopped phase can publish an owed observation or silently clean genuine Queued work, and a retired fact can accept a reintroduced owed observation. W24 is unqualified and unpublished; those reproductions are not fixes. Valid lateSending-to-Retry recovery must remain accepted. One observation per already-bounded registration adds no unbounded history.
 
 This is an unpublished inner lifecycle checkpoint. The retained command supervisor, startup reader, credential/grant admission and sender still require composition; this chart does not claim that they run. [Private evidence](../../../reviews/evidence/webhook-runtime/lifecycle-observation/README.md) distinguishes completed isolated tests from pending canonical checks and independent review.
 
