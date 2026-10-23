@@ -53,17 +53,23 @@ type Phase =
       readonly retained?: boolean
     }
 
+type Request = { readonly kind: "read" } | { readonly kind: "revoke" }
+
 export function PermissionRuleRows() {
   const gateway = useContext(PermissionRulesContext)
   const [phase, setPhase] = useState<Phase>({ kind: "absent" })
-  const latest = useRef(0)
+  const latest = useRef<Request>({ kind: "read" })
   useEffect(() => {
     if (!gateway) return
     let current = true
     const read = () => {
-      const generation = ++latest.current
+      // A revoke retains ownership through its own fresh read. Background
+      // refreshes defer to that read rather than replacing its pending state.
+      if (latest.current.kind === "revoke") return
+      const request: Request = { kind: "read" }
+      latest.current = request
       void gateway.read().then((outcome) => {
-        if (!current || generation !== latest.current) return
+        if (!current || request !== latest.current) return
         setPhase(
           outcome.ok ? { kind: "ready", rules: outcome.rules } : { kind: "unread" },
         )
@@ -79,17 +85,21 @@ export function PermissionRuleRows() {
     document.addEventListener("visibilitychange", onVisible)
     return () => {
       current = false
+      latest.current = { kind: "read" }
       window.removeEventListener("focus", onFocus)
       document.removeEventListener("visibilitychange", onVisible)
     }
   }, [gateway])
   const revoke = (ruleId: string) => {
-    if (!gateway || phase.kind !== "ready" || phase.revoking) return
-    const generation = ++latest.current
+    if (!gateway || phase.kind !== "ready" || latest.current.kind === "revoke") return
+    const request: Request = { kind: "revoke" }
+    latest.current = request
     setPhase({ kind: "ready", rules: phase.rules, revoking: ruleId })
     void gateway.revoke(ruleId, crypto.randomUUID()).then(async (outcome) => {
+      if (request !== latest.current) return
       const again = await gateway.read()
-      if (generation !== latest.current) return
+      if (request !== latest.current) return
+      latest.current = { kind: "read" }
       if (!outcome.ok) {
         const retained = again.ok
           ? again.rules.some((rule) => rule.id === ruleId)

@@ -53,6 +53,13 @@ jobs:
       - name: Install the pinned Playwright browsers and official runtime dependencies
         run: pnpm exec playwright install --with-deps chromium webkit 2>&1 | tee "$BROWSER_EVIDENCE/browser-install.log"
         timeout-minutes: 15
+      - name: Verify pending action ordering in both engines
+        run: |
+          node verification/desktop/scripts/user-flow-ordering.mjs \
+            --engine chromium,webkit --channel bundled \
+            --out "$BROWSER_EVIDENCE/user-flow-ordering.json" \
+            --shots "$BROWSER_EVIDENCE/user-flow-ordering-shots"
+        timeout-minutes: 5
       - name: Run the canonical signed-out suite in both engines
         run: pnpm test:e2e:scripted -- --channel bundled --evidence "$BROWSER_EVIDENCE" 2>&1 | tee "$BROWSER_EVIDENCE/canonical.log"
         timeout-minutes: 35
