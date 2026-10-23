@@ -6,11 +6,13 @@ use crate::webhooks::application::{
 };
 use crate::webhooks::infrastructure::outbox::{retirement, stop::SavedStop};
 use nessa_auth::application::{
+    credential_admin::CredentialAdmin,
     ports::{AccessAdmission, AccessError, AccessHold, AccessReader, AccessSnapshot, PortFuture},
     revocation::RevocationRecord,
 };
 use nessa_auth::domain::{Initiator, RevocationCause, Supersession, TransitionCause};
 use std::sync::atomic::AtomicUsize;
+use tokio::sync::Notify;
 
 fn audits(f: &Registered) -> Vec<Value> {
     let mut values: Vec<Value> = std::fs::read_dir(&f.audit)
@@ -416,4 +418,59 @@ async fn not_yet_valid_is_not_an_expiry_observation() {
         StopObservationResult::NoStopObserved
     );
     assert_eq!(stops.0.load(Ordering::SeqCst), 0);
+}
+
+struct WaitingStop(Notify);
+#[async_trait]
+impl RegistrationStops for WaitingStop {
+    async fn stop_credential(
+        &self,
+        _: CredentialId,
+        _: RegistrationStop,
+    ) -> Result<(), OutboxError> {
+        self.0.notified().await;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn actual_read_hold_remains_owned_until_the_stop_sink_acknowledges() {
+    let f = Registered::new();
+    let proposal = f.proposed();
+    let credential = CredentialId::new(&proposal.issue.credential_id).unwrap();
+    f.command(&f.store).execute(proposal).await.unwrap();
+    f.clock.0.store(100_001, Ordering::SeqCst);
+    let stops = WaitingStop(Notify::new());
+    let observer = ObserveRegistrationStop {
+        credentials: &f.auth,
+        stops: &stops,
+        clock: f.clock.as_ref(),
+    };
+    let mut observation = Box::pin(observer.execute(&credential, ExpiryObserver::Restart));
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(matches!(
+        observation.as_mut().poll(&mut context),
+        Poll::Pending
+    ));
+    let mut revoke = f.auth.revoke(RevokeCredentialRequest {
+        request_id: "held-observation".into(),
+        issuer_principal_id: "owner".into(),
+        credential_id: credential.as_str().into(),
+        revoked_at: 101,
+    });
+    assert!(matches!(revoke.as_mut().poll(&mut context), Poll::Pending));
+    stops.0.notify_one();
+    assert_eq!(
+        observation.await.unwrap(),
+        StopObservationResult::StopAcknowledged
+    );
+    revoke.await.unwrap();
+    assert!(f
+        .auth
+        .read(&credential)
+        .await
+        .unwrap()
+        .revocation_fact()
+        .unwrap()
+        .is_some());
 }
