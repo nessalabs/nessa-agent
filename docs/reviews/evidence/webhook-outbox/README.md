@@ -23,6 +23,8 @@ SQLite/filesystem fixtures only. The source manifest names exact file hashes.
   in system Chromium 151, visually inspected: labels readable, no overlap,
   zero page errors; [render metadata](render.json), [diagram](diagram-1.png).
 
+Captured text logs normalize trailing blank lines only.
+
 Cargo environment was `PATH=/tmp/nessa-cargo/bin:$PATH`,
 `CARGO_HOME=/tmp/nessa-cargo`, `RUSTUP_HOME=/tmp/nessa-rustup`,
 `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`,

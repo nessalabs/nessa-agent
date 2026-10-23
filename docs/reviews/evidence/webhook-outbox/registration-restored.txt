@@ -4,4 +4,3 @@ test webhooks::infrastructure::outbox::tests::delivery_audit_uses_checked_regist
 test webhooks::infrastructure::outbox::tests::restored_registration_facts_are_checked_before_effects ... ok
 
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 29 filtered out; finished in 0.03s
-

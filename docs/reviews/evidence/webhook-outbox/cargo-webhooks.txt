@@ -87,4 +87,3 @@ test webhooks::infrastructure::outbox::tests::bulk_reset_retention_is_bounded_in
 test webhooks::infrastructure::outbox::tests::stop_retention_is_bounded_when_publication_fails ... ok
 
 test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 3749 filtered out; finished in 37.93s
-
