@@ -1,10 +1,11 @@
 use super::*;
 use crate::webhooks::application::{
-    ExpiryObserver, MacKey, QueueInitiator, Registration, StopReason, Target, PENDING_LIMIT,
-    RETAINED_LIMIT,
+    ExpiryObserver, MacKey, QueueInitiator, Registration, RegistrationStop, StopReason, Target,
+    PENDING_LIMIT, RETAINED_LIMIT,
 };
 use crate::webhooks::domain::{Destination, Observation, Outcome};
-use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
+use crate::webhooks::infrastructure::outbox::stop::SavedStop;
+use nessa_auth::domain::{CredentialId, Initiator, OrganizationId, PrincipalId, RevocationCause};
 use nessa_local_database::rusqlite::{Error, ErrorCode};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sync::replication::domain::{Id, Scope};
@@ -285,10 +286,8 @@ async fn stop_preserves_inflight_observation_and_cause() {
         .stop(
             credential.clone(),
             StopReason::Revoked {
-                initiator: nessa_auth::domain::Initiator::Principal(
-                    PrincipalId::new("canonical-revoker").unwrap(),
-                ),
-                cause: nessa_auth::domain::RevocationCause::Explicit,
+                initiator: Initiator::Principal(PrincipalId::new("canonical-revoker").unwrap()),
+                cause: RevocationCause::Explicit,
             },
             2001,
         )
@@ -540,10 +539,8 @@ async fn late_retry_after_stop_does_not_become_ready() {
         .stop(
             f.registration.target.credential.clone(),
             StopReason::Revoked {
-                initiator: nessa_auth::domain::Initiator::Principal(
-                    PrincipalId::new("original-owner").unwrap(),
-                ),
-                cause: nessa_auth::domain::RevocationCause::Explicit,
+                initiator: Initiator::Principal(PrincipalId::new("original-owner").unwrap()),
+                cause: RevocationCause::Explicit,
             },
             2001,
         )
@@ -595,10 +592,8 @@ async fn bulk_refusal_rejects_foreign_state_without_partial_effects() {
             .stop(
                 f.registration.target.credential.clone(),
                 StopReason::Revoked {
-                    initiator: nessa_auth::domain::Initiator::Principal(
-                        PrincipalId::new("owner").unwrap()
-                    ),
-                    cause: nessa_auth::domain::RevocationCause::Explicit
+                    initiator: Initiator::Principal(PrincipalId::new("owner").unwrap()),
+                    cause: RevocationCause::Explicit
                 },
                 2000
             )
@@ -916,10 +911,8 @@ async fn stop_retention_is_bounded_when_publication_fails() {
             .stop(
                 f.registration.target.credential.clone(),
                 StopReason::Revoked {
-                    initiator: nessa_auth::domain::Initiator::Principal(
-                        PrincipalId::new("canonical-revoker").unwrap()
-                    ),
-                    cause: nessa_auth::domain::RevocationCause::Explicit
+                    initiator: Initiator::Principal(PrincipalId::new("canonical-revoker").unwrap()),
+                    cause: RevocationCause::Explicit
                 },
                 2001
             )
@@ -1209,12 +1202,12 @@ async fn restored_registration_facts_are_checked_before_effects() {
     for set in cases {
         let mut f = Fixture::new().await;
         let audit_before = f.audits();
-        let base_stop = crate::webhooks::infrastructure::outbox::stop::SavedStop::of(
+        let base_stop = SavedStop::of(
             &registry::installation_fixture::revocation(
                 f.registration.target.credential.clone(),
                 1,
-                nessa_auth::domain::Initiator::Principal(f.registration.target.owner.clone()),
-                nessa_auth::domain::RevocationCause::Explicit,
+                Initiator::Principal(f.registration.target.owner.clone()),
+                RevocationCause::Explicit,
                 1000,
             )
             .unwrap(),
@@ -1262,22 +1255,20 @@ async fn restored_registration_facts_are_checked_before_effects() {
             registry::installation_fixture::revocation(
                 f.registration.target.credential.clone(),
                 1,
-                nessa_auth::domain::Initiator::Principal(PrincipalId::new(initiator).unwrap()),
-                nessa_auth::domain::RevocationCause::Explicit,
+                Initiator::Principal(PrincipalId::new(initiator).unwrap()),
+                RevocationCause::Explicit,
                 i64::MAX as u64,
             )
             .unwrap()
         } else {
-            crate::webhooks::application::RegistrationStop::expired(
+            RegistrationStop::expired(
                 ExpiryObserver::Delivery(
                     Uuid::parse_str(initiator.strip_prefix("delivery:").unwrap()).unwrap(),
                 ),
                 i64::MAX as u64,
             )
         };
-        let text = crate::webhooks::infrastructure::outbox::stop::SavedStop::of(&stop)
-            .encode()
-            .unwrap();
+        let text = SavedStop::of(&stop).encode().unwrap();
         f.store
             .owner
             .connection
@@ -1646,10 +1637,10 @@ async fn retired_historical_actor_survives_lost_publication_ack_and_restart() {
             .stop(
                 f.registration.target.credential.clone(),
                 StopReason::Revoked {
-                    initiator: nessa_auth::domain::Initiator::Principal(
+                    initiator: Initiator::Principal(
                         PrincipalId::new("original-other-revoker").unwrap()
                     ),
-                    cause: nessa_auth::domain::RevocationCause::Explicit
+                    cause: RevocationCause::Explicit
                 },
                 2000
             )
@@ -1690,10 +1681,8 @@ async fn registration_audit_lifecycle_and_actor_are_validated() {
         .stop(
             f.registration.target.credential.clone(),
             StopReason::Revoked {
-                initiator: nessa_auth::domain::Initiator::Principal(
-                    PrincipalId::new("historical-revoker").unwrap(),
-                ),
-                cause: nessa_auth::domain::RevocationCause::Explicit,
+                initiator: Initiator::Principal(PrincipalId::new("historical-revoker").unwrap()),
+                cause: RevocationCause::Explicit,
             },
             2000,
         )
@@ -1760,10 +1749,8 @@ async fn typed_delivery_actors_are_correlated_to_saved_cause() {
         .stop(
             f.registration.target.credential.clone(),
             StopReason::Revoked {
-                initiator: nessa_auth::domain::Initiator::Principal(
-                    PrincipalId::new("original-revoker").unwrap(),
-                ),
-                cause: nessa_auth::domain::RevocationCause::Explicit,
+                initiator: Initiator::Principal(PrincipalId::new("original-revoker").unwrap()),
+                cause: RevocationCause::Explicit,
             },
             6000,
         )
@@ -1968,10 +1955,10 @@ async fn owed_credential_stop_evidence_matches_original_registration_facts() {
                     .stop(
                         f.registration.target.credential.clone(),
                         StopReason::Revoked {
-                            initiator: nessa_auth::domain::Initiator::Principal(
+                            initiator: Initiator::Principal(
                                 PrincipalId::new("original-revoker").unwrap()
                             ),
-                            cause: nessa_auth::domain::RevocationCause::Explicit
+                            cause: RevocationCause::Explicit
                         },
                         2001
                     )
@@ -2104,10 +2091,10 @@ async fn registration_stop_evidence_matches_original_stop_and_target() {
                 .stop(
                     f.registration.target.credential.clone(),
                     StopReason::Revoked {
-                        initiator: nessa_auth::domain::Initiator::Principal(
+                        initiator: Initiator::Principal(
                             PrincipalId::new("original-revoker").unwrap()
                         ),
-                        cause: nessa_auth::domain::RevocationCause::Explicit
+                        cause: RevocationCause::Explicit
                     },
                     2001
                 )
@@ -2157,10 +2144,10 @@ async fn retirement_evidence_uses_retained_original_facts_after_private_row_dele
                 .stop(
                     f.registration.target.credential.clone(),
                     StopReason::Revoked {
-                        initiator: nessa_auth::domain::Initiator::Principal(
+                        initiator: Initiator::Principal(
                             PrincipalId::new("original-other-revoker").unwrap()
                         ),
-                        cause: nessa_auth::domain::RevocationCause::Explicit
+                        cause: RevocationCause::Explicit
                     },
                     2000
                 )

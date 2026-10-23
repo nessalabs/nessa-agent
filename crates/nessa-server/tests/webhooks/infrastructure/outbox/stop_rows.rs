@@ -53,7 +53,7 @@ fn stop_rows_are_bounded_before_owned_allocation() {
     );
     assert!(row.is_ok());
     let row = connection.query_row(
-        "SELECT 'credential','principal','organization','owner',?1,10001,'audit',10000",
+        "SELECT 'registration','credential','principal','organization','owner',?1,10001,'audit',10000",
         [&oversized],
         SavedRetirement::row,
     );
@@ -61,11 +61,24 @@ fn stop_rows_are_bounded_before_owned_allocation() {
         matches!(row, Err(Error::FromSqlConversionFailure(_,_,source)) if source.downcast_ref::<RowTooLarge>().is_some())
     );
     let row = connection.query_row(
-        "SELECT 'credential','principal','organization','owner',?1,10001,'audit',10000",
+        "SELECT 'registration','credential','principal','organization','owner',?1,10001,'audit',10000",
         ["{}"],
         SavedRetirement::row,
     );
     assert!(row.is_ok());
+    connection
+        .query_row(
+            "SELECT ?1,'credential','principal','organization','owner',?2,10001,?3,10000",
+            params![
+                Uuid::new_v4().to_string(),
+                largest_stop,
+                Uuid::new_v4().to_string()
+            ],
+            SavedRetirement::row,
+        )
+        .unwrap()
+        .checked()
+        .unwrap();
 }
 
 #[test]
@@ -98,7 +111,7 @@ fn retained_credential_lookup_is_indexed_and_refuses_ambiguous_ownership() {
                 .credential,
             target
         );
-        let mut query = connection.prepare(BY_CREDENTIAL).unwrap();
+        let mut query = connection.prepare(&credential_query()).unwrap();
         assert!(query
             .query([missing.as_str()])
             .unwrap()
@@ -119,4 +132,34 @@ fn retained_credential_lookup_is_indexed_and_refuses_ambiguous_ownership() {
             Err(OutboxError::Invalid)
         ));
     }
+}
+
+#[test]
+fn retirement_identity_is_bounded_in_every_shared_row_read() {
+    let connection = Connection::open_in_memory().unwrap();
+    let oversized = "x".repeat(1024 * 1024);
+    let stop = super::super::stop::SavedStop::of(&RegistrationStop::expired(
+        ExpiryObserver::Restart,
+        10001,
+    ))
+    .encode()
+    .unwrap();
+    let query = "SELECT ?1,'credential','principal','organization','owner',?2,10001,?3,10000";
+    let audit = Uuid::new_v4().to_string();
+    let row = connection.query_row(query, params![oversized, stop, audit], SavedRetirement::row);
+    assert!(
+        matches!(row, Err(Error::FromSqlConversionFailure(_,_,source)) if source.downcast_ref::<RowTooLarge>().is_some())
+    );
+    let id = Uuid::new_v4();
+    let facts = connection
+        .query_row(
+            query,
+            params![id.to_string(), stop, audit],
+            SavedRetirement::row,
+        )
+        .unwrap()
+        .checked()
+        .unwrap();
+    assert_eq!(facts.registration, id);
+    assert_eq!(facts.audit.to_string(), audit);
 }

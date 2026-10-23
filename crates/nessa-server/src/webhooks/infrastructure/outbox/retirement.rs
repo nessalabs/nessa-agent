@@ -10,6 +10,7 @@ use nessa_local_database::rusqlite::{
 use uuid::Uuid;
 
 pub(super) struct Retirement {
+    pub registration: Uuid,
     pub audit: Uuid,
     pub target: Target,
     pub issued_at_ms: u64,
@@ -32,6 +33,7 @@ pub(super) fn retain(
 }
 
 struct SavedRetirement {
+    registration: String,
     audit: String,
     issued_at: i64,
     credential: String,
@@ -45,18 +47,19 @@ impl SavedRetirement {
     fn row(row: &Row<'_>) -> SqlResult<Self> {
         super::codec::check_row_bytes(
             row,
-            0..8,
+            0..9,
             super::audit::AUDIT_BYTES + 4 * nessa_auth::domain::MAX_IDENTIFIER_BYTES + 128,
         )?;
         Ok(Self {
-            audit: row.get(6)?,
-            issued_at: row.get(7)?,
-            credential: row.get(0)?,
-            principal: row.get(1)?,
-            organization: row.get(2)?,
-            owner: row.get(3)?,
-            stop: row.get(4)?,
-            retired: row.get(5)?,
+            registration: row.get(0)?,
+            audit: row.get(7)?,
+            issued_at: row.get(8)?,
+            credential: row.get(1)?,
+            principal: row.get(2)?,
+            organization: row.get(3)?,
+            owner: row.get(4)?,
+            stop: row.get(5)?,
+            retired: row.get(6)?,
         })
     }
     fn checked(self) -> Result<Retirement, OutboxError> {
@@ -72,6 +75,7 @@ impl SavedRetirement {
             return Err(OutboxError::Invalid);
         }
         Ok(Retirement {
+            registration: uuid(&self.registration)?,
             audit: uuid(&self.audit)?,
             target,
             issued_at_ms,
@@ -82,7 +86,16 @@ impl SavedRetirement {
 }
 
 pub(super) fn read(connection: &Connection, id: Uuid) -> Result<Option<Retirement>, OutboxError> {
-    connection.query_row("SELECT credential,principal,organization,owner,stop,retired_at,audit,issued_at FROM retirements WHERE id=?1", [id.to_string()], SavedRetirement::row).optional().map_err(super::cursor::row_error)?.map(SavedRetirement::checked).transpose()
+    connection
+        .query_row(
+            &format!("{SELECT} WHERE id=?1"),
+            [id.to_string()],
+            SavedRetirement::row,
+        )
+        .optional()
+        .map_err(super::cursor::row_error)?
+        .map(SavedRetirement::checked)
+        .transpose()
 }
 
 /// The indexed lookup refuses ambiguous retained ownership before publication.
@@ -90,7 +103,9 @@ pub(super) fn by_credential(
     connection: &Connection,
     credential: &CredentialId,
 ) -> Result<Option<Retirement>, OutboxError> {
-    let mut statement = connection.prepare(BY_CREDENTIAL).map_err(unavailable)?;
+    let mut statement = connection
+        .prepare(&credential_query())
+        .map_err(unavailable)?;
     let mut rows = statement
         .query([credential.as_str()])
         .map_err(unavailable)?;
@@ -108,7 +123,11 @@ pub(super) fn by_credential(
     Ok(first)
 }
 
-const BY_CREDENTIAL: &str = "SELECT credential,principal,organization,owner,stop,retired_at,audit,issued_at FROM retirements WHERE credential=?1 LIMIT 2";
+const SELECT: &str = "SELECT id,credential,principal,organization,owner,stop,retired_at,audit,issued_at FROM retirements";
+
+fn credential_query() -> String {
+    format!("{SELECT} WHERE credential=?1 LIMIT 2")
+}
 
 #[cfg(test)]
 #[path = "../../../../tests/webhooks/infrastructure/outbox/stop_rows.rs"]
@@ -116,7 +135,7 @@ mod tests;
 
 pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
     let mut statement = connection
-        .prepare("SELECT id FROM retirements LIMIT ?1")
+        .prepare(&format!("{SELECT} LIMIT ?1"))
         .map_err(unavailable)?;
     let mut rows = statement
         .query([(MAX_REGISTRATIONS + 1) as i64])
@@ -127,8 +146,10 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
         if count > MAX_REGISTRATIONS {
             return Err(OutboxError::Invalid);
         }
-        let id: String = row.get(0).map_err(invalid)?;
-        let facts = read(connection, uuid(&id)?)?.ok_or(OutboxError::Invalid)?;
+        let facts = SavedRetirement::row(row)
+            .map_err(super::cursor::row_error)?
+            .checked()?;
+        let id = facts.registration.to_string();
         let saved = connection
             .query_row(
                 "SELECT id,registration,delivery,record,published,source_reset FROM audit WHERE id=?1",

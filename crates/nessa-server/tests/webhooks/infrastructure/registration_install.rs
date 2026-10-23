@@ -5,9 +5,13 @@ use crate::webhooks::application::{RegistrationConfig, RegistrationIntent, Regis
 use nessa_auth::application::{
     credential_admin::{CredentialIssuePurpose, IssueCredentialRequest},
     dto::{
-        CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
-        PrincipalInputDto, PrincipalKindDto, ResourceDto,
+        CredentialGrantDto, CredentialTransitionDto, MembershipInputDto, MembershipRoleDto,
+        MembershipStateDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
     },
+    revocation::RevocationRecord,
+};
+use nessa_auth::domain::{
+    CredentialLifecycle, CredentialTransition, Initiator, RevocationCause, TransitionCause,
 };
 
 impl SqlOutbox {
@@ -87,14 +91,10 @@ impl SqlOutbox {
 pub(in super::super) fn revocation(
     credential: CredentialId,
     issued_at: u64,
-    initiator: nessa_auth::domain::Initiator,
-    cause: nessa_auth::domain::RevocationCause,
+    initiator: Initiator,
+    cause: RevocationCause,
     at_ms: u64,
 ) -> Result<RegistrationStop, OutboxError> {
-    use nessa_auth::{
-        application::{dto::CredentialTransitionDto, revocation::RevocationRecord},
-        domain::{CredentialLifecycle, CredentialTransition, TransitionCause},
-    };
     let at = at_ms / 1000;
     let before = CredentialLifecycle {
         issued_at,

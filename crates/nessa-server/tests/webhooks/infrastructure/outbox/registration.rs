@@ -494,10 +494,8 @@ async fn registration_retirement_removes_private_intent_even_when_audit_ack_is_l
             .stop(
                 credential,
                 StopReason::Revoked {
-                    initiator: nessa_auth::domain::Initiator::Principal(
-                        PrincipalId::new(initiator).unwrap()
-                    ),
-                    cause: nessa_auth::domain::RevocationCause::Explicit
+                    initiator: Initiator::Principal(PrincipalId::new(initiator).unwrap()),
+                    cause: RevocationCause::Explicit
                 },
                 canonical.revocation.at * 1000
             )

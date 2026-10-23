@@ -116,7 +116,7 @@ pub enum StopObservationResult {
 }
 
 /// Read the actual current held fact instead of trusting a command reply's actor
-/// or inferring revocation from expiry. Composition retains this inner future
+/// or inferring revocation from expiry. Composition must retain this inner future
 /// across caller loss; it is not itself a command supervisor.
 pub struct ObserveRegistrationStop<'a> {
     pub credentials: &'a dyn AccessAdmission,

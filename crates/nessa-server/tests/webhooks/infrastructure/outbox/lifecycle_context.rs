@@ -259,10 +259,8 @@ async fn stopped_queue_admission_refuses_before_cursor_or_delivery_commit() {
         .stop(
             f.registration.target.credential.clone(),
             StopReason::Revoked {
-                initiator: nessa_auth::domain::Initiator::Principal(
-                    PrincipalId::new("owner").unwrap(),
-                ),
-                cause: nessa_auth::domain::RevocationCause::Explicit,
+                initiator: Initiator::Principal(PrincipalId::new("owner").unwrap()),
+                cause: RevocationCause::Explicit,
             },
             2001,
         )

@@ -1,6 +1,7 @@
 //! Typed automatic expiry observations and their original retained cause.
 use super::super::Fixture;
 use super::*;
+use nessa_auth::application::ports::AccessAdmission;
 
 #[tokio::test]
 async fn lifecycle_expiry_before_a_delivery_retains_original_observer_through_lost_ack_and_restore()
@@ -138,7 +139,7 @@ fn automatic_expiry_observer_decoding_is_closed_and_canonical() {
         at_ms: u64,
     ) -> Result<crate::webhooks::application::RegistrationStop, OutboxError> {
         let text = json!({"cause":"credential_expired","initiator":actor,"atMs":at_ms}).to_string();
-        crate::webhooks::infrastructure::outbox::stop::SavedStop::decode(&text)
+        SavedStop::decode(&text)
     }
     let delivery = Uuid::new_v4();
     for (actor, expected) in [
@@ -320,10 +321,9 @@ async fn owner_expiry_observation_survives_failed_stop_and_later_canonical_revoc
         InitiatorDto::Principal { .. }
     ));
     assert_eq!(canonical.revocation.at, 101);
-    use nessa_auth::application::ports::AccessAdmission;
     let held = f.auth.hold(&credential).await.unwrap();
     let original = held.snapshot.revocation_fact().unwrap().unwrap();
-    let stop = crate::webhooks::application::RegistrationStop::revoked(original, 101_000);
+    let stop = RegistrationStop::revoked(original, 101_000);
     f.store.stop_credential(credential, stop).await.unwrap();
     drop(held);
     assert_eq!(f.count("registrations"), 0);
@@ -520,8 +520,8 @@ async fn first_expiry_and_actual_auth_revocation_remain_distinct_after_retiremen
             .stop(
                 id.clone(),
                 StopReason::Revoked {
-                    initiator: nessa_auth::domain::Initiator::Principal(actor.clone()),
-                    cause: nessa_auth::domain::RevocationCause::Explicit,
+                    initiator: Initiator::Principal(actor.clone()),
+                    cause: RevocationCause::Explicit,
                 },
                 101_000,
             )

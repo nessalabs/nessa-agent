@@ -236,10 +236,8 @@ async fn retiring_private_configuration_cannot_restore_product_session_authority
         .stop(
             id.clone(),
             StopReason::Revoked {
-                initiator: nessa_auth::domain::Initiator::Principal(
-                    PrincipalId::new("owner").unwrap(),
-                ),
-                cause: nessa_auth::domain::RevocationCause::Explicit,
+                initiator: Initiator::Principal(PrincipalId::new("owner").unwrap()),
+                cause: RevocationCause::Explicit,
             },
             11_000,
         )
@@ -357,10 +355,7 @@ async fn historical_product_actor_and_absent_command_correlation_are_not_rewritt
     ));
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     let before = auth.read(&id).await.unwrap().origin;
-    assert_eq!(
-        before.transition().initiator(),
-        &nessa_auth::domain::Initiator::LocalOperator
-    );
+    assert_eq!(before.transition().initiator(), &Initiator::LocalOperator);
     assert_eq!(before.correlation(), None);
     auth.revoke_sync(RevokeCredentialRequest {
         request_id: "revoke-historical".into(),

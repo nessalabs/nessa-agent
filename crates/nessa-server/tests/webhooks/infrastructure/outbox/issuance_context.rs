@@ -94,10 +94,8 @@ async fn later_history(kind: usize, reader: ExpiryObserver) -> (Fixture, Value) 
                     .stop(
                         f.registration.target.credential.clone(),
                         StopReason::Revoked {
-                            initiator: nessa_auth::domain::Initiator::Principal(
-                                f.registration.target.owner.clone()
-                            ),
-                            cause: nessa_auth::domain::RevocationCause::Explicit
+                            initiator: Initiator::Principal(f.registration.target.owner.clone()),
+                            cause: RevocationCause::Explicit
                         },
                         2001,
                     )
