@@ -1,0 +1,31 @@
+
+> test
+> node --test tests/*.test.mjs
+
+✔ browser initialization retains primary failure, cleanup error and recovery owner (1.7968ms)
+✔ unconfirmed browser cleanup preserves test tree and writes primary plus cleanup failures (8.661968ms)
+✔ confirmed close removes profile before writing result; removal failure is reported (1.162872ms)
+✔ unconfirmed secondary context prevents deletion after ordinary resources close (0.498595ms)
+✔ nested uncertain browser initialization retains cleanup owner without implicit retry (1.335675ms)
+✔ viewer startup failure closes constructed browser before fixture (1.309877ms)
+✔ launch failure closes fixture; cleanup failure retains startup cause (1.383475ms)
+✔ shutdown is idempotent and attempts remaining cleanup after failure (0.466976ms)
+✔ current Chromium namespace and SUID rows require seccomp and positive evaluation (1.032176ms)
+✔ loopback API requires capability, exact origin/host, bounded JSON; no traversal or evaluation (92.252343ms)
+✔ launch requires headful sandboxed Chromium and exposes no debugging TCP port (1.582027ms)
+✔ commands serialize, queue is bounded, close fences queued and new work (3.046044ms)
+✔ invalid inputs cannot dispatch and prototype names are rejected (1.494042ms)
+✔ navigation failure is typed, next command recovers, disconnect refuses work (0.43714ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 531.992291
+npm notice
+npm notice New major version of npm available! 11.9.0 -> 12.2.1
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.1
+npm notice To update run: npm install -g npm@12.2.1
+npm notice

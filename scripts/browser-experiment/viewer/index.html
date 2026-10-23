@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Nessa browser experiment</title>
+  <link rel="stylesheet" href="/viewer.css" />
+  <main>
+    <header>
+      <span class="mark">n</span>
+      <div>
+        <h1>Shared browser</h1>
+        <p>Experiment 1089 · dedicated test profile</p>
+      </div>
+      <output id="status" role="status">Connecting…</output>
+    </header>
+    <nav aria-label="Browser controls">
+      <button data-target="home">Home</button
+      ><button data-target="next">Next fixture</button
+      ><button id="agent">Agent: increment</button
+      ><button data-target="unavailable">Test failed navigation</button>
+    </nav>
+    <p id="message" role="alert">
+      Click the browser image to control the same page the agent uses.
+    </p>
+    <img
+      id="screen"
+      width="1000"
+      height="700"
+      tabindex="0"
+      alt="Live dedicated browser page. Click to control; Tab and arrow keys are forwarded."
+    />
+    <form id="text-form">
+      <label
+        >Type into focused browser field
+        <input id="text" maxlength="256" autocomplete="off" /></label
+      ><button>Send text</button>
+    </form>
+    <footer>
+      <output id="metrics"></output>
+      <p>
+        Test fixtures only · low-rate page frames · browser chrome, extension popups,
+        passkeys and authentication are unverified.
+      </p>
+    </footer>
+  </main>
+  <script type="module" src="/viewer.js"></script>
+</html>

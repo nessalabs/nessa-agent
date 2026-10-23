@@ -1,0 +1,50 @@
+name: Browser experiment qualification
+
+# Experimental branch only. This is not a deployment or a mainline merge gate.
+on:
+  push:
+    branches: [codex/1089-exp-browser]
+    paths:
+      - scripts/browser-experiment/**
+      - .github/workflows/browser-experiment.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-experiment-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    # Still supported until April 2027; pin avoids changes to ubuntu-latest.
+    # Do not modify AppArmor, sysctls, seccomp or Chromium's sandbox to pass.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: scripts/browser-experiment
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install locked experiment dependencies
+        run: npm ci
+      - name: Install matching test Chromium and normal system dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Test HTTP, lifecycle and cleanup
+        run: |
+          mkdir -p evidence/latest
+          npm test | tee evidence/latest/node-tests.txt
+      - name: Qualify real sandboxed headful browser
+        run: xvfb-run --auto-servernum npm run verify
+      - name: Retain test-only results, rendered sandbox status and any screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-experiment-${{ github.sha }}
+          path: scripts/browser-experiment/evidence/latest/
+          if-no-files-found: warn
+          retention-days: 7
