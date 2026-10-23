@@ -8,11 +8,12 @@ use tauri::{
     image::Image,
     menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, Wry,
+    AppHandle, Emitter, Manager, State, Wry,
 };
 
 use serde::Serialize;
 use std::io;
+use std::sync::Arc;
 
 use crate::composition::HostDependencies;
 use crate::desktop_window;
@@ -161,29 +162,81 @@ pub struct TrayPoint {
     pub y: f64,
 }
 
+/// Where the menu bar icon and the setup window are, as the window server
+/// reports them: the icon's centre and the window's page origin in physical
+/// screen pixels, and the window's scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrayLayout {
+    pub centre: (f64, f64),
+    pub origin: (f64, f64),
+    pub scale: f64,
+}
+
+/// Asks the window server where the menu bar icon and the setup window are.
+///
+/// The window server is outside the process, so it is reached through this
+/// seam (`HostDependencies::tray_geometry`) and a test can stand in for it.
+pub trait TrayGeometry: Send + Sync {
+    /// `Ok(None)` when there is nothing to measure: no tray, no setup window,
+    /// or a system that does not say where its tray items are (Linux reports
+    /// no rect). `Err` when the window server refused a question it was asked.
+    fn layout(&self) -> Result<Option<TrayLayout>, String>;
+}
+
+/// The window server Tauri talks to.
+struct NativeTrayGeometry(AppHandle);
+
+impl TrayGeometry for NativeTrayGeometry {
+    fn layout(&self) -> Result<Option<TrayLayout>, String> {
+        let Some(tray) = self.0.tray_by_id(TRAY_ID) else {
+            return Ok(None);
+        };
+        let Some(rect) = tray.rect().map_err(|error| error.to_string())? else {
+            return Ok(None);
+        };
+        let Some(window) = self.0.get_webview_window(panel::SETUP_WINDOW) else {
+            return Ok(None);
+        };
+        let scale = window.scale_factor().map_err(|error| error.to_string())?;
+        let origin = window.inner_position().map_err(|error| error.to_string())?;
+        let position = rect.position.to_physical::<f64>(scale);
+        let size = rect.size.to_physical::<f64>(scale);
+        Ok(Some(TrayLayout {
+            centre: (
+                position.x + size.width / 2.0,
+                position.y + size.height / 2.0,
+            ),
+            origin: (f64::from(origin.x), f64::from(origin.y)),
+            scale,
+        }))
+    }
+}
+
+/// The tray geometry this app's window server answers with.
+pub fn tray_geometry(app: &AppHandle) -> Arc<dyn TrayGeometry> {
+    Arc::new(NativeTrayGeometry(app.clone()))
+}
+
 /// The menu bar icon's centre, as a point in the setup window's page.
 ///
-/// None when there is nothing to aim at: no tray, no setup window, or a system
-/// that does not say where its tray items are (Linux reports no rect). The
-/// page then aims at the top right corner, where the icon is on every desktop
-/// this runs on.
+/// None when there is nothing to aim at, when the window server refused, or
+/// when what it said cannot be a place on screen. The page then aims at the
+/// top right corner, where the icon is on every desktop this runs on.
 #[tauri::command]
-pub fn setup_tray_point(app: AppHandle) -> Option<TrayPoint> {
-    let tray = app.tray_by_id(TRAY_ID)?;
-    let rect = tray.rect().ok()??;
-    let window = app.get_webview_window(panel::SETUP_WINDOW)?;
-    let scale = window.scale_factor().ok()?;
-    let origin = window.inner_position().ok()?;
-    let position = rect.position.to_physical::<f64>(scale);
-    let size = rect.size.to_physical::<f64>(scale);
-    tray_point(
-        (
-            position.x + size.width / 2.0,
-            position.y + size.height / 2.0,
-        ),
-        (f64::from(origin.x), f64::from(origin.y)),
-        scale,
-    )
+pub fn setup_tray_point(deps: State<'_, HostDependencies>) -> Option<TrayPoint> {
+    aim(deps.tray_geometry.as_ref())
+}
+
+fn aim(geometry: &dyn TrayGeometry) -> Option<TrayPoint> {
+    match geometry.layout() {
+        Ok(layout) => {
+            layout.and_then(|layout| tray_point(layout.centre, layout.origin, layout.scale))
+        }
+        Err(error) => {
+            tracing::warn!(target: "nessa.setup", %error, "could not read where the tray icon is");
+            None
+        }
+    }
 }
 
 /// A point on the screen in physical pixels, as CSS pixels from the page's
@@ -224,6 +277,57 @@ mod tests {
     fn no_tray_point_is_made_up_from_a_broken_scale() {
         assert_eq!(tray_point((10.0, 10.0), (0.0, 0.0), 0.0), None);
         assert_eq!(tray_point((f64::NAN, 10.0), (0.0, 0.0), 1.0), None);
+    }
+
+    struct Answers(Result<Option<TrayLayout>, String>);
+
+    impl TrayGeometry for Answers {
+        fn layout(&self) -> Result<Option<TrayLayout>, String> {
+            self.0.clone()
+        }
+    }
+
+    #[test]
+    fn the_command_aims_at_what_the_window_server_reports() {
+        let reported = Answers(Ok(Some(TrayLayout {
+            centre: (2800.0, 22.0),
+            origin: (0.0, 0.0),
+            scale: 2.0,
+        })));
+        assert_eq!(aim(&reported), Some(TrayPoint { x: 1400.0, y: 11.0 }));
+    }
+
+    #[test]
+    fn an_absent_tray_or_window_gives_no_point() {
+        assert_eq!(aim(&Answers(Ok(None))), None);
+    }
+
+    #[test]
+    fn a_refused_read_gives_no_point() {
+        assert_eq!(aim(&Answers(Err("no window server".into()))), None);
+    }
+
+    #[test]
+    fn a_malformed_layout_gives_no_point() {
+        for layout in [
+            TrayLayout {
+                centre: (10.0, 10.0),
+                origin: (0.0, 0.0),
+                scale: -1.0,
+            },
+            TrayLayout {
+                centre: (10.0, f64::INFINITY),
+                origin: (0.0, 0.0),
+                scale: 1.0,
+            },
+            TrayLayout {
+                centre: (10.0, 10.0),
+                origin: (f64::NAN, 0.0),
+                scale: 1.0,
+            },
+        ] {
+            assert_eq!(aim(&Answers(Ok(Some(layout)))), None);
+        }
     }
     use crate::settings::testing::in_memory;
 

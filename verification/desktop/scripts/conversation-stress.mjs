@@ -2925,8 +2925,27 @@ async function setupWindow(run, prepare) {
       const headingSeen = Boolean(
         heading?.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
       )
-      window.__setupBeats.push({ beat, headingSeen })
+      // Where the window is drawn as the beat starts, transform included.
+      const { left, top, right, bottom } = shell.getBoundingClientRect()
+      const drawn = { left, top, right, bottom, width: innerWidth, height: innerHeight }
+      window.__setupBeats.push({ beat, headingSeen, drawn })
     }).observe(document, { subtree: true, childList: true, attributes: true })
+    // The flight is the window's one Web Animation: the box it took off
+    // from and the keyframes and timing it was given, taken as it starts.
+    window.__setupFlights = []
+    const animate = Element.prototype.animate
+    Element.prototype.animate = function (...args) {
+      const animation = animate.apply(this, args)
+      if (this.classList.contains("nessa-setup-window")) {
+        const { left, top, width, height } = this.getBoundingClientRect()
+        window.__setupFlights.push({
+          from: { left, top, width, height },
+          frames: animation.effect.getKeyframes(),
+          duration: animation.effect.getComputedTiming().duration,
+        })
+      }
+      return animation
+    }
   })
   await page.goto(`${new URL(run.page.url()).origin}/index.html?surface=setup`)
   return page
@@ -2945,6 +2964,35 @@ async function openedAsAGlow(page, failures) {
   const early = beats.filter((entry) => entry.beat !== "open" && entry.headingSeen)
   if (early.length)
     failures.push(`the window's heading showed during the ${early[0].beat} beat`)
+  // Glow and fill draw the window past every edge of the screen.
+  for (const { beat, drawn } of beats.filter(
+    (entry) => entry.beat !== "open" && entry.beat !== "form",
+  ))
+    if (
+      drawn.left > 0 ||
+      drawn.top > 0 ||
+      drawn.right < drawn.width ||
+      drawn.bottom < drawn.height
+    )
+      failures.push(
+        `during ${beat} the light does not fill the screen: ${JSON.stringify(drawn)}`,
+      )
+  // Once open, the window has formed: its own size, in the middle.
+  const formed = () =>
+    page.locator(".nessa-setup-window").evaluate((shell) => {
+      const box = shell.getBoundingClientRect()
+      return {
+        scale: box.width / shell.offsetWidth,
+        dx: box.left + box.width / 2 - innerWidth / 2,
+        dy: box.top + box.height / 2 - innerHeight / 2,
+      }
+    })
+  const whole = (shape) =>
+    Math.abs(shape.scale - 1) < 0.005 && Math.abs(shape.dx) < 1 && Math.abs(shape.dy) < 1
+  if (!(await waitFor(async () => whole(await formed()), 3_000)))
+    failures.push(
+      `the open window did not form in the middle: ${JSON.stringify(await formed())}`,
+    )
   const backdrop = await page.evaluate(() => ({
     dim: document.querySelectorAll(".nessa-setup-dim").length,
     sheet: getComputedStyle(document.querySelector(".nessa-setup-sheet")).backgroundColor,
@@ -3059,12 +3107,62 @@ async function finishedIntoTheMenuBar(run, failures) {
       async () => (await page.evaluate(() => window.__fakeHostSetupFinishes.length)) > 0,
       10_000,
     )
-    const { finishes, trayAsks, left } = await page.evaluate(() => ({
+    const { finishes, trayAsks, left, flights, tray } = await page.evaluate(() => ({
       finishes: window.__fakeHostSetupFinishes,
       trayAsks: window.__fakeHostTrayAsks,
       left: window.__setupLeft,
+      flights: window.__setupFlights,
+      // Where the fake host says its icon is.
+      tray: { x: innerWidth - 80, y: 12 },
     }))
     if (!left) failures.push("finishing setup did not fly the window")
+    // Where the flight lands, measured from what it was given rather than
+    // from its frames: a loaded headless page draws few frames, and the
+    // flight's deadline can land setup before the last one. A box where the
+    // window took off, wearing the last keyframe, is drawn where the window
+    // ends up; its centre is on the icon, and it is a light the icon's size.
+    // How long it takes on screen in a production build is measured on a Mac.
+    if (flights.length !== 1)
+      failures.push(`the window flew ${flights.length} times, not once`)
+    else {
+      const [flight] = flights
+      const landing = await page.evaluate(({ from, frames }) => {
+        const last = frames.at(-1)
+        const probe = document.createElement("div")
+        Object.assign(probe.style, {
+          position: "fixed",
+          left: `${from.left}px`,
+          top: `${from.top}px`,
+          width: `${from.width}px`,
+          height: `${from.height}px`,
+          transform: last.transform,
+        })
+        document.body.append(probe)
+        const box = probe.getBoundingClientRect()
+        probe.remove()
+        return {
+          x: box.left + box.width / 2,
+          y: box.top + box.height / 2,
+          width: box.width,
+          height: box.height,
+          opacity: Number(last.opacity),
+          round: frames.slice(1).every((frame) => frame.borderRadius === "50%"),
+          offset: last.offset,
+        }
+      }, flight)
+      if (
+        Math.abs(landing.x - tray.x) > 1 ||
+        Math.abs(landing.y - tray.y) > 1 ||
+        Math.abs(landing.width - 17.6) > 0.5 ||
+        Math.abs(landing.height - 17.6) > 0.5 ||
+        landing.opacity !== 0 ||
+        !landing.round ||
+        flight.duration !== 900
+      )
+        failures.push(
+          `the flight lands ${JSON.stringify({ ...landing, duration: flight.duration })}, not a round 17.6 px light on ${JSON.stringify(tray)} over 900 ms`,
+        )
+    }
     if (!handed) failures.push("finishing setup did not hand over to the host")
     else if (
       finishes.length !== 1 ||
