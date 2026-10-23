@@ -600,6 +600,9 @@ const checks = {
         `${css.sidebar} ${css.sessionRow}:not([data-open]), ${css.sessionList} ${css.sessionRow}:not([data-open])`,
       )
       .last()
+    // In view first: a long list's last row can sit below the window.
+    await row.scrollIntoViewIfNeeded()
+    await settled(page)
     const box = await row.boundingBox()
     if (!box) throw new CannotRun(`no session row to carry (${css.sessionRow})`)
     const over = await page.locator(css.widgetWindow).boundingBox()
