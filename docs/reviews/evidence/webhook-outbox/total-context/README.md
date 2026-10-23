@@ -46,7 +46,8 @@ reset timestamp probe remain diagnostic under /tmp. The final logs linked here q
 
 ## Review and remaining work
 
-Fresh independent structural review is pending. No persistence approval, merge
+Fresh independent structural review at5bb457db found one major source-reset
+provenance gap and one minor live-selection cost regression. No persistence approval, merge
 qualification or full #896 completion is claimed. Composition worktree remains
 unchanged until clean persistence review, as directed by the parent. All actual
 registration/share/source/sender/revoke/expiry/capability E2E and feature stress/
@@ -82,4 +83,32 @@ The final source remained frozen throughout validation; source/manifest hashes
 match. Docs catalog122documents/0issues, chart rendered in Chromium151 and
 visually inspected with0pageerrors; [catalog](catalog.json), [render](render.json),
 [diagram](diagram-1.png). This is docs evidence, not gateway browser acceptance.
-Fresh independent review remains pending; validation alone does not close it.
+Fresh review requires changes; validation alone does not close it.
+
+
+## Fresh review and parent-adopted reset owner
+
+[Full report](review-1/report.md), [final focused demonstrations](review-1/final-probes.txt),
+[combined run](review-1/all-tests.txt) preserve exact-head findings at5bb457db.
+Baseline50tests passed56.99s; combined53passed58.49s; final4focused passed0.05s.
+The final four include three causal defect demonstrations and one actual query
+measurement; those passing demonstrations affirm defects, not fixes.
+
+Original cursor reset facts can disagree with saved Sending capture or immediate
+source-change refusal actor/time; capture can also be invented without any reset.
+The same source-change event has multiple uncorrelated owners. A fixed owed count
+also scans all published audit rows through the optional-OR selector:10,000
+published records cause10,000fullscan steps versus0for the indexed direct query.
+No POST authorization bypass or deadline failure was demonstrated.
+
+The parent has explicitly adopted one retained source-reset identity referenced
+by cursor and affected deliveries, with bounded transactional capture/reference
+cleanup and historical recovery. [Alternatives and parent decision](review-1/parent-adopted-alternative.md).
+The implementation follows this published checkpoint; these findings are not
+closed yet. The minor needs a direct indexed owed query and deterministic cost
+regression. No other independent structural constraint was found in review.
+Runtime remains unchanged until the corrected persistence review is clean.
+
+Automatic exact-head CI run39976243520 for5bb457db was observed in progress;
+no terminal result is claimed. No rerun/dispatch was requested. Foundation's
+separate denied retry remains untouched. Later source will require its own checks.

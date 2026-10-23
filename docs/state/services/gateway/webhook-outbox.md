@@ -59,8 +59,11 @@ The first two fresh reviews found missing contextual correlations. Their
 [reports and exact demonstrations](../../../reviews/evidence/webhook-outbox/typed-state/README.md)
 remain preserved as findings at their historical source. The parent adopted a
 total contextual restoration owner, implemented at this checkpoint. Final source checks passed80 canonical webhook tests,50 isolated tests,
-required Clippy/architecture and28 fail/restore probes. Fresh independent review
-remains pending; persistence and full feature acceptance are not claimed.
+required Clippy/architecture and28 fail/restore probes. Fresh review at5bb457db found an open source-reset provenance gap and a live
+selection-cost regression. The [report](../../../reviews/evidence/webhook-outbox/total-context/review-1/report.md)
+is preserved. The parent has adopted one retained reset identity shared by
+cursor and affected deliveries; that correction is not implemented at this
+source checkpoint. Persistence and full feature acceptance are not claimed.
 
 The same typed audit validator serves writing, restoration and publication.
 It rejects unknown fields, malformed identities and actors, negative timestamps,
@@ -108,7 +111,7 @@ durability; it says nothing about a recipient's effects.
 ```mermaid
 stateDiagram-v2
     [*] --> Restoring
-    Restoring --> Refused: Invalid fields, histories, owning facts or accounting
+    Restoring --> Refused: Invalid fields, histories, registration/cursor facts or accounting
     Restoring --> Ready: Checked current schema and acquired lifetime owner lock
     Ready --> Writing: Queue, transition, stop or recovery
     Writing --> Refused: Validation, compare-and-swap or audit insertion fails
@@ -207,8 +210,8 @@ and capacity, missing or changed original facts, reset observations after audit
 trim, and lost-ack valid recovery after private registration deletion. The prior
 review demonstrations are historical bug evidence, not fixed test passes.
 
-Exact-source validation, fail/restore probes and the pending fresh independent
-review are recorded in [total-context evidence](../../../reviews/evidence/webhook-outbox/total-context/README.md).
+Exact-source validation, fail/restore probes and the completed independent
+review findings are recorded in [total-context evidence](../../../reviews/evidence/webhook-outbox/total-context/README.md).
 Historical checks do not establish acceptance of newer source. No clean review
 or gateway/browser qualification is claimed by this source checkpoint.
 
