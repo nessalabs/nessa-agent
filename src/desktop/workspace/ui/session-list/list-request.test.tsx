@@ -406,3 +406,18 @@ it("offers a request it cannot show whole its refusals and the chat, never an al
     card()?.querySelector('button[data-answer="once"], button[data-answer="always"]'),
   ).toBeNull()
 })
+
+it("draws a request it may allow whole, and any other as a preview", async () => {
+  await waitingOn({ approvals: [asked("short", "cargo test")] })
+  expect(
+    card()?.querySelector(".workspace-request-command")?.hasAttribute("data-whole"),
+  ).toBe(true)
+  await act(async () => root.unmount())
+  root = createRoot(host)
+  await waitingOn({
+    approvals: [asked("long", "echo a\necho b\necho c\necho d")],
+  })
+  expect(
+    card()?.querySelector(".workspace-request-command")?.hasAttribute("data-whole"),
+  ).toBe(false)
+})

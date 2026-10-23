@@ -230,7 +230,7 @@ export function ApprovalActions({
    * Two buttons, whatever the review offers: its first refusal and its
    * primary allow (once, else always), each on one line, in the same place
    * on every card; every other answer is in the menu beside them. For a card
-   * that must keep one height, as the session list's does.
+   * that must stay compact, as the session list's does.
    */
   compact?: boolean
   disabled: boolean

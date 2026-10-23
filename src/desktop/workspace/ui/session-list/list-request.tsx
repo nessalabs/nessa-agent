@@ -1,18 +1,20 @@
 /**
  * What a waiting row in the session list asks, answered from the list: the
  * transcript card's own parts, compact (`transcript/approval-request.tsx`).
- * Under the row's agent and title, who asks and the exact command — clipped
- * to a few lines with a fade, whole in the conversation — then its answers,
- * in the same place on every card whatever the command's length. A question
- * shows the question card. The first request is shown; more wait as "+N
- * more", in the conversation. While answered, the card leaves on the
- * motion's curve; a refused answer says why in place.
+ * Under the row's agent and title, who asks and the command, then its
+ * answers: the refusal and the primary allow, every other in the menu
+ * beside them. A request the list shows whole (`allowableFromList`) is drawn
+ * in full and may be allowed; any other is a preview of three lines with a
+ * fade, offering its refusals and Review in Chat. A question shows the
+ * question card. The first request is shown; more wait as "+N more", in the
+ * conversation. While answered, the card leaves on the motion's curve; a
+ * refused answer says why in place.
  *
  * The list reads and keeps the conversations it asks about
  * (`listAskIds`, `workspace-state.ts`), so what is shown here is what an
  * answer answers (`onScreen`).
  */
-import { memo, useState } from "react"
+import { memo } from "react"
 import { approve, deny, openSession } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
@@ -36,7 +38,7 @@ import "../transcript/transcript.css"
 import "./list-request.css"
 import type { CommandGist } from "../transcript/approval-gist"
 
-/** The most of a command, in lines and in characters, the list shows whole. */
+/** The most of a command, in lines and in UTF-16 code units, the list shows whole. */
 export const listShownLines = 3
 export const listShownChars = 180
 
@@ -72,8 +74,6 @@ export const ListRequest = memo(function ListRequest({
   const answer = useWorkspaceSelector((state) =>
     approval ? selectAnswer(state, sessionId, approval.id) : undefined,
   )
-  // The request an answer was not sent for: it is no longer asked from here.
-  const [unsentFor, setUnsentFor] = useState<string | null>(null)
   if (!session) return null
   const asks = approvals.length + questions.length
   const more =
@@ -99,7 +99,6 @@ export const ListRequest = memo(function ListRequest({
   const answerable = shownWhole(approval) && !sent
   // Shown whole, it may be allowed here; else refused, or read in the chat.
   const whole = allowableFromList(approval, gist)
-  const unsent = unsentFor === approval.id
   return (
     <div
       className="workspace-request"
@@ -134,10 +133,6 @@ export const ListRequest = memo(function ListRequest({
         <p className="workspace-request-failure" role="status">
           {failureCopy(answer.failure)}
         </p>
-      ) : unsent ? (
-        <p className="workspace-request-failure" role="status">
-          This request is no longer asked here. Open the chat to answer it.
-        </p>
       ) : null}
       <div className="workspace-request-foot">
         {more}
@@ -166,8 +161,6 @@ export const ListRequest = memo(function ListRequest({
                     initiator: "person",
                     optionId: option.id,
                   }),
-            ).then((outcome) =>
-              setUnsentFor(outcome === "not-asked" ? approval.id : null),
             )
           }
         />

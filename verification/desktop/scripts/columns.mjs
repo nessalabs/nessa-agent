@@ -62,6 +62,34 @@ import {
   settled,
 } from "./lib/workspace.mjs"
 
+/**
+ * What a card the list may allow (`data-whole`) cuts off: its command, the
+ * box around it or its tool line, wider or taller than drawn. A card that
+ * allows must show everything it allows.
+ */
+const cutOff = (page) =>
+  page.evaluate(() =>
+    [...document.querySelectorAll(".workspace-request-command[data-whole]")].flatMap(
+      (box) => {
+        const card = box.closest(".workspace-request")
+        const parts = [
+          ["command", box.querySelector(".workspace-approval-command")],
+          ["box", box],
+          ["tool", card?.querySelector(".workspace-request-tool")],
+        ]
+        return parts.flatMap(([name, element]) =>
+          element &&
+          (element.scrollWidth > element.clientWidth + 1 ||
+            element.scrollHeight > element.clientHeight + 1)
+            ? [
+                `${card?.getAttribute("aria-label")}: its ${name} is cut off (${element.scrollWidth}x${element.scrollHeight} in ${element.clientWidth}x${element.clientHeight})`,
+              ]
+            : [],
+        )
+      },
+    ),
+  )
+
 const checks = [
   "channels-alone",
   "list-request",
@@ -699,6 +727,7 @@ const body = {
     const id = await row.getAttribute("data-session-row")
     const command = (await card.locator(".workspace-approval-command").innerText()).trim()
     if (!command.startsWith("$")) failures.push(`the card shows no command: "${command}"`)
+    failures.push(...(await cutOff(page)))
     const allow = card.locator('button[data-answer="once"]')
     const deny = card.locator('button[data-answer="deny"]')
     const [a, d] = [await allow.boundingBox(), await deny.boundingBox()]
@@ -756,6 +785,7 @@ const body = {
     }))
     if (seen.squeezed.length)
       failures.push(`answers narrower than their words: ${seen.squeezed}`)
+    failures.push(...(await cutOff(page)))
     if (!(seen.height < 260)) failures.push(`the card is ${seen.height}px tall`)
     if (seen.answers.join("|") !== "No|Yes|More Answers")
       failures.push(`the answers read ${seen.answers.join("|")}`)

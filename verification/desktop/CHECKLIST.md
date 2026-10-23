@@ -2046,7 +2046,7 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
 - [ ] **Each waiting row the list asks about is a request card, answered from
   the list.** It reads the command as the transcript card does
   (`approvalGist`), offers the review's refusal and primary allow on one row,
-  every other answer in the menu beside them, and keeps one bounded height.
+  every other answer in the menu beside them.
   It allows only a request it shows whole, by a rule over the request
   (`allowableFromList`): nothing in the tool's input but the command, at
   most three lines and 180 characters; any other offers its refusals and

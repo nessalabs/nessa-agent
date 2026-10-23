@@ -1,9 +1,9 @@
 /*
  * A waiting row's request, answered from the list (`list-request.tsx`): the
  * transcript card's parts, compact. The row above it and this body are one
- * card (`.workspace-request-card`, `session-list.css`). The command is held
- * to a few lines with a fade, so the answers stand in the same place on every
- * card, whatever the command's length.
+ * card (`.workspace-request-card`, `session-list.css`). A command the list
+ * may allow is drawn whole, wrapping even within a word; any other is a
+ * preview of three lines with a fade. The answers keep one row either way.
  */
 .workspace-request {
   display: flex;
@@ -42,10 +42,24 @@
 }
 
 .workspace-request-command .workspace-approval-command {
-  overflow: hidden;
   line-height: var(--request-line);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.workspace-request-command:not([data-whole]) .workspace-approval-command {
+  overflow: hidden;
+}
+
+/* Whole means whole across too: a long word breaks onto the next line
+   rather than running past the card's edge, where nothing would show it. */
+.workspace-request-command[data-whole] .workspace-approval-command {
+  overflow: visible;
+}
+
+.workspace-request-command[data-whole] .workspace-approval-word {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .workspace-request-loading {
@@ -138,14 +152,13 @@
   padding-bottom: 6px;
 }
 
+/* The tool is part of what is allowed: drawn whole, wrapping, never cut. */
 .workspace-request-tool {
   margin: -2px 0 0;
-  overflow: hidden;
   color: var(--desktop-muted);
   font-family: var(--nessa-font-mono);
   font-size: var(--desktop-text-footnote);
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 
 /* Two answers, each one line whatever its words: a long label ends in an
@@ -184,7 +197,7 @@
   overflow: auto;
 }
 
-/* A command taller than the card is not allowed from here: read whole in the chat. */
+/* A request the list does not show whole is not allowed from here: read whole in the chat. */
 .workspace-request-review {
   flex: none;
   height: 28px;

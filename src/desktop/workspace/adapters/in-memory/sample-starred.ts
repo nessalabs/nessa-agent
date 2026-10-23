@@ -84,7 +84,9 @@ export const starredSamples: readonly SampleSession[] = [
     unread: true,
     approval: {
       id: "signing-import",
-      command: "security import build/nessa-dev.p12 -k release.keychain",
+      // One long word: a card that may allow it must draw it whole, wrapped.
+      command:
+        "security import build/certificates/nessa-developer-id-application-2026-10.p12 -k release.keychain",
       reason: "Imports a signing certificate into the release keychain.",
       origin: { kind: "agent" },
       options: sampleApprovalOptions,
