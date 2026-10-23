@@ -184,12 +184,17 @@
   }
 }
 
-/* A bottom-left slot aligned with the compact rail, clear of the window bar. */
+/*
+ * In the footer's row, in its mark's slot (`ui/identity.css`), which is the
+ * toggle's own width: from the sidebar's content edge and the row's 6px, and
+ * on the row's line, 13px above its foot, so the toggle and
+ * "nessa Studio" read as one row whether or not the sidebar is open.
+ */
 .side-rail-toggle {
   position: absolute;
   z-index: 42;
-  bottom: var(--desktop-control-edge);
-  left: var(--rail-column);
+  bottom: calc(var(--desktop-gutter) + 13px);
+  left: calc(var(--desktop-gutter) + 6px);
 }
 
 .side-rail-toggle:active {
@@ -207,12 +212,9 @@
     transform 220ms var(--rail-spring);
 }
 
-/* With the rail folded, its slot sits inside the sidebar footer. */
-.workspace-window[data-rail="closed"] .workspace-identity {
-  padding-left: calc(
-    var(--rail-column) - var(--desktop-gutter) + var(--desktop-control-size) +
-      var(--desktop-control-inset)
-  );
+/* With the rail folded, its toggle is the footer's mark: Studio's square steps aside. */
+.workspace-window[data-rail="closed"] .workspace-identity .desktop-mark {
+  visibility: hidden;
 }
 
 /* The toggle doubles as nessa's mark: its top-right tile is lit. */

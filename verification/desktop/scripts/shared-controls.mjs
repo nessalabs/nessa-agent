@@ -227,10 +227,27 @@ function measureIdentity([selector, sel]) {
     failures.push(`its product word is not --desktop-muted at rest`)
   if (!button.getAttribute("aria-label")) failures.push("it has no accessible name")
   const row = button.closest(sel.identityRow)?.getBoundingClientRect() ?? null
+  // The words, and what stands in the mark's slot: Studio's square, the way
+  // back's chevron, or the side rail's toggle laid over the slot.
+  const words = button.querySelector(".desktop-identity-words").getBoundingClientRect()
+  const square = button.closest(sel.identityRow)?.querySelector(".desktop-mark")
+  const shown = (e) =>
+    e &&
+    getComputedStyle(e).visibility !== "hidden" &&
+    e.getBoundingClientRect().width > 0
+  const markBox = shown(square)
+    ? square.getBoundingClientRect()
+    : (button.querySelector(".desktop-identity-back")?.getBoundingClientRect() ?? null)
+  const centre = (r) => r.top + r.height / 2
+  if (markBox && Math.abs(centre(markBox) - centre(words)) > 1)
+    failures.push(`its mark's centre is ${centre(markBox)}, its words' ${centre(words)}`)
   return {
     failures,
     text: button.textContent.trim(),
     box: { x: box.x, y: box.y, height: box.height },
+    words: { x: words.left, y: centre(words) },
+    square: Boolean(shown(square)),
+    chevron: button.querySelector(".desktop-identity-back") !== null,
     row: row && { x: row.x, y: row.y, height: row.height },
   }
 }
@@ -443,13 +460,18 @@ const checks = {
           await identityHover(page, scale, `${css.settings} ${css.identityButton}`)
         ).map((f) => `"${inSettings.text}": ${f}`),
       )
-      // Where "nessa Studio" opened Settings, the way back is the same pill in
-      // the same place: switching between them moves nothing.
-      for (const side of ["x", "y", "height"])
-        if (Math.abs(inSettings.box[side] - inWindow.box[side]) > 0.5)
+      // Where "nessa Studio" opened Settings, the way back stands in the same
+      // row: "nessa" starts where it did and sits on the same line, so the
+      // switch moves nothing; its mark is the destination's — Studio's square
+      // there, the chevron back here, never the square.
+      for (const side of ["x", "y"])
+        if (Math.abs(inSettings.words[side] - inWindow.words[side]) > 0.5)
           failures.push(
-            `Settings' pill is at ${side} ${inSettings.box[side]}, the window's at ${inWindow.box[side]}`,
+            `Settings' "nessa" is at ${side} ${inSettings.words[side]}, the window's at ${inWindow.words[side]}`,
           )
+      if (!inSettings.chevron || inSettings.square)
+        failures.push("the way back is not its chevron alone in the mark's slot")
+      if (inWindow.chevron) failures.push('"nessa Studio" leads with a chevron')
       if (!inSettings.row || !inWindow.row) failures.push("an identity outside its row")
       else
         for (const side of ["y", "height"])

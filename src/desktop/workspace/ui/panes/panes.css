@@ -314,14 +314,19 @@
 .workspace-widget-window {
   position: absolute;
   z-index: 2;
-  top: var(--desktop-titlebar-height);
+  /* The chat surface itself, as a pane is: up behind the tabs to the
+     window's top, its header below them, on the window's own ground and
+     light — no slab with an edge of its own. The panes beneath are hidden
+     while it is up (`[data-window-widget]`, below), so nothing shows through. */
+  top: 0;
   right: 0;
   bottom: 0;
   left: 0;
   display: flex;
   min-width: 0;
   flex-direction: column;
-  background: var(--background);
+  padding-top: var(--desktop-titlebar-height);
+  background: transparent;
   overflow: hidden;
 }
 

@@ -57,19 +57,29 @@ export function IdentityButton({
 export function IdentityRow({
   as: Element = "footer",
   className,
+  mark = "studio",
   trailing,
   children,
 }: {
   /** `div` where the row sits inside another landmark, as Settings' does in its nav. */
   as?: "footer" | "div"
   className?: string
+  /**
+   * What stands in the row's mark slot, which keeps one width so "nessa"
+   * never moves between places: Studio's square, or nothing — where the way
+   * back's chevron takes the slot (`IdentityButton back`) or a control the
+   * place lays over it (the side rail's toggle).
+   */
+  mark?: "studio" | "none"
   /** At the row's far end: the classic shell's theme menu. */
   trailing?: ReactNode
   children: ReactNode
 }) {
   return (
     <Element className={className ? `desktop-identity ${className}` : "desktop-identity"}>
-      <span aria-hidden="true" className="desktop-mark" />
+      <span className="desktop-identity-mark" aria-hidden="true">
+        {mark === "studio" ? <span className="desktop-mark" /> : null}
+      </span>
       {children}
       {trailing ? <span className="desktop-identity-trailing">{trailing}</span> : null}
     </Element>

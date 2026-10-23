@@ -16,7 +16,13 @@
  */
 import { useMemo } from "react"
 import type { PaneKey } from "../../../split-panes/model/pane-layout"
-import type { EscapeStack, OpenPlace, WidgetHost, WidgetRef } from "../../../widgets"
+import type {
+  EscapeStack,
+  OpenPlace,
+  WidgetCrumb,
+  WidgetHost,
+  WidgetRef,
+} from "../../../widgets"
 import { closePane, openWidget, showContent } from "./commands"
 import { useWorkspaceDispatch } from "./hooks"
 
@@ -44,6 +50,7 @@ export function usePaneWidgetHost(
   widget: WidgetRef,
   origin: string | undefined,
   steps: EscapeStack,
+  crumb?: (step: WidgetCrumb | null) => void,
 ): WidgetHost {
   const dispatch = useWorkspaceDispatch()
   return useMemo(
@@ -55,8 +62,9 @@ export function usePaneWidgetHost(
       openWidget: (other: WidgetRef, place: OpenPlace) =>
         dispatch(openWidget({ widget: other, place, origin })),
       onEscape: steps.push,
+      crumb,
     }),
-    [dispatch, pane, widget, origin, steps],
+    [dispatch, pane, widget, origin, steps, crumb],
   )
 }
 
@@ -65,6 +73,7 @@ export function useWindowWidgetHost(
   widget: WidgetRef,
   origin: string | undefined,
   steps: EscapeStack,
+  crumb?: (step: WidgetCrumb | null) => void,
 ): WidgetHost {
   const dispatch = useWorkspaceDispatch()
   return useMemo(
@@ -76,8 +85,9 @@ export function useWindowWidgetHost(
       openWidget: (other: WidgetRef, place: OpenPlace) =>
         dispatch(openWidget({ widget: other, place, origin })),
       onEscape: steps.push,
+      crumb,
     }),
-    [dispatch, widget, origin, steps],
+    [dispatch, widget, origin, steps, crumb],
   )
 }
 

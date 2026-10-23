@@ -422,23 +422,19 @@ const body = {
           failures.push(`${label}: sidebar has an extra top row (${state.sidebar.y}px)`)
         if (state.pane && state.pane.y < state.titlebar.bottom)
           failures.push(`${label}: a pane's header sits under the window toolbar`)
+        // The toggle stands in the footer row's mark slot (`ui/identity.css`,
+        // `side-rail.css`): 6px in from the sidebar's content edge — the
+        // gutter, from the window's — on the row's line, its foot 13px above
+        // the row's. The row keeps its own 6px inset in every state.
         if (
           state.toggle &&
-          (state.toggle.x !== 10 || state.toggle.bottom !== size.height - 10)
+          (state.toggle.x !== 14 || state.toggle.bottom !== size.height - 21)
         )
-          failures.push(`${label}: rail toggle left its bottom-left control slot`)
-        // The identity's own inset from the sidebar's content edge
-        // (`ui/identity.css`), or, with the rail folded into the footer,
-        // past the rail's toggle.
-        const identityInset = 16
-        const expectedInset =
-          state.drawnRail || !state.sidebar
-            ? identityInset
-            : state.toggle.right - state.sidebarContent + state.controlInset
-        if (state.sidebar && state.footerInset !== expectedInset)
           failures.push(
-            `${label}: footer inset ${state.footerInset}, expected ${expectedInset} for its toggle slot`,
+            `${label}: rail toggle at x ${state.toggle.x}, foot ${state.toggle.bottom}, not in the footer's mark slot`,
           )
+        if (state.sidebar && state.footerInset !== 6)
+          failures.push(`${label}: footer inset ${state.footerInset}, not the row's 6px`)
         if (state.rail?.width && state.rail.width !== 48)
           failures.push(`${label}: rail width ${state.rail.width}, expected 48`)
       }

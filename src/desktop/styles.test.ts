@@ -523,7 +523,7 @@ it("paints nothing of a pane under the window's controls: its content below the 
     /padding-top:\s*calc\(max\(0, 1 - var\(--ri\)\) \* var\(--desktop-titlebar-height\)\)/,
   )
   expect(body(panes, ".workspace-widget-window {")).toMatch(
-    /top:\s*var\(--desktop-titlebar-height\)/,
+    /padding-top:\s*var\(--desktop-titlebar-height\)/,
   )
 })
 
