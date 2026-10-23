@@ -78,7 +78,7 @@ NESSA_DOCS_PROJECT=/workspace/nessa-agent PORT=4312 npm start
 Final catalog: **126 pages, 0 issues** ([JSON](catalog.json)). Installed Chromium
 rendered **25 diagrams across all 14 changed state pages**, opened **35 authored
 node/edge detail bindings** and followed **11 drill-down paths**, with **0 page
-errors** ([per-page and navigation evidence](statecharts.json)). All **181
+errors** ([per-page and navigation evidence](statecharts.json)). All **182
 relative Markdown links** in changed state pages resolve to existing files.
 The viewer pass covered root → journey index → startup feature → session flow →
 supervisor → client recovery; gateway observation and runtime downloads;
