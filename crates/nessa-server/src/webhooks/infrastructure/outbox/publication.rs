@@ -1,6 +1,5 @@
 //! Immutable audit publication with exact durable acknowledgement.
-use super::audit::{DeliveryEvidence, Record, AUDIT_BYTES};
-use super::stored::{self, StoredDelivery};
+use super::audit::{Record, AUDIT_BYTES};
 use super::{unavailable, uuid};
 use crate::webhooks::application::OutboxError;
 use nessa_local_database::rusqlite::{
@@ -15,15 +14,17 @@ use uuid::Uuid;
 
 pub(super) fn append(transaction: &Transaction<'_>, record: Record) -> Result<(), OutboxError> {
     let (id, registration, delivery) = record.keys()?;
+    let reset = record.reset_key()?;
     let record = record.encode()?;
     transaction
         .execute(
-            "INSERT INTO audit(id,registration,delivery,record) VALUES(?1,?2,?3,?4)",
+            "INSERT INTO audit(id,registration,delivery,record,source_reset) VALUES(?1,?2,?3,?4,?5)",
             params![
                 id.to_string(),
                 registration.to_string(),
                 delivery.map(|d| d.to_string()),
-                record
+                record,
+                reset.map(|id|id.to_string())
             ],
         )
         .map_err(unavailable)?;
@@ -31,9 +32,10 @@ pub(super) fn append(transaction: &Transaction<'_>, record: Record) -> Result<()
 }
 
 pub(super) fn publish(connection: &mut Connection, directory: &Path) -> Result<(), OutboxError> {
+    super::restoration::validate_owed(connection)?;
     loop {
         let next=connection.query_row(
-            "SELECT id,registration,delivery,record,published FROM audit WHERE published=0 ORDER BY rowid LIMIT 1",[],SavedAudit::row,
+            "SELECT id,registration,delivery,record,published,source_reset FROM audit WHERE published=0 ORDER BY rowid LIMIT 1",[],SavedAudit::row,
         ).optional().map_err(unavailable)?;
         let Some(next) = next else {
             return Ok(());
@@ -73,24 +75,26 @@ pub(super) fn publish(connection: &mut Connection, directory: &Path) -> Result<(
     }
 }
 
-struct SavedAudit {
+pub(super) struct SavedAudit {
     id: String,
     registration: String,
     delivery: Option<String>,
     record: String,
-    published: i64,
+    pub(super) published: i64,
+    source_reset: Option<String>,
 }
 impl SavedAudit {
-    fn row(row: &Row<'_>) -> SqlResult<Self> {
+    pub(super) fn row(row: &Row<'_>) -> SqlResult<Self> {
         Ok(Self {
             id: row.get(0)?,
             registration: row.get(1)?,
             delivery: row.get(2)?,
             record: row.get(3)?,
             published: row.get(4)?,
+            source_reset: row.get(5)?,
         })
     }
-    fn checked(self) -> Result<(Uuid, String), OutboxError> {
+    pub(super) fn checked(self) -> Result<(Uuid, String), OutboxError> {
         let id = uuid(&self.id)?;
         uuid(&self.registration)?;
         if let Some(delivery) = &self.delivery {
@@ -100,6 +104,9 @@ impl SavedAudit {
             return Err(OutboxError::Invalid);
         }
         let record = Record::decode(&self.record)?;
+        if record.reset_key()? != self.source_reset.as_ref().map(|id| uuid(id)).transpose()? {
+            return Err(OutboxError::Invalid);
+        }
         if record.keys()?
             != (
                 id,
@@ -111,62 +118,4 @@ impl SavedAudit {
         }
         Ok((id, self.record))
     }
-}
-
-pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
-    if connection.prepare("SELECT 1 FROM audit a WHERE a.delivery IS NOT NULL AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.id=a.delivery) LIMIT 1").map_err(unavailable)?.exists([]).map_err(unavailable)? { return Err(OutboxError::Invalid); }
-    let mut statement = connection
-        .prepare("SELECT id,registration,delivery,record,published FROM audit")
-        .map_err(unavailable)?;
-    let rows = statement
-        .query_map([], SavedAudit::row)
-        .map_err(unavailable)?;
-    for row in rows {
-        row.map_err(unavailable)?.checked()?;
-    }
-    let mut deliveries = connection
-        .prepare(&format!("{} FROM deliveries", stored::SELECT))
-        .map_err(unavailable)?;
-    let rows = deliveries
-        .query_map([], StoredDelivery::row)
-        .map_err(unavailable)?;
-    for row in rows {
-        let saved = row.map_err(unavailable)?.checked()?;
-        let target = super::registry::by_id(connection, saved.registration)?
-            .registration
-            .target;
-        let mut statement=connection.prepare("SELECT id,registration,delivery,record,published FROM audit WHERE delivery=?1 ORDER BY rowid").map_err(unavailable)?;
-        let history = statement
-            .query_map([saved.delivery.id().to_string()], SavedAudit::row)
-            .map_err(unavailable)?;
-        let mut previous: Option<DeliveryEvidence> = None;
-        // Streaming chain validation keeps one predecessor. Delivery's finite
-        // transition owner rejects any extension past its attempt/terminal budget.
-        for row in history {
-            let (_, text) = row.map_err(unavailable)?.checked()?;
-            let record = Record::decode(&text)?;
-            let next = record.delivery_evidence()?.ok_or(OutboxError::Invalid)?;
-            if previous
-                .as_ref()
-                .map_or(next.before.is_some(), |prior| !next.follows(prior))
-            {
-                return Err(OutboxError::Invalid);
-            }
-            previous = Some(next);
-        }
-        let last = previous.ok_or(OutboxError::Invalid)?;
-        if last.registration != saved.registration
-            || last.conversation != saved.conversation
-            || last.position != saved.position
-            || last.scope != saved.scope
-            || last.target != target
-            || last.after != saved.delivery
-            || last
-                .source_stop
-                .is_some_and(|stop| saved.source_stop != Some(stop))
-        {
-            return Err(OutboxError::Invalid);
-        }
-    }
-    Ok(())
 }

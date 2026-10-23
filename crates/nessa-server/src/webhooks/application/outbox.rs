@@ -13,6 +13,9 @@ pub const PENDING_LIMIT: usize = 1024;
 pub const MAX_REGISTRATIONS: usize = 64;
 pub const MAX_OUTBOX_WORKERS: usize = 4;
 pub const RETAINED_LIMIT: usize = 1024;
+pub const MAX_CURSORS: usize = 1024;
+pub const MAX_SOURCE_RESETS: usize = MAX_CURSORS + PENDING_LIMIT + RETAINED_LIMIT;
+pub const SOURCE_RESET_BYTES: usize = 16 * 1024;
 
 /// One committed registration. Debug deliberately excludes endpoint and key.
 #[derive(Clone)]
@@ -73,7 +76,7 @@ impl QueueInitiator {
 
 /// Revocation supplies its canonical auth transition initiator. Expiry retains
 /// the first observing delivery identity; cleanup must not replace that cause.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StopReason {
     Revoked { initiator: PrincipalId },
     Expired { observed_by: Uuid },

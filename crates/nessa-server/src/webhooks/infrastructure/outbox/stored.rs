@@ -8,7 +8,7 @@ use nessa_sync::replication::domain::Scope;
 use uuid::Uuid;
 
 pub(super) const SELECT: &str =
-    "SELECT id,registration,conversation,incarnation,position,scope,state,phase,due_at,source_stop";
+    "SELECT id,registration,conversation,incarnation,position,scope,state,phase,due_at,(SELECT reset FROM source_reset_members WHERE delivery=deliveries.id)";
 
 pub(super) struct StoredDelivery {
     id: String,
@@ -20,7 +20,7 @@ pub(super) struct StoredDelivery {
     state: String,
     phase: String,
     due_at: i64,
-    source_stop: Option<String>,
+    source_reset: Option<String>,
 }
 
 pub(super) struct CheckedDelivery {
@@ -31,6 +31,8 @@ pub(super) struct CheckedDelivery {
     pub delivery: Delivery,
     pub saved_state: String,
     pub source_stop: Option<codec::SourceStop>,
+    pub source_reset: Option<Uuid>,
+    pub capture_before: Option<Delivery>,
 }
 
 impl StoredDelivery {
@@ -47,10 +49,10 @@ impl StoredDelivery {
             state: row.get(6)?,
             phase: row.get(7)?,
             due_at: row.get(8)?,
-            source_stop: row.get(9)?,
+            source_reset: row.get(9)?,
         })
     }
-    pub fn checked(self) -> Result<CheckedDelivery, OutboxError> {
+    pub fn checked(self, connection: &Connection) -> Result<CheckedDelivery, OutboxError> {
         let delivery = codec::decode(&self.state)?;
         let scope = codec::scope(&self.scope)?;
         let registration = uuid(&self.registration)?;
@@ -67,14 +69,20 @@ impl StoredDelivery {
         {
             return Err(OutboxError::Invalid);
         }
-        let source_stop = self
-            .source_stop
-            .as_deref()
-            .map(codec::source_stop)
-            .transpose()?;
-        if source_stop.is_some() && delivery.phase() == Phase::Queued {
+        let captured = super::source_reset::delivery(
+            connection,
+            registration,
+            &conversation,
+            &scope,
+            position,
+            &delivery,
+        )?;
+        let source_reset = captured.as_ref().map(|c| c.fact.id);
+        if self.source_reset.as_ref().map(|id| uuid(id)).transpose()? != source_reset {
             return Err(OutboxError::Invalid);
         }
+        let source_stop = captured.as_ref().map(|c| c.fact.stop);
+        let capture_before = captured.map(|c| c.before);
         Ok(CheckedDelivery {
             registration,
             conversation,
@@ -83,6 +91,8 @@ impl StoredDelivery {
             delivery,
             saved_state: self.state,
             source_stop,
+            source_reset,
+            capture_before,
         })
     }
 }
@@ -99,7 +109,7 @@ pub(super) fn by_id(
         )
         .optional()
         .map_err(unavailable)?
-        .map(StoredDelivery::checked)
+        .map(|saved| saved.checked(connection))
         .transpose()
 }
 
@@ -132,7 +142,7 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
         .query_map([], StoredDelivery::row)
         .map_err(unavailable)?;
     for row in rows {
-        let saved = row.map_err(unavailable)?.checked()?;
+        let saved = row.map_err(unavailable)?.checked(connection)?;
         check_current(connection, &saved)?;
     }
     cursor::validate(connection)?;

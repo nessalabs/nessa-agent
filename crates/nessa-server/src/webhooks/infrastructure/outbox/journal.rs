@@ -8,7 +8,6 @@ use crate::webhooks::application::{
 use crate::webhooks::domain::{Delivery, Phase};
 use nessa_local_database::rusqlite::{params, Connection, Result as SqlResult, Transaction};
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_sync::replication::domain::Scope;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -39,7 +38,7 @@ pub(super) fn refuse_pending(
         return Err(OutboxError::Invalid);
     }
     for saved in states {
-        let saved = saved.checked()?;
+        let saved = saved.checked(transaction)?;
         if saved.registration != registration
             || conversation.is_some_and(|id| *id != saved.conversation)
         {
@@ -100,6 +99,7 @@ fn trim(connection: &Connection) -> Result<(), OutboxError> {
         .map_err(unavailable)?;
     connection.execute("DELETE FROM deliveries WHERE registration IN (SELECT id FROM registrations WHERE active=0) AND phase NOT IN ('queued','sending','retry') AND NOT EXISTS(SELECT 1 FROM audit a WHERE a.delivery=deliveries.id AND a.published=0)",[]).map_err(unavailable)?;
     connection.execute("DELETE FROM audit WHERE published=1 AND (delivery IS NULL OR NOT EXISTS(SELECT 1 FROM deliveries d WHERE d.id=audit.delivery))",[]).map_err(unavailable)?;
+    connection.execute("DELETE FROM retirements WHERE NOT EXISTS(SELECT 1 FROM audit WHERE audit.registration=retirements.id)",[]).map_err(unavailable)?;
     Ok(())
 }
 
@@ -153,9 +153,17 @@ fn retire_drained(transaction: &Transaction<'_>, at_ms: u64) -> Result<(), Outbo
     for id in retired {
         let saved = super::registry::by_id(transaction, uuid(&id)?)?;
         let stop = saved.stop.as_ref().ok_or(OutboxError::Invalid)?;
-        append(
+        let record =
+            Record::registration(&saved.registration, RegistrationChange::Retire(stop), at_ms);
+        let (audit_id, _, _) = record.keys()?;
+        append(transaction, record)?;
+        super::retirement::retain(
             transaction,
-            Record::registration(&saved.registration, RegistrationChange::Retire(stop), at_ms),
+            &saved.registration,
+            stop,
+            at_ms,
+            audit_id,
+            saved.issued_at_ms,
         )?;
         transaction
             .execute("DELETE FROM cursors WHERE registration=?1", [&id])
@@ -182,18 +190,15 @@ pub(super) fn commit(
 /// across a later cursor reset. Sending itself still resolves its observation.
 pub(super) fn invalidate_source(
     transaction: &Transaction<'_>,
-    registration: Uuid,
-    conversation: &ConversationId,
-    old: &Scope,
-    stop: codec::SourceStop,
+    fact: &super::source_reset::Fact,
 ) -> Result<(), OutboxError> {
     let rows = {
         let mut statement=transaction.prepare(&format!("{} FROM deliveries WHERE registration=?1 AND conversation=?2 AND phase IN ('queued','retry','sending') LIMIT ?3",stored::SELECT)).map_err(unavailable)?;
         let rows = statement
             .query_map(
                 params![
-                    registration.to_string(),
-                    conversation.to_string(),
+                    fact.registration.to_string(),
+                    fact.conversation.to_string(),
                     (PENDING_LIMIT + 1) as i64
                 ],
                 StoredDelivery::row,
@@ -205,25 +210,19 @@ pub(super) fn invalidate_source(
         return Err(OutboxError::Invalid);
     }
     for row in rows {
-        let saved = row.checked()?;
-        if !codec::same_source(&saved.scope, old) {
+        let saved = row.checked(transaction)?;
+        if !codec::same_source(&saved.scope, &fact.prior_scope) || saved.source_reset.is_some() {
             continue;
         }
-        if saved.delivery.phase() == Phase::Sending {
-            if saved.source_stop.is_none() {
-                let changed=transaction.execute("UPDATE deliveries SET source_stop=?1 WHERE id=?2 AND state=?3 AND source_stop IS NULL",params![codec::source_stop_text(stop)?,saved.delivery.id().to_string(),saved.saved_state]).map_err(unavailable)?;
-                if changed != 1 {
-                    return Err(OutboxError::Conflict);
-                }
-            }
-        } else {
+        super::source_reset::capture(transaction, fact, &saved)?;
+        if saved.delivery.phase() != Phase::Sending {
             refuse_one(
                 transaction,
                 saved,
                 DeliveryCause::SourceChanged {
-                    initiator: stop.initiator,
+                    initiator: fact.stop.initiator,
                 },
-                stop.at_ms,
+                fact.stop.at_ms,
             )?;
         }
     }
@@ -269,7 +268,7 @@ fn refuse_invalidated(transaction: &Transaction<'_>, at_ms: u64) -> Result<(), O
     }
     for registration in registrations {
         let rows = {
-            let mut statement=transaction.prepare(&format!("{} FROM deliveries WHERE registration=?1 AND source_stop IS NOT NULL AND phase='retry' LIMIT ?2",stored::SELECT)).map_err(unavailable)?;
+            let mut statement=transaction.prepare(&format!("{} FROM deliveries WHERE registration=?1 AND EXISTS(SELECT 1 FROM source_reset_members WHERE delivery=deliveries.id) AND phase='retry' LIMIT ?2",stored::SELECT)).map_err(unavailable)?;
             let rows = statement
                 .query_map(
                     params![registration, (PENDING_LIMIT + 1) as i64],
@@ -282,7 +281,7 @@ fn refuse_invalidated(transaction: &Transaction<'_>, at_ms: u64) -> Result<(), O
             return Err(OutboxError::Invalid);
         }
         for row in rows {
-            let saved = row.checked()?;
+            let saved = row.checked(transaction)?;
             let stop = saved.source_stop.ok_or(OutboxError::Invalid)?;
             refuse_one(
                 transaction,

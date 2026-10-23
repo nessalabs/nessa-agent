@@ -1,0 +1,108 @@
+   Compiling nessa-server v0.1.0 (/workspace/nessa-agent/crates/nessa-server)
+warning: constant evaluation is taking a long time
+   --> /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/slice/mod.rs:117:8
+    |
+    = note: the const evaluator is currently interpreting this expression
+help: the constant being evaluated
+   --> crates/nessa-server/src/env/config.rs:51:9
+    |
+ 51 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 63 | / lease_protocol!(
+ 64 | |     "../../../nessa-protocol/src/lease.rs",
+ 65 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+ 66 | |     "../env_serve/mod.rs",
+...   |
+105 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+106 | | );
+    | |_- in this macro invocation
+    = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `nessa-server` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 1m 28s
+     Running unittests src/lib.rs (target/debug/deps/nessa_server-fe0ac38a8f68e2b7)
+
+running 80 tests
+test webhooks::domain::delivery_tests::admission_pins_epoch_and_timestamp ... ok
+test webhooks::application::message_tests::status_and_failure_classification_preserve_ambiguity ... ok
+test webhooks::domain::delivery_tests::observations_are_terminal_except_bounded_retry ... ok
+test webhooks::application::message_tests::application_values_bound_retained_bytes_and_redact_diagnostics ... ok
+test webhooks::domain::delivery_tests::refusal_cannot_cancel_an_inflight_observation ... ok
+test webhooks::domain::delivery_tests::restart_does_not_repost_an_unknown_effect ... ok
+test webhooks::domain::delivery_tests::retries_are_bounded_and_keep_identity ... ok
+test webhooks::domain::destination_tests::destinations_are_constrained_and_paths_are_redacted ... ok
+test webhooks::infrastructure::admission_tests::credential_expiring_while_waiting_for_grant_is_refused ... ok
+test webhooks::infrastructure::https::https_tests::bad_dns_answers_are_refused_before_connect ... ok
+test webhooks::infrastructure::https::https_tests::cancelled_dns_waiter_keeps_the_physical_workers_permit ... ok
+test webhooks::infrastructure::https::https_tests::destination_policy_rejects_nonpublic_answers_and_transition_prefixes ... ok
+test webhooks::infrastructure::admission_tests::webhook_cedar_subject_has_no_send_or_owner_authority ... ok
+test webhooks::infrastructure::https::https_tests::dns_deadline_and_concurrency_are_bounded_without_a_waiter_queue ... ok
+test webhooks::infrastructure::admission_tests::principal_admission_filters_chats_revoke_epochs_and_lifetime ... ok
+test webhooks::infrastructure::https::https_tests::expired_preparation_refuses_before_polling_a_request ... ok
+test webhooks::infrastructure::https::https_tests::isolated_tls_recipient_verifies_exact_signed_bytes ... ok
+test webhooks::infrastructure::https::https_tests::isolated_tls_recipient_rejects_untrusted_ca_and_wrong_hostname ... ok
+test webhooks::infrastructure::https::https_tests::oversized_headers_remain_unknown ... ok
+test webhooks::infrastructure::https::https_tests::redirect_is_a_response_and_receives_no_second_request ... ok
+test webhooks::infrastructure::https::https_tests::local_backpressure_precedes_sending_and_does_not_consume_an_attempt ... ok
+test webhooks::infrastructure::https::https_tests::retained_dns_capacity_refuses_preparation_while_delivery_stays_queued ... ok
+test webhooks::infrastructure::message_tests::compact_encoding_preserves_quoted_whitespace_and_rejects_invalid_identity ... ok
+test webhooks::infrastructure::message_tests::malformed_and_oversized_records_fail_before_a_body_is_retained ... ok
+test webhooks::infrastructure::message_tests::record_envelope_preserves_the_records_page_owner_representation ... ok
+test webhooks::infrastructure::message_tests::retry_contract_preserves_id_timestamp_body_and_signature ... ok
+test webhooks::infrastructure::message_tests::wire_bytes_and_mac_match_an_independent_golden_vector ... ok
+test webhooks::infrastructure::https::https_tests::lost_or_malformed_headers_do_not_claim_zero_response_bytes ... ok
+test webhooks::infrastructure::outbox::tests::a_file_without_generated_projections_is_not_the_current_schema ... ok
+test webhooks::infrastructure::outbox::tests::audit_acknowledgement_is_exact_and_recoverable ... ok
+test webhooks::infrastructure::outbox::tests::aliased_saved_state_is_refused_on_restore ... ok
+test webhooks::infrastructure::outbox::tests::audit_failure_recovers_before_work ... ok
+test webhooks::infrastructure::https::https_tests::responses_are_bounded_without_retaining_remote_text ... ok
+test webhooks::infrastructure::outbox::tests::bulk_refusal_rejects_foreign_state_without_partial_effects ... ok
+test webhooks::infrastructure::outbox::tests::bulk_reset_keeps_one_reader_initiator ... ok
+test webhooks::infrastructure::outbox::tests::cancelled_observer_keeps_physical_worker_and_canonical_owner ... ok
+test webhooks::infrastructure::outbox::tests::audit_record_correlations_are_checked_before_cleanup ... ok
+test webhooks::infrastructure::outbox::tests::complete_owed_batch_is_checked_before_first_publication ... ok
+test webhooks::infrastructure::outbox::tests::checkpoint_and_identity_survive_reopen ... ok
+test webhooks::infrastructure::outbox::tests::conflicting_checkpoint_does_not_replace_bytes ... ok
+test webhooks::infrastructure::outbox::tests::cursor_audit_restores_its_transition_and_scope ... ok
+test webhooks::infrastructure::https::https_tests::a_hung_response_is_bounded ... ok
+test webhooks::infrastructure::outbox::tests::cursor_evidence_matches_complete_original_reset_observation ... ok
+test webhooks::infrastructure::outbox::tests::cursor_scope_identity_is_not_overwritten ... ok
+test webhooks::infrastructure::outbox::tests::delivery_audit_uses_checked_registration_facts ... ok
+test webhooks::infrastructure::outbox::tests::delivery_evidence_matches_enclosing_facts_before_publication ... ok
+test webhooks::infrastructure::outbox::tests::failed_audit_insert_rolls_back_checkpoint_and_delivery ... ok
+test webhooks::infrastructure::outbox::tests::impossible_typed_delivery_history_is_refused ... ok
+test webhooks::infrastructure::outbox::tests::invalid_replacements_and_restore_combinations_are_refused ... ok
+test webhooks::infrastructure::outbox::tests::cursor_restore_and_live_duplicate_decode_the_whole_value ... ok
+test webhooks::infrastructure::outbox::tests::late_retry_after_stop_does_not_become_ready ... ok
+test webhooks::infrastructure::outbox::tests::late_retry_keeps_source_refusal_after_cursor_replacement ... ok
+test webhooks::infrastructure::outbox::tests::live_owed_delivery_history_matches_current_before_publication ... ok
+test webhooks::infrastructure::outbox::tests::noncanonical_audit_key_is_refused_before_publication ... ok
+test webhooks::infrastructure::outbox::tests::owed_credential_stop_evidence_matches_original_registration_facts ... ok
+test webhooks::infrastructure::outbox::tests::owner_lock_and_physical_permit_survive_waiter_cancellation ... ok
+test webhooks::infrastructure::outbox::tests::registration_audit_lifecycle_and_actor_are_validated ... ok
+test webhooks::infrastructure::outbox::tests::registration_issue_evidence_matches_retained_target ... ok
+test webhooks::infrastructure::outbox::tests::malformed_owed_audit_is_refused_before_effects ... ok
+test webhooks::infrastructure::outbox::tests::registration_stop_evidence_matches_original_stop_and_target ... ok
+test webhooks::infrastructure::outbox::tests::reset_facts_survive_audit_trim_and_decode_completely ... ok
+test webhooks::infrastructure::outbox::tests::restart_keeps_invalidated_sending_unknown ... ok
+test webhooks::infrastructure::outbox::tests::restart_recovers_sending_without_repost ... ok
+test webhooks::infrastructure::outbox::tests::restored_capacity_is_bounded_before_collection ... ok
+test webhooks::infrastructure::outbox::tests::restored_retry_respects_backoff_without_assuming_wall_clock_order ... ok
+test webhooks::infrastructure::outbox::tests::restored_rows_are_checked_before_projection_cleanup ... ok
+test webhooks::infrastructure::outbox::tests::restored_registration_facts_are_checked_before_effects ... ok
+test webhooks::infrastructure::outbox::tests::retired_historical_actor_survives_lost_publication_ack_and_restart ... ok
+test webhooks::infrastructure::outbox::tests::retained_audit_chain_correlates_checkpoint_target_and_current_state ... ok
+test webhooks::infrastructure::outbox::tests::sending_capture_can_precede_its_observation_audit_on_restore ... ok
+test webhooks::infrastructure::outbox::tests::retirement_evidence_uses_retained_original_facts_after_private_row_deletion ... ok
+test webhooks::infrastructure::outbox::tests::settled_source_context_must_match_the_enclosing_delivery ... ok
+test webhooks::infrastructure::outbox::tests::stop_preserves_inflight_observation_and_cause ... ok
+test webhooks::infrastructure::outbox::tests::source_change_requires_explicit_reset ... ok
+test webhooks::infrastructure::outbox::tests::cursor_cas_and_queue_limit_preserve_predecessor ... ok
+test webhooks::infrastructure::outbox::tests::transition_cas_rejects_lost_ack_repost ... ok
+test webhooks::infrastructure::outbox::tests::typed_delivery_actors_are_correlated_to_saved_cause ... ok
+test webhooks::infrastructure::outbox::tests::bulk_reset_retention_is_bounded_in_the_commit ... ok
+test webhooks::infrastructure::outbox::tests::terminal_retention_is_bounded ... ok
+test webhooks::infrastructure::outbox::tests::stop_retention_is_bounded_when_publication_fails ... ok
+
+test result: ok. 80 passed; 0 failed; 0 ignored; 0 measured; 3749 filtered out; finished in 58.29s

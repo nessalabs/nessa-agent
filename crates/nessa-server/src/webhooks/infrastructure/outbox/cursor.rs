@@ -8,18 +8,21 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sync::replication::domain::Scope;
 use uuid::Uuid;
 
-const SELECT: &str = "SELECT registration,conversation,scope,position,reset_required FROM cursors";
+const SELECT: &str =
+    "SELECT registration,conversation,scope,position,reset_required,source_reset FROM cursors";
 struct StoredCursor {
     registration: String,
     conversation: String,
     scope: String,
     position: i64,
     reset_required: i64,
+    source_reset: Option<String>,
 }
 pub(super) struct Cursor {
     pub scope: Scope,
     pub position: u64,
     pub reset_required: bool,
+    pub reset: Option<Uuid>,
 }
 impl StoredCursor {
     fn row(row: &Row<'_>) -> SqlResult<Self> {
@@ -29,9 +32,10 @@ impl StoredCursor {
             scope: row.get(2)?,
             position: row.get(3)?,
             reset_required: row.get(4)?,
+            source_reset: row.get(5)?,
         })
     }
-    fn checked(self) -> Result<Cursor, OutboxError> {
+    fn checked(self, connection: &Connection) -> Result<Cursor, OutboxError> {
         let scope = codec::scope(&self.scope)?;
         check_identity(&self.registration, &self.conversation, &scope)?;
         let position = u64::try_from(self.position).map_err(invalid)?;
@@ -40,10 +44,27 @@ impl StoredCursor {
             1 => true,
             _ => return Err(OutboxError::Invalid),
         };
+        let reset = match (reset_required, self.source_reset) {
+            (false, None) => None,
+            (true, Some(id)) => {
+                let fact = super::source_reset::read(connection, uuid(&id)?)?
+                    .ok_or(OutboxError::Invalid)?;
+                if fact.registration.to_string() != self.registration
+                    || fact.conversation.to_string() != self.conversation
+                    || fact.prior_scope != scope
+                    || fact.prior_position != position
+                {
+                    return Err(OutboxError::Invalid);
+                }
+                Some(fact.id)
+            }
+            _ => return Err(OutboxError::Invalid),
+        };
         Ok(Cursor {
             scope,
             position,
             reset_required,
+            reset,
         })
     }
 }
@@ -74,7 +95,7 @@ pub(super) fn read(
         )
         .optional()
         .map_err(row_error)?
-        .map(StoredCursor::checked)
+        .map(|saved| saved.checked(connection))
         .transpose()
 }
 pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
@@ -83,15 +104,31 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
         .query_map([], StoredCursor::row)
         .map_err(unavailable)?;
     for row in rows {
-        row.map_err(row_error)?.checked()?;
+        row.map_err(row_error)?.checked(connection)?;
     }
     Ok(())
 }
-fn row_error(error: Error) -> OutboxError {
+pub(super) fn row_error(error: Error) -> OutboxError {
     match error {
         Error::InvalidColumnType(..)
         | Error::IntegralValueOutOfRange(..)
         | Error::FromSqlConversionFailure(..) => OutboxError::Invalid,
         _ => OutboxError::Unavailable,
     }
+}
+
+/// One owner of the physical source replacement relationship, used by both
+/// saved cursor facts and audit decoding.
+pub(super) fn check_replacement(
+    registration: &str,
+    conversation: &str,
+    prior: &Scope,
+    observed: &Scope,
+) -> Result<(), OutboxError> {
+    check_identity(registration, conversation, prior)?;
+    check_identity(registration, conversation, observed)?;
+    if codec::same_source(prior, observed) {
+        return Err(OutboxError::Invalid);
+    }
+    Ok(())
 }

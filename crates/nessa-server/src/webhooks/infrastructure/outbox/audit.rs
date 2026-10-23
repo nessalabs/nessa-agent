@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 pub(super) const AUDIT_BYTES: usize = 16 * 1024;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Cause {
     CredentialIssue,
@@ -31,6 +31,27 @@ pub(super) enum Cause {
     Restart,
     SourceChanged,
     SourceCheckpoint,
+}
+
+/// Original credential lifecycle evidence, distinct from this observation's time.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct SavedStop {
+    cause: Cause,
+    initiator: String,
+    at_ms: u64,
+}
+impl SavedStop {
+    fn of(stop: &Stopped) -> Self {
+        Self {
+            cause: stop_cause(stop),
+            initiator: stop.initiator(),
+            at_ms: stop.at_ms,
+        }
+    }
+    fn checked(&self) -> Result<Stopped, OutboxError> {
+        check_stop(&self.cause, &self.initiator, self.at_ms)
+    }
 }
 
 /// No open JSON fields or secret-bearing registration DTO can enter evidence.
@@ -69,6 +90,8 @@ pub(super) enum Record {
         position: u64,
         scope: Box<SavedScope>,
         source_stop: Option<SourceStop>,
+        source_reset_id: Option<String>,
+        credential_stop: Option<SavedStop>,
         before_state: Option<SavedDelivery>,
         after_state: SavedDelivery,
         before: String,
@@ -83,6 +106,7 @@ pub(super) enum Record {
     },
     #[serde(rename = "webhook_cursor")]
     Cursor {
+        source_reset_id: String,
         record_id: String,
         registration: String,
         conversation_id: String,
@@ -112,6 +136,8 @@ pub(super) struct DeliveryEvidence {
     pub before: Option<Delivery>,
     pub after: Delivery,
     pub source_stop: Option<SourceStop>,
+    pub source_reset: Option<Uuid>,
+    pub credential_stop: Option<Stopped>,
 }
 impl DeliveryEvidence {
     pub fn follows(&self, previous: &Self) -> bool {
@@ -121,6 +147,9 @@ impl DeliveryEvidence {
             && self.position == previous.position
             && self.scope == previous.scope
             && self.target == previous.target
+            && previous
+                .source_reset
+                .is_none_or(|id| self.source_reset == Some(id))
             && previous
                 .source_stop
                 .is_none_or(|stop| self.source_stop == Some(stop))
@@ -182,6 +211,11 @@ impl Record {
         stop: Option<&Stopped>,
         at_ms: u64,
     ) -> Result<Self, OutboxError> {
+        let credential_stop = if cause == DeliveryCause::AuthorityStopped {
+            stop.map(SavedStop::of)
+        } else {
+            None
+        };
         let (cause, initiator) = match cause {
             DeliveryCause::AuthorityStopped => {
                 let stop = stop.ok_or(OutboxError::Invalid)?;
@@ -219,6 +253,8 @@ impl Record {
             position: saved.position,
             scope: Box::new(SavedScope::of(&saved.scope)),
             source_stop: saved.source_stop,
+            source_reset_id: saved.source_reset.map(|id| id.to_string()),
+            credential_stop,
             before_state: before.map(SavedDelivery::of),
             after_state: SavedDelivery::of(after),
             before: before.map(|d| codec::phase(d).0).unwrap_or("absent").into(),
@@ -232,27 +268,31 @@ impl Record {
             at_ms,
         })
     }
-    pub fn cursor(
-        registration: Uuid,
-        conversation: &ConversationId,
-        prior: &Scope,
-        position: u64,
-        observed: &Scope,
-        initiator: QueueInitiator,
-        at_ms: u64,
-    ) -> Self {
+    pub fn cursor(fact: &super::source_reset::Fact) -> Self {
         Self::Cursor {
+            source_reset_id: fact.id.to_string(),
             record_id: Uuid::new_v4().to_string(),
-            registration: registration.to_string(),
-            conversation_id: conversation.to_string(),
+            registration: fact.registration.to_string(),
+            conversation_id: fact.conversation.to_string(),
             before: "following".into(),
             after: "reset_required".into(),
-            prior_scope: SavedScope::of(prior),
-            prior_position: position,
-            observed_scope: SavedScope::of(observed),
+            prior_scope: SavedScope::of(&fact.prior_scope),
+            prior_position: fact.prior_position,
+            observed_scope: SavedScope::of(&fact.observed_scope),
             cause: Cause::SourceChanged,
-            initiator: initiator.label(registration),
-            at_ms,
+            initiator: fact.stop.initiator.label(fact.registration),
+            at_ms: fact.stop.at_ms,
+        }
+    }
+    pub fn reset_key(&self) -> Result<Option<Uuid>, OutboxError> {
+        match self {
+            Self::Registration { .. } => Ok(None),
+            Self::Cursor {
+                source_reset_id, ..
+            } => Ok(Some(uuid(source_reset_id)?)),
+            Self::Delivery {
+                source_reset_id, ..
+            } => source_reset_id.as_ref().map(|id| uuid(id)).transpose(),
         }
     }
     pub fn delivery_evidence(&self) -> Result<Option<DeliveryEvidence>, OutboxError> {
@@ -268,6 +308,8 @@ impl Record {
             before_state,
             after_state,
             source_stop,
+            source_reset_id,
+            credential_stop,
             ..
         } = self
         {
@@ -283,6 +325,11 @@ impl Record {
                     .transpose()?,
                 after: after_state.checked()?,
                 source_stop: *source_stop,
+                source_reset: source_reset_id.as_ref().map(|id| uuid(id)).transpose()?,
+                credential_stop: credential_stop
+                    .as_ref()
+                    .map(SavedStop::checked)
+                    .transpose()?,
             }))
         } else {
             Ok(None)
@@ -331,6 +378,7 @@ impl Record {
     }
     fn checked(&self) -> Result<(), OutboxError> {
         let (_, registration, delivery_id) = self.keys()?;
+        let reset_id = self.reset_key()?;
         match self {
             Self::Registration {
                 credential,
@@ -407,20 +455,29 @@ impl Record {
                             .map(|d| codec::phase(d).0)
                             .unwrap_or("absent")
                     || source_stop.is_some() && next.phase() == Phase::Queued
+                    || source_stop.is_some() != reset_id.is_some()
+                {
+                    return Err(OutboxError::Invalid);
+                }
+                if !matches!(cause, Cause::CredentialRevoked | Cause::CredentialExpired)
+                    && evidence.credential_stop.is_some()
                 {
                     return Err(OutboxError::Invalid);
                 }
                 let transition = match cause {
                     Cause::CredentialRevoked | Cause::CredentialExpired => {
-                        check_stop(cause, initiator, *at_ms)?;
+                        let stop = evidence
+                            .credential_stop
+                            .as_ref()
+                            .ok_or(OutboxError::Invalid)?;
+                        if stop_cause(stop) != *cause || stop.initiator() != *initiator {
+                            return Err(OutboxError::Invalid);
+                        }
                         DeliveryCause::AuthorityStopped
                     }
                     Cause::SourceChanged => {
                         let actor = check_reader(initiator, registration)?;
-                        if source_stop
-                            .as_ref()
-                            .is_some_and(|stop| stop.initiator != actor)
-                        {
+                        if source_stop.as_ref().map(|stop| stop.initiator) != Some(actor) {
                             return Err(OutboxError::Invalid);
                         }
                         DeliveryCause::SourceChanged { initiator: actor }
@@ -458,13 +515,16 @@ impl Record {
             } => {
                 let prior = prior_scope.checked()?;
                 let observed = observed_scope.checked()?;
-                cursor::check_identity(&registration.to_string(), conversation_id, &prior)?;
-                cursor::check_identity(&registration.to_string(), conversation_id, &observed)?;
+                cursor::check_replacement(
+                    &registration.to_string(),
+                    conversation_id,
+                    &prior,
+                    &observed,
+                )?;
                 if before != "following"
                     || after != "reset_required"
                     || !matches!(cause, Cause::SourceChanged)
                     || *prior_position > i64::MAX as u64
-                    || codec::same_source(&prior, &observed)
                 {
                     return Err(OutboxError::Invalid);
                 }
@@ -474,7 +534,7 @@ impl Record {
         Ok(())
     }
 }
-fn checked_target(
+pub(super) fn checked_target(
     credential: &str,
     principal: &str,
     organization: &str,
@@ -488,22 +548,25 @@ fn checked_target(
     })
 }
 
-fn stop_cause(stop: &Stopped) -> Cause {
+pub(super) fn stop_cause(stop: &Stopped) -> Cause {
     match stop.reason() {
         StopReason::Revoked { .. } => Cause::CredentialRevoked,
         StopReason::Expired { .. } => Cause::CredentialExpired,
     }
 }
-fn check_stop(cause: &Cause, initiator: &str, at_ms: u64) -> Result<(), OutboxError> {
+pub(super) fn check_stop(
+    cause: &Cause,
+    initiator: &str,
+    at_ms: u64,
+) -> Result<Stopped, OutboxError> {
     let cause = match cause {
         Cause::CredentialRevoked => "credential_revoked",
         Cause::CredentialExpired => "credential_expired",
         _ => return Err(OutboxError::Invalid),
     };
-    Stopped::restore(cause, initiator, at_ms)?;
-    Ok(())
+    Stopped::restore(cause, initiator, at_ms)
 }
-fn check_reader(actor: &str, registration: Uuid) -> Result<QueueInitiator, OutboxError> {
+pub(super) fn check_reader(actor: &str, registration: Uuid) -> Result<QueueInitiator, OutboxError> {
     if actor == QueueInitiator::Live.label(registration) {
         Ok(QueueInitiator::Live)
     } else if actor == "restart" {

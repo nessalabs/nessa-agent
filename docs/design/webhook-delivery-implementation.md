@@ -287,3 +287,125 @@ permission system is added.
 | cursor has text position with only terminal history | Decode all cursor fields before publication or duplicate acknowledgement; refuse Invalid | original minor reproduction becomes refusal regression |
 | cursor reset flag or identity/scope is malformed | Same decoder refuses at restore and live read | cursor boundary table with valid maximum-integer controls |
 | retained delivery audit chain | Each validated snapshot follows the previous saved after-state, keeps checkpoint/target and source-stop context, and ends at the enclosing current delivery; reject missing, foreign or reordered history before effects | historical chain, current-state and checkpoint mutation regressions |
+
+The first fresh review of this parent-directed redesign confirmed two remaining
+cross-record correlations. Its report and exact bug demonstrations are preserved
+under `docs/reviews/evidence/webhook-outbox/typed-state/review-1/`.
+
+| Ordering / historical fact | Correlation owner and expected result | Regression |
+| --- | --- | --- |
+| Sending source-change capture precedes any observation audit | Current Sending alone may have captured context absent from its last admission audit; reopen and Unknown recovery preserve it | valid Sending capture/reopen/recovery control |
+| observation has settled Sending | Latest audit source-stop context equals the enclosing delivery's complete context, including None/Some, actor and time | terminal source context null/actor/time mutations refuse before publication |
+| credential stop commits but audit publication fails | Each authority-stop delivery record retains typed original stop cause, actor and time; its top-level cause/actor agree, and restore correlates them with the immutable owning registration stop | original actor mutation, coordinated actor/context and time mutation, active-registration false stop refusal |
+| registration retirement has deleted current facts | Historical retirement evidence validates its own saved stop facts and never substitutes a current owner or actor | existing lost-ack retired historical actor regression |
+
+
+### Second fresh typed-state review: owning relationships remain incomplete
+
+Review head dc86bc2d, source26b2bd35, found two major defects. The complete report
+and exact demonstrations are in `docs/reviews/evidence/webhook-outbox/typed-state/review-2/`.
+Registration audit target/original stop actor can disagree with retained
+registration facts; cursor audit prior position can disagree with its retained
+reset checkpoint. Both survive reopen and publish. Typed record validation is
+complete locally, but aggregate correlation is implemented for Delivery only.
+No authorization bypass was demonstrated. The parent owns the next structural
+decision before another patch cycle; runtime remains uncomposed and unchanged.
+
+| Demonstrated contradiction | Required future relationship / positive control |
+| --- | --- |
+| owed registration stop names another valid revoker while original stop remains | correlation with original retained stop actor/cause/time; valid historical retirement after registration deletion remains accepted |
+| owed registration issue substitutes valid principal/owner and initiator | target correlation with retained registration; do not reconstruct historical target from unrelated current ownership |
+| owed source-change audit changes priorPosition 1 to 999 while reset cursor remains at 1 | correlate the transition with the checkpoint retained by its atomic write; define historical/retention behavior before implementing |
+
+These are open findings and proposed requirements, not implemented fixes or a
+new review-loop authorization. Existing passing source checks do not close them.
+
+
+### Parent-adopted total contextual restoration
+
+The parent explicitly adopted this structural correction after fresh round two.
+Restoration owns an exhaustive match across Registration, Cursor and Delivery;
+no default variant arm may silently omit contextual checks. The same contextual
+admission checks all owed rows before the first publication effect, including
+live replay. Existing full Delivery history validation remains owned here.
+
+A stopped registration's private URL/key/cursors may still be removed before
+its retirement audit acknowledgement. In that transaction retain a bounded,
+secret-free retirement fact (original target and issuance time, original stop cause/actor/time,
+retirement observation time and exact retirement audit identity). The retained
+fact references that audit until both trim in the same transaction; missing or
+substituted retirement evidence is invalid. Issue/Stop evidence may survive that same atomic
+retirement and correlates against those retained facts. Drained requires these
+facts and no live registration. Acknowledged facts and audit projections trim
+together; owed facts cannot be discarded. No actor is inferred from current
+ownership, and no private credential material is retained for audit recovery.
+
+A cursor captures its original reset observation (observed scope, reader and
+time) beside the prior checkpoint when reset-required is committed. Its whole
+decoder requires both facts or neither. Contextual audit validation compares
+the complete prior checkpoint and original observation. Published cursor audit
+is removed before a later source/reset mutation; an owed cursor record must
+still have its retained reset checkpoint. This introduces no reset API.
+
+| Ordering / contradiction | Context owner and required evidence |
+| --- | --- |
+| owed Issue target substitutes valid principal/owner | retained registration or same-write retirement target; refuse before any publication |
+| owed Stop actor/cause/time substitutes valid values | retained immutable stop, including after immediate retirement; refuse before publication |
+| Drained owes publication after private registration deletion | retained secret-free retirement target/stop/time; valid replay preserves original actor and exact bytes |
+| Drained facts missing, changed or paired with live registration | reject impossible ownership before publication/cleanup |
+| owed Cursor prior position/scope or observed scope/reader/time differs | complete cursor reset fact and prior checkpoint; refuse before publication |
+| Cursor reset flag and captured observation disagree | whole cursor decoder rejects at restoration and live reads |
+| Delivery target/checkpoint/credential stop differs | exhaustive variant branch checks enclosing facts; history owner checks chain/current/source contexts |
+| second owed record contradicts facts | validate the entire owed batch before the first immutable-file effect |
+| live owed Delivery record is locally legal but its history/current end contradicts the enclosing delivery | reuse the complete history validator for the deliveries selected by unpublished audit identity, before any publication; no scan of unrelated retained histories |
+| publication acknowledgement is lost | retain original contextual facts until exact ack and common trim; no replacement identities/history |
+
+This is the parent-authorized bounded structural correction, not erasure of
+prior findings or a relaxation of browser/CI gates. Composition follows only a
+clean fresh persistence review.
+
+### Parent-adopted immutable source-reset owner
+
+After the complete review at5bb457db was preserved in0f6bea1e, the parent adopted
+one retained source-reset identity. The three source-provenance demonstrations
+are the same structural gap; the selector scan is a separate query-shape fix.
+No other independent structural constraint was reported.
+
+The source-reset owner retains immutable registration/chat, prior checkpoint,
+observed source and original reader/time. An immutable first-capture membership
+links each actually affected delivery to that identity and its original saved
+state/position. This prevents a later physically repeated source event from
+claiming an old Sending delivery. Current cursor and audit references retain the
+same identity; actor/time snapshots in audit are checked projections, never a
+second source of provenance. Logical access epochs may differ between the old
+delivery and newer cursor; physical source and immutable captured identity must
+still agree. Cleanup time is separate from the original reset observation.
+
+Reference accounting is an indexed SQLite projection owned by the reset schema.
+Cursor, capture membership and audit insertion/removal retain/release the fact.
+The last reference releases it in the same state transaction; a published cursor
+audit alone does not release a fact still owned by an old Sending delivery.
+Membership survives until the delivery is removed with its acknowledged history.
+Immutable schema guards forbid replacing facts or reassigning captured members;
+restoration checks the owning schema definitions and indexed reference counts.
+
+New cursor capacity is1024per registration. A reset fact is at most16KiB, and
+there are at most cursor1024+pending1024+retained1024=3072facts per registration,
+including detached delivery/history owners. This yields48MiB of reset fact bytes
+per registration; captured saved states are at most512bytes and one per retained
+delivery. Capacity is refused before partial reset/capture effects. Startup
+checks count/byte/reference bounds before bulk reads; live preflight checks
+only facts/history named by owed audit identities. Immutable audit-file retention
+remains its separately documented unbounded history.
+
+| Ordering / contradiction | Single owner and required evidence |
+| --- | --- |
+| immediate Queued/Retry source refusal | original capture state matches the before-state; original actor and reset time are projected into the audit |
+| Sending capture before any response audit | immutable membership names the actual original Sending state/reset identity; no copied unproven source-stop value |
+| audit claims the reset before the original capture state existed | history must reach the member’s captured state before any audit may project that reset identity; no inference from wall time |
+| later response creates Retry then cleanup refuses | original reset actor/time remain causal; cleanup records its own observation time |
+| later cursor replacement/deletion or repeated physical source | old delivery retains first membership; compatibility permits differing logical access epochs but refuses foreign scope/checkpoint/member identity |
+| malformed/dangling reset reference or changed audit actor/time/scope | reject before publication/recovery effects; no manufactured reset history |
+| cursor, delivery history or registration retires | release only those references; final reference removes reset fact transactionally; valid retired-registration audit still replays |
+| count/byte capacity or failed capture write | typed Capacity/Invalid/Conflict or Unavailable, transaction rolls back all reset/member/cursor/evidence changes |
+| fixed owed count and growing published history | direct published=0 query uses existing index; deterministic fullscan/VM counts stay independent of published history |
