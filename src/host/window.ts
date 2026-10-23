@@ -1119,8 +1119,16 @@ export async function replayOnboarding(): Promise<void> {
  */
 export async function onSetupRecorded(handler: () => void) {
   if (!inTauri) return () => undefined
-  const { listen } = await import("@tauri-apps/api/event")
-  return listen(HOST_EVENTS.setupRecorded, () => handler())
+  // Never rejects: composition starts this and does not wait for it, and a
+  // host that cannot be listened to costs the replay's new agent until the
+  // next launch, not the window.
+  try {
+    const { listen } = await import("@tauri-apps/api/event")
+    return await listen(HOST_EVENTS.setupRecorded, () => handler())
+  } catch (cause) {
+    console.warn("[nessa] could not listen for setup being recorded", cause)
+    return () => undefined
+  }
 }
 
 /**
