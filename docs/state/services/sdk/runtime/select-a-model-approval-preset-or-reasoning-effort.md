@@ -3,10 +3,16 @@ id: "sdk-runtime-select-a-model-approval-preset-or-reasoning-effort"
 title: "select a model, approval preset, or reasoning effort"
 kind: "operation"
 status: "mixed"
-summary: "The model is chosen when the conversation is created and kept when it reopens."
+summary: "A conversation can change to a supported model on the same provider session."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "sdk-runtime"
 sources:
   - "crates/nessa-server/src/conversation/application/service.rs"
+  - "crates/nessa-server/src/conversation/application/service/model_changes.rs"
+  - "src/desktop/workspace/adapters/store/model-commands.ts"
+  - "src/desktop/workspace/adapters/store/session-commands.ts"
+  - "crates/nessa-server/tests/conversation/model_changes.rs"
+  - "src/desktop/workspace/adapters/store/model-commands.test.ts"
   - "crates/nessa-server/src/conversation/infrastructure/mode_audit.rs"
   - "crates/nessa-server/src/composition/current_agent.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/agent.rs"
@@ -21,27 +27,41 @@ diagramLinks: {}
 
 # select a model, approval preset, or reasoning effort
 
-The model is chosen when the conversation is created and kept when it reopens. Choosing another model for a new conversation does not migrate an existing agent's context.
+A conversation can change to a supported model on the same provider session. The gateway keeps the existing context and commits the provider's acknowledged model and approval preset together. The provider states whether the choice affects subsequent responses or the next turn.
 
-An idle conversation has a working approval-preset change path. The Rust SDK also supports verified reasoning-effort changes for supported agents, but that alone does not establish a product control. A requested change is separate from the agent confirming that it applied it.
+In the desktop workspace, choosing a model stages it locally. Send applies that choice before submitting the next message; refusal or uncertainty prevents that send. Picking the current model again clears the staged choice. A native acknowledgement without a reconciled source view also keeps the message unsent. A cross-provider choice uses the separate agent-switch path; the model chart below covers same-provider changes. Approval-preset changes have their own idle checks and durable request journal. The Rust SDK also supports verified reasoning-effort changes for supported agents, but that alone does not establish a product control. A requested change is separate from the agent confirming that it applied it.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Resolving: Exact conversation and action identity
-    Resolving --> RetainedOutcome: Existing same action
-    Resolving --> Eligible: New supported preset / verified idle attachment
-    Resolving --> Refused: Conflict, queued turn or unsupported mode
-    Eligible --> Pending: Durably begin request
-    Pending --> Observed: Apply native mode if live and changed
-    Observed --> Applied: Save outcome and audit / finish request
-    Observed --> Uncertain: Mutation, save or audit not confirmed
-    Uncertain --> Recovering: Retire live session / recover correlated request
-    note right of Resolving
-        Model selection belongs to conversation creation.
-        This chart describes approval preset changes.
-        SDK effort controls are a separate capability.
+    [*] --> Staged: Desktop chooses another same-provider model
+    Staged --> Unchanged: Choose current model / clear local choice
+    Staged --> Resolving: Send / apply staged choice before message
+    Resolving --> RetainedOutcome: Exact existing request / recover original evidence
+    Resolving --> Pending: Current access and binding valid / save intent
+    Resolving --> Refused: Conflict, unsupported selection or unresolved earlier change
+    Pending --> Observed: Native model control / retain application evidence
+    Observed --> Applied: Acknowledged selection and continuation plan committed
+    Observed --> Refused: Confirmed before-effect failure
+    Observed --> Uncertain: Effect, save or audit not confirmed
+    Uncertain --> Recovering: Retire uncertain live owner / reconcile exact request
+    Recovering --> RetainedOutcome: Correlated retained outcome
+    Applied --> ReconcileView: Desktop verifies current source selection
+    ReconcileView --> Submit: Source confirms requested model
+    ReconcileView --> Held: Acknowledged but not reconciled / keep message unsent
+    RetainedOutcome --> ReconcileView: Applied selection confirmed
+    RetainedOutcome --> Held: Refused or uncertain outcome / do not send
+    Refused --> Held: Keep message unsent
+    note right of Pending
+        Pending intent does not publish the requested model as selected.
+        The admitted task survives caller loss.
     end note
 ```
+
+## Recovery and configuration boundaries
+
+The model journal binds the original conversation, request, actor and before/after identities. An exact retry reads or recovers that request rather than issuing another native control. The SDK retains the active turn's execution binding separately from the acknowledged selection, so a next-turn change does not rewrite the running turn's model. New admissions use the selected model's limits; retries retain their original complete submitted input.
+
+An applied model change invalidates the causal usage limit and reconciles its [scheduled continuation](usage-limit-continuation.md) before completion. Reasoning effort remains a separate SDK capability; this page does not claim a product effort control. The [model journal](../../../../../crates/nessa-server/src/conversation/application/service/model_changes.rs) and [desktop staging regressions](../../../../../src/desktop/workspace/adapters/store/model-commands.test.ts) own these boundaries.
 
 ## Further reading
 

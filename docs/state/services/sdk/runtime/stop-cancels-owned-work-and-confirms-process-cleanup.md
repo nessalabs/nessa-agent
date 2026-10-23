@@ -1,12 +1,15 @@
 ---
 id: "sdk-runtime-stop-cancels-owned-work-and-confirms-process-cleanup"
-title: "Stop cancels owned work and confirms process cleanup"
+title: "Turn Stop and attachment cleanup have different owners"
 kind: "operation"
 status: "mixed"
-summary: "Stop blocks new work, cancels waiting or active inputs and closes the current agent connection."
+summary: "Turn Stop cancels one captured turn; attachment close fences work and owns process cleanup."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "sdk-runtime"
 sources:
   - "src/conversation/adapters/store/slice.ts"
+  - "crates/nessa-server/src/conversation/application/service/mutation.rs"
+  - "crates/nessa-server/tests/conversation/mutation_commands.rs"
   - "crates/nessa-server/src/conversation/application/provider_sessions.rs"
   - "crates/nessa-server/src/conversation/infrastructure/provider_sessions.rs"
   - "docs/adr/done/182-conversation-deletion.md"
@@ -32,15 +35,15 @@ diagramLinks:
   Fenced: "sdk-cleanup"
 ---
 
-# Stop cancels owned work and confirms process cleanup
+# Turn Stop and attachment cleanup have different owners
 
-Stop blocks new work, cancels waiting or active inputs and closes the current agent connection. Saved history remains for later reopening. Archive only changes list visibility; closing a populated tab only detaches its view.
+Turn Stop cancels one captured turn; attachment close fences work and owns process cleanup. A queued turn is withdrawn, an active turn uses provider cancellation, and a finished turn sends nothing. Turn Stop leaves the attachment open. Archive only changes list visibility; closing a populated tab only detaches its view.
 
-Physical process cleanup, release of installed-runtime use and audit delivery are separate results. A repeated close can retry unfinished cleanup. Delete additionally asks the provider to dispose of its session and erases Nessa-owned data. A provider may archive or retain its record, so local erasure must not be presented as proof that every external copy was deleted.
+The cleanup chart below follows attachment close, including failure-driven cleanup, rather than the turn Stop command. Physical process cleanup, release of installed-runtime use and audit delivery are separate results. A repeated close can retry unfinished cleanup. Delete additionally asks the provider to dispose of its session and erases Nessa-owned data. A provider may archive or retain its record, so local erasure must not be presented as proof that every external copy was deleted.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Fenced: Verified close / fence generation and work
+    [*] --> Fenced: Attachment close / fence generation and work
     Fenced --> Draining: Seal controls / drain admitted answers
     Draining --> Teardown: Record cancellations, closure and finish / bounded cancel
     Teardown --> Checking: Close pipes, wait, terminate or kill / reap child
@@ -49,14 +52,24 @@ stateDiagram-v2
     Checking --> PhysicallyReleased: Process tree gone
     PhysicallyReleased --> Retained: Durable executable-use release still pending
     PhysicallyReleased --> ReleaseConfirmed: Directory and executable-use release confirmed
-    ReleaseConfirmed --> CloseAcknowledged: Independent audit and completion facts accepted
-    ReleaseConfirmed --> CloseFailed: Audit or cleanup supervision fails
-    CloseAcknowledged --> SlotReleased: Join attachment / end reviews and tickets
+    ReleaseConfirmed --> ReleaseEligible: Retain close result including audit failure
+    ReleaseEligible --> ResourcesReleased: Gateway retires confirmed owner and releases eligible holds
+    ReleaseEligible --> CloseFailed: Hold release fails / retain close and release errors
+    ResourcesReleased --> CloseAcknowledged: Close and release both acknowledged
+    ResourcesReleased --> CloseFailed: Audit or completion failed despite confirmed release
     note right of PhysicallyReleased
         Physical release cannot erase audit failure.
-        Tab detachment is a different event from Stop.
+        Turn Stop and populated-tab detachment do not request this close.
     end note
 ```
+
+A cleanup record can fail after physical release is confirmed. The gateway then retires that owner and attempts eligible image-hold release while returning the failure. Audit success is not a prerequisite for physical release or slot retirement. A proven-empty idle tab has a separate automatic-close exception; ordinary populated-tab detachment only removes the view.
+
+## Turn cancellation and ownership
+
+[The command owner](../../../../../crates/nessa-server/src/conversation/application/service/mutation.rs) checks the exact turn and saves its attempt before effects. [Agent cancellation](../../../../../crates/nessa-sdk/src/application/agent_execution/agents/agent.rs) accepts only the active turn on a capable attached provider. Moving from queue to execution is retried within a bounded wait; a concurrent close is answered from the turn's eventual final state. A saved attempted Stop without a terminal receipt stays interrupted after restart and is not sent again.
+
+The SDK's [parent and child close settlement](../README.md#parent-and-child-close-settlement) is an implemented ownership lifecycle. It is not evidence that product Stop cascades through child turns. PR #981 remains unmerged at this audit baseline. The [turn Stop flow](../../desktop/chat/stop-active-and-queued-work.md) follows the product operation.
 
 ## Confirming the process group
 

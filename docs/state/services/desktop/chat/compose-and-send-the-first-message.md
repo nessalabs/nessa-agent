@@ -4,6 +4,7 @@ title: "compose and send the first message"
 kind: "flow"
 status: "mixed"
 summary: "Open a new conversation, choose a model and write a message."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "desktop-chat"
 sources:
   - "src/panel/ui/use-composer.ts"
@@ -29,7 +30,7 @@ diagramLinks: {}
 
 Open a new conversation, choose a model and write a message. Enter sends it; Shift+Enter starts a Markdown block. Text can be empty when there are sendable attachments. The voice button has no working voice action yet.
 
-Send keeps the original message identity and content while it waits for acceptance. Acceptance means Nessa owns the input. The external agent may still be starting. Pending or failed uploads, unsupported attachments and oversized text prevent sending. A model choice is fixed when the remote conversation is created; choosing another afterward starts a separate conversation.
+Send keeps the original message identity and content while it waits for acceptance. Acceptance means Nessa owns the input. The external agent may still be starting. Pending or failed uploads, unsupported attachments and oversized text prevent sending. The panel binds its initial model choice when it creates the remote conversation. The desktop workspace also supports [staging a model change before the next send](../../sdk/runtime/select-a-model-approval-preset-or-reasoning-effort.md); that control does not imply a second conversation.
 
 ```mermaid
 stateDiagram-v2
