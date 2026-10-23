@@ -50,6 +50,7 @@
  *
  * Every check but rail-off runs with the rail turned on.
  */
+import { readFile } from "node:fs/promises"
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
@@ -94,6 +95,7 @@ const checks = [
   "channels-alone",
   "list-request",
   "list-request-claude",
+  "list-request-narrow",
   "quiet-composer",
   "overview-narrow",
   "sidebar-motion",
@@ -138,6 +140,11 @@ Checks, per engine, layout and size:
                   three columns, the list at its narrowest: Claude's shell
                   review reads as the transcript card reads it, its two answers
                   each fit their words, and the card keeps under 260px
+  list-request-narrow
+                  three columns, the list at its narrowest: a command holds the
+                  columns allowableFromList counts on; a card whose command or
+                  tool is not printable ASCII offers no Allow, only Review in
+                  Chat; a long tool name wraps, drawn whole
   channels-alone  three columns: the sidebar lists channels and no session
                   under them; the chosen channel's pinned sessions lead its
                   list under "Pinned", each listed once. Sessions in sidebar:
@@ -718,12 +725,15 @@ const body = {
   "list-request": async ({ page, layout }) => {
     if (layout !== "columns") throw new CannotRun("only three columns has a session list")
     const failures = []
-    const card = page.locator('[data-list-group="needs-you"] .workspace-request').first()
-    await card.waitFor({ timeout: 10_000 }).catch(() => {})
-    if (!(await card.count())) throw new CannotRun("nothing waits in Needs you")
-    const row = page
-      .locator('[data-list-group="needs-you"] .workspace-request-card [data-session-row]')
+    // The first card the list may allow from (`allowableFromList`).
+    const allowable = page
+      .locator('[data-list-group="needs-you"] .workspace-request-card')
+      .filter({ has: page.locator('button[data-answer="once"]') })
       .first()
+    const card = allowable.locator(".workspace-request")
+    await card.waitFor({ timeout: 10_000 }).catch(() => {})
+    if (!(await card.count())) throw new CannotRun("nothing in Needs you may be allowed")
+    const row = allowable.locator("[data-session-row]").first()
     const id = await row.getAttribute("data-session-row")
     const command = (await card.locator(".workspace-approval-command").innerText()).trim()
     if (!command.startsWith("$")) failures.push(`the card shows no command: "${command}"`)
@@ -747,6 +757,91 @@ const body = {
       .catch(() => false)
     if (!left) failures.push("after Allow, the row is still in Needs you")
     return { failures, detail: { id, command } }
+  },
+
+  "list-request-narrow": async ({ page, layout }) => {
+    if (layout !== "columns") throw new CannotRun("only three columns has a session list")
+    const failures = []
+    await page
+      .locator(".workspace-sidebar button, .workspace-sidebar [role='button']", {
+        hasText: /^gateway/,
+      })
+      .first()
+      .click()
+    const edge = page.getByRole("separator", { name: "Resize Session List" })
+    await edge.focus()
+    for (let i = 0; i < 20; i++) await page.keyboard.press("ArrowLeft")
+    const marks = page.locator('[aria-label="Request from Marks wider than the card"]')
+    await marks.waitFor({ timeout: 10_000 }).catch(() => {})
+    if (!(await marks.count())) throw new CannotRun("the wide marks are not in Needs you")
+    await settled(page)
+    // The rule's own count of columns, from the rule's source.
+    const source = await readFile(
+      new URL(
+        "../../../src/desktop/workspace/ui/session-list/list-request.tsx",
+        import.meta.url,
+      ),
+      "utf8",
+    )
+    const columns = Number(/listShownColumns = (\d+)/.exec(source)?.[1])
+    const seen = await page.evaluate(() => {
+      const cards = [
+        ...document.querySelectorAll('[data-list-group="needs-you"] .workspace-request'),
+      ].filter((card) => card.querySelector(".workspace-approval-command"))
+      const pre = cards[0].querySelector(".workspace-approval-command")
+      const style = getComputedStyle(pre)
+      const probe = document.createElement("span")
+      probe.textContent = "x".repeat(100)
+      probe.style.font = style.font
+      probe.style.whiteSpace = "pre"
+      document.body.append(probe)
+      const ch = probe.getBoundingClientRect().width / 100
+      probe.remove()
+      const inner =
+        pre.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+      return {
+        held: Math.floor(inner / ch + 0.01),
+        cards: cards.map((card) => {
+          const words =
+            card.querySelector(".workspace-approval-command").textContent ?? ""
+          const tool = card.querySelector(".workspace-request-tool")
+          return {
+            label: card.getAttribute("aria-label"),
+            ascii: /^[\x20-\x7e\n]*$/.test(words + (tool?.textContent ?? "")),
+            allows: !!card.querySelector(
+              'button[data-answer="once"], button[data-answer="always"]',
+            ),
+            review: [...card.querySelectorAll("button")].some(
+              (button) => button.textContent === "Review in Chat",
+            ),
+            toolLines: tool
+              ? Math.round(
+                  tool.getBoundingClientRect().height /
+                    parseFloat(getComputedStyle(tool).lineHeight),
+                )
+              : 0,
+          }
+        }),
+      }
+    })
+    if (!(seen.held >= columns))
+      failures.push(`a command holds ${seen.held} columns, the rule counts on ${columns}`)
+    for (const card of seen.cards)
+      if (!card.ascii && (card.allows || !card.review))
+        failures.push(
+          `${card.label} is not plain ASCII, yet offers ${card.allows ? "Allow" : "no Review in Chat"}`,
+        )
+    const named = (label) =>
+      seen.cards.find((card) => card.label === `Request from ${label}`)
+    const wide = named("Marks wider than the card")
+    if (!wide || wide.allows || !wide.review)
+      failures.push("the wide marks are not refused from the list, read in the chat")
+    const lab = named("Shell through the lab's tool")
+    if (!lab?.allows) failures.push("the lab's short shell call offers no Allow")
+    if (!(lab?.toolLines > 1))
+      failures.push(`the lab's long tool name takes ${lab?.toolLines} line, not wrapping`)
+    failures.push(...(await cutOff(page)))
+    return { failures, detail: { columns, ...seen } }
   },
 
   "list-request-claude": async ({ page, layout }) => {

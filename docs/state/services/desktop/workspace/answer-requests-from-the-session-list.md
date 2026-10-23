@@ -30,11 +30,15 @@ keeps their conversations, and answers what their cards show. A pinned
 session, a row the search hides, a row past the twelve, or any row while the
 list is folded or under the Agents overview, asks nothing from the list.
 
-A card allows only a request it shows whole, decided from the request itself
-and never from how it laid out (`allowableFromList`): a command read whole
-with nothing in the tool's input but the command, of at most three lines and
-180 characters, is drawn in full with its answers. Any other request is a
-preview with its refusals and Review in Chat, which opens the conversation.
+A card allows only a request it can only draw whole, decided from the
+request itself and never from how it laid out (`allowableFromList`): a
+command and tool name in printable ASCII, so no character is wider than a
+column, joins another or reorders the line; nothing in the tool's input but
+the command; at most three lines at the list's narrowest width (21 columns),
+and a tool name of at most 48 characters. Such a request is drawn in full
+with its answers. Any other request is a preview with its refusals and
+Review in Chat, which opens the conversation, where the transcript card
+shows it whole.
 
 ```mermaid
 stateDiagram-v2

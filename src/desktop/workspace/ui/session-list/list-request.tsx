@@ -3,9 +3,9 @@
  * transcript card's own parts, compact (`transcript/approval-request.tsx`).
  * Under the row's agent and title, who asks and the command, then its
  * answers: the refusal and the primary allow, every other in the menu
- * beside them. A request the list shows whole (`allowableFromList`) is drawn
- * in full and may be allowed; any other is a preview of three lines with a
- * fade, offering its refusals and Review in Chat. A question shows the
+ * beside them. A short request in printable ASCII (`allowableFromList`)
+ * is drawn in full and may be allowed; any other is a preview of three
+ * lines with a fade, offering its refusals and Review in Chat. A question shows the
  * question card. The first request is shown; more wait as "+N more", in the
  * conversation. While answered, the card leaves on the motion's curve; a
  * refused answer says why in place.
@@ -30,6 +30,7 @@ import {
   ApprovalActions,
   ApprovalCommand,
   approvalHead,
+  drawnCommand,
 } from "../transcript/approval-request"
 import { approvalGist } from "../transcript/approval-card"
 import { QuestionCard } from "../transcript/question-card"
@@ -38,17 +39,61 @@ import "../transcript/transcript.css"
 import "./list-request.css"
 import type { CommandGist } from "../transcript/approval-gist"
 
-/** The most of a command, in lines and in UTF-16 code units, the list shows whole. */
+/** The most lines of a command the list draws whole. */
 export const listShownLines = 3
-export const listShownChars = 180
+/**
+ * The monospace columns a card's command holds at the list's narrowest
+ * width (`columns.mjs` measures it, `list-request-narrow`).
+ */
+export const listShownColumns = 21
+/** The longest tool name the list allows under. */
+export const listShownToolChars = 48
+
+/** Printable ASCII and line breaks: text whose every character draws one column wide. */
+const printable = /^[\x20-\x7e\n]*$/
 
 /**
- * Whether the list may allow a request: only one it shows whole, decided
- * from the request alone, never from how it happened to lay out. An agent's
- * tool call read whole (`approvalGist`) with nothing in its input but the
- * command, and a command of at most `listShownLines` lines and
- * `listShownChars` characters; or an app's request of the same size. Any
- * other request is refused from the list, or read whole in the chat.
+ * How many lines `text` takes at `columns`, broken as the card breaks it:
+ * between words, spaces hanging at a line's end, and a word longer than a
+ * line anywhere in it.
+ */
+export function wrappedLines(text: string, columns: number): number {
+  let lines = 0
+  for (const line of text.split("\n")) {
+    lines += 1
+    let at = 0
+    for (const part of line.split(/( +)/)) {
+      if (part === "") continue
+      if (part.startsWith(" ")) {
+        at += part.length
+        continue
+      }
+      if (at > 0 && at + part.length > columns) {
+        lines += 1
+        at = 0
+      }
+      let rest = part.length
+      while (at + rest > columns) {
+        lines += 1
+        rest -= columns - at
+        at = 0
+      }
+      at += rest
+    }
+  }
+  return lines
+}
+
+/**
+ * Whether the list may allow a request: only one it can only draw whole,
+ * decided from the request alone, never from how it happened to lay out.
+ * Its command as sent and its tool name are printable ASCII, so no
+ * character is wider than a column, joins another, reorders the line, or is
+ * drawn as an escape that reads like typed text; the command as drawn
+ * (`drawnCommand`) takes at most `listShownLines` lines at the list's
+ * narrowest; the tool name is at most `listShownToolChars` long; and the
+ * tool's input holds nothing but the command (`approvalGist`). Any other
+ * request is refused from the list, or read whole in the chat.
  */
 export function allowableFromList(
   approval: Approval,
@@ -56,8 +101,19 @@ export function allowableFromList(
 ): boolean {
   if (!shownWhole(approval)) return false
   if (gist && gist.fields.length > 0) return false
-  const shown = (gist?.script ?? approval.command).replace(/\n$/, "")
-  return shown.split("\n").length <= listShownLines && shown.length <= listShownChars
+  const tool = gist?.tool ?? ""
+  const sent = gist?.script ?? approval.command
+  const drawn = drawnCommand(
+    sent,
+    approval.origin.kind === "app" ? approval.origin.tool : undefined,
+  ).replace(/\n$/, "")
+  return (
+    printable.test(sent) &&
+    printable.test(tool) &&
+    !tool.includes("\n") &&
+    tool.length <= listShownToolChars &&
+    wrappedLines(drawn, listShownColumns) <= listShownLines
+  )
 }
 
 export const ListRequest = memo(function ListRequest({
