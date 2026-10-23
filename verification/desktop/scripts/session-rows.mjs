@@ -31,8 +31,8 @@ Checks, per engine:
             from the menu hands focus to the row in its place
   swipe     two fingers left uncover Archive and Delete without opening the
             row; Delete asks once more in place, then removes the row; a long
-            swipe archives; a mouse drag moves nothing and right-click is the
-            row's own menu`,
+            swipe rests open and never archives, and Archive is one press; a
+            mouse drag moves nothing and right-click is the row's own menu`,
   },
   async ({ options, rep, url }) => {
     await withEngines(options, rep, async (engine, browser) => {
@@ -270,7 +270,8 @@ Checks, per engine:
         await confirm.click()
         await rowById(page, id).waitFor({ state: "detached", timeout: 3_000 })
 
-        // A long swipe archives as the row slides out.
+        // A long two-finger swipe never archives: the row rests open, held
+        // at its tray, and Archive is one press away.
         row = await quietRow(page)
         id = await row.getAttribute("data-session-row")
         await row.hover()
@@ -280,7 +281,14 @@ Checks, per engine:
           9,
           ...Array.from({ length: 30 }, (_, at) => (at % 2 ? 9 : 11)),
         ])
-        await rowById(page, id).waitFor({ state: "detached", timeout: 5_000 })
+        await waitAttr(wrapper(), "data-swipe", "open")
+        await page.waitForTimeout(400)
+        if (!(await rowById(page, id).count()))
+          failures.push("the long swipe archived the row")
+        else {
+          await action("Archive").click()
+          await rowById(page, id).waitFor({ state: "detached", timeout: 5_000 })
+        }
         if ((await openId(page)) !== before) failures.push("the long swipe opened a row")
         return { failures, evidence: [open, confirming].filter(Boolean) }
       })
