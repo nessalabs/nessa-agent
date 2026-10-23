@@ -5,7 +5,7 @@ kind: flow
 status: implemented
 summary: Signed HTTP events can queue one turn in a configured conversation.
 parent: gateway
-sourceRevision: "ebc5212723366e707256eed51a051d6c61bd3b5b"
+sourceRevision: "7763614c1998cc428a9b6043cbe1ab10cebe6ec4"
 sources:
   - crates/nessa-server/src/external_events/entrypoint/http.rs
   - crates/nessa-server/src/external_events/application/admission.rs
@@ -131,15 +131,19 @@ checks capacity before and after command handoff; this does not simulate a TCP r
 An admission-task failure returns uncertainty and recovers capacity. The design
 table links inherited command recovery
 and cancellation behavior. No production provider registration or external workflow
-effects are exercised. The 17 feature tests passed on Linux. The affected package test run passed its
+effects are exercised. The 18 feature tests passed on Linux. The affected package test run passed its
 other targets but retains one failing, unchanged Codex process-cleanup test;
 see [verification evidence](../../../../verification/external-events/README.md).
 The full seven-package CI Clippy selection passed with `-D warnings`.
 The fixture creates private storage beneath its temporary container, independent
 of ambient Unix umask. The old fixture reproduced twelve UnsafeFile failures at
 umask 022; the corrected suite passes at 022 and 077 without repairing container
-permissions. Hosted canonical Chromium/WebKit checks passed for the earlier merge
-candidate; the separate stress upgrade failure remains an open gate, and a later
-head needs its own hosted qualification.
+permissions. Hosted canonical Chromium/WebKit, stress 42/42 and chaos 2/2 passed for the earlier
+`a1994569…` merge candidate. Its sole Windows failure timed out while a capacity
+test also awaited another durable admission during the released-command burst. Capacity recovery now
+uses controlled pre-storage failures, and a separate single-command test proves
+durable execution and replay after caller loss. No timeout increased or production
+owner changed. The corrected Windows test and later head need hosted qualification;
+Linux runs are not Windows evidence.
 This page reviews the source commit named above. The gateway index change is
 navigation only; unrelated state pages were not re-audited.

@@ -1,7 +1,7 @@
 # Independent review record (#1088)
 
 Base: `0b8019cf45f99b285f10c41199875d474492c6d1`.
-Current source checkpoint: `ebc5212723366e707256eed51a051d6c61bd3b5b`.
+Current source checkpoint: `7763614c1998cc428a9b6043cbe1ab10cebe6ec4`.
 The earlier clean review below covered `0c320bd8…`; the CI follow-up is separate.
 Draft: [#1092](https://github.com/nessalabs/nessa-agent/pull/1092).
 Each round used a fresh reviewer under `AGENTS.md` / `CODING_STANDARDS.md`.
@@ -120,3 +120,38 @@ The separate stress upgrade candidate-baseline ordering investigation does not
 clear the failed browser stress gate. Existing helper suites and the client probe
 were reviewed independently; their precise limits are in the hosted CI record and
 verification README. No unrelated frontend/settings implementation changed.
+
+## Windows cancellation-test follow-up
+
+Run 39930446153 at `a1994569…` had one Windows test timeout at the post-release
+ninth durable admission; every other check passed. The earlier browser, stress
+42/42 and chaos 2/2 passes remain historical candidate evidence. The source log
+does not prove a production permit leak or the exact cause of the slow schedule.
+
+Source `7763614c1998cc428a9b6043cbe1ab10cebe6ec4` splits the test's capacity and
+persistence obligations. Eight cancelled response futures still retain slots and
+refuse a ninth before store entry. Controlled pre-storage failures settle that
+case; observed failure/entry counts prove recovery without provider execution.
+A separate successful caller-loss case observes actual terminal persistence
+through the fixture port, waits execution complete and checks receipt replay and
+one provider execution. The fixture observer notifies only after its underlying
+terminal save succeeds. No production owner or timeout changed.
+
+A fresh independent reviewer checked source `7763614c1998cc428a9b6043cbe1ab10cebe6ec4`
+against published `a1994569…`, including dirty docs/evidence. **No findings at any
+priority; review stop rule satisfied.** All 18 focused tests independently passed
+under umask 022 in 5.27 seconds; `git diff --check` passed and production probe
+hashes matched. No files changed during the review.
+
+The review explicitly assessed invariant preservation: the prior successful
+post-release calls did not measure capacity while successful writes stayed
+pending. Their durability/replay obligation remains in the separate actual-store
+case. Outcome-independent production permit scope is unchanged; the split does
+not mask a demonstrated product defect. Reviewed gate/counter order, cancellation
+joins, failure recovery, observer truth, replay, adjacent failed acknowledgements,
+SDK ownership and documentation claims. Broad/browser checks were inspected as
+supplied evidence, not independently repeated.
+
+Windows itself was not executed locally. The exact original Windows timing cause
+remains uncertain, and new-head hosted qualification is required. Historical
+browser/stress/chaos passes and the separate cleanup failure remain preserved.

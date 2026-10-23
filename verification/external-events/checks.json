@@ -1,5 +1,5 @@
 {
-  "sourceRevision": "ebc5212723366e707256eed51a051d6c61bd3b5b",
+  "sourceRevision": "7763614c1998cc428a9b6043cbe1ab10cebe6ec4",
   "baseRevision": "0b8019cf45f99b285f10c41199875d474492c6d1",
   "environment": {
     "os": "Linux x86_64",
@@ -10,37 +10,37 @@
     "umask": "022"
   },
   "featureTests": {
-    "command": "compiled nessa-server test binary external_events:: under umask022 and077",
+    "command": "cargo test -p nessa-server --lib external_events:: under umask022",
     "exit": 0,
-    "passed": 17
+    "passed": 18
   },
   "affectedSuites": {
     "command": "cargo test -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client --no-fail-fast",
     "exit": 101,
     "results": [
-      "test result: ok. 437 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.04s",
-      "test result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.43s",
-      "test result: ok. 180 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.59s",
+      "test result: ok. 437 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.53s",
+      "test result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.45s",
+      "test result: ok. 180 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.20s",
       "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
       "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
-      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3764 filtered out; finished in 0.00s",
-      "test result: oktest agent_install::infrastructure::audit::journal::tests::oversized_persisted_failure_detail_is_rejected_instead_of_normalized ... . 1 passed; 0 failed; 0 ignored; 0 measured; 3764 filtered outok",
-      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3764 filtered out; finished in 0.00s",
-      "test result: FAILED. 3754 passed; 1 failed; 10 ignored; 0 measured; 0 filtered out; finished in 97.70s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3765 filtered out; finished in 0.00s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3765 filtered out; finished in 0.00s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3765 filtered out; finished in 0.00s",
+      "test result: FAILED. 3755 passed; 1 failed; 10 ignored; 0 measured; 0 filtered out; finished in 96.81s",
       "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
       "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
       "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
       "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
       "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
-      "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
-      "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s",
+      "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+      "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s",
       "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
-      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
-      "test result: ok. 117 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.92s",
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+      "test result: ok. 117 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.95s",
       "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
       "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
-      "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s",
-      "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s"
+      "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+      "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s"
     ],
     "failedTests": [
       "agents::infrastructure::codex::tests::status_cleanup_removes_descendants_after_root_exit_and_after_timeout"
@@ -75,7 +75,7 @@
   "limitations": [
     "No production mount, provider registration or external workflow effects.",
     "Cancellation tests drop real Axum service futures; no TCP-reset simulation.",
-    "Desktop UI/cross-platform execution not run; inherited stress scenarios own shared execution behavior.",
+    "Desktop browser/cross-platform execution not run locally; hosted results apply only to their recorded candidates.",
     "Hosted exact-head CI remains required; parent owns merge and baseline-blocker qualification.",
     "Stress upgrade baseline ordering is a candidate explanation; exact CI browser failure is not reproduced or qualified. Artifact materialization was denied403; no retry/reroute/dispatch/rerun."
   ],
@@ -98,6 +98,21 @@
   },
   "hostedBrowserGate": {
     "required": true,
+    "run": 39930446153,
+    "job": 120337505456,
+    "merge": "b8613a533571696e9a9efaf34625e23c5984c706",
+    "head": "a1994569286c96d6be09b9bcc9d83e2f5993ffb3",
+    "base": "0b8019cf45f99b285f10c41199875d474492c6d1",
+    "canonicalVerdict": "pass",
+    "engines": ["chromium", "webkit"],
+    "stressVerdict": "pass",
+    "stressChecksHeld": 42,
+    "chaosRunsHeld": 2,
+    "laterHeadQualification": "pending",
+    "evidence": "windows-cancellation-39930446153.md"
+  },
+  "earlierHostedBrowserGate": {
+    "required": true,
     "run": 39925277268,
     "job": 120320630575,
     "merge": "75f5b0bf9fbbe070254ffbb3277bf7779130c546",
@@ -109,5 +124,24 @@
     "chaosRunsHeld": 2,
     "laterHeadQualification": "pending",
     "evidence": "hosted-ci-39925277268.md"
+  },
+  "windowsCancellationCorrection": {
+    "sourceRevision": "7763614c1998cc428a9b6043cbe1ab10cebe6ec4",
+    "failedJob": 120337505616,
+    "priorWindowsResult": {
+      "passed": 3030,
+      "failed": 1,
+      "ignored": 8,
+      "seconds": 1408.01
+    },
+    "priorFailure": "post-release durable-admission timeout at ingress.rs:832",
+    "newLocalFeatureTestsPassed": 18,
+    "repeatCases": {
+      "cancelled_http_responses_keep_command_capacity_until_detached_admission_settles": 30,
+      "cancelled_http_response_keeps_successful_admission_durable_and_replayable": 30
+    },
+    "productionCodeChanged": false,
+    "timeoutsIncreased": false,
+    "windowsExecution": "not available locally; pending exact-head hosted qualification"
   }
 }

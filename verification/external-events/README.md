@@ -1,6 +1,6 @@
 # External event primitive verification (#1088)
 
-The reviewed source is `ebc5212723366e707256eed51a051d6c61bd3b5b`, based on
+The reviewed source is `7763614c1998cc428a9b6043cbe1ab10cebe6ec4`, based on
 `0b8019cf45f99b285f10c41199875d474492c6d1`. The primitive is an explicitly composed,
 unmounted HTTP router that dispatches one authorized existing conversation turn.
 It does not create a general workflow engine or a public listener.
@@ -17,14 +17,17 @@ binary reproduces twelve failures at 022: [before-fix evidence](fixture-before-u
 [Exact check summaries](checks.json) and the [feature test output](feature-tests.txt)
 retain the source checkpoint and outcomes.
 
-- All 17 `external_events::` unit/loopback E2E tests passed. Real HTTP, Cedar,
+- All 18 `external_events::` unit/loopback E2E tests passed. Real HTTP, Cedar,
   SQLite request receipts and the SDK runner are used; only credentials, clock
   and provider are local fixtures. Cancellation tests additionally drop actual
   Axum service futures deterministically before and after command handoff; they
   do not claim to simulate TCP resets. All eight command slots remain occupied
-  after post-handoff caller loss until the gated storage calls settle.
+  after post-handoff caller loss. Controlled storage failures prove capacity
+  recovery; a separate single-command test observes real terminal persistence,
+  execution and receipt replay after caller cancellation. This separates the
+  ownership invariant from concurrent filesystem latency.
 - `cargo test -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client --no-fail-fast`
-  ran all selected targets. The server library had **3,754 passed, one failed,
+  ran all selected targets. The server library had **3,755 passed, one failed,
   ten ignored**. Its integration targets and the other package targets passed.
   Ignored fixture helpers retain their existing annotations. The sole failure
   is the unchanged cleanup test described below.
@@ -129,7 +132,7 @@ handoff; parent owns any exact-head merge after hosted gates qualify the blocker
 
 ## Stress upgrade investigation
 
-The hosted stress failure remains open. Existing upgrade/restart helper tests pass
+The earlier hosted stress failure remains unattributed. Existing upgrade/restart helper tests pass
 54/54 on the clean base and published head. The upgrade step waits for gateway
 health and its Node client, then sends through the browser without an explicit
 browser replacement-socket frame barrier. A copied-source client probe reproduces
@@ -148,3 +151,25 @@ of CI's exact browser failure. The copied send-error diagnostic or a controlled
 browser reproduction is still needed. No frontend/settings behavior or console
 classification was changed. The artifact materialization denial and the absence
 of a dispatch/rerun are recorded with the hosted evidence.
+
+## Windows cancellation-test correction
+
+[Run 39930446153](windows-cancellation-39930446153.md) on `a1994569…` passed
+canonical scripted checks in Chromium and WebKit, stress 42/42 and chaos 2/2.
+Those are historical results for merge `b8613a53…`; they do not qualify a later
+head or explain the earlier upgrade failure. The sole failing check was the
+Windows server library: 3,030 passed, one failed, eight ignored. The cancelled
+response capacity test timed out while awaiting a ninth durable admission after
+releasing eight SQLite-backed commands.
+
+The test now checks all-eight retention and ninth-request refusal as before,
+then releases into controlled pre-storage failures and observes a fresh store
+entry to prove capacity recovery. No provider runs on that failure path. A
+separate cancelled-caller test uses real SQLite, signals only after successful
+terminal persistence, awaits completion and replays the same execution once.
+No production code or timeout changed. Each corrected case passed 30 repetitions
+while the full affected suite ran locally. Windows qualification remains pending.
+
+The denied materialization of artifact 12489422730 remains explicit. Neither that
+artifact nor a manual workflow dispatch was retried or routed through another
+mechanism. Earlier job logs and evidence are preserved rather than overwritten.
