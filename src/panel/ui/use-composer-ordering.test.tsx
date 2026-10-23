@@ -3,7 +3,6 @@ import * as React from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { useConversation } from "../../conversation"
-vi.mock("../../conversation", () => import("../../conversation/testing"))
 import { useComposer } from "./use-composer"
 
 function deferred() {

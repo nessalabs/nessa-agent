@@ -87,3 +87,21 @@ changed-file ESLint, formatting and production build passed. Full frontend:
 fixture failures. The initial source commit's evidence above remains historical.
 System-Chromium overview/focus findings are being triaged separately and are
 not attributed to these changes.
+
+## Exact-head CI import correction
+
+CI run `39919232935` at `4d718da047acbcf200c10feab62cb45b097ee939`
+failed the actual architecture scan in frontend, gateway-contract and all three
+local-auth platform jobs. Parent supplied the failed steps, including jobs
+`120300724852` and `120300724976`: the new composer test's mock imported the
+conversation testing entry where that TSX consumer must use public contracts.
+The correction removes that mock and exercises the public barrel. It changes
+no scanner exception, assertion or runtime rule. The original failed run is
+retained; it was not blindly rerun.
+
+After correction: **23/23 affected tests**, TypeScript, changed-file ESLint and
+formatting pass. Rust stable **1.99.1** was installed under `/tmp` using the
+normal Rust installer, and **all 108 architecture tests plus the actual
+repository scan passed**. This supersedes the earlier missing-Cargo architecture
+limitation, without changing that historical result. Gateway compilation is
+being attempted separately; it is not an E2E pass.
