@@ -1,4 +1,5 @@
 //! State/audit commits, immutable journal publication and bounded retirement.
+use super::audit::{Record, RegistrationChange};
 use super::stored::{self, StoredDelivery};
 use super::{capacity, codec, invalid, unavailable, uuid};
 use crate::webhooks::application::{
@@ -8,7 +9,6 @@ use crate::webhooks::domain::{Delivery, Phase};
 use nessa_local_database::rusqlite::{params, Connection, Result as SqlResult, Transaction};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sync::replication::domain::Scope;
-use serde_json::{json, Value};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -68,51 +68,16 @@ pub(super) fn delivery_audit(
     } else if !matches!(cause, DeliveryCause::SourceQueued { .. }) {
         return Err(OutboxError::Invalid);
     }
-    let registration = saved.registration.to_string();
-    let conversation = saved.conversation.to_string();
-    let incarnation = saved.scope.incarnation().as_str();
-    let position = saved.position;
-    let scope = codec::scope_text(&saved.scope)?;
     let registration_facts = super::registry::by_id(transaction, saved.registration)?;
-    let target = &registration_facts.registration.target;
-    let before = before.map(|d| codec::phase(d).0).unwrap_or("absent");
-    let stop = if cause == DeliveryCause::AuthorityStopped {
-        Some(
-            registration_facts
-                .stop
-                .as_ref()
-                .ok_or(OutboxError::Invalid)?,
-        )
-    } else {
-        None
-    };
-    let attribution = cause;
-    let cause = match cause {
-        DeliveryCause::Admission => "admission",
-        DeliveryCause::Response => "response",
-        DeliveryCause::Deadline => "deadline",
-        DeliveryCause::AuthorityStopped => "authority_stopped",
-        DeliveryCause::Refused => "admission_refused",
-        DeliveryCause::Restart => "restart",
-        DeliveryCause::SourceChanged { .. } => "source_changed",
-        DeliveryCause::SourceQueued { .. } => "source_checkpoint",
-    };
-    let initiator = match (&stop, attribution) {
-        (Some(stop), _) => stop.initiator(),
-        (
-            None,
-            DeliveryCause::SourceChanged { initiator } | DeliveryCause::SourceQueued { initiator },
-        ) => initiator.label(saved.registration),
-        (None, DeliveryCause::Restart) => "restart".into(),
-        _ => format!("delivery:{}", after.id()),
-    };
-    let cause = stop.as_ref().map(|stop| stop.cause()).unwrap_or(cause);
-    append(
-        transaction,
-        uuid(&registration)?,
-        Some(after.id()),
-        json!({"kind":"webhook_delivery","registration":registration,"credential":target.credential.as_str(),"principal":target.principal.as_str(),"organization":target.organization.as_str(),"owner":target.owner.as_str(),"deliveryId":after.id().to_string(),"conversationId":conversation,"incarnation":incarnation,"position":position,"scope":serde_json::from_str::<Value>(&scope).map_err(invalid)?,"sourceStop":saved.source_stop,"epoch":after.epoch(),"attempt":after.attempts(),"timestampMs":after.timestamp_ms(),"before":before,"after":codec::phase(after).0,"dueAtMs":codec::phase(after).1,"cause":cause,"initiator":initiator,"atMs":at_ms}),
-    )
+    let record = Record::delivery(
+        &saved,
+        &registration_facts.registration.target,
+        before,
+        cause,
+        registration_facts.stop.as_ref(),
+        at_ms,
+    )?;
+    append(transaction, record)
 }
 
 /// Retention ranks all terminal rows, including this transaction's newly owed
@@ -187,13 +152,10 @@ fn retire_drained(transaction: &Transaction<'_>, at_ms: u64) -> Result<(), Outbo
     }
     for id in retired {
         let saved = super::registry::by_id(transaction, uuid(&id)?)?;
-        let target = &saved.registration.target;
         let stop = saved.stop.as_ref().ok_or(OutboxError::Invalid)?;
         append(
             transaction,
-            uuid(&id)?,
-            None,
-            json!({"kind":"webhook_registration","registration":id,"credential":target.credential.as_str(),"principal":target.principal.as_str(),"organization":target.organization.as_str(),"owner":target.owner.as_str(),"before":"stopped","after":"absent","cause":"drained","stopCause":stop.cause(),"initiator":stop.initiator(),"stopAtMs":stop.at_ms,"atMs":at_ms}),
+            Record::registration(&saved.registration, RegistrationChange::Retire(stop), at_ms),
         )?;
         transaction
             .execute("DELETE FROM cursors WHERE registration=?1", [&id])

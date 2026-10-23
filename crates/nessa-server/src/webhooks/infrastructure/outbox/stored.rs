@@ -1,5 +1,5 @@
 //! One decoder correlates durable delivery identity with its enclosing SQL row.
-use super::{capacity, codec, invalid, unavailable, uuid};
+use super::{capacity, codec, cursor, invalid, unavailable, uuid};
 use crate::webhooks::application::OutboxError;
 use crate::webhooks::domain::{Delivery, Phase};
 use nessa_local_database::rusqlite::{Connection, OptionalExtension, Result as SqlResult, Row};
@@ -135,42 +135,12 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
         let saved = row.map_err(unavailable)?.checked()?;
         check_current(connection, &saved)?;
     }
-    let mut statement = connection
-        .prepare("SELECT registration,conversation,scope FROM cursors")
-        .map_err(unavailable)?;
-    let rows = statement
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        })
-        .map_err(unavailable)?;
-    for row in rows {
-        let (registration, conversation, scope) = row.map_err(unavailable)?;
-        check_cursor(&registration, &conversation, &codec::scope(&scope)?)?;
-    }
+    cursor::validate(connection)?;
     if connection
         .prepare("PRAGMA foreign_key_check")
         .map_err(unavailable)?
         .exists([])
         .map_err(unavailable)?
-    {
-        return Err(OutboxError::Invalid);
-    }
-    Ok(())
-}
-
-pub(super) fn check_cursor(
-    registration: &str,
-    conversation: &str,
-    scope: &Scope,
-) -> Result<(), OutboxError> {
-    let registration = uuid(registration)?;
-    let conversation = ConversationId::new(conversation).map_err(invalid)?;
-    if scope.receiver().as_str() != registration.to_string()
-        || scope.stream().as_str() != conversation.to_string()
     {
         return Err(OutboxError::Invalid);
     }
@@ -184,17 +154,12 @@ pub(super) fn check_current(
     if matches!(saved.delivery.phase(), Phase::Terminal(_)) || saved.source_stop.is_some() {
         return Ok(());
     }
-    let cursor:Option<(String,i64,i64)>=connection.query_row("SELECT scope,position,reset_required FROM cursors WHERE registration=?1 AND conversation=?2",[saved.registration.to_string(),saved.conversation.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(unavailable)?;
-    let Some((scope, position, reset)) = cursor else {
-        return Err(OutboxError::Invalid);
-    };
-    let scope = codec::scope(&scope)?;
-    check_cursor(
-        &saved.registration.to_string(),
-        &saved.conversation.to_string(),
-        &scope,
-    )?;
-    if reset != 0 || position < saved.position as i64 || !codec::same_source(&scope, &saved.scope) {
+    let current = cursor::read(connection, saved.registration, &saved.conversation)?
+        .ok_or(OutboxError::Invalid)?;
+    if current.reset_required
+        || current.position < saved.position
+        || !codec::same_source(&current.scope, &saved.scope)
+    {
         return Err(OutboxError::Invalid);
     }
     Ok(())

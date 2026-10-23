@@ -1,7 +1,9 @@
 //! One private durable registration/outbox owner. Short SQLite transactions
 //! retain state and causal audit together; publication never contains secrets.
+mod audit;
 mod capacity;
 mod codec;
+mod cursor;
 mod journal;
 mod publication;
 mod queue;
@@ -58,7 +60,13 @@ impl SqlOutbox {
             .map_err(unavailable)?;
         lock.try_lock_exclusive().map_err(unavailable)?;
         let schema = Schema::new(SCHEMA).map_err(unavailable)?;
-        let connection = nessa_local_database::open(path, &schema).map_err(unavailable)?;
+        let connection =
+            nessa_local_database::open(path, &schema).map_err(|error| match error {
+                nessa_local_database::OpenError::Unreadable(_)
+                | nessa_local_database::OpenError::Damaged(_)
+                | nessa_local_database::OpenError::Version { .. } => OutboxError::Invalid,
+                _ => OutboxError::Unavailable,
+            })?;
         stored::validate(&connection)?;
         publication::validate(&connection)?;
         nessa_local_storage::create_directory(&audit).map_err(unavailable)?;

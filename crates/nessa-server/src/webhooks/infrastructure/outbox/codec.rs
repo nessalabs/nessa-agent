@@ -4,9 +4,9 @@ use crate::webhooks::domain::{Delivery, Outcome, Phase};
 use nessa_sync::replication::domain::{Id, Scope};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SavedDelivery {
+pub(super) struct SavedDelivery {
     id: String,
     epoch: u64,
     phase: String,
@@ -28,16 +28,23 @@ pub(super) fn phase(delivery: &Delivery) -> (&'static str, u64) {
 }
 
 pub(super) fn encode(delivery: &Delivery) -> Result<String, OutboxError> {
-    let (phase, due_at) = phase(delivery);
-    serde_json::to_string(&SavedDelivery {
-        id: delivery.id().to_string(),
-        epoch: delivery.epoch(),
-        phase: phase.into(),
-        due_at,
-        attempts: delivery.attempts(),
-        timestamp_ms: delivery.timestamp_ms(),
-    })
-    .map_err(|_| OutboxError::Invalid)
+    serde_json::to_string(&SavedDelivery::of(delivery)).map_err(|_| OutboxError::Invalid)
+}
+impl SavedDelivery {
+    pub fn of(delivery: &Delivery) -> Self {
+        let (phase, due_at) = phase(delivery);
+        Self {
+            id: delivery.id().to_string(),
+            epoch: delivery.epoch(),
+            phase: phase.into(),
+            due_at,
+            attempts: delivery.attempts(),
+            timestamp_ms: delivery.timestamp_ms(),
+        }
+    }
+    pub fn checked(&self) -> Result<Delivery, OutboxError> {
+        decode(&serde_json::to_string(self).map_err(|_| OutboxError::Invalid)?)
+    }
 }
 
 pub(super) fn decode(value: &str) -> Result<Delivery, OutboxError> {
@@ -74,9 +81,9 @@ pub(super) fn decode(value: &str) -> Result<Delivery, OutboxError> {
     Ok(delivery)
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SavedScope {
+pub(super) struct SavedScope {
     receiver: String,
     origin: String,
     stream: String,
@@ -86,15 +93,22 @@ struct SavedScope {
 }
 
 pub(super) fn scope_text(scope: &Scope) -> Result<String, OutboxError> {
-    serde_json::to_string(&SavedScope {
-        receiver: scope.receiver().as_str().into(),
-        origin: scope.origin().as_str().into(),
-        stream: scope.stream().as_str().into(),
-        incarnation: scope.incarnation().as_str().into(),
-        schema: scope.schema().as_str().into(),
-        access_epoch: scope.access_epoch().as_str().into(),
-    })
-    .map_err(|_| OutboxError::Invalid)
+    serde_json::to_string(&SavedScope::of(scope)).map_err(|_| OutboxError::Invalid)
+}
+impl SavedScope {
+    pub fn of(scope: &Scope) -> Self {
+        Self {
+            receiver: scope.receiver().as_str().into(),
+            origin: scope.origin().as_str().into(),
+            stream: scope.stream().as_str().into(),
+            incarnation: scope.incarnation().as_str().into(),
+            schema: scope.schema().as_str().into(),
+            access_epoch: scope.access_epoch().as_str().into(),
+        }
+    }
+    pub fn checked(&self) -> Result<Scope, OutboxError> {
+        scope(&serde_json::to_string(self).map_err(|_| OutboxError::Invalid)?)
+    }
 }
 
 pub(super) fn scope(value: &str) -> Result<Scope, OutboxError> {
@@ -114,7 +128,7 @@ pub(super) fn scope(value: &str) -> Result<Scope, OutboxError> {
 }
 
 /// Causal source fact retained by an admitted row across cursor replacement.
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SourceStop {
     pub initiator: QueueInitiator,

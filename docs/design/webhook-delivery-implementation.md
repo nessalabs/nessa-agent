@@ -256,3 +256,34 @@ before it can produce evidence with an invalid principal or initiator.
 | --- | --- |
 | Reopen malformed registration identities, URL or stop attribution | Refuse Invalid before publication or cleanup; `restored_registration_facts_are_checked_before_effects` |
 | Live audit consumes malformed registration facts | Checked decoder refuses and transaction rolls back; `delivery_audit_uses_checked_registration_facts` |
+
+### Parent-authorized persisted-state redesign
+
+The parent accepted the blocked review's focused redesign on 2026-10-23 and
+explicitly directed implementation to continue. Prior findings and their exact
+probes remain in the evidence directory; they are not erased by this decision.
+
+The persisted audit becomes one closed typed representation, used by every
+writer, restoration and publication. Delivery records retain complete before
+and after snapshots so the domain's existing transition methods, not a second
+phase table, validate history. Human/system attribution and credential-stop
+facts travel in the record; restoration never substitutes current ownership or
+requires a historical registration to still exist. Unknown fields, invalid
+identities, impossible transitions and mismatched projections refuse before
+publication. No permission decision moves into this representation.
+
+A single persisted cursor decoder owns registration/conversation/scope,
+nonnegative SQLite integer position and the reset flag. Startup checks the same
+whole value that queue and current-delivery reads consume, including when only
+terminal deliveries remain. No schema migration, compatibility alias or new
+permission system is added.
+
+| Saved input / ordering | Guard and effect | Required regression |
+| --- | --- | --- |
+| owed audit with invalid actor, target, time, phase or unknown fields | Decode the closed type and validate complete historical transition before any file publication or cleanup | malformed audit restore table; original major reproduction becomes refusal regression |
+| historical registration already retired | Validate retained original identities/actors from its saved record; do not join current registration facts or invent an owner | valid retired historical actor recovery |
+| individually legal before and after delivery snapshots that cannot transition | Ask existing DeliveryCause/domain transition owner; refuse Invalid | impossible history and snapshot/projection correlation |
+| audit file publication fails after typed record commits | Return visible failure; later operation publishes exact original typed bytes and initiator | typed audit failure/recovery with actor preservation |
+| cursor has text position with only terminal history | Decode all cursor fields before publication or duplicate acknowledgement; refuse Invalid | original minor reproduction becomes refusal regression |
+| cursor reset flag or identity/scope is malformed | Same decoder refuses at restore and live read | cursor boundary table with valid maximum-integer controls |
+| retained delivery audit chain | Each validated snapshot follows the previous saved after-state, keeps checkpoint/target and source-stop context, and ends at the enclosing current delivery; reject missing, foreign or reordered history before effects | historical chain, current-state and checkpoint mutation regressions |

@@ -837,6 +837,12 @@ async fn late_retry_keeps_source_refusal_after_cursor_replacement() {
     assert_eq!(refused["cause"], "source_changed");
     assert_eq!(refused["initiator"], "restart");
     assert_eq!(refused["sourceStop"]["at_ms"], 1003);
+    let mut malformed = refused.clone();
+    malformed["sourceStop"]["initiator"] = json!("live");
+    assert!(matches!(
+        audit::Record::decode(&malformed.to_string()),
+        Err(OutboxError::Invalid)
+    ));
     assert_eq!(refused["atMs"], 2200);
     assert!(!audits.iter().any(|a| a["before"] == "sending"
         && a["after"] == "not_sent"
@@ -1224,7 +1230,11 @@ async fn restored_registration_facts_are_checked_before_effects() {
         let connection = reopened.owner.connection.lock().unwrap();
         let saved = registry::by_id(&connection, f.registration.id).unwrap();
         let stopped = saved.stop.unwrap();
-        assert_eq!(stopped.cause(), cause);
+        assert!(matches!(
+            (cause, stopped.reason()),
+            ("credential_revoked", StopReason::Revoked { .. })
+                | ("credential_expired", StopReason::Expired { .. })
+        ));
         assert_eq!(stopped.initiator(), initiator);
         assert_eq!(stopped.at_ms, i64::MAX as u64);
     }
@@ -1257,4 +1267,505 @@ async fn delivery_audit_uses_checked_registration_facts() {
             .unwrap(),
         0
     );
+}
+
+async fn reopen_store(f: &mut Fixture) -> Result<SqlOutbox, OutboxError> {
+    let placeholder = Fixture::new().await;
+    drop(std::mem::replace(&mut f.store, placeholder.store));
+    SqlOutbox::open(&f.path, f.audit.clone(), f.clock.clone())
+}
+
+#[tokio::test]
+async fn malformed_owed_audit_is_refused_before_effects() {
+    let cases = [
+        ("principal", json!("")),
+        ("credential", json!("")),
+        ("organization", json!("")),
+        ("owner", json!("")),
+        ("before", json!("unknown_phase")),
+        ("after", json!("unknown_phase")),
+        ("atMs", json!(-1)),
+        ("atMs", json!("invalid")),
+        ("cause", json!("unrecorded_cause")),
+        ("initiator", json!("")),
+        (
+            "initiator",
+            json!("reader:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ),
+        ("remoteText", json!("synthetic-sensitive-text")),
+        ("epoch", json!(8)),
+        ("attempt", json!(1)),
+        ("timestampMs", json!(1000)),
+        ("dueAtMs", json!(1)),
+        ("position", json!(0)),
+        ("position", json!(u64::MAX)),
+        ("conversationId", json!("")),
+        ("incarnation", json!("other-source")),
+        ("sourceStop", json!({"initiator":"live","at_ms":1000})),
+        ("beforeState", json!({"id":"invalid"})),
+        ("afterState", json!({"id":"invalid"})),
+        ("scope", json!({"receiver":"invalid"})),
+        ("afterState.extra", json!("synthetic-secret")),
+        ("afterState.epoch", json!(8)),
+        (
+            "afterState.id",
+            json!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ),
+        ("afterState.due_at", json!(1)),
+        (
+            "scope.receiver",
+            json!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ),
+        (
+            "scope.stream",
+            json!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ),
+        ("scope.incarnation", json!("different-source")),
+        ("scope.access_epoch", json!("epoch-8")),
+    ];
+    for (field, malformed) in cases {
+        let mut f = Fixture::new().await;
+        f.store.queue(f.record(1)).await.unwrap();
+        let (id, text): (String, String) = f
+            .store
+            .owner
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT id,record FROM audit WHERE delivery IS NOT NULL LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let mut record: Value = serde_json::from_str(&text).unwrap();
+        if let Some((parent, key)) = field.split_once('.') {
+            record[parent][key] = malformed;
+        } else {
+            record[field] = malformed;
+        }
+        assert!(
+            matches!(
+                audit::Record::decode(&record.to_string()),
+                Err(OutboxError::Invalid)
+            ),
+            "typed record accepted {field}"
+        );
+        if let Ok(typed) = serde_json::from_value::<audit::Record>(record.clone()) {
+            assert!(
+                matches!(typed.encode(), Err(OutboxError::Invalid)),
+                "writer accepted {field}"
+            );
+        }
+        std::fs::remove_file(f.audit.join(format!("{id}.json"))).unwrap();
+        f.store
+            .owner
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE audit SET record=?1,published=0 WHERE id=?2",
+                params![record.to_string(), id],
+            )
+            .unwrap();
+        assert!(
+            matches!(reopen_store(&mut f).await, Err(OutboxError::Invalid)),
+            "accepted {field}"
+        );
+        assert!(
+            !f.audit.join(format!("{id}.json")).exists(),
+            "published {field}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn impossible_typed_delivery_history_is_refused() {
+    let f = Fixture::new().await;
+    let id = f.store.queue(f.record(1)).await.unwrap();
+    let text: String = f
+        .store
+        .owner
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT record FROM audit WHERE delivery=?1",
+            [id.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut record: Value = serde_json::from_str(&text).unwrap();
+    let queued = Delivery::queued(id, 7);
+    let sent = queued
+        .admit(7, 2000)
+        .unwrap()
+        .observed(Observation::Success, 2100)
+        .unwrap();
+    record["beforeState"] = serde_json::from_str(&codec::encode(&queued).unwrap()).unwrap();
+    record["afterState"] = serde_json::from_str(&codec::encode(&sent).unwrap()).unwrap();
+    record["before"] = json!("queued");
+    record["after"] = json!("sent");
+    record["attempt"] = json!(1);
+    record["timestampMs"] = json!(2000);
+    record["cause"] = json!("response");
+    record["initiator"] = json!(format!("delivery:{id}"));
+    assert!(matches!(
+        audit::Record::decode(&record.to_string()),
+        Err(OutboxError::Invalid)
+    ));
+    record["beforeState"] = Value::Null;
+    record["before"] = json!("absent");
+    record["cause"] = json!("source_checkpoint");
+    record["initiator"] = json!(QueueInitiator::Live.label(f.registration.id));
+    assert!(matches!(
+        audit::Record::decode(&record.to_string()),
+        Err(OutboxError::Invalid)
+    ));
+}
+
+#[tokio::test]
+async fn retained_audit_chain_correlates_checkpoint_target_and_current_state() {
+    for corruption in [
+        "missing_first",
+        "missing_last",
+        "foreign_target",
+        "foreign_checkpoint",
+        "current_state",
+        "orphan",
+        "source_context",
+    ] {
+        let mut f = Fixture::new().await;
+        let id = f.store.queue(f.record(1)).await.unwrap();
+        let queued = f.store.due(2000).await.unwrap().remove(0).delivery;
+        let sending = queued.admit(7, 2000).unwrap();
+        f.store
+            .transition(&queued, &sending, DeliveryCause::Admission, 2000)
+            .await
+            .unwrap();
+        if corruption == "source_context" {
+            assert_eq!(
+                f.store.queue(replaced_source(f.record(2))).await,
+                Err(OutboxError::ResetRequired)
+            );
+            let retry = sending.observed(Observation::Retryable, 2100).unwrap();
+            f.store
+                .transition(&sending, &retry, DeliveryCause::Response, 2100)
+                .await
+                .unwrap();
+        }
+        {
+            let c = f.store.owner.connection.lock().unwrap();
+            match corruption {
+                "missing_first" => {
+                    c.execute("DELETE FROM audit WHERE json_extract(record,'$.cause')='source_checkpoint'",[]).unwrap();
+                }
+                "missing_last" => {
+                    c.execute(
+                        "DELETE FROM audit WHERE json_extract(record,'$.cause')='admission'",
+                        [],
+                    )
+                    .unwrap();
+                }
+                "foreign_target" => {
+                    c.execute("UPDATE audit SET record=json_set(record,'$.principal','other-valid-principal') WHERE json_extract(record,'$.cause')='source_checkpoint'",[]).unwrap();
+                }
+                "foreign_checkpoint" => {
+                    c.execute("UPDATE audit SET record=json_set(record,'$.position',2) WHERE json_extract(record,'$.cause')='source_checkpoint'",[]).unwrap();
+                }
+                "current_state" => {
+                    c.execute(
+                        "UPDATE deliveries SET state=?1",
+                        [codec::encode(&queued.admit(7, 9999).unwrap()).unwrap()],
+                    )
+                    .unwrap();
+                }
+                "source_context" => {
+                    c.execute("UPDATE audit SET record=json_set(record,'$.sourceStop',NULL) WHERE delivery IS NOT NULL AND json_extract(record,'$.cause')='source_changed'",[]).unwrap();
+                }
+                "orphan" => {
+                    c.execute("DELETE FROM deliveries WHERE id=?1", [id.to_string()])
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+        }
+        let before = f.audits();
+        assert!(
+            matches!(reopen_store(&mut f).await, Err(OutboxError::Invalid)),
+            "accepted {corruption}"
+        );
+        assert_eq!(f.audits(), before, "changed evidence for {corruption}");
+    }
+}
+
+#[tokio::test]
+async fn cursor_restore_and_live_duplicate_decode_the_whole_value() {
+    for set in [
+        "position='invalid'",
+        "position=1.5",
+        "position=-1",
+        "reset_required='invalid'",
+        "reset_required=2",
+    ] {
+        let mut f = Fixture::new().await;
+        f.store.queue(f.record(1)).await.unwrap();
+        let queued = f.store.due(2000).await.unwrap().remove(0).delivery;
+        f.store
+            .transition(
+                &queued,
+                &queued.refused().unwrap(),
+                DeliveryCause::Refused,
+                2001,
+            )
+            .await
+            .unwrap();
+        {
+            let c = f.store.owner.connection.lock().unwrap();
+            c.execute_batch("PRAGMA ignore_check_constraints=ON")
+                .unwrap();
+            c.execute(&format!("UPDATE cursors SET {set}"), []).unwrap();
+            c.execute_batch("PRAGMA ignore_check_constraints=OFF")
+                .unwrap();
+        }
+        let before = f.audits();
+        assert_eq!(
+            f.store.queue(f.record(1)).await,
+            Err(OutboxError::Invalid),
+            "duplicate accepted {set}"
+        );
+        let result = reopen_store(&mut f).await;
+        assert!(
+            matches!(&result, Err(OutboxError::Invalid)),
+            "wrong restore result for {set}: {:?}",
+            result.as_ref().err()
+        );
+        assert_eq!(f.audits(), before);
+    }
+    let mut f = Fixture::new().await;
+    let id = f.store.queue(f.record(1)).await.unwrap();
+    let queued = f.store.due(2000).await.unwrap().remove(0).delivery;
+    f.store
+        .transition(
+            &queued,
+            &queued.refused().unwrap(),
+            DeliveryCause::Refused,
+            2001,
+        )
+        .await
+        .unwrap();
+    f.store
+        .owner
+        .connection
+        .lock()
+        .unwrap()
+        .execute("UPDATE cursors SET position=?1", [i64::MAX])
+        .unwrap();
+    let reopened = reopen_store(&mut f).await.unwrap();
+    assert_eq!(reopened.queue(f.record(1)).await.unwrap(), id);
+}
+
+#[tokio::test]
+async fn retired_historical_actor_survives_lost_publication_ack_and_restart() {
+    let mut f = Fixture::new().await;
+    f.store.owner.connection.lock().unwrap().execute_batch("CREATE TRIGGER lose_retire_ack BEFORE UPDATE OF published ON audit WHEN json_extract(OLD.record,'$.cause')='drained' BEGIN SELECT RAISE(IGNORE); END;").unwrap();
+    assert_eq!(
+        f.store
+            .stop(
+                f.registration.target.credential.clone(),
+                StopReason::Revoked {
+                    initiator: PrincipalId::new("original-other-revoker").unwrap()
+                },
+                2000
+            )
+            .await,
+        Err(OutboxError::Conflict)
+    );
+    let (id, text): (String, String) = {
+        let c = f.store.owner.connection.lock().unwrap();
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM registrations", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        c.execute_batch("DROP TRIGGER lose_retire_ack").unwrap();
+        c.query_row("SELECT id,record FROM audit WHERE published=0", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap()
+    };
+    let path = f.audit.join(format!("{id}.json"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    std::fs::remove_file(&path).unwrap();
+    let reopened = reopen_store(&mut f).await.unwrap();
+    assert!(reopened.due(3000).await.unwrap().is_empty());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    let record: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(record["initiator"], "original-other-revoker");
+    assert_eq!(record["owner"], "synthetic-owner");
+    assert_eq!(record["stopAtMs"], 2000);
+    assert_eq!(record["stopCause"], "credential_revoked");
+}
+
+#[tokio::test]
+async fn registration_audit_lifecycle_and_actor_are_validated() {
+    let f = Fixture::new().await;
+    f.store
+        .stop(
+            f.registration.target.credential.clone(),
+            StopReason::Revoked {
+                initiator: PrincipalId::new("historical-revoker").unwrap(),
+            },
+            2000,
+        )
+        .await
+        .unwrap();
+    for original in f
+        .audits()
+        .into_iter()
+        .filter(|r| r["kind"] == "webhook_registration")
+    {
+        audit::Record::decode(&original.to_string()).unwrap();
+        for (field, value) in [
+            ("principal", json!("")),
+            ("credential", json!("")),
+            ("organization", json!("")),
+            ("owner", json!("")),
+            ("before", json!("impossible")),
+            ("after", json!("impossible")),
+            ("atMs", json!(-1)),
+            ("cause", json!("source_changed")),
+            ("initiator", json!("")),
+            ("unrecognized", json!("synthetic-secret")),
+            ("stopAtMs", json!(-1)),
+            ("stopAtMs", json!(u64::MAX)),
+            ("stopCause", json!("credential_expired")),
+        ] {
+            let mut malformed = original.clone();
+            malformed[field] = value;
+            assert!(
+                matches!(
+                    audit::Record::decode(&malformed.to_string()),
+                    Err(OutboxError::Invalid)
+                ),
+                "accepted {field} on {}",
+                original["cause"]
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn typed_delivery_actors_are_correlated_to_saved_cause() {
+    let f = Fixture::new().await;
+    f.store.queue(f.record(1)).await.unwrap();
+    f.store.queue(f.record(2)).await.unwrap();
+    let queued = f.store.due(2000).await.unwrap().remove(0).delivery;
+    let sending = queued.admit(7, 2000).unwrap();
+    f.store
+        .transition(&queued, &sending, DeliveryCause::Admission, 2000)
+        .await
+        .unwrap();
+    let retry = sending.observed(Observation::Retryable, 2100).unwrap();
+    f.store
+        .transition(&sending, &retry, DeliveryCause::Response, 2100)
+        .await
+        .unwrap();
+    let sending_again = retry.admit(7, 4000).unwrap();
+    f.store
+        .transition(&retry, &sending_again, DeliveryCause::Admission, 4000)
+        .await
+        .unwrap();
+    f.store.recover(5000).await.unwrap();
+    f.store
+        .stop(
+            f.registration.target.credential.clone(),
+            StopReason::Revoked {
+                initiator: PrincipalId::new("original-revoker").unwrap(),
+            },
+            6000,
+        )
+        .await
+        .unwrap();
+    for original in f
+        .audits()
+        .into_iter()
+        .filter(|r| r["kind"] == "webhook_delivery")
+    {
+        audit::Record::decode(&original.to_string()).unwrap();
+        let mut malformed = original.clone();
+        malformed["initiator"] = json!("");
+        assert!(
+            matches!(
+                audit::Record::decode(&malformed.to_string()),
+                Err(OutboxError::Invalid)
+            ),
+            "accepted empty actor for {}",
+            original["cause"]
+        );
+        if original["cause"] != "credential_revoked" {
+            malformed["initiator"] = json!("delivery:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+            assert!(
+                matches!(
+                    audit::Record::decode(&malformed.to_string()),
+                    Err(OutboxError::Invalid)
+                ),
+                "accepted foreign actor for {}",
+                original["cause"]
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn cursor_audit_restores_its_transition_and_scope() {
+    let f = Fixture::new().await;
+    f.store.queue(f.record(1)).await.unwrap();
+    assert_eq!(
+        f.store.queue(replaced_source(f.record(2))).await,
+        Err(OutboxError::ResetRequired)
+    );
+    let original = f
+        .audits()
+        .into_iter()
+        .find(|r| r["kind"] == "webhook_cursor")
+        .unwrap();
+    audit::Record::decode(&original.to_string()).unwrap();
+    for (field, value) in [
+        ("before", json!("absent")),
+        ("after", json!("following")),
+        ("cause", json!("source_checkpoint")),
+        (
+            "initiator",
+            json!("reader:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ),
+        ("priorPosition", json!(-1)),
+        ("priorPosition", json!(u64::MAX)),
+        ("atMs", json!(-1)),
+        ("priorScope.extra", json!("synthetic-secret")),
+        (
+            "priorScope.receiver",
+            json!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ),
+        (
+            "observedScope.receiver",
+            json!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ),
+        ("observedScope", original["priorScope"].clone()),
+    ] {
+        let mut malformed = original.clone();
+        if let Some((parent, key)) = field.split_once('.') {
+            malformed[parent][key] = value;
+        } else {
+            malformed[field] = value;
+        }
+        assert!(
+            matches!(
+                audit::Record::decode(&malformed.to_string()),
+                Err(OutboxError::Invalid)
+            ),
+            "accepted cursor {field}"
+        );
+    }
 }

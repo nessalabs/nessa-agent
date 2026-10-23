@@ -1,4 +1,5 @@
 //! Private registration facts and the credential lifecycle stop projection.
+use super::audit::{Record, RegistrationChange};
 use super::journal::{commit, finish, refuse_pending};
 use super::publication::{append, publish};
 use super::{integer, invalid, unavailable, uuid, SqlOutbox};
@@ -10,7 +11,6 @@ use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
 use nessa_local_database::rusqlite::{
     params, Connection, OptionalExtension, Result as SqlResult, Row,
 };
-use serde_json::json;
 use std::sync::Arc;
 
 impl SqlOutbox {
@@ -20,7 +20,7 @@ impl SqlOutbox {
         self.run(move |connection, audit| {
             let transaction = connection.transaction().map_err(unavailable)?;
             transaction.execute("INSERT INTO registrations(id,credential,principal,organization,owner,destination,mac_key,active) VALUES(?1,?2,?3,?4,?5,?6,?7,1)", params![registration.id.to_string(),registration.target.credential.as_str(),registration.target.principal.as_str(),registration.target.organization.as_str(),registration.target.owner.as_str(),registration.destination.expose_url().as_str(),registration.key.expose_bytes()]).map_err(|_| OutboxError::Conflict)?;
-            append(&transaction, registration.id, None, json!({"kind":"webhook_registration","registration":registration.id.to_string(),"credential":registration.target.credential.as_str(),"principal":registration.target.principal.as_str(),"organization":registration.target.organization.as_str(),"owner":registration.target.owner.as_str(),"before":"absent","after":"delivering","cause":"credential_issue","initiator":registration.target.owner.as_str(),"atMs":at_ms}))?;
+            append(&transaction, Record::registration(&registration,RegistrationChange::Issue,at_ms))?;
             commit(transaction,Some(registration.id),at_ms)?;
             publish(connection, audit)
         }).await
@@ -46,7 +46,8 @@ impl SqlOutbox {
             let (cause,initiator)=match reason { StopReason::Revoked{initiator} => ("credential_revoked",initiator.as_str().to_owned()), StopReason::Expired{observed_by} => ("credential_expired",format!("delivery:{observed_by}")) };
             transaction.execute("UPDATE registrations SET active=0,stop_cause=?1,stop_initiator=?2,stop_at=?4 WHERE id=?3",params![cause,initiator,registration,integer(at_ms)?]).map_err(unavailable)?;
             refuse_pending(&transaction,id,None,DeliveryCause::AuthorityStopped,at_ms)?;
-            append(&transaction,id,None,json!({"kind":"webhook_registration","registration":registration,"credential":credential.as_str(),"before":"delivering","after":"stopped","cause":cause,"initiator":initiator,"atMs":at_ms}))?;
+            let stopped=Stopped::restore(cause,&initiator,at_ms)?;
+            append(&transaction,Record::registration(&saved.registration,RegistrationChange::Stop(&stopped),at_ms))?;
             commit(transaction,Some(id),at_ms)?;
             finish(connection,audit,clock.unix_milliseconds())
         }).await
@@ -99,12 +100,27 @@ pub(super) struct Stopped {
     pub at_ms: u64,
 }
 impl Stopped {
-    pub fn cause(&self) -> &'static str {
-        match self.reason {
-            StopReason::Revoked { .. } => "credential_revoked",
-            StopReason::Expired { .. } => "credential_expired",
-        }
+    pub fn reason(&self) -> &StopReason {
+        &self.reason
     }
+    pub fn restore(cause: &str, initiator: &str, at_ms: u64) -> Result<Self, OutboxError> {
+        integer(at_ms)?;
+        let reason = match cause {
+            "credential_revoked" => StopReason::Revoked {
+                initiator: PrincipalId::new(initiator).map_err(invalid)?,
+            },
+            "credential_expired" => StopReason::Expired {
+                observed_by: uuid(
+                    initiator
+                        .strip_prefix("delivery:")
+                        .ok_or(OutboxError::Invalid)?,
+                )?,
+            },
+            _ => return Err(OutboxError::Invalid),
+        };
+        Ok(Self { reason, at_ms })
+    }
+
     pub fn initiator(&self) -> String {
         match &self.reason {
             StopReason::Revoked { initiator } => initiator.as_str().to_owned(),
@@ -131,25 +147,11 @@ impl StoredRegistration {
     pub fn checked(self) -> Result<CheckedRegistration, OutboxError> {
         let stop = match (self.active, self.cause, self.initiator, self.at_ms) {
             (1, None, None, None) => None,
-            (0, Some(cause), Some(initiator), Some(at_ms)) => {
-                let reason = match cause.as_str() {
-                    "credential_revoked" => StopReason::Revoked {
-                        initiator: PrincipalId::new(initiator).map_err(invalid)?,
-                    },
-                    "credential_expired" => StopReason::Expired {
-                        observed_by: uuid(
-                            initiator
-                                .strip_prefix("delivery:")
-                                .ok_or(OutboxError::Invalid)?,
-                        )?,
-                    },
-                    _ => return Err(OutboxError::Invalid),
-                };
-                Some(Stopped {
-                    reason,
-                    at_ms: u64::try_from(at_ms).map_err(invalid)?,
-                })
-            }
+            (0, Some(cause), Some(initiator), Some(at_ms)) => Some(Stopped::restore(
+                &cause,
+                &initiator,
+                u64::try_from(at_ms).map_err(invalid)?,
+            )?),
             _ => return Err(OutboxError::Invalid),
         };
         Ok(CheckedRegistration {

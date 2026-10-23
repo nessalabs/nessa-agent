@@ -1,39 +1,21 @@
 //! Immutable audit publication with exact durable acknowledgement.
-use super::{invalid, unavailable, uuid};
+use super::audit::{DeliveryEvidence, Record, AUDIT_BYTES};
+use super::stored::{self, StoredDelivery};
+use super::{unavailable, uuid};
 use crate::webhooks::application::OutboxError;
 use nessa_local_database::rusqlite::{
     params, Connection, OptionalExtension, Result as SqlResult, Row, Transaction,
 };
 use nessa_local_storage::{OpenMode, PrivateTempFile};
-use serde_json::{json, Value};
 use std::{
     io::{ErrorKind, Read, Write},
     path::Path,
 };
 use uuid::Uuid;
 
-const AUDIT_BYTES: u64 = 16 * 1024;
-
-pub(super) fn append(
-    transaction: &Transaction<'_>,
-    registration: Uuid,
-    delivery: Option<Uuid>,
-    mut record: Value,
-) -> Result<(), OutboxError> {
-    let id = Uuid::new_v4();
-    record["recordId"] = json!(id.to_string());
-    let record = serde_json::to_string(&record).map_err(invalid)?;
-    if record.len() > AUDIT_BYTES as usize {
-        return Err(OutboxError::Invalid);
-    }
-    SavedAudit {
-        id: id.to_string(),
-        registration: registration.to_string(),
-        delivery: delivery.map(|id| id.to_string()),
-        record: record.clone(),
-        published: 0,
-    }
-    .checked()?;
+pub(super) fn append(transaction: &Transaction<'_>, record: Record) -> Result<(), OutboxError> {
+    let (id, registration, delivery) = record.keys()?;
+    let record = record.encode()?;
     transaction
         .execute(
             "INSERT INTO audit(id,registration,delivery,record) VALUES(?1,?2,?3,?4)",
@@ -61,7 +43,7 @@ pub(super) fn publish(connection: &mut Connection, directory: &Path) -> Result<(
         match nessa_local_storage::open(&destination, OpenMode::Read) {
             Ok(file) => {
                 let mut bytes = Vec::new();
-                file.take(AUDIT_BYTES + 1)
+                file.take(AUDIT_BYTES as u64 + 1)
                     .read_to_end(&mut bytes)
                     .map_err(unavailable)?;
                 if bytes != record.as_bytes() {
@@ -114,30 +96,25 @@ impl SavedAudit {
         if let Some(delivery) = &self.delivery {
             uuid(delivery)?;
         }
-        if self.record.len() > AUDIT_BYTES as usize || !matches!(self.published, 0 | 1) {
+        if self.record.len() > AUDIT_BYTES || !matches!(self.published, 0 | 1) {
             return Err(OutboxError::Invalid);
         }
-        let value: Value = serde_json::from_str(&self.record).map_err(invalid)?;
-        if value.get("recordId").and_then(Value::as_str) != Some(self.id.as_str())
-            || value.get("registration").and_then(Value::as_str) != Some(self.registration.as_str())
+        let record = Record::decode(&self.record)?;
+        if record.keys()?
+            != (
+                id,
+                uuid(&self.registration)?,
+                self.delivery.as_ref().map(|id| uuid(id)).transpose()?,
+            )
         {
             return Err(OutboxError::Invalid);
-        }
-        match (
-            self.delivery.as_deref(),
-            value.get("deliveryId"),
-            value.get("kind").and_then(Value::as_str),
-        ) {
-            (Some(delivery), Some(Value::String(named)), Some("webhook_delivery"))
-                if delivery == named => {}
-            (None, None, Some("webhook_registration" | "webhook_cursor")) => {}
-            _ => return Err(OutboxError::Invalid),
         }
         Ok((id, self.record))
     }
 }
 
 pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
+    if connection.prepare("SELECT 1 FROM audit a WHERE a.delivery IS NOT NULL AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.id=a.delivery) LIMIT 1").map_err(unavailable)?.exists([]).map_err(unavailable)? { return Err(OutboxError::Invalid); }
     let mut statement = connection
         .prepare("SELECT id,registration,delivery,record,published FROM audit")
         .map_err(unavailable)?;
@@ -146,6 +123,50 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
         .map_err(unavailable)?;
     for row in rows {
         row.map_err(unavailable)?.checked()?;
+    }
+    let mut deliveries = connection
+        .prepare(&format!("{} FROM deliveries", stored::SELECT))
+        .map_err(unavailable)?;
+    let rows = deliveries
+        .query_map([], StoredDelivery::row)
+        .map_err(unavailable)?;
+    for row in rows {
+        let saved = row.map_err(unavailable)?.checked()?;
+        let target = super::registry::by_id(connection, saved.registration)?
+            .registration
+            .target;
+        let mut statement=connection.prepare("SELECT id,registration,delivery,record,published FROM audit WHERE delivery=?1 ORDER BY rowid").map_err(unavailable)?;
+        let history = statement
+            .query_map([saved.delivery.id().to_string()], SavedAudit::row)
+            .map_err(unavailable)?;
+        let mut previous: Option<DeliveryEvidence> = None;
+        // Streaming chain validation keeps one predecessor. Delivery's finite
+        // transition owner rejects any extension past its attempt/terminal budget.
+        for row in history {
+            let (_, text) = row.map_err(unavailable)?.checked()?;
+            let record = Record::decode(&text)?;
+            let next = record.delivery_evidence()?.ok_or(OutboxError::Invalid)?;
+            if previous
+                .as_ref()
+                .map_or(next.before.is_some(), |prior| !next.follows(prior))
+            {
+                return Err(OutboxError::Invalid);
+            }
+            previous = Some(next);
+        }
+        let last = previous.ok_or(OutboxError::Invalid)?;
+        if last.registration != saved.registration
+            || last.conversation != saved.conversation
+            || last.position != saved.position
+            || last.scope != saved.scope
+            || last.target != target
+            || last.after != saved.delivery
+            || last
+                .source_stop
+                .is_some_and(|stop| saved.source_stop != Some(stop))
+        {
+            return Err(OutboxError::Invalid);
+        }
     }
     Ok(())
 }

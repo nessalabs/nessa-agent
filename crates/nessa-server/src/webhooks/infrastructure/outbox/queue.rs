@@ -1,12 +1,12 @@
 //! One transaction advances the contiguous source cursor with its delivery.
+use super::audit::Record;
 use super::journal::{commit, delivery_audit, invalidate_source};
 use super::publication::{append, publish};
 use super::stored::{self, StoredDelivery};
-use super::{codec, integer, invalid, unavailable};
+use super::{codec, cursor, integer, unavailable};
 use crate::webhooks::application::{DeliveryCause, OutboxError, QueuedRecord, MAX_BODY_BYTES};
 use crate::webhooks::domain::Delivery;
 use nessa_local_database::rusqlite::{params, Connection, OptionalExtension};
-use serde_json::{json, Value};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -24,7 +24,7 @@ pub(super) fn queue(
     }
     let registration = record.registration.to_string();
     let conversation = record.conversation.to_string();
-    stored::check_cursor(&registration, &conversation, &record.scope)?;
+    cursor::check_identity(&registration, &conversation, &record.scope)?;
     let scope = codec::scope_text(&record.scope)?;
     let position = integer(record.position)?;
     let transaction = connection.transaction().map_err(unavailable)?;
@@ -39,6 +39,7 @@ pub(super) fn queue(
     if active != Some(1) {
         return Err(OutboxError::Conflict);
     }
+    let current = cursor::read(&transaction, record.registration, &record.conversation)?;
     let existing:Option<(StoredDelivery,Vec<u8>)>=transaction.query_row(
         &format!("{},body FROM deliveries WHERE registration=?1 AND conversation=?2 AND incarnation=?3 AND position=?4",stored::SELECT),
         params![registration,conversation,record.scope.incarnation().as_str(),position],
@@ -54,17 +55,12 @@ pub(super) fn queue(
         }
         return Ok(existing.delivery.id());
     }
-    let cursor:Option<(String,i64,i64)>=transaction.query_row(
-        "SELECT scope,position,reset_required FROM cursors WHERE registration=?1 AND conversation=?2",
-        params![registration,conversation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
-    ).optional().map_err(unavailable)?;
-    if let Some((old, after, reset)) = &cursor {
-        let old = codec::scope(old)?;
-        stored::check_cursor(&registration, &conversation, &old)?;
-        if *reset != 0 {
+    if let Some(current) = &current {
+        let old = &current.scope;
+        if current.reset_required {
             return Err(OutboxError::ResetRequired);
         }
-        if !codec::same_source(&old, &record.scope) {
+        if !codec::same_source(old, &record.scope) {
             let changed=transaction.execute(
                 "UPDATE cursors SET reset_required=1 WHERE registration=?1 AND conversation=?2 AND reset_required=0",
                 params![registration,conversation],
@@ -76,7 +72,7 @@ pub(super) fn queue(
                 &transaction,
                 record.registration,
                 &record.conversation,
-                &old,
+                old,
                 codec::SourceStop {
                     initiator: record.initiator,
                     at_ms: record.observed_at_ms,
@@ -84,15 +80,15 @@ pub(super) fn queue(
             )?;
             append(
                 &transaction,
-                record.registration,
-                None,
-                json!({
-                    "kind":"webhook_cursor","registration":registration,"conversationId":conversation,
-                    "before":"following","after":"reset_required",
-                    "priorScope":serde_json::from_str::<Value>(&codec::scope_text(&old)?).map_err(invalid)?,
-                    "priorPosition":after,"observedScope":serde_json::from_str::<Value>(&scope).map_err(invalid)?,
-                    "cause":"source_changed","initiator":record.initiator.label(record.registration),"atMs":record.observed_at_ms
-                }),
+                Record::cursor(
+                    record.registration,
+                    &record.conversation,
+                    old,
+                    current.position,
+                    &record.scope,
+                    record.initiator,
+                    record.observed_at_ms,
+                ),
             )?;
             commit(
                 transaction,
@@ -102,7 +98,7 @@ pub(super) fn queue(
             publish(connection, audit)?;
             return Err(OutboxError::ResetRequired);
         }
-        if *after != integer(record.expected_after)? {
+        if current.position != record.expected_after {
             return Err(OutboxError::Conflict);
         }
     } else if record.expected_after != 0 {

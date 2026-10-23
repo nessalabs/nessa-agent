@@ -1641,10 +1641,13 @@ the existing conversation Cedar evaluator. Credential mutation fences live in
 the auth registry; principal/resource fences remain in the grant store.
 `application/outbox.rs` publishes the persistence port and limits.
 `infrastructure/outbox` owns the private database: `stored` validates restored
-identity and scope; `codec` owns the current serialized values; `capacity` owns
+identity and scope; `cursor` decodes complete cursor values for startup and live
+reads; `audit` owns closed typed historical records and validates transitions
+through the domain owner; `codec` owns the current serialized values; `capacity` owns
 accounting; `queue` advances source cursor and delivery together; `journal` owns
 state/audit commits, source-change context and retirement; `publication` writes
-immutable audit files and exact acknowledgements; `registry` persists target
+immutable audit files and exact acknowledgements and validates retained chains
+against current delivery rows; `registry` persists target
 facts supplied by the future credential lifecycle coordinator. Tests remain in
 `tests/webhooks/infrastructure/outbox.rs`.
 Registration authorization/configuration, the committed source reader, sender
