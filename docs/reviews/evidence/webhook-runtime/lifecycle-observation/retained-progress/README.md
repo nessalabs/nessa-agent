@@ -33,15 +33,15 @@ Canonical webhooks: **160 passed**, including unchanged full-boundary retention.
 Seven-package all-target Clippy with `-D warnings`, formatting and architecture
 checks passed. The existing lease-protocol long-constant-evaluation warning
 remains unrelated. Eight mutation controls caught the changed rule and passed
-after byte restoration. The private pre-final suite passed129; the final focused
-suite passed11. Both M3 tests fail against the actual old 4c993d45 owner and pass
-with the correction. The docs catalog has135 documents and no issues. All three
+after byte restoration. The private pre-final suite passed 129; the final focused
+suite passed 11. Both M3 tests fail against the actual old 4c993d45 owner and pass
+with the correction. The docs catalog has 135 documents and no issues. All three
 diagrams rendered at the exact checkpoint in system Chromium151 with no page
 errors. Visual inspection simplified overlapping reset self-loop labels; the
 new initial-proof refusal arrow is visible. This render is documentation only.
 [Fresh independent structural review](review-1/report.md) is clean at
 **e8f1564f90e34f77bee6858328f34d94a323c01e**: all priority buckets zero,
-214 actual Auth tests and133 combined owner/probe tests passed, with four
+214 actual Auth tests and 133 combined owner/probe tests passed, with four
 independent mutations caught/restored. Production copied files remain byte-equal.
 This qualifies the inner W24 correction, not the full main-based feature. W24 remains unpublished. Product command
 ownership, general revocation mapping, source/sender composition and capability/
@@ -52,7 +52,7 @@ remain stopped, including pinned browser download and foundation CI retry.
 
 Published predecessor c5 exact-head CI40024786910 has a Windows local-auth failure
 in native enrollment: actual peer_audit_unavailable versus expected peer_unreachable
-at tests/peer_gateways/enroll.rs:535. All7revocation tests pass on Windows in that
+at tests/peer_gateways/enroll.rs:535. All seven revocation tests pass on Windows in that
 job. The failing assertion and peer audit/command production owner are unchanged;
 fixture DTO purpose and session Cedar injection were mapped by the earlier auth
 correction. This is not proof of an unrelated baseline flake. The failure remains
