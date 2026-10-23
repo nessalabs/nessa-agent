@@ -107,8 +107,8 @@ when { context.action == "credential.manage" && context.path == "product" };
 // Who a new credential may be issued to (`GrantPolicyEvaluator::may_issue`).
 // A peer gateway is never issued one: it is enrolled only by pairing, which
 // binds its credential to the key it pinned, and an issued bearer secret
-// would be a second way in. A member may be issued a credential on any
-// issuing path; an admin only on the local operator's (bootstrap, surface
+// would be a second way in. The webhook path further restricts members to
+// integrations. An admin requires the local operator's path (bootstrap, surface
 // provisioning and owner recovery), never over the product protocol.
 @id("issue.member")
 permit (

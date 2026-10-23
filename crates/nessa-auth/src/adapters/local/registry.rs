@@ -591,9 +591,9 @@ impl LocalCredentialStore {
         self.issue_internal(request, path)
     }
 
-    /// Issue over `path`: [`IssuePath::ProductIssue`] or
-    /// [`IssuePath::SurfaceProvision`]. A provisioning is a rotation; a product
-    /// issue only adds.
+    /// Issue over the ProductIssue, WebhookIssue or SurfaceProvision path.
+    /// Provisioning rotates; product and webhook issuance only add. The
+    /// existing grant-policy owner decides the restrictions on each path.
     fn issue_internal(
         &self,
         request: IssueCredentialRequest,
