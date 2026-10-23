@@ -17,7 +17,8 @@ sources:
   - "src/session/adapters/client/authentication-failure.ts"
   - "crates/nessa-server/src/product/socket.rs"
   - "crates/nessa-auth/src/application/session.rs"
-diagramLinks: {}
+diagramLinks:
+  Supervisor: surface-session-supervision
 ---
 
 # authenticate, reconnect, expire, or revoke a surface session
@@ -58,6 +59,15 @@ stateDiagram-v2
         Connection setup only; commands not replayed.
         Stale generation results discarded and closed.
     end note
+```
+
+## Surface connection owner
+
+Open the application supervisor for its nested retry, refusal, disposal and stale-result rules. The product client's retry window and the surface's longer recovery lifetime have separate owners.
+
+```mermaid
+flowchart LR
+    Supervisor[Surface session supervision]
 ```
 
 ## Further reading

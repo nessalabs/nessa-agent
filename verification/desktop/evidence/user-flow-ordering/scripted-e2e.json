@@ -1,0 +1,46 @@
+{
+  "sourceRevision": "7f434845423686cdd01a17300c47d10d46911f50",
+  "mode": "dev",
+  "chromium": "installed /usr/bin/chromium via launch-only preload",
+  "overall": "could-not-run",
+  "exitCode": 2,
+  "reason": "WebKit executable absent; browser download previously denied",
+  "results": [
+    {
+      "check": "resize-observers",
+      "chromium": {
+        "passed": 3,
+        "total": 3
+      },
+      "sharedSetupPassed": 0,
+      "webkitCouldNotRun": true
+    },
+    {
+      "check": "mcp-apps-gateway",
+      "chromium": {
+        "passed": 8,
+        "total": 8
+      },
+      "sharedSetupPassed": 1,
+      "webkitCouldNotRun": true
+    },
+    {
+      "check": "gateway-window",
+      "chromium": {
+        "passed": 7,
+        "total": 7
+      },
+      "sharedSetupPassed": 1,
+      "webkitCouldNotRun": true
+    },
+    {
+      "check": "scripted-scenarios",
+      "chromium": {
+        "passed": 5,
+        "total": 5
+      },
+      "sharedSetupPassed": 0,
+      "webkitCouldNotRun": true
+    }
+  ]
+}

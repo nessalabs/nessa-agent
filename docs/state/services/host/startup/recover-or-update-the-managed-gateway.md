@@ -25,7 +25,8 @@ sources:
   - "src-tauri/tests/gateway/infrastructure/startup.rs"
   - "src-tauri/tests/gateway/infrastructure/control.rs"
   - "src-tauri/tests/gateway/infrastructure/generation.rs"
-diagramLinks: {}
+diagramLinks:
+  Monitor: gateway-startup-observation
 ---
 
 # recover or update the managed gateway
@@ -60,6 +61,15 @@ stateDiagram-v2
         Journal recovery observes effects; no blind replay.
         Unmanaged debug/browser has no native machine.
     end note
+```
+
+## Surface observation
+
+The native service and the surface watching it have separate lifetimes. Open the monitor for snapshot/event ordering, local bridge failure, explicit Retry and listener cleanup.
+
+```mermaid
+flowchart LR
+    Monitor[Observe gateway startup and retry]
 ```
 
 ## Further reading
