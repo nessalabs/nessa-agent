@@ -16,6 +16,7 @@ use nessa_auth::domain::{
     Membership, OrganizationId, PrincipalId, TransitionCause,
 };
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 /// Private endpoint configuration. Diagnostics omit both values.
@@ -36,6 +37,35 @@ pub struct RegistrationIntent {
 }
 
 impl RegistrationIntent {
+    /// Resolve only server selections from a retained reservation. Caller facts
+    /// and configuration remain bound to the original command on every adapter.
+    pub(crate) fn resolve(&self, original: &Self) -> Result<Self, OutboxError> {
+        let mut selected = original.clone();
+        selected.id = self.id;
+        selected.issue.credential_id = self.issue.credential_id.clone();
+        selected.issue.issued_at = self.issue.issued_at;
+        selected.observed_at_ms = self.observed_at_ms;
+        self.registration()?;
+        if self.same_values(&selected) {
+            Ok(selected)
+        } else {
+            Err(OutboxError::Conflict)
+        }
+    }
+
+    /// Registration identity is already bound by resolution or the SQL lookup.
+    pub(crate) fn same_values(&self, other: &Self) -> bool {
+        self.issue == other.issue
+            && self.observed_at_ms == other.observed_at_ms
+            && self.config.destination == other.config.destination
+            && bool::from(
+                self.config
+                    .key
+                    .expose_bytes()
+                    .ct_eq(other.config.key.expose_bytes()),
+            )
+    }
+
     pub fn registration(&self) -> Result<Registration, OutboxError> {
         if self.issue.issued_at != self.observed_at_ms / 1000 {
             return Err(OutboxError::Invalid);
@@ -98,11 +128,14 @@ impl RegisterWebhook<'_> {
     ) -> Result<IssueCredentialOutcome, RegistrationFailure> {
         proposed.issue.purpose = CredentialIssuePurpose::Webhook;
         proposed.issue.issued_at = proposed.observed_at_ms / 1000;
-        let intent = self
+        let reserved = self
             .intents
-            .reserve(proposed)
+            .reserve(proposed.clone())
             .await
             .map_err(RegistrationFailure::Store)?;
+        let intent = reserved
+            .resolve(&proposed)
+            .map_err(|_| RegistrationFailure::Inconsistent)?;
         let outcome = match self.credentials.issue(intent.issue.clone()).await {
             Ok(outcome) => outcome,
             Err(error @ (CredentialAdminError::Conflict | CredentialAdminError::Capacity)) => {
