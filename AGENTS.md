@@ -1,8 +1,8 @@
 # Working in Nessa
 
 [CODING_STANDARDS.md](CODING_STANDARDS.md) is the single coding standards
-document. Every rule lives there. This file says only which rules apply, when,
-and where to find them — it states none of its own.
+document. Coding rules live there. This file says which rules apply, when,
+and where to find them, and routes completion work through the documentation skill.
 
 That is deliberate, and it is
 [gate 13](CODING_STANDARDS.md#gates) applied to our own documentation: a rule
@@ -79,6 +79,12 @@ A desktop pull request puts its verification on the PR: screenshots of what a
 person sees, and only the short log lines that prove the check. Where those
 files go and which lines to quote is
 [Evidence on the pull request](.claude/skills/desktop-verification/SKILL.md#evidence-on-the-pull-request).
+
+## Completing code changes
+
+Before completing code changes, use the [nessa-docs skill](https://github.com/nessalabs/nessa-docs/blob/main/skills/nessa-docs/SKILL.md)
+to review and update affected state diagrams and documentation. If no update is
+needed, explicitly record why in the handoff or pull request.
 
 ## Reviewing, locally and delegated
 
