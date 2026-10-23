@@ -242,8 +242,10 @@ struct Fixture {
     session: AuthenticatedSession,
 }
 impl Fixture {
-    async fn new(root: &Path, target: ConversationId) -> Self {
-        nessa_local_storage::create_directory(root).unwrap();
+    async fn new(container: &Path, target: ConversationId) -> Self {
+        // TempDir uses ambient permissions; only this child is private storage.
+        let root = container.join("private");
+        nessa_local_storage::create_directory(&root).unwrap();
         let provider = Arc::new(ProviderFactory::default());
         let records = Arc::new(RecordStorage::new(root.join("records")).unwrap());
         let metadata = Arc::new(
@@ -924,6 +926,39 @@ async fn admission_task_failure_is_visible_and_recovers_its_slot() {
     assert!(fixture.provider.executions.lock().unwrap().is_empty());
     fixture.authority.panic_read.store(false, Ordering::SeqCst);
     let (status, receipt) = server.event("task-panic").await;
+    assert_eq!(status, 202);
+    fixture
+        .completed(receipt["executionId"].as_str().unwrap())
+        .await;
+    drop(server);
+    fixture.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn fixture_creates_private_storage_without_repairing_its_temp_container() {
+    use std::os::unix::fs::PermissionsExt;
+    let container = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o755))
+        .tempdir()
+        .unwrap();
+    let initial_mode = std::fs::metadata(container.path())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    let fixture = Fixture::new(container.path(), id()).await;
+    nessa_local_storage::verify_directory(&container.path().join("private")).unwrap();
+    assert_eq!(
+        std::fs::metadata(container.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        initial_mode
+    );
+    let server = fixture.server().await;
+    let (status, receipt) = server.event("private-storage").await;
     assert_eq!(status, 202);
     fixture
         .completed(receipt["executionId"].as_str().unwrap())
