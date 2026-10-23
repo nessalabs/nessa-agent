@@ -8,6 +8,8 @@ parent: "desktop-workspace"
 sources:
   - "src/desktop/workspace/ui/session-list/list-request.tsx"
   - "src/desktop/workspace/ui/session-list/session-list.tsx"
+  - "src/desktop/workspace/ui/transcript/approval-request.tsx"
+  - "src/desktop/workspace/ui/transcript/approval-card.tsx"
   - "src/desktop/workspace/application/workspace-state.ts"
   - "src/desktop/workspace/model/session-groups.ts"
   - "src/desktop/workspace/adapters/store/session-commands.ts"
@@ -28,13 +30,19 @@ keeps their conversations, and answers what their cards show. A pinned
 session, a row the search hides, a row past the twelve, or any row while the
 list is folded or under the Agents overview, asks nothing from the list.
 
+A card allows only a request it shows whole, decided from the request itself
+and never from how it laid out (`allowableFromList`): a command read whole
+with nothing in the tool's input but the command, of at most three lines and
+180 characters, is drawn in full with its answers. Any other request is a
+preview with its refusals and Review in Chat, which opens the conversation.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Row: a session waits on the person
     Row --> Card: asked by the list (Needs you, searched, newest twelve)
     Card --> Row: pinned, searched away, past twelve, list folded or covered
     Card --> Answering: refusal, allow or a menu answer
-    Card --> Chat: Review in Chat, when the command is taller than the card
+    Card --> Chat: Review in Chat, when the request is not shown whole
     Answering --> [*]: taken / the card fades and the row leaves Needs you
     Answering --> Card: refused / the reason in place
     note right of Card

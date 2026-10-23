@@ -2047,8 +2047,10 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   the list.** It reads the command as the transcript card does
   (`approvalGist`), offers the review's refusal and primary allow on one row,
   every other answer in the menu beside them, and keeps one bounded height.
-  A command taller than the card is not allowed from here: Review in Chat
-  takes Allow's place. _Check:_ `columns.mjs` (`list-request`: Allow moves
+  It allows only a request it shows whole, by a rule over the request
+  (`allowableFromList`): nothing in the tool's input but the command, at
+  most three lines and 180 characters; any other offers its refusals and
+  Review in Chat. _Check:_ `columns.mjs` (`list-request`: Allow moves
   the row out of Needs you; `list-request-claude`: Claude's five-answer shell
   review at the list's narrowest, read as the transcript reads it, answers
   that fit their words, under 260px); `conversation-stress.mjs`

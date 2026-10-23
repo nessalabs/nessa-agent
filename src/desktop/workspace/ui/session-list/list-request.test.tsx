@@ -24,6 +24,7 @@ import {
   type FakeSource,
 } from "../../testing"
 import { approvalGist } from "../transcript/approval-card"
+import { allowableFromList } from "./list-request"
 import { SessionList } from "./session-list"
 
 let root: Root
@@ -308,6 +309,12 @@ it("draws as many cards as it asks about, and the rest as rows", async () => {
   const ids = listAskIds(store.getState().workspace)
   expect(ids).toHaveLength(12)
   expect(cards()).toEqual(ids)
+  // Past the bound, a row in the list of cards is one of its items too, a button.
+  const group = host.querySelector('[data-list-group="needs-you"]')
+  expect(group?.getAttribute("role")).toBe("list")
+  expect(group?.querySelectorAll('[role="option"]')).toHaveLength(0)
+  for (const row of group?.querySelectorAll("[data-session-row]") ?? [])
+    expect(row.closest('[role="listitem"]')).not.toBeNull()
   // The oldest waiting, past the bound, is a row with its words.
   const rest = host.querySelector(
     '[data-list-group="needs-you"] > [data-session-row="b"], [data-list-group="needs-you"] [data-session-row="b"]',
@@ -354,4 +361,48 @@ it("marks the card answered while its answer is on the way", async () => {
   )
   expect(card()?.hasAttribute("data-answering")).toBe(true)
   await act(async () => source.release("approve"))
+})
+
+it("allows from the list only a request it shows whole, decided by the request, not its layout", () => {
+  const shell = (input: Record<string, unknown>) =>
+    asked("s", `mcp__nessa__shell ${JSON.stringify(input)}`)
+  const whole = (approval: Approval) =>
+    allowableFromList(approval, approvalGist(approval))
+  expect(whole(shell({ command: "ls -la" }))).toBe(true)
+  // Input it would not draw: a working folder, a sandbox switch.
+  expect(whole(shell({ command: "ls", cwd: "/", dangerouslyDisableSandbox: true }))).toBe(
+    false,
+  )
+  // More than it draws whole: four lines, or a long line.
+  expect(whole(shell({ command: "echo a\necho b\necho c\nrm -rf ~" }))).toBe(false)
+  expect(whole(shell({ command: `echo ${"x".repeat(200)}` }))).toBe(false)
+  expect(whole(asked("plain", "cargo test"))).toBe(true)
+  expect(whole({ ...asked("loading", "mcp__nessa__shell"), loading: "reading" })).toBe(
+    false,
+  )
+})
+
+it("offers a request it cannot show whole its refusals and the chat, never an allow", async () => {
+  const review: Approval = {
+    ...asked(
+      "hidden",
+      `mcp__nessa__shell ${JSON.stringify({ command: "ls", cwd: "/" })}`,
+    ),
+    options: [
+      { id: "no", label: "No", choice: "deny" },
+      { id: "never", label: "Always deny in this project", choice: "deny" },
+      { id: "yes", label: "Yes", choice: "once" },
+      { id: "always", label: "Always allow in this project", choice: "always" },
+    ],
+  }
+  await waitingOn({ approvals: [review] })
+  // No allow, the other refusal still in its menu, and the chat to read it whole.
+  const foot = [
+    ...(card()?.querySelectorAll<HTMLButtonElement>(".workspace-request-foot button") ??
+      []),
+  ].map((button) => button.getAttribute("aria-label") ?? button.textContent)
+  expect(foot).toEqual(["No", "More Answers", "Review in Chat"])
+  expect(
+    card()?.querySelector('button[data-answer="once"], button[data-answer="always"]'),
+  ).toBeNull()
 })

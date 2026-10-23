@@ -248,6 +248,33 @@ export function ApprovalActions({
     const refuse = denies[0]
     const allow = once[0] ?? always[0]
     const rest = options.filter((option) => option !== refuse && option !== allow)
+    const more =
+      rest.length > 0 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="workspace-button workspace-approval-more"
+              data-primary={allow ? true : undefined}
+              aria-label="More Answers"
+              disabled={disabled}
+            >
+              <DesktopIcon name="chevronDown" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {rest.map((option) => (
+              <MenuItem
+                key={option.id}
+                data-answer={option.choice}
+                onSelect={answer(option)}
+              >
+                {option.label}
+              </MenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null
     return (
       <div
         className="workspace-approval-answers"
@@ -284,34 +311,12 @@ export function ApprovalActions({
               >
                 <span>{allow.label}</span>
               </button>
-              {rest.length > 0 ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      className="workspace-button workspace-approval-more"
-                      data-primary
-                      aria-label="More Answers"
-                      disabled={disabled}
-                    >
-                      <DesktopIcon name="chevronDown" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    {rest.map((option) => (
-                      <MenuItem
-                        key={option.id}
-                        data-answer={option.choice}
-                        onSelect={answer(option)}
-                      >
-                        {option.label}
-                      </MenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              ) : null}
+              {more}
             </div>
-          ) : null}
+          ) : (
+            // With nothing to allow here, every other refusal is still in reach.
+            more
+          )}
         </div>
       </div>
     )

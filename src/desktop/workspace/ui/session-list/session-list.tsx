@@ -160,7 +160,13 @@ export const SessionList = memo(function SessionList() {
         </ColumnHeader>
         {/* One row's swipe actions open at a time; a scroll that moves it closes it. */}
         <SwipeRowGroup asChild data-slot="workspace-swipe">
-          <div className="workspace-list-scroll" ref={listRef} onKeyDown={onKeyDown}>
+          <div
+            className="workspace-list-scroll"
+            ref={listRef}
+            role="group"
+            aria-label="Sessions"
+            onKeyDown={onKeyDown}
+          >
             {ordered.length === 0 ? (
               <EmptyState
                 className="workspace-list-empty desktop-pill-ink"
@@ -181,54 +187,65 @@ export const SessionList = memo(function SessionList() {
                 }
               />
             ) : null}
-            {groups.map((group, index) => (
-              <div
-                key={group.id}
-                // Each group is a listbox of its sessions; one whose rows ask
-                // something is a list of request cards, which hold controls a
-                // listbox may not.
-                role={group.ids.some((id) => asked.includes(id)) ? "list" : "listbox"}
-                data-list-group={group.id}
-                aria-label={`${group.label} ${group.ids.length}`}
-              >
-                {/* The kit caption is a heading. Hidden here, so the group
+            {groups.map((group, index) => {
+              // Each group is a listbox of its sessions; one whose rows ask
+              // something is a list of request cards, which hold controls a
+              // listbox may not, and every row in it is an item of that list.
+              const cards = group.ids.some((id) => asked.includes(id))
+              return (
+                <div
+                  key={group.id}
+                  role={cards ? "list" : "listbox"}
+                  data-list-group={group.id}
+                  aria-label={`${group.label} ${group.ids.length}`}
+                >
+                  {/* The kit caption is a heading. Hidden here, so the group
                   exposes its rows; its name keeps the count the heading
                   would have said. */}
-                <GroupHeader
-                  aria-hidden="true"
-                  className="workspace-group-label"
-                  data-first={index === 0 || undefined}
-                  level={3}
-                  size="dense"
-                  tone="quiet"
-                  label={group.label}
-                  count={group.ids.length}
-                />
-                {group.ids.map((sessionId) =>
-                  // What waits on the person is asked here too, the row its card's head.
-                  asked.includes(sessionId) ? (
-                    <div
-                      key={sessionId}
-                      className="workspace-request-card"
-                      role="listitem"
-                    >
+                  <GroupHeader
+                    aria-hidden="true"
+                    className="workspace-group-label"
+                    data-first={index === 0 || undefined}
+                    level={3}
+                    size="dense"
+                    tone="quiet"
+                    label={group.label}
+                    count={group.ids.length}
+                  />
+                  {group.ids.map((sessionId) =>
+                    // What waits on the person is asked here too, the row its card's head.
+                    asked.includes(sessionId) ? (
+                      <div
+                        key={sessionId}
+                        className="workspace-request-card"
+                        role="listitem"
+                      >
+                        <SessionRow
+                          sessionId={sessionId}
+                          tabStop={sessionId === tabStop}
+                          heading
+                        />
+                        <ListRequest sessionId={sessionId} />
+                      </div>
+                    ) : cards ? (
+                      <div key={sessionId} role="listitem">
+                        <SessionRow
+                          sessionId={sessionId}
+                          tabStop={sessionId === tabStop}
+                          heading
+                        />
+                      </div>
+                    ) : (
                       <SessionRow
+                        key={sessionId}
                         sessionId={sessionId}
                         tabStop={sessionId === tabStop}
-                        heading
                       />
-                      <ListRequest sessionId={sessionId} />
-                    </div>
-                  ) : (
-                    <SessionRow
-                      key={sessionId}
-                      sessionId={sessionId}
-                      tabStop={sessionId === tabStop}
-                    />
-                  ),
-                )}
-              </div>
-            ))}
+                    ),
+                  )}
+                </div>
+              )
+            })}
           </div>
         </SwipeRowGroup>
       </div>
