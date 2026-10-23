@@ -11,6 +11,7 @@ use crate::webhooks::{application::OutboxError, domain::Phase};
 use nessa_local_database::rusqlite::{Connection, OptionalExtension};
 
 pub(super) fn validate_owed(connection: &Connection) -> Result<(), OutboxError> {
+    super::intents::validate(connection)?;
     super::source_reset::validate_owed(connection)?;
     validate_records(connection, true)?;
     validate_histories(connection, true)

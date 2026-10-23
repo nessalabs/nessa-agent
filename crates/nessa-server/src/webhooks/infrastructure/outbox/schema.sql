@@ -1,7 +1,7 @@
 PRAGMA user_version = 1;
 
 CREATE TABLE registrations (
-    id TEXT PRIMARY KEY,
+    id TEXT PRIMARY KEY REFERENCES registration_intents(id),
     credential TEXT NOT NULL UNIQUE,
     principal TEXT NOT NULL,
     organization TEXT NOT NULL,
@@ -17,6 +17,23 @@ CREATE TABLE registrations (
        OR (active=0 AND stop_cause IS NOT NULL AND stop_at IS NOT NULL AND stop_cause IN ('credential_revoked','credential_expired') AND stop_initiator IS NOT NULL AND stop_at>=0))
 );
 CREATE UNIQUE INDEX active_principal ON registrations(principal) WHERE active = 1;
+
+-- Private command inputs survive a lost auth/registration acknowledgement.
+-- Their selected identity and configuration do not change on replay.
+CREATE TABLE registration_intents (
+    id TEXT PRIMARY KEY,
+    issuer TEXT NOT NULL,
+    request TEXT NOT NULL,
+    issue TEXT NOT NULL CHECK(json_valid(issue)),
+    destination TEXT NOT NULL,
+    mac_key BLOB NOT NULL CHECK(length(mac_key) = 32),
+    observed_at INTEGER NOT NULL CHECK(observed_at>=0),
+    UNIQUE(issuer,request)
+);
+CREATE TRIGGER registration_intent_immutable BEFORE UPDATE ON registration_intents
+BEGIN SELECT RAISE(ABORT,'immutable registration intent'); END;
+CREATE TRIGGER registration_intent_retire AFTER DELETE ON registrations
+BEGIN DELETE FROM registration_intents WHERE id=OLD.id; END;
 
 CREATE TABLE cursors (
     registration TEXT NOT NULL REFERENCES registrations(id),

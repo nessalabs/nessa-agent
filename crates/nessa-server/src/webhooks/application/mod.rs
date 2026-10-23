@@ -4,12 +4,17 @@ mod admission;
 mod message;
 mod outbox;
 mod ports;
+mod registration;
 
 pub use admission::{AdmissionFailure, AdmitDelivery, DeliveryHold, Target};
 pub use outbox::{
     DeliveryCause, Outbox, OutboxError, PendingDelivery, QueueInitiator, QueuedRecord,
     Registration, StopReason, MAX_CURSORS, MAX_OUTBOX_WORKERS, MAX_REGISTRATIONS,
     MAX_SOURCE_RESETS, PENDING_LIMIT, RETAINED_LIMIT, SOURCE_RESET_BYTES,
+};
+pub use registration::{
+    RegisterWebhook, RegistrationConfig, RegistrationFailure, RegistrationIntent,
+    RegistrationIntents,
 };
 
 pub use message::{InvalidMessage, MacKey, Message, MAX_BODY_BYTES};

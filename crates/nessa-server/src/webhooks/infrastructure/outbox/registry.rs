@@ -1,7 +1,7 @@
 //! Private registration facts and the credential lifecycle stop projection.
 use super::audit::{Record, RegistrationChange};
 use super::journal::{commit, finish, refuse_pending};
-use super::publication::{append, publish};
+use super::publication::append;
 use super::{integer, invalid, unavailable, uuid, SqlOutbox};
 use crate::webhooks::application::{
     DeliveryCause, MacKey, OutboxError, Registration, StopReason, Target,
@@ -9,23 +9,11 @@ use crate::webhooks::application::{
 use crate::webhooks::domain::Destination;
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
 use nessa_local_database::rusqlite::{
-    params, Connection, OptionalExtension, Result as SqlResult, Row,
+    params, Connection, OptionalExtension, Result as SqlResult, Row, Transaction,
 };
 use std::sync::Arc;
 
 impl SqlOutbox {
-    /// The caller owns registration authorization and a per-principal issue
-    /// permit. No endpoint, key, or row alone supplies conversation authority.
-    pub async fn install(&self, registration: Registration, at_ms: u64) -> Result<(), OutboxError> {
-        self.run(move |connection, audit| {
-            let transaction = connection.transaction().map_err(unavailable)?;
-            transaction.execute("INSERT INTO registrations(id,credential,principal,organization,owner,destination,mac_key,active,issued_at) VALUES(?1,?2,?3,?4,?5,?6,?7,1,?8)", params![registration.id.to_string(),registration.target.credential.as_str(),registration.target.principal.as_str(),registration.target.organization.as_str(),registration.target.owner.as_str(),registration.destination.expose_url().as_str(),registration.key.expose_bytes(),integer(at_ms)?]).map_err(|_| OutboxError::Conflict)?;
-            append(&transaction, Record::registration(&registration,RegistrationChange::Issue,at_ms))?;
-            commit(transaction,Some(registration.id),at_ms)?;
-            publish(connection, audit)
-        }).await
-    }
-
     /// Only the credential lifecycle coordinator calls stop. It supplies the
     /// original revocation initiator, or the first expiry observer. The same
     /// per-registration permit used by dispatch must surround this operation.
@@ -72,6 +60,22 @@ impl SqlOutbox {
         })
         .await
     }
+}
+
+#[cfg(test)]
+#[path = "../../../../tests/webhooks/infrastructure/registration_install.rs"]
+mod installation_fixture;
+
+pub(super) fn insert(
+    transaction: &Transaction<'_>,
+    registration: &Registration,
+    at_ms: u64,
+) -> Result<(), OutboxError> {
+    transaction.execute("INSERT INTO registrations(id,credential,principal,organization,owner,destination,mac_key,active,issued_at) VALUES(?1,?2,?3,?4,?5,?6,?7,1,?8)", params![registration.id.to_string(),registration.target.credential.as_str(),registration.target.principal.as_str(),registration.target.organization.as_str(),registration.target.owner.as_str(),registration.destination.expose_url().as_str(),registration.key.expose_bytes(),integer(at_ms)?]).map_err(|_| OutboxError::Conflict)?;
+    append(
+        transaction,
+        Record::registration(registration, RegistrationChange::Issue, at_ms),
+    )
 }
 
 pub(super) const SELECT: &str = "SELECT id,credential,principal,organization,owner,destination,mac_key,active,stop_cause,stop_initiator,stop_at,issued_at";

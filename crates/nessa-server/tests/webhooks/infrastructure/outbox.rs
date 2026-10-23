@@ -4,6 +4,7 @@ use crate::webhooks::application::{
 };
 use crate::webhooks::domain::{Destination, Observation, Outcome};
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
+use nessa_local_database::rusqlite::{Error, ErrorCode};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sync::replication::domain::{Id, Scope};
 use serde_json::{json, Value};
@@ -1050,7 +1051,14 @@ async fn restored_capacity_is_bounded_before_collection() {
         let mut connection = f.store.owner.connection.lock().unwrap();
         let transaction = connection.transaction().unwrap();
         for n in 1..=crate::webhooks::application::MAX_REGISTRATIONS {
-            transaction.execute("INSERT INTO registrations(id,credential,principal,organization,owner,destination,mac_key,active,issued_at) SELECT ?1,?2,?3,organization,owner,destination,mac_key,1,issued_at FROM registrations WHERE id=?4",params![Uuid::new_v4().to_string(),format!("synthetic-key-{n}"),format!("synthetic-principal-{n}"),f.registration.id.to_string()]).unwrap();
+            let id = Uuid::new_v4().to_string();
+            let credential = format!("synthetic-key-{n}");
+            let principal = format!("synthetic-principal-{n}");
+            let request = format!("capacity-fixture-{n}");
+            // Preserve the current valid relationship while exceeding the
+            // count bound; this is not a dangling-reference demonstration.
+            transaction.execute("INSERT INTO registration_intents(id,issuer,request,issue,destination,mac_key,observed_at) SELECT ?1,issuer,?5,json_set(issue,'$.credentialId',?2,'$.principal.id',?3,'$.membership.principalId',?3,'$.requestId',?5),destination,mac_key,observed_at FROM registration_intents WHERE id=?4",params![id,credential,principal,f.registration.id.to_string(),request]).unwrap();
+            transaction.execute("INSERT INTO registrations(id,credential,principal,organization,owner,destination,mac_key,active,issued_at) SELECT ?1,?2,?3,organization,owner,destination,mac_key,1,issued_at FROM registrations WHERE id=?4",params![id,credential,principal,f.registration.id.to_string()]).unwrap();
         }
         transaction.commit().unwrap();
     }
@@ -1188,13 +1196,20 @@ async fn restored_registration_facts_are_checked_before_effects() {
     for set in cases {
         let mut f = Fixture::new().await;
         let audit_before = f.audits();
-        f.store
-            .owner
-            .connection
-            .lock()
-            .unwrap()
-            .execute(&format!("UPDATE registrations SET {set}"), [])
-            .unwrap();
+        {
+            let c = f.store.owner.connection.lock().unwrap();
+            let mutation = format!("UPDATE registrations SET {set}");
+            if set == "id=upper(id)" {
+                assert!(
+                    matches!(c.execute(&mutation,[]),Err(Error::SqliteFailure(error,_)) if error.code==ErrorCode::ConstraintViolation)
+                );
+                // The live foreign key now prevents this mutation. Model an
+                // offline damaged file separately to preserve the cold guard.
+                c.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+            }
+            c.execute(&mutation, []).unwrap();
+            c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        }
         let placeholder = Fixture::new().await;
         drop(std::mem::replace(&mut f.store, placeholder.store));
         assert!(
@@ -2413,3 +2428,6 @@ async fn live_owed_delivery_history_matches_current_before_publication() {
 
 #[path = "outbox/source_reset.rs"]
 mod source_reset_tests;
+
+#[path = "outbox/registration.rs"]
+mod registration_tests;

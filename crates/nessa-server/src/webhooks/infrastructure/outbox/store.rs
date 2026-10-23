@@ -64,6 +64,7 @@ impl SqlOutbox {
                 _ => OutboxError::Unavailable,
             })?;
         source_reset::validate_schema(&connection)?;
+        super::intents::validate(&connection)?;
         source_reset::validate_all(&connection)?;
         stored::validate(&connection)?;
         restoration::validate(&connection)?;

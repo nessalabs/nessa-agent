@@ -4,6 +4,7 @@ mod audit;
 mod capacity;
 mod codec;
 mod cursor;
+mod intents;
 mod journal;
 mod publication;
 mod queue;

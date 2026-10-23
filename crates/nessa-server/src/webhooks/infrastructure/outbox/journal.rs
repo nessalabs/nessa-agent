@@ -182,6 +182,7 @@ pub(super) fn commit(
 ) -> Result<(), OutboxError> {
     trim(&transaction)?;
     retire_drained(&transaction, at_ms)?;
+    super::intents::validate(&transaction)?;
     capacity::check(&transaction, registration)?;
     transaction.commit().map_err(unavailable)
 }

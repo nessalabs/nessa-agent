@@ -439,6 +439,19 @@ coordinator asks these owners; URL/key possession grants no authority.
 | ordinary or webhook issue while a registration's credential remains current | one principal-scoped coordinator gate covers both issue modes; refuse another active credential/registration | competing issue and generic issue tests |
 | expired or revoked credential observed during issue, without due work | retain the original observed stop cause; stop old registration before admitting replacement | expiry/revoke without a queued record |
 | auth issue commits, registration acknowledgement is lost | retained bounded intent fixes issuer/request, configuration fingerprint and selected IDs; validate actual auth receipt before registration and expose no recovered bearer secret | crash/restart and unrelated prior-issue receipt |
+| intent is reserved but auth has not admitted the request | retain proposed inputs, not a permission verdict; the real auth registry still validates and decides issuance | invalid proposal creates no credential or destination |
+| auth returns Conflict or Capacity | discard only the uninstalled intent and preserve the exact typed auth failure; installed registrations cannot be discarded | typed refusal and protected installed intent |
+| auth returns Unavailable or caller loses the response | retain the original private intent for an authenticated retry; do not infer rollback or recover a bearer secret | uncertain auth commit and retry |
+| caller retries with changed endpoint, key or caller input | refuse before auth; server-selected IDs and observation time resolve to the retained originals | each conflicting input and unchanged original intent |
+| auth replays an expired or revoked credential | metadata describes current lifecycle, while issuance transitions retain original cause; hold current credential and refuse installation if stopped | revoke/expiry between auth commit and install |
+| auth adapter returns contradictory metadata or transitions | no registration installation or successful response; retain original intent as recovery evidence | wrong identity, original issuer/correlation and transition cases |
+| current credential read is unavailable or has a different binding | unavailable remains retryable, stopped lifetime remains Stopped, and contradictory credential/membership stays Inconsistent; preserve the intent and install nothing | read failure, full membership identity substitution and successful retry |
+| installed intent contradicts its retained registration | whole owed-publication preflight correlates identity, target, configuration and original observation before any recovery effect | live and cold mutation rejection with valid retry controls |
+| installed intent identity is substituted or deleted | registration identity is a mandatory foreign key to the immutable original intent, rather than inferring installation from a lookup that could become a new proposal | dangling reference and identity mutation rejection |
+| retained admission timestamp contradicts auth issuance time | server selects one millisecond observation; auth issuance seconds are its integer-second projection and installation retains the original observation | timestamp substitution and matching retry |
+| private intent reaches count or byte capacity | at most64intents,16KiB issuance JSON, bounded whole-row reads before allocation; typed refusal before insertion | count/byte bounds and malformed restored row |
+| registration retires after draining | the registration-delete trigger removes its private intent in the same transaction; remaining secret-free retirement evidence retains original cause | retirement/failed acknowledgement and no resurrection by old receipt |
+| retired request replays an auth receipt for another selected credential | query the auth owner's current metadata; discard the uninstalled proposal only when that selected ID was not issued, and return Conflict rather than install a new destination from the old receipt | retired replay does not leak intent capacity; contradictory replay preserves known issued evidence |
 | credential revoke is replayed by a different caller | registration uses the canonical auth revocation actor/time, rather than the observer | revoke replay and failed stop recovery |
 | granted source selected for one conversation | read actual principal grant and epoch through existing Cedar/fences, then canonical recordsPage encoding; checkpoint/body/identity commit together | one-chat source isolation and capability refusal |
 | sender prepared endpoint, but Sending or its audit is unacknowledged | no POST; reconcile saved state on the next bounded read | uncertain Sending acknowledgement |
@@ -446,6 +459,16 @@ coordinator asks these owners; URL/key possession grants no authority.
 | known HTTP outcome cannot commit | bounded supervised owner retains the known observation while live; do not re-POST Sending; restart without saved outcome records Unknown | lost outcome acknowledgement and process restart |
 | physical source changes or is later reset | retain the reviewed immutable reset/capture owner; owner-authorized reset uses its exact identity, never reconstructed actor/time | reset CAS, source cycles and retirement |
 | registration, cursor, intent, queue or physical worker reaches its cap | explicit Capacity/backpressure; no partial admission, dropped record or unbounded notification queue | count/byte bounds and cleanup |
+
+The proposed composition uses one bounded command/sender owner, with reserved
+control admission and an explicit shutdown/drain contract. Serial ownership is
+the initial W1 gate across ordinary issue, webhook issue and revocation; queued
+commands have no authority. The owner survives a response observer disconnecting.
+It retains at most one known HTTP outcome awaiting durable settlement, releases
+credential/grant holds at the attempt deadline and does not POST an uncertain
+Sending row. A process restart has no saved observation for that row and uses
+the existing Unknown recovery. This ownership is still pending, rather than
+inferred from the inner registration use case.
 
 No claim of exactly-once remote effects is made. A recipient deduplicates by the
 stable delivery identity, and retries retain the initial timestamp/signature.

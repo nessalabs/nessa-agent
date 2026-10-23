@@ -7,16 +7,19 @@ use super::{
     },
     ports::{AccessError, CredentialEvidence, PortFuture},
 };
+use serde::{Deserialize, Serialize};
 
 /// Composition selects the issuing use case; this is not a policy decision.
 /// Offline provisioning and recovery have separate entry points.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CredentialIssuePurpose {
     Product,
     Webhook,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 /// Request to issue one exact credential, with retry identity separate from its secret.
 pub struct IssueCredentialRequest {
     /// Server-selected use case whose restrictions the grant-policy owner applies.
