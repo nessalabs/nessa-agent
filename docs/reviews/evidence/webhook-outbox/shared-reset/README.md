@@ -1,6 +1,9 @@
 # Shared immutable source-reset correction
 
-Source checkpoint `0bf207707f4144ab9634c5ed7764e66fa7b4dcba` implements the
+Latest organization correction source is `b3dc0d4688e473fa40bbbeddf00bb9f510130bf1`;
+its [exact-source checks and review status](layout/README.md) follow the
+preserved first review. The original implementation/checks below qualify
+`0bf207707f4144ab9634c5ed7764e66fa7b4dcba`, which implements the
 [parent-adopted alternative](../total-context/review-1/parent-adopted-alternative.md)
 after the [preserved review](../total-context/review-1/report.md). It remains an
 uncomposed storage adapter. No production source reader, registration admission,
@@ -61,11 +64,23 @@ validation, not canonical gateway Chromium/WebKit qualification.
 
 ## Review status
 
-Fresh independent review is pending. No persistence approval or full feature
-acceptance is claimed. The runtime worktree remains unchanged until persistence
-is clean. Main56602fc69d0dc50868f68cb0bb485bed1b7de2be (including #1097/#1098)
-was fetched and will be preserved before composition. No shared auth/grant/protocol
-or runtime files changed in this correction.
+[Fresh independent round1](review-1/report.md) at43a90946 found no blocker or major,
+one minor organization/import finding and one EOF-formatting nit. Its independent
+baseline67tests and combined70tests (three added probes) passed; the report and
+all scripts/logs remain preserved. It is not a clean review.
+
+The [focused correction](organization/README.md) moves reset persistence behavior
+into `source_reset/store.rs`, imports types at module level, and removes only
+terminal blank EOF lines from evidence. No permission, lifecycle, timeout or test
+assertion changes. The initial focused correction source is `6e624b490283d3908f747dc591ce8f04b4a639b6`;
+97canonical/67isolated tests, required Clippy/architecture and27fail/restore probes
+passed again. The assembled PR also moves the parent outbox behavior/schema into named owners
+at `b3dc0d46`; see [final layout checks](layout/README.md). Fresh round two is pending.
+Runtime stays uncomposed until clean.
+
+Main56602fc69d0dc50868f68cb0bb485bed1b7de2be (including #1097/#1098) was fetched
+and will be preserved before composition. No shared auth/grant/protocol or runtime
+files changed in the reset correction.
 
 Only synthetic keys and private filesystem fixtures are used. No live recipients,
 registrations or production data are involved. The inherited denied foundation

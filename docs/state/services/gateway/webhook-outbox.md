@@ -4,12 +4,14 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private delivery state and causal audit survive restart; registration admission, source replay and the sender are still uncomposed.
-sourceRevision: "0bf207707f4144ab9634c5ed7764e66fa7b4dcba"
+sourceRevision: "b3dc0d4688e473fa40bbbeddf00bb9f510130bf1"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/application/outbox.rs
   - crates/nessa-server/src/webhooks/domain/value_objects/delivery.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/mod.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/store.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/schema.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/schema.sql
   - crates/nessa-server/src/webhooks/infrastructure/outbox/registry.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/stored.rs
@@ -23,6 +25,7 @@ sources:
   - crates/nessa-server/src/webhooks/infrastructure/outbox/restoration.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/retirement.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/mod.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/store.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/fact.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/retention.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox.rs
@@ -230,13 +233,13 @@ and transport policy remain owned by the linked delivery mechanics page.
 
 ## Evidence and remaining gates
 
-The [outbox adapter tests](https://github.com/nessalabs/nessa-agent/blob/0bf207707f4144ab9634c5ed7764e66fa7b4dcba/crates/nessa-server/tests/webhooks/infrastructure/outbox.rs)
+The [outbox adapter tests](https://github.com/nessalabs/nessa-agent/blob/b3dc0d4688e473fa40bbbeddf00bb9f510130bf1/crates/nessa-server/tests/webhooks/infrastructure/outbox.rs)
 exercise actual private SQLite/filesystem state with synthetic keys and no
 recipient network. They cover checkpoint identity, compare-and-swap, stop and
 source replacement, unknown restart, audit failures, restoration and capacity,
 physical ownership after cancellation and retained-history limits.
 
-The [shared reset tests](https://github.com/nessalabs/nessa-agent/blob/0bf207707f4144ab9634c5ed7764e66fa7b4dcba/crates/nessa-server/tests/webhooks/infrastructure/outbox/source_reset.rs)
+The [shared reset tests](https://github.com/nessalabs/nessa-agent/blob/b3dc0d4688e473fa40bbbeddf00bb9f510130bf1/crates/nessa-server/tests/webhooks/infrastructure/outbox/source_reset.rs)
 add immutable membership, later cursor deletion/replacement, retirement/recovery,
 transaction rollback, bounded factory and pre-allocation checks.
 This checkpoint also retains refusal regressions for contradictory Registration, Cursor

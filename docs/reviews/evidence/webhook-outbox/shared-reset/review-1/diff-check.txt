@@ -1,0 +1,2 @@
+docs/reviews/evidence/webhook-outbox/shared-reset/canonical.txt:126: new blank line at EOF.
+docs/reviews/evidence/webhook-outbox/shared-reset/isolated.txt:72: new blank line at EOF.
