@@ -1,0 +1,5 @@
+{
+  "originalSHA256": "dd37b91135ff7fe5448052e763f5be4da858cdf4c350ac13032ea3437425ce59",
+  "fixedSHA256": "45cce022d184e7cd650e06f0883a4baf03a720b925be45d9b540d0203e48520f",
+  "scope": "entire fixture-only before/after, exact Git base test file"
+}

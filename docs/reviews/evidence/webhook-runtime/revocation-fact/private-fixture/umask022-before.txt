@@ -1,0 +1,57 @@
+    Finished `test` profile [unoptimized] target(s) in 0.19s
+     Running tests/revocation.rs (/workspace/nessa-agent/target/debug/deps/revocation-ca055305f4229148)
+
+running 7 tests
+test historical_revocation_actor_and_absent_correlation_are_not_inferred_from_receipt ... FAILED
+test explicit_fact_is_coherent_held_original_and_survives_cold_restore ... FAILED
+test both_actual_supersessions_preserve_cause_actor_and_replacement ... FAILED
+test expiry_has_no_revocation_actor_and_later_fact_does_not_rewrite_issuance ... FAILED
+test missing_mismatched_future_and_out_of_order_facts_fail_closed ... ok
+test malformed_actual_revocation_history_rejects_cold_open_without_replacing_bytes ... FAILED
+test ordinary_product_keeps_one_time_secret_and_facts_are_secret_free ... FAILED
+
+failures:
+
+---- historical_revocation_actor_and_absent_correlation_are_not_inferred_from_receipt stdout ----
+
+thread 'historical_revocation_actor_and_absent_correlation_are_not_inferred_from_receipt' (163145) panicked at crates/nessa-auth/tests/revocation.rs:61:10:
+called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+
+---- explicit_fact_is_coherent_held_original_and_survives_cold_restore stdout ----
+
+thread 'explicit_fact_is_coherent_held_original_and_survives_cold_restore' (163144) panicked at crates/nessa-auth/tests/revocation.rs:61:10:
+called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- both_actual_supersessions_preserve_cause_actor_and_replacement stdout ----
+
+thread 'both_actual_supersessions_preserve_cause_actor_and_replacement' (163142) panicked at crates/nessa-auth/tests/revocation.rs:61:10:
+called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+
+---- expiry_has_no_revocation_actor_and_later_fact_does_not_rewrite_issuance stdout ----
+
+thread 'expiry_has_no_revocation_actor_and_later_fact_does_not_rewrite_issuance' (163143) panicked at crates/nessa-auth/tests/revocation.rs:61:10:
+called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+
+---- malformed_actual_revocation_history_rejects_cold_open_without_replacing_bytes stdout ----
+
+thread 'malformed_actual_revocation_history_rejects_cold_open_without_replacing_bytes' (163146) panicked at crates/nessa-auth/tests/revocation.rs:61:10:
+called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+
+---- ordinary_product_keeps_one_time_secret_and_facts_are_secret_free stdout ----
+
+thread 'ordinary_product_keeps_one_time_secret_and_facts_are_secret_free' (163148) panicked at crates/nessa-auth/tests/revocation.rs:61:10:
+called `Result::unwrap()` on an `Err` value: Io(Custom { kind: PermissionDenied, error: UnsafeFile })
+
+
+failures:
+    both_actual_supersessions_preserve_cause_actor_and_replacement
+    expiry_has_no_revocation_actor_and_later_fact_does_not_rewrite_issuance
+    explicit_fact_is_coherent_held_original_and_survives_cold_restore
+    historical_revocation_actor_and_absent_correlation_are_not_inferred_from_receipt
+    malformed_actual_revocation_history_rejects_cold_open_without_replacing_bytes
+    ordinary_product_keeps_one_time_secret_and_facts_are_secret_free
+
+test result: FAILED. 1 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-auth --test revocation`
