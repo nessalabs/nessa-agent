@@ -63,3 +63,35 @@ of job 120322813252 was denied again at 14:09 UTC after fresh exact-head checks.
 No retry, lookup, dispatch, alternate CLI or indirect trigger is attempted here.
 Parent owns that CI action and final guarded merges. The redesign is independent
 substantive implementation, not a way to retrigger foundation CI.
+
+## First fresh review and correlation correction
+
+The first review of bb561e55 found two major persisted-evidence defects;
+[full report](review-1/report.md), [independent probes](review-1/probes.txt),
+[39 original tests plus three bug demonstrations](review-1/tests.txt) remain
+preserved. Demonstration passes affirm defective behavior at that older source.
+
+Correction source `26b2bd355f8d3d203b0db76b94f9f78a2da41ffe` retains a closed typed
+credential-stop fact on authority-stop delivery evidence, checks cause/actor
+projections against it, and correlates it with the immutable current registration
+stop. It compares complete settled source context with the enclosing delivery;
+only Sending permits capture to precede its observation audit. The old missing
+terminal context and substituted-actor probes now have explicit refusal
+regressions, including coordinated actor/context, stop time and false stop against
+an active registration. Valid Sending capture/reopen and canonical failed-audit
+replay remain positive controls. No current owner replaces historical actors.
+
+The sealed corrected isolated suite passed **42 cases** in 43.61 seconds, and
+required seven-package all-target Clippy passed. Ten new copied-source fail/restore mutations caught these rules;
+all affected tests passed after byte-identical restoration. Final sealed-source canonical suite passed **72 webhook tests**, 0 failed, 3749
+filtered, 42.66 seconds; [log](correlation-cargo.txt), [Clippy](correlation-clippy.txt),
+[isolated](correlation-isolated.txt), [exact hashes](correlation-source-manifest.json).
+The next fresh independent review remains pending.
+
+The corrected Nessa Docs page checkpoints exact source 26b2bd35: 122 documents,
+zero catalog issues, diagram rendered and visually inspected Chromium 151 with
+zero page errors. [Render](correlation-render.json), [diagram](correlation-diagram-1.png).
+Earlier pre-seal invocations/logs under /tmp remain diagnostic history; final
+sealed runs include the last added cause/context regression case. No source
+bytes changed during sealed validation. Docs rendering does not waive browser
+or feature stress gates.

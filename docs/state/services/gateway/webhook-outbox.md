@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private delivery state and causal audit survive restart; registration admission, source replay and the sender are still uncomposed.
-sourceRevision: "1c3085add14833a862681f6697f1e4ea31f9ba86"
+sourceRevision: "26b2bd355f8d3d203b0db76b94f9f78a2da41ffe"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/application/outbox.rs
@@ -53,7 +53,9 @@ The parent explicitly authorized a focused redesign after the prior bounded
 review handoff. The original [findings and reproductions](../../../reviews/evidence/webhook-outbox/blocked-review.md)
 remain historical evidence. This source replaces open audit JSON with one
 closed record type and routes every cursor read through a complete decoder.
-Fresh review of this redesign is pending; it is not full feature acceptance.
+The first fresh review found two remaining context correlations, corrected in
+this checkpoint. The next fresh review is pending; this is not full feature
+acceptance.
 
 The same typed audit validator serves writing, restoration and publication.
 It rejects unknown fields, malformed identities and actors, negative timestamps,
@@ -62,6 +64,14 @@ Delivery evidence retains complete before and after snapshots; the existing
 domain transition methods validate their legal relationship. Restored retained
 chains keep their target/checkpoint and source-change context, and end at the
 current delivery row. Validation streams one predecessor at a time.
+
+Authority-stop delivery evidence also retains the credential stop's original
+cause, actor and time, separate from this observation's time. Its projections
+must agree with that saved context. While the owning registration remains,
+restore checks this context against its immutable stop fact. A live registration
+cannot supply credential-stop evidence. Settled source context must equal the
+current delivery's complete context. Sending alone permits captured context to
+precede its first observation audit; recovery then carries that context forward.
 
 Registration retirement evidence contains its original target and revocation
 or expiry actor. It can be replayed after the registration has been deleted;
@@ -163,14 +173,15 @@ and transport policy remain owned by the linked delivery mechanics page.
 
 ## Evidence and remaining gates
 
-The [outbox adapter tests](https://github.com/nessalabs/nessa-agent/blob/1c3085add14833a862681f6697f1e4ea31f9ba86/crates/nessa-server/tests/webhooks/infrastructure/outbox.rs)
+The [outbox adapter tests](https://github.com/nessalabs/nessa-agent/blob/26b2bd355f8d3d203b0db76b94f9f78a2da41ffe/crates/nessa-server/tests/webhooks/infrastructure/outbox.rs)
 exercise actual private SQLite/filesystem state with synthetic keys and no
 recipient network. They cover checkpoint identity, compare-and-swap, stop and
 source replacement, unknown restart, audit failures, restoration and capacity,
 physical ownership after cancellation and retained-history limits.
 
-This source checkpoint passed 69 webhook tests, including 39 outbox tests,
-and required seven-package Clippy, architecture, formatting and diff checks.
+This source checkpoint passed 72 canonical webhook tests, including 42 outbox
+tests, required seven-package Clippy, architecture, formatting and diff checks.
+The next fresh independent review is pending.
 This redesign adds malformed
 historical audit, transition/chain, complete cursor and lost-ack retirement
 recovery regressions. Twenty-nine new copied-source mutations were caught and
