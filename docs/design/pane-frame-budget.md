@@ -94,6 +94,23 @@ geometry share one layout.
 | Gliding | The frame after that | The copy has let go. A column title that changed rows glides. The grid is still on its last boxes. |
 | Drawn | The frame after that | The grid paints the new boxes. The grain comes back the frame after that paint, and the composer's blur the frame after the grain. |
 
+The sidebar's row geometry uses `data-sidebar-row`, published from the
+existing box-frame `sidebarOpen` read. `FoldMark` writes `data-sidebar` on
+frame 2; the row marker changes with the pane boxes on frame 3. A spare
+hold retains a row only when `data-sidebar-row="open"`: a sidebar that was
+already closed must not re-enter the row merely because a swap is waiting.
+`layouts.test.tsx` checks the closed and folding paths against the actual
+sidebar stylesheet; browser reduced-motion geometry remains a separate gate.
+
+| Sidebar row before the change | Event | Row while boxes wait |
+| --- | --- | --- |
+| Closed | Swap or split | Stays out of the row; a peek remains an overlay. |
+| Open | Fold for a new arrangement | Stays in the row until the new boxes paint. |
+| Open | Arrangement keeps the sidebar open | Stays in the row. |
+| Retained through a fold | Replacing arrangement before boxes | Keeps the painted row until the replacement boxes paint. |
+| Either | Arrangement reverses before its callback | No late change to row geometry. |
+| Either | Same-pane resize | Existing immediate pane painting is unchanged. |
+
 A content height of 0 leaves the scene unready. The next positive height
 starts the measured row.
 
