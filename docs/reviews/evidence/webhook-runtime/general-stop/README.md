@@ -1,6 +1,6 @@
 # Canonical credential-stop correction
 
-Current source: `d742cf55ef740716a7a8dfebe5eaea427819138c`, based on published
+Current source: `342e21aa5250eb97c79e57a1bd56bd10c12a439b`, based on published
 `c7fe656af15346a21c293eb9a5bb5d5cf27c54b0`. This is the inner stop adapter and
 use case, not runtime mounting or completed issue #896.
 
@@ -62,7 +62,7 @@ a valid complete retirement. Omitting the ID from that budget [fails the
 regression](review-1/outer-id-mutation.txt). Private source was restored afterward.
 N1 groups the new test imports at module scope; N2 states that future composition
 **must** retain the inner observer, rather than claiming a supervisor exists.
-Fresh round TWO must review these dispositions and the complete correction.
+Round TWO below reviews these dispositions and the complete correction.
 
 At source `d742cf55ef740716a7a8dfebe5eaea427819138c`, the canonical server webhook
 suite passed **170/170**. The first local canonical compile was killed by SIGKILL
@@ -74,12 +74,34 @@ mutations and the new identity-budget omission were caught and restored. The Aut
 source is byte-identical to preceding c2, whose full282 tests passed. Formatting,
 architecture, docs135/0 and three rendered/visually inspected diagrams passed at
 the new source. Required seven-package all-target Clippy `-D warnings` passed;
-fresh review is pending.
+that source then entered round TWO.
 
+
+## Fresh round TWO and complete import closure
+
+[Round TWO](review-2/report.md), frozen at `ef06f84f0f355b631e29a8da91d53f688499967f`,
+verified M1 and N2 fixed and found no Blocker, Major or Minor. It retained Nit N1:
+eight new qualified type expressions/signatures across registry, retirement and
+two test files. Source `342e21aa5250eb97c79e57a1bd56bd10c12a439b` imports these types
+at each owning module and uses short names. This is an import-only correction;
+no lifecycle, authorization, persistence or network behavior changed.
+
+Round TWO independently passed143 owner tests,214 Auth unit tests,8 revocation
+tests and docs135/0. It caught/restored seven meaningful rule mutations, including
+current-Credential binding. Its six oversized identity-field controls all returned
+Invalid with largest measured Rust allocation196bytes; the excluded-ID mutant
+allocated1048576bytes and failed. The complete original report records private
+assembly, controls and limits; these are not relabeled canonical server checks.
+At source342e21aa, the repeated canonical webhook suite passed170/170 and required
+seven-package all-target Clippy `-D warnings`, fmt and architecture passed. Docs
+validation passed135/0 and all three diagrams rendered and were visually inspected
+at the new owning checkpoint with zero page errors. There was no new OOM kill.
+Auth implementation remains byte-identical to the full282-test preceding source.
+Fresh round THREE is pending.
 
 ## Remaining gates
 
-Fresh round TWO exact-head review and publication are pending. Windows, macOS, MSRV, exact-head CI, canonical scripted Chromium/WebKit,
+Fresh round THREE exact-head review and publication are pending. Windows, macOS, MSRV, exact-head CI, canonical scripted Chromium/WebKit,
 default/raised stress and chaos, and the unfinished runtime/recipient E2E are not
 qualified by these Linux checks. The prior Windows enrollment assertion and
 cancelled jobs remain distinct evidence; there is no demonstrated Windows fix.
