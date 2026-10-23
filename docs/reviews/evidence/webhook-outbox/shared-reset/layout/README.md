@@ -39,6 +39,8 @@ This is documentation evidence, not canonical gateway browser qualification.
 The [intermediate focused checks](../organization/README.md) qualify only source
 `6e624b49`. Fresh independent round two, canonical gateway Chromium/WebKit,
 stress/chaos, exact-head CI and full runtime composition remain pending.
-Committed-range diff checks against both the correction and intended PR base
-will be recorded after the evidence commit. Working-tree checks alone do not
-establish those ranges.
+Explicit committed-range diff checks passed at evidence head `129bb424`, against
+immediate correction base `43a90946`, original correction base `0f6bea1e`, and
+intended PR base `6c38915d` ([results](committed-diff-checks.json)). These execute
+`git diff --check BASE..HEAD`, not a working-tree-only check. The final head is
+rechecked after recording this evidence, before independent review.
