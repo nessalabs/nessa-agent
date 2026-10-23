@@ -1465,7 +1465,7 @@ const steps = {
 
   async onboarding(run, step, failures) {
     await run.exclusive(async () => {
-      const asked = await replayOnboarding(run.page)
+      const asked = await replayOnboarding(run.page, run.evidence)
       if (asked !== 1) {
         failures.push(`Replay asked the host ${asked} times, not once`)
         return
@@ -2854,10 +2854,14 @@ async function openLinkedDevices(page) {
  * Asks for setup again where a person does: Settings › Advanced › Setup, its
  * Replay button. Resolves how many times the host was asked. Leaves Settings.
  */
-async function replayOnboarding(page) {
+async function replayOnboarding(page, evidence) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
   await page.locator(css.settingsCategory, { hasText: names.advanced }).click()
   await page.locator(css.settingsTab, { hasText: names.setupTab }).click()
+  if (evidence)
+    await page
+      .screenshot({ path: join(evidence, "onboarding-settings.png") })
+      .catch(() => {})
   const before = await page.evaluate(() => window.__fakeHostReplays)
   await page
     .locator(selectorFor.settingRow("replay-onboarding"))

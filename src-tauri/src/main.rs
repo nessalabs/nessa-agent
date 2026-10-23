@@ -346,6 +346,7 @@ fn main() {
             // ways setup can go that nothing coordinates — a dismissal, a
             // crashed webview — and is idempotent with the handoff's own close.
             if matches!(event, WindowEvent::Destroyed) && window.label() == panel::SETUP_WINDOW {
+                panel::setup_window_gone();
                 if let Some(panel) = window.app_handle().get_webview_window(panel::MAIN_WINDOW) {
                     platform::current().set_above_overlay(&panel, false);
                 }

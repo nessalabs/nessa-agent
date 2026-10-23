@@ -143,8 +143,9 @@ pub fn open_setup_window(app: &AppHandle) {
 ///
 /// Only the steps that can fail without the handoff failing. Showing the panel
 /// is not among them: a handoff whose panel did not come up is an `Err` and
-/// changes nothing else, so there is no shape of this struct in which the panel
-/// is not already on screen.
+/// changes nothing else, so the panel is on screen in every shape of this
+/// struct but one: a replay from Settings left without finishing, which
+/// summons no panel by design (see [`finish_setup`]).
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupHandoff {
@@ -198,7 +199,9 @@ pub fn finish_setup(
     let settings_store = deps.settings.clone();
     // Asked for from Settings, and left without finishing: the person goes
     // back to what they were doing, not to a panel they did not summon.
-    let left_replay = REPLAYING.swap(false, Ordering::SeqCst) && !completed;
+    // Read, not cleared: a close that fails leaves the window up, and its retry
+    // is the same replay. The flag ends with the window (`setup_window_gone`).
+    let left_replay = REPLAYING.load(Ordering::SeqCst) && !completed;
     hand_over(
         completed,
         || {
@@ -451,8 +454,14 @@ pub fn restart_onboarding(app: &AppHandle, settings: &dyn SettingsStore) {
 }
 
 /// Whether the setup on screen was asked for from Settings rather than opened
-/// by a first run. Read, and cleared, by the handoff that ends it.
+/// by a first run. Set by the ask, and cleared when the window goes, however
+/// it goes.
 static REPLAYING: AtomicBool = AtomicBool::new(false);
+
+/// The setup window is gone, so whatever replay it was showing is over.
+pub fn setup_window_gone() {
+    REPLAYING.store(false, Ordering::SeqCst);
+}
 
 /// Shows first-run setup again from Settings, keeping what it recorded.
 ///

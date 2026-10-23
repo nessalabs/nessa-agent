@@ -92,10 +92,17 @@ export function createDependencies(
   const chosenAgent = () => (chosen ??= ask())
   // A kept choice is good until setup records another: a replay from Settings
   // can finish on a different agent while this window runs, and the next
-  // conversation is on that one.
+  // conversation is on that one. The pickers are told too, so the agent they
+  // offer a new conversation changes with it.
+  const recordedListeners = new Set<() => void>()
   void onSetupRecorded(() => {
     chosen = undefined
+    for (const listener of recordedListeners) listener()
   })
+  const setupRecorded = (listener: () => void) => {
+    recordedListeners.add(listener)
+    return () => void recordedListeners.delete(listener)
+  }
   // The wall clock a permission's countdown is read against, and that a
   // view's deadlines are put on as it arrives. Constructed here so neither the
   // conversation UI nor its gateway adapter reads `Date.now()` itself. It is a
@@ -114,6 +121,7 @@ export function createDependencies(
       () => session.get(),
       () => new Promise((resolve) => setTimeout(resolve, FOLLOW_RETRY_MS)),
       chosenAgent,
+      setupRecorded,
     ),
     session,
     attachments: createAttachmentResources(),
