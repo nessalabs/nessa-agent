@@ -4,7 +4,7 @@ title: Outbound webhook foundation
 kind: feature
 status: mixed
 summary: Delivery values and a bounded signed HTTPS adapter are built; gateway registration, durable replay and grant coordination remain unimplemented.
-sourceRevision: "04a421a47711a3c326a7cd4e1ab23bd9cf17f1b8"
+sourceRevision: "b8568beee166680a45a192222da468234933411d"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/domain/value_objects/delivery.rs
@@ -18,6 +18,7 @@ sources:
   - crates/nessa-server/tests/webhooks/domain/destination.rs
   - crates/nessa-server/tests/webhooks/application/message.rs
   - crates/nessa-server/tests/webhooks/infrastructure/https.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/fixtures/tls.rs
   - crates/nessa-server/tests/webhooks/infrastructure/message.rs
 diagramLinks: {}
 diagramDetails:
@@ -181,5 +182,11 @@ Tests for this source live under
 [message encoding](../../../../crates/nessa-server/tests/webhooks/infrastructure/message.rs), and
 [HTTPS infrastructure](../../../../crates/nessa-server/tests/webhooks/infrastructure/https.rs).
 The TLS fixture is a disposable loopback recipient with a test-only key and
-trust root. It does not exercise registration, gateway admission or durable
+trust root, generated only in memory. The CA signs an eight-day server leaf
+with server-auth EKU and the recipient.test SAN. The client retains production
+platform TLS verification; untrusted-root and wrong-hostname controls require
+a certificate error before HTTP bytes. This replaces the fixed 100-year
+certificate that failed macOS verification. Linux tests pass; the native macOS
+and Windows result belongs to the new exact-head CI run, not this local result.
+The fixture does not exercise registration, gateway admission or durable
 restart. A source checkpoint records review scope, not test execution or deployment.
