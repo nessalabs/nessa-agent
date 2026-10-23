@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "460a1c85935973f367cfd5fd033bcb81dd181469"
+sourceRevision: "6cfb9673aba7c9fb78e26f4e3c09f2dd55be279f"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/application/outbox.rs
@@ -261,7 +261,7 @@ review demonstrations are historical bug evidence, not fixed test passes.
 
 Historical validation and findings remain in [total-context evidence](../../../reviews/evidence/webhook-outbox/total-context/README.md).
 Historical reset-source checks and review status are in [shared reset evidence](../../../reviews/evidence/webhook-outbox/shared-reset/README.md).
-Current registration and schema checks are recorded in [registration evidence](../../../reviews/evidence/webhook-runtime/registration/README.md): 114 canonical webhook tests, 212 auth tests and 21 failure/restore probes. Independent registration review is pending.
+Current registration and schema checks are recorded in [registration evidence](../../../reviews/evidence/webhook-runtime/registration/README.md): 116 canonical webhook tests and 12 correction failure/restore probes. Auth source is unchanged since the 212-test run. [Correction evidence](../../../reviews/evidence/webhook-runtime/registration/repair/README.md) distinguishes the preserved not-clean first review from fresh review pending at this source.
 Historical checks do not establish acceptance of newer source. Independent
 persistence review at `546de7af` checked the unchanged `b3dc0d46` source and is
 clean; gateway/browser qualification and full feature acceptance remain open.

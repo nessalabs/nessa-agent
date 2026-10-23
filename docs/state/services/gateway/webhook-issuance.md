@@ -4,7 +4,7 @@ title: Webhook credential issuance
 kind: operation
 status: mixed
 summary: Cedar owns webhook issuance; a bounded private intent coordinates actual auth receipts and fenced installation, while product and worker composition remain pending.
-sourceRevision: "460a1c85935973f367cfd5fd033bcb81dd181469"
+sourceRevision: "6cfb9673aba7c9fb78e26f4e3c09f2dd55be279f"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/credential_admin.rs
@@ -92,6 +92,9 @@ pages.
 reserving one immutable private intent. The SQLite owner retains the selected IDs,
 original issuer/request, observation, destination and key. Same-input retries reuse
 the original proposal; changed caller inputs or configuration conflict before auth.
+The application-owned intent resolver also binds the returned reservation to the
+original call immediately before auth, allowing only retained server selections
+to differ. SQL replay asks that same resolver; it does not implement a second rule.
 There are at most 64 intents, with 16-KiB issuance JSON and a borrowed whole-row byte
 budget before owned configuration allocation. An intent is proposed input, not an
 authorization decision or an auth receipt.
@@ -101,6 +104,7 @@ stateDiagram-v2
     [*] --> Reserved: Private intent commits
     Reserved --> Reserved: Auth or installation outcome unavailable
     Reserved --> Discarded: Auth proves Conflict or Capacity
+    Reserved --> Reserved: Invalid returned reservation / refuse before auth
     Reserved --> Held: Actual auth result correlates with original intent
     Held --> Reserved: Current authority unavailable or contradictory
     Held --> Stopped: Revoked, expired or inactive current authority
@@ -133,9 +137,13 @@ recovery and the product configuration entry point still require runtime composi
 ## Evidence and limits
 
 The full auth library suite passed **212 tests** at this source. The canonical
-server webhook suite passed **114 tests**. The registration [evidence](../../../reviews/evidence/webhook-runtime/registration/README.md)
-records 21 caught-and-restored probes, the earlier failed fixtures, source boundaries
-and pending independent review. The [registry tests](../../../../crates/nessa-auth/tests/adapters/local/webhook_issue.rs)
+server webhook suite passed **116 tests**. The registration [evidence](../../../reviews/evidence/webhook-runtime/registration/README.md)
+retains the 21 original caught-and-restored probes and earlier failures. The
+[repair evidence](../../../reviews/evidence/webhook-runtime/registration/repair/README.md)
+records 12 further caught-and-restored probes for original-call resolution and
+transient failure classification. Review round1 is preserved as not clean;
+fresh review of the correction is pending. Auth source has not changed since its
+212-test run. The [registry tests](../../../../crates/nessa-auth/tests/adapters/local/webhook_issue.rs)
 exercise policy refusal before writes, cross-purpose receipt substitution in
 both directions, cold replay, original transitions and unavailable secret.
 The [Cedar matrix](../../../../crates/nessa-auth/src/adapters/cedar/evaluator_tests.rs)
