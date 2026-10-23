@@ -1,0 +1,9 @@
+# Assembled private webhook corrections
+
+Implementation merge source `8f83f7394251814575429f5f1362cb3abac61687`, documentation checkpoint `37824b59dbcd7b01b69e0dcb86173793d66f8ecc`, publication base `0e1f44def810c8b91439000f52986869cb0cdfc2`. The original clean [auth review](../origin/review-2/report.md) and [cost review](../retention-cost/review-1/report.md) remain scoped evidence. Their original source commits are reachable through this merge. The earlier `7b83e425` typed expiry-observer helper is included and requires explicit combined review. Dirty observation-before-stop W24 work stays in a separate checkout and is excluded.
+
+On this combined source:134 canonical webhook tests,214 Auth unit plus60 integration tests, and the Product typed credential-conflict boundary test passed. Required seven-package all-target locked Clippy with `-D warnings`, formatting, architecture and diff checks passed. The existing lease const-evaluation warning is preserved. Architecture initially failed because the shell lacked Cargo PATH; its original error is retained, and the documented environment rerun passed. Text copies trim trailing whitespace only.
+
+NessaDocs validates135pages/0issues. Four diagrams rendered and were visually inspected with systemChromium151, zero page errors. This does not qualify scripted gateway browsers. Source checkpoints describe inspected owners, not full feature completion.
+
+Fresh independent assembled review is pending. Windows, pinned Chromium/WebKit, canonical gateway stress/chaos, feature-specific recipient capability/revoke E2E and exact-head CI remain unqualified. The older broad-server CleanupUnconfirmed failure remains retained in origin evidence and was not repaired or reclassified. No merge, CI retry/dispatch, denied browser/report retry, live credentials, registration, production data or recipient transmission occurred.
