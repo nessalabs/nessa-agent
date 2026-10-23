@@ -4,6 +4,7 @@ title: Usage limits and scheduled continuation
 kind: statechart
 status: implemented
 summary: A usage limit ends the turn; an enabled gateway preference may schedule one later continuation.
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: sdk-runtime
 sources:
   - crates/nessa-sdk/src/application/agent_execution/agents/error.rs

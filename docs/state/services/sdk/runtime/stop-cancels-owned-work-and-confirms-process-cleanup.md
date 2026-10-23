@@ -4,6 +4,7 @@ title: "Turn Stop and attachment cleanup have different owners"
 kind: "operation"
 status: "mixed"
 summary: "Turn Stop cancels one captured turn; attachment close fences work and owns process cleanup."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "sdk-runtime"
 sources:
   - "src/conversation/adapters/store/slice.ts"

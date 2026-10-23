@@ -231,6 +231,32 @@ Mermaid node IDs to document IDs for drill-down; ordinary Markdown links also
 work. Folder paths organize the files, while parent metadata owns the browsing
 hierarchy. Do not add another navigation manifest.
 
+## Source review checkpoint
+
+Record the exact committed source reviewed in each page's frontmatter:
+
+```yaml
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
+```
+
+The optional field is a quoted full lowercase Git commit ID (40 or 64 hexadecimal
+characters) of this repository, not the renderer or the later documentation commit.
+The [nessa-docs format reference](https://github.com/nessalabs/nessa-docs/blob/main/skills/nessa-docs/references/format.md#source-review-checkpoint)
+owns its validation and display contract. Nessa Docs shows a short checkpoint and
+the full ID in Sources and provenance. Missing means not recorded; there is no
+inherited root checkpoint and no claim that newer code was checked.
+
+Before changing a page, compare its linked source since that commit and inspect
+the current owners and tests. Advance the checkpoint only after reconciling the
+page with that source. A navigation-only edit or partial audit does not establish
+that other pages are current. Keep the review's scope and exclusions in prose.
+If implementation changes are uncommitted, commit them before recording a newer
+checkpoint, or retain the old one and explain the dirty scope explicitly.
+
+For a failure on a newer checkout, compare the affected source at the recorded
+revision with the failing revision. This identifies the documentation baseline;
+it does not prove a regression, successful test execution, or causation.
+
 ## Diagram explanations
 
 Keep state and guard explanations in the owning page's Markdown. The optional

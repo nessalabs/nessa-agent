@@ -4,6 +4,7 @@ title: "a conversation opens its selected provider"
 kind: "operation"
 status: "mixed"
 summary: "A conversation restores its last acknowledged agent and model selection."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "sdk-runtime"
 sources:
   - "crates/nessa-server/src/conversation/application/service.rs"

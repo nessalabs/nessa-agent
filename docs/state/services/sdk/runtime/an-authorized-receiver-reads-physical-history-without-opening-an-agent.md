@@ -4,6 +4,7 @@ title: "an authorized receiver reads physical history without opening an agent"
 kind: "operation"
 status: "mixed"
 summary: "An authorized receiver can read saved records without opening an agent or running a prompt."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "sdk-runtime"
 sources:
   - "Cargo.toml"

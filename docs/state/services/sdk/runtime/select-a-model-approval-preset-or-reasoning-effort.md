@@ -4,6 +4,7 @@ title: "select a model, approval preset, or reasoning effort"
 kind: "operation"
 status: "mixed"
 summary: "A conversation can change to a supported model on the same provider session."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "sdk-runtime"
 sources:
   - "crates/nessa-server/src/conversation/application/service.rs"

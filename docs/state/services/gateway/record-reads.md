@@ -4,6 +4,7 @@ title: "Bounded physical history reads"
 kind: "operation"
 status: "implemented"
 summary: "An authorized reader can page through saved conversation records without starting an agent."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "gateway"
 sources:
   - "crates/nessa-server/src/product/socket.rs"

@@ -4,6 +4,7 @@ title: "Close or delete a conversation and release its uploaded images"
 kind: "flow"
 status: "mixed"
 summary: "Attachment close ends active and waiting work; turn Stop does not release image holds."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "gateway-attachments"
 sources:
   - "src/conversation/adapters/store/slice.ts"

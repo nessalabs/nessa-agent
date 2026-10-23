@@ -84,7 +84,10 @@ files go and which lines to quote is
 
 Before completing code changes, use the [nessa-docs skill](https://github.com/nessalabs/nessa-docs/blob/main/skills/nessa-docs/SKILL.md)
 to review and update affected state diagrams and documentation. If no update is
-needed, explicitly record why in the handoff or pull request.
+needed, explicitly record why in the handoff or pull request. Advance each reviewed
+page's `sourceRevision` to the exact source commit checked, following the
+[checkpoint contract](docs/state/authoring.md#source-review-checkpoint). A partial
+review does not advance unrelated pages.
 
 ## Reviewing, locally and delegated
 

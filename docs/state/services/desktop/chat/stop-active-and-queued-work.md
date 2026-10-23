@@ -4,6 +4,7 @@ title: "stop active and queued work"
 kind: "flow"
 status: "mixed"
 summary: "Stop targets the captured turn: withdraw it from the queue or cancel it if active."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "desktop-chat"
 sources:
   - "src/panel/ui/app.tsx"

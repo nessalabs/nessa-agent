@@ -4,6 +4,7 @@ title: "Wire requests and command uncertainty"
 kind: "statechart"
 status: "implemented"
 summary: "The client sends a request and waits for a reply."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "client"
 sources:
   - "packages/nessa-client/src/transport/wire-session.ts"
