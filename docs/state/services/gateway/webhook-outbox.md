@@ -348,8 +348,10 @@ proof survived deletion of current cursor/delivery rows, and a published origina
 Issue contradicted a competing owed UUID. Parent chose the total retained-proof
 summary, implemented at this source checkpoint. [Structural correction evidence](../../../reviews/evidence/webhook-runtime/lifecycle-observation/retained-progress/README.md)
 records both desired-contract regressions failing against the old owner and
-passing after correction, scoped/retention tests and mutation controls. Fresh
-independent review and final qualification are still pending; W24 is unpublished.
+passing after correction, scoped/retention tests and mutation controls. [Fresh independent structural review](../../../reviews/evidence/webhook-runtime/lifecycle-observation/retained-progress/review-1/report.md)
+is clean at e8f1564f, with214Auth and133owner/probe checks plus four caught/restored
+mutations. This qualifies the inner lifecycle correction; full feature and merge
+gates remain open.
 The exact canonical schema now includes the registration-leading audit index;
 a different private schema is refused before effects rather than silently migrated.
 

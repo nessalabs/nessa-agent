@@ -39,9 +39,23 @@ with the correction. The docs catalog has135 documents and no issues. All three
 diagrams rendered at the exact checkpoint in system Chromium151 with no page
 errors. Visual inspection simplified overlapping reset self-loop labels; the
 new initial-proof refusal arrow is visible. This render is documentation only.
-Fresh independent structural review remains pending. W24 remains unpublished. Product command
+[Fresh independent structural review](review-1/report.md) is clean at
+**e8f1564f90e34f77bee6858328f34d94a323c01e**: all priority buckets zero,
+214 actual Auth tests and133 combined owner/probe tests passed, with four
+independent mutations caught/restored. Production copied files remain byte-equal.
+This qualifies the inner W24 correction, not the full main-based feature. W24 remains unpublished. Product command
 ownership, general revocation mapping, source/sender composition and capability/
 revoke recipient E2E remain separate required implementation work. Canonical
 scripted Chromium/WebKit and platform CI remain required feature gates; a local
 system-Chromium documentation render does not qualify them. Prior denied actions
 remain stopped, including pinned browser download and foundation CI retry.
+
+Published predecessor c5 exact-head CI40024786910 has a Windows local-auth failure
+in native enrollment: actual peer_audit_unavailable versus expected peer_unreachable
+at tests/peer_gateways/enroll.rs:535. All7revocation tests pass on Windows in that
+job. The failing assertion and peer audit/command production owner are unchanged;
+fixture DTO purpose and session Cedar injection were mapped by the earlier auth
+correction. This is not proof of an unrelated baseline flake. The failure remains
+unqualified; no retry, timeout change or unrelated repair was applied. The excerpt
+is preserved here. Windows server and other platform jobs were still running at
+the last read. Those old-head results do not qualify this W24 source.
