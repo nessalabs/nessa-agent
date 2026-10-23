@@ -729,6 +729,14 @@ fn a_tool_spans_from_its_first_report_to_the_one_that_settles_it_and_keeps_its_i
     ]);
     assert_eq!(straddling.tools[0].started_at_ms, None);
     assert_eq!(straddling.tools[0].ended_at_ms, Some(3_000));
+    // A time no JSON reader can hold, read back from a damaged file, is left
+    // unknown rather than refusing the whole view.
+    let damaged = committed_tool_view(&[at(
+        bare(Some(ToolStatus::Completed)),
+        crate::conversation::domain::LATEST_TIME_MS + 1,
+    )]);
+    assert_eq!(damaged.tools[0].started_at_ms, None);
+    assert_eq!(damaged.tools[0].ended_at_ms, None);
 }
 
 #[test]

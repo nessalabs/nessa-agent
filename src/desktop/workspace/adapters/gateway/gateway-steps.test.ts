@@ -70,7 +70,7 @@ describe("a tool call as a step", () => {
       tool({
         kind: "edit",
         title: "Edit sign.sh",
-        details: "File: ci/sign.sh\n…",
+        details: "Applied with a warning\nFile: ci/sign.sh\n…",
         changes: [
           { path: "ci/sign.sh", before: "a\nb", after: "a\nc\nd", cut: false },
           // Created: nothing before it.
@@ -85,8 +85,8 @@ describe("a tool call as a step", () => {
       added: 3,
       removed: 1,
     })
-    // The details say the same change in text; they are not its output.
-    expect(step.output).toBeUndefined()
+    // What else it reported beside the change stays its output.
+    expect(step.output).toBe("Applied with a warning\nFile: ci/sign.sh\n…")
   })
 
   it("counts no lines once a side of a change was cut", () => {

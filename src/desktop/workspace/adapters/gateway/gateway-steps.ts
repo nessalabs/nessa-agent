@@ -117,8 +117,10 @@ export function toolStep(
     ...(startedAtMs !== undefined ? { startedAtMs } : {}),
     ...(endedAtMs !== undefined ? { endedAtMs } : {}),
     ...(tool.input ? { input: tool.input } : {}),
-    // A call that changed files shows the change; its details say the same
-    // in text. Anything else's details are what it printed.
-    ...(diff ? { diff, ...delta } : tool.details ? { output: tool.details } : {}),
+    // A call that changed files shows the change, and its details stay its
+    // output: they hold whatever else it reported beside the change (a
+    // warning, a summary), which the change alone would lose.
+    ...(diff ? { diff, ...delta } : {}),
+    ...(tool.details ? { output: tool.details } : {}),
   }
 }

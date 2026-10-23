@@ -1990,12 +1990,10 @@ impl SessionManager {
     /// copy carry the same time. Every report is stamped, so a reader after a
     /// restart draws the same timeline — a tool's start and end, when a
     /// review was asked — from what was saved; a report without a time was
-    /// saved before times were kept.
+    /// saved before times were kept. The session's clock is the only author:
+    /// a time a provider set on its event is replaced, not trusted.
     pub(crate) fn observed(&self, event: ExecutionEvent) -> ExecutionEvent {
-        match event.observed_at_ms() {
-            Some(_) => event,
-            None => event.with_observed_at_ms(self.message_commit_clock.unix_milliseconds()),
-        }
+        event.with_observed_at_ms(self.message_commit_clock.unix_milliseconds())
     }
 
     pub(crate) async fn event(&self, event: ExecutionEvent) -> Result<(), StorageError> {

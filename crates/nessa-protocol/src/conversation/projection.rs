@@ -1,4 +1,4 @@
-use super::domain::{ConversationApprovalMode, ConversationId};
+use super::domain::{ConversationApprovalMode, ConversationId, LATEST_TIME_MS};
 use super::tool_uis::{McpToolUis, NoMcpToolUis};
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationArtifact,
@@ -1539,6 +1539,10 @@ impl Projection {
                     }
                     agreed
                 });
+                // When the session heard this report. A time no JSON reader
+                // can hold, read back from a damaged file, is left unknown
+                // rather than refusing the whole view.
+                let at = event.observed_at_ms().filter(|at| *at <= LATEST_TIME_MS);
                 let position = self.view.tools.iter().position(|tool| {
                     tool.execution_id == id && tool.tool_id == update.id().as_str()
                 });
@@ -1565,14 +1569,13 @@ impl Projection {
                         // first report sets the start: a call first reported
                         // before arrivals were stamped keeps an unknown start
                         // rather than taking a later report's time.
-                        started_at_ms: event.observed_at_ms(),
+                        started_at_ms: at,
                         ended_at_ms: None,
                         changes: Vec::new(),
                     });
                     self.view.tools.last_mut().unwrap()
                 };
                 // A later report of a settled call does not move its end.
-                let at = event.observed_at_ms();
                 if let Some(input) = update.input() {
                     tool.input = input.as_str().to_owned();
                 }
