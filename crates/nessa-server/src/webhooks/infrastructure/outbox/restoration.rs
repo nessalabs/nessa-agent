@@ -83,6 +83,16 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
             }
             match cause {
                 audit::Cause::CredentialIssue => {
+                    if owed
+                        && (!matches!(&live, Some(live) if live.lifecycle.phase() == RegistrationPhase::Active)
+                            || connection
+                                .query_row(ISSUANCE_WORK, [registration], |row| {
+                                    row.get::<_, bool>(0)
+                                })
+                                .map_err(unavailable)?)
+                    {
+                        return Err(OutboxError::Invalid);
+                    }
                     if *at_ms != issued_at {
                         return Err(OutboxError::Invalid);
                     }
@@ -316,3 +326,7 @@ pub(super) fn validate_queued(connection: &Connection) -> Result<(), OutboxError
     }
     Ok(())
 }
+
+/// Current retained work proves the initial Issue was acknowledged before it.
+/// EXISTS uses each table's registration-leading key, without scanning history.
+pub(super) const ISSUANCE_WORK: &str = "SELECT EXISTS(SELECT 1 FROM cursors WHERE registration=?1) OR EXISTS(SELECT 1 FROM deliveries WHERE registration=?1)";

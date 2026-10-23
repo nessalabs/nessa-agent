@@ -574,3 +574,24 @@ Fresh review at4953b288 reproduced three phase/ack/work contradictions. The corr
 | Current work scan | Stream distinct Queued registration IDs through existing ready index, capped atMAX_REGISTRATIONS+1; no terminal/history scan or new acknowledgement flag | Query work stays independent of terminal history |
 
 The same contextual owner runs before cold recovery and before the first owed publication. Canonical regressions must turn the three preserved acceptance demonstrations into explicit rejection expectations, with no new files, acknowledgements or retirement before refusal, and successful original-byte recovery. Existing domain/SQL failure controls remain retained.
+
+## W24 M2 issuance acknowledgement monotonicity
+
+Parent adjudicated the adjacent round-two finding as part of existing restoration,
+replay and cleanup invariants. An initial issuance obligation cannot become owed
+again after an operation that had to finish its acknowledgement. Validation uses
+only retained proof; absent historical rows do not authorize invented history.
+
+| Retained original Issue | Existing contextual owner's decision before effects | Evidence |
+| --- | --- | --- |
+| Owed, live Active, no retained cursor or delivery | Allow original initial publication/lost-ack recovery | Genuine failed initial publication, cold reopen and later queue acknowledgement |
+| Owed, ExpiryObserved or Stopped | Invalid: lifecycle advancement required issuance acknowledgement | Exact review reproduction, all first-reader kinds, live/cold refusal and original repair |
+| Owed, live Active with retained cursor or delivery | Invalid: that work required an earlier completed issuance obligation | Separate cursor-only and delivery-only retained proofs, no publication or SQL changes |
+| Owed, retired | Invalid: retirement required earlier issuance acknowledgement | Genuine retained retirement, original Issue reinserted, refusal then original recovery |
+| Published, any valid live/retired phase | Keep historical target/time correlation; do not treat published history as owed | Same adjacent histories accept original published evidence and recover |
+| No retained later work and Active | Do not infer completion merely from absence of history or an already present audit file | Idempotent original acknowledgement remains valid |
+| Work query | Existing registration-leading cursor primary key and delivery unique index answer EXISTS; no terminal-history scan | Query-plan and bounded SQL-step controls at full retained capacity |
+
+No new lifecycle state, acknowledgement flag, schema, authority or history owner
+is introduced. The existing contextual owner checks the owed Issue prerequisite;
+published original Issue still follows the existing target/time relationship.

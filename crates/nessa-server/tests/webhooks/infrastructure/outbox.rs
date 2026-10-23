@@ -2438,3 +2438,6 @@ mod cleanup_tests;
 
 #[path = "outbox/lifecycle_context.rs"]
 mod lifecycle_context_tests;
+
+#[path = "outbox/issuance_context.rs"]
+mod issuance_context_tests;
