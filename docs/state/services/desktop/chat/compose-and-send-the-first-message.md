@@ -4,7 +4,7 @@ title: "compose and send the first message"
 kind: "flow"
 status: "mixed"
 summary: "Open a new conversation, choose a model and write a message."
-sourceRevision: "11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1"
+sourceRevision: "4d718da047acbcf200c10feab62cb45b097ee939"
 parent: "desktop-chat"
 sources:
   - "src/panel/ui/use-composer.ts"
@@ -17,6 +17,7 @@ sources:
   - "crates/nessa-server/src/conversation/application/service.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/submissions.rs"
   - "src/panel/ui/use-composer.test.ts"
+  - "src/panel/ui/use-composer-ordering.test.tsx"
   - "src/panel/application/composer-expansion.test.ts"
   - "src/conversation/adapters/store/unsent.test.ts"
   - "docs/guides/gateway-chat.md"
@@ -98,7 +99,7 @@ sequenceDiagram
 
 ## Composer ownership while a send waits
 
-The expanded editor closes when its own submitted draft leaves. Switching tabs gives the selected tab a fresh collapsed editor; subsequently expanding that tab is a new local choice. A pending send from another tab must not collapse it when its draft is cleared.
+The expanded editor closes when its own submitted draft leaves. The independently reproduced application counterexample submits A and switches to B in the same task, before the hook observes A's emptied draft. Ordinary, separately delivered human-click reachability remains unverified. Switching tabs gives the selected tab a fresh collapsed editor; subsequently expanding that tab is a new local choice. A pending send from another tab must not collapse it when its draft is cleared.
 
 Submission callbacks also carry operation identity. An old refusal clears only its own pending observation, so it cannot prevent a newer accepted send from closing its editor. The correction is local presentation; the conversation store remains the admission and prepared-command owner.
 
@@ -114,6 +115,6 @@ stateDiagram-v2
     Retired --> [*]
 ```
 
-The [CO1–CO4 design table](../../../../design/user-flow-ordering.md#composer-draft-observation) owns these orderings. The [hook regressions](../../../../../src/panel/ui/use-composer-ordering.test.tsx) exercise the actual hook through a form with controlled submission promises; they do not establish provider completion.
+The [CO1–CO4 design table](../../../../design/user-flow-ordering.md#composer-draft-observation) owns these orderings. The [hook regressions](../../../../../src/panel/ui/use-composer-ordering.test.tsx) and [actual-store same-task case](../../../../../src/panel/ui/use-composer.test.ts) exercise the actual hook through a form with controlled submission promises; they do not establish provider completion.
 
 This is a bounded correction to the composer owner. The other linked source files have no implementation changes since the earlier checkpoint. The checkpoint advances to the committed correction after reconciling that hook and its regression tests; the other source owners retain their unchanged implementation.

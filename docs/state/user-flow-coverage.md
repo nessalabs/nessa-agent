@@ -5,10 +5,11 @@ kind: guide
 status: mixed
 summary: Start from a user goal, follow its owning feature, and inspect regression evidence and remaining verification gaps.
 parent: nessa
-sourceRevision: "11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1"
+sourceRevision: "4d718da047acbcf200c10feab62cb45b097ee939"
 sources:
   - docs/state/inventory.md
   - src/startup/application/gateway-startup.ts
+  - src/desktop/settings/ui/permission-rule-rows.tsx
   - src/session/adapters/lifecycle/supervisor.ts
   - src/session/adapters/lifecycle/browser-renewal.ts
   - src/session/adapters/lifecycle/session-lifecycle.tsx
@@ -141,6 +142,7 @@ Workspace panes and sessions retain their own identities. Fixture controls do no
 | Split/move/close panes | [Pane commands](../../src/desktop/workspace/adapters/store/pane-commands.test.ts), [session commands](../../src/desktop/workspace/adapters/store/session-commands.test.ts) | Geometry, focus and frame budgets in [workspace](services/desktop/workspace/README.md). |
 | Pair/approve/revoke devices | [Reducer cases](../../src/desktop/settings/model/linked-devices.test.ts), [rendered settings](../../src/desktop/settings/ui/linked-devices-tab.test.tsx) | [Linked-device flow](services/desktop/workspace/linked-devices.md); native activation and later revocation admission remain separate. |
 | Share/change/revoke conversation grants | [Store orderings](../../src/desktop/workspace/adapters/store/sharing-commands.test.ts), [gateway pages](../../src/desktop/workspace/adapters/gateway/sharing-gateway.test.ts) | [Sharing flow](services/desktop/workspace/conversation-sharing.md); fresh list versus acknowledged change and dialog/window ownership. |
+| Revoke remembered permission rules | [Request-owner regressions](../../src/desktop/settings/ui/permission-rule-rows.test.tsx) | [Revoke flow](services/desktop/workspace/permission-rule-revocation.md); focus cannot retire an in-flight command or its reread. |
 | MCP Apps/reviews | [Bridge](../../src/desktop/widgets/app/application/bridge.test.ts), [review notices](../../src/desktop/workspace/adapters/gateway/review-notices.test.ts) | Real iframe origins, stale calls and gateway permission/audit E2E. |
 
 ## Runtime and backend boundaries
@@ -157,7 +159,7 @@ The related simplification branch is `codex/simplify-submit-admission` at `152ce
 
 ## Executed checks and remaining gates
 
-Runs use Linux, Node 24.19.0 and pinned Nessa UI `d550fac7a59b8f9b6c9d6f1e7dced07ca38ee35b`. Source and tests are committed at the checkpoint on `codex/1087-user-flow-regressions`. Documentation is a dependent slice for [issue 1087](https://github.com/nessalabs/nessa-agent/issues/1087). The runtime changes are limited to the two reproduced frontend ownership defects; no SDK or gateway source changed.
+Runs use Linux, Node 24.19.0 and pinned Nessa UI `d550fac7a59b8f9b6c9d6f1e7dced07ca38ee35b`. Source and tests are committed at the checkpoint on `codex/1087-user-flow-regressions`. Documentation is a dependent slice for [issue 1087](https://github.com/nessalabs/nessa-agent/issues/1087). The runtime changes are limited to the three reproduced frontend ownership defects; no SDK or gateway source changed.
 
 - Initial lifecycle batch: **48 passed / 5 files**.
 - Startup/session/panel after renewal additions: **88 passed / 14 files**.
@@ -170,12 +172,16 @@ Runs use Linux, Node 24.19.0 and pinned Nessa UI `d550fac7a59b8f9b6c9d6f1e7dced0
 
 Final verification at the committed source checkpoint:
 
-- **33 added regression cases** across monitor ordering, supervisor timing/cleanup, browser renewal, mounted React/store lifetime and the two audit reproductions.
-- **129 passed / 19 targeted files**, **401 passed verification-library tests**. TypeScript, changed-file ESLint, formatting and production build passed.
-- **5130 passed, 2 failed / 390 frontend files**. The same two private-file fixture failures remain; security checks were preserved.
+- **41 added regression cases** across monitor ordering, supervisor timing/cleanup, browser renewal, mounted React/store lifetime and the three audit findings, including the qualified actual-store composer case.
+- **142 passed / 20 targeted files**, **401 passed verification-library tests**. TypeScript, changed-file ESLint, formatting and production build passed.
+- **5138 passed, 2 failed / 390 frontend files**. The same two private-file fixture failures remain; security checks were preserved.
 - **107 architecture tests passed, 1 failed to execute Cargo metadata** (`spawnSync cargo ENOENT`); the final architecture scan did not run after that prerequisite failed.
-- Chromium ordering script: **6/6 checks held**. Both uncertain outcomes retained **0 stale Download buttons and 1 dispatch**, then **1 button after a fresh check**. Both composer ownership checks held.
+- Chromium ordering script after the revoke follow-up: **7/7 checks held**. Both uncertain outcomes retained **0 stale Download buttons and 1 dispatch**, then **1 button after a fresh check**. Both composer ownership checks held. The permission-rule case retained one revoke dispatch and disabled controls through its reread, then enabled recovery.
 - Revert probes: original download hook gives **2 failed / 9 passed**; original composer hook gives **2 failed / 1 passed**. Both original hooks in the browser give **2/6 held**, with the four ordering checks failing. Fixed source restored and browser 6/6 held.
-- Nessa Docs validation accepted **125 pages / 0 catalog issues**; installed Chromium rendered **24 diagrams on all 13 changed pages**, opened **31 detail bindings** and followed **10 drill-down paths** with **0 page errors**. All **173 relative Markdown links** resolve. Changed-chart rendering, detail bindings, drill-down counts and source-review checkpoints are recorded in [the committed verification evidence](../../verification/desktop/evidence/user-flow-ordering/README.md) and the documentation handoff.
+- Nessa Docs validation accepted **126 pages / 0 catalog issues**; installed Chromium rendered **25 diagrams on all 14 changed pages**, opened **35 detail bindings** and followed **11 drill-down paths** with **0 page errors**. All **181 relative Markdown links** resolve. Changed-chart rendering, detail bindings, drill-down counts and source-review checkpoints are recorded in [the committed verification evidence](../../verification/desktop/evidence/user-flow-ordering/README.md) and the documentation handoff.
 
-The [design table](../design/user-flow-ordering.md) preserves the corrected orderings and precise frontend scope. No speculative logic simplification was made. Exact-head CI and independent review remain separate gates; the parent owns merging.
+The [design table](../design/user-flow-ordering.md) preserves the corrected orderings and precise frontend scope. The actual-store composer counterexample requires send and tab switch in the same task. Ordinary separate-click reachability remains unverified. The permission component adds seven regression cases; its baseline gives **6 failed / 6 passed**, and its Chromium baseline permits a second frontend dispatch (**6/7 held**). The actual-store composer file with the original hook gives **1 failed / 7 passed**. No duplicate physical effects or speculative logic simplification are claimed. Exact-head CI and independent review remain separate gates; the parent owns merging.
+
+## Separate focus triage
+
+The independent audit reported a system-Chromium overview focus result of 15/17. The [separate focus diagnostics](../reviews/user-flow-focus-triage-1087.md) record an initial 16/21 run with contention/reload exclusions and a frozen-source quick run at 18/21. The latter retains two assertion failures and one could-not-run result. No overview focus owner is changed by these fixes, and no causal attribution has been established. This finding remains for coordinator disposition; it is not a passed gate or an excuse to weaken assertions.

@@ -1,0 +1,662 @@
+{
+  "check": "focus",
+  "ok": false,
+  "started": "2026-10-23T07:37:55.212Z",
+  "finished": "2026-10-23T07:40:11.160Z",
+  "target": {
+    "url": "http://127.0.0.1:1438/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "focus-panes",
+      "engine": "chromium",
+      "layout": "columns",
+      "trail": [
+        {
+          "step": "⌘N",
+          "content": null,
+          "active": "TEXTAREA[Message]",
+          "activeInPane": "1",
+          "activeIsComposer": true,
+          "activeOverviewItem": null,
+          "focusedPane": "1",
+          "ok": true
+        },
+        {
+          "step": "⇧⌘N (new session beside)",
+          "content": null,
+          "active": "TEXTAREA[Message]",
+          "activeInPane": "1",
+          "activeIsComposer": true,
+          "activeOverviewItem": null,
+          "focusedPane": "2",
+          "ok": false
+        },
+        {
+          "step": "⌘\\ and a pick",
+          "content": null,
+          "active": "TEXTAREA[Message]",
+          "activeInPane": "4",
+          "activeIsComposer": true,
+          "activeOverviewItem": null,
+          "focusedPane": "4",
+          "ok": true
+        },
+        {
+          "step": "⇧⌘\\ (split down)",
+          "content": null,
+          "active": "TEXTAREA[Message]",
+          "activeInPane": "4",
+          "activeIsComposer": true,
+          "activeOverviewItem": null,
+          "focusedPane": "6",
+          "ok": false
+        },
+        {
+          "step": "⌘1",
+          "content": null,
+          "active": "TEXTAREA[Message]",
+          "activeInPane": "1",
+          "activeIsComposer": true,
+          "activeOverviewItem": null,
+          "focusedPane": "1",
+          "ok": true
+        },
+        {
+          "step": "⌘2",
+          "content": null,
+          "active": "TEXTAREA[Message]",
+          "activeInPane": "4",
+          "activeIsComposer": true,
+          "activeOverviewItem": null,
+          "focusedPane": "4",
+          "ok": true
+        },
+        {
+          "step": "⌘3",
+          "content": null,
+          "active": "TEXTAREA[Message]",
+          "activeInPane": "6",
+          "activeIsComposer": true,
+          "activeOverviewItem": null,
+          "focusedPane": "6",
+          "ok": true
+        },
+        {
+          "step": "⌘4",
+          "content": null,
+          "active": "TEXTAREA[Message]",
+          "activeInPane": "2",
+          "activeIsComposer": true,
+          "activeOverviewItem": null,
+          "focusedPane": "2",
+          "ok": true
+        },
+        {
+          "step": "⇧⌘]",
+          "content": null,
+          "active": "TEXTAREA[Message]",
+          "activeInPane": "2",
+          "activeIsComposer": true,
+          "activeOverviewItem": null,
+          "focusedPane": "2",
+          "ok": true
+        },
+        {
+          "step": "⇧⌘[",
+          "content": null,
+          "active": "TEXTAREA[Message]",
+          "activeInPane": "6",
+          "activeIsComposer": true,
+          "activeOverviewItem": null,
+          "focusedPane": "6",
+          "ok": true
+        },
+        {
+          "step": "⌘W",
+          "content": null,
+          "active": "TEXTAREA[Message]",
+          "activeInPane": "2",
+          "activeIsComposer": true,
+          "activeOverviewItem": null,
+          "focusedPane": "2",
+          "ok": true
+        },
+        {
+          "step": "⌘K closed without a pick",
+          "content": null,
+          "active": "TEXTAREA[Message]",
+          "activeInPane": "2",
+          "activeIsComposer": true,
+          "activeOverviewItem": null,
+          "focusedPane": "2",
+          "ok": true
+        },
+        {
+          "step": "Settings opened and left",
+          "content": null,
+          "active": "TEXTAREA[Message]",
+          "activeInPane": "2",
+          "activeIsComposer": true,
+          "activeOverviewItem": null,
+          "focusedPane": "2",
+          "ok": true
+        }
+      ],
+      "failures": [
+        "⇧⌘N (new session beside): caret is on TEXTAREA[Message] in pane 1, focused pane is 2",
+        "⇧⌘\\ (split down): caret is on TEXTAREA[Message] in pane 4, focused pane is 6"
+      ],
+      "ok": false
+    },
+    {
+      "name": "focus-overview",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "could not run: the overview list did not finish drawing",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "focus-overview-arriving",
+      "engine": "chromium",
+      "layout": "columns",
+      "missed": false,
+      "first": "retry-budget",
+      "last": "backpressure",
+      "afterEnd": {
+        "focused": "backpressure",
+        "tabbable": "backpressure"
+      },
+      "afterDown": {
+        "focused": "backpressure",
+        "tabbable": "backpressure"
+      },
+      "afterHome": {
+        "focused": "retry-budget",
+        "tabbable": "retry-budget"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1438/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-bound-keys",
+      "engine": "chromium",
+      "layout": "columns",
+      "records": [
+        {
+          "code": "KeyN",
+          "prevented": true
+        },
+        {
+          "code": "KeyW",
+          "prevented": true
+        },
+        {
+          "code": "KeyX",
+          "prevented": false
+        },
+        {
+          "code": "KeyN",
+          "prevented": true
+        }
+      ],
+      "original": 1,
+      "retained": 1,
+      "ordinary": 1,
+      "modal": true,
+      "failures": ["ordinary split command stopped working"],
+      "ok": false
+    },
+    {
+      "name": "focus-retired-layout",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "could not run: pane movement queued 5 frames; expected its one settlement",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "focus-home-handoff",
+      "engine": "chromium",
+      "layout": "columns",
+      "counts": [
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+      ],
+      "flights": {
+        "first-send-composer": [
+          {
+            "offset": null,
+            "easing": "linear",
+            "composite": "auto",
+            "transform": "translate(0px, -351.568px) scale(0.888889)",
+            "computedOffset": 0
+          },
+          {
+            "offset": null,
+            "easing": "linear",
+            "composite": "auto",
+            "transform": "none",
+            "computedOffset": 1
+          }
+        ],
+        "first-send-message": [
+          {
+            "offset": null,
+            "easing": "linear",
+            "composite": "auto",
+            "transform": "translate(-342.375px, 240.432px)",
+            "computedOffset": 0
+          },
+          {
+            "offset": null,
+            "easing": "linear",
+            "composite": "auto",
+            "transform": "none",
+            "computedOffset": 1
+          }
+        ]
+      },
+      "motionCount": 2,
+      "retirement": {
+        "priorMutations": 0,
+        "homeConnected": true,
+        "fieldConnected": true,
+        "trusted": true
+      },
+      "after": {
+        "content": null,
+        "active": "DIV",
+        "activeInPane": null,
+        "activeIsComposer": false,
+        "activeOverviewItem": null,
+        "focusedPane": "1"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-home-handoff-reduced",
+      "engine": "chromium",
+      "layout": "columns",
+      "counts": [
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+      ],
+      "flights": {},
+      "motionCount": 0,
+      "retirement": {
+        "priorMutations": 0,
+        "homeConnected": true,
+        "fieldConnected": true,
+        "trusted": true
+      },
+      "after": {
+        "content": null,
+        "active": "DIV",
+        "activeInPane": null,
+        "activeIsComposer": false,
+        "activeOverviewItem": null,
+        "focusedPane": "1"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-answers-overview",
+      "engine": "chromium",
+      "layout": "columns",
+      "trail": [
+        {
+          "step": "held ⌘↩",
+          "before": 6,
+          "after": 5
+        },
+        {
+          "step": "two queued ⌘↩ events within 250ms",
+          "queued": [
+            {
+              "sessionId": "signing",
+              "timeStamp": 5872.100000000093,
+              "repeat": false,
+              "isTrusted": false,
+              "prevented": true
+            },
+            {
+              "sessionId": "notarize",
+              "timeStamp": 5872.100000000093,
+              "repeat": false,
+              "isTrusted": false,
+              "prevented": true
+            }
+          ],
+          "gap": 0,
+          "before": 5,
+          "after": 4
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-answers-card",
+      "engine": "chromium",
+      "layout": "columns",
+      "trail": [
+        {
+          "step": "Allow Once, held ↩",
+          "before": 6,
+          "after": 5,
+          "typed": "keep these words"
+        },
+        {
+          "step": "Deny",
+          "before": 5,
+          "after": 4,
+          "typed": "keep these words"
+        },
+        {
+          "step": "Always Allow",
+          "before": 4,
+          "after": 3,
+          "typed": "keep these words"
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-regroup-row",
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "1440x900",
+      "trail": [
+        {
+          "step": "replied, Escape",
+          "under": "Working",
+          "content": "agents",
+          "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+          "activeInPane": null,
+          "activeIsComposer": false,
+          "activeOverviewItem": "retry-budget",
+          "focusedPane": "1"
+        },
+        {
+          "step": "waiting (row)",
+          "on": "row"
+        },
+        {
+          "step": "turn ended",
+          "under": "Finished",
+          "content": "agents",
+          "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+          "activeInPane": null,
+          "activeIsComposer": false,
+          "activeOverviewItem": "retry-budget",
+          "focusedPane": "1"
+        },
+        {
+          "step": "↓ (or ↑)",
+          "content": "agents",
+          "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+          "activeInPane": null,
+          "activeIsComposer": false,
+          "activeOverviewItem": "gpt6-catalog",
+          "focusedPane": "1"
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-regroup-peek",
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "1000x700",
+      "cannotRun": true,
+      "error": "could not run: Escape in the reply pill left the overview",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "focus-regroup-away",
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "1440x900",
+      "trail": [
+        {
+          "step": "replied, Escape",
+          "under": "Working",
+          "content": "agents",
+          "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+          "activeInPane": null,
+          "activeIsComposer": false,
+          "activeOverviewItem": "retry-budget",
+          "focusedPane": "1"
+        },
+        {
+          "step": "waiting (away)",
+          "on": "body"
+        },
+        {
+          "step": "turn ended",
+          "under": "Finished",
+          "content": "agents",
+          "active": "BODY",
+          "activeInPane": null,
+          "activeIsComposer": false,
+          "activeOverviewItem": null,
+          "focusedPane": "1"
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-regroup-held",
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "1440x900",
+      "trail": [
+        {
+          "step": "replied, Escape",
+          "under": "Working",
+          "content": "agents",
+          "active": "BUTTON[Retry budget for ACP reconnects. Codex, working.]",
+          "activeInPane": null,
+          "activeIsComposer": false,
+          "activeOverviewItem": "retry-budget",
+          "focusedPane": "1"
+        },
+        {
+          "step": "waiting (held)",
+          "on": "row"
+        },
+        {
+          "step": "turn ended",
+          "under": "Finished",
+          "content": "agents",
+          "active": "BUTTON[Retry budget for ACP reconnects. Codex, finished.]",
+          "activeInPane": null,
+          "activeIsComposer": false,
+          "activeOverviewItem": "retry-budget",
+          "focusedPane": "1"
+        },
+        {
+          "step": "↓ (or ↑)",
+          "content": "agents",
+          "active": "BUTTON[Model catalog for GPT-6. Codex, working.]",
+          "activeInPane": null,
+          "activeIsComposer": false,
+          "activeOverviewItem": "gpt6-catalog",
+          "focusedPane": "1"
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-gives-back-moved",
+      "engine": "chromium",
+      "layout": "columns",
+      "trail": [
+        {
+          "step": "moved its row",
+          "row": "gpt6-catalog"
+        },
+        {
+          "step": "after",
+          "on": "row",
+          "row": "gpt6-catalog"
+        },
+        {
+          "step": "scroll",
+          "was": 684,
+          "now": 684
+        },
+        {
+          "step": "↓ (or ↑)",
+          "on": "row",
+          "row": "split-panes"
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-gives-back-moved-pill",
+      "engine": "chromium",
+      "layout": "columns",
+      "trail": [
+        {
+          "step": "moved the row being replied to",
+          "session": "retry-budget",
+          "value": "half-way"
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-gives-back-beside",
+      "engine": "chromium",
+      "layout": "columns",
+      "trail": [
+        {
+          "step": "narrowed to 700"
+        },
+        {
+          "step": "after",
+          "on": "row",
+          "row": "retry-budget"
+        },
+        {
+          "step": "↓ (or ↑)",
+          "on": "row",
+          "row": "signing"
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-gives-back-show-all",
+      "engine": "chromium",
+      "layout": "columns",
+      "trail": [
+        {
+          "step": "Show All"
+        },
+        {
+          "step": "after",
+          "on": "row",
+          "row": "retry-budget"
+        },
+        {
+          "step": "↓ (or ↑)",
+          "on": "row",
+          "row": "signing"
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-home-scene",
+      "engine": "chromium",
+      "layout": "columns",
+      "after": {
+        "content": null,
+        "active": "BUTTON",
+        "activeInPane": "1",
+        "activeIsComposer": false,
+        "activeOverviewItem": null,
+        "focusedPane": "1"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "1440x900",
+      "trail": [
+        {
+          "step": "↓ ⌘R and type",
+          "from": "retry-budget",
+          "session": "signing",
+          "value": "status?"
+        },
+        {
+          "step": "sent",
+          "wasRequest": true,
+          "rowLeftNeedsYou": true,
+          "session": "signing",
+          "value": ""
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "focus-reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "size": "1000x700",
+      "trail": [
+        {
+          "step": "↓ ⌘R and type",
+          "from": "retry-budget",
+          "session": "signing",
+          "value": "status?"
+        },
+        {
+          "step": "sent",
+          "wasRequest": true,
+          "rowLeftNeedsYou": true,
+          "session": "signing",
+          "value": ""
+        }
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

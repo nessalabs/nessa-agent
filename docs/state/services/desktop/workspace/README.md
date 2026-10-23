@@ -15,6 +15,7 @@ sources:
   - "src/desktop/workspace/adapters/store/session-commands.ts"
   - "src/desktop/widgets/app/model/lifecycle.ts"
 diagramLinks:
+  Permissions: desktop-permission-rule-revocation
   Devices: desktop-linked-devices
   Sharing: desktop-conversation-sharing
   F0: "desktop-workspace-open-dismiss-and-reopen-the-desktop-window"
@@ -51,6 +52,8 @@ These boxes open related pages. They are parts of the system, rather than mutual
 ```mermaid
 flowchart TB
     Feature["Browse this feature"]
+    Permissions["Revoke remembered permission rules"]
+    Feature --> Permissions
     Devices["Pair, approve and revoke linked devices"]
     Sharing["Share a conversation and revoke access"]
     Feature --> Devices
@@ -74,6 +77,8 @@ flowchart TB
 ```
 
 ## Browse flows
+
+- [Revoke a remembered permission rule](permission-rule-revocation.md)
 
 - [Pair, approve and revoke a linked device](linked-devices.md)
 - [Share a conversation and revoke its grant](conversation-sharing.md)

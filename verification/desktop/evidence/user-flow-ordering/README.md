@@ -59,8 +59,9 @@ files** (the same two unchanged private-file acceptance fixtures). Architecture:
 **107 passed, 1 could not execute Cargo metadata**, reported by that test runner
 as a failure. Required exact-head CI remains pending on GitHub.
 
-Documentation slice: source/test checkpoint
-`11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1`; unchanged linked-device and
+Documentation source/test checkpoints include current
+`4d718da047acbcf200c10feab62cb45b097ee939`, the unchanged startup/session/download
+owners at `11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1`, and linked-device and
 sharing owners reviewed at mainline
 `0b8019cf45f99b285f10c41199875d474492c6d1`. Navigation-only changes do not
 advance unrelated checkpoints. Renderer/skill checkout:
@@ -73,10 +74,10 @@ npm run --silent validate:docs -- --project /workspace/nessa-agent
 NESSA_DOCS_PROJECT=/workspace/nessa-agent PORT=4312 npm start
 ```
 
-Final catalog: **125 pages, 0 issues** ([JSON](catalog.json)). Installed Chromium
-rendered **24 diagrams across all 13 changed state pages**, opened **31 authored
-node/edge detail bindings** and followed **10 drill-down paths**, with **0 page
-errors** ([per-page and navigation evidence](statecharts.json)). All **173
+Final catalog: **126 pages, 0 issues** ([JSON](catalog.json)). Installed Chromium
+rendered **25 diagrams across all 14 changed state pages**, opened **35 authored
+node/edge detail bindings** and followed **11 drill-down paths**, with **0 page
+errors** ([per-page and navigation evidence](statecharts.json)). All **181
 relative Markdown links** in changed state pages resolve to existing files.
 The viewer pass covered root → journey index → startup feature → session flow →
 supervisor → client recovery; gateway observation and runtime downloads;
@@ -117,3 +118,8 @@ changed-file ESLint, formatting and production build passed. Full frontend:
 fixture failures. The initial source commit's evidence above remains historical.
 System-Chromium overview/focus findings are being triaged separately and are
 not attributed to these changes.
+
+The separate focus diagnostic and its exclusions are recorded in
+[focus triage](../../../../docs/reviews/user-flow-focus-triage-1087.md). It is not
+attributed to the fixes, and its quick-run results are not substituted for the
+full desktop/browser gate. Source PR: https://github.com/nessalabs/nessa-agent/pull/1090.

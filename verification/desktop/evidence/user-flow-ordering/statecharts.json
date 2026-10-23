@@ -1,9 +1,9 @@
 {
   "engine": "installed Chromium",
-  "pages": 13,
-  "diagrams": 24,
-  "details": 31,
-  "navigationPaths": 10,
+  "pages": 14,
+  "diagrams": 25,
+  "details": 35,
+  "navigationPaths": 11,
   "pageErrors": 0,
   "results": [
     {
@@ -32,28 +32,7 @@
       "file": "docs/state/services/desktop/workspace/README.md",
       "diagrams": 1,
       "details": 0,
-      "navigation": 10
-    },
-    {
-      "id": "host-startup-authenticate-reconnect-expire-or-revoke-a-surface-session",
-      "file": "docs/state/services/host/startup/authenticate-reconnect-expire-or-revoke-a-surface-session.md",
-      "diagrams": 2,
-      "details": 0,
-      "navigation": 1
-    },
-    {
-      "id": "host-startup-recover-or-update-the-managed-gateway",
-      "file": "docs/state/services/host/startup/recover-or-update-the-managed-gateway.md",
-      "diagrams": 2,
-      "details": 0,
-      "navigation": 1
-    },
-    {
-      "id": "host-startup-save-provider-credentials-and-download-a-runtime",
-      "file": "docs/state/services/host/startup/save-provider-credentials-and-download-a-runtime.md",
-      "diagrams": 2,
-      "details": 0,
-      "navigation": 1
+      "navigation": 11
     },
     {
       "id": "desktop-conversation-sharing",
@@ -70,11 +49,32 @@
       "navigation": 2
     },
     {
+      "id": "host-startup-authenticate-reconnect-expire-or-revoke-a-surface-session",
+      "file": "docs/state/services/host/startup/authenticate-reconnect-expire-or-revoke-a-surface-session.md",
+      "diagrams": 2,
+      "details": 0,
+      "navigation": 1
+    },
+    {
+      "id": "host-startup-recover-or-update-the-managed-gateway",
+      "file": "docs/state/services/host/startup/recover-or-update-the-managed-gateway.md",
+      "diagrams": 2,
+      "details": 0,
+      "navigation": 1
+    },
+    {
       "id": "runtime-download",
       "file": "docs/state/services/host/startup/runtime-download.md",
       "diagrams": 1,
       "details": 3,
       "navigation": 0
+    },
+    {
+      "id": "host-startup-save-provider-credentials-and-download-a-runtime",
+      "file": "docs/state/services/host/startup/save-provider-credentials-and-download-a-runtime.md",
+      "diagrams": 2,
+      "details": 0,
+      "navigation": 1
     },
     {
       "id": "surface-session-supervision",
@@ -96,6 +96,13 @@
       "diagrams": 2,
       "details": 4,
       "navigation": 9
+    },
+    {
+      "id": "desktop-permission-rule-revocation",
+      "file": "docs/state/services/desktop/workspace/permission-rule-revocation.md",
+      "diagrams": 1,
+      "details": 4,
+      "navigation": 0
     }
   ],
   "paths": [
@@ -126,6 +133,10 @@
     {
       "from": "host-startup-save-provider-credentials-and-download-a-runtime",
       "to": "runtime-download"
+    },
+    {
+      "from": "desktop-workspace",
+      "to": "desktop-permission-rule-revocation"
     },
     {
       "from": "desktop-workspace",
