@@ -223,6 +223,13 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   lifts cancels nothing). _Check:_ unit tests `split-panes/model/drag.test.ts`,
   `split-panes/adapters/dom/drag.test.tsx`,
   `workspace/adapters/dom/split-panes-drag.test.tsx`.
+- [ ] **A compact card never acquires pane-preview glass.** Cancel and drop,
+  with full or reduced motion, neither set the pressing marker nor pulse the
+  blur-restoration marker, including the four deferred release frames. The
+  displayed swap commits on drop; cancel preserves order; both remove drag
+  residue. _Check:_ `drag.mjs` (`compact-glass-release`, Chromium and WebKit),
+  `split-panes/adapters/dom/drag.test.tsx`; resource ownership in
+  [`pane frame budget`](../../docs/design/pane-frame-budget.md).
 - [ ] **Only the primary button carries**: the right button joining the left
   mid-drag ends the drag; nothing is carried after it and its release drops
   nothing. _Check:_ `drag.mjs` (`chord-right-button`).
