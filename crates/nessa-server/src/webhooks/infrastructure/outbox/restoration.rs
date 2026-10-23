@@ -12,6 +12,9 @@ use crate::webhooks::{
     domain::{Phase, RegistrationPhase},
 };
 use nessa_local_database::rusqlite::{Connection, OptionalExtension};
+use std::collections::BTreeSet;
+
+pub(super) mod progress;
 
 pub(super) fn validate_owed(connection: &Connection) -> Result<(), OutboxError> {
     super::intents::validate(connection)?;
@@ -29,11 +32,22 @@ fn validate_records(connection: &Connection, owed: bool) -> Result<(), OutboxErr
     let rows = statement
         .query_map([], SavedAudit::row)
         .map_err(unavailable)?;
+    let mut initial_registrations = BTreeSet::new();
     for row in rows {
         let saved = row.map_err(unavailable)?;
         let is_owed = saved.published == 0;
         let (_, text) = saved.checked()?;
-        contextual(connection, &Record::decode(&text)?, is_owed)?;
+        let record = Record::decode(&text)?;
+        contextual(connection, &record, is_owed)?;
+        if progress::is_initial(&record) {
+            initial_registrations.insert(record.keys()?.1);
+            if initial_registrations.len() > 2 * MAX_REGISTRATIONS {
+                return Err(OutboxError::Invalid);
+            }
+        }
+    }
+    for registration in initial_registrations {
+        progress::validate(connection, registration)?;
     }
     Ok(())
 }
@@ -83,16 +97,6 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
             }
             match cause {
                 audit::Cause::CredentialIssue => {
-                    if owed
-                        && (!matches!(&live, Some(live) if live.lifecycle.phase() == RegistrationPhase::Active)
-                            || connection
-                                .query_row(ISSUANCE_WORK, [registration], |row| {
-                                    row.get::<_, bool>(0)
-                                })
-                                .map_err(unavailable)?)
-                    {
-                        return Err(OutboxError::Invalid);
-                    }
                     if *at_ms != issued_at {
                         return Err(OutboxError::Invalid);
                     }
@@ -138,7 +142,13 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
                         return Err(OutboxError::Invalid);
                     }
                 }
-                _ => return Err(OutboxError::Invalid),
+                audit::Cause::Admission
+                | audit::Cause::Response
+                | audit::Cause::Deadline
+                | audit::Cause::AdmissionRefused
+                | audit::Cause::Restart
+                | audit::Cause::SourceChanged
+                | audit::Cause::SourceCheckpoint => return Err(OutboxError::Invalid),
             }
         }
         Record::Cursor {
@@ -326,7 +336,3 @@ pub(super) fn validate_queued(connection: &Connection) -> Result<(), OutboxError
     }
     Ok(())
 }
-
-/// Current retained work proves the initial Issue was acknowledged before it.
-/// EXISTS uses each table's registration-leading key, without scanning history.
-pub(super) const ISSUANCE_WORK: &str = "SELECT EXISTS(SELECT 1 FROM cursors WHERE registration=?1) OR EXISTS(SELECT 1 FROM deliveries WHERE registration=?1)";

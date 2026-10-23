@@ -624,3 +624,34 @@ is required. It must not substitute its current caller for an offline actor or
 collapse supersession provenance into an explicit command. This auth checkpoint
 publishes provenance only; product command/source/sender composition remains
 separate and unfinished.
+
+### Retained initial-publication proof (parent decision A)
+
+Restoration and live publication share one ephemeral retained-progress summary;
+there is no new durable acknowledgement field. An Active registration may owe its
+initial projection only when exactly one retained initial identity is pending,
+no retained initial identity is published, and no retained later-work fact exists.
+A file already written with its SQL acknowledgement lost remains retryable under
+that same identity. Erased proof cannot establish historical acknowledgement:
+after all relevant proof is trimmed this design makes no post-trim guarantee.
+
+| Retained owner | Summary contribution and ordering |
+| --- | --- |
+| `registration_intents` | Original input binding, validated by the existing intent owner; no acknowledgement proof alone |
+| `registrations` | Validated Active is ambiguous; ExpiryObserved or Stopped contradicts pending initial publication |
+| `cursors` | A registration-keyed current cursor proves later work even without deliveries |
+| `deliveries` | Every phase proves later work, including retained terminal rows |
+| `source_reset_facts` | Retained immutable reset proves later work after current cursor/delivery deletion |
+| `source_reset_members` | Subordinate to reset/delivery owners through foreign keys and reference validation; no independent registration identity |
+| `audit` | Decode and contextual validation precede classification; exactly one initial identity, with published state distinct from file existence; every other closed variant is later progress |
+| `retirements` | Original target/stop/retirement identity proves completed initial and stop progress |
+
+The table inventory is checked against the canonical schema. Audit classification
+exhaustively matches Record and Cause variants, consuming the existing decoder
+and contextual validator. A registration-leading audit index keeps retained reads
+scoped. Cold restoration checks all retained initial families; live publication
+checks registrations with pending initial records before any file effects.
+Contradictory pending initial publication is rejected without repair or invented
+history. Both M3 substitutions (reset-only proof and a second initial UUID beside
+a published original) must fail before publication and on cold restore. Valid
+lost-answer recovery and unrelated registrations remain accepted.

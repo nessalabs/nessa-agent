@@ -22,3 +22,30 @@ fn schema_text_is_bounded_before_owned_definitions_are_constructed() {
         }
     }
 }
+
+#[test]
+fn retained_progress_inventory_covers_the_canonical_tables() {
+    let connection = Connection::open_in_memory().unwrap();
+    connection.execute_batch(SCHEMA).unwrap();
+    let tables: Vec<String> = definitions(&connection, 1000)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.kind == "table")
+        .map(|entry| entry.name)
+        .collect();
+    // Owners and proof rules are documented together in the design's retained
+    // initial-publication table. A new persisted family needs an explicit rule.
+    assert_eq!(
+        tables,
+        [
+            "audit",
+            "cursors",
+            "deliveries",
+            "registration_intents",
+            "registrations",
+            "retirements",
+            "source_reset_facts",
+            "source_reset_members",
+        ]
+    );
+}

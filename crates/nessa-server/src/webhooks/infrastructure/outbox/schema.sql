@@ -73,6 +73,7 @@ CREATE TABLE audit (
 
 CREATE INDEX unpublished_audit ON audit(published,source_reset);
 CREATE INDEX delivery_audit ON audit(delivery, published);
+CREATE INDEX registration_audit ON audit(registration);
 CREATE INDEX published_registration_audit ON audit(published) WHERE delivery IS NULL;
 CREATE TRIGGER delivery_audit_retire AFTER DELETE ON deliveries
 WHEN OLD.phase NOT IN ('queued','sending','retry')

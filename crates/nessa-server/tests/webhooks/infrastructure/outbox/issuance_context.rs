@@ -231,7 +231,7 @@ async fn genuine_initial_issue_lost_publication_ack_recovers_before_work() {
 }
 
 #[tokio::test]
-async fn issuance_work_proof_uses_registration_keys_at_retained_capacity() {
+async fn retained_progress_uses_registration_keys_at_retained_capacity() {
     use nessa_local_database::rusqlite::StatementStatus;
     let mut baseline = None;
     for count in [1, RETAINED_LIMIT] {
@@ -246,7 +246,7 @@ async fn issuance_work_proof_uses_registration_keys_at_retained_capacity() {
             tx.execute("INSERT INTO deliveries(id,registration,conversation,incarnation,position,scope,body,state) VALUES(?1,?3,'chat','incarnation',?2,'{}',X'00','{\"phase\":\"terminal\",\"due_at\":0}')", params![i.to_string(), i as i64+1,registration]).unwrap();
         }
         tx.commit().unwrap();
-        let mut q = c.prepare(restoration::ISSUANCE_WORK).unwrap();
+        let mut q = c.prepare(restoration::progress::WORK).unwrap();
         assert!(!q.query_row(["missing"], |r| r.get::<_, bool>(0)).unwrap());
         assert_eq!(q.get_status(StatementStatus::FullscanStep), 0);
         let steps = q.get_status(StatementStatus::VmStep);
@@ -263,4 +263,214 @@ async fn issuance_work_proof_uses_registration_keys_at_retained_capacity() {
             .query_row([&registration], |r| r.get::<_, bool>(0))
             .unwrap());
     }
+}
+
+async fn reject_initial_without_effects(mut f: Fixture, issue: Value) {
+    insert_issue(&f, &issue, false);
+    let before = retained(&f);
+    let held = f.audit.with_extension("held");
+    std::fs::rename(&f.audit, &held).unwrap();
+    assert_eq!(f.store.due(3000).await.err(), Some(OutboxError::Invalid));
+    assert_eq!(retained(&f), before);
+    assert!(!f.audit.exists());
+    std::fs::rename(held, &f.audit).unwrap();
+    let placeholder = Fixture::new().await;
+    drop(std::mem::replace(&mut f.store, placeholder.store));
+    let bytes = std::fs::read(&f.path).unwrap();
+    let files = f.audits().len();
+    assert!(matches!(
+        SqlOutbox::open(&f.path, f.audit.clone(), f.clock.clone()),
+        Err(OutboxError::Invalid)
+    ));
+    assert_eq!(std::fs::read(&f.path).unwrap(), bytes);
+    assert_eq!(f.audits().len(), files);
+    let c = Connection::open(&f.path).unwrap();
+    c.execute(
+        "DELETE FROM audit WHERE id=?1",
+        [issue["recordId"].as_str().unwrap()],
+    )
+    .unwrap();
+    drop(c);
+    f.store = SqlOutbox::open(&f.path, f.audit.clone(), f.clock.clone()).unwrap();
+    f.store.due(3000).await.unwrap();
+}
+
+#[tokio::test]
+async fn initial_rejection_with_only_retained_source_history() {
+    let f = Fixture::new().await;
+    let issue = f
+        .audits()
+        .into_iter()
+        .find(|v| v["cause"] == "credential_issue")
+        .unwrap();
+    f.store.queue(f.record(1)).await.unwrap();
+    assert_eq!(
+        f.store.queue(replaced_source(f.record(2))).await,
+        Err(OutboxError::ResetRequired)
+    );
+    {
+        let c = f.store.owner.connection.lock().unwrap();
+        c.execute("DELETE FROM cursors", []).unwrap();
+        c.execute("DELETE FROM deliveries", []).unwrap();
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM source_reset_facts", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(restoration::validate(&c), Ok(()));
+    }
+    reject_initial_without_effects(f, issue).await;
+}
+
+#[tokio::test]
+async fn published_initial_identity_excludes_a_second_pending_identity() {
+    let f = Fixture::new().await;
+    let mut issue = f
+        .audits()
+        .into_iter()
+        .find(|v| v["cause"] == "credential_issue")
+        .unwrap();
+    assert_eq!(
+        f.store
+            .owner
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT published FROM audit WHERE id=?1",
+                [issue["recordId"].as_str().unwrap()],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    issue["recordId"] = json!(Uuid::new_v4().to_string());
+    reject_initial_without_effects(f, issue).await;
+}
+
+#[tokio::test]
+async fn two_pending_initial_identities_are_not_lost_ack_recovery() {
+    let f = Fixture::new().await;
+    let mut issue = f
+        .audits()
+        .into_iter()
+        .find(|v| v["cause"] == "credential_issue")
+        .unwrap();
+    f.store
+        .owner
+        .connection
+        .lock()
+        .unwrap()
+        .execute("UPDATE audit SET published=0", [])
+        .unwrap();
+    issue["recordId"] = json!(Uuid::new_v4().to_string());
+    reject_initial_without_effects(f, issue).await;
+}
+
+#[tokio::test]
+async fn all_erased_proof_leaves_initial_acknowledgement_undetermined() {
+    let mut f = Fixture::new().await;
+    let issue = f
+        .audits()
+        .into_iter()
+        .find(|v| v["cause"] == "credential_issue")
+        .unwrap();
+    // Deliberately erase SQL proof. The original file alone cannot establish
+    // SQL acknowledgement: it is also the valid file-written/ack-lost case.
+    f.store
+        .owner
+        .connection
+        .lock()
+        .unwrap()
+        .execute("DELETE FROM audit", [])
+        .unwrap();
+    insert_issue(&f, &issue, false);
+    f.store = reopen_store(&mut f).await.unwrap();
+    f.store.due(3000).await.unwrap();
+    assert_eq!(f.audits().len(), 1);
+    assert_eq!(
+        f.store
+            .owner
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT count(*) FROM audit WHERE published=0", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn two_published_initial_identities_are_also_contradictory() {
+    let mut f = Fixture::new().await;
+    let mut issue = f
+        .audits()
+        .into_iter()
+        .find(|v| v["cause"] == "credential_issue")
+        .unwrap();
+    issue["recordId"] = json!(Uuid::new_v4().to_string());
+    insert_issue(&f, &issue, true);
+    assert!(matches!(
+        reopen_store(&mut f).await,
+        Err(OutboxError::Invalid)
+    ));
+}
+
+#[tokio::test]
+async fn retained_audit_summary_reads_only_its_registration_at_real_limit() {
+    use nessa_local_database::rusqlite::StatementStatus;
+    let f = Fixture::new().await;
+    let mut c = f.store.owner.connection.lock().unwrap();
+    // Query-plan metadata only, not claimed as valid restorable evidence.
+    let tx = c.transaction().unwrap();
+    for i in 0..RETAINED_LIMIT {
+        tx.execute("INSERT INTO audit(id,registration,record,published) VALUES(?1,'other-registration','{}',1)", [i.to_string()]).unwrap();
+    }
+    tx.commit().unwrap();
+    let mut q = c.prepare(restoration::progress::AUDIT).unwrap();
+    let mut rows = q.query([f.registration.id.to_string()]).unwrap();
+    assert!(rows.next().unwrap().is_some());
+    assert!(rows.next().unwrap().is_none());
+    drop(rows);
+    assert_eq!(q.get_status(StatementStatus::FullscanStep), 0);
+    assert!(q.get_status(StatementStatus::VmStep) < 64);
+    let mut rows = q.query(["other-registration"]).unwrap();
+    let mut count = 0;
+    while rows.next().unwrap().is_some() {
+        count += 1;
+    }
+    assert_eq!(count, RETAINED_LIMIT);
+    drop(rows);
+    assert_eq!(q.get_status(StatementStatus::FullscanStep), 0);
+    assert!(q.get_status(StatementStatus::VmStep) < (RETAINED_LIMIT * 16) as i32);
+}
+
+#[tokio::test]
+async fn unowned_reset_is_contradictory_evidence_before_initial_effects() {
+    let f = Fixture::new().await;
+    let issue = f
+        .audits()
+        .into_iter()
+        .find(|v| v["cause"] == "credential_issue")
+        .unwrap();
+    {
+        let c = f.store.owner.connection.lock().unwrap();
+        c.execute("DELETE FROM audit", []).unwrap();
+        // Explicit malformed-state substitution, not fabricated valid history.
+        c.execute(
+            "INSERT INTO source_reset_facts(id,registration,fact,refs) VALUES(?1,?2,'{}',0)",
+            params![Uuid::new_v4().to_string(), f.registration.id.to_string()],
+        )
+        .unwrap();
+    }
+    insert_issue(&f, &issue, false);
+    let held = f.audit.with_extension("held");
+    std::fs::rename(&f.audit, &held).unwrap();
+    let before = retained(&f);
+    assert_eq!(f.store.due(3000).await.err(), Some(OutboxError::Invalid));
+    assert_eq!(retained(&f), before);
+    assert!(!f.audit.exists());
+    std::fs::rename(held, &f.audit).unwrap();
 }
