@@ -1,0 +1,119 @@
+[
+  {
+    "rule": "baseline",
+    "exit": 0,
+    "sourceSha256": "f6f707ca2474fb3dad0abb0e6fbe5feabe32a9fa633204f30448d823a39d2e10",
+    "mutantCompiled": true,
+    "failedTests": []
+  },
+  {
+    "rule": "hmac-verification",
+    "exit": 101,
+    "sourceSha256": "f6f707ca2474fb3dad0abb0e6fbe5feabe32a9fa633204f30448d823a39d2e10",
+    "mutantCompiled": true,
+    "failedTests": [
+      "external_events::entrypoint::http::probe_tests::signature_scope_follows_binding",
+      "external_events::entrypoint::http::probe_tests::signatures_and_binding_are_checked"
+    ]
+  },
+  {
+    "rule": "freshness",
+    "exit": 101,
+    "sourceSha256": "f6f707ca2474fb3dad0abb0e6fbe5feabe32a9fa633204f30448d823a39d2e10",
+    "mutantCompiled": true,
+    "failedTests": [
+      "external_events::entrypoint::http::probe_tests::freshness_is_checked"
+    ]
+  },
+  {
+    "rule": "canonical-timestamp",
+    "exit": 101,
+    "sourceSha256": "f6f707ca2474fb3dad0abb0e6fbe5feabe32a9fa633204f30448d823a39d2e10",
+    "mutantCompiled": true,
+    "failedTests": [
+      "external_events::entrypoint::http::probe_tests::freshness_is_checked"
+    ]
+  },
+  {
+    "rule": "single-signature-headers",
+    "exit": 101,
+    "sourceSha256": "f6f707ca2474fb3dad0abb0e6fbe5feabe32a9fa633204f30448d823a39d2e10",
+    "mutantCompiled": true,
+    "failedTests": [
+      "external_events::entrypoint::http::probe_tests::repeated_headers_are_rejected"
+    ]
+  },
+  {
+    "rule": "strict-envelope",
+    "exit": 101,
+    "sourceSha256": "f6f707ca2474fb3dad0abb0e6fbe5feabe32a9fa633204f30448d823a39d2e10",
+    "mutantCompiled": true,
+    "failedTests": [
+      "external_events::entrypoint::http::probe_tests::envelope_shape_is_strict"
+    ]
+  },
+  {
+    "rule": "body-byte-bound",
+    "exit": 101,
+    "sourceSha256": "f6f707ca2474fb3dad0abb0e6fbe5feabe32a9fa633204f30448d823a39d2e10",
+    "mutantCompiled": true,
+    "failedTests": [
+      "external_events::entrypoint::http::probe_tests::body_limit_is_enforced"
+    ]
+  },
+  {
+    "rule": "body-deadline",
+    "exit": 101,
+    "sourceSha256": "f6f707ca2474fb3dad0abb0e6fbe5feabe32a9fa633204f30448d823a39d2e10",
+    "mutantCompiled": true,
+    "failedTests": [
+      "external_events::entrypoint::http::probe_tests::body_deadline_is_enforced"
+    ]
+  },
+  {
+    "rule": "binding-signature-scope",
+    "exit": 101,
+    "sourceSha256": "f6f707ca2474fb3dad0abb0e6fbe5feabe32a9fa633204f30448d823a39d2e10",
+    "mutantCompiled": true,
+    "failedTests": [
+      "external_events::entrypoint::http::probe_tests::signature_scope_follows_binding"
+    ]
+  },
+  {
+    "rule": "signature-decode-allocation",
+    "exit": 101,
+    "sourceSha256": "f6f707ca2474fb3dad0abb0e6fbe5feabe32a9fa633204f30448d823a39d2e10",
+    "mutantCompiled": true,
+    "failedTests": [
+      "external_events::entrypoint::http::probe_tests::signature_length_bounds_decode_allocation"
+    ]
+  },
+  {
+    "rule": "handler-capacity",
+    "exit": 101,
+    "sourceSha256": "f6f707ca2474fb3dad0abb0e6fbe5feabe32a9fa633204f30448d823a39d2e10",
+    "mutantCompiled": true,
+    "failedTests": [
+      "external_events::entrypoint::http::probe_tests::cancelled_responses_retain_capacity_until_admission_settles",
+      "external_events::entrypoint::http::probe_tests::full_capacity_refuses_another_handler"
+    ]
+  },
+  {
+    "rule": "caller-loss-capacity",
+    "exit": 101,
+    "sourceSha256": "f6f707ca2474fb3dad0abb0e6fbe5feabe32a9fa633204f30448d823a39d2e10",
+    "mutantCompiled": true,
+    "failedTests": [
+      "external_events::entrypoint::http::probe_tests::cancelled_responses_retain_capacity_until_admission_settles"
+    ]
+  },
+  {
+    "rule": "content-type",
+    "exit": 101,
+    "sourceSha256": "f6f707ca2474fb3dad0abb0e6fbe5feabe32a9fa633204f30448d823a39d2e10",
+    "mutantCompiled": true,
+    "failedTests": [
+      "external_events::entrypoint::http::probe_tests::content_type_is_explicit"
+    ]
+  }
+]

@@ -37,6 +37,8 @@ nessa-gateway-endpoint = { path = "../nessa-gateway-endpoint" }
 nessa-auth = { path = "../nessa-auth" }
 nessa-agent-credentials = { path = "../nessa-agent-credentials" }
 axum = { version = "0.8", features = ["ws"] }
+# Name the bounded HTTP-body rejection separately from transport read failures.
+http-body-util = "0.1"
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 # `raw_value` keeps each mcpServers entry's original JSON so a repeated
@@ -108,6 +110,8 @@ security-framework = "3.7"
 security-framework-sys = "2.17"
 
 [dev-dependencies]
+# Cancel actual HTTP service futures at a deterministic command-storage gate.
+tower = { version = "0.5", features = ["util"] }
 # Online process tests drive the example's command entry point.
 nessa-client-core = { path = "../nessa-client-core", features = ["cli"] }
 # Actual native-session tests share the existing paired gateway process fixture.
