@@ -322,26 +322,31 @@ Experimental turns it on; the rail stands beside the workspace in
   combination of the rail, the sidebar, the session list and the Agents
   overview, at 1440, 1000 and 760 wide. _Check:_ `columns.mjs --only no-overlap`
   (Chromium and WebKit, both layouts).
-- [ ] **The rail's toggle never moves**: it is at the control edge of the
-  window's bottom-left corner in every state, and hidden exactly when the rail
-  and the sidebar are both closed. **"nessa Studio" is at the same pixels in
-  Agents and in an item's full view**, and never under the toggle.
-  _Check:_ `columns.mjs --only rail-corner`.
+- [ ] **Conversation cards clear the window toolbar**: New Session
+  is absent from the window toolbar; ⌘N still opens a new conversation, and
+  conversation cards begin below the toolbar; the frameless sidebar wash
+  extends to the window top.
+  Sidebar content clears the toolbar, with no card rim behind the traffic lights.
+  Sidebar and session-list toggles are adjacent, followed by Back and Forward.
+  The 48px rail starts its icons
+  below the controls on every host. The toggle stays at the bottom-left control
+  edge, including when both side columns are closed, and a folded rail has a
+  reserved slot beside "nessa Studio" in the
+  sidebar footer. _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
+  WebKit, both layouts; coding standards gate 17).
 - [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
-  ⌥⌘S change nothing behind it. _Check:_ `columns.mjs --only rail-view-inert`.
+  ⌥⌘S change nothing behind it. Its opaque view covers the workspace cards and
+  chat controls all the way to the top edge. One top sidebar toggle folds and
+  reopens the rail in Notes, Calendar, Browser and Files.
+  _Check:_ `columns.mjs --only rail-view-inert`.
 - [ ] **An item's view opens empty, and a slow load shows only text**: no
   loader before 3 s; still loading at 3 s, the kit's `LoadingText` sweeps
   "Loading Files" with no panel or border around it. _Check:_
   `columns.mjs --only rail-loading`.
-- [ ] **The open rail holds the traffic lights in its top row**: in the macOS
-  window the lights never move; the open rail is wide enough for them, its
-  items are centred under them, and so is its toggle, open or closed; the
-  first card starts as far past the green button as the red one is from the
-  window's edge. Open, closed or off, the titlebar's first control starts
-  where the lights end. _Check:_ `conversation-stress.mjs` step `rail` (the
-  fake host makes the page macOS; `columns.mjs` keeps the browser's rail);
-  `side-rail.test.tsx` ties the rail's width to `traffic_lights.rs` and
-  `styles.css`.
+- [ ] **The top bar clears the traffic lights regardless of the rail**:
+  its controls keep their window positions as the rail opens and closes below
+  them. _Check:_ `columns.mjs --only shell-chrome,titlebar-row,titlebar-steady`;
+  `conversation-stress.mjs` step `rail` also sends and receives with it open.
 - [ ] **The titlebar's controls never pass under the window's controls while
   the rail opens or closes**: every frame draws them between where they were
   and where they land. _Check:_
@@ -385,6 +390,9 @@ _ADR 238 › Focus follows the focused pane_; keys in
   in dev, confirm with `--mode prod` before reporting.
 
 ## Agents overview
+
+- [ ] **An empty Agents view has no enclosing card rim or fill.** The existing
+  empty overview case in `overview.test.tsx` checks that its surface stays bare.
 
 Header and group measurements wait for the published `data-overview-listed`
 marker, including a reopened list; finite motion finishing does not mean its
@@ -750,7 +758,10 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   names, the shell's own words (`if`, `then`, `do`, `fi`) left out (no row when it would only repeat the command's first
   word); under it the script, one step per line where the card
   follows its quotes and exactly as sent where it does not, then the tool it
-  calls, the tool's other input, and Copy Command. A script over six lines
+  calls and the tool's other input. Copy Command is an icon in the command's
+  upper-right corner, visible on hover and keyboard focus (also on touch); it
+  copies the original command even when folded. Deny stays left-aligned at
+  each card width. A script over six lines
   shows its first four and Show All N Lines; the next approval starts folded.
   A title that only repeats the tool's name is not shown as a reason
   (`approval-card.tsx`, `approval-gist.ts`).
@@ -992,8 +1003,7 @@ phone's scanner is not this screen.
   `settings-view.test.tsx`, `settings-controls.test.tsx`; by eye.
 - [ ] **A setting for one layout says so elsewhere**: "Show session list" and
   "Keep running sessions at the top" work in three columns; in sessions in
-  the sidebar and classic their switches are disabled and say "Three columns
-  only". _Check:_ unit test `settings-view.test.tsx` (per layout).
+  the sidebar their switches are disabled and say "Three columns only". _Check:_ unit test `settings-view.test.tsx` (per layout).
 - [ ] **Segmented choices are one Tab stop each option, for now**: they are
   the kit's `SegmentedControl` (a group of pressed buttons, no arrow keys);
   one Tab stop with arrows waits on its radio-group mode (nessalabs/nessa_ui#120).
@@ -1173,7 +1183,7 @@ pointer, and outlined by `--desktop-focus-outline` under the keyboard.
 
 - [ ] **Every icon button holds the contract, and none of the replaced classes
   is left.** _Check:_ `icon-buttons.mjs` (`contract`, per engine and layout;
-  `--layout classic` for the classic shell). Rule: `ui/icon-button.css`.
+  both layouts). Rule: `ui/icon-button.css`.
 - [ ] **The pointer fills it with the stronger hover.** _Check:_
   `icon-buttons.mjs` (`hover`).
 - [ ] **Keyboard focus on one draws an outline.** _Check:_ `icon-buttons.mjs`
@@ -1217,26 +1227,24 @@ it is redesigned on its own branch.
   commit no row was either component, and unread weighed 560, 600 or 650 by
   list.
 - [ ] **The window's name is one control in every place (#657).** "nessa
-  Studio" at the workspace's and the classic shell's foot and "‹ nessa Agent"
+  Studio" at the workspace's foot and "‹ nessa Agent"
   at Settings' are `ui/identity.tsx`: a pill the corner controls' size and
   radius, "nessa" and its word in `--desktop-muted`, named, filled with
   `--desktop-hover` under the pointer; Settings' row stands where the
   window's does. _Check:_ `shared-controls.mjs` (`identity`, per engine and
   layout; "‹ nessa Agent" measured inside Settings, over the inert window
-  that keeps its own; and in the classic shell). Rule:
+  that keeps its own). Rule:
   `ui/identity.css`. Sampling waits for its finite hover transition through
   `waitUntilSettled`, retaining the exact fill assertion. Browser measurement
   ordering is in [UI workspace load](../../docs/design/ui-workspace-load.md#verification-sampling-order).
-  At the base commit the classic shell's read
-  "nessaStudio" with no name, no pill and no fill, in the kit's grey.
 - [ ] **Every empty state is the kit's `EmptyState`, in the window's type
   (#657).** The session list's, the workspace's failure, an overview group
-  shown alone, "Nothing needs you", the classic shell's notes, the subagents
+  shown alone, "Nothing needs you", the right panel's "Nothing open", the subagents
   panel's and a widget's line: a quiet one (`compact`) a faint footnote line
   with its action 12px under it, a titled one at reading size, 600, its
   sentence muted. Where each sits is its surface's. _Check:_
   `shared-controls.mjs` (`empty`: the quiet ones — the session list with no
-  match, the classic shell's notes); `gateway-states.mjs` reads the
+  match, the right panel's "Nothing open"); `gateway-states.mjs` reads the
   workspace's sentence from the kit's title. The titled ones ("Nothing needs
   you", the subagents panel's) show only with nothing listed, which the
   sample never is: their type is held by #657's before/after shots
@@ -2019,9 +2027,9 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   naming 3 answers "Shared.".
 - [ ] **Tab stays in the dialog; Escape closes it and focus is back on the
   session's row.** _Check:_ `focus` (waits for that end state, 3 s).
-- [ ] **A pinned session under a folded sidebar gets that focus on the list's
-  row, not the inert sidebar copy.** _Check:_ `focus-pinned` (the sample
-  workspace, which can pin; the gateway keeps no pin).
+- [ ] **A pinned session gets that focus on its row in the list's Pinned
+  group, its only row.** _Check:_ `focus-pinned` (the sample workspace,
+  which can pin; the gateway keeps no pin).
 - [ ] **The panel fits the window.** _Check:_ `fit-1200`, `fit-420`; with
   `--shots <dir>`, screenshots of the grants, Drive form, budget, refusal,
   changed refusal and the narrow panel.
@@ -2029,7 +2037,40 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   _Check:_ `empty`. "No linked devices yet." and Link a Device, no Done and no
   Share; the link closes the dialog and opens Settings on Linked devices.
 
+## Session list: pinned first, request cards (#1084)
+
+- [ ] **In three columns the sidebar lists channels only; a channel's pinned
+  sessions lead its list under "Pinned", each listed once.** _Check:_
+  `columns.mjs` (`channels-alone`); Sessions in sidebar still discloses a
+  channel's sessions.
+- [ ] **Each waiting row the list asks about is a request card, answered from
+  the list.** It reads the command as the transcript card does
+  (`approvalGist`), offers the review's refusal and primary allow on one row,
+  every other answer in the menu beside them.
+  It allows only a request it shows whole, by a rule over the request
+  (`allowableFromList`): nothing in the tool's input but the command, at
+  most three lines and 180 characters; any other offers its refusals and
+  Review in Chat. _Check:_ `columns.mjs` (`list-request`: Allow moves
+  the row out of Needs you; `list-request-claude`: Claude's five-answer shell
+  review at the list's narrowest, read as the transcript reads it, answers
+  that fit their words, under 260px); `conversation-stress.mjs`
+  (`listAnswer`); unit tests `list-request.test.tsx` (only what is drawn is
+  asked: never a pinned row, a row the search hides, or a folded list's; the
+  bound of 12; a card's controls keep their keys).
+
+## The window never scrolls sideways (#1084)
+
+- [ ] **The window and the workspace clip, never scroll** (`overflow: clip`),
+  so no focus or scroll-into-view moves the columns under their edges; the
+  tab strip brings a clipped tab into view by scrolling itself alone.
+  _Check:_ `conversation-stress.mjs` (`window`: the chat surface reaches the
+  window's right edge after many tabs and steps).
+
 ## Session rows: hover, menu, rename, delete, swipe
+
+- [ ] **Pinning a session closes its menu without painting a detached copy at
+  the top-left.** Row-moving actions dismiss immediately when their anchor can
+  move; `session-rows.mjs` samples every closing frame in Chromium and WebKit.
 
 `session-rows.mjs` runs against the dev server's in-memory workspace, in the
 session list (`session-list.tsx`, `session-row-actions.tsx`). The swipe is
@@ -2040,7 +2081,7 @@ row.
   _Check:_ `hover`. Away from the row its time shows and no button does;
   under it the two show at 26 px and the time does not.
 - [ ] **More holds what the row can do, less the ways to open it; Rename
-  edits the title where it stood.** _Check:_ `more`. Rename, Pin to Sidebar,
+  edits the title where it stood.** _Check:_ `more`. Rename, Pin (Unpin when pinned), Fork,
   (Share…,) Archive, Delete…; the row keeps its buttons while the menu is
   open; the field takes focus and ↩ keeps "Rain plan".
 - [ ] **Delete asks first.** _Check:_ `delete`. Cancel deletes nothing, and
@@ -2140,3 +2181,16 @@ rejected acknowledgement. SDK ACP tests cover remembered allow and deny, exact
 logical attribution and the mapped provider wire option. Service tests keep a
 second review pending and require live publication after success or consumption
 with a typed failure.
+
+### Workspace document tabs (#1077)
+
+- `columns.mjs --only window-tabs` checks tabs in Chromium and WebKit: switching
+  tabs retains unsent text; ⌘D splits the chat in front into a merged tab; a
+  single chat's tab shows it alone and going back to the merged tab restores
+  its split; tab closure removes the chat. Home/End select and reveal tabs;
+  overflow leaves New Tab clickable at narrow widths. There is no Split Right
+  button in the tab strip: splitting is a drag, ⌘D or a pane's menu.
+- The `fresh` conversation-stress step types the first message, switches away
+  and back through document tabs, then sends that same text through the gateway.
+- By hand: resize and drag existing pane headers with tabs visible, and inspect
+  windowed/fullscreen toolbar alignment with the native traffic lights.

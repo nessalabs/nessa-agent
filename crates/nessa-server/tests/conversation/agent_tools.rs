@@ -1566,7 +1566,7 @@ fn a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit() {
         &id(),
         "turn",
         "completed",
-        "é".repeat(limit),
+        Some("é".repeat(limit)),
         limit,
     );
     assert!(text.len() <= limit, "{} > {limit}", text.len());
@@ -1577,10 +1577,42 @@ fn a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit() {
             &id(),
             "turn",
             "completed",
-            "reply".into(),
+            Some("reply".into()),
             limit,
         );
         assert!(text.len() <= limit, "{} > {limit}", text.len());
+    }
+}
+
+/// The report's first line is a contract with the desktop, which shows a
+/// report as one line naming the chat and how its turn ended
+/// (`src/desktop/workspace/model/thread-report.ts`). Both read the same cases.
+#[test]
+fn a_report_heading_is_the_one_the_desktop_reads() {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/thread-report.json"))
+            .expect("the shared cases parse");
+    for case in cases["cases"].as_array().expect("cases") {
+        let child = ConversationId::new(case["child"].as_str().unwrap()).unwrap();
+        let reply = case["reply"].as_str().map(str::to_owned);
+        let text = crate::conversation::application::service::report_text_for_test(
+            &child,
+            case["execution"].as_str().unwrap(),
+            case["outcome"].as_str().unwrap(),
+            reply,
+            ConversationLimits::default().max_input_bytes,
+        );
+        assert_eq!(text.lines().next(), case["header"].as_str());
+    }
+    // Every outcome a report can name is a case the desktop reads.
+    let named: Vec<&str> = cases["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .map(|case| case["outcome"].as_str().unwrap())
+        .collect();
+    for outcome in crate::conversation::application::service::report_outcomes_for_test() {
+        assert!(named.contains(&outcome), "no shared case for {outcome}");
     }
 }
 

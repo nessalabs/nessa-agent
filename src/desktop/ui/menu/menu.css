@@ -193,6 +193,14 @@
   animation: desktop-menu-out-chosen 230ms linear forwards;
 }
 
+/* A row-moving action loses its anchor as the source updates. Do not keep
+   its closing surface alive at the popper's fallback origin (session-rows.mjs). */
+.desktop-popover[role="menu"][data-state="closed"]:has(
+    [data-chosen][data-close-immediately]
+  ) {
+  animation: none;
+}
+
 .desktop-popover[role="menu"] [role^="menuitem"][data-chosen] {
   background: var(--desktop-material-highlight);
   animation: desktop-menu-chosen 110ms linear;

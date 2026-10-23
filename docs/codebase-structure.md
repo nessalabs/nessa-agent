@@ -267,7 +267,8 @@ against a private scripted gateway.
   session groups, the new-session lifecycle, and what a pane shows —
   `pane-item.ts`, a session or a widget, with the one codec to split panes'
   opaque key), `application/` (the
-  `WorkspaceSource` port and pure use cases over the workspace's state),
+  `WorkspaceSource` port and pure use cases over the workspace's state, including
+  switching and opening the window's tabs in `usecases/session-tabs.ts`),
   `adapters/` (the Redux slice, commands — one list in `store/commands.ts`,
   implemented for the index, the panes, and the session in
   `store/index-commands.ts`, `store/pane-commands.ts`, and

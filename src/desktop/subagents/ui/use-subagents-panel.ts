@@ -13,7 +13,7 @@ import {
   selectedSubagent,
   subscribeSubagentChoice,
 } from "../application/selection"
-import { byActivity, summaryLine, type Subagent } from "../model/subagent"
+import { byActivity, subagentGroups, type Subagent } from "../model/subagent"
 import { useStickToBottom } from "./use-stick-to-bottom"
 
 export function useSubagentsPanel(sessionId: string, host: WidgetHost) {
@@ -45,12 +45,20 @@ export function useSubagentsPanel(sessionId: string, host: WidgetHost) {
     return host.onEscape(() => chooseSubagent(sessionId, null))
   }, [openId, host, sessionId])
 
+  // The open child is named in the widget's chrome, the one breadcrumb, with
+  // its way back to the list (`WidgetHost.crumb`).
+  const openName = present?.name ?? null
+  useEffect(() => {
+    if (!openName) return
+    host.crumb?.({ label: openName, back: () => chooseSubagent(sessionId, null) })
+    return () => host.crumb?.(null)
+  }, [openName, host, sessionId])
+
+  // Opened, the child's conversation takes the keyboard.
   const rootRef = useRef<HTMLElement | null>(null)
   useLayoutEffect(() => {
     if (!openId) return
-    rootRef.current
-      ?.querySelector<HTMLButtonElement>('[data-slot="breadcrumb-link"]')
-      ?.focus()
+    rootRef.current?.querySelector<HTMLElement>("[data-subagent-scroll]")?.focus()
   }, [openId])
 
   const ordered = read.kind === "ready" ? byActivity(read.subagents) : empty
@@ -66,7 +74,7 @@ export function useSubagentsPanel(sessionId: string, host: WidgetHost) {
     read,
     ordered,
     present,
-    summary: summaryLine(ordered),
+    groups: subagentGroups(ordered),
     now,
     stick,
     choose: (id: string | null) => chooseSubagent(sessionId, id),

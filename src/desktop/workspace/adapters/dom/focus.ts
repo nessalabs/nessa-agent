@@ -157,20 +157,29 @@ function signature(store: DesktopStore): {
   pane: string
   rest: string
   shown: string
+  tab: string
 } {
   const state = store.getState()
   const { panes } = state.workspace
+  const tab = state.workspace.tabs.activeTab ?? ""
   const widget = selectWindowWidget(state)
   const shown = widget ? paneItemKey(widgetItem(widget)) : selectContentKind(state)
-  if (!panes) return { pane: "", rest: "", shown }
+  if (!panes) return { pane: "", rest: "", shown, tab }
   const pane = focusedPane(panes)
   // What it shows by its key alone: two keys are equal exactly when their
   // items are (`model/pane-item.ts`), so nothing here reads what it names.
   return {
+    tab,
     pane: String(pane.key),
     rest: `${pane.item}:${panes.columns.map((column) => column.panes.length).join(",")}`,
     shown,
   }
+}
+
+/** The caret is on the selected tab, and the last input was a key, not the pointer. */
+function stripDriven(active: Element | null, byKeyboard: boolean): boolean {
+  const tab = active?.closest('[role="tab"]')
+  return byKeyboard && tab?.getAttribute("aria-selected") === "true"
 }
 
 export function useFocusFollowsPane(
@@ -216,6 +225,10 @@ export function useFocusFollowsPane(
       const active = document.activeElement
       const lost = !active || active === document.body
       if (inModal(active)) return
+      // A tab chosen from the keyboard keeps the caret in the strip, so the
+      // next arrow key moves along it rather than into a composer. A tab
+      // clicked, or a stale one left behind by ⌘N or ⌘D, lets it follow.
+      if (stripDriven(active, byKeyboard)) return
       const key = selectFocusedPaneKey(store.getState())
       const marked = scope.querySelector<HTMLElement>(`[${focusedPaneAttribute}]`)
       const markAgrees =
@@ -233,6 +246,17 @@ export function useFocusFollowsPane(
       follow()
     }
 
+    // How the person last reached for the window: a key, or the pointer.
+    let byKeyboard = false
+    const onKey = () => {
+      byKeyboard = true
+    }
+    const onPointer = () => {
+      byKeyboard = false
+    }
+    window.addEventListener("keydown", onKey, true)
+    window.addEventListener("pointerdown", onPointer, true)
+
     let seen = signature(store)
     const unsubscribe = store.subscribe(() => {
       const next = signature(store)
@@ -246,10 +270,21 @@ export function useFocusFollowsPane(
         return
       }
       const back = was.shown !== "panes"
-      if (!back && next.pane === was.pane && next.rest === was.rest) return
+      if (
+        !back &&
+        next.tab === was.tab &&
+        next.pane === was.pane &&
+        next.rest === was.rest
+      )
+        return
       // Another pane took focus, or the panes came back from under the
       // overview or the window — by a command that changed nothing else, too.
-      const moved = back || next.pane !== was.pane
+      // A session row that opened a chat in another tab keeps its caret, as
+      // one opening it in the focused pane does; anything else follows the tab.
+      const fromList =
+        next.tab !== was.tab && !!document.activeElement?.closest("[data-session-row]")
+      const moved =
+        back || (!fromList && (next.pane !== was.pane || next.tab !== was.tab))
       // After the change reaches the page. Coming back from the overview,
       // one frame later still: the leave's own frame only lifts the cover
       // (`overview-layer.tsx`).
@@ -295,6 +330,8 @@ export function useFocusFollowsPane(
       watcher.disconnect()
       hiding?.disconnect()
       scope.removeEventListener("focusin", onFocusIn)
+      window.removeEventListener("keydown", onKey, true)
+      window.removeEventListener("pointerdown", onPointer, true)
     }
   }, [store, root])
 }

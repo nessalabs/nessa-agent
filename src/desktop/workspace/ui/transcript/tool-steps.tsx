@@ -2,6 +2,7 @@ import { useState } from "react"
 import { ToolTrace, type ToolTraceStep } from "@nessa-ui/react/tool-trace"
 import { DesktopIcon, type DesktopIconRole } from "../../../ui/icons"
 import type { StepKind, StepPart } from "../../model/transcript"
+import { WithChats } from "./chat-pill"
 import { useSiteIcon } from "./site-icon"
 
 const stepIcons: Record<StepKind, DesktopIconRole> = {
@@ -39,9 +40,13 @@ export function ToolSteps({
       open={open}
       onOpenChange={setOpen}
       steps={steps.map((step, index) => traceStep(step, index, steps.length, settled))}
+      // A chat a tool named is its pill, drawn still: the row is the button.
+      renderText={chatsIn}
     />
   )
 }
+
+const chatsIn = (text: string) => <WithChats text={text} still />
 
 /**
  * A step as the trace draws it. A step that says nothing of its status is

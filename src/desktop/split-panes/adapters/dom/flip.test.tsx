@@ -9,7 +9,7 @@
 import { act, useRef, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import { FlipScope, flyPane } from "./flip"
+import { curveOf, FlipScope, flyPane } from "./flip"
 import { marks } from "./marks"
 
 let host: HTMLDivElement
@@ -355,4 +355,16 @@ it("resizes a pane and its header by transform without fading its content", () =
   expect(
     frames.every((animation) => animation.every((frame) => frame.opacity === undefined)),
   ).toBe(true)
+})
+
+it("samples a cubic-bezier as the browser does, ends included", () => {
+  const ease = curveOf("cubic-bezier(0.32, 0.72, 0, 1)")
+  expect(ease(0)).toBe(0)
+  expect(ease(1)).toBe(1)
+  // Monotone, and well past halfway by the middle: an ease-out.
+  const samples = [0.1, 0.25, 0.5, 0.75, 0.9].map(ease)
+  expect(samples).toEqual([...samples].sort((a, b) => a - b))
+  expect(ease(0.5)).toBeGreaterThan(0.8)
+  // Linear is the identity.
+  expect(curveOf("cubic-bezier(0, 0, 1, 1)")(0.3)).toBeCloseTo(0.3, 2)
 })

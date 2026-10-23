@@ -481,8 +481,8 @@ Per engine, against a scripted product session:
   focus     Tab stays in the dialog; Escape closes it and focus comes back
             to the session's row
   focus-pinned
-            the same, when that session is also pinned under a folded
-            sidebar: focus comes back to the list's row, not the inert copy
+            the same for a pinned session, listed once under the list's
+            Pinned group, never in the sidebar: focus comes back to that row
   fit-N     at 1200 and 420 wide the panel is inside the window and the page does not scroll sideways`,
 }
 
@@ -939,24 +939,27 @@ await main(meta, async ({ options, rep, url }) => {
       })
       const { page } = opened
       try {
-        const row = page.locator(css.sessionListRow).first()
+        // A session not pinned yet: the sample pins some, which lead the list.
+        const row = page
+          .locator(
+            `.workspace-list [data-list-group]:not([data-list-group="pinned"]) [data-session-row]`,
+          )
+          .first()
         await row.waitFor({ timeout: 15_000 })
         const id = await row.getAttribute("data-session-row")
         if (!id) throw new Error("the session list row named no session")
         await row.click({ button: "right" })
         await need(page, css.menu, "the session's menu")
-        await page.locator(css.menuItem, { hasText: "Pin to Sidebar" }).click()
+        await page.getByRole("menuitem", { name: "Pin", exact: true }).click()
+        // Pinned, the row moves to the list's Pinned group, and is drawn there only.
         await page.waitForFunction(
           (sessionId) =>
             document.querySelector(
-              `.workspace-sidebar [data-session-row="${CSS.escape(sessionId)}"]`,
-            ) !== null,
+              `[data-list-group="pinned"] [data-session-row="${CSS.escape(sessionId)}"]`,
+            ) !== null &&
+            document.querySelectorAll(`[data-session-row="${CSS.escape(sessionId)}"]`)
+              .length === 1,
           id,
-        )
-        await page.locator(css.titlebarSidebarToggle).click()
-        await page.waitForFunction(
-          (selector) => document.querySelector(selector)?.hasAttribute("inert") === true,
-          css.sidebar,
         )
         const listRow = page.locator(selectorFor.sessionListRowFor(id))
         await listRow.click({ button: "right" })
@@ -996,10 +999,10 @@ await main(meta, async ({ options, rep, url }) => {
           const active = document.activeElement
           const selector = `[data-session-row="${CSS.escape(sessionId)}"]`
           return {
-            list: active?.closest(`.workspace-list ${selector}`) !== null,
-            sidebarInert: document
-              .querySelector(".workspace-sidebar")
-              ?.hasAttribute("inert"),
+            list:
+              active?.closest(
+                `.workspace-list [data-list-group="pinned"] ${selector}`,
+              ) !== null,
             sidebarCopy:
               document.querySelector(`.workspace-sidebar ${selector}`) !== null,
             what: active ? active.outerHTML.slice(0, 160) : null,
@@ -1011,8 +1014,7 @@ await main(meta, async ({ options, rep, url }) => {
             trail.every(Boolean)
               ? null
               : `Tab left the dialog at step ${trail.indexOf(false) + 1}`,
-            back.sidebarCopy ? null : "the folded sidebar had no copy of the session",
-            back.sidebarInert ? null : "the sidebar was not inert",
+            back.sidebarCopy ? "the sidebar lists the pinned session" : null,
             back.list
               ? null
               : `focus came back to ${back.what}, not the session list's row`,

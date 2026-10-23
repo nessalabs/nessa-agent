@@ -1,0 +1,205 @@
+/*
+ * A waiting row's request, answered from the list (`list-request.tsx`): the
+ * transcript card's parts, compact. The row above it and this body are one
+ * card (`.workspace-request-card`, `session-list.css`). A command the list
+ * may allow is drawn whole, wrapping even within a word; any other is a
+ * preview of three lines with a fade. The answers keep one row either way.
+ */
+.workspace-request {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 12px 44px;
+  transition:
+    opacity var(--desktop-base) var(--desktop-out),
+    transform var(--desktop-base) var(--desktop-out);
+}
+
+.workspace-request-head {
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  line-height: 1.35;
+}
+
+/*
+ * A command the list may allow is drawn whole: the rule that allows it
+ * (`allowableFromList`) keeps it short, so the card stays small. Any other
+ * is a preview, three lines and a fade, that is never allowed from here:
+ * Review in Chat takes Allow's place.
+ */
+.workspace-request-command {
+  --request-lines: 3;
+  --request-line: 1.6;
+  position: relative;
+  font-size: var(--desktop-text-footnote);
+}
+
+.workspace-request-command:not([data-whole]) {
+  height: calc(var(--request-lines) * var(--request-line) * 1em + 16px);
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, black 70%, transparent);
+}
+
+.workspace-request-command .workspace-approval-command {
+  line-height: var(--request-line);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.workspace-request-command:not([data-whole]) .workspace-approval-command {
+  overflow: hidden;
+}
+
+/* Whole means whole across too: a long word breaks onto the next line
+   rather than running past the card's edge, where nothing would show it. */
+.workspace-request-command[data-whole] .workspace-approval-command {
+  overflow: visible;
+}
+
+.workspace-request-command[data-whole] .workspace-approval-word {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.workspace-request-loading {
+  margin: 0;
+  color: var(--desktop-muted);
+}
+
+.workspace-request-failure {
+  margin: 0;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.workspace-request-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: var(--desktop-control-size);
+}
+
+.workspace-request-more {
+  margin-right: auto;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+/* Answered: it leaves, under 300ms, at once with less motion (`--desktop-base`). */
+.workspace-request[data-answering] {
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+}
+
+/*
+ * The card: the waiting row as its head and the request beneath, one
+ * surface with the list rows' corners, a faint fill and the card rim the
+ * transcript's own card has. The row inside keeps its own states.
+ */
+.workspace-request-card {
+  margin: 0 4px 6px;
+  border-radius: var(--desktop-radius-md);
+  background: color-mix(in oklab, var(--foreground) 3%, transparent);
+  box-shadow: var(--desktop-card-rim);
+}
+
+.workspace-request-card .workspace-session {
+  margin: 0;
+}
+
+.workspace-request-card .workspace-session::before {
+  display: none;
+}
+
+/* The answers are a size container (`approval-card.css`): they take the
+   foot's width, and stand at its end. */
+.workspace-request-foot .workspace-approval-answers {
+  flex: 1 1 auto;
+}
+
+.workspace-request-foot .workspace-approval-actions {
+  justify-content: flex-end;
+}
+
+/* One row on every card, whatever the list's width: the refusal, then the
+   primary allow with every other answer in its menu (`ApprovalActions`
+   compact), so the pointer lands in one place card after card. */
+.workspace-request-foot .workspace-approval-actions {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.workspace-request-foot .workspace-approval-allow {
+  order: 0;
+  width: auto;
+  margin-left: auto;
+  flex-wrap: nowrap;
+}
+
+/* The card leads with what is asked: the row's last-said line gives way to
+   it, but only once there is a request to show. */
+.workspace-request-card:has(.workspace-request)
+  .workspace-session
+  .desktop-list-row-description {
+  display: none;
+}
+
+.workspace-request-card .workspace-session {
+  padding-bottom: 6px;
+}
+
+/* The tool is part of what is allowed: drawn whole, wrapping, never cut. */
+.workspace-request-tool {
+  margin: -2px 0 0;
+  color: var(--desktop-muted);
+  font-family: var(--nessa-font-mono);
+  font-size: var(--desktop-text-footnote);
+  overflow-wrap: anywhere;
+}
+
+/* Two answers, each one line whatever its words: a long label ends in an
+   ellipsis (its whole words in its tooltip), never a column of letters. */
+.workspace-request-foot .workspace-approval-answers[data-compact] {
+  min-width: 0;
+}
+
+.workspace-request-foot .workspace-approval-actions .workspace-button {
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 28px;
+  min-height: 28px;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.workspace-request-foot .workspace-approval-actions .workspace-button > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-request-foot .workspace-approval-actions .workspace-approval-more {
+  display: inline-flex;
+  flex: none;
+  width: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+/* A question's card keeps the same bound: a long one scrolls inside it. */
+.workspace-request[data-request="question"] {
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* A request the list does not show whole is not allowed from here: read whole in the chat. */
+.workspace-request-review {
+  flex: none;
+  height: 28px;
+  white-space: nowrap;
+}

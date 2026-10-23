@@ -1140,11 +1140,22 @@ describe("a transcript", () => {
     expect(block?.contains(host.querySelector(".workspace-approval-command"))).toBe(true)
     // Folded or not, Copy Command copies the command as the agent sent it,
     // through the host's clipboard.
+    const copy = host.querySelector<HTMLButtonElement>(".workspace-approval-copy")
+    expect(copy?.closest(".workspace-approval-command-block")?.contains(block)).toBe(true)
+    expect(copy?.getAttribute("aria-label")).toBe("Copy Command")
+    expect(copy?.textContent).toBe("")
+    expect(copy?.querySelector("svg")).not.toBeNull()
     clipboardWrite.mockClear()
-    await act(async () =>
-      host.querySelector<HTMLButtonElement>(".workspace-approval-copy")?.click(),
-    )
+    const said = () => host.querySelector('.workspace-approval-copy-said[role="status"]')
+    expect(said()?.textContent).toBe("")
+    await act(async () => copy?.click())
     expect(clipboardWrite).toHaveBeenCalledWith(steps.join("; "))
+    expect(said()?.textContent).toBe("Copied")
+    // A refusal is said in words and shown by another icon, not only named.
+    clipboardWrite.mockRejectedValueOnce(new Error("denied"))
+    await act(async () => copy?.click())
+    expect(said()?.textContent).toBe("Couldn’t copy")
+    expect(copy?.getAttribute("aria-label")).toBe("Couldn’t Copy")
     await act(async () => unfold?.click())
     expect(unfold?.getAttribute("aria-expanded")).toBe("true")
     expect(command()).toBe(`$ ${steps.join(";\n")}`)

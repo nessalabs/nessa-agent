@@ -27,7 +27,7 @@ diagramLinks:
 
 # Desktop workspace
 
-The desktop organizes sessions into panes and provides search, focus, widgets and local preferences. Classic is its right-side conversation panel.
+The desktop organizes sessions into panes and provides search, focus, widgets and local preferences, with a right panel beside the panes.
 
 Layout can survive navigation in memory, but a restart does not restore every pane or draft. The connection mode determines whether actions reach the gateway or a sample source.
 
@@ -69,9 +69,11 @@ flowchart TB
 
 ## Browse flows
 
+- [Answer requests from the session list](answer-requests-from-the-session-list.md)
 - [Discover subagents and experimental features](discover-subagents-and-experimental-features.md)
 - [Drag or move a session or pane](drag-or-move-a-session-or-pane.md)
-- [Expand and restore the Classic right panel](expand-and-restore-the-classic-right-panel.md)
+- [Open, merge, unmerge, switch, and close window tabs](open-merge-unmerge-switch-and-close-window-tabs.md)
+- [Open, resize, expand and restore the right panel](open-resize-expand-and-restore-the-right-panel.md)
 - [Fold, reveal, and resize side columns](fold-reveal-and-resize-side-columns.md)
 - [Follow focus and route keyboard actions](follow-focus-and-route-keyboard-actions.md)
 - [Load, browse, and resynchronize the workspace](load-browse-and-resynchronize-the-workspace.md)

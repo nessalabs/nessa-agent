@@ -137,6 +137,9 @@ const longTail =
 // The card's selectors, as page.evaluate can carry them: `css` holds functions (#441).
 const cardSelectors = {
   approvalCard: css.approvalCard,
+  approvalCopy: css.approvalCopy,
+  approvalCommandBlock: css.approvalCommandBlock,
+  approvalDeny: css.approvalDeny,
   approvalActions: css.approvalActions,
   approvalWord: css.approvalWord,
 }
@@ -156,6 +159,11 @@ const checks = {
       throw new CannotRun(`no session row "${names.approvalSession}" in the list`)
     await row.click()
     await need(page, css.approvalCard, "the approval card")
+    await page.locator(css.approvalCommandBlock).first().hover()
+    await page.waitForFunction(
+      (s) => getComputedStyle(document.querySelector(s)).opacity === "1",
+      css.approvalCopy,
+    )
     // A long script shows its first lines until Show All: unfold it, so every word is measured.
     const disclose = page.locator(css.approvalDisclose).first()
     if (await disclose.count()) await disclose.click()
@@ -207,6 +215,23 @@ const checks = {
               .filter((b) => b.getBoundingClientRect().height > lineHeight(b) * 1.9)
               .map((b) => b.textContent.trim()),
             overflow: card.scrollWidth > card.clientWidth + 1,
+            denyLeft: card.querySelector(sel.approvalDeny)?.getBoundingClientRect().left,
+            answersLeft: card
+              .querySelector(sel.approvalDeny)
+              ?.parentElement.getBoundingClientRect().left,
+            copy: (() => {
+              const button = card.querySelector(sel.approvalCopy)
+              const block = card.querySelector(sel.approvalCommandBlock)
+              if (!button || !block) return null
+              const b = button.getBoundingClientRect(),
+                c = block.getBoundingClientRect()
+              return {
+                right: c.right - b.right,
+                top: b.top - c.top,
+                text: button.textContent,
+                icon: !!button.querySelector("svg"),
+              }
+            })(),
           }
         }, cardSelectors)
         const tag = `${width}px${long ? " long" : ""}`
@@ -218,6 +243,18 @@ const checks = {
         if (r.wrapped.length)
           failures.push(`${tag}: button label(s) wrapped: ${r.wrapped.join(", ")}`)
         if (r.overflow) failures.push(`${tag}: the card overflows`)
+        if (Math.abs(r.denyLeft - r.answersLeft) > 1)
+          failures.push(`${tag}: Deny is not left aligned`)
+        if (
+          !r.copy ||
+          r.copy.right !== 2 ||
+          r.copy.top !== 2 ||
+          r.copy.text ||
+          !r.copy.icon
+        )
+          failures.push(
+            `${tag}: Copy Command is not an icon inside the command's upper-right corner`,
+          )
         await shot(
           options,
           page,
