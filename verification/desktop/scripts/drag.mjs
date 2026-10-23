@@ -33,6 +33,7 @@
  *   peek-press-while-hiding  the revealed sidebar stays while a drag owns it
  *   reduced-motion       live panes stay still; releasing commits without motion
  *   compact-drag-card     a row-sized card keeps its size and follows the pointer
+ *   compact-glass-release compact cards never acquire or pulse pane-preview glass flags
  *   stationary-drag-target  chats keep their geometry and material; only the target highlights
  *   stationary-layout-flight  closing one pane never suppresses stationary chats
  *   stationary-drop-commit    a committed swap never suppresses untouched chats
@@ -1202,6 +1203,82 @@ Object.assign(checks, {
       failures.push(`released on the swap shown: ${before} became ${after}`)
     failures.push(...residueFailures(await dragResidue(still)))
     return { committed, before, after, failures }
+  },
+  "compact-glass-release": async (_page, layout, fresh) => {
+    const cases = []
+    const failures = []
+    for (const motion of ["full", "reduced"])
+      for (const end of ["cancel", "drop"]) {
+        const page = await fresh({ prefs: { [storage.motion]: motion } })
+        const list = await threeColumns(page, layout)
+        const before = list.map((pane) => pane.key)
+        const expected =
+          end === "cancel" ? before : [before[1], before[0], ...before.slice(2)]
+        const observation = await page.evaluateHandle(
+          (names) => {
+            const writes = []
+            const collect = (records) => {
+              for (const record of records)
+                writes.push({
+                  name: record.attributeName,
+                  // oldValue catches an add/remove pair within one delivery.
+                  held:
+                    record.oldValue !== null ||
+                    record.target.hasAttribute(record.attributeName),
+                })
+            }
+            const observer = new MutationObserver(collect)
+            observer.observe(document, {
+              subtree: true,
+              attributes: true,
+              attributeOldValue: true,
+              attributeFilter: names,
+            })
+            return {
+              initial: names.filter((name) => document.querySelector(`[${name}]`)),
+              stop() {
+                collect(observer.takeRecords())
+                observer.disconnect()
+                return { initial: this.initial, writes }
+              },
+            }
+          },
+          [marks.pressing, marks.blur],
+        )
+        const shapes = await recordShapes(page)
+        let evidence
+        try {
+          await lift(page, 0)
+          const next = list[1]
+          await page.mouse.move(next.x + next.w / 2, next.y + next.h / 2, { steps: 20 })
+          if (!(await zoneSays(page, zoneSaid.swap)))
+            throw new CannotRun("no swap was offered for compact glass release")
+          if (end === "cancel") await page.keyboard.press(keys.escape)
+          await page.mouse.up()
+          await page.waitForSelector(css.dragGhost, { state: "hidden", timeout: 3000 })
+          const committed = await recordedDropSettled(page, expected)
+          // The full-pane glass release owns four deferred frames. Observe past
+          // that chain even when compact-card geometry settles immediately.
+          await frames(page, 9)
+          evidence = await observation.evaluate((observer) => observer.stop())
+          const acquired = evidence.writes.filter((write) => write.held)
+          const after = await order(page)
+          const residue = residueFailures(await dragResidue(page))
+          if (evidence.initial.length || acquired.length)
+            failures.push(
+              `${motion} ${end}: glass acquired/pulsed ${acquired.length} times; initial ${evidence.initial}`,
+            )
+          if (!committed || after.join(",") !== expected.join(","))
+            failures.push(`${motion} ${end}: expected ${expected}, got ${after}`)
+          failures.push(...residue.map((failure) => `${motion} ${end}: ${failure}`))
+          cases.push({ motion, end, committed, before, after, ...evidence })
+        } finally {
+          if (!evidence) await observation.evaluate((observer) => observer.stop())
+          await observation.dispose()
+          await shapes.stop()
+        }
+      }
+    return { cases, failures }
   },
   "compact-drag-card": async (page, layout, fresh, run) => {
     const { own, other } = await sideBySide(page, layout)
