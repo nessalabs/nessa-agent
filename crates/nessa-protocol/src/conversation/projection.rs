@@ -1560,19 +1560,19 @@ impl Projection {
                         mcp: None,
                         structured_content: None,
                         native_hooks: None,
-                        started_at_ms: None,
+                        // The call's span is when the session first heard of
+                        // it, to when it heard the call settle. Only the row's
+                        // first report sets the start: a call first reported
+                        // before arrivals were stamped keeps an unknown start
+                        // rather than taking a later report's time.
+                        started_at_ms: event.observed_at_ms(),
                         ended_at_ms: None,
                         changes: Vec::new(),
                     });
                     self.view.tools.last_mut().unwrap()
                 };
-                // The call's span is when the session first heard of it, to
-                // when it heard the call settle. A later report of a settled
-                // call does not move its end.
+                // A later report of a settled call does not move its end.
                 let at = event.observed_at_ms();
-                if tool.started_at_ms.is_none() {
-                    tool.started_at_ms = at;
-                }
                 if let Some(input) = update.input() {
                     tool.input = input.as_str().to_owned();
                 }
@@ -1651,6 +1651,9 @@ impl Projection {
                         .filter(|json| json.len() <= MAX_STRUCTURED_CONTENT_BYTES)
                         .map(str::to_owned);
                     let mut details = String::new();
+                    // Once the details are full, later items still list their
+                    // file changes; only their text is left out.
+                    let mut details_full = false;
                     tool.changes.clear();
                     for item in content {
                         let text = match item.view() {
@@ -1679,6 +1682,9 @@ impl Projection {
                                 text
                             }
                         };
+                        if details_full {
+                            continue;
+                        }
                         if !details.is_empty() {
                             details.push('\n');
                         }
@@ -1686,7 +1692,7 @@ impl Projection {
                         if details.len() > 16000 {
                             details = clipped(&details, 16000);
                             details.push_str("\n[Output truncated]");
-                            break;
+                            details_full = true;
                         }
                     }
                     tool.details = details;

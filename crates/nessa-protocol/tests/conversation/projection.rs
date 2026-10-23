@@ -721,6 +721,14 @@ fn a_tool_spans_from_its_first_report_to_the_one_that_settles_it_and_keeps_its_i
     assert_eq!(old.tools[0].ended_at_ms, None);
     let json = serde_json::to_value(&old.tools[0]).unwrap();
     assert!(json.get("startedAtMs").is_none() && json.get("endedAtMs").is_none());
+    // A call first reported before then, and settled after, keeps its start
+    // unknown: the settling report's time is its end, not its start.
+    let straddling = committed_tool_view(&[
+        event(ExecutionUpdate::Tool(bare(Some(ToolStatus::Running)))),
+        at(bare(Some(ToolStatus::Completed)), 3_000),
+    ]);
+    assert_eq!(straddling.tools[0].started_at_ms, None);
+    assert_eq!(straddling.tools[0].ended_at_ms, Some(3_000));
 }
 
 #[test]
@@ -770,6 +778,24 @@ fn a_tool_lists_the_files_it_changed_and_says_when_a_side_was_cut() {
         ToolCallUpdate::new(tool, None, None, None, None, None).with_content(many),
     ))]);
     assert_eq!(view.tools[0].changes.len(), MAX_TOOL_CHANGES);
+    // Text that fills the details does not hide a later file change.
+    let view = committed_tool_view(&[event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(
+            ToolCallId::new("long").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .with_content(vec![
+            ToolContent::text("y".repeat(20_000)),
+            ToolContent::diff(path("after.ts"), Some("a".into()), "b"),
+        ]),
+    ))]);
+    assert!(view.tools[0].details.ends_with("[Output truncated]"));
+    assert_eq!(view.tools[0].changes.len(), 1);
+    assert_eq!(view.tools[0].changes[0].path, "after.ts");
 }
 
 #[test]
