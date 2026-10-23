@@ -4,11 +4,18 @@ title: Webhook credential issuance
 kind: operation
 status: mixed
 summary: Cedar owns webhook issuance; a bounded private intent coordinates actual auth receipts and fenced installation, while product and worker composition remain pending.
-sourceRevision: "6cfb9673aba7c9fb78e26f4e3c09f2dd55be279f"
+sourceRevision: "946bbc8647b681fbd34440a116ecb3fb8efe5a6f"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/credential_admin.rs
   - crates/nessa-auth/src/application/ports.rs
+  - crates/nessa-auth/src/domain/transition.rs
+  - crates/nessa-auth/src/application/dto.rs
+  - crates/nessa-auth/src/adapters/cedar/schema.json
+  - crates/nessa-auth/src/application/origin.rs
+  - crates/nessa-auth/src/application/session.rs
+  - crates/nessa-auth/tests/origin.rs
+  - crates/nessa-auth/src/application/mapping.rs
   - crates/nessa-auth/src/adapters/cedar/attributes.rs
   - crates/nessa-auth/src/adapters/cedar/policies.cedar
   - crates/nessa-auth/src/adapters/cedar/evaluator_tests.rs
@@ -20,6 +27,7 @@ sources:
   - crates/nessa-server/src/webhooks/infrastructure/outbox/schema.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_failures.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_origin.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/intent_rows.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/schema.rs
 diagramLinks: {}
@@ -33,6 +41,9 @@ diagramDetails:
   - diagram: 1
     node: Installed
     section: Destination installation
+  - diagram: 1
+    node: Recovery
+    section: Original purpose and product session entry
 ---
 
 # Webhook credential issuance
@@ -105,22 +116,33 @@ stateDiagram-v2
     Reserved --> Reserved: Auth or installation outcome unavailable
     Reserved --> Discarded: Auth proves Conflict or Capacity
     Reserved --> Reserved: Invalid returned reservation / refuse before auth
-    Reserved --> Held: Actual auth result correlates with original intent
+    Reserved --> Held: Auth returns metadata / acquire current authority hold
     Held --> Reserved: Current authority unavailable or contradictory
     Held --> Stopped: Revoked, expired or inactive current authority
-    Held --> Installed: Credential hold spans installation and acknowledgement
+    Held --> Recovery: Historical AdminIssue origin / require explicit recovery
+    Held --> Installed: Match actual origin and current authority / acknowledge without bearer
     Installed --> Installed: Same intent retry acknowledges original installation
     Installed --> Retired: Canonical stop drains retained state
     Retired --> [*]: Transaction deletes registration and private intent
     Discarded --> [*]: No registration installed
 ```
 
-The auth domain's validated transition type owns lifecycle evidence validation;
-registration checks its relationship to the original command and request correlation.
+The auth owner reads the actual first journal transition with current credential,
+membership and revision. One validated origin type retains the original cause,
+actor, time, command correlation and journal identity. Parsing validates its
+representation; authority comes from the existing injected reader and hold.
+Registration compares that actual origin with its reserved command and checks the
+returned receipt's actual sequence, revision and domain evidence.
 It compares the complete current credential and membership with the returned metadata
-and original inputs under an existing credential hold. A revoked, expired or inactive
-result installs nothing. A lost auth or installation acknowledgement retains the
-intent for retry and never recovers a bearer secret. Replaying a retired receipt
+and original inputs under an existing credential hold. An authority already revoked, expired or inactive at admission
+installs nothing. Absolute expiry can advance during installation; a saved
+registration supplies no send permission, and delivery still requires fresh
+admission. A lost auth or installation acknowledgement retains the
+intent for retry. Initial success and matching replay both return a secret-free
+RegisteredWebhook with registration ID and credential metadata. The auth port's
+new bearer is consumed and discarded inside registration. It is not returned,
+logged or stored in its intent. Ordinary credential.issue retains its existing
+one-time-secret and unavailable-on-replay behavior. Replaying a retired receipt
 cannot resurrect a destination; the auth owner must prove the newly proposed selected
 ID was not issued before that uninstalled proposal can be discarded.
 
@@ -136,33 +158,45 @@ recovery and the product configuration entry point still require runtime composi
 
 ## Evidence and limits
 
-The full auth library suite passed **212 tests** at this source. The canonical
-server webhook suite passed **116 tests**. The registration [evidence](../../../reviews/evidence/webhook-runtime/registration/README.md)
-retains the 21 original caught-and-restored probes and earlier failures. The
-[repair evidence](../../../reviews/evidence/webhook-runtime/registration/repair/README.md)
-records 12 further caught-and-restored probes for original-call resolution and
-transient failure classification. Review round1 is preserved as not clean;
-round2 subsequently found origin/evidence gaps and failed before delivering its final report; see [status](../../../reviews/evidence/webhook-runtime/registration/review-2/README.md). Auth source has not changed since its
-212-test run. The [registry tests](../../../../crates/nessa-auth/tests/adapters/local/webhook_issue.rs)
-exercise policy refusal before writes, cross-purpose receipt substitution in
-both directions, cold replay, original transitions and unavailable secret.
-The [Cedar matrix](../../../../crates/nessa-auth/src/adapters/cedar/evaluator_tests.rs)
-checks principal kinds, actions and issuing paths. Six fail/restore probes caught
-removal of the relevant kind/action restrictions, path mapping/use and receipt
-purpose binding; every restored control passed with byte-identical source.
+The earlier source `6cfb9673` passed 212 auth unit tests and116 canonical
+webhook tests. Its [registration evidence](../../../reviews/evidence/webhook-runtime/registration/README.md),
+[repair controls](../../../reviews/evidence/webhook-runtime/registration/repair/README.md)
+and [incomplete historical review](../../../reviews/evidence/webhook-runtime/registration/review-2/README.md)
+remain preserved. That failed delivery has not been retried or reconstructed.
+These are historical checks, not qualification of the new correction.
 
-Required seven-package all-target Clippy with `-D warnings`, server all-target
-check and the architecture checker passed. The first architecture invocation
-could not find Cargo on PATH; the corrected invocation passed. The pre-existing
-lease const-evaluation notice remains in check/Clippy output.
+The parent selected actual retained origin and removal of unnecessary bearer
+output. [New correction evidence](../../../reviews/evidence/webhook-runtime/origin/README.md)
+records its separate tests, failure controls and fresh review status.
 
 Product registration, W1 coordination across ordinary issuance, revocation/expiry stop
 composition, source capture, supervised sending and actual recipient E2E remain
 unfinished. Canonical scripted Chromium/WebKit and feature stress/chaos remain
 applicable and unqualified. A documentation render does not qualify those gates.
 
-The intended no-product-session classification still needs an auth-owned immutable
-purpose fact and the existing Cedar product-entry boundary. The issuing-path purpose
-currently binds the receipt; it does not persist a credential-use classification.
-This gap is not addressed by looking up only active registration rows. General
-application installation and its session model remain owned by #1052.
+## Original purpose and product session entry
+
+Actual webhook issuance records a distinct WebhookIssue cause. The journal
+validator checks its representation and original command receipt before effects;
+restoration applies existing Cedar webhook grant restrictions to that origin.
+There is no second purpose table. Access reads carry the original fact in the same
+committed snapshot as current metadata; existing holds fence mutation.
+
+Bearer and opaque-session entry ask the existing Cedar evaluator for session.enter.
+Cedar admits the ordinary original issuing causes and refuses webhook origin.
+This grants no conversation operation. Retirement removes private configuration,
+while original auth provenance remains. Current expiry, revocation and membership
+checks still apply. Operations continue to authorize with fresh state.
+
+A failed registration may already have committed auth issuance. It retains the
+actual auth fact and private intent; it refuses destination installation rather
+than claiming rollback.
+
+Historical AdminIssue is preserved exactly. Registration does not infer webhook
+purpose from read-only grants or an old destination. Such an ambiguous origin
+returns OriginRecoveryRequired without installing anything. Explicit revoke and a
+fresh issuance/request are required. Automatic cleanup of an already-issued,
+uninstalled intent still needs the pending lifecycle coordinator; meanwhile the
+private intent cap bounds retention. Other contradictory facts are inconsistent.
+Ordinary product issuance is unchanged. Application installation and its session
+model remain owned by #1052.

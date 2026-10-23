@@ -10,7 +10,7 @@ observers cannot replace the committed stop. Existing delivery observations keep
 their actual ID. This adds no scheduler, permission decision or product mount.
 
 The four regressions in
-[the lifecycle tests](../../../../../../crates/nessa-server/tests/webhooks/infrastructure/outbox/lifecycle.rs)
+[the lifecycle tests](../../../../../crates/nessa-server/tests/webhooks/infrastructure/outbox/lifecycle.rs)
 cover lost publication acknowledgement, cold recovery and retirement, saved audit
 actor substitution, canonical decoding, integer overflow, known response and
 unknown Sending recovery. [Isolated baseline](baseline.txt): 88 passed.

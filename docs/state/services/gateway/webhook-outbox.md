@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "0d922ce16543e6627efe8b710ac87a80bd507a96"
+sourceRevision: "946bbc8647b681fbd34440a116ecb3fb8efe5a6f"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/application/outbox.rs
@@ -214,8 +214,11 @@ expiry scheduling coordination remain uncomposed.
 records the source checkpoints, failure/recovery tests and mutation controls.
 The page's source checkpoint advances only this outbox review; diagrams are
 unchanged. This is persistence evidence, not a claim of recipient E2E or product
-session isolation. The separate registration auth-origin and returned-evidence
-findings remain open in [registration review status](../../../reviews/evidence/webhook-runtime/registration/review-2/README.md).
+session isolation. Historical registration findings remain preserved in
+[registration review status](../../../reviews/evidence/webhook-runtime/registration/review-2/README.md).
+The parent-selected correction now reads actual auth origin and returns a
+secret-free acknowledgement. Its [fresh qualification](../../../reviews/evidence/webhook-runtime/origin/README.md)
+is separate from that incomplete historical review.
 
 ## Bounds and private data
 
