@@ -310,14 +310,15 @@ async fn different_actual_credential_cannot_publish_a_pending_registration_oblig
         Err(OutboxError::Invalid)
     );
     assert!(!f.audit.exists());
-    let c = f.store.owner.connection.lock().unwrap();
-    assert_eq!(
-        c.query_row("SELECT count(*) FROM audit WHERE published=0", [], |r| r
-            .get::<_, i64>(0))
-            .unwrap(),
-        1
-    );
-    drop(c);
+    {
+        let c = f.store.owner.connection.lock().unwrap();
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM audit WHERE published=0", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
     std::fs::rename(held_directory, &f.audit).unwrap();
     f.store.due(30_002).await.unwrap();
     assert_eq!(f.count("registrations"), 1);

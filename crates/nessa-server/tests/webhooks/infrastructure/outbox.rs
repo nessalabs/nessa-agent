@@ -2514,3 +2514,27 @@ mod lifecycle_context_tests;
 
 #[path = "outbox/issuance_context.rs"]
 mod issuance_context_tests;
+
+#[tokio::test]
+async fn oversized_stop_is_invalid_in_public_registration_read() {
+    let f = Fixture::new().await;
+    let files = f.audits();
+    let oversized = " ".repeat(super::super::audit::AUDIT_BYTES + 4096);
+    {
+        let c = f.store.owner.connection.lock().unwrap();
+        // Isolated corrupt-row fixture; production CHECK constraints stay enabled.
+        c.execute_batch("PRAGMA ignore_check_constraints=ON")
+            .unwrap();
+        c.execute("UPDATE registrations SET stop=?1", [oversized])
+            .unwrap();
+        c.execute_batch("PRAGMA ignore_check_constraints=OFF")
+            .unwrap();
+    }
+    assert!(matches!(
+        f.store
+            .registration(f.registration.target.credential.clone())
+            .await,
+        Err(OutboxError::Invalid)
+    ));
+    assert_eq!(f.audits(), files);
+}
