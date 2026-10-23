@@ -6,9 +6,11 @@ covers storage and admission foundations, not a usable composed #896 feature.
 Registration authorization, credential stop/expiry coordination, source replay,
 sender supervision, owner reset admission and capability/revoke E2E remain open.
 
-**Review blocked.** The bounded final round found one major audit restore gap
+**Historical review checkpoint.** The bounded final round found one major audit restore gap
 and one minor cursor restore gap. No further code patch/review loop was started.
-See [the owner handoff](blocked-review.md).
+See [the owner handoff](blocked-review.md). The parent subsequently adopted
+the focused redesign; [new source and evidence](typed-state/README.md) track
+that authorized continuation. Earlier evidence below retains its original scope.
 
 ## Checks and environment
 

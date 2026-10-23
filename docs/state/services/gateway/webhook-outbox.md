@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private delivery state and causal audit survive restart; registration admission, source replay and the sender are still uncomposed.
-sourceRevision: "c608eaa2de4e24143d349f9eb60fe63b74f34193"
+sourceRevision: "1c3085add14833a862681f6697f1e4ea31f9ba86"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/application/outbox.rs
@@ -13,6 +13,8 @@ sources:
   - crates/nessa-server/src/webhooks/infrastructure/outbox/schema.sql
   - crates/nessa-server/src/webhooks/infrastructure/outbox/registry.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/stored.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/audit.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/cursor.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/codec.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/capacity.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/queue.rs
@@ -45,18 +47,28 @@ The storage registration methods accept trusted facts; they do not authorize
 credential issuance or sharing. Application installation #1052 and inbound
 workflow triggers #1088 remain separate.
 
-## Review hold
+## Restoration redesign
 
-Final independent review at assembled head 2ef1264a found two restoration gaps
-in this source checkpoint. Saved audit records validate envelope keys but can
-still publish malformed principal, phase and timestamp fields. Cursor-only
-startup validation omits its position, so a text position can survive reopen
-and fail on the next advance. These defects remain open; the diagram describes
-the implemented operation, not complete restoration acceptance.
+The parent explicitly authorized a focused redesign after the prior bounded
+review handoff. The original [findings and reproductions](../../../reviews/evidence/webhook-outbox/blocked-review.md)
+remain historical evidence. This source replaces open audit JSON with one
+closed record type and routes every cursor read through a complete decoder.
+Fresh review of this redesign is pending; it is not full feature acceptance.
 
-The repository's bounded review rounds are exhausted. Implementation is paused
-for the parent/person to revisit the typed audit and cursor restoration owners.
-[Exact probes, diagnosis and suggested next step](../../../reviews/evidence/webhook-outbox/blocked-review.md).
+The same typed audit validator serves writing, restoration and publication.
+It rejects unknown fields, malformed identities and actors, negative timestamps,
+impossible before/after transitions and mismatched checkpoint projections.
+Delivery evidence retains complete before and after snapshots; the existing
+domain transition methods validate their legal relationship. Restored retained
+chains keep their target/checkpoint and source-change context, and end at the
+current delivery row. Validation streams one predecessor at a time.
+
+Registration retirement evidence contains its original target and revocation
+or expiry actor. It can be replayed after the registration has been deleted;
+restoration does not reconstruct an actor from current ownership. The cursor
+decoder covers identity, scope, integer position and reset flag at startup and
+before live duplicate acknowledgement. SQLite corruption refusals map to
+Invalid; transient I/O remains Unavailable.
 
 ## Acknowledging one durable operation
 
@@ -66,7 +78,7 @@ durability; it says nothing about a recipient's effects.
 ```mermaid
 stateDiagram-v2
     [*] --> Restoring
-    Restoring --> Refused: Invalid stored identities, lifecycle or resource accounting
+    Restoring --> Refused: Invalid identities, cursor, audit history or accounting
     Restoring --> Ready: Checked current schema and acquired lifetime owner lock
     Ready --> Writing: Queue, transition, stop or recovery
     Writing --> Refused: Validation, compare-and-swap or audit insertion fails
@@ -146,23 +158,25 @@ and transport policy remain owned by the linked delivery mechanics page.
 | SQL publication acknowledgement affects zero rows | Conflict; do not spin or report publication success. |
 | Sending observer disappears or process restarts | Startup recovery records Unknown; no automatic POST. |
 | Stop or source replacement reaches retention ceiling | Shared commit owner trims only eligible published rows in the same write. |
-| Invalid decoded registration/delivery identity, lifecycle, encoding or capacity | Refuse before publication, cleanup or filtered ready scans; audit fields and cursor positions still have the review gaps above. |
+| Invalid typed identity, cursor, lifecycle, audit history, encoding or capacity | Refuse before publication, cleanup or filtered ready scans. |
 | Caller stops awaiting a blocking operation | Physical worker retains its capacity permit and owner lock until completion. |
 
 ## Evidence and remaining gates
 
-The [outbox adapter tests](https://github.com/nessalabs/nessa-agent/blob/c608eaa2de4e24143d349f9eb60fe63b74f34193/crates/nessa-server/tests/webhooks/infrastructure/outbox.rs)
+The [outbox adapter tests](https://github.com/nessalabs/nessa-agent/blob/1c3085add14833a862681f6697f1e4ea31f9ba86/crates/nessa-server/tests/webhooks/infrastructure/outbox.rs)
 exercise actual private SQLite/filesystem state with synthetic keys and no
 recipient network. They cover checkpoint identity, compare-and-swap, stop and
 source replacement, unknown restart, audit failures, restoration and capacity,
 physical ownership after cancellation and retained-history limits.
 
-The source checkpoint passed 61 webhook tests, including 31 outbox tests,
-and the required seven-package all-target Clippy selection. Thirty-four
-copied-source fail/restore probes falsified the tested rules and then passed
-after restoration. Independent review and the registration restore correction
-are tracked in the linked [evidence](../../../reviews/evidence/webhook-outbox/README.md).
-A source checkpoint is not a claim of final review or product E2E completion.
+This source checkpoint passed 69 webhook tests, including 39 outbox tests,
+and required seven-package Clippy, architecture, formatting and diff checks.
+This redesign adds malformed
+historical audit, transition/chain, complete cursor and lost-ack retirement
+recovery regressions. Twenty-nine new copied-source mutations were caught and
+the affected tests passed after restoration. Canonical checks and the pending fresh
+review checkpoint are recorded in [typed-state evidence](../../../reviews/evidence/webhook-outbox/typed-state/README.md).
+Historical earlier checks do not establish acceptance of newer source.
 
 Canonical Chromium/WebKit, stress and chaos evidence remains an applicable
 integration gate. The foundation's hosted browser setup timed out before
