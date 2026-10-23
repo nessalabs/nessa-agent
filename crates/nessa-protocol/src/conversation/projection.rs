@@ -1667,17 +1667,23 @@ impl Projection {
                     for item in content {
                         let text = match item.view() {
                             ToolContentView::Structured(_) => continue,
-                            ToolContentView::Text(text) => clipped(text, 16384),
+                            ToolContentView::Text(text) => {
+                                (!details_full).then(|| clipped(text, 16384))
+                            }
                             ToolContentView::Diff { path, old, new } => {
                                 let before =
                                     old.map(|old| clipped(old, MAX_TOOL_CHANGE_SIDE_BYTES));
                                 let after = clipped(new, MAX_TOOL_CHANGE_SIDE_BYTES);
-                                let text = format!(
-                                    "File: {}\nBefore:\n{}\nAfter:\n{}",
-                                    path.as_str(),
-                                    before.as_deref().unwrap_or("(not provided)"),
-                                    after
-                                );
+                                // Only while the details have room, and no
+                                // more of the path than they could hold.
+                                let text = (!details_full).then(|| {
+                                    format!(
+                                        "File: {}\nBefore:\n{}\nAfter:\n{}",
+                                        clipped(path.as_str(), 16384),
+                                        before.as_deref().unwrap_or("(not provided)"),
+                                        after
+                                    )
+                                });
                                 // A path past its bound is not listed rather
                                 // than cut: a cut path names another file.
                                 if tool.changes.len() == MAX_TOOL_CHANGES
@@ -1697,9 +1703,9 @@ impl Projection {
                                 text
                             }
                         };
-                        if details_full {
+                        let Some(text) = text else {
                             continue;
-                        }
+                        };
                         if !details.is_empty() {
                             details.push('\n');
                         }
