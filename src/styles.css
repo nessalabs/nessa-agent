@@ -1323,7 +1323,7 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
 }
 
 /*
- * Setup's chrome: the way back, the way out, and the way to make it be quiet.
+ * Setup's chrome: the way back and the way out.
  *
  * It arrives once the light has filled the window, not before. Shown over the
  * floating glow, buttons hanging in empty space gave away the shape before
@@ -1332,14 +1332,14 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
  * reduced-motion preference there is no opening and these are simply there.
  *
  * It belongs to the window rather than to the wash, so it keeps its own timing
- * and is not re-mounted by every step. It lies over the whole window, inset,
- * with Back in the top-left corner, Close in the top-right and sound in the
- * bottom-right, and takes no pointer itself: only the buttons in it do, so
- * the space between them never covers the step underneath.
+ * and is not re-mounted by every step. It spans the window's top edge, inset,
+ * with Back in the top-left corner and Close in the top-right, and takes no
+ * pointer itself: only the buttons in it do, so the space between them never
+ * covers the step underneath.
  */
 .nessa-setup-chrome {
   position: absolute;
-  inset: 0.875rem;
+  inset: 0.875rem 0.875rem auto;
   z-index: 10;
   display: flex;
   align-items: flex-start;
@@ -1353,12 +1353,6 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-}
-
-.nessa-setup-corner-bottom {
-  position: absolute;
-  right: 0;
-  bottom: 0;
 }
 
 /*

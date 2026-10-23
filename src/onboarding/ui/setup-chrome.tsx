@@ -1,13 +1,9 @@
-import * as React from "react"
-import { ChevronLeft, Volume2, VolumeX, X } from "lucide-react"
-
-import { setSoundMuted, soundMuted, subscribeSoundMuted } from "./sound"
+import { ChevronLeft, X } from "lucide-react"
 
 /**
- * Setup's own chrome: the way back, the way out, and the way to make it be
- * quiet — round glass buttons floating in the window's corners: Back top left
- * and Close top right, where a sheet on a phone keeps them, and sound in the
- * bottom right, out of their way.
+ * Setup's own chrome: the way back and the way out — round glass buttons
+ * floating in the window's top corners, Back on the left and Close on the
+ * right, where a sheet on a phone keeps them.
  *
  * It belongs to the window rather than to the step, for two reasons. A control
  * that is always there should not be re-mounted by every step, and — the one
@@ -29,7 +25,6 @@ export function SetupChrome({
   onBack?: () => void
   onClose?: () => void
 }) {
-  const muted = React.useSyncExternalStore(subscribeSoundMuted, soundMuted, () => true)
   return (
     <div className="nessa-setup-chrome">
       {/* Each corner keeps its place whether or not it holds a button, so the
@@ -57,22 +52,6 @@ export function SetupChrome({
             <X aria-hidden className="nessa-setup-glyph" />
           </button>
         ) : null}
-      </div>
-      {/* Sound is not a way through setup, so it keeps out of the top corners
-        the two that are, and waits in the bottom one. */}
-      <div className="nessa-setup-corner nessa-setup-corner-bottom">
-        <button
-          type="button"
-          aria-label={muted ? "Turn setup sounds on" : "Turn setup sounds off"}
-          onClick={() => setSoundMuted(!muted)}
-          className="nessa-setup-control"
-        >
-          {muted ? (
-            <VolumeX aria-hidden className="nessa-setup-glyph" />
-          ) : (
-            <Volume2 aria-hidden className="nessa-setup-glyph" />
-          )}
-        </button>
       </div>
     </div>
   )

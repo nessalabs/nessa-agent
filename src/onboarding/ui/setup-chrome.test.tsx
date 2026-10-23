@@ -16,19 +16,14 @@ function corners(props: React.ComponentProps<typeof SetupChrome>) {
 }
 
 describe("setup's corner buttons", () => {
-  it("puts Back top left, Close top right, and sound in the bottom corner", () => {
+  it("puts Back top left and Close top right, and nothing else", () => {
     expect(corners({ onBack: () => undefined, onClose: () => undefined })).toEqual([
       ["Back"],
       ["Close setup"],
-      ["Turn setup sounds on"],
     ])
   })
 
   it("draws no Back where there is no step before, and keeps the left corner", () => {
-    expect(corners({ onClose: () => undefined })).toEqual([
-      [],
-      ["Close setup"],
-      ["Turn setup sounds on"],
-    ])
+    expect(corners({ onClose: () => undefined })).toEqual([[], ["Close setup"]])
   })
 })
