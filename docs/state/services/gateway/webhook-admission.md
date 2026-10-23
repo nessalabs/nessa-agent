@@ -102,3 +102,7 @@ Local source checks passed 209 auth tests, 29 webhook tests, the principal grant
 regression and the composed revoke regression. These are admission and isolated
 transport checks, not a usable product delivery E2E. Independent review corrected
 expiry ordering, physical registry ownership and the actual revoke composition.
+
+The separate [durable outbox checkpoint](webhook-outbox.md) describes later
+persistence work. This navigation link does not advance this page's historical
+source review checkpoint or claim runtime composition.

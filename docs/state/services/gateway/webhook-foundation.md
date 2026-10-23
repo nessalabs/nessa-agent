@@ -190,3 +190,7 @@ certificate that failed macOS verification. Linux tests pass; the native macOS
 and Windows result belongs to the new exact-head CI run, not this local result.
 The fixture does not exercise registration, gateway admission or durable
 restart. A source checkpoint records review scope, not test execution or deployment.
+
+The separate [durable outbox checkpoint](webhook-outbox.md) describes later
+persistence work. This navigation link does not advance this page's historical
+source review checkpoint or claim runtime composition.

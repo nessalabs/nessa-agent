@@ -1,0 +1,74 @@
+[
+  {
+    "mutation": "embedded_id",
+    "test": "bulk_refusal_rejects_foreign_state",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "incarnation",
+    "test": "restored_rows_are_checked",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "cursor_receiver",
+    "test": "cursor_scope_identity",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "startup_validation",
+    "test": "restored_rows_are_checked",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "same_commit_trim",
+    "test": "bulk_reset_retention_is_bounded",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "reader_attribution",
+    "test": "bulk_reset_keeps_one_reader",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "retry_bound",
+    "test": "restored_retry_respects_backoff",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "queue_capacity",
+    "test": "cursor_cas_and_queue_limit",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "duplicate_bytes",
+    "test": "conflicting_checkpoint",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "state_cas",
+    "test": "transition_cas_rejects_lost_ack",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "projection_shape",
+    "test": "a_file_without_generated",
+    "exitCode": 101,
+    "caught": true
+  },
+  {
+    "mutation": "stopped_drain",
+    "test": "late_retry_after_stop",
+    "exitCode": 101,
+    "caught": true
+  }
+]
