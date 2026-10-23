@@ -2,6 +2,7 @@
 use super::audit::{Record, RegistrationChange};
 use super::journal::{commit, finish, refuse_pending};
 use super::publication::append;
+use super::stop::SavedStop;
 use super::{integer, invalid, unavailable, uuid, SqlOutbox};
 use crate::webhooks::application::{
     DeliveryCause, ExpiryObserver, MacKey, OutboxError, Registration, RegistrationStop,
@@ -185,7 +186,7 @@ fn save_lifecycle(
         RegistrationPhase::ExpiryObserved => 1,
         RegistrationPhase::Stopped => 0,
     };
-    let record = super::stop::SavedStop::of(stop).encode()?;
+    let record = SavedStop::of(stop).encode()?;
     transaction
         .execute(
             "UPDATE registrations SET active=?1,stop=?2 WHERE id=?3",
@@ -267,11 +268,7 @@ impl StoredRegistration {
         })
     }
     pub fn checked(self) -> Result<CheckedRegistration, OutboxError> {
-        let stop = self
-            .stop
-            .as_deref()
-            .map(super::stop::SavedStop::decode)
-            .transpose()?;
+        let stop = self.stop.as_deref().map(SavedStop::decode).transpose()?;
         let phase = match (self.active, stop.is_some()) {
             (1, false) => RegistrationPhase::Active,
             (1, true) => RegistrationPhase::ExpiryObserved,

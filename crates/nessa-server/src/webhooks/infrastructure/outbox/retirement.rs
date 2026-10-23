@@ -1,4 +1,5 @@
 //! Secret-free original facts retained through an unacknowledged retirement.
+use super::stop::SavedStop;
 use super::{audit, integer, invalid, unavailable, uuid};
 use crate::webhooks::application::{
     OutboxError, Registration, RegistrationStop, Target, MAX_REGISTRATIONS,
@@ -26,7 +27,7 @@ pub(super) fn retain(
     audit: Uuid,
     issued_at_ms: u64,
 ) -> Result<(), OutboxError> {
-    let stop = super::stop::SavedStop::of(stop).encode()?;
+    let stop = SavedStop::of(stop).encode()?;
     let target = &registration.target;
     transaction.execute("INSERT INTO retirements(id,credential,principal,organization,owner,stop,retired_at,audit,issued_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![registration.id.to_string(),target.credential.as_str(),target.principal.as_str(),target.organization.as_str(),target.owner.as_str(),stop,integer(at_ms)?,audit.to_string(),integer(issued_at_ms)?]).map_err(unavailable)?;
     Ok(())
@@ -70,7 +71,7 @@ impl SavedRetirement {
             &self.owner,
         )?;
         let issued_at_ms = u64::try_from(self.issued_at).map_err(invalid)?;
-        let stop = super::stop::SavedStop::decode(&self.stop)?;
+        let stop = SavedStop::decode(&self.stop)?;
         if !stop.matches_registration(&target.credential, issued_at_ms) {
             return Err(OutboxError::Invalid);
         }

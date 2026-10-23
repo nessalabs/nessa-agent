@@ -1,7 +1,7 @@
 //! Borrowed decoding budgets include nested stop records and joined offsets.
 use super::*;
 use crate::webhooks::infrastructure::outbox::{
-    codec::RowTooLarge, publication::SavedAudit, registry::StoredRegistration,
+    codec::RowTooLarge, publication::SavedAudit, registry::StoredRegistration, stop::SavedStop,
 };
 use crate::webhooks::{application::RegistrationStop, domain::ExpiryObserver};
 use nessa_auth::domain::CredentialId;
@@ -10,12 +10,10 @@ use nessa_local_database::rusqlite::{Error, StatementStatus};
 #[test]
 fn stop_rows_are_bounded_before_owned_allocation() {
     let connection = Connection::open_in_memory().unwrap();
-    let mut largest_stop = super::super::stop::SavedStop::of(&RegistrationStop::expired(
-        ExpiryObserver::Restart,
-        10001,
-    ))
-    .encode()
-    .unwrap();
+    let mut largest_stop =
+        SavedStop::of(&RegistrationStop::expired(ExpiryObserver::Restart, 10001))
+            .encode()
+            .unwrap();
     largest_stop.push_str(&" ".repeat(super::super::audit::AUDIT_BYTES - largest_stop.len()));
     let oversized = "x".repeat(super::super::audit::AUDIT_BYTES + 4096);
     for offset in [0, 11] {
@@ -91,12 +89,9 @@ fn retained_credential_lookup_is_indexed_and_refuses_ambiguous_ownership() {
         // nor a complete restorable audit history. The production schema/index
         // and production lookup are exercised at the retained count ceiling.
         connection.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
-        let stop = super::super::stop::SavedStop::of(&RegistrationStop::expired(
-            ExpiryObserver::Restart,
-            10001,
-        ))
-        .encode()
-        .unwrap();
+        let stop = SavedStop::of(&RegistrationStop::expired(ExpiryObserver::Restart, 10001))
+            .encode()
+            .unwrap();
         for n in 0..count {
             connection.execute("INSERT INTO retirements(id,audit,credential,principal,organization,owner,issued_at,stop,retired_at) VALUES(?1,?2,?3,'principal','organization','owner',10000,?4,10001)",params![Uuid::new_v4().to_string(),Uuid::new_v4().to_string(),format!("credential-{n}"),stop]).unwrap();
         }
@@ -138,12 +133,9 @@ fn retained_credential_lookup_is_indexed_and_refuses_ambiguous_ownership() {
 fn retirement_identity_is_bounded_in_every_shared_row_read() {
     let connection = Connection::open_in_memory().unwrap();
     let oversized = "x".repeat(1024 * 1024);
-    let stop = super::super::stop::SavedStop::of(&RegistrationStop::expired(
-        ExpiryObserver::Restart,
-        10001,
-    ))
-    .encode()
-    .unwrap();
+    let stop = SavedStop::of(&RegistrationStop::expired(ExpiryObserver::Restart, 10001))
+        .encode()
+        .unwrap();
     let query = "SELECT ?1,'credential','principal','organization','owner',?2,10001,?3,10000";
     let audit = Uuid::new_v4().to_string();
     let row = connection.query_row(query, params![oversized, stop, audit], SavedRetirement::row);

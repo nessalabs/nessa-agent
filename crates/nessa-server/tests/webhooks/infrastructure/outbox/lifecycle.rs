@@ -134,10 +134,7 @@ async fn delivery_expiry_observation_keeps_the_actual_queued_identity() {
 
 #[test]
 fn automatic_expiry_observer_decoding_is_closed_and_canonical() {
-    fn decode(
-        actor: &str,
-        at_ms: u64,
-    ) -> Result<crate::webhooks::application::RegistrationStop, OutboxError> {
+    fn decode(actor: &str, at_ms: u64) -> Result<RegistrationStop, OutboxError> {
         let text = json!({"cause":"credential_expired","initiator":actor,"atMs":at_ms}).to_string();
         SavedStop::decode(&text)
     }
