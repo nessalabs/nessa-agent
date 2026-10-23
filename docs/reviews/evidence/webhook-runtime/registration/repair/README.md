@@ -1,7 +1,7 @@
 # Registration correction checkpoint
 
 Implementation source `6cfb9673aba7c9fb78e26f4e3c09f2dd55be279f`; intended base
-`501a81dca92d0af7f7d8fa457bd1ec409cdf3b89`. Fresh independent review is pending.
+`501a81dca92d0af7f7d8fa457bd1ec409cdf3b89`. [Fresh round2](../review-2/README.md) is incomplete: new origin/evidence findings remain open, and final report delivery failed. The correction checks below do not qualify the full feature.
 
 [Round1](../review-1/report.md) remains a not-clean historical report at7041ac65.
 Its passing demonstration tests show defects; they are not fixed-test passes.

@@ -142,7 +142,7 @@ retains the 21 original caught-and-restored probes and earlier failures. The
 [repair evidence](../../../reviews/evidence/webhook-runtime/registration/repair/README.md)
 records 12 further caught-and-restored probes for original-call resolution and
 transient failure classification. Review round1 is preserved as not clean;
-fresh review of the correction is pending. Auth source has not changed since its
+round2 subsequently found origin/evidence gaps and failed before delivering its final report; see [status](../../../reviews/evidence/webhook-runtime/registration/review-2/README.md). Auth source has not changed since its
 212-test run. The [registry tests](../../../../crates/nessa-auth/tests/adapters/local/webhook_issue.rs)
 exercise policy refusal before writes, cross-purpose receipt substitution in
 both directions, cold replay, original transitions and unavailable secret.
