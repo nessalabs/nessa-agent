@@ -37,6 +37,7 @@ export {
   lingerStatus,
   restartNessa,
   replayOnboarding,
+  onSetupRecorded,
   quitNessa,
   retrySetupRecord,
   retryGatewayStartup,

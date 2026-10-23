@@ -56,6 +56,7 @@ const HOST_EVENTS = {
   gatewayStartup: "nessa://gateway-startup",
   runtimeCopy: "nessa://runtime-copy",
   reviewNoticeOpened: "nessa://review-notice-opened",
+  setupRecorded: "nessa://setup-recorded",
 } as const
 
 /** How many staged runtime files have finished `sync_all`.
@@ -1110,6 +1111,16 @@ export async function replayOnboarding(): Promise<void> {
   if (!inTauri) return
   const { invoke } = await import("@tauri-apps/api/core")
   await invoke("replay_onboarding")
+}
+
+/**
+ * Subscribes to setup recording a finish, which may have chosen another agent:
+ * a replay from Settings finishes while this window is running.
+ */
+export async function onSetupRecorded(handler: () => void) {
+  if (!inTauri) return () => undefined
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen(HOST_EVENTS.setupRecorded, () => handler())
 }
 
 /**

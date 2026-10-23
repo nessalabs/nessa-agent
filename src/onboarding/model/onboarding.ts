@@ -181,6 +181,9 @@ export function agentChoice(id: AgentId): AgentChoice | undefined {
  * says cannot run is not kept: leaving it ticked, with Continue still lit, is
  * the panel promising an agent it has just been told is not there.
  *
+ * Welcome holds the choice too once somebody has gone back to it, and the
+ * picker is the next thing it shows, so the same rule applies there.
+ *
  * Past the picker the choice is not silently unmade. Setup has moved on, and
  * quietly emptying a decision behind someone on a step that says nothing about
  * agents would be a worse lie than the stale tick.
@@ -190,11 +193,15 @@ function withAnswer(
   readiness: AgentReadinessReport | undefined,
   readinessFailure: AgentReadinessFailure | undefined,
 ): OnboardingState {
-  const answered: OnboardingState = { ...state, readiness, readinessFailure }
-  if (answered.step !== "agent" || !answered.agent) return answered
-  return isChoosable(answered, answered.agent)
-    ? answered
-    : { ...answered, agent: undefined }
+  return keepChoosable({ ...state, readiness, readinessFailure })
+}
+
+/** On welcome and the picker, a held agent is one that can run, or none: the
+ * picker must never come up with an agent ticked and Continue lit that the
+ * newest answer says is not there. */
+function keepChoosable(state: OnboardingState): OnboardingState {
+  if ((state.step !== "agent" && state.step !== "welcome") || !state.agent) return state
+  return isChoosable(state, state.agent) ? state : { ...state, agent: undefined }
 }
 
 /** Record what the runtimes reported. A report also clears any earlier failure:
@@ -301,7 +308,8 @@ export function canGoBack(state: OnboardingState): boolean {
  * Go back one step, keeping what was chosen on the way.
  *
  * The agent and the readiness answer stay, so the picker comes back as it was
- * left. The shortcut lesson starts again from the picker, because coming back
+ * left — the agent only while that answer says it can run, the same rule a new
+ * answer is held to. The shortcut lesson starts again from the picker, because coming back
  * to it is asking to see it again. From linger the lesson was already learned
  * — linger is only reached past it — so the way on is there at once. The host's
  * linger report is dropped: it belongs to the step being left, and the step is
@@ -311,7 +319,9 @@ export function goBack(state: OnboardingState): OnboardingState {
   const step = previousStep(state.step)
   if (!step) return state
   const { summon: _summon, summonTaught: _taught, linger: _linger, ...kept } = state
-  return step === "summon" ? { ...kept, step, summonTaught: true } : { ...kept, step }
+  return step === "summon"
+    ? { ...kept, step, summonTaught: true }
+    : keepChoosable({ ...kept, step })
 }
 
 /** Leave setup without finishing it, from any step. Nothing is recorded: an

@@ -422,4 +422,17 @@ describe("going back a step", () => {
       agent: "claude",
     })
   })
+
+  it("never brings the picker back with an agent the newest answer rules out", () => {
+    // An answer that lands on welcome, after going back from the picker.
+    const welcome = goBack(chooseAgent(startAgentChoice(withClaudeReady()), "claude"))
+    expect(welcome.agent).toBe("claude")
+    const signedOut = recordReadiness(welcome, { claude: "needs-authentication" })
+    expect(signedOut.agent).toBeUndefined()
+    expect(confirmAgent(startAgentChoice(signedOut)).step).toBe("agent")
+    // Back from the lesson while the gateway restarted and its answer was dropped.
+    const unanswered = goBack(clearReadiness(atSummon()))
+    expect(unanswered.step).toBe("agent")
+    expect(unanswered.agent).toBeUndefined()
+  })
 })

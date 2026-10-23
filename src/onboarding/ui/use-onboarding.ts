@@ -211,6 +211,10 @@ export function useOnboarding(
 
   const lingerBusy = React.useRef(false)
   const leavingSummon = React.useRef(false)
+  // Which visit to the summon step a finish was asked from. Back and Continue
+  // each start a new one, so a linger read still in flight from a visit that
+  // was left cannot finish setup on the visit somebody came back to.
+  const summonVisit = React.useRef(0)
   const [lingerPending, setLingerPending] = React.useState(false)
   const recheck = React.useCallback(() => {
     if (
@@ -354,6 +358,7 @@ export function useOnboarding(
     }, []),
     confirm: React.useCallback(() => {
       playCue("advance")
+      summonVisit.current += 1
       setState(confirmAgent)
     }, []),
     finish: React.useCallback(() => {
@@ -366,8 +371,10 @@ export function useOnboarding(
       }
       if (state.step !== "summon" || leavingSummon.current) return
       leavingSummon.current = true
+      const visit = summonVisit.current
       void linger.status().then(
         (view) => {
+          if (visit !== summonVisit.current) return
           leavingSummon.current = false
           if (!view || view.shown === "not-applicable") {
             playCue("celebrate")
@@ -382,6 +389,7 @@ export function useOnboarding(
           )
         },
         () => {
+          if (visit !== summonVisit.current) return
           // A failed ask is not a view and not a claim. Setup still finishes.
           leavingSummon.current = false
           playCue("celebrate")
@@ -413,6 +421,9 @@ export function useOnboarding(
     // one. Back onto the picker asks the runtimes again, because whatever was
     // not ready the last time it was on screen may be by now.
     back: React.useCallback(() => {
+      // Whatever finish the step being left had asked for is abandoned with it.
+      summonVisit.current += 1
+      leavingSummon.current = false
       setState(goBack)
       if (state.step === "summon") recheck()
     }, [recheck, state.step]),

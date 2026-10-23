@@ -15,7 +15,7 @@ import { createSessionHandle } from "../session/adapters/client/handle"
 import { connectDevSession } from "../session/adapters/client/dev-session"
 import type { ConversationEffects } from "../conversation/application/ports"
 import { assignedAgentReadiness, httpAgentReadiness } from "../onboarding/adapters/agents"
-import { loadAssignedGatewayEndpoint, loadChosenAgent } from "../host"
+import { loadAssignedGatewayEndpoint, loadChosenAgent, onSetupRecorded } from "../host"
 import type { AgentReadinessSource } from "../onboarding/application/ports"
 import { hasNativeHost } from "../host"
 import { PreparedOperationTable } from "../conversation/adapters/store/prepared-operation-table"
@@ -90,6 +90,12 @@ export function createDependencies(
     return asking
   }
   const chosenAgent = () => (chosen ??= ask())
+  // A kept choice is good until setup records another: a replay from Settings
+  // can finish on a different agent while this window runs, and the next
+  // conversation is on that one.
+  void onSetupRecorded(() => {
+    chosen = undefined
+  })
   // The wall clock a permission's countdown is read against, and that a
   // view's deadlines are put on as it arrives. Constructed here so neither the
   // conversation UI nor its gateway adapter reads `Date.now()` itself. It is a
