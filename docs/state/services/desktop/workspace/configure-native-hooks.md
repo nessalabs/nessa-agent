@@ -5,13 +5,14 @@ kind: statechart
 status: implemented
 summary: Settings saves Claude and Codex hook choices for their next process start and rereads uncertain writes.
 parent: desktop-workspace
-sourceRevision: "7f434845423686cdd01a17300c47d10d46911f50"
+sourceRevision: "a32206a4b867e8a4515a37d803b7753dce90d534"
 sources:
   - src/desktop/settings/ui/native-hooks-rows.tsx
   - src/desktop/settings/ui/native-hooks-rows.test.tsx
   - src/desktop/settings/adapters/native-hooks-gateway.ts
   - src/desktop/settings/adapters/native-hooks-gateway.test.ts
-diagramLinks: {}
+diagramLinks:
+  Saving: desktop-settings-action-owners
 diagramDetails:
   - diagram: 0
     node: Ready
@@ -37,11 +38,11 @@ stateDiagram-v2
     Reading --> Ready: Current read succeeds
     Reading --> Unread: Current read fails
     Ready --> Reading: Focus or visible event [not saving]
-    Ready --> Saving: Toggle [ready phase and no rendered save]
-    Saving --> Rereading: Write answers / read actual choices
-    Rereading --> Ready: Read succeeds / show stored choice and any failure
-    Rereading --> Ready: Read fails but matching write acknowledged / use acknowledged choice
-    Rereading --> Unread: Write and reread unconfirmed
+    Ready --> Saving: Toggle [synchronous save owner free] / claim slot before dispatch
+    Saving --> Rereading: Write answers [owner current] / read actual choices
+    Rereading --> Ready: Read succeeds [owner current] / release and show stored choice
+    Rereading --> Ready: Read fails [owner current and matching ACK] / release with acknowledged choice
+    Rereading --> Unread: Read unconfirmed [owner current and no matching ACK] / release
     Unread --> Reading: Focus or visible event [not saving]
 ```
 
@@ -53,16 +54,16 @@ This is a next-start configuration acknowledgement. It is not proof that a live 
 
 ## Saving and rereading
 
-Toggling displays the proposed choice and disables both switches while saving. The handler declines a request whose captured phase already names a save. A save receives a new request ID and the component then rereads. Background focus/visibility reads do not compete while the saving flag is held; earlier read generations cannot replace the pending save.
+Toggling claims a synchronous request identity before dispatch, displays the proposed choice and disables both switches. Another callback cannot dispatch while that identity owns the write and its mandatory reread, including callbacks before the disabled render commits. The save receives a new request ID. Focus/visibility reads defer to its mandatory reread; earlier reads cannot replace its owner. The Saving node opens the [detailed action-owner chart](settings-action-owners.md).
 
 A successful reread supplies the actual choices even if the write answer was lost. When the read fails but a matching write was acknowledged, the row can retain that acknowledged choice. If neither supplies trustworthy state, it becomes unread. A failed write with a successful reread displays the actual choice and a failure sentence rather than assuming rollback.
 
 ## Recovery and lifetime limits
 
-A failed read can recover on focus or becoming visible. The read effect has a lifetime guard and generation comparison; its listener cleanup removes focus and visibility handlers. No cancellation port stops an admitted gateway save.
+A failed read can recover on focus or becoming visible. Read publication requires a live effect and current request identity. Cleanup retires that identity and removes focus/visibility listeners, so a replacement source reads independently. A retired save cannot start its reread; an already-started retired reread cannot publish or unlock the replacement's action. No cancellation port stops an admitted gateway save.
 
-The current write continuation does not carry a separate source-lifetime identity, and rendered disabling is not proof of synchronous coalescing before React commits it. This audit does not establish repeated-click or cross-source late-save safety. Those are concrete remaining validation boundaries, not a claim that the remembered-rule revoke fix also changed native hooks.
+Controlled same-task callbacks and provider replacement are covered by regressions. Ordinary production provider replacement and real next-start harness effects remain unproven. Retiring publication does not undo a configuration write. These boundaries differ from server authorization and physical cancellation.
 
 ## Evidence and execution limits
 
-[Rendered rows](../../../../../src/desktop/settings/ui/native-hooks-rows.test.tsx) cover stored choices, refusal, a lost write answer, missing catalog entries, focus refresh and overlapping reads. [Adapter tests](../../../../../src/desktop/settings/adapters/native-hooks-gateway.test.ts) cover reading and writing through the agents API. Live harness next-start behavior and the repeated-input/lifetime boundaries above are not established by those UI/adapter tests. No new runtime behavior is proposed by this chart.
+[Rendered rows](../../../../../src/desktop/settings/ui/native-hooks-rows.test.tsx) cover stored choices, refusal, a lost write answer, missing catalog entries, focus refresh and overlapping reads. [Adapter tests](../../../../../src/desktop/settings/adapters/native-hooks-gateway.test.ts) cover reading and writing through the agents API. The rows now also cover repeated input, ownership through rereading, source replacement and unmount. [Action-owner evidence](settings-action-owners.md) distinguishes those controlled cases from live next-start behavior and production rebinding. This page was re-reviewed against the assembled source checkpoint; unrelated pages retain their earlier checkpoints.

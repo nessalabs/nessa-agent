@@ -5,7 +5,7 @@ kind: statechart
 status: implemented
 summary: Native-hook saves and notification requests retain one admission and settlement identity across asynchronous work.
 parent: desktop-workspace
-sourceRevision: "c988ee98fae2517adfd0fae33fd422deb915856f"
+sourceRevision: "a32206a4b867e8a4515a37d803b7753dce90d534"
 sources:
   - src/desktop/settings/ui/native-hooks-rows.tsx
   - src/desktop/settings/ui/native-hooks-rows.test.tsx
@@ -191,7 +191,7 @@ not established.
 
 [Design and invariants](../../../../design/settings-action-owners.md) ·
 [Evidence and remaining gates](../../../../../verification/desktop/evidence/settings-action-owners/README.md).
-Only these owners/tests were checked at the source checkpoint. This follow-up
-does not alter frozen #1090/#1093 branches. When combined with their broader
-settings journeys, this page owns corrected pending-action behavior; their older
-source checkpoints do not claim these later fixes.
+These owners/tests were rechecked at the assembled source checkpoint. The
+[full native-hook journey](configure-native-hooks.md) and
+[notification permission journey](enable-review-notices.md) link to this page
+for pending-action detail. Other state pages retain their scoped source reviews.
