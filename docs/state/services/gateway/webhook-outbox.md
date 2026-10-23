@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "efa4020c75347c42c3896f2d77363498aebb0eb6"
+sourceRevision: "e08b90cf01ecd2fef3e78ce4b707935e1fb2abfa"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
@@ -36,6 +36,7 @@ sources:
   - crates/nessa-server/src/webhooks/infrastructure/outbox/journal.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/publication.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/restoration.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/restoration/progress.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/retirement.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/mod.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/store.rs
@@ -142,6 +143,7 @@ stateDiagram-v2
     Ready --> Writing: Queue, transition, stop or recovery
     Writing --> Refused: Validation, compare-and-swap or audit insertion fails
     Writing --> Owed: Commit state, checkpoint and audit after retention checks
+    Owed --> Refused: Initial obligation contradicts retained progress
     Owed --> Acknowledged: Publish immutable private audit and acknowledge exactly one SQL row
     Owed --> Unacknowledged: Publication or acknowledgement fails
     Unacknowledged --> Owed: Next operation replays the same saved audit bytes
@@ -197,9 +199,7 @@ release references in the same transaction; they do not invent historical actors
 ```mermaid
 stateDiagram-v2
     [*] --> Retained: Commit original reset fact with cursor and capture members
-    Retained --> Retained: Replace cursor / keep older delivery and audit references
-    Retained --> Retained: Settle captured Sending / project original cause into audit
-    Retained --> Retained: Retire delivery or cursor / decrement owned references
+    Retained --> Retained: Replace or release an owner / preserve referenced original fact
     Retained --> Released: Trim final acknowledged reference / delete original fact
     Released --> [*]
 ```
@@ -319,29 +319,45 @@ The immutable registration lifecycle value owns legal replacements and its decod
 
 ## Issuance acknowledgement before later work
 
-Initial issuance must acknowledge before another outbox operation commits later
-work. If an owed original Issue is retained alongside ExpiryObserved, Stopped or
-retirement, restoration refuses it before publication or cleanup. The same is
-true for an Active registration with retained cursor or delivery work: those
-facts prove that the initial obligation had to complete. The query uses the
-existing registration-leading cursor and delivery keys; it does not scan terminal
-history or allocate a second acknowledgement log.
+The initial projection must acknowledge before another outbox operation commits
+later work. Restoration and live publication now share one retained-progress
+summary. It consumes the existing record and contextual validators and classifies
+the closed audit/cause variants. A schema inventory checks all eight persisted
+families. Intents establish original input binding; members derive their
+registration through their reset/delivery owners. These facts grant no authority.
 
-A genuinely pending initial Issue on an Active registration with no such work
-can recover. Its exact file may already exist if only local acknowledgement was
-lost. Other registrations' work does not block it. Published original history
-remains valid through later phases and retirement. Missing historical evidence
-alone does not prove an impossible state or justify inventing prior events.
+An owed initial projection requires an Active registration and exactly one
+retained initial identity, with no published initial identity, later audit or
+current retained work contradicting it. Cursors, every delivery phase, immutable
+reset facts and retirements participate. Retained published records are checked
+before classification. Registration-leading keys and the new audit index scope
+reads to the affected registration; validation streams audit rows and bounds the
+registration set. Existing capacity and durability rules are unchanged.
 
-[The M2 correction evidence](../../../reviews/evidence/webhook-runtime/lifecycle-observation/m2-repair/README.md)
-records fifteen live/cold refusal-and-repair histories, adjacent published-history
-recovery, both initial failure modes and full-capacity query controls. A combined
-actual-registry test preserves the first Owner or Restart expiry observation
-through later actual auth revocation and retirement, then cold-restores the
-original independent auth fact. These are inner owner tests, not a running
-command coordinator or recipient E2E. This page's source review compared the
-outbox changes since f75, traced the current restoration/publication/registry
-owners and checked the new joint auth boundary. [Independent round3](../../../reviews/evidence/webhook-runtime/lifecycle-observation/review-3/report.md) confirms the concrete M1/M2 repairs but finds Major M3: a retained published Cursor and its immutable reset fact still prove initial completion after the current cursor/delivery are gone. A genuine published initial Issue also contradicts a competing owed initial identity. The current predicate omits those proofs. W24 remains unqualified and unpublished. The desired rejection test is preserved failing, distinct from acceptance demonstrations. The bounded review process now requires parent adjudication of total retained-progress classification versus stronger original identity and monotonic acknowledgement; no additional symptom patch has been applied.
+A genuine pending projection can recover under the same identity even if its
+file already exists and only SQL acknowledgement was lost. Unrelated registrations'
+work does not block it. Published original history remains valid through later
+phases and retirement. Erased proof cannot establish historical acknowledgement:
+when all proof has been trimmed, this design provides no stronger historical
+guarantee. It does not add a durable acknowledgement log or synthesize history.
+
+[M2 evidence](../../../reviews/evidence/webhook-runtime/lifecycle-observation/m2-repair/README.md)
+and [independent round three](../../../reviews/evidence/webhook-runtime/lifecycle-observation/review-3/report.md)
+remain historical findings. Round three reproduced M3 at 4c993d45: reset/Cursor
+proof survived deletion of current cursor/delivery rows, and a published original
+Issue contradicted a competing owed UUID. Parent chose the total retained-proof
+summary, implemented at this source checkpoint. [Structural correction evidence](../../../reviews/evidence/webhook-runtime/lifecycle-observation/retained-progress/README.md)
+records both desired-contract regressions failing against the old owner and
+passing after correction, scoped/retention tests and mutation controls. Fresh
+independent review and final qualification are still pending; W24 is unpublished.
+The exact canonical schema now includes the registration-leading audit index;
+a different private schema is refused before effects rather than silently migrated.
+
+This source review compared the owning outbox changes since efa4020c, traced the
+initial-publication, restoration, reset, retirement and cleanup relationships,
+and checked their regression tests. It advances only this page, not the unrelated
+issuance/admission pages. The inner auth/expiry integration remains a synthetic
+owner test rather than a running command coordinator or recipient E2E.
 
 This is an unpublished inner lifecycle checkpoint. The retained command supervisor, startup reader, credential/grant admission and sender still require composition; this chart does not claim that they run. [Private evidence](../../../reviews/evidence/webhook-runtime/lifecycle-observation/README.md) distinguishes completed isolated tests from pending canonical checks and independent review.
 
