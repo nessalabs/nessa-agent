@@ -372,7 +372,15 @@ async function settledOffset(wrapper, closed) {
           content.getBoundingClientRect().left -
           element.getBoundingClientRect().left -
           from,
-        tray: tray?.getBoundingClientRect().width ?? 0,
+        // The open tray's width as SwipeRow states it: the tray itself spans
+        // the row, so a full swipe's leading action can stretch across it.
+        tray:
+          parseFloat(
+            getComputedStyle(
+              tray?.querySelector('[data-slot="workspace-swipe-row-action"]') ?? element,
+            ).getPropertyValue("--nessa-swipe-open"),
+          ) ||
+          (tray?.getBoundingClientRect().width ?? 0),
       }
     }, closed)
     if (last && now.offset === last.offset && now.tray === last.tray && now.offset !== 0)
