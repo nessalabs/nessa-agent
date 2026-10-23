@@ -6,6 +6,7 @@ CREATE TABLE registrations (
     principal TEXT NOT NULL,
     organization TEXT NOT NULL,
     owner TEXT NOT NULL,
+    issued_at INTEGER NOT NULL CHECK(issued_at>=0),
     destination TEXT NOT NULL CHECK(length(destination) <= 2048),
     mac_key BLOB NOT NULL CHECK(length(mac_key) = 32),
     active INTEGER NOT NULL CHECK(active IN (0, 1)),
@@ -23,6 +24,8 @@ CREATE TABLE cursors (
     scope TEXT NOT NULL CHECK(length(scope) <= 4096),
     position INTEGER NOT NULL CHECK(position >= 0),
     reset_required INTEGER NOT NULL DEFAULT 0 CHECK(reset_required IN (0, 1)),
+    observed_scope TEXT CHECK(observed_scope IS NULL OR length(observed_scope)<=4096),
+    reset_stop TEXT CHECK(reset_stop IS NULL OR length(reset_stop)<=128),
     PRIMARY KEY(registration, conversation)
 );
 
@@ -52,3 +55,19 @@ CREATE TABLE audit (
 
 CREATE INDEX unpublished_audit ON audit(published);
 CREATE INDEX delivery_audit ON audit(delivery, published);
+
+-- Original secret-free ownership facts survive private registration retirement
+-- until all its audit projections have been acknowledged and trimmed.
+CREATE TABLE retirements (
+    id TEXT PRIMARY KEY,
+    audit TEXT NOT NULL UNIQUE REFERENCES audit(id) DEFERRABLE INITIALLY DEFERRED,
+    credential TEXT NOT NULL,
+    principal TEXT NOT NULL,
+    organization TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    issued_at INTEGER NOT NULL CHECK(issued_at>=0),
+    stop_cause TEXT NOT NULL,
+    stop_initiator TEXT NOT NULL,
+    stop_at INTEGER NOT NULL CHECK(stop_at>=0),
+    retired_at INTEGER NOT NULL CHECK(retired_at>=0)
+);

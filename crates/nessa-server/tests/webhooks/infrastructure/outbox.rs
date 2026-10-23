@@ -1050,7 +1050,7 @@ async fn restored_capacity_is_bounded_before_collection() {
         let mut connection = f.store.owner.connection.lock().unwrap();
         let transaction = connection.transaction().unwrap();
         for n in 1..=crate::webhooks::application::MAX_REGISTRATIONS {
-            transaction.execute("INSERT INTO registrations(id,credential,principal,organization,owner,destination,mac_key,active) SELECT ?1,?2,?3,organization,owner,destination,mac_key,1 FROM registrations WHERE id=?4",params![Uuid::new_v4().to_string(),format!("synthetic-key-{n}"),format!("synthetic-principal-{n}"),f.registration.id.to_string()]).unwrap();
+            transaction.execute("INSERT INTO registrations(id,credential,principal,organization,owner,destination,mac_key,active,issued_at) SELECT ?1,?2,?3,organization,owner,destination,mac_key,1,issued_at FROM registrations WHERE id=?4",params![Uuid::new_v4().to_string(),format!("synthetic-key-{n}"),format!("synthetic-principal-{n}"),f.registration.id.to_string()]).unwrap();
         }
         transaction.commit().unwrap();
     }
@@ -1951,6 +1951,420 @@ async fn owed_credential_stop_evidence_matches_original_registration_facts() {
                 "accepted stop {corruption}"
             );
             assert!(!path.exists());
+        }
+    }
+}
+
+/// Corrupt only the private fixture's saved evidence and make publication owed.
+fn edit_evidence(f: &Fixture, kind: &str, cause: &str, edit: impl FnOnce(&mut Value)) -> String {
+    let connection = f.store.owner.connection.lock().unwrap();
+    let (id, text): (String, String) = connection.query_row(
+        "SELECT id,record FROM audit WHERE json_extract(record,'$.kind')=?1 AND json_extract(record,'$.cause')=?2 ORDER BY rowid DESC LIMIT 1",
+        params![kind,cause], |r| Ok((r.get(0)?,r.get(1)?)),
+    ).unwrap();
+    let mut record: Value = serde_json::from_str(&text).unwrap();
+    edit(&mut record);
+    connection
+        .execute(
+            "UPDATE audit SET record=?1,published=0 WHERE id=?2",
+            params![record.to_string(), id],
+        )
+        .unwrap();
+    let path = f.audit.join(format!("{id}.json"));
+    if path.exists() {
+        std::fs::remove_file(path).unwrap();
+    }
+    id
+}
+
+async fn rejects_evidence_before_live_or_restored_publication(f: &mut Fixture, id: &str) {
+    let path = f.audit.join(format!("{id}.json"));
+    assert_eq!(f.store.due(3000).await.err(), Some(OutboxError::Invalid));
+    assert!(!path.exists());
+    assert_eq!(reopen_store(f).await.err(), Some(OutboxError::Invalid));
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+async fn registration_issue_evidence_matches_retained_target() {
+    for field in ["credential", "principal", "organization", "owner", "atMs"] {
+        let mut f = Fixture::new().await;
+        let id = edit_evidence(&f, "webhook_registration", "credential_issue", |r| {
+            r[field] = if field == "atMs" {
+                json!(1001)
+            } else {
+                json!("another-valid-target")
+            };
+            if field == "owner" {
+                r["initiator"] = r["owner"].clone();
+            }
+        });
+        rejects_evidence_before_live_or_restored_publication(&mut f, &id).await;
+    }
+}
+
+#[tokio::test]
+async fn registration_stop_evidence_matches_original_stop_and_target() {
+    for field in ["initiator", "cause", "atMs", "principal", "owner"] {
+        let mut f = Fixture::new().await;
+        f.store.queue(f.record(1)).await.unwrap();
+        let q = f.store.due(2000).await.unwrap().remove(0).delivery;
+        let sending = q.admit(7, 2000).unwrap();
+        f.store
+            .transition(&q, &sending, DeliveryCause::Admission, 2000)
+            .await
+            .unwrap();
+        let held = f.audit.with_extension("held");
+        std::fs::rename(&f.audit, &held).unwrap();
+        assert_eq!(
+            f.store
+                .stop(
+                    f.registration.target.credential.clone(),
+                    StopReason::Revoked {
+                        initiator: PrincipalId::new("original-revoker").unwrap()
+                    },
+                    2001
+                )
+                .await,
+            Err(OutboxError::Unavailable)
+        );
+        std::fs::rename(&held, &f.audit).unwrap();
+        let id = edit_evidence(
+            &f,
+            "webhook_registration",
+            "credential_revoked",
+            |r| match field {
+                "atMs" => r[field] = json!(2002),
+                "cause" => {
+                    r[field] = json!("credential_expired");
+                    r["initiator"] = json!(format!("delivery:{}", Uuid::new_v4()));
+                }
+                _ => r[field] = json!("replacement-valid-principal"),
+            },
+        );
+        rejects_evidence_before_live_or_restored_publication(&mut f, &id).await;
+    }
+}
+
+#[tokio::test]
+async fn retirement_evidence_uses_retained_original_facts_after_private_row_deletion() {
+    for field in [
+        "valid",
+        "initiator",
+        "principal",
+        "stopCause",
+        "stopAtMs",
+        "atMs",
+        "missing_facts",
+        "changed_facts",
+        "invalid_facts",
+        "wrong_audit_identity",
+        "missing_retirement_record",
+        "replaced_retirement_record",
+        "duplicate_retirement_record",
+        "excess_facts",
+    ] {
+        let mut f = Fixture::new().await;
+        f.store.owner.connection.lock().unwrap().execute_batch("CREATE TRIGGER hold_retirement_ack BEFORE UPDATE OF published ON audit WHEN json_extract(OLD.record,'$.cause')='drained' BEGIN SELECT RAISE(IGNORE); END;").unwrap();
+        assert_eq!(
+            f.store
+                .stop(
+                    f.registration.target.credential.clone(),
+                    StopReason::Revoked {
+                        initiator: PrincipalId::new("original-other-revoker").unwrap()
+                    },
+                    2000
+                )
+                .await,
+            Err(OutboxError::Conflict)
+        );
+        {
+            let c = f.store.owner.connection.lock().unwrap();
+            c.execute_batch("DROP TRIGGER hold_retirement_ack").unwrap();
+            assert_eq!(
+                c.query_row("SELECT count(*) FROM registrations", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                c.query_row("SELECT count(*) FROM retirements", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+        }
+        let id = edit_evidence(&f, "webhook_registration", "drained", |r| match field {
+            "initiator" | "principal" => r[field] = json!("substituted-valid-principal"),
+            "stopCause" => {
+                r[field] = json!("credential_expired");
+                r["initiator"] = json!(format!("delivery:{}", Uuid::new_v4()));
+            }
+            "stopAtMs" | "atMs" => r[field] = json!(2002),
+            _ => {}
+        });
+        {
+            let c = f.store.owner.connection.lock().unwrap();
+            match field {
+                "missing_facts" => {
+                    c.execute("DELETE FROM retirements", []).unwrap();
+                }
+                "changed_facts" => {
+                    c.execute(
+                        "UPDATE retirements SET stop_initiator='changed-original'",
+                        [],
+                    )
+                    .unwrap();
+                }
+                "invalid_facts" => {
+                    c.execute("UPDATE retirements SET retired_at='invalid'", [])
+                        .unwrap();
+                }
+                "wrong_audit_identity" => {
+                    c.execute("UPDATE retirements SET audit=(SELECT id FROM audit WHERE json_extract(record,'$.cause')='credential_revoked')", []).unwrap();
+                }
+                "replaced_retirement_record" => {
+                    c.execute("UPDATE retirements SET audit=(SELECT id FROM audit WHERE json_extract(record,'$.cause')='credential_revoked')", []).unwrap();
+                    c.execute("DELETE FROM audit WHERE id=?1", [&id]).unwrap();
+                }
+                "duplicate_retirement_record" => {
+                    let text: String = c
+                        .query_row("SELECT record FROM audit WHERE id=?1", [&id], |r| r.get(0))
+                        .unwrap();
+                    let mut record: Value = serde_json::from_str(&text).unwrap();
+                    let another = Uuid::new_v4().to_string();
+                    record["recordId"] = json!(another);
+                    c.execute(
+                        "INSERT INTO audit(id,registration,record) VALUES(?1,?2,?3)",
+                        params![another, f.registration.id.to_string(), record.to_string()],
+                    )
+                    .unwrap();
+                }
+                "excess_facts" => {
+                    let text: String = c
+                        .query_row("SELECT record FROM audit WHERE id=?1", [&id], |r| r.get(0))
+                        .unwrap();
+                    for _ in 0..crate::webhooks::application::MAX_REGISTRATIONS {
+                        let another = Uuid::new_v4().to_string();
+                        let registration = Uuid::new_v4().to_string();
+                        let mut record: Value = serde_json::from_str(&text).unwrap();
+                        record["recordId"] = json!(another);
+                        record["registration"] = json!(registration);
+                        c.execute(
+                            "INSERT INTO audit(id,registration,record) VALUES(?1,?2,?3)",
+                            params![another, registration, record.to_string()],
+                        )
+                        .unwrap();
+                        c.execute("INSERT INTO retirements(id,audit,credential,principal,organization,owner,issued_at,stop_cause,stop_initiator,stop_at,retired_at) SELECT ?1,?2,credential,principal,organization,owner,issued_at,stop_cause,stop_initiator,stop_at,retired_at FROM retirements WHERE id=?3",params![registration,another,f.registration.id.to_string()]).unwrap();
+                    }
+                }
+                "missing_retirement_record" => {
+                    // Model a damaged private file; the production FK remains enabled.
+                    c.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+                    c.execute("DELETE FROM audit WHERE id=?1", [&id]).unwrap();
+                    c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+                }
+                _ => {}
+            }
+        }
+        if field == "valid" {
+            // The actual FK refuses deletion of the owed retirement identity.
+            assert!(f
+                .store
+                .owner
+                .connection
+                .lock()
+                .unwrap()
+                .execute("DELETE FROM audit WHERE id=?1", [&id])
+                .is_err());
+            let reopened = reopen_store(&mut f).await.unwrap();
+            assert!(reopened.due(3000).await.unwrap().is_empty());
+            let record: Value = serde_json::from_str(
+                &std::fs::read_to_string(f.audit.join(format!("{id}.json"))).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(record["initiator"], "original-other-revoker");
+            assert_eq!(
+                reopened
+                    .owner
+                    .connection
+                    .lock()
+                    .unwrap()
+                    .query_row("SELECT count(*) FROM retirements", [], |r| r
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        } else {
+            rejects_evidence_before_live_or_restored_publication(&mut f, &id).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn cursor_evidence_matches_complete_original_reset_observation() {
+    for field in [
+        "valid",
+        "priorPosition",
+        "priorScope",
+        "observedScope",
+        "initiator",
+        "atMs",
+        "missing_observation",
+        "changed_observation",
+    ] {
+        let mut f = Fixture::new().await;
+        f.store.queue(f.record(1)).await.unwrap();
+        let q = f.store.due(2000).await.unwrap().remove(0).delivery;
+        let sending = q.admit(7, 2000).unwrap();
+        f.store
+            .transition(&q, &sending, DeliveryCause::Admission, 2000)
+            .await
+            .unwrap();
+        let held = f.audit.with_extension("held");
+        std::fs::rename(&f.audit, &held).unwrap();
+        assert_eq!(
+            f.store.queue(replaced_source(f.record(2))).await,
+            Err(OutboxError::Unavailable)
+        );
+        std::fs::rename(&held, &f.audit).unwrap();
+        let id = edit_evidence(&f, "webhook_cursor", "source_changed", |r| match field {
+            "priorPosition" => r[field] = json!(999),
+            "priorScope" | "observedScope" => {
+                r[field]["incarnation"] = json!("other-valid-incarnation")
+            }
+            "initiator" => r[field] = json!("restart"),
+            "atMs" => r[field] = json!(2002),
+            _ => {}
+        });
+        {
+            let c = f.store.owner.connection.lock().unwrap();
+            match field {
+                "missing_observation" => {
+                    c.execute("UPDATE cursors SET reset_stop=NULL", []).unwrap();
+                }
+                "changed_observation" => {
+                    c.execute(
+                        "UPDATE cursors SET reset_stop=?1",
+                        [codec::source_stop_text(codec::SourceStop {
+                            initiator: QueueInitiator::Restart,
+                            at_ms: 2001,
+                        })
+                        .unwrap()],
+                    )
+                    .unwrap();
+                }
+                _ => {}
+            }
+        }
+        if field == "valid" {
+            let reopened = reopen_store(&mut f).await.unwrap();
+            assert!(reopened.due(3000).await.unwrap().is_empty());
+            assert!(f.audit.join(format!("{id}.json")).exists());
+            reopened.recover(3100).await.unwrap();
+        } else {
+            rejects_evidence_before_live_or_restored_publication(&mut f, &id).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn complete_owed_batch_is_checked_before_first_publication() {
+    let f = Fixture::new().await;
+    let held = f.audit.with_extension("held");
+    std::fs::rename(&f.audit, &held).unwrap();
+    assert_eq!(
+        f.store.queue(f.record(1)).await.err(),
+        Some(OutboxError::Unavailable)
+    );
+    std::fs::rename(&held, &f.audit).unwrap();
+    let first: String = f
+        .store
+        .owner
+        .connection
+        .lock()
+        .unwrap()
+        .query_row("SELECT id FROM audit WHERE published=0", [], |r| r.get(0))
+        .unwrap();
+    let mut other = f.registration.clone();
+    other.target.principal = PrincipalId::new("other-valid-principal").unwrap();
+    {
+        let mut c = f.store.owner.connection.lock().unwrap();
+        let transaction = c.transaction().unwrap();
+        publication::append(
+            &transaction,
+            audit::Record::registration(&other, audit::RegistrationChange::Issue, 1000),
+        )
+        .unwrap();
+        transaction.commit().unwrap();
+    }
+    assert_eq!(f.store.due(3000).await.err(), Some(OutboxError::Invalid));
+    assert!(!f.audit.join(format!("{first}.json")).exists());
+    assert_eq!(
+        f.store
+            .owner
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT count(*) FROM audit WHERE published=0", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn delivery_evidence_matches_enclosing_facts_before_publication() {
+    for field in ["principal", "position", "scope"] {
+        let mut f = Fixture::new().await;
+        f.store.queue(f.record(1)).await.unwrap();
+        let id = edit_evidence(
+            &f,
+            "webhook_delivery",
+            "source_checkpoint",
+            |r| match field {
+                "position" => r[field] = json!(999),
+                "scope" => r[field]["origin"] = json!("another-valid-origin"),
+                _ => r[field] = json!("another-valid-principal"),
+            },
+        );
+        rejects_evidence_before_live_or_restored_publication(&mut f, &id).await;
+    }
+}
+
+#[tokio::test]
+async fn reset_facts_survive_audit_trim_and_decode_completely() {
+    for change in [
+        "valid",
+        "observed_scope=NULL",
+        "reset_stop=NULL",
+        "reset_required=0",
+        "reset_stop='invalid'",
+        "reset_stop='{}'",
+    ] {
+        let mut f = Fixture::new().await;
+        f.store.queue(f.record(1)).await.unwrap();
+        assert_eq!(
+            f.store.queue(replaced_source(f.record(2))).await,
+            Err(OutboxError::ResetRequired)
+        );
+        assert!(f.store.due(3000).await.unwrap().is_empty());
+        {
+            let c = f.store.owner.connection.lock().unwrap();
+            assert_eq!(c.query_row("SELECT count(*) FROM audit WHERE json_extract(record,'$.kind')='webhook_cursor'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+            if change != "valid" {
+                c.execute(&format!("UPDATE cursors SET {change}"), [])
+                    .unwrap();
+            }
+        }
+        let reopened = reopen_store(&mut f).await;
+        if change == "valid" {
+            assert_eq!(
+                reopened.unwrap().queue(replaced_source(f.record(2))).await,
+                Err(OutboxError::ResetRequired)
+            );
+        } else {
+            assert_eq!(reopened.err(), Some(OutboxError::Invalid));
         }
     }
 }

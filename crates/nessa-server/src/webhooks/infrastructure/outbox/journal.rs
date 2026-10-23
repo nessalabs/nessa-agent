@@ -100,6 +100,7 @@ fn trim(connection: &Connection) -> Result<(), OutboxError> {
         .map_err(unavailable)?;
     connection.execute("DELETE FROM deliveries WHERE registration IN (SELECT id FROM registrations WHERE active=0) AND phase NOT IN ('queued','sending','retry') AND NOT EXISTS(SELECT 1 FROM audit a WHERE a.delivery=deliveries.id AND a.published=0)",[]).map_err(unavailable)?;
     connection.execute("DELETE FROM audit WHERE published=1 AND (delivery IS NULL OR NOT EXISTS(SELECT 1 FROM deliveries d WHERE d.id=audit.delivery))",[]).map_err(unavailable)?;
+    connection.execute("DELETE FROM retirements WHERE NOT EXISTS(SELECT 1 FROM audit WHERE audit.registration=retirements.id)",[]).map_err(unavailable)?;
     Ok(())
 }
 
@@ -153,9 +154,17 @@ fn retire_drained(transaction: &Transaction<'_>, at_ms: u64) -> Result<(), Outbo
     for id in retired {
         let saved = super::registry::by_id(transaction, uuid(&id)?)?;
         let stop = saved.stop.as_ref().ok_or(OutboxError::Invalid)?;
-        append(
+        let record =
+            Record::registration(&saved.registration, RegistrationChange::Retire(stop), at_ms);
+        let (audit_id, _, _) = record.keys()?;
+        append(transaction, record)?;
+        super::retirement::retain(
             transaction,
-            Record::registration(&saved.registration, RegistrationChange::Retire(stop), at_ms),
+            &saved.registration,
+            stop,
+            at_ms,
+            audit_id,
+            saved.issued_at_ms,
         )?;
         transaction
             .execute("DELETE FROM cursors WHERE registration=?1", [&id])

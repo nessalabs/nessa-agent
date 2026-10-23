@@ -1,0 +1,189 @@
+//! Complete contextual restoration, total over the closed audit representation.
+use super::{
+    audit::{self, DeliveryEvidence, Record},
+    cursor,
+    publication::SavedAudit,
+    registry, retirement,
+    stored::{self, StoredDelivery},
+    unavailable, uuid,
+};
+use crate::webhooks::{application::OutboxError, domain::Phase};
+use nessa_local_database::rusqlite::{Connection, OptionalExtension};
+use nessa_protocol::conversation::domain::ConversationId;
+
+pub(super) fn validate_owed(connection: &Connection) -> Result<(), OutboxError> {
+    validate_records(connection, true)
+}
+
+fn validate_records(connection: &Connection, owed: bool) -> Result<(), OutboxError> {
+    retirement::validate(connection)?;
+    let mut statement = connection.prepare("SELECT id,registration,delivery,record,published FROM audit WHERE (?1=0 OR published=0)").map_err(unavailable)?;
+    let rows = statement
+        .query_map([owed], SavedAudit::row)
+        .map_err(unavailable)?;
+    for row in rows {
+        let (_, text) = row.map_err(unavailable)?.checked()?;
+        contextual(connection, &Record::decode(&text)?)?;
+    }
+    Ok(())
+}
+
+/// No wildcard arm: adding an audit variant requires its owning relationship.
+fn contextual(connection: &Connection, record: &Record) -> Result<(), OutboxError> {
+    match record {
+        Record::Registration {
+            record_id,
+            registration,
+            credential,
+            principal,
+            organization,
+            owner,
+            cause,
+            initiator,
+            stop_cause,
+            stop_at_ms,
+            at_ms,
+            ..
+        } => {
+            let id = uuid(registration)?;
+            let live = connection
+                .query_row(
+                    &format!("{} FROM registrations WHERE id=?1", registry::SELECT),
+                    [registration],
+                    |r| registry::StoredRegistration::row(r, 0),
+                )
+                .optional()
+                .map_err(unavailable)?
+                .map(registry::StoredRegistration::checked)
+                .transpose()?;
+            let retired = retirement::read(connection, id)?;
+            let (target, stop, issued_at) = match (&live, &retired) {
+                (Some(live), None) => (
+                    &live.registration.target,
+                    live.stop.as_ref(),
+                    live.issued_at_ms,
+                ),
+                (None, Some(retired)) => {
+                    (&retired.target, Some(&retired.stop), retired.issued_at_ms)
+                }
+                _ => return Err(OutboxError::Invalid),
+            };
+            if audit::checked_target(credential, principal, organization, owner)? != *target {
+                return Err(OutboxError::Invalid);
+            }
+            match cause {
+                audit::Cause::CredentialIssue => {
+                    if *at_ms != issued_at {
+                        return Err(OutboxError::Invalid);
+                    }
+                }
+                audit::Cause::CredentialRevoked | audit::Cause::CredentialExpired => {
+                    if stop != Some(&audit::check_stop(cause, initiator, *at_ms)?) {
+                        return Err(OutboxError::Invalid);
+                    }
+                }
+                audit::Cause::Drained => {
+                    let retired = retired.ok_or(OutboxError::Invalid)?;
+                    if retired.audit != uuid(record_id)?
+                        || live.is_some()
+                        || retired.at_ms != *at_ms
+                        || retired.stop
+                            != audit::check_stop(
+                                stop_cause.as_ref().ok_or(OutboxError::Invalid)?,
+                                initiator,
+                                stop_at_ms.ok_or(OutboxError::Invalid)?,
+                            )?
+                    {
+                        return Err(OutboxError::Invalid);
+                    }
+                }
+                _ => return Err(OutboxError::Invalid),
+            }
+        }
+        Record::Cursor {
+            registration,
+            conversation_id,
+            prior_scope,
+            prior_position,
+            observed_scope,
+            initiator,
+            at_ms,
+            ..
+        } => {
+            let id = uuid(registration)?;
+            let conversation =
+                ConversationId::new(conversation_id).map_err(|_| OutboxError::Invalid)?;
+            let current =
+                cursor::read(connection, id, &conversation)?.ok_or(OutboxError::Invalid)?;
+            let reset = current.reset.ok_or(OutboxError::Invalid)?;
+            if current.scope != prior_scope.checked()?
+                || current.position != *prior_position
+                || reset.observed_scope != observed_scope.checked()?
+                || reset.stop.initiator != audit::check_reader(initiator, id)?
+                || reset.stop.at_ms != *at_ms
+            {
+                return Err(OutboxError::Invalid);
+            }
+        }
+        Record::Delivery { .. } => {
+            let evidence = record.delivery_evidence()?.ok_or(OutboxError::Invalid)?;
+            let saved =
+                stored::by_id(connection, evidence.after.id())?.ok_or(OutboxError::Invalid)?;
+            let registration = registry::by_id(connection, saved.registration)?;
+            if evidence.registration != saved.registration
+                || evidence.target != registration.registration.target
+                || evidence.conversation != saved.conversation
+                || evidence.scope != saved.scope
+                || evidence.position != saved.position
+                || evidence
+                    .credential_stop
+                    .as_ref()
+                    .is_some_and(|stop| registration.stop.as_ref() != Some(stop))
+            {
+                return Err(OutboxError::Invalid);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
+    if connection.prepare("SELECT 1 FROM audit a WHERE a.delivery IS NOT NULL AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.id=a.delivery) LIMIT 1").map_err(unavailable)?.exists([]).map_err(unavailable)? { return Err(OutboxError::Invalid); }
+    validate_records(connection, false)?;
+    let mut deliveries = connection
+        .prepare(&format!("{} FROM deliveries", stored::SELECT))
+        .map_err(unavailable)?;
+    let rows = deliveries
+        .query_map([], StoredDelivery::row)
+        .map_err(unavailable)?;
+    for row in rows {
+        let saved = row.map_err(unavailable)?.checked()?;
+        let mut statement=connection.prepare("SELECT id,registration,delivery,record,published FROM audit WHERE delivery=?1 ORDER BY rowid").map_err(unavailable)?;
+        let history = statement
+            .query_map([saved.delivery.id().to_string()], SavedAudit::row)
+            .map_err(unavailable)?;
+        let mut previous: Option<DeliveryEvidence> = None;
+        // Streaming chain validation keeps one predecessor. Delivery's finite
+        // transition owner rejects any extension past its attempt/terminal budget.
+        for row in history {
+            let (_, text) = row.map_err(unavailable)?.checked()?;
+            let record = Record::decode(&text)?;
+            let next = record.delivery_evidence()?.ok_or(OutboxError::Invalid)?;
+            if previous
+                .as_ref()
+                .map_or(next.before.is_some(), |prior| !next.follows(prior))
+            {
+                return Err(OutboxError::Invalid);
+            }
+            previous = Some(next);
+        }
+        let last = previous.ok_or(OutboxError::Invalid)?;
+        if last.after != saved.delivery
+            || (last.source_stop != saved.source_stop
+                && !(saved.delivery.phase() == Phase::Sending && last.source_stop.is_none()))
+        {
+            return Err(OutboxError::Invalid);
+        }
+    }
+    Ok(())
+}

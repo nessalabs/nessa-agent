@@ -8,6 +8,8 @@ mod journal;
 mod publication;
 mod queue;
 mod registry;
+mod restoration;
+mod retirement;
 mod stored;
 use journal::{commit, delivery_audit, finish};
 use registry::StoredRegistration;
@@ -68,7 +70,7 @@ impl SqlOutbox {
                 _ => OutboxError::Unavailable,
             })?;
         stored::validate(&connection)?;
-        publication::validate(&connection)?;
+        restoration::validate(&connection)?;
         nessa_local_storage::create_directory(&audit).map_err(unavailable)?;
         PrivateTempFile::clear_stale(&audit).map_err(unavailable)?;
         Ok(Self {
@@ -118,7 +120,7 @@ impl Outbox for SqlOutbox {
         self.run(move |connection,_| {
             let mut statement=connection.prepare(
                 "SELECT d.id,d.registration,d.conversation,d.incarnation,d.position,d.scope,d.state,d.phase,d.due_at,d.source_stop,d.body,
-                    r.id,r.credential,r.principal,r.organization,r.owner,r.destination,r.mac_key,r.active,r.stop_cause,r.stop_initiator,r.stop_at
+                    r.id,r.credential,r.principal,r.organization,r.owner,r.destination,r.mac_key,r.active,r.stop_cause,r.stop_initiator,r.stop_at,r.issued_at
                  FROM deliveries d JOIN registrations r ON d.registration=r.id
                  WHERE d.phase='queued' OR (d.phase='retry' AND d.due_at<=?1)
                  ORDER BY d.registration,d.conversation,d.position LIMIT 4"

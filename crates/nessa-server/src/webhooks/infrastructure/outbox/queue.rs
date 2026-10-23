@@ -62,8 +62,8 @@ pub(super) fn queue(
         }
         if !codec::same_source(old, &record.scope) {
             let changed=transaction.execute(
-                "UPDATE cursors SET reset_required=1 WHERE registration=?1 AND conversation=?2 AND reset_required=0",
-                params![registration,conversation],
+                "UPDATE cursors SET reset_required=1,observed_scope=?3,reset_stop=?4 WHERE registration=?1 AND conversation=?2 AND reset_required=0",
+                params![registration,conversation,scope,codec::source_stop_text(codec::SourceStop { initiator: record.initiator, at_ms: record.observed_at_ms })?],
             ).map_err(unavailable)?;
             if changed != 1 {
                 return Err(OutboxError::Conflict);

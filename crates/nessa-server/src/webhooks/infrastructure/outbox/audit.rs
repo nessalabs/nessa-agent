@@ -503,13 +503,16 @@ impl Record {
             } => {
                 let prior = prior_scope.checked()?;
                 let observed = observed_scope.checked()?;
-                cursor::check_identity(&registration.to_string(), conversation_id, &prior)?;
-                cursor::check_identity(&registration.to_string(), conversation_id, &observed)?;
+                cursor::check_replacement(
+                    &registration.to_string(),
+                    conversation_id,
+                    &prior,
+                    &observed,
+                )?;
                 if before != "following"
                     || after != "reset_required"
                     || !matches!(cause, Cause::SourceChanged)
                     || *prior_position > i64::MAX as u64
-                    || codec::same_source(&prior, &observed)
                 {
                     return Err(OutboxError::Invalid);
                 }
@@ -519,7 +522,7 @@ impl Record {
         Ok(())
     }
 }
-fn checked_target(
+pub(super) fn checked_target(
     credential: &str,
     principal: &str,
     organization: &str,
@@ -533,13 +536,17 @@ fn checked_target(
     })
 }
 
-fn stop_cause(stop: &Stopped) -> Cause {
+pub(super) fn stop_cause(stop: &Stopped) -> Cause {
     match stop.reason() {
         StopReason::Revoked { .. } => Cause::CredentialRevoked,
         StopReason::Expired { .. } => Cause::CredentialExpired,
     }
 }
-fn check_stop(cause: &Cause, initiator: &str, at_ms: u64) -> Result<Stopped, OutboxError> {
+pub(super) fn check_stop(
+    cause: &Cause,
+    initiator: &str,
+    at_ms: u64,
+) -> Result<Stopped, OutboxError> {
     let cause = match cause {
         Cause::CredentialRevoked => "credential_revoked",
         Cause::CredentialExpired => "credential_expired",
@@ -547,7 +554,7 @@ fn check_stop(cause: &Cause, initiator: &str, at_ms: u64) -> Result<Stopped, Out
     };
     Stopped::restore(cause, initiator, at_ms)
 }
-fn check_reader(actor: &str, registration: Uuid) -> Result<QueueInitiator, OutboxError> {
+pub(super) fn check_reader(actor: &str, registration: Uuid) -> Result<QueueInitiator, OutboxError> {
     if actor == QueueInitiator::Live.label(registration) {
         Ok(QueueInitiator::Live)
     } else if actor == "restart" {

@@ -1646,8 +1646,11 @@ reads; `audit` owns closed typed historical records and validates transitions
 through the domain owner; `codec` owns the current serialized values; `capacity` owns
 accounting; `queue` advances source cursor and delivery together; `journal` owns
 state/audit commits, source-change context and retirement; `publication` writes
-immutable audit files and exact acknowledgements and validates retained chains
-against current delivery rows; `registry` persists target
+immutable audit files and exact acknowledgements; `restoration` exhaustively
+correlates every audit variant with retained facts and owns delivery-history
+validation before effects; `retirement` retains bounded secret-free original
+identity/stop facts and the exact retirement audit identity through lost
+acknowledgement; `registry` persists target
 facts supplied by the future credential lifecycle coordinator. Tests remain in
 `tests/webhooks/infrastructure/outbox.rs`.
 Registration authorization/configuration, the committed source reader, sender

@@ -319,3 +319,46 @@ decision before another patch cycle; runtime remains uncomposed and unchanged.
 
 These are open findings and proposed requirements, not implemented fixes or a
 new review-loop authorization. Existing passing source checks do not close them.
+
+
+### Parent-adopted total contextual restoration
+
+The parent explicitly adopted this structural correction after fresh round two.
+Restoration owns an exhaustive match across Registration, Cursor and Delivery;
+no default variant arm may silently omit contextual checks. The same contextual
+admission checks all owed rows before the first publication effect, including
+live replay. Existing full Delivery history validation remains owned here.
+
+A stopped registration's private URL/key/cursors may still be removed before
+its retirement audit acknowledgement. In that transaction retain a bounded,
+secret-free retirement fact (original target and issuance time, original stop cause/actor/time,
+retirement observation time and exact retirement audit identity). The retained
+fact references that audit until both trim in the same transaction; missing or
+substituted retirement evidence is invalid. Issue/Stop evidence may survive that same atomic
+retirement and correlates against those retained facts. Drained requires these
+facts and no live registration. Acknowledged facts and audit projections trim
+together; owed facts cannot be discarded. No actor is inferred from current
+ownership, and no private credential material is retained for audit recovery.
+
+A cursor captures its original reset observation (observed scope, reader and
+time) beside the prior checkpoint when reset-required is committed. Its whole
+decoder requires both facts or neither. Contextual audit validation compares
+the complete prior checkpoint and original observation. Published cursor audit
+is removed before a later source/reset mutation; an owed cursor record must
+still have its retained reset checkpoint. This introduces no reset API.
+
+| Ordering / contradiction | Context owner and required evidence |
+| --- | --- |
+| owed Issue target substitutes valid principal/owner | retained registration or same-write retirement target; refuse before any publication |
+| owed Stop actor/cause/time substitutes valid values | retained immutable stop, including after immediate retirement; refuse before publication |
+| Drained owes publication after private registration deletion | retained secret-free retirement target/stop/time; valid replay preserves original actor and exact bytes |
+| Drained facts missing, changed or paired with live registration | reject impossible ownership before publication/cleanup |
+| owed Cursor prior position/scope or observed scope/reader/time differs | complete cursor reset fact and prior checkpoint; refuse before publication |
+| Cursor reset flag and captured observation disagree | whole cursor decoder rejects at restoration and live reads |
+| Delivery target/checkpoint/credential stop differs | exhaustive variant branch checks enclosing facts; history owner checks chain/current/source contexts |
+| second owed record contradicts facts | validate the entire owed batch before the first immutable-file effect |
+| publication acknowledgement is lost | retain original contextual facts until exact ack and common trim; no replacement identities/history |
+
+This is the parent-authorized bounded structural correction, not erasure of
+prior findings or a relaxation of browser/CI gates. Composition follows only a
+clean fresh persistence review.

@@ -19,7 +19,7 @@ impl SqlOutbox {
     pub async fn install(&self, registration: Registration, at_ms: u64) -> Result<(), OutboxError> {
         self.run(move |connection, audit| {
             let transaction = connection.transaction().map_err(unavailable)?;
-            transaction.execute("INSERT INTO registrations(id,credential,principal,organization,owner,destination,mac_key,active) VALUES(?1,?2,?3,?4,?5,?6,?7,1)", params![registration.id.to_string(),registration.target.credential.as_str(),registration.target.principal.as_str(),registration.target.organization.as_str(),registration.target.owner.as_str(),registration.destination.expose_url().as_str(),registration.key.expose_bytes()]).map_err(|_| OutboxError::Conflict)?;
+            transaction.execute("INSERT INTO registrations(id,credential,principal,organization,owner,destination,mac_key,active,issued_at) VALUES(?1,?2,?3,?4,?5,?6,?7,1,?8)", params![registration.id.to_string(),registration.target.credential.as_str(),registration.target.principal.as_str(),registration.target.organization.as_str(),registration.target.owner.as_str(),registration.destination.expose_url().as_str(),registration.key.expose_bytes(),integer(at_ms)?]).map_err(|_| OutboxError::Conflict)?;
             append(&transaction, Record::registration(&registration,RegistrationChange::Issue,at_ms))?;
             commit(transaction,Some(registration.id),at_ms)?;
             publish(connection, audit)
@@ -74,7 +74,7 @@ impl SqlOutbox {
     }
 }
 
-pub(super) const SELECT: &str = "SELECT id,credential,principal,organization,owner,destination,mac_key,active,stop_cause,stop_initiator,stop_at";
+pub(super) const SELECT: &str = "SELECT id,credential,principal,organization,owner,destination,mac_key,active,stop_cause,stop_initiator,stop_at,issued_at";
 
 pub(super) struct StoredRegistration {
     id: String,
@@ -88,11 +88,13 @@ pub(super) struct StoredRegistration {
     cause: Option<String>,
     initiator: Option<String>,
     at_ms: Option<i64>,
+    issued_at: i64,
 }
 
 pub(super) struct CheckedRegistration {
     pub registration: Registration,
     pub stop: Option<Stopped>,
+    pub issued_at_ms: u64,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -122,6 +124,13 @@ impl Stopped {
         Ok(Self { reason, at_ms })
     }
 
+    pub fn cause(&self) -> &'static str {
+        match self.reason {
+            StopReason::Revoked { .. } => "credential_revoked",
+            StopReason::Expired { .. } => "credential_expired",
+        }
+    }
+
     pub fn initiator(&self) -> String {
         match &self.reason {
             StopReason::Revoked { initiator } => initiator.as_str().to_owned(),
@@ -143,6 +152,7 @@ impl StoredRegistration {
             cause: row.get(offset + 8)?,
             initiator: row.get(offset + 9)?,
             at_ms: row.get(offset + 10)?,
+            issued_at: row.get(offset + 11)?,
         })
     }
     pub fn checked(self) -> Result<CheckedRegistration, OutboxError> {
@@ -156,6 +166,7 @@ impl StoredRegistration {
             _ => return Err(OutboxError::Invalid),
         };
         Ok(CheckedRegistration {
+            issued_at_ms: u64::try_from(self.issued_at).map_err(invalid)?,
             registration: Registration {
                 id: uuid(&self.id)?,
                 target: Target {
