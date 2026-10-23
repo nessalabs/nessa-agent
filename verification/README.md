@@ -149,6 +149,7 @@ verification/
         apps.mjs            an MCP App's documents, read through Playwright's frames; the window's card for an app's review, by its whole head
         apps.test.mjs       apps.mjs's rules, no browser: one inline mount, the one locator for an app's review card, and the wait for it to go
         settings.mjs        Settings › Integrations reached, and its fit measured at a width (responsive.mjs, mcp-servers-gateway.mjs)
+        settings-tabs.mjs   smoke's visible tab strip compared with the Settings catalogue's own visibility and order; settings-tabs.test.mjs rejects missing, reordered and unexpected tabs
         review-notices.mjs  Settings notification permission and accessible Allow-button evidence
         review-notices.test.mjs default/denied/granted/unsupported row contracts, without a browser
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
