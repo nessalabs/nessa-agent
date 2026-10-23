@@ -23,7 +23,8 @@ import type { RuntimeCopy } from "../../host"
 import type { GatewayStartupStatus } from "../../startup/application/gateway-startup"
 import { COULD_NOT_START } from "../../startup/application/copy"
 import type { ShortcutPlatform } from "../model/shortcut-display"
-import { AgentCard } from "@nessa-ui/react/agent-card"
+import { AgentBackdrop } from "@nessa-ui/react/agent-card"
+import { AgentFigure } from "@nessa-ui/react/agent-figure/agent-figure"
 import { Button } from "@nessa-ui/react/button"
 import { StepDots } from "@nessa-ui/react/step-dots"
 import { TypeIn } from "@nessa-ui/react/type-in"
@@ -390,19 +391,23 @@ export function showsPicker(
   )
 }
 
-/** What each agent is called on its card, and the figure that stands on it:
- * Claude's is Claude Code's mascot. */
-const CARDS = Object.freeze({
-  claude: Object.freeze({ name: "Claude", figure: "clawd" }),
-  codex: Object.freeze({ name: "Codex", figure: "codex" }),
-  local: Object.freeze({ name: "Local AI", figure: "local" }),
-} as const satisfies Record<FigureId, { name: string; figure: string }>)
+/** The figure that stands for each agent: Claude's is Claude Code's mascot. */
+const FIGURE_OF = Object.freeze({
+  claude: "clawd",
+  codex: "codex",
+  local: "local",
+} as const satisfies Record<FigureId, string>)
+
+const SHOWCASE: readonly FigureId[] = Object.freeze(["claude", "codex", "local"])
 
 /**
- * The one agent on the picture beside the picker, on its own card: the row
- * pointed at, else the chosen one, else Claude. Pointing at a row plays its
- * figure. Keyed by agent, so a new agent's card comes in fresh rather than the
- * old one changing under it. Decorative: the rows say all of it.
+ * The picture beside the picker, taken over by one agent: the row pointed at,
+ * else the chosen one, else Claude. The whole picture wears that agent's card
+ * background, which fades across when the agent changes, with its figure
+ * standing on it; pointing at a row plays the figure. Every background is
+ * drawn and only the shown one is opaque, so a change is a crossfade rather
+ * than a cut. The figure is keyed by agent and fades in fresh. Decorative: the
+ * rows say all of it, so nothing here is named.
  */
 export function AgentShowcase({
   chosen,
@@ -412,15 +417,23 @@ export function AgentShowcase({
   pointed: FigureId | undefined
 }) {
   const shown: FigureId = pointed ?? (chosen === "codex" ? "codex" : "claude")
-  const card = CARDS[shown]
   return (
-    <AgentCard
-      key={shown}
-      className="nessa-setup-card"
-      agent={card.figure}
-      name={card.name}
-      lively={pointed === shown}
-    />
+    <>
+      {SHOWCASE.map((id) => (
+        <AgentBackdrop
+          key={id}
+          agent={FIGURE_OF[id]}
+          className="nessa-setup-backdrop"
+          data-shown={id === shown ? "" : undefined}
+        />
+      ))}
+      <AgentFigure
+        key={shown}
+        agent={FIGURE_OF[shown]}
+        lively={pointed === shown}
+        className="nessa-setup-figure"
+      />
+    </>
   )
 }
 

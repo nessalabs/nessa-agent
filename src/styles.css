@@ -1536,30 +1536,46 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
 }
 
 /*
- * The agent on the picture, on its own card, centred in the picture. A new
- * agent's card replaces the last and fades in; off the picker it steps back
- * out of sight.
+ * On the picker the picture wears one agent's card background, edge to edge:
+ * every agent's is drawn and the shown one is opaque, so a change of agent
+ * crossfades. Off the picker they all fade, back to the light.
  */
-.nessa-setup-card {
+.nessa-setup-backdrop {
   position: absolute;
-  top: 50%;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 300ms var(--nessa-motion-easing-standard);
+}
+
+.nessa-setup-art[data-showing] .nessa-setup-backdrop[data-shown] {
+  opacity: 1;
+}
+
+/* The shown agent's figure, standing on its background. A new agent's figure
+ * fades in fresh; off the picker it steps back out of sight. */
+.nessa-setup-figure {
+  position: absolute;
+  top: 52%;
   left: 50%;
-  width: min(62%, 340px);
+  width: min(58%, 320px);
+  height: auto;
+  aspect-ratio: 1;
   translate: -50% -50%;
-  animation: nessa-setup-card-in 200ms var(--nessa-motion-easing-standard) both;
+  filter: drop-shadow(0 16px 20px rgb(20 10 0 / 0.35));
+  animation: nessa-setup-figure-in 200ms var(--nessa-motion-easing-standard) both;
   transition:
     scale 250ms var(--nessa-motion-easing-standard),
     opacity 250ms var(--nessa-motion-easing-standard);
 }
 
-@keyframes nessa-setup-card-in {
+@keyframes nessa-setup-figure-in {
   from {
     opacity: 0;
     scale: 0.96;
   }
 }
 
-.nessa-setup-art:not([data-showing]) .nessa-setup-card {
+.nessa-setup-art:not([data-showing]) .nessa-setup-figure {
   scale: 0.9;
   opacity: 0;
 }
@@ -1645,7 +1661,8 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
   .nessa-setup-window,
   .nessa-setup-window[data-beat] .nessa-setup-pane,
   .nessa-setup-window[data-beat] .nessa-setup-chrome,
-  .nessa-setup-card,
+  .nessa-setup-backdrop,
+  .nessa-setup-figure,
   .nessa-setup-after {
     animation: none;
     transition: none;

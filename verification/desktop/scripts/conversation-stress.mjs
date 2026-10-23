@@ -2955,9 +2955,9 @@ async function openedAsAGlow(page, failures) {
 
 /**
  * The picker lists Claude, Codex and a Local AI that cannot be chosen yet,
- * and never OpenCode. The picture holds one card, the chosen agent's (Claude
- * Code's mascot for Claude), and pointing at a row puts that agent's card
- * there instead.
+ * and never OpenCode. The picture wears one agent's background with that
+ * agent's figure on it, the chosen agent's (Claude Code's mascot for Claude),
+ * and pointing at a row turns it over to that agent.
  */
 async function pickerOffers(page, failures) {
   const rows = await page
@@ -2978,21 +2978,26 @@ async function pickerOffers(page, failures) {
     failures.push(`Local AI is not listed as coming: ${JSON.stringify(rows)}`)
   if (named.some((name) => /opencode/i.test(name)))
     failures.push(`the picker still offers OpenCode: ${JSON.stringify(named)}`)
+  // What the picture shows: the opaque background, then every figure on it.
   const cards = () =>
     page
-      .locator(".nessa-setup-art [data-slot='agent-card']")
-      .evaluateAll((all) => all.map((card) => card.dataset.agent))
+      .locator(".nessa-setup-art")
+      .evaluate((art) =>
+        [
+          art.querySelector("[data-slot='agent-backdrop'][data-shown]")?.dataset.agent,
+          ...[...art.querySelectorAll("[data-slot='agent-figure']")].map(
+            (figure) => figure.dataset.agent,
+          ),
+        ].join(","),
+      )
   const resting = await cards()
-  if (resting.join(",") !== "clawd")
-    failures.push(`the picture holds cards ${JSON.stringify(resting)}`)
+  if (resting !== "clawd,clawd")
+    failures.push(`the picture shows ${JSON.stringify(resting)}`)
   await page.getByRole("button", { name: /^Codex/ }).hover()
-  const lit = await waitFor(
-    () => cards().then((shown) => shown.join(",") === "codex"),
-    5_000,
-  )
+  const lit = await waitFor(() => cards().then((shown) => shown === "codex,codex"), 5_000)
   if (!lit)
     failures.push(
-      `pointing at Codex did not show its card: ${JSON.stringify(await cards())}`,
+      `pointing at Codex did not turn the picture to it: ${JSON.stringify(await cards())}`,
     )
   await page.mouse.move(1, 1)
 }
