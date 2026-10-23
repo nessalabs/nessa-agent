@@ -1,0 +1,69 @@
+{
+  "provenance": {
+    "source": "GitHub job log; artifact bytes not requested again after proxy denial",
+    "runId": 39922084392,
+    "jobId": 120309472802,
+    "sourceRevision": "53f6db11322c12cee874654dce801fc24b90d0a6",
+    "artifactId": 12487856648,
+    "artifactUrl": "https://github.com/nessalabs/nessa-agent/actions/runs/39922084392/artifacts/12487856648",
+    "artifactExpiresAt": "2026-10-30T08:05:50Z"
+  },
+  "report": {
+    "timestamp": "2026-10-23T08:05:43.002Z",
+    "platform": "linux",
+    "node": "v24.21.0",
+    "uid": 1001,
+    "chromiumSandbox": true,
+    "headless": false,
+    "tests": [
+      {
+        "name": "sandbox renderer status",
+        "result": "passed"
+      },
+      {
+        "name": "minimal MV3 content script, messaging, service worker, storage",
+        "result": "passed"
+      },
+      {
+        "name": "agent API and viewer pointer control affect the same page",
+        "result": "passed"
+      },
+      {
+        "name": "navigation, download bytes, popup shares context",
+        "result": "passed"
+      },
+      {
+        "name": "failed navigation recovers; invalid commands are refused",
+        "result": "passed"
+      },
+      {
+        "name": "profile rejects competing browser owner",
+        "result": "passed"
+      },
+      {
+        "name": "cookie, localStorage and extension storage survive restart",
+        "result": "passed"
+      },
+      {
+        "name": "second profile has independent cookies and storage",
+        "result": "passed"
+      },
+      {
+        "name": "browser disconnect fences commands",
+        "result": "passed"
+      }
+    ],
+    "measurements": {
+      "startupMs": 3385.9830819999997,
+      "frames": {
+        "samples": 20,
+        "medianMs": 33.58827000000019,
+        "maxMs": 79.55477299999984,
+        "meanBytes": 36283
+      }
+    },
+    "browserVersion": "156.0.8078.4",
+    "result": "passed",
+    "cleanedTestProfiles": true
+  }
+}

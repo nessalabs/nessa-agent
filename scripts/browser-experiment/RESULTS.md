@@ -1,5 +1,54 @@
 # Measured outcome · 2026-10-23
 
+## Supported-runner qualification passed after repair
+
+[Run 39922084392](https://github.com/nessalabs/nessa-agent/actions/runs/39922084392)
+passed at source **`53f6db11322c12cee874654dce801fc24b90d0a6`** on Ubuntu
+22.04.5/Xvfb, non-root uid 1001, Node 24.21.0 and Chromium 156.0.8078.4 with
+`chromiumSandbox:true`. All **18 Node tests** and **nine browser checks** passed:
+
+| Browser check | Result |
+| --- | --- |
+| Rendered sandbox status | Passed |
+| Minimal MV3 content script, messaging, service worker and storage | Passed |
+| Same-page agent API and viewer pointer control | Passed |
+| Navigation, download bytes and popup context sharing | Passed |
+| Five failed-navigation/recovery cycles, invalid-command refusal | Passed |
+| Competing profile ownership refused | Passed |
+| Cookie, localStorage and extension storage across restart | Passed |
+| Independent second-profile cookie/storage state | Passed |
+| Browser disconnection fences further commands | Passed |
+
+| Measurement | Observed value |
+| --- | --- |
+| Startup, one run | 3385.98 ms |
+| Authenticated loopback frame requests | 20 samples |
+| Frame response median / max | 33.59 / 79.55 ms |
+| Mean JPEG size, 1000 × 700 | 36283 bytes |
+| Test profile tree removed after confirmed close | true |
+
+These timings are fixture-only measurements on one worker. They exclude remote
+network latency, input-to-paint measurement, CPU throttling and long-duration
+loads; they establish no smoothness budget. Browser RSS/CPU was not measured.
+The viewer's 250 ms post-response delay limits frame rate independently of these
+request timings. The first run's 1465 ms startup and this run's 3386 ms startup
+are not a controlled comparison.
+
+[Exact report from job log](evidence/run39922084392-results.from-job-log.json)
+records the source revision and successful results. The successful run's
+[artifact](https://github.com/nessalabs/nessa-agent/actions/runs/39922084392/artifacts/12487856648)
+contains the actual screenshot and sandbox report, expires **2026-10-30 08:05 UTC**,
+and has SHA256 `98187583c2819f8103adfd98f7b95eb9df1c7a69566937165761f7ab20894e1c`.
+After the earlier artifact-byte proxy denial, no byte-download retry or alternate
+route was attempted. The screenshot exists in the runner artifact but was not
+retrieved or visually inspected in this environment. Preserve it through an
+authorized download before artifact expiry if a durable image is needed.
+
+The recovery change passed an independent review of loader/URL correlation,
+hash/stale/child-frame rejection, DOM-before-commit ordering, queue fencing and
+observer cleanup. No remaining code findings were reported. The original failed
+run and local sandbox refusal below are retained as separate evidence.
+
 ## Supported-runner qualification, first run
 
 [Run 39920161218](https://github.com/nessalabs/nessa-agent/actions/runs/39920161218)
@@ -41,7 +90,7 @@ If settlement fails, it preserves both errors and closes local command admission
 it does not retry navigation. A controlled ordering regression proves recovery
 cannot start before either barrier. The browser scenario now repeats error/recovery
 five times and checks the original fixture URL and storage afterward. **18 local
-Node tests pass**; the repair still requires supported-runner qualification.
+Node tests pass**; the successful qualification above verifies the repair.
 
 ## Original local environment failure (preserved)
 
@@ -105,22 +154,21 @@ The X display was a temporary diagnostic Xorg using the preinstalled dummy drive
 not a newly installed service. It has been stopped. Unit tests are reproducible
 without a display; browser verification needs a host with a functioning sandbox.
 
-## Local limitations and checks not reached in the first runner run
+## Remaining limits
 
-The local run did not pass launch. The runner independently established the four
-checks listed above and produced its own screenshot, while restart persistence,
-profile separation and later assertions remain unverified. No video, frame/input
-latency, browser RSS/CPU, bandwidth, WebKit/macOS/Windows, cloud deployment, real
-OAuth or passkey behavior was measured.
+The local run did not pass launch. The successful runner established the nine
+synthetic checks above. No video, human input-to-paint latency, browser RSS/CPU,
+real-network bandwidth, WebKit/macOS/Windows, cloud deployment, real OAuth or passkey
+behavior was measured.
 The harness records successful startup time and 20 authenticated JPEG request
 latencies/sizes on a supported host; that does not yet measure human input-to-paint
 or production frame budgets. Browser-suite failures are release blockers for any
 claim of a working browser integration.
 
-Next action: push the recovery repair to the experimental branch for the same
-supported-runner workflow, then retain that run's results separately from the
-original failure. No privilege escalation was requested to alter this local
-environment's browser sandbox.
+No privilege escalation was requested to alter this local environment's browser
+sandbox. A future integration still needs authenticated full-browser display,
+resource/load qualification, host lifecycle security and provider-permitted auth
+flows. The page-only viewer does not include extension popups or browser chrome.
 
 ## Review scope and dispositions
 

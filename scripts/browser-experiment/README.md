@@ -5,13 +5,15 @@ human and agent input reaching the same page. Keep its test profile on that work
 Treat local/cloud portability as reconnecting to the worker, not copying a logged-in
 profile between operating systems.
 
-**Current outcome: partial browser qualification.** The first supported-runner
-execution passed rendered sandbox status, the toy extension, shared viewer/agent
-controls and navigation/download/popup checks. It then exposed a failed-navigation
-recovery race. The repair waits for error-document settlement before releasing the
-queue; its new regressions pass locally and await another real-browser run.
-Persistence/restart, profile separation and performance qualification remain
-unverified. This local environment still cannot launch sandboxed Chromium.
+**Current outcome: synthetic browser qualification passed.** The supported-runner
+repair run passed all nine browser checks, including sandbox status, the toy
+extension, shared viewer/agent control, five failure/recovery cycles, downloads,
+profile ownership, persistence across restart, profile separation and disconnect
+fencing. Eighteen Node tests passed. Startup was 3385.98 ms; 20 loopback frame
+requests had median 33.59 ms, max 79.55 ms and mean JPEG size 36283 bytes. These are
+one runner's fixture measurements, not real-site authentication or smoothness
+guarantees. The first failed run is retained. This local environment still cannot
+launch sandboxed Chromium.
 Nothing is integrated into Nessa or deployed.
 See [RESULTS.md](RESULTS.md) for the actual run and remaining blockers.
 
@@ -59,18 +61,18 @@ desktop. No agent-evaluation endpoint or externally reachable CDP port is added.
 
 | State/event | Behavior | Evidence |
 | --- | --- | --- |
-| Launch | Non-root, `headless:false`, `chromiumSandbox:true`; no fallback | Launch-options unit test; real launch blocked |
+| Launch | Non-root, `headless:false`, `chromiumSandbox:true`; no fallback | Launch-options test and successful runner sandbox check; local environment remains blocked |
 | Ready, command | Shared page, ordered dispatch; at most 16 pending commands | Queue/close regression |
 | Invalid command/input | Typed refusal before browser operation | Input/transport regressions |
 | Navigation fails, error document still committing | Hold the command queue until a new root-document loader matching the requested/error URL has its own DOM-ready event; then publish the original typed failure | Controlled commit/load regression, including hash and stale-document events; first CI run exposed this ordering |
 | Error-document settlement cannot be confirmed | Publish original and settlement failures, fence further commands; no automatic navigation retry | Settlement-failure regression |
 | Close starts | Fence arrivals and queued commands; await active operation | Queue/close regression |
-| Context disconnects | Fence further commands | Unit regression; browser scenario not reached |
-| Shutdown | Close viewer, session/context, downloads, then fixture | Implemented; successful browser shutdown unverified |
+| Context disconnects | Fence further commands | Unit regression and successful browser scenario |
+| Shutdown | Close viewer, session/context, downloads, then fixture | Runner context close/profile cleanup passed; OS process reaping unmeasured |
 | Failed launch | No viewer exposed; verifier removes its temporary test tree | Observed in browser-results.json |
 | Browser close unconfirmed | Retain test profile and write primary/cleanup errors; no automatic relaunch | Real-filesystem cleanup regression with substitute browser failure |
 | Viewer startup fails after browser opens | Close browser, then fixture; retain primary and cleanup errors | Startup cleanup regressions |
-| Restart | Reuse only experiment profile a or b | Implemented; persistence scenario not reached |
+| Restart | Reuse only experiment profile a or b | Cookie/localStorage/extension persistence and profile separation passed on runner |
 
 Operations already executing when close begins may finish. Neither a queue
 acknowledgement nor an HTTP success is a durable audit event. There is no production
@@ -115,8 +117,9 @@ only after the actual viewer has received a real frame. Exit 0 means checks pass
 1 means a test failed, and 2 means browser startup/capability validation was blocked.
 Inspect the error as well as the exit code. No screenshot is supplied for this
 environment because it never reached the first rendered frame.
-The first runner did generate a screenshot in its
-[retained artifact](https://github.com/nessalabs/nessa-agent/actions/runs/39920161218/artifacts/12487056900).
+The successful runner generated a screenshot in its
+[retained artifact](https://github.com/nessalabs/nessa-agent/actions/runs/39922084392/artifacts/12487856648)
+(expires 2026-10-30).
 The connector returned an artifact download reference, but downloading its bytes
 from this environment was denied by the proxy with `403 Forbidden`; no alternate
 download route was attempted and the screenshot has not been inspected here.
