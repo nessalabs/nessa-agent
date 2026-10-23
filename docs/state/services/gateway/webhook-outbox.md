@@ -341,7 +341,7 @@ through later actual auth revocation and retirement, then cold-restores the
 original independent auth fact. These are inner owner tests, not a running
 command coordinator or recipient E2E. This page's source review compared the
 outbox changes since f75, traced the current restoration/publication/registry
-owners and checked the new joint auth boundary. Fresh exact-head review is pending.
+owners and checked the new joint auth boundary. [Independent round3](../../../reviews/evidence/webhook-runtime/lifecycle-observation/review-3/report.md) confirms the concrete M1/M2 repairs but finds Major M3: a retained published Cursor and its immutable reset fact still prove initial completion after the current cursor/delivery are gone. A genuine published initial Issue also contradicts a competing owed initial identity. The current predicate omits those proofs. W24 remains unqualified and unpublished. The desired rejection test is preserved failing, distinct from acceptance demonstrations. The bounded review process now requires parent adjudication of total retained-progress classification versus stronger original identity and monotonic acknowledgement; no additional symptom patch has been applied.
 
 This is an unpublished inner lifecycle checkpoint. The retained command supervisor, startup reader, credential/grant admission and sender still require composition; this chart does not claim that they run. [Private evidence](../../../reviews/evidence/webhook-runtime/lifecycle-observation/README.md) distinguishes completed isolated tests from pending canonical checks and independent review.
 

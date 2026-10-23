@@ -1,0 +1,17 @@
+[
+  {
+    "rule": "owed-issue",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "published-exemption",
+    "caught": true,
+    "byteRestored": true
+  },
+  {
+    "rule": "work-proof",
+    "caught": true,
+    "byteRestored": true
+  }
+]
