@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "6cfb9673aba7c9fb78e26f4e3c09f2dd55be279f"
+sourceRevision: "0d922ce16543e6627efe8b710ac87a80bd507a96"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/application/outbox.rs
@@ -12,6 +12,7 @@ sources:
   - crates/nessa-server/src/webhooks/infrastructure/outbox/intents.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_failures.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/lifecycle.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/intent_rows.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/schema.rs
   - crates/nessa-server/src/webhooks/domain/value_objects/delivery.rs
@@ -201,8 +202,20 @@ refuses pending work in one transaction. Sending still settles its own
 observation. A later retry is refused using the saved stop cause. After its
 published terminal projections drain, the registration, URL, key and cursors
 are deleted with retirement evidence. Secret-free original retirement facts
-survive until that exact audit is acknowledged and trimmed. Actual credential-revoke coordination
-and first-expiry-observer persistence are not yet implemented.
+survive until that exact audit is acknowledged and trimmed. Expiry accepts a typed
+lifecycle observer even before a delivery exists, or an actual delivery observer.
+The first committed observer and stop time survive later observations, settlement,
+retirement and restart. The decoder rejects alternate spellings and oversized
+timestamps; audit projections correlate to the original stop fact. No delivery ID
+or human actor is fabricated for lifecycle expiry. Actual credential-revoke and
+expiry scheduling coordination remain uncomposed.
+
+[Expiry evidence](../../../reviews/evidence/webhook-runtime/expiry/README.md)
+records the source checkpoints, failure/recovery tests and mutation controls.
+The page's source checkpoint advances only this outbox review; diagrams are
+unchanged. This is persistence evidence, not a claim of recipient E2E or product
+session isolation. The separate registration auth-origin and returned-evidence
+findings remain open in [registration review status](../../../reviews/evidence/webhook-runtime/registration/review-2/README.md).
 
 ## Bounds and private data
 
