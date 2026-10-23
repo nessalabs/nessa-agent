@@ -104,10 +104,7 @@
     "head": "1dc21cab8fa3a7ad620a8105f418966a740e5a05",
     "base": "0b8019cf45f99b285f10c41199875d474492c6d1",
     "canonicalVerdict": "pass",
-    "engines": [
-      "chromium",
-      "webkit"
-    ],
+    "engines": ["chromium", "webkit"],
     "stressVerdict": "fail",
     "chaosRunsHeld": 2,
     "laterHeadQualification": "pending",
