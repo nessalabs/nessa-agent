@@ -1886,32 +1886,28 @@ fn validate_registry(
         .iter()
         .map(|receipt| (&receipt.issuer_principal_id, &receipt.request_id))
         .collect();
-    let issue_by_credential: HashMap<_, _> = registry
-        .issue_receipts
-        .iter()
-        .map(|receipt| (receipt.credential_id.as_str(), receipt))
-        .collect();
-    if issue_by_credential.len() != registry.issue_receipts.len()
-        || original_issuance.values().any(|original| {
-            matches!(
-                original.cause,
-                TransitionCauseDto::Issued {
-                    cause: IssuanceCauseDto::WebhookIssue
-                }
-            ) && !issue_by_credential.contains_key(original.credential_id.as_str())
-        })
-    {
-        return Err(CredentialRegistryFault::InvalidState(
-            RegistryInvariant::CommandReceipt,
-        ));
+    let mut issue_by_credential: HashMap<&str, (usize, &IssueReceipt)> = HashMap::new();
+    for receipt in &registry.issue_receipts {
+        issue_by_credential
+            .entry(receipt.credential_id.as_str())
+            .and_modify(|entry| entry.0 += 1)
+            .or_insert((1, receipt));
+    }
+    // Only the newly distinguished webhook path promises this command shape.
+    // Ordinary historical actor/correlation facts retain their existing meaning.
+    if original_issuance.values().any(|original| {
+        matches!(original.cause, TransitionCauseDto::Issued { cause: IssuanceCauseDto::WebhookIssue })
+            && !issue_by_credential.get(original.credential_id.as_str()).is_some_and(|(count, receipt)| *count == 1
+                && original.correlation.as_deref() == Some(receipt.request_id.as_str())
+                && matches!(&original.initiator, InitiatorDto::Principal { id } if id == &receipt.issuer_principal_id))
+    }) {
+        return Err(CredentialRegistryFault::InvalidState(RegistryInvariant::CommandReceipt));
     }
     if issue_commands.len() != registry.issue_receipts.len()
         || revoke_commands.len() != registry.revoke_receipts.len()
         || registry.issue_receipts.iter().any(|receipt| {
             !principals.contains(&receipt.issuer_principal_id)
                 || !credentials.contains(&receipt.credential_id)
-                || original_issuance.get(receipt.credential_id.as_str()).is_none_or(|original| original.correlation.as_deref() != Some(receipt.request_id.as_str())
-                    || !matches!(&original.initiator, InitiatorDto::Principal { id } if id == &receipt.issuer_principal_id))
         })
         || registry.revoke_receipts.iter().any(|receipt| {
             !principals.contains(&receipt.issuer_principal_id)

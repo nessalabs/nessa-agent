@@ -277,3 +277,42 @@ fn restored_webhook_origin_cannot_carry_product_write_or_malformed_history() {
         assert_eq!(std::fs::read(&path).unwrap(), original);
     }
 }
+
+#[tokio::test]
+async fn historical_product_actor_and_absent_command_correlation_are_not_rewritten() {
+    let f = Registered::new();
+    let mut issue = f.proposed().issue;
+    issue.purpose = CredentialIssuePurpose::Product;
+    let id = CredentialId::new(issue.credential_id.clone()).unwrap();
+    drop(f.auth.issue_sync(issue).unwrap());
+    let private = f._root.path().join("private");
+    drop(f.auth);
+    let path = private.join("auth.json");
+    let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    saved["transitions"][1]["initiator"] = json!({"kind":"local_operator"});
+    saved["transitions"][1]["correlation"] = Value::Null;
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let original = saved["transitions"][1].clone();
+    let auth = LocalCredentialStore::open(
+        &private,
+        "auth.json",
+        Arc::new(CedarPolicyEvaluator::new().unwrap()),
+    )
+    .unwrap();
+    let before = auth.read(&id).await.unwrap().origin;
+    assert_eq!(
+        before.transition().initiator(),
+        &nessa_auth::domain::Initiator::LocalOperator
+    );
+    assert_eq!(before.correlation(), None);
+    auth.revoke_sync(RevokeCredentialRequest {
+        request_id: "revoke-historical".into(),
+        issuer_principal_id: "owner".into(),
+        credential_id: id.as_str().into(),
+        revoked_at: 11,
+    })
+    .unwrap();
+    assert_eq!(auth.read(&id).await.unwrap().origin, before);
+    let after: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(after["transitions"][1], original);
+}
