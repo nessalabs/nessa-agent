@@ -34,6 +34,7 @@ export const {
   toggleShowAll,
   toggleSidebar,
   toggleSessionList,
+  searchList,
   resizeSidebar,
   resizeSessionList,
   fitToWindow,

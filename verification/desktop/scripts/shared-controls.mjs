@@ -791,10 +791,10 @@ function measureAdopted(root) {
   else {
     if (
       group.getAttribute("aria-hidden") !== "true" ||
-      !group.closest("[role=group]")?.getAttribute("aria-label")
+      !group.closest("[data-list-group]")?.getAttribute("aria-label")
     )
       failures.push(
-        "session list caption is exposed in the listbox instead of naming its group",
+        "session list caption is exposed in the list instead of naming its group",
       )
     const label = group.querySelector("[data-slot=group-header-label]")
     const style = label ? getComputedStyle(label) : null
@@ -809,8 +809,17 @@ function measureAdopted(root) {
   for (const row of rows) {
     if (!row.classList.contains("desktop-list-row"))
       failures.push("a session row is not ListRow")
-    if (row.getAttribute("role") !== "option")
-      failures.push("a session row is not an option")
+    // A row is its group's option; a request card's head is a button (`list-request.tsx`).
+    const role = row.closest(".workspace-request-card") ? "button" : "option"
+    if (row.getAttribute("role") !== role)
+      failures.push(
+        `a session row is not ${role === "option" ? "an option" : "a button"}`,
+      )
+    if (
+      role === "option" &&
+      row.closest("[data-list-group]")?.getAttribute("role") !== "listbox"
+    )
+      failures.push("a session row's group is not a listbox")
     if (!row.getAttribute("data-drag-item"))
       failures.push("a session row cannot be carried")
   }

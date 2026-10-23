@@ -26,7 +26,7 @@ import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overvie
 import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
 import { drawn, type SideColumn } from "../../model/side-column"
 import type { WindowArrangement } from "../model/shown-window"
-import type { SessionView } from "../model/session-groups"
+import { waitingInList, type SessionView } from "../model/session-groups"
 import { keepDrafts, type Draft } from "../model/session-lifecycle"
 import {
   itemsInTabs,
@@ -478,32 +478,17 @@ export function overviewShows(state: WorkspaceState, sessionId: string): boolean
 }
 
 /**
- * Whether the session list asks the person about a session from its row: in
- * three columns, the list drawn and not under the overview, the session in
- * the channel it lists and waiting on the person. The one rule for the
- * list's request cards — what they answer (`onScreen`), and what the window
- * reads and keeps for them (`shownIds`).
- */
-export function listAsks(state: WorkspaceState, sessionId: string): boolean {
-  if (state.arrangement !== "columns" || state.content === "agents") return false
-  if (!drawn(state.chrome.sessionList)) return false
-  const session = sessionOf(state, sessionId)
-  return (
-    session !== undefined &&
-    session.status === "needs-you" &&
-    session.channelId === state.view.channelId
-  )
-}
-
-/**
- * The sessions the list asks about whose conversations the window reads and
- * keeps, most recently active first, at most `retention.listConversations`.
+ * The sessions the session list asks the person about from request cards:
+ * in three columns, the list drawn and not under the overview, its "Needs
+ * you" rows as its search lists them (`waitingInList`), the newest first, at
+ * most `retention.listConversations`. The one rule for which rows the list
+ * draws as cards, what they answer (`onScreen`), and whose conversations the
+ * window reads and keeps for them (`shownIds`).
  */
 export function listAskIds(state: WorkspaceState): string[] {
   if (state.arrangement !== "columns" || state.content === "agents") return []
-  return listedSessions(state)
-    .filter((session) => listAsks(state, session.id))
-    .sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? -1 : 1))
+  if (!drawn(state.chrome.sessionList)) return []
+  return waitingInList(listedSessions(state), state.view)
     .slice(0, retention.listConversations)
     .map((session) => session.id)
 }

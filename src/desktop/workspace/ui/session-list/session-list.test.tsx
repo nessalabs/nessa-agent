@@ -92,7 +92,9 @@ it("draws the search, the captions and the rows with the kit", async () => {
   const caption = host.querySelector("[data-slot=group-header]")
   expect(caption).not.toBeNull()
   expect(caption?.getAttribute("aria-hidden")).toBe("true")
-  expect(caption?.closest("[role=group]")?.getAttribute("aria-label")).toMatch(/ \d+$/)
+  expect(caption?.closest("[data-list-group]")?.getAttribute("aria-label")).toMatch(
+    / \d+$/,
+  )
   expect(host.querySelectorAll(".desktop-list-row").length).toBeGreaterThan(0)
   const row = host.querySelector("[data-session-row]")
   expect(row?.getAttribute("role")).toBe("option")
@@ -303,7 +305,9 @@ it("a rename outlives its row being drawn again in another group", async () => {
   })
   const moved = host.querySelector<HTMLElement>(`[data-session-row="${id}"]`)
   expect(moved).not.toBe(row)
-  expect(moved?.closest("[role=group]")?.getAttribute("aria-label")).toMatch(/^Running/)
+  expect(moved?.closest("[data-list-group]")?.getAttribute("aria-label")).toMatch(
+    /^Running/,
+  )
   expect(field(moved as HTMLElement)?.value).toBe("Half typed")
   expect(source.calls.some((call) => call[0] === "rename")).toBe(false)
 })

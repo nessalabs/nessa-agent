@@ -51,8 +51,9 @@ html:not(.dark) .workspace-tab-list {
  * One width for every chat's tab, shrinking together as the strip runs out of
  * room: a tab, or each chat in a merged group, is one unit of at most 196px
  * (`--tab-unit`). The titles truncate first; below `--tab-icon-only` a tab is
- * its icon alone, the selected one still its pill. No scrolling: the Agents
- * overview lists everything open.
+ * its icon alone, the selected one still its pill. The strip does not scroll
+ * for room: the Agents overview lists everything open. Past even that, the
+ * strip alone brings the selected tab into view (`window-tabs.tsx`).
  */
 .workspace-tab-list {
   --tab-unit: 196px;

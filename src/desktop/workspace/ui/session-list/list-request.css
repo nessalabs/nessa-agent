@@ -22,19 +22,29 @@
   line-height: 1.35;
 }
 
-/* Three lines of the command, whatever its length; the rest fades out. */
+/*
+ * Room for three lines of the command, whatever its length, at the command's
+ * own line height, so three lines fit whole. A longer one is clipped and
+ * fades (`data-clipped`, measured by the card), and is not allowed from
+ * here: Review in Chat takes Allow's place.
+ */
 .workspace-request-command {
   --request-lines: 3;
+  --request-line: 1.6;
   position: relative;
-  height: calc(var(--request-lines) * 1.5em + 16px);
+  height: calc(var(--request-lines) * var(--request-line) * 1em + 16px);
   overflow: hidden;
   font-size: var(--desktop-text-footnote);
+}
+
+.workspace-request-command[data-clipped] {
   mask-image: linear-gradient(to bottom, black 70%, transparent);
 }
 
 .workspace-request-command .workspace-approval-command {
   height: 100%;
   overflow: hidden;
+  line-height: var(--request-line);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -101,9 +111,9 @@
   justify-content: flex-end;
 }
 
-/* One row on every card, whatever the list's width: Deny, then what allows
-   (Allow Once, with Always in its menu), so the pointer lands in one place
-   card after card. */
+/* One row on every card, whatever the list's width: the refusal, then the
+   primary allow with every other answer in its menu (`ApprovalActions`
+   compact), so the pointer lands in one place card after card. */
 .workspace-request-foot .workspace-approval-actions {
   flex-direction: row;
   flex-wrap: nowrap;
@@ -117,8 +127,11 @@
   flex-wrap: nowrap;
 }
 
-/* The card leads with what is asked: the row's last-said line gives way to it. */
-.workspace-request-card .workspace-session .desktop-list-row-description {
+/* The card leads with what is asked: the row's last-said line gives way to
+   it, but only once there is a request to show. */
+.workspace-request-card:has(.workspace-request)
+  .workspace-session
+  .desktop-list-row-description {
   display: none;
 }
 
@@ -170,4 +183,11 @@
 .workspace-request[data-request="question"] {
   max-height: 320px;
   overflow: auto;
+}
+
+/* A command taller than the card is not allowed from here: read whole in the chat. */
+.workspace-request-review {
+  flex: none;
+  height: 28px;
+  white-space: nowrap;
 }

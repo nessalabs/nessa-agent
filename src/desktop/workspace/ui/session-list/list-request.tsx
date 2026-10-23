@@ -12,8 +12,8 @@
  * (`listAskIds`, `workspace-state.ts`), so what is shown here is what an
  * answer answers (`onScreen`).
  */
-import { memo } from "react"
-import { approve, deny } from "../../adapters/store/commands"
+import { memo, useLayoutEffect, useRef, useState } from "react"
+import { approve, deny, openSession } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
   selectAnswer,
@@ -49,6 +49,17 @@ export const ListRequest = memo(function ListRequest({
   const answer = useWorkspaceSelector((state) =>
     approval ? selectAnswer(state, sessionId, approval.id) : undefined,
   )
+  // An answer the window did not send: the request is no longer asked from here.
+  const [unsent, setUnsent] = useState(false)
+  // A command taller than the card shows, which no one should allow unseen.
+  const command = useRef<HTMLDivElement>(null)
+  const [clipped, setClipped] = useState(false)
+  useLayoutEffect(() => {
+    const box = command.current
+    const pre = box?.querySelector("pre")
+    if (!box || !pre) return setClipped(false)
+    setClipped(pre.scrollHeight > box.clientHeight + 1)
+  }, [approval?.id, approval?.command])
   if (!session) return null
   const asks = approvals.length + questions.length
   const more =
@@ -83,7 +94,11 @@ export const ListRequest = memo(function ListRequest({
       <p className="workspace-request-head">
         <Saying said={approvalHead(approval, agentName(agentOf(session.model)))} />
       </p>
-      <div className="workspace-request-command">
+      <div
+        className="workspace-request-command"
+        ref={command}
+        data-clipped={clipped || undefined}
+      >
         {approval.loading ? (
           <p className="workspace-request-loading" role="status">
             {approval.loading === "reading"
@@ -106,12 +121,21 @@ export const ListRequest = memo(function ListRequest({
         <p className="workspace-request-failure" role="status">
           {failureCopy(answer.failure)}
         </p>
+      ) : unsent ? (
+        <p className="workspace-request-failure" role="status">
+          This request is no longer asked here. Open the chat to answer it.
+        </p>
       ) : null}
       <div className="workspace-request-foot">
         {more}
         <ApprovalActions
           compact
-          options={approval.options}
+          // Clipped, it is refused or read whole in the chat, never allowed unseen.
+          options={
+            clipped
+              ? approval.options.filter((option) => option.choice === "deny")
+              : approval.options
+          }
           disabled={!answerable}
           onAnswer={(option) =>
             void dispatch(
@@ -129,9 +153,19 @@ export const ListRequest = memo(function ListRequest({
                     initiator: "person",
                     optionId: option.id,
                   }),
-            )
+            ).then((outcome) => setUnsent(outcome === "not-asked"))
           }
         />
+        {clipped ? (
+          <button
+            type="button"
+            className="workspace-button workspace-request-review"
+            data-primary
+            onClick={() => dispatch(openSession({ sessionId }))}
+          >
+            Review in Chat
+          </button>
+        ) : null}
       </div>
     </div>
   )

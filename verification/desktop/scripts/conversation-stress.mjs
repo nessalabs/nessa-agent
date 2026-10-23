@@ -1089,6 +1089,48 @@ const steps = {
     )
   },
 
+  async listAnswer(run, step, failures) {
+    const text = prompt(run, STRESS.permission, step)
+    const seen = await send(run, run.main.id, text, failures)
+    // The conversation asks; the session list's Needs you card asks the same.
+    const listCard = run.page.locator(
+      `[data-list-group="needs-you"] .workspace-request-card:has([data-session-row="${run.main.id}"])`,
+    )
+    const shown = await listCard
+      .locator(".workspace-request")
+      .first()
+      .waitFor({ timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!shown) {
+      failures.push("the session list shows no request card for the waiting conversation")
+      return
+    }
+    const words = async (locator) =>
+      ((await locator.first().textContent()) ?? "").replace(/\s+/g, " ").trim()
+    const fromList = await words(listCard.locator(".workspace-approval-command"))
+    const fromPane = await words(
+      run.page.locator(`${css.agentApproval} .workspace-approval-command`),
+    )
+    if (fromList !== fromPane)
+      failures.push(
+        `the list's card reads "${fromList}", the conversation's "${fromPane}"`,
+      )
+    await listCard
+      .locator(`button[data-answer="${step.answer === "allow" ? "once" : "deny"}"]`)
+      .first()
+      .click()
+    await settled(run, run.main.id, seen, text, "completed", failures)
+    await expectShown(
+      run.page,
+      step.answer === "allow" ? SAYS.allowed : SAYS.denied,
+      failures,
+    )
+    // Answered, the card goes with the row out of Needs you.
+    if (!(await waitFor(async () => (await listCard.count()) === 0, 10_000)))
+      failures.push("the answered card is still in Needs you")
+  },
+
   async reviews(run, step, failures) {
     const text = prompt(run, STRESS.reviews, step)
     const seen = await send(run, run.main.id, text, failures)

@@ -2037,6 +2037,33 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   _Check:_ `empty`. "No linked devices yet." and Link a Device, no Done and no
   Share; the link closes the dialog and opens Settings on Linked devices.
 
+## Session list: pinned first, request cards (#1084)
+
+- [ ] **In three columns the sidebar lists channels only; a channel's pinned
+  sessions lead its list under "Pinned", each listed once.** _Check:_
+  `columns.mjs` (`channels-alone`); Sessions in sidebar still discloses a
+  channel's sessions.
+- [ ] **Each waiting row the list asks about is a request card, answered from
+  the list.** It reads the command as the transcript card does
+  (`approvalGist`), offers the review's refusal and primary allow on one row,
+  every other answer in the menu beside them, and keeps one bounded height.
+  A command taller than the card is not allowed from here: Review in Chat
+  takes Allow's place. _Check:_ `columns.mjs` (`list-request`: Allow moves
+  the row out of Needs you; `list-request-claude`: Claude's five-answer shell
+  review at the list's narrowest, read as the transcript reads it, answers
+  that fit their words, under 260px); `conversation-stress.mjs`
+  (`listAnswer`); unit tests `list-request.test.tsx` (only what is drawn is
+  asked: never a pinned row, a row the search hides, or a folded list's; the
+  bound of 12; a card's controls keep their keys).
+
+## The window never scrolls sideways (#1084)
+
+- [ ] **The window and the workspace clip, never scroll** (`overflow: clip`),
+  so no focus or scroll-into-view moves the columns under their edges; the
+  tab strip brings a clipped tab into view by scrolling itself alone.
+  _Check:_ `conversation-stress.mjs` (`window`: the chat surface reaches the
+  window's right edge after many tabs and steps).
+
 ## Session rows: hover, menu, rename, delete, swipe
 
 - [ ] **Pinning a session closes its menu without painting a detached copy at

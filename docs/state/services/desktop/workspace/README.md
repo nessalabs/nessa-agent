@@ -69,6 +69,7 @@ flowchart TB
 
 ## Browse flows
 
+- [Answer requests from the session list](answer-requests-from-the-session-list.md)
 - [Discover subagents and experimental features](discover-subagents-and-experimental-features.md)
 - [Drag or move a session or pane](drag-or-move-a-session-or-pane.md)
 - [Open, merge, unmerge, switch, and close window tabs](open-merge-unmerge-switch-and-close-window-tabs.md)

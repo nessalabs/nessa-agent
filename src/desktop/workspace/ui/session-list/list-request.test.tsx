@@ -5,14 +5,24 @@ import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import { ClockProvider } from "../../../../clock"
 import {
+  approve,
   arrangementShown,
   followWorkspace,
   loadWorkspace,
+  searchList,
   showContent,
+  toggleSessionList,
 } from "../../adapters/store/commands"
 import { listAskIds, onScreen } from "../../application/workspace-state"
 import { emptyTranscript, type Approval } from "../../model/transcript"
-import { fakeSource, settle, testStore, type FakeSource } from "../../testing"
+import {
+  fakeSource,
+  settle,
+  summary,
+  testIndex,
+  testStore,
+  type FakeSource,
+} from "../../testing"
 import { approvalGist } from "../transcript/approval-card"
 import { SessionList } from "./session-list"
 
@@ -224,4 +234,124 @@ it("asks a question from the list, held to the card's bound", async () => {
   )
   expect(question?.querySelector('[data-question="place"]')).not.toBeNull()
   expect(question?.dataset.request).toBe("question")
+})
+
+/** The list in three columns over `sessions` added to the test index, each waiting on one review. */
+async function listOf(extra: ReturnType<typeof summary>[]) {
+  const index = testIndex()
+  const source = fakeSource({ ...index, sessions: [...index.sessions, ...extra] })
+  for (const session of [...extra, ...index.sessions.filter((s) => s.id === "b")])
+    source.transcripts.set(session.id, {
+      ...emptyTranscript(session.id),
+      revision: 1,
+      approvals: [asked(`ask-${session.id}`, `echo ${session.id}`)],
+    })
+  const store = testStore(source)
+  unfollow = store.dispatch(followWorkspace())
+  await store.dispatch(loadWorkspace())
+  store.dispatch(arrangementShown({ arrangement: "columns" }))
+  await act(async () =>
+    root.render(
+      <Provider store={store}>
+        <ClockProvider now={() => 1_000}>
+          <SessionList />
+        </ClockProvider>
+      </Provider>,
+    ),
+  )
+  await act(async () => settle())
+  return { store, source }
+}
+
+const cards = () =>
+  [...host.querySelectorAll(".workspace-request-card [data-session-row]")].map((row) =>
+    row.getAttribute("data-session-row"),
+  )
+
+it("asks only what it draws as cards: never a pinned session, a row its search hides, or a folded list's", async () => {
+  const { store, source } = await listOf([
+    summary("p", "desktop", 250, "needs-you", { pinned: true }),
+  ])
+  const state = () => store.getState().workspace
+  // Pinned, it is listed under Pinned, a row, and not asked about there.
+  expect(cards()).toEqual(["b"])
+  expect(listAskIds(state())).toEqual(["b"])
+  expect(onScreen(state(), "p")).toBe(false)
+  expect(
+    await store.dispatch(
+      approve({
+        sessionId: "p",
+        approvalId: "ask-p",
+        initiator: "agent",
+        scope: "once",
+        optionId: "once",
+      }),
+    ),
+  ).toBe("not-asked")
+  expect(source.calls.some((call) => call[0] === "approve")).toBe(false)
+  // A search that hides it.
+  store.dispatch(searchList({ query: "zzz" }))
+  expect(listAskIds(state())).toEqual([])
+  expect(onScreen(state(), "b")).toBe(false)
+  store.dispatch(searchList({ query: "" }))
+  expect(listAskIds(state())).toEqual(["b"])
+  // A folded list asks nothing.
+  store.dispatch(toggleSessionList({ open: false }))
+  expect(listAskIds(state())).toEqual([])
+})
+
+it("draws as many cards as it asks about, and the rest as rows", async () => {
+  const waiting = Array.from({ length: 13 }, (_, at) =>
+    summary(`w${at}`, "desktop", 400 + at, "needs-you"),
+  )
+  const { store } = await listOf(waiting)
+  const ids = listAskIds(store.getState().workspace)
+  expect(ids).toHaveLength(12)
+  expect(cards()).toEqual(ids)
+  // The oldest waiting, past the bound, is a row with its words.
+  const rest = host.querySelector(
+    '[data-list-group="needs-you"] > [data-session-row="b"], [data-list-group="needs-you"] [data-session-row="b"]',
+  )
+  expect(rest?.closest(".workspace-request-card")).toBeNull()
+})
+
+it("keeps a card's controls' keys their own: Home in its field and an arrow on Deny walk nothing", async () => {
+  const { store } = await shown()
+  const before = store.getState().workspace.panes
+  const deny = card()?.querySelector<HTMLButtonElement>('button[data-answer="deny"]')
+  deny?.focus()
+  await act(async () =>
+    deny?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    ),
+  )
+  await act(async () =>
+    deny?.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })),
+  )
+  expect(store.getState().workspace.panes).toBe(before)
+  expect(document.activeElement).toBe(deny)
+  // The group of cards is a list, its head a button; the rest stay listboxes of options.
+  expect(host.querySelector('[data-list-group="needs-you"]')?.getAttribute("role")).toBe(
+    "list",
+  )
+  expect(
+    card()
+      ?.closest('[role="listitem"]')
+      ?.querySelector('[data-session-row="b"]')
+      ?.getAttribute("role"),
+  ).toBe("button")
+  expect(host.querySelector('[data-list-group="running"]')?.getAttribute("role")).toBe(
+    "listbox",
+  )
+})
+
+it("marks the card answered while its answer is on the way", async () => {
+  const source = fakeSource()
+  source.hold("approve")
+  await shown(source)
+  await act(async () =>
+    card()?.querySelector<HTMLButtonElement>('button[data-answer="once"]')?.click(),
+  )
+  expect(card()?.hasAttribute("data-answering")).toBe(true)
+  await act(async () => source.release("approve"))
 })

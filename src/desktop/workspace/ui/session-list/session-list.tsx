@@ -10,8 +10,11 @@ import {
   archiveSession,
   deleteSession,
   newSession,
+  searchList,
   walkToSession,
 } from "../../adapters/store/commands"
+import { shallowEqual } from "react-redux"
+import { listAskIds } from "../../application/workspace-state"
 import {
   useWorkspaceDispatch,
   useWorkspaceSelector,
@@ -60,8 +63,9 @@ import { useSessionRowActions, type SessionRowActions } from "../session-row-act
 
 /**
  * The middle column: what the sidebar chose — a channel's sessions, or every
- * session in one state — grouped "Needs you", "Running", "Earlier", with a
- * search over them. Arrow keys walk the list and open as they go, like Mail's
+ * session in one state — its pinned ones first, then grouped "Needs you",
+ * "Running", "Earlier", with a search over them. Each row in Needs you that
+ * the window asks about is a request card (`list-request.tsx`). Arrow keys walk the list and open as they go, like Mail's
  * message list. A new session appears here with its first message.
  */
 export const SessionList = memo(function SessionList() {
@@ -71,10 +75,12 @@ export const SessionList = memo(function SessionList() {
   const open = useWorkspaceSelector(selectSessionListOpen)
   const view = useWorkspaceSelector(selectView)
   const channel = useWorkspaceSelector((state) => selectChannel(state, view.channelId))
-  // The search is the list's own; choosing another channel starts it afresh.
-  const [search, setSearch] = useState({ view, query: "" })
-  const query = search.view === view ? search.query : ""
-  const setQuery = (next: string) => setSearch({ view, query: next })
+  // The search is the view's (`SessionView.query`): what it hides is not
+  // asked about from the list. Choosing another channel starts it afresh.
+  const query = view.query ?? ""
+  const setQuery = (next: string) => dispatch(searchList({ query: next }))
+  // The rows drawn as request cards: the one rule the window answers by.
+  const asked = useWorkspaceSelector((state) => listAskIds(state.workspace), shallowEqual)
   const [runningFirst] = useRunningFirstPreference()
   const groups = useWorkspaceSelector(
     (state) => selectListGroups(state, query, runningFirst === "on"),
@@ -93,8 +99,12 @@ export const SessionList = memo(function SessionList() {
   // goes; the context-menu key opens the focused row's menu.
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     // A row's menu is drawn elsewhere and React carries its keys up here
-    // anyway: only keys pressed in the list itself walk it.
+    // anyway, and a request card's controls keep their own keys: only keys
+    // pressed on a row walk the list.
     if (!event.currentTarget.contains(event.target as Node)) return
+    if (event.defaultPrevented) return
+    if (!(event.target instanceof Element) || !event.target.closest("[data-session-row]"))
+      return
     if (contextMenuFromKey(event)) return
     const walk: Record<string, (at: number) => number> = {
       ArrowDown: (at) => at + 1,
@@ -150,13 +160,7 @@ export const SessionList = memo(function SessionList() {
         </ColumnHeader>
         {/* One row's swipe actions open at a time; a scroll that moves it closes it. */}
         <SwipeRowGroup asChild data-slot="workspace-swipe">
-          <div
-            className="workspace-list-scroll"
-            ref={listRef}
-            role="listbox"
-            aria-label="Sessions"
-            onKeyDown={onKeyDown}
-          >
+          <div className="workspace-list-scroll" ref={listRef} onKeyDown={onKeyDown}>
             {ordered.length === 0 ? (
               <EmptyState
                 className="workspace-list-empty desktop-pill-ink"
@@ -180,13 +184,16 @@ export const SessionList = memo(function SessionList() {
             {groups.map((group, index) => (
               <div
                 key={group.id}
-                role="group"
+                // Each group is a listbox of its sessions; one whose rows ask
+                // something is a list of request cards, which hold controls a
+                // listbox may not.
+                role={group.ids.some((id) => asked.includes(id)) ? "list" : "listbox"}
                 data-list-group={group.id}
                 aria-label={`${group.label} ${group.ids.length}`}
               >
-                {/* The kit caption is a heading. Hidden here, so the listbox
-                  exposes the group and its options; the group's name keeps
-                  the count the heading would have said. */}
+                {/* The kit caption is a heading. Hidden here, so the group
+                  exposes its rows; its name keeps the count the heading
+                  would have said. */}
                 <GroupHeader
                   aria-hidden="true"
                   className="workspace-group-label"
@@ -199,9 +206,17 @@ export const SessionList = memo(function SessionList() {
                 />
                 {group.ids.map((sessionId) =>
                   // What waits on the person is asked here too, the row its card's head.
-                  group.id === "needs-you" ? (
-                    <div key={sessionId} className="workspace-request-card" role="none">
-                      <SessionRow sessionId={sessionId} tabStop={sessionId === tabStop} />
+                  asked.includes(sessionId) ? (
+                    <div
+                      key={sessionId}
+                      className="workspace-request-card"
+                      role="listitem"
+                    >
+                      <SessionRow
+                        sessionId={sessionId}
+                        tabStop={sessionId === tabStop}
+                        heading
+                      />
                       <ListRequest sessionId={sessionId} />
                     </div>
                   ) : (
@@ -224,10 +239,13 @@ export const SessionList = memo(function SessionList() {
 const SessionRow = memo(function SessionRow({
   sessionId,
   tabStop,
+  heading = false,
 }: {
   sessionId: string
   /** Whether the row is the list's one Tab stop. */
   tabStop: boolean
+  /** The head of a request card: a button that opens the chat, not a listbox option. */
+  heading?: boolean
 }) {
   const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
   // With the list's measure, the frame after the boxes, so the fold does not
@@ -268,9 +286,10 @@ const SessionRow = memo(function SessionRow({
         <ContextMenuTrigger asChild disabled={row.renaming}>
           <ListRow
             ref={row.ref}
-            role="option"
+            role={heading ? "button" : "option"}
             tabIndex={tabStop ? 0 : -1}
-            aria-selected={selected}
+            aria-selected={heading ? undefined : selected}
+            aria-current={heading && selected ? "true" : undefined}
             data-session-row={session.id}
             className="workspace-session"
             selected={selected}

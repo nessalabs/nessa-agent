@@ -186,6 +186,8 @@ const workspaceSlice = createSlice({
       navigation.toggleSidebar(state, payload ?? {}),
     toggleSessionList: (state, { payload }: Payload<{ open?: boolean } | undefined>) =>
       navigation.toggleSessionList(state, payload ?? {}),
+    searchList: (state, { payload }: Payload<{ query: string }>) =>
+      navigation.searchList(state, payload),
     resizeSidebar: (state, { payload }: Payload<{ width: number }>) =>
       navigation.resizeSidebar(state, payload),
     resizeSessionList: (state, { payload }: Payload<{ width: number }>) =>
