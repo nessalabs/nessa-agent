@@ -2140,3 +2140,7 @@ rejected acknowledgement. SDK ACP tests cover remembered allow and deny, exact
 logical attribution and the mapped provider wire option. Service tests keep a
 second review pending and require live publication after success or consumption
 with a typed failure.
+
+### Pending action ownership (#1087)
+
+`user-flow-ordering.mjs` drives production AgentDownloads and useComposer against controlled ports in Chromium and WebKit: Busy and Not confirmed both keep Download absent after an older offers response (0 stale buttons, 1 dispatch), while a newer check restores it (1 button). Sending in A and clearing B leaves B expanded; refusing A while B sends cannot suppress B's own collapse. This is frontend dispatch/presentation evidence, not a claim about physical backend installation. The fixture needs dev mode and no gateway credentials.

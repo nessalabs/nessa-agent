@@ -987,3 +987,12 @@ export const composerControls = {
   accessValue: { ask: "ask-approval", auto: "auto-approval", full: "full-access" },
   notice: ".desktop-composer-notice", // class: what the composer says of a held or refused access change
 }
+
+/** Deterministic production-hook/component ordering fixture for #1087. */
+export const userFlowOrdering = {
+  page: "/verification/conversation/user-flow-ordering.html",
+  ready: "[data-user-flow-ordering]",
+  download: 'button[aria-label^="Download Claude"]',
+  installRequests: 'output[aria-label="Installation requests"]',
+  expanded: 'output[aria-label="Expanded editor"]',
+}
