@@ -460,3 +460,102 @@ async fn owed_observation_and_retired_stop_refuse_cross_record_substitutions_bef
         }
     }
 }
+
+#[tokio::test]
+async fn first_expiry_and_actual_auth_revocation_remain_distinct_after_retirement() {
+    use nessa_auth::application::ports::{AccessAdmission, AccessReader};
+    use nessa_auth::domain::{Initiator, RevocationCause, TransitionCause};
+    for first in [
+        ExpiryObserver::Owner(PrincipalId::new("owner").unwrap()),
+        ExpiryObserver::Restart,
+    ] {
+        let mut f = Registered::new();
+        let proposed = f.proposed();
+        let id = CredentialId::new(&proposed.issue.credential_id).unwrap();
+        f.command(&f.store).execute(proposed).await.unwrap();
+        f.clock.0.store(100_000, Ordering::SeqCst);
+        let expired = f.auth.read(&id).await.unwrap();
+        assert!(!expired.credential.is_valid_at(100));
+        assert_eq!(expired.revocation_fact().unwrap(), None);
+        let expected = match &first {
+            ExpiryObserver::Owner(p) => format!("owner:{}", p.as_str()),
+            ExpiryObserver::Restart => "restart".into(),
+            ExpiryObserver::Delivery(_) => unreachable!(),
+        };
+        f.store
+            .observe_expiry(id.clone(), first, 100_001)
+            .await
+            .unwrap();
+        f.reopen();
+        let committed = f
+            .auth
+            .revoke_sync(RevokeCredentialRequest {
+                request_id: "actual-after-expiry".into(),
+                issuer_principal_id: "owner".into(),
+                credential_id: id.as_str().into(),
+                revoked_at: 101,
+            })
+            .unwrap();
+        let held = f.auth.hold(&id).await.unwrap();
+        let fact = held.snapshot.revocation_fact().unwrap().unwrap().clone();
+        assert_eq!(held.snapshot.origin, expired.origin);
+        assert_eq!(fact.sequence(), committed.revocation.sequence);
+        assert_eq!(fact.revision(), committed.revocation.revision);
+        assert_eq!(fact.correlation(), Some("actual-after-expiry"));
+        assert_eq!(fact.transition().at(), 101);
+        assert_eq!(
+            fact.transition().cause(),
+            &TransitionCause::Revoked(RevocationCause::Explicit)
+        );
+        let Initiator::Principal(actor) = fact.transition().initiator() else {
+            panic!("actual explicit owner command has its original principal")
+        };
+        // This exercises the two existing owners together. The general runtime
+        // coordinator and offline/supersession mapping remain separate work.
+        f.store
+            .stop(
+                id.clone(),
+                StopReason::Revoked {
+                    initiator: actor.clone(),
+                },
+                101_000,
+            )
+            .await
+            .unwrap();
+        drop(held);
+        assert_eq!(f.count("registrations"), 0);
+        assert_eq!(f.count("registration_intents"), 0);
+        f.reopen();
+        let records = std::fs::read_dir(&f.audit)
+            .unwrap()
+            .map(|e| {
+                serde_json::from_slice::<Value>(&std::fs::read(e.unwrap().path()).unwrap()).unwrap()
+            })
+            .collect::<Vec<_>>();
+        for cause in [
+            "credential_expiry_observed",
+            "credential_expired",
+            "drained",
+        ] {
+            let record = records.iter().find(|v| v["cause"] == cause).unwrap();
+            assert_eq!(record["initiator"], expected);
+            if cause == "drained" {
+                assert_eq!(record["stopAtMs"], 100_001);
+            } else {
+                assert_eq!(record["atMs"], 100_001);
+            }
+        }
+        let private = f._root.path().join("private");
+        drop(f.auth);
+        let auth = LocalCredentialStore::open(
+            &private,
+            "auth.json",
+            Arc::new(CedarPolicyEvaluator::new().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            auth.read(&id).await.unwrap().revocation_fact().unwrap(),
+            Some(&fact)
+        );
+    }
+}
