@@ -1,0 +1,9 @@
+warning: unused variable: `origin`
+   --> /tmp/nessa-origin-recovery-independent-review/crates/nessa-auth/src/adapters/local/registry.rs:633:21
+    |
+633 |                 let origin = credential_origin(current, &credential)
+    |                     ^^^^^^ help: if this is intentional, prefix it with an underscore: `_origin`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: 1 warning emitted

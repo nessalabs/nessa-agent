@@ -211,3 +211,8 @@ The recovery-classification correction at this source checkpoint is covered by
 five accepted historical shapes, repeated registration, byte-preservation and
 intent-retention checks in the linked registration tests. [Fresh review round 1](../../../reviews/evidence/webhook-runtime/origin/review-1/report.md)
 reproduced the missing classification; the fix still requires fresh round 2.
+
+[Fresh round 2](../../../reviews/evidence/webhook-runtime/origin/review-2/report.md)
+is clean for this source at candidate8346c4ae: all severity buckets empty, M1
+independently verified fixed. No crate source changes follow source1c1355b5 in
+that candidate. Runtime, lifecycle and full-feature qualification remain pending.

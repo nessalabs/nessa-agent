@@ -13,3 +13,5 @@ The earlier broad server run's unrelated Codex CleanupUnconfirmed failure remain
 Copied text logs remove trailing whitespace and terminal blank lines for repository whitespace checks. Original execution logs remain unchanged under `/tmp`; statuses, assertions and diagnostics are preserved. The review report itself is unchanged.
 
 Nessa Docs validates 135 pages with zero issues. Four diagrams render with zero page errors in system Chromium 151.0.7922.173; the changed issuance diagram was visually inspected. Issuance advances only to the exact source checkpoint above; unchanged outbox documentation keeps its prior 946bbc checkpoint. These diagrams are documentation evidence, not the required pinned Chromium/WebKit product gate.
+
+Fresh [round 2](../review-2/report.md) is clean at `8346c4ae9b69a6127041e4e07d2156143d0b2732`, source/test `1c1355b537037e7416486856211b74c605804fa7`: all four severity buckets empty and M1 independently verified fixed. Full #896 integration and qualification remain pending.
