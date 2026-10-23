@@ -1,0 +1,99 @@
+
+running 16 tests
+test external_events::entrypoint::http::tests::a_key_discards_the_supplied_spare_capacity ... ok
+test external_events::domain::value_objects::identity::tests::delivery_identity_is_bounded_and_has_an_allowed_alphabet ... ok
+test external_events::domain::value_objects::identity::tests::an_identity_discards_the_supplied_spare_capacity ... ok
+test external_events::tests::admission_task_failure_is_visible_and_recovers_its_slot ... FAILED
+test external_events::tests::cancelled_http_responses_keep_command_capacity_until_detached_admission_settles ... FAILED
+test external_events::tests::cancelled_http_body_reads_release_capacity_before_command_handoff ... FAILED
+test external_events::tests::concurrent_duplicates_share_a_turn_and_changed_payload_conflicts ... FAILED
+test external_events::tests::current_authority_denies_replay_revocation_expiry_and_unavailability ... FAILED
+test external_events::tests::execution_failure_is_separate_from_dispatch_and_an_explicit_new_event_can_run ... FAILED
+test external_events::tests::failed_storage_can_recover_with_same_delivery_without_fake_acceptance ... FAILED
+test external_events::tests::lost_terminal_acknowledgement_is_interrupted_after_restart_and_does_not_redispatch ... FAILED
+test external_events::tests::queued_event_can_be_stopped_with_existing_exact_turn_command_and_replay_does_not_revive_it ... FAILED
+test external_events::tests::signed_http_event_runs_deterministically_and_replays_after_reopen ... FAILED
+test external_events::tests::rejects_invalid_signatures_freshness_shapes_and_oversized_payloads_before_execution ... FAILED
+test external_events::tests::signing_key_is_bounded ... ok
+test external_events::tests::slow_bodies_have_bounded_concurrency_and_a_deadline_then_release_capacity ... FAILED
+
+failures:
+
+---- external_events::tests::admission_task_failure_is_visible_and_recovers_its_slot stdout ----
+
+thread 'external_events::tests::admission_task_failure_is_visible_and_recovers_its_slot' (121154) panicked at crates/nessa-server/src/external_events/../../tests/external_events/ingress.rs:246:53:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- external_events::tests::cancelled_http_responses_keep_command_capacity_until_detached_admission_settles stdout ----
+
+thread 'external_events::tests::cancelled_http_responses_keep_command_capacity_until_detached_admission_settles' (121156) panicked at crates/nessa-server/src/external_events/../../tests/external_events/ingress.rs:246:53:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+---- external_events::tests::cancelled_http_body_reads_release_capacity_before_command_handoff stdout ----
+
+thread 'external_events::tests::cancelled_http_body_reads_release_capacity_before_command_handoff' (121155) panicked at crates/nessa-server/src/external_events/../../tests/external_events/ingress.rs:246:53:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+---- external_events::tests::concurrent_duplicates_share_a_turn_and_changed_payload_conflicts stdout ----
+
+thread 'external_events::tests::concurrent_duplicates_share_a_turn_and_changed_payload_conflicts' (121157) panicked at crates/nessa-server/src/external_events/../../tests/external_events/ingress.rs:246:53:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+---- external_events::tests::current_authority_denies_replay_revocation_expiry_and_unavailability stdout ----
+
+thread 'external_events::tests::current_authority_denies_replay_revocation_expiry_and_unavailability' (121158) panicked at crates/nessa-server/src/external_events/../../tests/external_events/ingress.rs:246:53:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+---- external_events::tests::execution_failure_is_separate_from_dispatch_and_an_explicit_new_event_can_run stdout ----
+
+thread 'external_events::tests::execution_failure_is_separate_from_dispatch_and_an_explicit_new_event_can_run' (121159) panicked at crates/nessa-server/src/external_events/../../tests/external_events/ingress.rs:246:53:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+---- external_events::tests::failed_storage_can_recover_with_same_delivery_without_fake_acceptance stdout ----
+
+thread 'external_events::tests::failed_storage_can_recover_with_same_delivery_without_fake_acceptance' (121160) panicked at crates/nessa-server/src/external_events/../../tests/external_events/ingress.rs:246:53:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+---- external_events::tests::lost_terminal_acknowledgement_is_interrupted_after_restart_and_does_not_redispatch stdout ----
+
+thread 'external_events::tests::lost_terminal_acknowledgement_is_interrupted_after_restart_and_does_not_redispatch' (121161) panicked at crates/nessa-server/src/external_events/../../tests/external_events/ingress.rs:246:53:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+---- external_events::tests::queued_event_can_be_stopped_with_existing_exact_turn_command_and_replay_does_not_revive_it stdout ----
+
+thread 'external_events::tests::queued_event_can_be_stopped_with_existing_exact_turn_command_and_replay_does_not_revive_it' (121162) panicked at crates/nessa-server/src/external_events/../../tests/external_events/ingress.rs:246:53:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+---- external_events::tests::signed_http_event_runs_deterministically_and_replays_after_reopen stdout ----
+
+thread 'external_events::tests::signed_http_event_runs_deterministically_and_replays_after_reopen' (121164) panicked at crates/nessa-server/src/external_events/../../tests/external_events/ingress.rs:246:53:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+---- external_events::tests::rejects_invalid_signatures_freshness_shapes_and_oversized_payloads_before_execution stdout ----
+
+thread 'external_events::tests::rejects_invalid_signatures_freshness_shapes_and_oversized_payloads_before_execution' (121163) panicked at crates/nessa-server/src/external_events/../../tests/external_events/ingress.rs:246:53:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+---- external_events::tests::slow_bodies_have_bounded_concurrency_and_a_deadline_then_release_capacity stdout ----
+
+thread 'external_events::tests::slow_bodies_have_bounded_concurrency_and_a_deadline_then_release_capacity' (121166) panicked at crates/nessa-server/src/external_events/../../tests/external_events/ingress.rs:246:53:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+
+failures:
+    external_events::tests::admission_task_failure_is_visible_and_recovers_its_slot
+    external_events::tests::cancelled_http_body_reads_release_capacity_before_command_handoff
+    external_events::tests::cancelled_http_responses_keep_command_capacity_until_detached_admission_settles
+    external_events::tests::concurrent_duplicates_share_a_turn_and_changed_payload_conflicts
+    external_events::tests::current_authority_denies_replay_revocation_expiry_and_unavailability
+    external_events::tests::execution_failure_is_separate_from_dispatch_and_an_explicit_new_event_can_run
+    external_events::tests::failed_storage_can_recover_with_same_delivery_without_fake_acceptance
+    external_events::tests::lost_terminal_acknowledgement_is_interrupted_after_restart_and_does_not_redispatch
+    external_events::tests::queued_event_can_be_stopped_with_existing_exact_turn_command_and_replay_does_not_revive_it
+    external_events::tests::rejects_invalid_signatures_freshness_shapes_and_oversized_payloads_before_execution
+    external_events::tests::signed_http_event_runs_deterministically_and_replays_after_reopen
+    external_events::tests::slow_bodies_have_bounded_concurrency_and_a_deadline_then_release_capacity
+
+test result: FAILED. 4 passed; 12 failed; 0 ignored; 0 measured; 3748 filtered out; finished in 0.00s
+

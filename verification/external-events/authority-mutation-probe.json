@@ -1,0 +1,12 @@
+{
+  "rule": "current-cedar-decision-before-replaying-a-receipt",
+  "sourceSha256": "55ba6fe44a4d2dad1843bb778881770833a46d8e52d9fdf3f6df004426bf28a8",
+  "replaced": "if decision != Decision::Allow {",
+  "with": "if false {",
+  "exit": 101,
+  "mutantCompiled": true,
+  "failedTest": "external_events::tests::current_authority_denies_replay_revocation_expiry_and_unavailability",
+  "sourceRevision": "d8b508b1783f733ae04ed111690a6a04d3bc2616",
+  "restoredSourceSha256": "55ba6fe44a4d2dad1843bb778881770833a46d8e52d9fdf3f6df004426bf28a8",
+  "observed": "Removing the current Cedar decision guard changed a denied receipt replay from403 to202; the test failed. Source was restored with a fresh mtime."
+}

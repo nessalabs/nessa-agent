@@ -1,0 +1,38 @@
+{
+  "browser": "151.0.7922.173",
+  "document": "gateway-external-events",
+  "figures": [
+    {
+      "state": "rendered",
+      "svgs": 4
+    },
+    {
+      "state": "rendered",
+      "svgs": 4
+    }
+  ],
+  "details": [
+    {
+      "key": "0",
+      "tag": "g"
+    },
+    {
+      "key": "1",
+      "tag": "g"
+    },
+    {
+      "key": "2",
+      "tag": "g"
+    },
+    {
+      "key": "4",
+      "tag": "g"
+    },
+    {
+      "key": "3",
+      "tag": "g"
+    }
+  ],
+  "inspectorTitle": "Proving an event came from its sender",
+  "pageErrors": []
+}
