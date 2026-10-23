@@ -168,9 +168,12 @@ impl RegisterWebhook<'_> {
             IssueCredentialOutcome::Issued {
                 metadata,
                 transitions,
-                ..
+                evidence,
+            } => {
+                drop(evidence);
+                (metadata, transitions)
             }
-            | IssueCredentialOutcome::ExistingSecretUnavailable {
+            IssueCredentialOutcome::ExistingSecretUnavailable {
                 metadata,
                 transitions,
             } => (metadata, transitions),
