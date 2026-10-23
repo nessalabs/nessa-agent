@@ -38,6 +38,8 @@ import {
   hideColumns,
   leaveSettings,
   overviewListed,
+  overviewCompleteList,
+  overviewRowReady,
   openPanes,
   order,
   paneCount,
@@ -130,7 +132,7 @@ function overviewSteps() {
       "⌘0 opens",
       async (p) => {
         await p.keyboard.press(keys.overview)
-        await onOverviewRow(p)
+        await onOverviewRow(p, true)
       },
       (s) => ((last = s.activeOverviewItem), onItem(s)),
     ],
@@ -201,19 +203,16 @@ async function openInPane(page, title) {
 }
 
 /**
- * The caret lands the frame after the current row is drawn. Rows arrive one
- * a frame, so that is later than the peek's animation (`overview.tsx`).
+ * The current row can take focus before later rows arrive (`overview.test.tsx`).
+ * Down requires a mounted successor; complete-list readiness is reported apart.
  */
-async function onOverviewRow(page) {
-  if (!(await overviewListed(page)))
-    throw new CannotRun("the overview list did not finish drawing")
-  const landed = await until(
-    page,
-    (sel) => document.activeElement?.closest(sel) != null,
-    css.overviewItem,
-    1000,
-  )
-  if (!landed) throw new CannotRun("the keyboard did not land on an overview row")
+async function onOverviewRow(page, next = false) {
+  if (!(await overviewRowReady(page, next)))
+    throw new CannotRun(
+      next
+        ? "the focused overview row and its mounted successor were not ready"
+        : "the keyboard did not land on a mounted overview row",
+    )
 }
 
 /** How many requests the overview lists now: opened, counted, left. */
@@ -442,7 +441,7 @@ async function replyKeepsCaret(page) {
   const trail = []
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
-  await onOverviewRow(page)
+  await onOverviewRow(page, true)
   const start = (await state(page)).activeOverviewItem
   // ↓ and ⌘R in one breath, then the words at once: the peek may not have followed ↓ yet.
   await page.keyboard.press(keys.down)
@@ -1251,6 +1250,27 @@ await main(meta, async ({ options, rep, url }) => {
 
           await attempt(rep, { name: "focus-overview-arriving", engine, layout }, () =>
             keysWhileRowsArrive(page),
+          )
+
+          await attempt(
+            rep,
+            { name: "focus-overview-complete-list", engine, layout },
+            async () => {
+              const fresh = await openPage(browser, {
+                url,
+                layout,
+                width: 1440,
+                height: 900,
+              })
+              return withCleanup(
+                async () => {
+                  await need(fresh.page, css.composer, "a composer")
+                  await fresh.page.keyboard.press(keys.overview)
+                  return overviewCompleteList(fresh.page)
+                },
+                () => fresh.close(),
+              )
+            },
           )
 
           const mash = Number(options.mash)

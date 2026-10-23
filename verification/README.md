@@ -215,6 +215,26 @@ ends each step once its motion has, not after a fixed wait.
 
 ## Scenario results and preview ownership
 
+### Focus and drag observation order
+
+The focus and sideways-drag probes keep readiness and timing evidence separate
+(`lib/workspace.test.mjs`). No production deadline is changed by these probes.
+
+| Observed ordering | Result |
+| --- | --- |
+| Selected overview row focused, later rows pending | Focus is ready; Down waits for a mounted successor within 2,000 ms. |
+| List complete but focus missing, outside the list, or no successor for Down | Focus/navigation is not ready. |
+| Complete-list marker absent after 2,000 ms | Independent `focus-overview-complete-list` result fails, even if focus held. |
+| Pointer delivered and zone observed before the event's 150 ms rest boundary | The moving-sweep assertion checks the announced zone. |
+| Pointer delivery or DOM observation reaches the rest boundary first | No proof of moving intent; missing timely evidence fails and records both gaps. |
+| No announcement, or announcement before any recorded changed-position move | No proof of moving intent; the sweep fails. |
+
+`recordZones` retains event time, event delivery time and DOM observation time.
+The last is after a scheduled preview, not the model's decision time. A later
+legitimate rest announcement stays in the receipt without replacing a timely
+moving observation. Historical late announcements alone cannot identify whether
+input delivery, rendering, host scheduling or another cause was responsible.
+
 A scenario owns its result; a missing optional assertion list cannot replace the
 scenario's original error. `report.add` normalizes `failures` after accepting the
 result fields, then derives `ok` and the existing process verdict. Page diagnostic
