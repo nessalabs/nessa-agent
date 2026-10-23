@@ -14,4 +14,3 @@ failures:
     webhooks::domain::registration_lifecycle_tests::expiry_requires_observation_and_retains_the_first_actual_reader
 
 test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 104 filtered out; finished in 0.00s
-

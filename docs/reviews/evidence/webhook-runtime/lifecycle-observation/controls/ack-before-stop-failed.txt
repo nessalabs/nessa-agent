@@ -14,4 +14,3 @@ failures:
     webhooks::infrastructure::outbox::store::tests::registration_tests::lifecycle_tests::owner_expiry_observation_survives_failed_stop_and_later_canonical_revocation
 
 test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 104 filtered out; finished in 0.01s
-
