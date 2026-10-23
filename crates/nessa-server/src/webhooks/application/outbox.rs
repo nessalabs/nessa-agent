@@ -73,7 +73,7 @@ impl QueueInitiator {
 
 /// Revocation supplies its canonical auth transition initiator. Expiry retains
 /// the first observing delivery identity; cleanup must not replace that cause.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StopReason {
     Revoked { initiator: PrincipalId },
     Expired { observed_by: Uuid },

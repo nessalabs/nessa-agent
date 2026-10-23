@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 pub(super) const AUDIT_BYTES: usize = 16 * 1024;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Cause {
     CredentialIssue,
@@ -31,6 +31,27 @@ pub(super) enum Cause {
     Restart,
     SourceChanged,
     SourceCheckpoint,
+}
+
+/// Original credential lifecycle evidence, distinct from this observation's time.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct SavedStop {
+    cause: Cause,
+    initiator: String,
+    at_ms: u64,
+}
+impl SavedStop {
+    fn of(stop: &Stopped) -> Self {
+        Self {
+            cause: stop_cause(stop),
+            initiator: stop.initiator(),
+            at_ms: stop.at_ms,
+        }
+    }
+    fn checked(&self) -> Result<Stopped, OutboxError> {
+        check_stop(&self.cause, &self.initiator, self.at_ms)
+    }
 }
 
 /// No open JSON fields or secret-bearing registration DTO can enter evidence.
@@ -69,6 +90,7 @@ pub(super) enum Record {
         position: u64,
         scope: Box<SavedScope>,
         source_stop: Option<SourceStop>,
+        credential_stop: Option<SavedStop>,
         before_state: Option<SavedDelivery>,
         after_state: SavedDelivery,
         before: String,
@@ -112,6 +134,7 @@ pub(super) struct DeliveryEvidence {
     pub before: Option<Delivery>,
     pub after: Delivery,
     pub source_stop: Option<SourceStop>,
+    pub credential_stop: Option<Stopped>,
 }
 impl DeliveryEvidence {
     pub fn follows(&self, previous: &Self) -> bool {
@@ -182,6 +205,11 @@ impl Record {
         stop: Option<&Stopped>,
         at_ms: u64,
     ) -> Result<Self, OutboxError> {
+        let credential_stop = if cause == DeliveryCause::AuthorityStopped {
+            stop.map(SavedStop::of)
+        } else {
+            None
+        };
         let (cause, initiator) = match cause {
             DeliveryCause::AuthorityStopped => {
                 let stop = stop.ok_or(OutboxError::Invalid)?;
@@ -219,6 +247,7 @@ impl Record {
             position: saved.position,
             scope: Box::new(SavedScope::of(&saved.scope)),
             source_stop: saved.source_stop,
+            credential_stop,
             before_state: before.map(SavedDelivery::of),
             after_state: SavedDelivery::of(after),
             before: before.map(|d| codec::phase(d).0).unwrap_or("absent").into(),
@@ -268,6 +297,7 @@ impl Record {
             before_state,
             after_state,
             source_stop,
+            credential_stop,
             ..
         } = self
         {
@@ -283,6 +313,10 @@ impl Record {
                     .transpose()?,
                 after: after_state.checked()?,
                 source_stop: *source_stop,
+                credential_stop: credential_stop
+                    .as_ref()
+                    .map(SavedStop::checked)
+                    .transpose()?,
             }))
         } else {
             Ok(None)
@@ -410,9 +444,20 @@ impl Record {
                 {
                     return Err(OutboxError::Invalid);
                 }
+                if !matches!(cause, Cause::CredentialRevoked | Cause::CredentialExpired)
+                    && evidence.credential_stop.is_some()
+                {
+                    return Err(OutboxError::Invalid);
+                }
                 let transition = match cause {
                     Cause::CredentialRevoked | Cause::CredentialExpired => {
-                        check_stop(cause, initiator, *at_ms)?;
+                        let stop = evidence
+                            .credential_stop
+                            .as_ref()
+                            .ok_or(OutboxError::Invalid)?;
+                        if stop_cause(stop) != *cause || stop.initiator() != *initiator {
+                            return Err(OutboxError::Invalid);
+                        }
                         DeliveryCause::AuthorityStopped
                     }
                     Cause::SourceChanged => {
@@ -494,14 +539,13 @@ fn stop_cause(stop: &Stopped) -> Cause {
         StopReason::Expired { .. } => Cause::CredentialExpired,
     }
 }
-fn check_stop(cause: &Cause, initiator: &str, at_ms: u64) -> Result<(), OutboxError> {
+fn check_stop(cause: &Cause, initiator: &str, at_ms: u64) -> Result<Stopped, OutboxError> {
     let cause = match cause {
         Cause::CredentialRevoked => "credential_revoked",
         Cause::CredentialExpired => "credential_expired",
         _ => return Err(OutboxError::Invalid),
     };
-    Stopped::restore(cause, initiator, at_ms)?;
-    Ok(())
+    Stopped::restore(cause, initiator, at_ms)
 }
 fn check_reader(actor: &str, registration: Uuid) -> Result<QueueInitiator, OutboxError> {
     if actor == QueueInitiator::Live.label(registration) {

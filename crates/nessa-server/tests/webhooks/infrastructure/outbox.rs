@@ -1302,6 +1302,10 @@ async fn malformed_owed_audit_is_refused_before_effects() {
         ("conversationId", json!("")),
         ("incarnation", json!("other-source")),
         ("sourceStop", json!({"initiator":"live","at_ms":1000})),
+        (
+            "credentialStop",
+            json!({"cause":"credential_revoked","initiator":"original-revoker","atMs":1000}),
+        ),
         ("beforeState", json!({"id":"invalid"})),
         ("afterState", json!({"id":"invalid"})),
         ("scope", json!({"receiver":"invalid"})),
@@ -1767,5 +1771,186 @@ async fn cursor_audit_restores_its_transition_and_scope() {
             ),
             "accepted cursor {field}"
         );
+    }
+}
+
+#[tokio::test]
+async fn settled_source_context_must_match_the_enclosing_delivery() {
+    for corruption in ["missing", "actor", "time"] {
+        let mut f = Fixture::new().await;
+        let id = f.store.queue(f.record(1)).await.unwrap();
+        let queued = f.store.due(2000).await.unwrap().remove(0).delivery;
+        let sending = queued.admit(7, 2000).unwrap();
+        f.store
+            .transition(&queued, &sending, DeliveryCause::Admission, 2000)
+            .await
+            .unwrap();
+        assert_eq!(
+            f.store.queue(replaced_source(f.record(2))).await,
+            Err(OutboxError::ResetRequired)
+        );
+        let sent = sending.observed(Observation::Success, 2100).unwrap();
+        f.store
+            .transition(&sending, &sent, DeliveryCause::Response, 2100)
+            .await
+            .unwrap();
+        let (audit_id,text):(String,String)=f.store.owner.connection.lock().unwrap().query_row("SELECT id,record FROM audit WHERE delivery=?1 AND json_extract(record,'$.cause')='response'",[id.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        let mut record: Value = serde_json::from_str(&text).unwrap();
+        assert!(record["sourceStop"].is_object());
+        match corruption {
+            "missing" => record["sourceStop"] = Value::Null,
+            "actor" => record["sourceStop"]["initiator"] = json!("restart"),
+            "time" => record["sourceStop"]["at_ms"] = json!(0),
+            _ => unreachable!(),
+        }
+        std::fs::remove_file(f.audit.join(format!("{audit_id}.json"))).unwrap();
+        f.store
+            .owner
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE audit SET record=?1,published=0 WHERE id=?2",
+                params![record.to_string(), audit_id],
+            )
+            .unwrap();
+        assert!(
+            matches!(reopen_store(&mut f).await, Err(OutboxError::Invalid)),
+            "accepted source context {corruption}"
+        );
+        assert!(!f.audit.join(format!("{audit_id}.json")).exists());
+    }
+}
+
+#[tokio::test]
+async fn sending_capture_can_precede_its_observation_audit_on_restore() {
+    let mut f = Fixture::new().await;
+    f.store.queue(f.record(1)).await.unwrap();
+    let queued = f.store.due(2000).await.unwrap().remove(0).delivery;
+    let sending = queued.admit(7, 2000).unwrap();
+    f.store
+        .transition(&queued, &sending, DeliveryCause::Admission, 2000)
+        .await
+        .unwrap();
+    let replacement = replaced_source(f.record(2));
+    let observed_at = replacement.observed_at_ms;
+    assert_eq!(
+        f.store.queue(replacement).await,
+        Err(OutboxError::ResetRequired)
+    );
+    let reopened = reopen_store(&mut f).await.unwrap();
+    reopened.recover(3000).await.unwrap();
+    let unknown = f
+        .audits()
+        .into_iter()
+        .find(|r| r["cause"] == "restart" && r["after"] == "unknown")
+        .unwrap();
+    assert_eq!(unknown["sourceStop"]["at_ms"], observed_at);
+    assert_eq!(unknown["sourceStop"]["initiator"], "live");
+    assert!(reopened.due(4000).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn owed_credential_stop_evidence_matches_original_registration_facts() {
+    for corruption in [
+        "valid",
+        "actor_only",
+        "cause_context",
+        "missing_context",
+        "unknown_context_field",
+        "actor_and_context",
+        "time",
+        "active_false_cause",
+    ] {
+        let mut f = Fixture::new().await;
+        f.store.queue(f.record(1)).await.unwrap();
+        f.store.queue(f.record(2)).await.unwrap();
+        let queued = f.store.due(2000).await.unwrap().remove(0).delivery;
+        let sending = queued.admit(7, 2000).unwrap();
+        f.store
+            .transition(&queued, &sending, DeliveryCause::Admission, 2000)
+            .await
+            .unwrap();
+        let audit_cause = if corruption == "active_false_cause" {
+            let second = f.store.due(2000).await.unwrap().remove(0).delivery;
+            f.store
+                .transition(
+                    &second,
+                    &second.refused().unwrap(),
+                    DeliveryCause::Refused,
+                    2001,
+                )
+                .await
+                .unwrap();
+            "admission_refused"
+        } else {
+            let held = f.audit.with_extension("held");
+            std::fs::rename(&f.audit, &held).unwrap();
+            assert_eq!(
+                f.store
+                    .stop(
+                        f.registration.target.credential.clone(),
+                        StopReason::Revoked {
+                            initiator: PrincipalId::new("original-revoker").unwrap()
+                        },
+                        2001
+                    )
+                    .await,
+                Err(OutboxError::Unavailable)
+            );
+            std::fs::rename(&held, &f.audit).unwrap();
+            "credential_revoked"
+        };
+        let (id,text):(String,String)=f.store.owner.connection.lock().unwrap().query_row("SELECT id,record FROM audit WHERE delivery IS NOT NULL AND json_extract(record,'$.cause')=?1",[audit_cause],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        let mut record: Value = serde_json::from_str(&text).unwrap();
+        match corruption {
+            "valid" => {}
+            "actor_only" => record["initiator"] = json!("unrelated-revoker"),
+            "cause_context" => record["cause"] = json!("credential_expired"),
+            "missing_context" => record["credentialStop"] = Value::Null,
+            "unknown_context_field" => {
+                record["credentialStop"]["extra"] = json!("synthetic-secret")
+            }
+            "actor_and_context" => {
+                record["initiator"] = json!("unrelated-revoker");
+                record["credentialStop"]["initiator"] = json!("unrelated-revoker");
+            }
+            "time" => record["credentialStop"]["atMs"] = json!(1000),
+            "active_false_cause" => {
+                record["cause"] = json!("credential_revoked");
+                record["initiator"] = json!("unrelated-revoker");
+                record["credentialStop"] = json!({"cause":"credential_revoked","initiator":"unrelated-revoker","atMs":2001});
+            }
+            _ => unreachable!(),
+        }
+        let path = f.audit.join(format!("{id}.json"));
+        if path.exists() {
+            std::fs::remove_file(&path).unwrap();
+        }
+        f.store
+            .owner
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE audit SET record=?1,published=0 WHERE id=?2",
+                params![record.to_string(), id],
+            )
+            .unwrap();
+        let result = reopen_store(&mut f).await;
+        if corruption == "valid" {
+            let reopened = result.unwrap();
+            assert!(reopened.due(3000).await.unwrap().is_empty());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+            let actual: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(actual["credentialStop"]["initiator"], "original-revoker");
+            assert_eq!(actual["credentialStop"]["atMs"], 2001);
+        } else {
+            assert!(
+                matches!(result, Err(OutboxError::Invalid)),
+                "accepted stop {corruption}"
+            );
+            assert!(!path.exists());
+        }
     }
 }

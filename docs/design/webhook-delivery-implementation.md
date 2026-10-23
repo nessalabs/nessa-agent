@@ -287,3 +287,14 @@ permission system is added.
 | cursor has text position with only terminal history | Decode all cursor fields before publication or duplicate acknowledgement; refuse Invalid | original minor reproduction becomes refusal regression |
 | cursor reset flag or identity/scope is malformed | Same decoder refuses at restore and live read | cursor boundary table with valid maximum-integer controls |
 | retained delivery audit chain | Each validated snapshot follows the previous saved after-state, keeps checkpoint/target and source-stop context, and ends at the enclosing current delivery; reject missing, foreign or reordered history before effects | historical chain, current-state and checkpoint mutation regressions |
+
+The first fresh review of this parent-directed redesign confirmed two remaining
+cross-record correlations. Its report and exact bug demonstrations are preserved
+under `docs/reviews/evidence/webhook-outbox/typed-state/review-1/`.
+
+| Ordering / historical fact | Correlation owner and expected result | Regression |
+| --- | --- | --- |
+| Sending source-change capture precedes any observation audit | Current Sending alone may have captured context absent from its last admission audit; reopen and Unknown recovery preserve it | valid Sending capture/reopen/recovery control |
+| observation has settled Sending | Latest audit source-stop context equals the enclosing delivery's complete context, including None/Some, actor and time | terminal source context null/actor/time mutations refuse before publication |
+| credential stop commits but audit publication fails | Each authority-stop delivery record retains typed original stop cause, actor and time; its top-level cause/actor agree, and restore correlates them with the immutable owning registration stop | original actor mutation, coordinated actor/context and time mutation, active-registration false stop refusal |
+| registration retirement has deleted current facts | Historical retirement evidence validates its own saved stop facts and never substitutes a current owner or actor | existing lost-ack retired historical actor regression |

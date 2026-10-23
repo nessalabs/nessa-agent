@@ -95,6 +95,7 @@ pub(super) struct CheckedRegistration {
     pub stop: Option<Stopped>,
 }
 
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct Stopped {
     reason: StopReason,
     pub at_ms: u64,

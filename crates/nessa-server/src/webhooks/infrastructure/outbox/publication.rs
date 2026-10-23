@@ -3,6 +3,7 @@ use super::audit::{DeliveryEvidence, Record, AUDIT_BYTES};
 use super::stored::{self, StoredDelivery};
 use super::{unavailable, uuid};
 use crate::webhooks::application::OutboxError;
+use crate::webhooks::domain::Phase;
 use nessa_local_database::rusqlite::{
     params, Connection, OptionalExtension, Result as SqlResult, Row, Transaction,
 };
@@ -132,9 +133,8 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
         .map_err(unavailable)?;
     for row in rows {
         let saved = row.map_err(unavailable)?.checked()?;
-        let target = super::registry::by_id(connection, saved.registration)?
-            .registration
-            .target;
+        let registration = super::registry::by_id(connection, saved.registration)?;
+        let target = &registration.registration.target;
         let mut statement=connection.prepare("SELECT id,registration,delivery,record,published FROM audit WHERE delivery=?1 ORDER BY rowid").map_err(unavailable)?;
         let history = statement
             .query_map([saved.delivery.id().to_string()], SavedAudit::row)
@@ -146,6 +146,13 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
             let (_, text) = row.map_err(unavailable)?.checked()?;
             let record = Record::decode(&text)?;
             let next = record.delivery_evidence()?.ok_or(OutboxError::Invalid)?;
+            if next
+                .credential_stop
+                .as_ref()
+                .is_some_and(|stop| registration.stop.as_ref() != Some(stop))
+            {
+                return Err(OutboxError::Invalid);
+            }
             if previous
                 .as_ref()
                 .map_or(next.before.is_some(), |prior| !next.follows(prior))
@@ -159,11 +166,10 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
             || last.conversation != saved.conversation
             || last.position != saved.position
             || last.scope != saved.scope
-            || last.target != target
+            || &last.target != target
             || last.after != saved.delivery
-            || last
-                .source_stop
-                .is_some_and(|stop| saved.source_stop != Some(stop))
+            || (last.source_stop != saved.source_stop
+                && !(saved.delivery.phase() == Phase::Sending && last.source_stop.is_none()))
         {
             return Err(OutboxError::Invalid);
         }
