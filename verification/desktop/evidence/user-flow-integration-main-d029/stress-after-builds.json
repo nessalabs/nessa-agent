@@ -1,0 +1,563 @@
+{
+  "check": "conversation-stress",
+  "ok": true,
+  "started": "2026-10-23T14:48:09.110Z",
+  "finished": "2026-10-23T14:51:26.006Z",
+  "target": {
+    "url": "http://127.0.0.1:42253/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "001 notice",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3994,
+      "seen": {
+        "index": 1,
+        "kind": "notice"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "002 aside",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1708,
+      "seen": {
+        "index": 2,
+        "kind": "aside"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "003 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3449,
+      "seen": {
+        "index": 3,
+        "kind": "switch",
+        "from": "ask",
+        "to": "full",
+        "during": true
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "004 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 501,
+      "seen": {
+        "index": 4,
+        "kind": "permission",
+        "answer": "deny",
+        "mode": "full",
+        "after": "switch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "005 pool",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 14408,
+      "seen": {
+        "index": 5,
+        "kind": "pool"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "006 aside",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1647,
+      "seen": {
+        "index": 6,
+        "kind": "aside"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "007 park",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 8583,
+      "seen": {
+        "index": 7,
+        "kind": "park"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "008 await",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 4031,
+      "seen": {
+        "index": 8,
+        "kind": "await"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "009 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 458,
+      "seen": {
+        "index": 9,
+        "kind": "switch",
+        "from": "full",
+        "to": "ask",
+        "during": false
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "010 large",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1503,
+      "seen": {
+        "index": 10,
+        "kind": "large",
+        "answer": "deny",
+        "mode": "ask"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "011 trace",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 4531,
+      "seen": {
+        "index": 11,
+        "kind": "trace"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "012 long",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 17208,
+      "seen": {
+        "index": 12,
+        "kind": "long",
+        "turns": 30
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "013 usageLimit",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1147,
+      "seen": {
+        "index": 13,
+        "kind": "usageLimit"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "014 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 802,
+      "seen": {
+        "index": 14,
+        "kind": "reply",
+        "after": "usageLimit"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "015 window",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2911,
+      "seen": {
+        "index": 15,
+        "kind": "window"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "016 delegate",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1159,
+      "seen": {
+        "index": 16,
+        "kind": "delegate"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "017 stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1577,
+      "seen": {
+        "index": 17,
+        "kind": "stop"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "018 fresh",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3449,
+      "seen": {
+        "index": 18,
+        "kind": "fresh"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "019 reviews",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 15707,
+      "seen": {
+        "index": 19,
+        "kind": "reviews",
+        "answer": "allow",
+        "mode": "ask"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "020 restart",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1620,
+      "seen": {
+        "index": 20,
+        "kind": "restart",
+        "signal": "SIGTERM"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "021 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3644,
+      "seen": {
+        "index": 21,
+        "kind": "switch",
+        "from": "ask",
+        "to": "auto",
+        "during": true
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "022 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1174,
+      "seen": {
+        "index": 22,
+        "kind": "permission",
+        "answer": "allow",
+        "mode": "auto",
+        "after": "switch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "023 fail",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 542,
+      "seen": {
+        "index": 23,
+        "kind": "fail"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "024 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 700,
+      "seen": {
+        "index": 24,
+        "kind": "reply",
+        "after": "fail"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "025 rail",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3937,
+      "seen": {
+        "index": 25,
+        "kind": "rail"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "026 table",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3761,
+      "seen": {
+        "index": 26,
+        "kind": "table"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "027 linking",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 4947,
+      "seen": {
+        "index": 27,
+        "kind": "linking"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "028 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3551,
+      "seen": {
+        "index": 28,
+        "kind": "switch",
+        "from": "auto",
+        "to": "ask",
+        "during": true
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "029 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1425,
+      "seen": {
+        "index": 29,
+        "kind": "permission",
+        "answer": "deny",
+        "mode": "ask",
+        "after": "switch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "030 delete",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1772,
+      "seen": {
+        "index": 30,
+        "kind": "delete"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "031 launch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 5203,
+      "seen": {
+        "index": 31,
+        "kind": "launch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "032 watch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2342,
+      "seen": {
+        "index": 32,
+        "kind": "watch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "033 drift",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1246,
+      "seen": {
+        "index": 33,
+        "kind": "drift"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "034 upgrade",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1406,
+      "seen": {
+        "index": 34,
+        "kind": "upgrade"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "035 rename",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2703,
+      "seen": {
+        "index": 35,
+        "kind": "rename"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "036 stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 928,
+      "seen": {
+        "index": 36,
+        "kind": "stop"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "037 fresh",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3512,
+      "seen": {
+        "index": 37,
+        "kind": "fresh"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "038 model",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 6137,
+      "seen": {
+        "index": 38,
+        "kind": "model",
+        "answer": "allow",
+        "mode": "ask"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "039 handoff",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 15563,
+      "seen": {
+        "index": 39,
+        "kind": "handoff"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": [
+        {
+          "conversations": 7,
+          "churned": 174,
+          "resumed": 53,
+          "lagging": 0,
+          "refusedAsExpected": 28
+        },
+        {
+          "conversations": 7,
+          "churned": 165,
+          "resumed": 53,
+          "lagging": 0,
+          "refusedAsExpected": 26
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:42253/favicon.ico)",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:45503/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:42253/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

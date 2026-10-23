@@ -1,0 +1,64 @@
+{
+  "check": "settings-action-owners",
+  "ok": true,
+  "started": "2026-10-23T14:35:56.088Z",
+  "finished": "2026-10-23T14:36:05.769Z",
+  "target": {
+    "url": "http://127.0.0.1:1443/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "name": "native-admission-through-reread",
+      "writesBeforeSettlement": 1,
+      "readsDuringReconciliation": 2,
+      "recoveryEnabled": true,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "native-source-replacement",
+      "retiredSourceReads": 1,
+      "replacementWrites": 1,
+      "replacementRetained": true,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "notification-api-admission",
+      "permissionApiCalls": 1,
+      "waitingReviewReplays": 1,
+      "realOsPrompts": "not exercised",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "notification-source-replacement",
+      "retiredReplayCalls": 0,
+      "currentReplayCalls": 1,
+      "productionRebinding": "unproven",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "console",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1443/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

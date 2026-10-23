@@ -70,6 +70,13 @@
  *               sent with the rail open is answered; closed, opened again,
  *               and turned off while open, the titlebar's controls go back to
  *               starting where the lights end
+ *   onboarding  setup is replayed from Settings › Advanced › Setup: the host
+ *               is asked once; in the setup window that ask opens, welcome
+ *               has no Back button and Close sits in the top-right corner;
+ *               past it the picker has Back in the top-left corner, which
+ *               returns to welcome; Close then leaves setup, handing over
+ *               as left, not finished, and the message sent in the window
+ *               after it is answered
  *   notice      a review waits in another conversation, which the window does
  *               not show: the host's system notice names its tool and the
  *               conversation's title, opening it brings that conversation
@@ -105,6 +112,12 @@
  *               upgrades the file to the current version, lists every
  *               conversation it listed before, and the message sent in the
  *               window after it is answered
+ *   trace       the agent makes three calls, one failing, then answers: the
+ *               gateway's view keeps each call's start and end time and the
+ *               input it was made with; the window draws them as one folded
+ *               line, "Ran 3 tools", that opens to a row per call, each with
+ *               its status and a bar on the shared time axis, and a call's
+ *               card shows its input
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -149,6 +162,8 @@ import {
   SAYS,
   STRESS,
   TABLE_LINES,
+  TRACE_CALLS,
+  TRACE_PAUSE_MS,
   WATCH_CALLS,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
@@ -1448,6 +1463,79 @@ const steps = {
     })
   },
 
+  async onboarding(run, step, failures) {
+    await run.exclusive(async () => {
+      const asked = await replayOnboarding(run.page, run.evidence)
+      if (asked !== 1) {
+        failures.push(`Replay asked the host ${asked} times, not once`)
+        return
+      }
+      // The host opens the setup window for that ask; this page is that
+      // window, over the same gateway, as the real host builds it.
+      const page = await run.page.context().newPage()
+      try {
+        await page.addInitScript(gatewayHost, {
+          endpoint: run.stack.endpoint,
+          credential: run.stack.credential,
+          setup: true,
+        })
+        await page.goto(`${new URL(run.page.url()).origin}/index.html?surface=setup`)
+        const heading = (name) => page.getByRole("heading", { name, exact: true })
+        const button = (name) => page.getByRole("button", { name, exact: true })
+        await heading(names.setup.welcome).waitFor({ timeout: 15_000 })
+        // Welcome has nothing before it: no Back, and Close in its corner.
+        await button(names.setup.close).waitFor()
+        let corners = await setupCorners(page)
+        if (corners.back) failures.push("welcome shows a Back button")
+        if (!inCorner(corners.close, "right"))
+          failures.push(
+            `Close is not round in the top-right corner: ${JSON.stringify(corners.close)}`,
+          )
+        // Forward and back twice: each time the picker has Back in the
+        // top-left corner, and it returns to welcome.
+        for (let round = 0; round < 2; round += 1) {
+          await button(names.setup.getStarted).click()
+          await heading(names.setup.chooseAgent).waitFor({ timeout: 10_000 })
+          await button(names.setup.back).waitFor()
+          corners = await setupCorners(page)
+          if (!inCorner(corners.back, "left"))
+            failures.push(
+              `Back is not round in the top-left corner: ${JSON.stringify(corners.back)}`,
+            )
+          if (!inCorner(corners.close, "right"))
+            failures.push(
+              `on the picker Close left its corner: ${JSON.stringify(corners.close)}`,
+            )
+          await button(names.setup.back).click()
+          await heading(names.setup.welcome).waitFor({ timeout: 10_000 })
+          if (await button(names.setup.back).count())
+            failures.push("back on welcome, the Back button is still shown")
+        }
+        // Close leaves setup from the picker: one handoff, as left.
+        await button(names.setup.getStarted).click()
+        await heading(names.setup.chooseAgent).waitFor({ timeout: 10_000 })
+        await button(names.setup.close).click()
+        const handed = await waitFor(
+          async () =>
+            (await page.evaluate(() => window.__fakeHostSetupFinishes.length)) > 0,
+          10_000,
+        )
+        const finishes = await page.evaluate(() => window.__fakeHostSetupFinishes)
+        if (!handed) failures.push("Close did not hand setup back to the host")
+        else if (finishes.length !== 1 || finishes[0].completed !== false)
+          failures.push(
+            `Close handed over ${JSON.stringify(finishes)}, not one left setup`,
+          )
+        if (await page.locator(".nessa-setup-window").count())
+          failures.push("setup is still on screen after Close")
+      } finally {
+        await page.close()
+      }
+    })
+    // The window is still the window it was: a message sent there is answered.
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
   async pool(run, step, failures) {
     // Workers dial the gateway's native listener, which is off in this run
     // until a step turns it on: a person does it in Settings, here as in
@@ -2319,6 +2407,168 @@ const steps = {
     if (!hidden) failures.push("the window still lists the deleted conversation")
   },
 
+  async trace(run, step, failures) {
+    const text = prompt(run, STRESS.trace, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const { view, turn } = await settled(
+      run,
+      run.main.id,
+      seen,
+      text,
+      "completed",
+      failures,
+    )
+    if (!turn) return
+    // The gateway keeps every call of the turn with when it started and
+    // ended, and the input it was made with.
+    const tools = view.tools.filter((tool) => tool.executionId === turn.executionId)
+    if (tools.length !== TRACE_CALLS.length) {
+      failures.push(
+        `the trace turn kept ${tools.length} calls, not ${TRACE_CALLS.length}`,
+      )
+      return
+    }
+    for (const [index, tool] of tools.entries()) {
+      const call = TRACE_CALLS[index]
+      const name = `call ${index + 1} (${call.tool})`
+      if (tool.status !== call.status)
+        failures.push(`${name} is ${tool.status}, not ${call.status}`)
+      if (typeof tool.startedAtMs !== "number" || typeof tool.endedAtMs !== "number") {
+        failures.push(
+          `${name} kept no start or end: ${tool.startedAtMs}, ${tool.endedAtMs}`,
+        )
+        continue
+      }
+      if (tool.endedAtMs < tool.startedAtMs)
+        failures.push(
+          `${name} ended ${tool.startedAtMs - tool.endedAtMs} ms before it started`,
+        )
+      let input
+      try {
+        input = JSON.parse(tool.input)
+      } catch {
+        failures.push(`${name} kept no input: ${JSON.stringify(tool.input)}`)
+        continue
+      }
+      // A harness reports the arguments themselves (Claude) or its own
+      // record of the call, naming the tool (Codex): either way the input is
+      // this call's, not another's.
+      const own =
+        input && typeof input === "object" && "arguments" in input && "tool" in input
+          ? input.tool === call.tool && JSON.stringify(input.arguments)
+          : JSON.stringify(input)
+      if (own !== JSON.stringify(call.arguments))
+        failures.push(
+          `${name}'s input ${tool.input} is not ${JSON.stringify(call.arguments)}`,
+        )
+    }
+    // The pause after each call shows in the times, which are the session's
+    // own clock: the next call starts no sooner.
+    for (let index = 1; index < tools.length; index += 1) {
+      const gap = tools[index].startedAtMs - tools[index - 1].endedAtMs
+      if (gap < TRACE_PAUSE_MS - 100)
+        failures.push(
+          `call ${index + 1} started ${gap} ms after the one before, not after the pause`,
+        )
+    }
+    // The window draws the run as one line, folded once the agent wrote past
+    // it, that opens to a row per call, each with its bar and status.
+    const message = run.page
+      .locator('.workspace-message[data-role="agent"]')
+      .filter({ hasText: `${SAYS.trace}${text}` })
+    const line = message.locator('[data-slot="tool-trace-line"]')
+    const folded = await waitFor(
+      async () =>
+        (await line.count()) === 1 &&
+        (await line.getAttribute("aria-expanded")) === "false" &&
+        (await line.textContent()).includes(`Ran ${TRACE_CALLS.length} tools`),
+      15_000,
+    )
+    if (run.evidence)
+      await message.screenshot({
+        path: join(run.evidence, `trace-${run.engine ?? "window"}-folded.png`),
+      })
+    if (!folded) {
+      failures.push(
+        `the window does not draw the run as one folded line: ${JSON.stringify(
+          (await line.count()) ? await line.textContent() : null,
+        )}`,
+      )
+      return
+    }
+    await line.click()
+    const rows = message.locator('[data-slot="tool-trace-step"]')
+    const opened = await waitFor(
+      async () =>
+        (await line.getAttribute("aria-expanded")) === "true" &&
+        (await rows.count()) === TRACE_CALLS.length,
+      5_000,
+    )
+    if (!opened) {
+      failures.push(
+        `the run opened to ${await rows.count()} rows, not ${TRACE_CALLS.length}`,
+      )
+      return
+    }
+    // Each bar starts where its call started on the shared axis, as a share
+    // of the run: a settled run's axis spans the first call's start to the
+    // last call's end (`ToolTrace`'s domain), so a clock read wrong — the
+    // wrong sign, seconds for milliseconds — moves the bars.
+    const drawn = await rows.evaluateAll((elements) =>
+      elements.map((row) => {
+        const bar = row.querySelector('[data-slot="tool-trace-bar"]')
+        const track = bar?.parentElement?.getBoundingClientRect()
+        const box = bar?.getBoundingClientRect()
+        return {
+          status: row.dataset.status,
+          at: bar && track.width ? (box.left - track.left) / track.width : null,
+        }
+      }),
+    )
+    const first = tools[0].startedAtMs
+    const span = Math.max(1, ...tools.map((tool) => tool.endedAtMs - first))
+    for (const [index, row] of drawn.entries()) {
+      if (row.status !== TRACE_CALLS[index].status)
+        failures.push(
+          `row ${index + 1} is drawn ${row.status}, not ${TRACE_CALLS[index].status}`,
+        )
+      const expected = (tools[index].startedAtMs - first) / span
+      if (row.at === null) failures.push(`row ${index + 1} has no bar on the time axis`)
+      else if (Math.abs(row.at - expected) > 0.03)
+        failures.push(
+          `row ${index + 1}'s bar starts ${(row.at * 100).toFixed(1)}% along the axis, not ${(expected * 100).toFixed(1)}%`,
+        )
+    }
+    // A call's card shows the input it was made with.
+    const asked = TRACE_CALLS.findIndex((call) => Object.keys(call.arguments).length)
+    const row = rows.nth(asked)
+    await row.click()
+    const card = message.locator(`[id="${await row.getAttribute("aria-controls")}"]`)
+    await card.getByRole("tab", { name: "Input" }).click()
+    const value = String(Object.values(TRACE_CALLS[asked].arguments)[0])
+    const shown = await waitFor(
+      async () =>
+        (
+          await card.locator('[role="tabpanel"][data-state="active"]').textContent()
+        )?.includes(value),
+      5_000,
+    )
+    if (!shown) failures.push(`call ${asked + 1}'s card does not show its input ${value}`)
+    if (run.evidence)
+      await message.screenshot({
+        path: join(run.evidence, `trace-${run.engine ?? "window"}-opened.png`),
+      })
+    // Folded again, as the person left it.
+    await line.click()
+    if (
+      !(await waitFor(
+        async () => (await line.getAttribute("aria-expanded")) === "false",
+        5_000,
+      ))
+    )
+      failures.push("the run does not fold again")
+  },
+
   async table(run, step, failures) {
     const text = prompt(run, STRESS.table, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -2598,6 +2848,62 @@ async function openLinkedDevices(page) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
   await page.locator(css.settingsCategory, { hasText: names.connections }).click()
   await page.locator(css.settingsTab, { hasText: names.linkedDevices }).click()
+}
+
+/**
+ * Asks for setup again where a person does: Settings › Advanced › Setup, its
+ * Replay button. Resolves how many times the host was asked. Leaves Settings.
+ */
+async function replayOnboarding(page, evidence) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.advanced }).click()
+  await page.locator(css.settingsTab, { hasText: names.setupTab }).click()
+  if (evidence)
+    await page
+      .screenshot({ path: join(evidence, "onboarding-settings.png") })
+      .catch(() => {})
+  const before = await page.evaluate(() => window.__fakeHostReplays)
+  await page
+    .locator(selectorFor.settingRow("replay-onboarding"))
+    .getByRole("button", { name: names.replayOnboarding, exact: true })
+    .click()
+  await waitFor(
+    async () => (await page.evaluate(() => window.__fakeHostReplays)) > before,
+    5_000,
+  )
+  const asked = (await page.evaluate(() => window.__fakeHostReplays)) - before
+  await closeSettings(page)
+  return asked
+}
+
+/**
+ * Where setup's corner buttons are, against its window: which buttons are
+ * drawn, and for each its centre as fractions of the window's width and
+ * height, and whether it is round.
+ */
+function setupCorners(page) {
+  return page.evaluate((labels) => {
+    const frame = document.querySelector(".nessa-setup-window")?.getBoundingClientRect()
+    const at = (label) => {
+      const button = document.querySelector(`button[aria-label="${label}"]`)
+      if (!frame || !button) return null
+      const box = button.getBoundingClientRect()
+      return {
+        x: (box.left + box.width / 2 - frame.left) / frame.width,
+        y: (box.top + box.height / 2 - frame.top) / frame.height,
+        round:
+          Math.abs(box.width - box.height) < 0.5 &&
+          parseFloat(getComputedStyle(button).borderRadius) >= box.width / 2 - 0.5,
+      }
+    }
+    return { back: at(labels.back), close: at(labels.close) }
+  }, names.setup)
+}
+
+/** Whether a corner button sits in the window's top-left or top-right corner. */
+function inCorner(place, side) {
+  if (!place || !place.round || place.y > 0.15) return false
+  return side === "left" ? place.x < 0.15 : place.x > 0.85
 }
 
 /** Leaves Settings: Esc does not close it; its back control returns to the app. */

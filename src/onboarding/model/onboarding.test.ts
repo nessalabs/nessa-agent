@@ -12,6 +12,8 @@ import {
   completeOnboarding,
   confirmAgent,
   dismissOnboarding,
+  canGoBack,
+  goBack,
   recordLinger,
   showLinger,
   isOnboarding,
@@ -371,5 +373,66 @@ describe("leaving setup without finishing it", () => {
     // A done with nothing recorded about how it got there is not evidence that
     // anybody chose anything.
     expect(isOnboardingCompleted({ step: "done", agent: "claude" })).toBe(false)
+  })
+})
+
+describe("going back a step", () => {
+  it("has nothing before welcome, and nothing once setup is over", () => {
+    expect(canGoBack(beginOnboarding())).toBe(false)
+    expect(goBack(beginOnboarding())).toEqual(beginOnboarding())
+    const done = completeOnboarding(summonPressed())
+    expect(canGoBack(done)).toBe(false)
+    expect(goBack(done)).toBe(done)
+  })
+
+  it("walks back through every step in order", () => {
+    const picker = chooseAgent(startAgentChoice(withClaudeReady()), "claude")
+    const summon = summonPressed()
+    const linger = showLinger(summon, { shown: "offer" })
+    expect([picker, summon, linger].map(canGoBack)).toEqual([true, true, true])
+    expect(goBack(picker).step).toBe("welcome")
+    expect(goBack(summon).step).toBe("agent")
+    expect(goBack(linger).step).toBe("summon")
+  })
+
+  it("keeps the agent and what the runtimes said, so the picker comes back as left", () => {
+    const back = goBack(goBack(summonPressed()))
+    expect(back.step).toBe("welcome")
+    const picker = startAgentChoice(back)
+    expect(picker.agent).toBe("claude")
+    expect(isChoosable(picker, "claude")).toBe(true)
+    expect(confirmAgent(picker).step).toBe("summon")
+  })
+
+  it("starts the shortcut lesson again from the picker", () => {
+    const again = confirmAgent(goBack(summonPressed()))
+    expect(again.step).toBe("summon")
+    expect(again.summon).toBeUndefined()
+    expect(again.summonTaught).toBeUndefined()
+  })
+
+  it("comes back from linger with the lesson learned and the report dropped", () => {
+    const back = goBack(showLinger(summonPressed(), { shown: "offer" }))
+    expect(back).toMatchObject({ step: "summon", agent: "claude", summonTaught: true })
+    expect(back.linger).toBeUndefined()
+    expect(isChoosable(goBack(back), "claude")).toBe(true)
+    expect(completeOnboarding(back)).toEqual({
+      step: "done",
+      outcome: "completed",
+      agent: "claude",
+    })
+  })
+
+  it("never brings the picker back with an agent the newest answer rules out", () => {
+    // An answer that lands on welcome, after going back from the picker.
+    const welcome = goBack(chooseAgent(startAgentChoice(withClaudeReady()), "claude"))
+    expect(welcome.agent).toBe("claude")
+    const signedOut = recordReadiness(welcome, { claude: "needs-authentication" })
+    expect(signedOut.agent).toBeUndefined()
+    expect(confirmAgent(startAgentChoice(signedOut)).step).toBe("agent")
+    // Back from the lesson while the gateway restarted and its answer was dropped.
+    const unanswered = goBack(clearReadiness(atSummon()))
+    expect(unanswered.step).toBe("agent")
+    expect(unanswered.agent).toBeUndefined()
   })
 })

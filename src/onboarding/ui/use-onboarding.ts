@@ -17,11 +17,13 @@ import type { AgentReadinessSource } from "../application/ports"
 import { summonAccelerator } from "../model/shortcut-display"
 import {
   beginOnboarding,
+  canGoBack,
   clearReadiness,
   chooseAgent,
   completeOnboarding,
   confirmAgent,
   dismissOnboarding,
+  goBack,
   isOnboarding,
   pressSummon,
   recordLinger,
@@ -75,6 +77,10 @@ export interface Onboarding {
   finish: () => void
   /** Leave setup without finishing it. */
   dismiss: () => void
+  /** True where there is an earlier step for `back` to return to. */
+  canGoBack: boolean
+  /** Return to the step before this one, keeping what was chosen. */
+  back: () => void
   /** Ask the runtimes again after an agent was installed or signed in. Does
    * nothing while an ask is already in flight, or while the managed gateway is
    * not ready to answer. */
@@ -205,6 +211,10 @@ export function useOnboarding(
 
   const lingerBusy = React.useRef(false)
   const leavingSummon = React.useRef(false)
+  // Which visit to the summon step a finish was asked from. Back and Continue
+  // each start a new one, so a linger read still in flight from a visit that
+  // was left cannot finish setup on the visit somebody came back to.
+  const summonVisit = React.useRef(0)
   const [lingerPending, setLingerPending] = React.useState(false)
   const recheck = React.useCallback(() => {
     if (
@@ -348,6 +358,7 @@ export function useOnboarding(
     }, []),
     confirm: React.useCallback(() => {
       playCue("advance")
+      summonVisit.current += 1
       setState(confirmAgent)
     }, []),
     finish: React.useCallback(() => {
@@ -360,8 +371,10 @@ export function useOnboarding(
       }
       if (state.step !== "summon" || leavingSummon.current) return
       leavingSummon.current = true
+      const visit = summonVisit.current
       void linger.status().then(
         (view) => {
+          if (visit !== summonVisit.current) return
           leavingSummon.current = false
           if (!view || view.shown === "not-applicable") {
             playCue("celebrate")
@@ -376,6 +389,7 @@ export function useOnboarding(
           )
         },
         () => {
+          if (visit !== summonVisit.current) return
           // A failed ask is not a view and not a claim. Setup still finishes.
           leavingSummon.current = false
           playCue("celebrate")
@@ -402,6 +416,17 @@ export function useOnboarding(
       if (practising) playCue("celebrate")
       setState(dismissOnboarding)
     }, [practising]),
+    canGoBack: canGoBack(state),
+    // Quiet, like leaving part-way: going back undoes a step rather than taking
+    // one. Back onto the picker asks the runtimes again, because whatever was
+    // not ready the last time it was on screen may be by now.
+    back: React.useCallback(() => {
+      // Whatever finish the step being left had asked for is abandoned with it.
+      summonVisit.current += 1
+      leavingSummon.current = false
+      setState(goBack)
+      if (state.step === "summon") recheck()
+    }, [recheck, state.step]),
     recheck,
     retryGatewayStartup: retryStartup,
     checking,

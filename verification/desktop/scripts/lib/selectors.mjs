@@ -215,8 +215,9 @@ export const css = {
   peekCommand: ".agents-peek .workspace-approval-command", // class: the command in the peek, beside the list or under the row
   peekStory: ".agents-peek-story", // class: the turn's story, top to bottom
   peekEarlier: ".agents-peek-earlier", // class: says the turn holds more above what the peek draws
-  transcriptStep: ".workspace-steps li", // class: one step the agent took, in a message
-  transcriptWorkToggle: ".workspace-work button[aria-expanded]", // completed tool work opens its steps in place
+  transcriptStep: '[data-slot="tool-trace-step"]', // kit slot: one call the agent made, a row of a message's trace
+  transcriptWorkToggle: '.workspace-work [data-slot="tool-trace-line"]', // a run of calls opens its rows in place
+  transcriptWorkEarlier: '.workspace-work [data-slot="tool-trace-earlier"]', // an open run shows the calls folded before its last few
   overviewColumn: ".agents-overview-column", // class: the list the arrow keys walk
   overviewGeometryItems:
     ".agents-overview-group > h2, .agents-row-item, .agents-clear, .agents-overview-resting, .agents-overview-footnote", // classes: list headings, rows and notices whose placement is observed
@@ -542,6 +543,17 @@ export const names = {
   /** Settings' category and tab holding the previews, the side rail's switch among them. */
   advanced: "Advanced",
   experimental: "Experimental",
+  /** Settings › Advanced's tab holding first-run setup, and its row's button. */
+  setupTab: "Setup",
+  replayOnboarding: "Replay",
+  /** First-run setup (`onboarding/ui`): its steps' headings, the way on, and its corner buttons. */
+  setup: {
+    welcome: "Welcome to Nessa",
+    getStarted: "Get started",
+    chooseAgent: "Choose an agent",
+    back: "Back",
+    close: "Close setup",
+  },
   /** A session's menu item that opens the share dialog. */
   share: "Share…",
   /** What Integrations says (`sentences` in src/desktop/settings/model/mcp-servers.ts). */
@@ -986,4 +998,35 @@ export const composerControls = {
   /** The shield's value for each access mode. */
   accessValue: { ask: "ask-approval", auto: "auto-approval", full: "full-access" },
   notice: ".desktop-composer-notice", // class: what the composer says of a held or refused access change
+}
+
+/** Deterministic production-hook/component ordering fixture for #1087. */
+export const userFlowOrdering = {
+  page: "/verification/conversation/user-flow-ordering.html",
+  ready: "[data-user-flow-ordering]",
+  download: 'button[aria-label^="Download Claude"]',
+  permissionSection: 'section[aria-label="Permission revoke ordering fixture"]',
+  revokeRequests: 'output[aria-label="Revoke requests"]',
+  installRequests: 'output[aria-label="Installation requests"]',
+  expanded: 'output[aria-label="Expanded editor"]',
+}
+
+/** Controlled native-hook/notification permission owners, #1087 follow-up. */
+export const settingsActionOwners = {
+  page: "/verification/desktop/fixtures/settings-action-owners/index.html",
+  ready: "[data-settings-action-owners]",
+  native: 'section[aria-label="Native hook ownership"]',
+  notices: 'section[aria-label="Notification permission ownership"]',
+  claude: '[data-setting="claude-native-hooks"] [role="switch"]',
+  codex: '[data-setting="codex-native-hooks"] [role="switch"]',
+  nativeCounts: 'output[aria-label="Native request counts"]',
+  noticeCounts: 'output[aria-label="Notice request counts"]',
+  allow: 'button:has-text("Allow")',
+  acknowledgeA: "A acknowledges save",
+  rereadA: "A finishes reread",
+  replaceNative: "Replace native source",
+  refuseB: "B refuses save",
+  grantA: "A grants notification access",
+  grantB: "B grants notification access",
+  replaceNotice: "Replace notification source",
 }

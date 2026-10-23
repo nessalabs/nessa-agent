@@ -112,3 +112,24 @@ fn tool_wire_preserves_empty_text_and_unknown_versus_empty_prior_diff() {
         );
     }
 }
+
+#[test]
+fn a_reported_input_is_kept_whole_or_left_off() {
+    let call = |raw: serde_json::Value| {
+        let frame = json!({"toolCallId":"grep", "rawInput": raw});
+        attach_input(tool_call(&frame).unwrap(), &frame)
+    };
+    let kept = call(json!({"pattern":"todo", "path":"src"}));
+    let kept: serde_json::Value =
+        serde_json::from_str(kept.input().map(ToolCallInput::as_str).unwrap()).unwrap();
+    assert_eq!(kept, json!({"pattern":"todo", "path":"src"}));
+    // Not an object, or past the bound: left off, never cut, never refused.
+    assert!(call(json!("ls -la")).input().is_none());
+    assert!(call(json!(null)).input().is_none());
+    let long = json!({"text": "x".repeat(MAX_TOOL_INPUT_BYTES)});
+    assert!(call(long).input().is_none());
+    let frame = json!({"toolCallId":"grep"});
+    assert!(attach_input(tool_call(&frame).unwrap(), &frame)
+        .input()
+        .is_none());
+}

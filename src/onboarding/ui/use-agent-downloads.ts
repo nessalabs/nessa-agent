@@ -61,9 +61,10 @@ export function useAgentDownloads(source: AgentInstallations, onChanged?: () => 
     setOutcome(result)
     // A lost acknowledgement or busy worker may still own installation.
     // Require a fresh check before offering another attempt.
-    if (result.status === "failed" && ["busy", "not-confirmed"].includes(result.reason))
+    if (result.status === "failed" && ["busy", "not-confirmed"].includes(result.reason)) {
+      revision.current += 1
       setOffers(undefined)
-    else await refresh()
+    } else await refresh()
     if (active.current && generation === lifetime.current) onChanged?.()
   }
   return {

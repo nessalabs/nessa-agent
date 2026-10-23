@@ -1,0 +1,42 @@
+[
+  {
+    "checkout": "/workspace/nessa-agent-base-1088",
+    "revision": "0b8019cf45f99b285f10c41199875d474492c6d1",
+    "sourceHashes": {
+      "application/managed-session.ts": "97732ea788b3e31408474067d1a636888b683d7d2a0d2154f0ecbfbbc355d4f2",
+      "application/connection-closed-error.ts": "24225c082716303347cccb4482e1d9f657e4fe6eb4e544107c5ec19050a2dee8",
+      "application/connect-retry.ts": "57a47f9aa15907297c79cf0fd186b6871939a37efdeb2e63268152f381ecd52c",
+      "application/client-config.ts": "3d7f84014c0af37d34f4923737cf8f5cbc02692eacf59a9c6ee90b690c94f58a",
+      "application/rpc-error.ts": "6149b5ee08bdb7a633696e54e7986bb39629dc3c14f5a76e75f5d4657d9b541c",
+      "application/stage.ts": "742e8cc6d47d47c3cbfefbd263dcfb95e8bcafb7165ea7a26e8e41d1aa526a83",
+      "generated/product.ts": "6b5599bd3cb39e8b9c3e58aeb11e8e08f9b5410da13d6d461f7e2f62b2ebc779"
+    },
+    "exit": 0,
+    "observation": {
+      "earlySend": "NessaSessionUnavailableError",
+      "earlyRpcDispatches": 0,
+      "automaticReplay": 0,
+      "explicitAfterConnected": "ok"
+    }
+  },
+  {
+    "checkout": "/workspace/nessa-agent",
+    "revision": "ebc5212723366e707256eed51a051d6c61bd3b5b",
+    "sourceHashes": {
+      "application/managed-session.ts": "97732ea788b3e31408474067d1a636888b683d7d2a0d2154f0ecbfbbc355d4f2",
+      "application/connection-closed-error.ts": "24225c082716303347cccb4482e1d9f657e4fe6eb4e544107c5ec19050a2dee8",
+      "application/connect-retry.ts": "57a47f9aa15907297c79cf0fd186b6871939a37efdeb2e63268152f381ecd52c",
+      "application/client-config.ts": "3d7f84014c0af37d34f4923737cf8f5cbc02692eacf59a9c6ee90b690c94f58a",
+      "application/rpc-error.ts": "6149b5ee08bdb7a633696e54e7986bb39629dc3c14f5a76e75f5d4657d9b541c",
+      "application/stage.ts": "742e8cc6d47d47c3cbfefbd263dcfb95e8bcafb7165ea7a26e8e41d1aa526a83",
+      "generated/product.ts": "6b5599bd3cb39e8b9c3e58aeb11e8e08f9b5410da13d6d461f7e2f62b2ebc779"
+    },
+    "exit": 0,
+    "observation": {
+      "earlySend": "NessaSessionUnavailableError",
+      "earlyRpcDispatches": 0,
+      "automaticReplay": 0,
+      "explicitAfterConnected": "ok"
+    }
+  }
+]

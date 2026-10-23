@@ -57,7 +57,7 @@ describe("the settings catalogue", () => {
   it("keeps experiments under Advanced, just before About, and not under General", () => {
     const ids = settingsCategories.map((category) => category.id)
     expect(ids.slice(-2)).toEqual(["advanced", "about"])
-    expect(tabsOf("advanced").map((tab) => tab.id)).toEqual(["experimental"])
+    expect(tabsOf("advanced").map((tab) => tab.id)).toEqual(["experimental", "setup"])
     expect(settingsTab("experimental")).toMatchObject({
       category: "advanced",
       label: "Experimental",
@@ -68,13 +68,17 @@ describe("the settings catalogue", () => {
       settingsEntries
         .filter((entry) => settingsTab(entry.tab).category === "advanced")
         .map((entry) => entry.id),
-    ).toEqual(["subagents-preview", "side-rail"])
+    ).toEqual(["subagents-preview", "side-rail", "replay-onboarding"])
+    expect(setting("replay-onboarding")).toMatchObject({
+      tab: "setup",
+      label: "Replay onboarding",
+    })
     expect(setting("subagents-preview").label).toBe("Subagents")
   })
 
   it("shows a category's tabs only when it has several to choose from", () => {
     expect(showsTabs("general")).toBe(true)
-    expect(showsTabs("advanced")).toBe(false)
+    expect(showsTabs("advanced")).toBe(true)
     expect(showsTabs("about")).toBe(false)
   })
 
@@ -86,7 +90,9 @@ describe("the settings catalogue", () => {
   })
 
   it("gives a category a line under its title only where its name does not say enough", () => {
-    expect(dekOf("advanced")).toBe("Early features you can try before they are finished.")
+    expect(dekOf("advanced")).toBe(
+      "Early features to try, and first-run setup to replay.",
+    )
     expect(dekOf("appearance")).toBeUndefined()
     // One short line: never more than a glance.
     for (const category of settingsCategories)
@@ -204,8 +210,14 @@ describe("searchSettings", () => {
         label: "Experimental",
         trail: "Advanced",
       })
-    // With no tab strip on its page, a setting there is placed by its category alone.
-    expect(showsTabs("advanced")).toBe(false)
+  })
+
+  it("finds setup's replay by what people call it", () => {
+    for (const query of ["onboarding", "replay", "welcome"])
+      expect(
+        searchSettings(query).find((match) => match.setting === "replay-onboarding"),
+        query,
+      ).toMatchObject({ category: "advanced", tab: "setup", trail: "Advanced › Setup" })
   })
 
   it("treats search syntax as plain text", () => {

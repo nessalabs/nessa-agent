@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   noticeAccess,
   showWaitingReviews,
   type NoticeAccess,
+  type NoticeAccessSource,
 } from "../../workspace/adapters/gateway/review-notices"
 import { setting } from "../model/settings-catalogue"
 import { Group, ItemRow } from "./settings-controls"
@@ -20,16 +21,24 @@ import { Group, ItemRow } from "./settings-controls"
 export function ReviewNoticeRows() {
   const source = noticeAccess()
   const [access, setAccess] = useState<NoticeAccess>("unsupported")
+  const [asking, setAsking] = useState(false)
+  const latest = useRef<{
+    readonly kind: "read" | "ask"
+    readonly source: NoticeAccessSource
+  } | null>(null)
   useEffect(() => {
-    let live = true
+    const request = { kind: "read" as const, source }
+    latest.current = request
+    setAccess("unsupported")
+    setAsking(false)
     void source
       .read()
       .catch(() => "unsupported" as const)
       .then((read) => {
-        if (live) setAccess(read)
+        if (latest.current === request) setAccess(read)
       })
     return () => {
-      live = false
+      latest.current = null
     }
   }, [source])
   if (access === "unsupported") return null
@@ -51,12 +60,21 @@ export function ReviewNoticeRows() {
           access === "not-asked" ? (
             <button
               type="button"
+              disabled={asking}
               onClick={() => {
+                if (latest.current?.source !== source || latest.current.kind === "ask")
+                  return
+                const request = { kind: "ask" as const, source }
+                latest.current = request
+                setAsking(true)
                 void source
                   .ask()
                   // Not asked after all: the button stays for another try.
                   .catch(() => "not-asked" as const)
                   .then((next) => {
+                    if (latest.current !== request || noticeAccess() !== source) return
+                    latest.current = { kind: "read", source }
+                    setAsking(false)
                     setAccess(next)
                     if (next === "allowed") showWaitingReviews()
                   })
