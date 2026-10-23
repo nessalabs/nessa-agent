@@ -64,6 +64,8 @@ Ownership snapshots use [bounded physical SQLite work](../storage/README.md#phys
 owned by each store instance. Snapshot revision authority remains with the
 coordinator; this adapter lifetime is separate from submission scheduling.
 
+Turn Stop is a separate [captured-turn command](runtime/stop-cancels-owned-work-and-confirms-process-cleanup.md#turn-cancellation-and-ownership). The ownership graph below describes SDK lifetime closure; it does not establish a product parent-Stop cascade.
+
 ## Parent and child close settlement
 
 The [ownership graph](../../../../crates/nessa-sdk/src/domain/agent_execution/subagents/graph/settlement.rs)

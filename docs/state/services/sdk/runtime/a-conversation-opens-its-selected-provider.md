@@ -3,7 +3,7 @@ id: "sdk-runtime-a-conversation-opens-its-selected-provider"
 title: "a conversation opens its selected provider"
 kind: "operation"
 status: "mixed"
-summary: "A conversation remembers the agent and model selected when it was created."
+summary: "A conversation restores its last acknowledged agent and model selection."
 parent: "sdk-runtime"
 sources:
   - "crates/nessa-server/src/conversation/application/service.rs"
@@ -27,7 +27,7 @@ diagramLinks:
 
 # a conversation opens its selected provider
 
-A conversation remembers the agent and model selected when it was created. Nessa prepares its local owner, then opens the external agent in a separate startup task.
+A conversation restores its last acknowledged agent and model selection. Nessa prepares its local owner, then opens the external agent in a separate startup task.
 
 Create, read and queue responses can finish before the agent is ready. The SDK keeps accepted inputs waiting during this time. Readiness requires the current opening attempt and its saved publication evidence; a late result from an invalidated attempt cannot replace it.
 
@@ -40,7 +40,7 @@ stateDiagram-v2
     Waiting --> Opening: Readiness settles / start authorized generation
     Opening --> Attached: Verified context / save evidence
     Opening --> Cleanup: Opening or publication fails
-    Waiting --> Cleanup: Stop fences generation
+    Waiting --> Cleanup: Attachment close or automatic lifecycle stop fences generation
     Attached --> Cleanup: Close
     Cleanup --> Released: Physical cleanup confirmed
     Cleanup --> Retained: Cleanup uncertain / keep owner fenced

@@ -47,6 +47,8 @@ stateDiagram-v2
     Settled --> [*]
 ```
 
+A recognized usage-limit result is terminal for this work. The gateway's opt-in [scheduled continuation](usage-limit-continuation.md) is a separate durable message lifecycle, rather than ordinary SDK failure backoff.
+
 ## Further reading
 
 [Source](../../../../../crates/nessa-sdk/src/application/agent_execution/agents/agent.rs) · [Related source](../../../../../crates/nessa-sdk/src/application/agent_execution/agents/scheduling.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/application/agent_execution/scheduling/retries.rs)

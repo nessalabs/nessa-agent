@@ -53,6 +53,27 @@ checkout layout; GitHub may not resolve sibling checkout links.
 
 The atlas migration started at `1bc93353ffebaf7553c14c624c269fbd21b71583`. Its docs-only PR also retains later flow-map updates from `11b622d8e5c07f6a40cdec4fd172e3f26e3eab4b`: native desktop gateway reads, gateway-backed MCP Apps, paired protected history reads, forwarded structured tool results, and moved protocol/client-core owners. [Inventory](inventory.md#current-main-reconciliation) states the limits of that bounded refresh. Earlier revisions and test results below remain historical evidence.
 
+## Mainline lifecycle refresh (2026-10-23)
+
+This bounded source audit starts at freshly fetched `origin/main`,
+`aa91831b5331d3461969f6a7be723a6d3325f29b`. It reconciles captured-turn
+Stop and command receipt recovery, attachment close and image-hold ownership,
+live model selection and desktop staged-send ordering, physical-read permit
+release and the existing directional source/cache adapters, and scheduled usage-limit
+continuation. The SDK graph's existing parent/child close settlement remains
+distinct from product turn cancellation.
+
+PRs [#965](https://github.com/nessalabs/nessa-agent/pull/965) and
+[#981](https://github.com/nessalabs/nessa-agent/pull/981) were open and unmerged
+at inspection. This pass does not attribute their proposed paired-reader or
+parent-Stop cascade behavior to main. Other pages retain their stated inspection
+baselines; this is not a new full-system runtime qualification. Linked regression
+sources were inspected, not run as product suites in this documentation pass.
+
+The supplied Library image resolved, but the supported materialization helper
+reported a download failure. No readable image was available in this executor,
+so it did not supply evidence or scope for the diagrams.
+
 ## Choose a user flow
 
 | What the person does | Follow this map | Boundaries to inspect for bugs |
