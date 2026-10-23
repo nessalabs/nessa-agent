@@ -128,3 +128,26 @@ command owner. There is no autonomous redelivery worker. Listener shutdown and
 conversation shutdown retain their existing responsibilities; a stalled injected
 authority/storage dependency can retain bounded admission capacity until it
 settles or the runtime ends.
+
+## Windows cancellation regression checkpoint
+
+Run 39930446153 at source head `a1994569…` passed every gate except one Windows
+server-library test: 3,030 passed, one failed, eight ignored. The cancellation
+capacity test timed out while awaiting durable admission of a ninth request after
+releasing eight SQLite-backed commands. That wait mixed capacity recovery with a
+filesystem latency bound. The log does not establish a production permit leak.
+
+The regression is split before changing its fixture:
+
+| Invariant | Controlled ordering and evidence |
+| --- | --- |
+| All eight cancelled callers retain pending admission capacity | Block eight command-store opens; cancel and join all HTTP futures; ninth returns busy without entering the store |
+| Capacity recovers after pending commands fail | Release the eight opens into a deliberate pre-storage failure; observe all eight finishes; a later request reaches the store and reports command failure rather than busy; no execution starts |
+| Successful command survives caller loss durably | Block one command-store open; cancel its caller; release to the real SQLite store; observe terminal persistence; replay its receipt and await execution completion; exactly one execution |
+
+Both outcomes are command settlement. Only the persistence case uses filesystem
+writes after release. No timeout is increased, no cancellation/capacity assertion
+is removed, and production admission ownership remains unchanged. Windows must
+qualify the corrected tests in hosted CI; Linux execution is not Windows proof.
+Prior canonical Chromium/WebKit, stress 42/42 and chaos 2/2 results remain evidence
+for their recorded earlier candidates, not automatic qualification of a new head.

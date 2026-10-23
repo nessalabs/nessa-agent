@@ -151,6 +151,8 @@ fn caller(action: &str) -> ConversationCaller {
 }
 struct CommandGate {
     entered: AtomicU64,
+    failed: AtomicU64,
+    reject_after_release: bool,
     released: tokio::sync::watch::Sender<bool>,
 }
 struct Store {
@@ -158,6 +160,7 @@ struct Store {
     fail: AtomicBool,
     fail_terminal: Arc<AtomicBool>,
     gate: Mutex<Option<Arc<CommandGate>>>,
+    settled: tokio::sync::watch::Sender<Option<String>>,
 }
 impl CreationStorage for Store {
     fn open_creation(
@@ -175,6 +178,10 @@ impl CreationStorage for Store {
                 let mut released = gate.released.subscribe();
                 gate.entered.fetch_add(1, Ordering::SeqCst);
                 released.wait_for(|released| *released).await.unwrap();
+                if gate.reject_after_release {
+                    gate.failed.fetch_add(1, Ordering::SeqCst);
+                    return Err(CreationStorageError::Storage(StorageError::Closed));
+                }
             }
             Ok(self
                 .inner
@@ -184,6 +191,7 @@ impl CreationStorage for Store {
                     Arc::new(Lease {
                         inner,
                         fail_terminal: self.fail_terminal.clone(),
+                        settled: self.settled.clone(),
                     }) as Arc<dyn CreationStorageLease>
                 }))
         })
@@ -192,6 +200,7 @@ impl CreationStorage for Store {
 struct Lease {
     inner: Arc<dyn CreationStorageLease>,
     fail_terminal: Arc<AtomicBool>,
+    settled: tokio::sync::watch::Sender<Option<String>>,
 }
 impl CreationStorageLease for Lease {
     fn load(
@@ -228,7 +237,14 @@ impl CreationStorageLease for Lease {
             if receipt.outcome().is_some() && self.fail_terminal.load(Ordering::SeqCst) {
                 return Err(CreationStorageError::Storage(StorageError::Closed));
             }
-            self.inner.save_mutation(receipt).await
+            let execution = receipt
+                .outcome()
+                .map(|_| receipt.binding().turn_id().as_str().to_owned());
+            self.inner.save_mutation(receipt).await?;
+            if let Some(execution) = execution {
+                self.settled.send_modify(|stored| *stored = Some(execution));
+            }
+            Ok(())
         })
     }
 }
@@ -290,6 +306,7 @@ impl Fixture {
             fail: AtomicBool::new(false),
             fail_terminal: Arc::new(AtomicBool::new(false)),
             gate: Mutex::new(None),
+            settled: tokio::sync::watch::channel(None).0,
         });
         Self {
             service,
@@ -772,6 +789,8 @@ async fn cancelled_http_responses_keep_command_capacity_until_detached_admission
     let routes = fixture.routes();
     let gate = Arc::new(CommandGate {
         entered: AtomicU64::new(0),
+        failed: AtomicU64::new(0),
+        reject_after_release: true,
         released: tokio::sync::watch::channel(false).0,
     });
     *fixture.commands.gate.lock().unwrap() = Some(gate.clone());
@@ -811,11 +830,93 @@ async fn cancelled_http_responses_keep_command_capacity_until_detached_admission
     );
     assert_eq!(gate.entered.load(Ordering::SeqCst), 8);
     gate.released.send(true).unwrap();
-    let admitted = tokio::time::timeout(Duration::from_secs(15), async {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while gate.failed.load(Ordering::SeqCst) != 8 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("released command opens must settle their controlled failure");
+    tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let response = routes
                 .clone()
                 .oneshot(signed_request("after-release"))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::SERVICE_UNAVAILABLE
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            let failure: Value = serde_json::from_slice(&bytes).unwrap();
+            if failure["error"] == "dispatch_unconfirmed" {
+                break;
+            }
+            assert_eq!(failure["error"], "busy");
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("settled command failures must release admission capacity");
+    assert_eq!(gate.entered.load(Ordering::SeqCst), 9);
+    assert_eq!(gate.failed.load(Ordering::SeqCst), 9);
+    assert!(fixture.provider.executions.lock().unwrap().is_empty());
+    fixture.shutdown().await;
+}
+#[tokio::test]
+async fn cancelled_http_response_keeps_successful_admission_durable_and_replayable() {
+    use tower::ServiceExt;
+    let root = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(root.path(), id()).await;
+    let routes = fixture.routes();
+    let gate = Arc::new(CommandGate {
+        entered: AtomicU64::new(0),
+        failed: AtomicU64::new(0),
+        reject_after_release: false,
+        released: tokio::sync::watch::channel(false).0,
+    });
+    *fixture.commands.gate.lock().unwrap() = Some(gate.clone());
+    let mut settled = fixture.commands.settled.subscribe();
+    let response = {
+        let routes = routes.clone();
+        tokio::spawn(async move {
+            routes
+                .oneshot(signed_request("cancelled-durable"))
+                .await
+                .unwrap()
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while gate.entered.load(Ordering::SeqCst) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    response.abort();
+    assert!(response.await.unwrap_err().is_cancelled());
+    assert!(fixture.provider.executions.lock().unwrap().is_empty());
+    gate.released.send(true).unwrap();
+    let execution = tokio::time::timeout(Duration::from_secs(15), async {
+        settled
+            .wait_for(|execution| execution.is_some())
+            .await
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .clone()
+    })
+    .await
+    .expect("the detached command must acknowledge terminal persistence");
+    fixture.completed(&execution).await;
+    let replay = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let response = routes
+                .clone()
+                .oneshot(signed_request("cancelled-durable"))
                 .await
                 .unwrap();
             if response.status() == axum::http::StatusCode::ACCEPTED {
@@ -830,42 +931,12 @@ async fn cancelled_http_responses_keep_command_capacity_until_detached_admission
     })
     .await
     .unwrap();
-    let bytes = axum::body::to_bytes(admitted.into_body(), 1024)
+    let bytes = axum::body::to_bytes(replay.into_body(), 1024)
         .await
         .unwrap();
     let receipt: Value = serde_json::from_slice(&bytes).unwrap();
-    fixture
-        .completed(receipt["executionId"].as_str().unwrap())
-        .await;
-    for index in 0..8 {
-        let response = tokio::time::timeout(Duration::from_secs(15), async {
-            loop {
-                let response = routes
-                    .clone()
-                    .oneshot(signed_request(&format!("cancelled-{index}")))
-                    .await
-                    .unwrap();
-                if response.status() == axum::http::StatusCode::ACCEPTED {
-                    break response;
-                }
-                assert_eq!(
-                    response.status(),
-                    axum::http::StatusCode::SERVICE_UNAVAILABLE
-                );
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), 1024)
-            .await
-            .unwrap();
-        let receipt: Value = serde_json::from_slice(&bytes).unwrap();
-        fixture
-            .completed(receipt["executionId"].as_str().unwrap())
-            .await;
-    }
-    assert_eq!(fixture.provider.executions.lock().unwrap().len(), 9);
+    assert_eq!(receipt["executionId"].as_str(), Some(execution.as_str()));
+    assert_eq!(fixture.provider.executions.lock().unwrap().len(), 1);
     fixture.shutdown().await;
 }
 #[tokio::test]
