@@ -1,0 +1,12 @@
+
+running 4 tests
+test webhooks::infrastructure::outbox::tests::independent_sending_capture_disagrees_with_original_cursor_reset ... ok
+test webhooks::infrastructure::outbox::tests::independent_source_refusal_replaces_original_cursor_actor ... ok
+test webhooks::infrastructure::outbox::tests::independent_capture_needs_an_original_source_reset ... ok
+test webhooks::infrastructure::outbox::tests::independent_owed_selection_scans_unrelated_published_rows ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 50 filtered out; finished in 0.05s
+
+published=0 actual_fullscan=0 actual_vm=18 indexed_fullscan=0 indexed_vm=16
+published=100 actual_fullscan=100 actual_vm=418 indexed_fullscan=0 indexed_vm=17
+published=10000 actual_fullscan=10000 actual_vm=40018 indexed_fullscan=0 indexed_vm=17

@@ -1635,8 +1635,30 @@ The outbound [webhook foundation](design/webhook-delivery-implementation.md)
 lives under `crates/nessa-server/src/webhooks`: immutable delivery and destination
 values in `domain/value_objects`, message/transport ports in `application`, and
 JSON, HMAC, DNS and HTTPS in `infrastructure`. Tests use the same layer names
-under `tests/webhooks`. This first slice is not composed into the gateway;
-registration, durable replay/outbox and grant admission remain future work.
+under `tests/webhooks`. `application/admission.rs` combines current credential
+effect holds, principal grant revision holds, checked conversation metadata and
+the existing conversation Cedar evaluator. Credential mutation fences live in
+the auth registry; principal/resource fences remain in the grant store.
+`application/outbox.rs` publishes the persistence port and limits.
+`infrastructure/outbox` owns the private database: `store` owns the lifetime lock
+and bounded physical operations; `schema` publishes its one SQL schema; `stored` validates restored
+identity and scope; `cursor` decodes complete cursor values for startup and live
+reads; `audit` owns closed typed historical records and validates transitions
+through the domain owner; `codec` owns the current serialized values; `capacity` owns
+accounting; `queue` advances source cursor and delivery together; `journal` owns
+state/audit commits, source-change context and retirement; `publication` writes
+immutable audit files and exact acknowledgements; `restoration` exhaustively
+correlates every audit variant with retained facts and owns delivery-history
+validation before effects; `retirement` retains bounded secret-free original
+identity/stop facts and the exact retirement audit identity through lost
+acknowledgement; `source_reset` owns immutable original reset facts and first-capture
+membership (`source_reset/store.rs`), bounded reference retention and canonical schema validation; `registry` persists target
+facts supplied by the future credential lifecycle coordinator. Tests remain in
+`tests/webhooks/infrastructure/outbox.rs`, with shared reset ownership cases in
+`tests/webhooks/infrastructure/outbox/source_reset.rs`.
+Registration authorization/configuration, the committed source reader, sender
+supervision and capability/revoke E2E remain uncomposed work. The outbox does not
+supply permission or open a listener.
 
 ## Browser sessions
 

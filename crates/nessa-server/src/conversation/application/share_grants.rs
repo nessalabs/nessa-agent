@@ -354,6 +354,34 @@ pub struct ShareGrantReceipt {
 /// tables: this is the owner's side only, and a follower's choice of what to
 /// keep never reaches it.
 pub trait ShareGrants: Send + Sync {
+    /// Read a principal-subject grant without manufacturing a receiver binding.
+    /// The credential remains part of the row and must be correlated by callers.
+    fn principal_grant<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        principal: &'a PrincipalId,
+    ) -> ConversationFuture<'a, Option<ShareGrant>> {
+        Box::pin(async move {
+            Ok(self
+                .grants(id)
+                .await?
+                .grants
+                .into_iter()
+                .find(|grant| &grant.principal_id == principal))
+        })
+    }
+
+    /// Fence this principal/resource epoch using the same gate as grant changes.
+    /// An adapter without that synchronization fails closed.
+    fn hold_principal_revision<'a>(
+        &'a self,
+        _id: &'a ConversationId,
+        _principal: &'a PrincipalId,
+        _policy_revision: u64,
+    ) -> ConversationFuture<'a, RevisionHold> {
+        Box::pin(async { Err(ConversationError::Metadata) })
+    }
+
     /// The grant `receiver_id` holds on `id`, or `None` when it holds none
     /// there.
     fn held_grant<'a>(

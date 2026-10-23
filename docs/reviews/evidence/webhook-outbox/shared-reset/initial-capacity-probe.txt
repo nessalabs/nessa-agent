@@ -1,0 +1,10 @@
+2 schema.sql caught/restored
+3 schema.sql caught/restored
+4 source_reset/retention.rs caught/restored
+5 source_reset/retention.rs caught/restored
+6 source_reset/retention.rs caught/restored
+Traceback (most recent call last):
+  File "/tmp/nessa-shared-reset-mutations.py", line 43, in <module>
+    if run.returncode==0:raise RuntimeError(f'uncaught mutation {index}: {file} {old}')
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: uncaught mutation 7: capacity.rs if count >= MAX_CURSORS as i64

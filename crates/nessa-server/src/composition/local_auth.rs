@@ -1675,10 +1675,14 @@ impl CredentialAdmin for LocalAdmin {
         let store = self.store.clone();
         let inventory = self.inventory.clone();
         Box::pin(async move {
-            let outcome = tokio::task::spawn_blocking(move || store.revoke_sync(request))
-                .await
-                .map_err(|_| CredentialAdminError::Unavailable)?
-                .map_err(CredentialAdminError::from)?;
+            let runtime = tokio::runtime::Handle::current();
+            // The detached physical owner waits for current effects and then
+            // commits. A socket disappearing must not cancel a revocation
+            // already handed to this owner, or occupy a socket runtime thread.
+            let outcome =
+                tokio::task::spawn_blocking(move || runtime.block_on(store.revoke(request)))
+                    .await
+                    .map_err(|_| CredentialAdminError::Unavailable)??;
             if let Some(inventory) = inventory {
                 if let Err(error) = inventory.capture().await {
                     tracing::warn!(

@@ -1,0 +1,75 @@
+{
+  "scripted-scenarios": {
+    "check": "scripted-scenarios",
+    "ok": false,
+    "started": "2026-10-23T08:42:44.348Z",
+    "finished": "2026-10-23T08:42:44.353Z",
+    "results": [
+      {
+        "name": "scripted-scenarios",
+        "cannotRun": true,
+        "error": "could not run: the gateway did not start: build the gateway first (cargo build -p nessa-server), or set MCP_LIVE_NESSA",
+        "failures": [],
+        "ok": false
+      }
+    ]
+  },
+  "gateway-window": {
+    "check": "gateway-window",
+    "ok": false,
+    "started": "2026-10-23T08:42:44.063Z",
+    "finished": "2026-10-23T08:42:44.068Z",
+    "results": [
+      {
+        "name": "gateway-window",
+        "cannotRun": true,
+        "error": "could not run: the gateway did not start: build the gateway first (cargo build -p nessa-server), or set MCP_LIVE_NESSA",
+        "failures": [],
+        "ok": false
+      }
+    ]
+  },
+  "mcp-apps-gateway": {
+    "check": "mcp-apps-gateway",
+    "ok": false,
+    "started": "2026-10-23T08:42:43.782Z",
+    "finished": "2026-10-23T08:42:43.787Z",
+    "results": [
+      {
+        "name": "mcp-apps-gateway",
+        "cannotRun": true,
+        "error": "could not run: the gateway did not start: build the gateway first (cargo build -p nessa-server), or set MCP_LIVE_NESSA",
+        "failures": [],
+        "ok": false
+      }
+    ]
+  },
+  "resize-observers": {
+    "check": "resize-observers",
+    "ok": false,
+    "started": "2026-10-23T08:42:39.278Z",
+    "finished": "2026-10-23T08:42:43.431Z",
+    "target": {
+      "url": "http://127.0.0.1:1438/desktop.html",
+      "mode": "dev"
+    },
+    "results": [
+      {
+        "name": "launch",
+        "engine": "chromium",
+        "cannotRun": true,
+        "error": "chromium did not launch (browserType.launch: Executable doesn't exist at /home/agent/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell). Run: pnpm exec playwright install chromium",
+        "failures": [],
+        "ok": false
+      },
+      {
+        "name": "launch",
+        "engine": "webkit",
+        "cannotRun": true,
+        "error": "webkit did not launch (browserType.launch: Executable doesn't exist at /home/agent/.cache/ms-playwright/webkit-2359/pw_run.sh). Run: pnpm exec playwright install webkit",
+        "failures": [],
+        "ok": false
+      }
+    ]
+  }
+}

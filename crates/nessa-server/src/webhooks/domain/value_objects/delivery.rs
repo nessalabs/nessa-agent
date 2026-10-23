@@ -51,6 +51,40 @@ pub struct Delivery {
 }
 
 impl Delivery {
+    /// Restore the current durable shape through live-transition invariants.
+    /// Infrastructure refuses a malformed row rather than resetting it.
+    pub(crate) fn restore(
+        id: Uuid,
+        epoch: u64,
+        phase: Phase,
+        attempts: u8,
+        timestamp_ms: Option<u64>,
+    ) -> Result<Self, DeliveryError> {
+        let valid = attempts <= MAX_ATTEMPTS
+            && match phase {
+                Phase::Queued => attempts == 0 && timestamp_ms.is_none(),
+                Phase::Sending => attempts > 0 && timestamp_ms.is_some(),
+                Phase::Retry { due_at_ms } => {
+                    attempts > 0
+                        && attempts < MAX_ATTEMPTS
+                        && timestamp_ms.is_some()
+                        && due_at_ms >= 1000u64 << (attempts - 1)
+                }
+                Phase::Terminal(Outcome::NotSent) => (attempts == 0) == timestamp_ms.is_none(),
+                Phase::Terminal(_) => attempts > 0 && timestamp_ms.is_some(),
+            };
+        if !valid {
+            return Err(DeliveryError::InvalidTransition);
+        }
+        Ok(Self {
+            id,
+            epoch,
+            phase,
+            attempts,
+            timestamp_ms,
+        })
+    }
+
     pub fn queued(id: Uuid, epoch: u64) -> Self {
         Self {
             id,

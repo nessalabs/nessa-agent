@@ -1,7 +1,16 @@
 //! Ports and exact message bytes for an outbound webhook attempt. A MAC is
 //! authenticity evidence, not conversation authority.
+mod admission;
 mod message;
+mod outbox;
 mod ports;
+
+pub use admission::{AdmissionFailure, AdmitDelivery, DeliveryHold, Target};
+pub use outbox::{
+    DeliveryCause, Outbox, OutboxError, PendingDelivery, QueueInitiator, QueuedRecord,
+    Registration, StopReason, MAX_CURSORS, MAX_OUTBOX_WORKERS, MAX_REGISTRATIONS,
+    MAX_SOURCE_RESETS, PENDING_LIMIT, RETAINED_LIMIT, SOURCE_RESET_BYTES,
+};
 
 pub use message::{InvalidMessage, MacKey, Message, MAX_BODY_BYTES};
 pub use ports::{
