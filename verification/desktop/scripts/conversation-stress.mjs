@@ -116,7 +116,8 @@
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
  *               line, "Ran 3 tools", that opens to a row per call, each with
- *               its status and a bar on the shared time axis, and a call's
+ *               its status and a bar on the shared time axis (at least as
+ *               wide as it is tall, ending inside the axis), and a call's
  *               card shows its input
  *
  * Meanwhile `--parallel` background conversations take turns through the
@@ -2534,6 +2535,9 @@ const steps = {
         return {
           status: row.dataset.status,
           at: bar && track.width ? (box.left - track.left) / track.width : null,
+          width: box?.width ?? 0,
+          height: box?.height ?? 0,
+          over: bar && track ? box.right - track.right : 0,
         }
       }),
     )
@@ -2549,6 +2553,16 @@ const steps = {
       else if (Math.abs(row.at - expected) > 0.03)
         failures.push(
           `row ${index + 1}'s bar starts ${(row.at * 100).toFixed(1)}% along the axis, not ${(expected * 100).toFixed(1)}%`,
+        )
+      // An instant call is still a round dot, never a hairline, and the
+      // last one stays inside the axis.
+      if (row.at !== null && row.width + 0.5 < row.height)
+        failures.push(
+          `row ${index + 1}'s bar is ${row.width.toFixed(1)} px wide, narrower than its ${row.height.toFixed(1)} px height`,
+        )
+      if (row.over > 0.5)
+        failures.push(
+          `row ${index + 1}'s bar ends ${row.over.toFixed(1)} px past the axis`,
         )
     }
     // A call's card shows the input it was made with.
