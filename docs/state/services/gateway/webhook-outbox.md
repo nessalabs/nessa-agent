@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "27515a3e4629db4b401cbf2333c424bd48924807"
+sourceRevision: "3a1083da0abee61f24654dba1006d45b6eaf6880"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
@@ -309,6 +309,8 @@ stateDiagram-v2
     Stopped --> Retired: Outcomes drained / remove private configuration and retain owed audit facts
 ```
 
+The current revocation input covers a known principal. Offline and supersession provenance still require the existing auth journal to expose its original revocation fact under the same authority hold; the coordinator must not invent an actor. This remains pending composition.
+
 The immutable registration lifecycle value owns legal replacements; its shared decoder validates restored phase and fact together. Audit decoding uses that same transition owner, and contextual restoration correlates observation, stop and retirement records against the retained original fact before publication. One observation per already-bounded registration adds no unbounded history.
 
 This is an unpublished inner lifecycle checkpoint. The retained command supervisor, startup reader, credential/grant admission and sender still require composition; this chart does not claim that they run. [Private evidence](../../../reviews/evidence/webhook-runtime/lifecycle-observation/README.md) distinguishes completed isolated tests from pending canonical checks and independent review.
@@ -333,6 +335,6 @@ the same lifecycle and require render validation at the new checkpoint.
 
 ## Assembled correction checkpoint
 
-Source `8f83f7394251814575429f5f1362cb3abac61687` combines the clean original-issuance correction (`1c1355b5`) and cleanup-cost correction (`611b5a87`). Their independent reports are scoped to their original bases; combined review remains pending. It also includes the earlier typed expiry-observer helper (`7b83e425`), which combined review must cover explicitly. That helper does not implement the separate observation-before-stop lifecycle. That reviewed correction excluded W24. This unpublished composition checkout adds the observation-before-stop lifecycle described above; its combined tests and independent review remain pending.
+Source `8f83f7394251814575429f5f1362cb3abac61687` combines the clean original-issuance correction (`1c1355b5`) and cleanup-cost correction (`611b5a87`). Their independent reports are scoped to their original bases; [assembled correction round2](../../../reviews/evidence/webhook-runtime/assembled-corrections/review-2/report.md) is clean at ecbb440e. It also includes the earlier typed expiry-observer helper (`7b83e425`), which that review explicitly covered. That helper does not implement the separate observation-before-stop lifecycle. That reviewed correction excluded W24. This unpublished composition checkout adds the observation-before-stop lifecycle described above; its139 combined canonical webhook tests and seven-package Clippy pass; independent lifecycle review remains pending.
 
 Windows and scripted gateway Chromium/WebKit, stress/chaos, recipient capability/revoke E2E and exact-head CI remain unqualified. Historical timeout and unrelated cleanup failures remain evidence, not passing gates.

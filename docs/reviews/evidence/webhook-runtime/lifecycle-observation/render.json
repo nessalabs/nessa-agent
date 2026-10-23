@@ -4,7 +4,7 @@
   "results": [
     {
       "id": "gateway-webhook-outbox",
-      "sourceRevision": "27515a3e4629db4b401cbf2333c424bd48924807",
+      "sourceRevision": "3a1083da0abee61f24654dba1006d45b6eaf6880",
       "diagrams": [
         {
           "state": "rendered",

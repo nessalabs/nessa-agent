@@ -510,7 +510,7 @@ assertion of when an external effect or database commit occurred.
 | Restored lifecycle, audit or observer contradicts retained original fact | Shared typed decoder and exhaustive contextual audit correlation reject before publication or effects | Every variant, actor/time/target mutation and valid retired recovery |
 | Capacity / cleanup | At most one fact per already-bounded registration; existing bounded retirement owns temporary historical references and final cleanup | Repeated failed observations do not grow state; capacity never discards pending work |
 
-The application coordinator consumes these transitions. It does not reimplement
+The future application coordinator will consume these transitions. It must not reimplement
 lifetime, Cedar or transition decisions. Runtime composition must retain the
 admitted command through acknowledgement/cleanup when its response observer
 leaves. Full source/sender and capability E2E gates remain separate.
@@ -554,3 +554,9 @@ demonstrates repeated whole-history work, not a Windows deadlock diagnosis.
 Production ceilings, retry/deadline behavior, fixtures' full boundary loops, test
 assertions and CI timeouts stay intact. Platform qualification still requires an
 allowed exact-head run; local profile numbers alone do not prove Windows fixed.
+
+## Canonical revocation provenance boundary still pending
+
+The current held access snapshot exposes actual original issuance plus current credential lifecycle, membership and revision. It does not expose the actual original revocation transition. Auth already supports Explicit and Superseded revocations with Principal or offline LocalOperator initiators; the private outbox's current Revoked input accepts a PrincipalId. That restriction is not permission to synthesize a principal for an offline action or to rewrite a supersession as an explicit command.
+
+Before composing revoke/startup/replacement, consume the existing auth journal's immutable revocation fact from the same held snapshot. Re-reading a separate transition list under a held authority may introduce ordering or lock-wait problems and does not establish snapshot agreement. The actual auth owner must publish the coherent fact; a returned command DTO cannot invent it. This is a pending structural boundary, not implemented by the expiry-observation adapter or covered by its principal-only positive revoke test. Parent coordination precedes this auth correction. Generic application-principal admission remains #1052.
