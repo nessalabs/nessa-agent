@@ -1,0 +1,3 @@
+RegistrationPhase::Stopped => false,
+=>
+RegistrationPhase::Stopped => true,

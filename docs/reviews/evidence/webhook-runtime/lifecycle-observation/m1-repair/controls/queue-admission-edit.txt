@@ -1,0 +1,3 @@
+if !current_registration.is_some_and
+=>
+if false && !current_registration.is_some_and

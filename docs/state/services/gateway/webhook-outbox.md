@@ -4,11 +4,12 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "3a1083da0abee61f24654dba1006d45b6eaf6880"
+sourceRevision: "f75b954e6f324a94150cd63dd95f1cd89e1ea646"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
   - crates/nessa-server/tests/webhooks/domain/registration_lifecycle.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/lifecycle_context.rs
   - crates/nessa-server/src/webhooks/application/outbox.rs
   - crates/nessa-server/src/webhooks/application/registration.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/intents.rs
@@ -311,7 +312,7 @@ stateDiagram-v2
 
 The current revocation input covers a known principal. Offline and supersession provenance still require the existing auth journal to expose its original revocation fact under the same authority hold; the coordinator must not invent an actor. This remains pending composition.
 
-The immutable registration lifecycle value owns legal replacements and its decoder checks local phase/fact combinations. However, [fresh independent review M1](../../../reviews/evidence/webhook-runtime/lifecycle-observation/review-1/report.md) found missing contextual phase/acknowledgement/work relationships: a substituted Stopped phase can publish an owed observation or silently clean genuine Queued work, and a retired fact can accept a reintroduced owed observation. W24 is unqualified and unpublished; those reproductions are not fixes. Valid lateSending-to-Retry recovery must remain accepted. One observation per already-bounded registration adds no unbounded history.
+The immutable registration lifecycle value owns legal replacements and its decoder checks local phase/fact combinations. However, [fresh independent review M1](../../../reviews/evidence/webhook-runtime/lifecycle-observation/review-1/report.md) found missing contextual phase/acknowledgement/work relationships: a substituted Stopped phase can publish an owed observation or silently clean genuine Queued work, and a retired fact can accept a reintroduced owed observation. The [f75 correction](../../../reviews/evidence/webhook-runtime/lifecycle-observation/m1-repair/README.md) adds complete retained phase/ack/work validation before both restoration and publication. It reuses one domain Queued compatibility predicate for queue admission, and checks distinct Queued registration IDs through the existing ready index without scanning terminal history. It rejects all three demonstrated contradictions, preserves valid lateSending-to-Retry recovery, and leaves indistinguishable missing history unclaimed. Its147canonical tests andsix controls pass; fresh independent round2 remains pending and W24 stays unpublished. One observation per already-bounded registration adds no unbounded history.
 
 This is an unpublished inner lifecycle checkpoint. The retained command supervisor, startup reader, credential/grant admission and sender still require composition; this chart does not claim that they run. [Private evidence](../../../reviews/evidence/webhook-runtime/lifecycle-observation/README.md) distinguishes completed isolated tests from pending canonical checks and independent review.
 
