@@ -404,13 +404,21 @@ it("allows from the list only printable ASCII, so no character hides another", (
   // The tool name is held to the same characters, and to a length.
   expect(shell("ls", `mcp__${"\u0600".repeat(3)}`)).toBe(false)
   expect(shell("ls", "mcp__a\nb")).toBe(false)
+  // An app's name and its tool's, drawn in the card's head, are held so too.
+  const app = (server: string, tool: string) =>
+    whole({ ...asked("app", "post hi"), origin: { kind: "app", server, tool } })
+  expect(app("Slack", "post")).toBe(true)
+  expect(app("Slack", `${"\u0600".repeat(40)}post`)).toBe(false)
+  expect(app(`Sl\u202Eack`, "post")).toBe(false)
+  expect(app("x".repeat(listShownToolChars + 1), "post")).toBe(false)
   expect(shell("ls", "x".repeat(listShownToolChars))).toBe(true)
   expect(shell("ls", "x".repeat(listShownToolChars + 1))).toBe(false)
   // At most three lines at the list's narrowest, wrapped as the card wraps.
   expect(shell("cargo run -p gateway -- --clients 200")).toBe(true)
   expect(shell("cargo test -p nessa-gateway reconnect -- --nocapture")).toBe(false)
-  expect(shell("x".repeat(63))).toBe(true)
-  expect(shell("x".repeat(64))).toBe(false)
+  // A word too long for the prompt's line moves below the prompt.
+  expect(shell("x".repeat(42))).toBe(true)
+  expect(shell("x".repeat(43))).toBe(false)
   // A word that does not fit beside `echo` moves to the next line whole.
   expect(shell(`echo ${"x".repeat(42)}`)).toBe(true)
   expect(shell(`echo ${"x".repeat(43)}`)).toBe(false)
@@ -419,7 +427,10 @@ it("allows from the list only printable ASCII, so no character hides another", (
 it("counts lines as the card wraps them: between words, a long word anywhere", () => {
   expect(wrappedLines("", 21)).toBe(1)
   expect(wrappedLines("x".repeat(21), 21)).toBe(1)
-  expect(wrappedLines("x".repeat(22), 21)).toBe(2)
+  // Too long for the prompt's line: it moves below the prompt, then breaks.
+  expect(wrappedLines("x".repeat(22), 21)).toBe(3)
+  // Only the first line carries the prompt.
+  expect(wrappedLines(`ls\n${"x".repeat(22)}`, 21)).toBe(3)
   // Spaces hang at a line's end; the next word starts the next line.
   expect(wrappedLines(`${"x".repeat(21)}   y`, 21)).toBe(2)
   // A word that does not fit after another moves down whole, then breaks.

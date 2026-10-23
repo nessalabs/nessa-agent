@@ -51,14 +51,19 @@ export const listShownToolChars = 48
 
 /** Printable ASCII and line breaks: text whose every character draws one column wide. */
 const printable = /^[\x20-\x7e\n]*$/
+/** A name in printable ASCII, on one line, at most `listShownToolChars` long. */
+const plainName = (name: string): boolean =>
+  /^[\x20-\x7e]*$/.test(name) && name.length <= listShownToolChars
 
 /**
  * How many lines `text` takes at `columns`, broken as the card breaks it:
  * between words, spaces hanging at a line's end, and a word longer than a
- * line anywhere in it.
+ * line anywhere in it. The prompt (`$ `) hangs before the first line, and a
+ * first word too long for that line moves below it, as after any word.
  */
 export function wrappedLines(text: string, columns: number): number {
   let lines = 0
+  let prompt = true
   for (const line of text.split("\n")) {
     lines += 1
     let at = 0
@@ -68,7 +73,9 @@ export function wrappedLines(text: string, columns: number): number {
         at += part.length
         continue
       }
-      if (at > 0 && at + part.length > columns) {
+      const after = at > 0 || prompt
+      prompt = false
+      if (after && at + part.length > columns) {
         lines += 1
         at = 0
       }
@@ -87,12 +94,14 @@ export function wrappedLines(text: string, columns: number): number {
 /**
  * Whether the list may allow a request: only one it can only draw whole,
  * decided from the request alone, never from how it happened to lay out.
- * Its command as sent and its tool name are printable ASCII, so no
- * character is wider than a column, joins another, reorders the line, or is
- * drawn as an escape that reads like typed text; the command as drawn
- * (`drawnCommand`) takes at most `listShownLines` lines at the list's
- * narrowest; the tool name is at most `listShownToolChars` long; and the
- * tool's input holds nothing but the command (`approvalGist`). Any other
+ * Its command as the card reads it (the script `approvalGist` reads, or
+ * the command) and every name the card shows (the agent's tool, or the
+ * app and its tool) are printable ASCII, so no character is wider than a
+ * column, joins another, reorders the line, or is drawn as an escape that
+ * reads like typed text; the command as drawn (`drawnCommand`) takes at
+ * most `listShownLines` lines at the list's narrowest; each name is at most
+ * `listShownToolChars` long; and the tool's input holds nothing but the
+ * command. Any other
  * request is refused from the list, or read whole in the chat.
  */
 export function allowableFromList(
@@ -101,17 +110,18 @@ export function allowableFromList(
 ): boolean {
   if (!shownWhole(approval)) return false
   if (gist && gist.fields.length > 0) return false
-  const tool = gist?.tool ?? ""
-  const sent = gist?.script ?? approval.command
+  const names =
+    approval.origin.kind === "app"
+      ? [approval.origin.server, approval.origin.tool]
+      : [gist?.tool ?? ""]
+  const read = gist?.script ?? approval.command
   const drawn = drawnCommand(
-    sent,
+    read,
     approval.origin.kind === "app" ? approval.origin.tool : undefined,
   ).replace(/\n$/, "")
   return (
-    printable.test(sent) &&
-    printable.test(tool) &&
-    !tool.includes("\n") &&
-    tool.length <= listShownToolChars &&
+    printable.test(read) &&
+    names.every(plainName) &&
     wrappedLines(drawn, listShownColumns) <= listShownLines
   )
 }
