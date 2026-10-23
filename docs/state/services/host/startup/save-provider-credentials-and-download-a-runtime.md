@@ -19,7 +19,8 @@ sources:
   - "src/onboarding/adapters/agent-installations.test.ts"
   - "src/onboarding/ui/agent-downloads.tsx"
   - "src/onboarding/ui/agent-downloads.test.tsx"
-diagramLinks: {}
+diagramLinks:
+  Download: runtime-download
 ---
 
 # save provider credentials and download a runtime
@@ -55,6 +56,15 @@ stateDiagram-v2
         authenticated installation command separately.
         Non-macOS secure store is unavailable.
     end note
+```
+
+## Runtime download ownership
+
+Open the separate runtime flow for uncertain installation, stale offers, fresh checks and view retirement. Saving a key does not install or sign in the runtime.
+
+```mermaid
+flowchart LR
+    Download[Download a tested runtime]
 ```
 
 ## Further reading

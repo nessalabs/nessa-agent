@@ -54,21 +54,23 @@ type Phase =
       readonly failed?: NativeHooksAgentName
     }
 
+type Request = { readonly kind: "read" } | { readonly kind: "save" }
+
 export function NativeHooksRows() {
   const gateway = useContext(NativeHooksContext)
   const [phase, setPhase] = useState<Phase>({ kind: "absent" })
-  // Focus, visibility and a change can start reads that overlap. Only the
-  // latest may answer, so an older one that settles last cannot undo it.
-  const latest = useRef(0)
-  const saving = useRef(false)
+  // A save owns admission through its reread, before React disables either
+  // switch. Cleanup retires that owner before a replacement source reads.
+  const latest = useRef<Request>({ kind: "read" })
   useEffect(() => {
     if (!gateway) return
     let current = true
     const read = () => {
-      if (saving.current) return
-      const generation = ++latest.current
+      if (latest.current.kind === "save") return
+      const request: Request = { kind: "read" }
+      latest.current = request
       void gateway.read().then((outcome) => {
-        if (!current || generation !== latest.current || saving.current) return
+        if (!current || request !== latest.current) return
         setPhase(
           outcome.ok ? { kind: "ready", choice: outcome.choice } : { kind: "unread" },
         )
@@ -84,19 +86,22 @@ export function NativeHooksRows() {
     document.addEventListener("visibilitychange", onVisible)
     return () => {
       current = false
+      latest.current = { kind: "read" }
       window.removeEventListener("focus", onFocus)
       document.removeEventListener("visibilitychange", onVisible)
     }
   }, [gateway])
   const set = (agent: NativeHooksAgentName, enabled: boolean) => {
-    if (!gateway || phase.kind !== "ready" || phase.saving) return
+    if (!gateway || phase.kind !== "ready" || latest.current.kind === "save") return
+    const request: Request = { kind: "save" }
+    latest.current = request
     const previous = phase.choice
     setPhase({ kind: "ready", choice: { ...previous, [agent]: enabled }, saving: agent })
-    saving.current = true
-    ++latest.current
     void gateway.set(agent, enabled, crypto.randomUUID()).then(async (outcome) => {
+      if (request !== latest.current) return
       const again = await gateway.read()
-      saving.current = false
+      if (request !== latest.current) return
+      latest.current = { kind: "read" }
       if (outcome.ok && outcome.agent === agent) {
         setPhase(
           again.ok

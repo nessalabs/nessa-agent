@@ -42,7 +42,7 @@ export function useComposer(
   const [expanded, setExpanded] = React.useState(false)
 
   // Whether a submit is waiting for its draft to leave. See `submit`.
-  const awaitingDraft = React.useRef(false)
+  const awaitingDraft = React.useRef<{ conversationId: string } | undefined>(undefined)
   // A fresh conversation gets a fresh composer — the pane does not follow
   // somebody into a tab they did not open it in.
   React.useEffect(() => setExpanded(false), [chat.active.id])
@@ -77,14 +77,15 @@ export function useComposer(
     // the moment the submission starts — so awaiting it held the pane open,
     // empty, for a whole round trip, and for good against a gateway that
     // accepts the connection and then answers nothing.
-    awaitingDraft.current = true
     const sending = chat.active.id
+    const observation = { conversationId: sending }
+    awaitingDraft.current = observation
     void chat.submit(content).then((taken) => {
       // Turned away: the draft is still here, so nothing is waiting for it to
       // go. Left set, the next unrelated emptying of the draft would close a
       // pane nobody asked to close.
       if (!taken) {
-        awaitingDraft.current = false
+        if (awaitingDraft.current === observation) awaitingDraft.current = undefined
         return
       }
       onDraftSent(sending)
@@ -94,10 +95,14 @@ export function useComposer(
   // The draft emptying is the submission having started — the one fact that
   // says the message left this composer.
   React.useEffect(() => {
-    if (!awaitingDraft.current || chat.active.draft.length > 0) return
-    awaitingDraft.current = false
+    if (
+      awaitingDraft.current?.conversationId !== chat.active.id ||
+      chat.active.draft.length > 0
+    )
+      return
+    awaitingDraft.current = undefined
     setExpanded(false)
-  }, [chat.active.draft])
+  }, [chat.active.id, chat.active.draft])
 
   /** Every expansion change the composer proposes, minus the ones we decline. */
   function changeExpanded(next: boolean, reason: PillComposerExpansionReason) {

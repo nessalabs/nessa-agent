@@ -1,0 +1,49 @@
+{
+  "engine": "installed Chromium",
+  "pages": 3,
+  "diagrams": 4,
+  "details": 7,
+  "navigationPaths": 4,
+  "pageErrors": 0,
+  "results": [
+    {
+      "id": "desktop-workspace",
+      "file": "docs/state/services/desktop/workspace/README.md",
+      "diagrams": 1,
+      "details": 0,
+      "navigation": 9
+    },
+    {
+      "id": "desktop-workspace-open-search-and-change-desktop-settings",
+      "file": "docs/state/services/desktop/workspace/open-search-and-change-desktop-settings.md",
+      "diagrams": 1,
+      "details": 0,
+      "navigation": 1
+    },
+    {
+      "id": "desktop-settings-action-owners",
+      "file": "docs/state/services/desktop/workspace/settings-action-owners.md",
+      "diagrams": 2,
+      "details": 7,
+      "navigation": 0
+    }
+  ],
+  "paths": [
+    {
+      "from": "nessa",
+      "to": "desktop"
+    },
+    {
+      "from": "desktop",
+      "to": "desktop-workspace"
+    },
+    {
+      "from": "desktop-workspace",
+      "to": "desktop-settings-action-owners"
+    },
+    {
+      "from": "desktop-workspace-open-search-and-change-desktop-settings",
+      "to": "desktop-settings-action-owners"
+    }
+  ]
+}
