@@ -993,6 +993,8 @@ export const userFlowOrdering = {
   page: "/verification/conversation/user-flow-ordering.html",
   ready: "[data-user-flow-ordering]",
   download: 'button[aria-label^="Download Claude"]',
+  permissionSection: 'section[aria-label="Permission revoke ordering fixture"]',
+  revokeRequests: 'output[aria-label="Revoke requests"]',
   installRequests: 'output[aria-label="Installation requests"]',
   expanded: 'output[aria-label="Expanded editor"]',
 }

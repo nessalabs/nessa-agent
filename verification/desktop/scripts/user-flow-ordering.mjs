@@ -13,7 +13,7 @@ await main(
   {
     name: "user-flow-ordering",
     summary:
-      "older offers cannot reopen uncertain installation; pending sends own their tab and operation",
+      "obsolete offers, cross-tab sends and focus refreshes retain their pending action owners",
     defaults: { engine: "chromium,webkit" },
     options: { "chromium-executable": { type: "string" } },
     help: "Drives production AgentDownloads/useComposer through injected ports in both engines. Dev fixture only. --chromium-executable uses an already installed Chromium.",
@@ -125,6 +125,36 @@ await main(
               },
             )
           }
+          await attempt(rep, { engine, name: "permission-revoke-focus" }, async () => {
+            await page.goto(new URL(ui.page, url).href)
+            const section = page.locator(ui.permissionSection)
+            const button = section.getByRole("button", { name: "Revoke", exact: true })
+            await button.waitFor()
+            await button.click()
+            assert(
+              await button.isDisabled(),
+              "pending revoke did not disable its control",
+            )
+            await page.evaluate(() => window.dispatchEvent(new Event("focus")))
+            assert(await button.isDisabled(), "focus refresh released pending revoke")
+            await button.evaluate((element) => element.click())
+            assert(
+              (await page.locator(ui.revokeRequests).textContent()) === "1",
+              "expected one pending revoke dispatch",
+            )
+            await section
+              .getByRole("button", { name: "Finish revoke", exact: true })
+              .click()
+            await section
+              .getByText("Could not revoke that rule.", { exact: true })
+              .waitFor()
+            assert(!(await button.isDisabled()), "settled revoke did not permit recovery")
+            return {
+              revokesBeforeOutcome: 1,
+              pendingDisabled: true,
+              recoveryEnabled: true,
+            }
+          })
           if (options.shots) {
             mkdirSync(options.shots, { recursive: true })
             await page.screenshot({
