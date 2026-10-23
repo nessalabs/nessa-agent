@@ -1,0 +1,5 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::cleanup_tests::delivery_retirement_removes_only_its_published_audit_and_preserves_owed_rows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.02s

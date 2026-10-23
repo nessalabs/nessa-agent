@@ -498,3 +498,23 @@ The auth journal owns provenance; registration does not create another authority
 This correction does not recover or retry the prior flagged reviewer report.
 Fresh review will concern the new correction and its tests only. Sender composition
 and recipient E2E follow a clean correction review.
+
+## Retained-state cleanup cost correction
+
+At published runtime source `0e1f44def810c8b91439000f52986869cb0cdfc2`, Windows
+job120586159654 timed out after45minutes. The last unfinished tests exercise
+terminal and stopped-registration retention at their full1024-row boundaries.
+Independent old-source Linux profiling shows growing SQL cleanup work (about
+10.1M/40.2M/160.8M VM instructions by128/256/512 terminal deliveries); this
+demonstrates repeated whole-history work, not a Windows deadlock diagnosis.
+
+| Ordering | Cleanup owner and intended equivalent effect | Evidence required |
+| --- | --- | --- |
+| Terminal commit / maintenance | One indexed cutoff per registration replaces ranking every retained row. Delete only rows older than the newest1024 and with no owed audit. | Existing full-boundary tests unchanged; SQL VM budget and query plan |
+| Terminal delivery row retires | Its exact published audit rows retire transactionally through the schema's ownership trigger; owed rows are not erased. Existing source-reset reference triggers remain authoritative. | Published/owed ownership and reference cleanup regressions |
+| Registration audit acknowledgement | Delete published delivery-null records through their partial index, without visiting retained delivery histories. | Fixed cleanup steps as unrelated published delivery history grows |
+| Stop, source reset, audit failure or restart | Preserve original identity, actor/cause/time and existing publication/recovery order; only query work changes. | Canonical outbox failures, reset/retirement and full1024-row assertions |
+
+Production ceilings, retry/deadline behavior, fixtures' full boundary loops, test
+assertions and CI timeouts stay intact. Platform qualification still requires an
+allowed exact-head run; local profile numbers alone do not prove Windows fixed.

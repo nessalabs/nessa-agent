@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "946bbc8647b681fbd34440a116ecb3fb8efe5a6f"
+sourceRevision: "1c1355b537037e7416486856211b74c605804fa7"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/application/outbox.rs
@@ -35,6 +35,7 @@ sources:
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/store.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/fact.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/retention.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/cleanup.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/source_reset.rs
 diagramLinks: {}
@@ -290,3 +291,21 @@ records exact inputs and exclusions. No browser gate is waived by this
 adapter being unmounted. Full registration, authorized source selection,
 current-authority dispatch, live outcome reconciliation and capability/revoke
 E2E remain unfinished.
+
+## Retained-state cleanup work
+
+Terminal retention uses one indexed cutoff per registration instead of ranking
+every retained row on each maintenance pass. The newest1024 count includes
+rows whose audit is still owed; an older row is deleted only after its audit
+acknowledges. Deleting that terminal row retires only its published audit
+history in the same transaction. Owed and nonterminal history remains available
+for recovery/refusal. Published registration projections have their own indexed
+cleanup; they do not require scanning retained delivery histories.
+
+This changes query work, not delivery authority, audit flushes or replay order.
+The original full-boundary tests and ceilings remain unchanged. [Cost evidence](../../../reviews/evidence/webhook-runtime/retention-cost/README.md)
+records source611b5a87,120 canonical webhook passes,212 auth unit+55 integration
+passes, nine mutation controls and measured work reductions. Windows is still
+unqualified: its old-head job timed out, and unchanged flush counts leave
+filesystem cost to be checked by actual permitted CI. This page's diagrams retain
+the same lifecycle and require render validation at the new checkpoint.
