@@ -28,6 +28,7 @@ pub struct ExecutionEvent {
     execution_id: ExecutionId,
     update: ExecutionUpdate,
     native_hooks: Option<bool>,
+    observed_at_ms: Option<u64>,
 }
 impl ExecutionEvent {
     /// Maximum retained UTF-8 allocation of one text or thought chunk (4 MiB).
@@ -183,6 +184,7 @@ impl ExecutionEvent {
             execution_id,
             update,
             native_hooks: None,
+            observed_at_ms: None,
         }
     }
     /// The same observation, stamped with the hooks choice of the process start
@@ -197,6 +199,20 @@ impl ExecutionEvent {
     /// without one.
     pub fn native_hooks(&self) -> Option<bool> {
         self.native_hooks
+    }
+    /// The same observation, stamped with the wall-clock time the session
+    /// received it, in Unix milliseconds. The stamp is saved with the event,
+    /// so when each report arrived — a tool's start and end among them —
+    /// survives a restart.
+    pub fn with_observed_at_ms(mut self, at_ms: u64) -> Self {
+        self.observed_at_ms = Some(at_ms);
+        self
+    }
+    /// When the session received this observation, in Unix milliseconds.
+    /// The session stamps every report as it arrives; `None` is an event
+    /// built outside a session, or one saved before stamps were kept.
+    pub fn observed_at_ms(&self) -> Option<u64> {
+        self.observed_at_ms
     }
     /// Borrow the stable identity used to route this observation.
     pub fn execution_id(&self) -> &ExecutionId {

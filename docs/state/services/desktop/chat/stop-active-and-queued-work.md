@@ -3,14 +3,16 @@ id: "desktop-chat-stop-active-and-queued-work"
 title: "stop active and queued work"
 kind: "flow"
 status: "mixed"
-summary: "Stop asks Nessa to end active work, cancel waiting inputs and close the conversation's connection to its agent."
+summary: "Stop targets the captured turn: withdraw it from the queue or cancel it if active."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "desktop-chat"
 sources:
   - "src/panel/ui/app.tsx"
   - "src/conversation/adapters/store/slice.ts"
   - "crates/nessa-server/src/conversation/application/service.rs"
   - "crates/nessa-sdk/src/application/agent_execution/agents/lifecycle.rs"
-  - "crates/nessa-sdk/src/application/agent_execution/providers/close.rs"
+  - "crates/nessa-server/src/conversation/application/service/mutation.rs"
+  - "crates/nessa-server/tests/conversation/mutation_commands.rs"
   - "src/conversation/application/usecases/control-failure.ts"
   - "src/conversation/adapters/store/control-failure.test.ts"
   - "crates/nessa-server/tests/conversation/application.rs"
@@ -21,31 +23,32 @@ diagramLinks: {}
 
 # stop active and queued work
 
-Stop asks Nessa to end active work, cancel waiting inputs and close the conversation's connection to its agent. Saved history remains available for reopening.
+Stop targets the captured turn: withdraw it from the queue or cancel it if active. Other queued turns and the agent attachment remain available.
 
-Stopping requires the current gateway conversation and connection. It is separate from closing a tab or archiving a conversation. The agent's physical cleanup and attachment release have their own results, so a cancelled input alone does not prove every resource has been released.
+The panel captures the running turn, or its latest unsettled submission, together with its conversation identity. A delayed Stop cannot target a different conversation after tab rebinding. Stop can overtake a pending send; the prepared operation remembers it and asks again after admission. Closing the attachment, deleting a conversation and detaching a tab are separate operations. Stop does not release uploaded images or prove external tool effects were reversed.
 
 ```mermaid
 stateDiagram-v2
-    state "Stop available" as Available
-    state "Cancelling" as Cancelling
-    state "Cancelled acknowledgement" as Cancelled
-    state "Stop outcome unconfirmed or refused" as Unconfirmed
-    [*] --> Available
-    Available --> Cancelling: Stop [gateway connected] / request close
-    Cancelling --> Cancelled: Close and attachment release acknowledged
-    Cancelling --> Unconfirmed: Refusal, cleanup failure, or transport error
-    Cancelled --> [*]: Reset stored draft images and refresh view
-    Unconfirmed --> [*]: Reset image state safely and refresh view
-    note right of Cancelling
-        Close stops active and queued work.
-        Unsafe cleanup can retain attachment holds.
-    end note
-    note right of Cancelled
-        History remains available.
-        This acknowledgement does not reverse external tool effects.
+    [*] --> Captured: Capture conversation and turn
+    Captured --> Requesting: Stop / retain prepared stop intent
+    Requesting --> Withdrawn: Named turn still queued / remove only that turn
+    Requesting --> CancelRequested: Named active turn / provider accepts cancellation
+    Requesting --> AlreadyFinal: Named turn has ended / send no cancel
+    Requesting --> Refused: Missing target, unsupported cancel or typed refusal
+    Requesting --> Unknown: Reply lost or original attempt interrupted
+    Unknown --> Reconciling: Panel follows current view / preserve uncertainty
+    Withdrawn --> Refreshed: Follow authoritative view
+    CancelRequested --> Refreshed: Follow actual turn settlement
+    AlreadyFinal --> Refreshed: Follow authoritative view
+    Refused --> Refreshed: Show failure and refresh
+    Reconciling --> Refreshed: Preserve known or uncertain outcome
+    note right of CancelRequested
+        Cancellation acknowledgement is not process cleanup.
+        Other queued turns and image holds are not closed.
     end note
 ```
+
+The [mutation command regressions](../../../../../crates/nessa-server/tests/conversation/mutation_commands.rs) cover queue-to-active races, a concurrent close, unsupported cancellation, finished turns and receipt recovery. They distinguish the durable Stop command from the eventual turn outcome. The panel refreshes the current view after failure; it does not automatically look up or replay a Stop receipt. Explicit command clients can read the original receipt with its exact binding.
 
 ## Further reading
 

@@ -5,8 +5,11 @@ use crate::conversation::application::{MAX_LISTED_CONVERSATIONS, MAX_POLICY_REVI
 use nessa_protocol::conversation::domain::{
     ConversationPreview, ConversationTitle, LATEST_TIME_MS,
 };
-use nessa_protocol::conversation::view::MAX_STRUCTURED_CONTENT_BYTES;
-use nessa_sdk::domain::agent_execution::tools::MAX_MCP_NAME_BYTES;
+use nessa_protocol::conversation::view::{
+    MAX_STRUCTURED_CONTENT_BYTES, MAX_TOOL_CHANGES, MAX_TOOL_CHANGE_PATH_BYTES,
+    MAX_TOOL_CHANGE_SIDE_BYTES,
+};
+use nessa_sdk::domain::agent_execution::tools::{MAX_MCP_NAME_BYTES, MAX_TOOL_INPUT_BYTES};
 use nessa_sdk::domain::mcp_apps::MAX_UI_URI_BYTES;
 use nessa_sync::replication::catalogue::MAX_CATALOGUE_ENTRIES;
 use serde_json::Value;
@@ -105,6 +108,28 @@ fn a_tool_states_the_mcp_name_and_structured_result_bounds_the_view_keeps() {
         tool["structuredContent"]["x-utf8MaxBytes"].as_u64(),
         Some(MAX_STRUCTURED_CONTENT_BYTES as u64)
     );
+    // The input an agent reports is the SDK's to bound; the row says the same.
+    assert_eq!(
+        tool["input"]["x-utf8MaxBytes"].as_u64(),
+        Some(MAX_TOOL_INPUT_BYTES as u64)
+    );
+    // The files a call changed are the view's to bound; the schema says the same.
+    assert_eq!(
+        tool["changes"]["maxItems"].as_u64(),
+        Some(MAX_TOOL_CHANGES as u64)
+    );
+    let change = &schema["$defs"]["ConversationToolChange"]["properties"];
+    assert_eq!(
+        change["path"]["x-utf8MaxBytes"].as_u64(),
+        Some(MAX_TOOL_CHANGE_PATH_BYTES as u64)
+    );
+    for side in ["before", "after"] {
+        assert_eq!(
+            change[side]["x-utf8MaxBytes"].as_u64(),
+            Some(MAX_TOOL_CHANGE_SIDE_BYTES as u64),
+            "{side}"
+        );
+    }
     // The names are the SDK domain's, which bounds them; the schema says the same.
     let mcp = &schema["$defs"]["ConversationMcpTool"]["properties"];
     for field in ["server", "tool"] {

@@ -48,48 +48,17 @@ const CUES: Readonly<Record<Cue, { src: string; volume: number }>> = Object.free
 })
 
 /**
- * Whether setup's sounds are off.
- *
- * A reduced-motion preference is where this *starts*, because someone who has
- * asked for less movement is unlikely to want an unprompted chime either. It is
- * not where it stays: motion and sound are two preferences, and tying them
- * together left anyone who wanted one without the other — or who is listening
- * to a screen reader the clip talks over — with no control at all. The toggle
- * in setup's chrome moves it in both directions.
- *
- * Session-local on purpose. Nessa has no settings store yet, and inventing one
- * for a single switch on a screen seen once would be a worse answer than a
- * switch that works for as long as the screen is up.
+ * Whether setup's sounds are off: under a reduced-motion preference, because
+ * someone who has asked for less movement is unlikely to want an unprompted
+ * chime either. Setup offers no switch of its own; its cues are short and
+ * heard once.
  */
-let muted = quietByDefault()
-const listeners = new Set<() => void>()
+const muted = quietByDefault()
 
 function quietByDefault(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function")
     return true
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches
-}
-
-/** Whether cues are currently silenced. */
-export function soundMuted(): boolean {
-  return muted
-}
-
-/** Turn setup's cues on or off. Silencing also stops whatever is sounding:
- * a mute that lets the current clip finish is not a mute. */
-export function setSoundMuted(next: boolean): void {
-  if (muted === next) return
-  muted = next
-  if (next) for (const audio of players.values()) audio.pause()
-  for (const listener of listeners) listener()
-}
-
-/** Subscribe to the preference changing, for a control that shows its state. */
-export function subscribeSoundMuted(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => {
-    listeners.delete(listener)
-  }
 }
 
 function silenced() {

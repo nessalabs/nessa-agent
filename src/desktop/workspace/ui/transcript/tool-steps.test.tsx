@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-/** A run of steps: each one while its turn runs, one line that opens to them once it ended. */
+/** A run of steps as the kit's waterfall: open while its turn runs, folded to one line once it ended. */
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
@@ -12,7 +12,7 @@ let host: HTMLDivElement
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-  // The kit's line asks whether motion is reduced; jsdom has no media queries.
+  // The kit asks whether motion is reduced; jsdom has no media queries.
   window.matchMedia ??= ((query: string) => ({
     matches: false,
     media: query,
@@ -29,38 +29,105 @@ afterEach(async () => {
   host.remove()
 })
 
+const T0 = Date.UTC(2026, 9, 23, 9, 0, 0)
+
 const steps: StepPart[] = [
-  { kind: "step", step: "search", label: "ToolSearch" },
-  { kind: "step", step: "search", label: "Search", detail: '"scroll"' },
-  { kind: "step", step: "read", label: "Read", detail: "transcript.tsx" },
+  {
+    kind: "step",
+    step: "search",
+    label: "ToolSearch",
+    startedAtMs: T0,
+    endedAtMs: T0 + 300,
+  },
+  {
+    kind: "step",
+    step: "search",
+    label: "Search",
+    detail: '"scroll"',
+    startedAtMs: T0 + 400,
+    endedAtMs: T0 + 900,
+  },
+  {
+    kind: "step",
+    step: "read",
+    label: "Read",
+    detail: "transcript.tsx",
+    startedAtMs: T0 + 1000,
+  },
 ]
 
-const labels = () =>
-  [...host.querySelectorAll(".workspace-step-label")].map((label) => label.textContent)
+const line = () => host.querySelector<HTMLButtonElement>("[data-slot=tool-trace-line]")
+const rows = () => [
+  ...host.querySelectorAll<HTMLButtonElement>("[data-slot=tool-trace-step]"),
+]
+const body = () =>
+  host.querySelector<HTMLElement>(`[id="${line()?.getAttribute("aria-controls")}"]`)
 
-it("shows each step while its turn runs", async () => {
+it("is open while its turn runs, its last call at work", async () => {
   await act(async () => root.render(<ToolSteps steps={steps} />))
-  expect(labels()).toEqual(["ToolSearch", "Search", "Read"])
-  expect(host.querySelector("[data-slot=agent-activity-trigger]")).toBeNull()
+  expect(line()?.textContent).toContain("Working")
+  expect(line()?.getAttribute("aria-expanded")).toBe("true")
+  expect(body()?.hasAttribute("inert")).toBe(false)
+  expect(rows().map((row) => row.dataset.status)).toEqual([
+    "completed",
+    "completed",
+    "running",
+  ])
+  expect(rows()[1]?.textContent).toContain('"scroll"')
 })
 
-it("folds a settled run into one line that opens to its steps in place and closes again", async () => {
+it("folds once its turn ends, and then opens and closes as the person chooses", async () => {
+  await act(async () => root.render(<ToolSteps steps={steps} />))
   await act(async () => root.render(<ToolSteps steps={steps} settled />))
-  const line = host.querySelector<HTMLButtonElement>("[data-slot=agent-activity-trigger]")
-  expect(line?.textContent).toBe("Ran 3 tools · 1 read")
-  expect(line?.getAttribute("aria-expanded")).toBe("false")
-  expect(line?.hasAttribute("aria-haspopup")).toBe(false)
-  expect(labels()).toEqual([])
+  expect(line()?.textContent).toContain("Ran 3 tools")
+  expect(line()?.getAttribute("aria-expanded")).toBe("false")
+  expect(body()?.hasAttribute("inert")).toBe(true)
+  // A call the turn ended under is finished, not still at work.
+  expect(rows().map((row) => row.dataset.status)).toEqual([
+    "completed",
+    "completed",
+    "completed",
+  ])
 
-  await act(async () => line?.click())
-  expect(line?.getAttribute("aria-expanded")).toBe("true")
-  const list = host.querySelector(".workspace-steps")
-  expect(line?.getAttribute("aria-controls")).toBe(list?.id)
-  expect(labels()).toEqual(["ToolSearch", "Search", "Read"])
+  await act(async () => line()?.click())
+  expect(line()?.getAttribute("aria-expanded")).toBe("true")
+  expect(body()?.hasAttribute("inert")).toBe(false)
+  // Settling again does not fold it under the person.
+  await act(async () => root.render(<ToolSteps steps={[...steps]} settled />))
+  expect(line()?.getAttribute("aria-expanded")).toBe("true")
 
-  await act(async () => line?.click())
-  expect(labels()).toEqual([])
-  expect(line?.hasAttribute("aria-controls")).toBe(false)
+  await act(async () => line()?.click())
+  expect(line()?.getAttribute("aria-expanded")).toBe("false")
+})
+
+it("opens a call's card to what it printed, and keeps a gateway status it was given", async () => {
+  const ran: StepPart[] = [
+    {
+      kind: "step",
+      step: "run",
+      label: "Run",
+      detail: "pnpm test",
+      id: "call-1",
+      status: "failed",
+      startedAtMs: T0,
+      endedAtMs: T0 + 2000,
+      input: '{"command":"pnpm test"}',
+      output: "1 test failed\n",
+    },
+  ]
+  await act(async () => root.render(<ToolSteps steps={ran} settled />))
+  await act(async () => line()?.click())
+  const [row] = rows()
+  expect(row?.dataset.status).toBe("failed")
+  await act(async () => row?.click())
+  expect(row?.getAttribute("aria-expanded")).toBe("true")
+  const card = host.querySelector(`[id="${row?.getAttribute("aria-controls")}"]`)
+  expect(card?.textContent).toContain("1 test failed")
+  // No diff, so its tabs are Input and Output, and Output is the one open.
+  expect(card?.querySelectorAll("[role=tab]")).toHaveLength(2)
+  expect(card?.querySelector("[role=tab][aria-selected=true]")?.textContent).toContain(
+    "Output",
+  )
 })
 
 const fetched: StepPart[] = [
@@ -77,7 +144,7 @@ it("asks the composed site icon for a step on a web page, with the kind's icon a
   await act(async () =>
     root.render(
       <SiteIconProvider render={siteIcon}>
-        <ToolSteps steps={fetched} />
+        <ToolSteps steps={fetched} settled />
       </SiteIconProvider>,
     ),
   )
@@ -88,7 +155,7 @@ it("asks the composed site icon for a step on a web page, with the kind's icon a
 })
 
 it("draws only the kind's icon, and fetches nothing, when no site icon is composed", async () => {
-  await act(async () => root.render(<ToolSteps steps={fetched} />))
-  expect(host.querySelectorAll(".workspace-steps li > svg")).toHaveLength(2)
+  await act(async () => root.render(<ToolSteps steps={fetched} settled />))
+  expect(rows().map((row) => row.querySelectorAll("svg").length)).toEqual([1, 1])
   expect(host.querySelector("img")).toBeNull()
 })

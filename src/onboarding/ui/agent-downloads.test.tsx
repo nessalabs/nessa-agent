@@ -174,3 +174,56 @@ it("ignores an old source's completion after the view receives a new source", as
   expect(onChanged).not.toHaveBeenCalled()
   await React.act(async () => root.unmount())
 })
+
+it.each(["busy", "not-confirmed"] as const)(
+  "does not let a pre-outcome offer restore Download after %s",
+  async (reason) => {
+    const container = document.createElement("div")
+    const root = createRoot(container)
+    let publish = () => {}
+    let offersReady!: (
+      offers: { agent: "claude"; archiveBytes: number; installed: boolean }[],
+    ) => void
+    let complete!: (outcome: InstallationOutcome) => void
+    const offer = { agent: "claude" as const, archiveBytes: 1, installed: false }
+    const source = {
+      subscribe: (listener: () => void) => {
+        publish = listener
+        return () => {}
+      },
+      offers: vi
+        .fn()
+        .mockResolvedValueOnce([offer])
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              offersReady = resolve
+            }),
+        )
+        .mockResolvedValue([offer]),
+      install: vi.fn(
+        () =>
+          new Promise<InstallationOutcome>((resolve) => {
+            complete = resolve
+          }),
+      ),
+    }
+    try {
+      await React.act(async () => root.render(<AgentDownloads source={source} />))
+      await React.act(async () => requiredElement(container, "button").click())
+      // A connection change starts another offers read while installation is pending.
+      await React.act(async () => publish())
+      await React.act(async () => complete({ status: "failed", reason }))
+      expect(container.querySelector('button[aria-label^="Download"]')).toBeNull()
+      await React.act(async () => offersReady([offer]))
+      expect(container.querySelector('button[aria-label^="Download"]')).toBeNull()
+      expect(source.install).toHaveBeenCalledOnce()
+      // A read explicitly started after uncertainty remains a supported recovery.
+      await React.act(async () => requiredElement(container, "button").click())
+      expect(source.offers).toHaveBeenCalledTimes(3)
+      expect(container.querySelector('button[aria-label^="Download"]')).not.toBeNull()
+    } finally {
+      await React.act(async () => root.unmount())
+    }
+  },
+)

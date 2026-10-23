@@ -1,9 +1,10 @@
 use super::super::fields::{identifier, string};
 use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::tools::{
-    FileLocation, FilePath, ToolCallId, ToolCallUpdate, ToolContent, ToolKind, ToolStatus,
+    FileLocation, FilePath, ToolCallId, ToolCallInput, ToolCallUpdate, ToolContent, ToolKind,
+    ToolStatus, MAX_TOOL_INPUT_BYTES,
 };
-use crate::infrastructure::json_rpc::protocol;
+use crate::infrastructure::json_rpc::{json_fits, protocol};
 use serde_json::Value;
 
 /// Bounded display text for a structurally valid tool result Nessa cannot render.
@@ -151,6 +152,26 @@ pub(crate) fn tool_call(value: &Value) -> Result<ToolCallUpdate, AgentError> {
         locations,
         content,
     ))
+}
+
+/// `update`, also carrying the call's input when the frame `value` reports
+/// one: an object `rawInput` within [`MAX_TOOL_INPUT_BYTES`]. One past the
+/// bound, or of another shape, is left off, never cut and never refused:
+/// the input is for display, and how each harness checks it is its profile's.
+pub(crate) fn attach_input(update: ToolCallUpdate, value: &Value) -> ToolCallUpdate {
+    let Some(input) = value.get("rawInput").filter(|input| input.is_object()) else {
+        return update;
+    };
+    if !json_fits(input, MAX_TOOL_INPUT_BYTES) {
+        return update;
+    }
+    match serde_json::to_string(input)
+        .ok()
+        .and_then(|json| ToolCallInput::new(json).ok())
+    {
+        Some(input) => update.with_input(input),
+        None => update,
+    }
 }
 
 pub(crate) fn path(value: impl Into<String>) -> Result<FilePath, AgentError> {

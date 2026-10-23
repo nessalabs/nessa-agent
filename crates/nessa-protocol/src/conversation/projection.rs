@@ -1,4 +1,4 @@
-use super::domain::{ConversationApprovalMode, ConversationId};
+use super::domain::{ConversationApprovalMode, ConversationId, LATEST_TIME_MS};
 use super::tool_uis::{McpToolUis, NoMcpToolUis};
 use super::view::{
     ConversationAnswerOption, ConversationApprovalModeChangeView, ConversationArtifact,
@@ -12,9 +12,10 @@ use super::view::{
     ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
     ConversationQuestion, ConversationQuestionEntry, ConversationReviewEntry,
     ConversationReviewKind, ConversationRuntime, ConversationSelectionView, ConversationTool,
-    ConversationTranscriptState, ConversationUnreadable, ConversationUsageLimit,
-    ConversationUsageLimitProvider, ConversationUsageLimitRecovery, ConversationView,
-    NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationToolChange, ConversationTranscriptState, ConversationUnreadable,
+    ConversationUsageLimit, ConversationUsageLimitProvider, ConversationUsageLimitRecovery,
+    ConversationView, NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES, MAX_TOOL_CHANGES,
+    MAX_TOOL_CHANGE_PATH_BYTES, MAX_TOOL_CHANGE_SIDE_BYTES,
 };
 use nessa_sdk::application::agent_execution::permissions::{
     ApprovalRuleReference, CancellationOrigin, DeclinedReview, PermissionCancellation,
@@ -31,7 +32,10 @@ use nessa_sdk::domain::agent_execution::leases::{
     EnvironmentRef, LeaseCleanup, LeaseEndCause, LeasePhase, LeaseRefusal, LeaseRevision,
     SandboxProfile,
 };
-use nessa_sdk::domain::agent_execution::tools::McpTool;
+// The schema's bound on `ConversationTool.input` is the SDK's bound on the
+// input an agent reports. A review's input past it is left off the tool row;
+// the review still offers all of it.
+use nessa_sdk::domain::agent_execution::tools::{McpTool, MAX_TOOL_INPUT_BYTES};
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{
@@ -78,9 +82,6 @@ pub const MAX_QUESTION_LIST_BYTES: usize = MAX_OPEN_QUESTIONS * MAX_QUESTION_ENT
 /// which it never gives up.
 pub const MAX_INTERACTION_LIST_BYTES: usize = MAX_REVIEW_LIST_BYTES + MAX_QUESTION_LIST_BYTES;
 const _: () = assert!(MAX_INTERACTION_LIST_BYTES <= MAX_VIEW_BYTES * 2 / 5);
-/// The schema's bound on `ConversationTool.input`, in UTF-8 bytes. An input
-/// past it is left off the tool row; its review still offers all of it.
-const MAX_TOOL_INPUT_BYTES: usize = 32_768;
 const REQUIRED_WORK_FAILURE: &str = "The turn could not complete all required work.";
 const PROVIDER_FAILURE_PREFIX: &str = "The agent provider reported an error: ";
 
@@ -278,11 +279,12 @@ pub struct Projection {
     /// deadline did not settle them, so a later notice is ignored.
     cancelled_otherwise: HashSet<(String, String)>,
     terminal_executions: HashSet<String>,
-    /// The calls that have a part in their turn, by execution and clipped tool
-    /// id, so a call's later updates find it without scanning the turn's
-    /// parts. A call goes in only when its part is pushed, and an execution
-    /// leaves when its parts do: cleared for a replayed record, or its message
-    /// let go.
+    /// The calls heard in each turn, by execution and clipped tool id, so a
+    /// call's later updates find its part without scanning the turn's parts,
+    /// and a call whose row was let go is not mistaken for a new one. A call
+    /// goes in on its first report, even when the turn had no room left for
+    /// its part, and an execution leaves when its parts do: cleared for a
+    /// replayed record, or its message let go.
     tool_parts: HashMap<String, HashSet<String>>,
     /// The hooks choice each execution's tool events were saved with. One
     /// execution runs on one process start, so its events agree. `None`
@@ -1191,11 +1193,11 @@ impl Projection {
             .iter_mut()
             .find(|tool| tool.execution_id == execution && tool.tool_id == tool_id.as_str())
         {
-            tool.input = if input.arguments_json.len() <= MAX_TOOL_INPUT_BYTES {
-                input.arguments_json.clone()
-            } else {
-                String::new()
-            };
+            // Past the bound the review's arguments are left out, never cut,
+            // and the input the call already reported stays.
+            if input.arguments_json.len() <= MAX_TOOL_INPUT_BYTES {
+                tool.input = input.arguments_json.clone();
+            }
         }
     }
 
@@ -1343,6 +1345,15 @@ impl Projection {
         {
             self.view.truncated = true;
         }
+        // Whether this turn heard the call before this report: its row may
+        // since have been let go for room, but this is not its first report.
+        let heard = match event.update() {
+            ExecutionUpdate::Tool(update) => self
+                .tool_parts
+                .get(id)
+                .is_some_and(|calls| calls.contains(&clipped(update.id().as_str(), 256))),
+            _ => false,
+        };
         let part = match event.update() {
             ExecutionUpdate::Message(chunk) => Some(ConversationPart {
                 message_id: chunk.message_id().map(str::to_owned),
@@ -1360,22 +1371,15 @@ impl Projection {
             }),
             // One part per tool call, where it was first seen: a call's later
             // updates change its `tools` entry, not the turn's parts.
-            ExecutionUpdate::Tool(update) => {
-                let tool_id = clipped(update.id().as_str(), 256);
-                let seen = self
-                    .tool_parts
-                    .get(id)
-                    .is_some_and(|calls| calls.contains(&tool_id));
-                (!seen).then(|| ConversationPart {
-                    message_id: None,
-                    offset,
-                    kind: "tool".into(),
-                    text: String::new(),
-                    tool_id,
-                    notice_id: String::new(),
-                    notice_kind: String::new(),
-                })
-            }
+            ExecutionUpdate::Tool(update) => (!heard).then(|| ConversationPart {
+                message_id: None,
+                offset,
+                kind: "tool".into(),
+                text: String::new(),
+                tool_id: clipped(update.id().as_str(), 256),
+                notice_id: String::new(),
+                notice_kind: String::new(),
+            }),
             ExecutionUpdate::DeadlineAnswered {
                 id: permission,
                 effect,
@@ -1473,16 +1477,16 @@ impl Projection {
             _ => None,
         };
         if let Some(part) = part {
+            if part.kind == "tool" {
+                self.tool_parts
+                    .entry(id.to_owned())
+                    .or_default()
+                    .insert(part.tool_id.clone());
+            }
             let message = &mut self.view.messages[index];
             if message.parts.len() < 512 && message.retained_text + part.text.len() <= MAX_TEXT * 2
             {
                 message.retained_text += part.text.len();
-                if part.kind == "tool" {
-                    self.tool_parts
-                        .entry(id.to_owned())
-                        .or_default()
-                        .insert(part.tool_id.clone());
-                }
                 message.parts.push(part);
             } else {
                 self.view.truncated = true;
@@ -1538,6 +1542,10 @@ impl Projection {
                     }
                     agreed
                 });
+                // When the session heard this report. A time no JSON reader
+                // can hold, read back from a damaged file, is left unknown
+                // rather than refusing the whole view.
+                let at = event.observed_at_ms().filter(|at| *at <= LATEST_TIME_MS);
                 let position = self.view.tools.iter().position(|tool| {
                     tool.execution_id == id && tool.tool_id == update.id().as_str()
                 });
@@ -1559,9 +1567,23 @@ impl Projection {
                         mcp: None,
                         structured_content: None,
                         native_hooks: None,
+                        // The call's span is when the session first heard of
+                        // it, to when it heard the call settle. Only the
+                        // call's first report sets the start: a call first
+                        // reported before arrivals were stamped, or whose row
+                        // was let go for room and is back, keeps an unknown
+                        // start rather than taking a later report's time.
+                        started_at_ms: at.filter(|_| !heard),
+                        ended_at_ms: None,
+                        changes: Vec::new(),
+                        changes_cut: false,
                     });
                     self.view.tools.last_mut().unwrap()
                 };
+                // A later report of a settled call does not move its end.
+                if let Some(input) = update.input() {
+                    tool.input = input.as_str().to_owned();
+                }
                 if let Some(agreed) = hooks {
                     tool.native_hooks = agreed.map(|allowed| {
                         if allowed {
@@ -1637,16 +1659,56 @@ impl Projection {
                         .filter(|json| json.len() <= MAX_STRUCTURED_CONTENT_BYTES)
                         .map(str::to_owned);
                     let mut details = String::new();
+                    // Once the details are full, later items still list their
+                    // file changes; only their text is left out.
+                    let mut details_full = false;
+                    tool.changes.clear();
+                    tool.changes_cut = false;
                     for item in content {
                         let text = match item.view() {
                             ToolContentView::Structured(_) => continue,
-                            ToolContentView::Text(text) => clipped(text, 16384),
-                            ToolContentView::Diff { path, old, new } => format!(
-                                "File: {}\nBefore:\n{}\nAfter:\n{}",
-                                path.as_str(),
-                                clipped(old.unwrap_or("(not provided)"), 7000),
-                                clipped(new, 7000)
-                            ),
+                            ToolContentView::Text(text) => {
+                                (!details_full).then(|| clipped(text, 16384))
+                            }
+                            ToolContentView::Diff { path, old, new } => {
+                                let before =
+                                    old.map(|old| clipped(old, MAX_TOOL_CHANGE_SIDE_BYTES));
+                                let after = clipped(new, MAX_TOOL_CHANGE_SIDE_BYTES);
+                                let cut = before
+                                    .as_ref()
+                                    .is_some_and(|before| before.len() < old.map_or(0, str::len))
+                                    || after.len() < new.len();
+                                // Only while the details have room, and no
+                                // more of the path than they could hold. A
+                                // clipped side says so in the text too.
+                                let text = (!details_full).then(|| {
+                                    format!(
+                                        "File: {}\nBefore:\n{}\nAfter:\n{}{}",
+                                        clipped(path.as_str(), 16384),
+                                        before.as_deref().unwrap_or("(not provided)"),
+                                        after,
+                                        if cut { "\n[Output truncated]" } else { "" }
+                                    )
+                                });
+                                // A path past its bound is not listed rather
+                                // than cut: a cut path names another file.
+                                if tool.changes.len() == MAX_TOOL_CHANGES
+                                    || path.as_str().len() > MAX_TOOL_CHANGE_PATH_BYTES
+                                {
+                                    tool.changes_cut = true;
+                                } else {
+                                    tool.changes.push(ConversationToolChange {
+                                        path: path.as_str().to_owned(),
+                                        cut,
+                                        before,
+                                        after,
+                                    });
+                                }
+                                text
+                            }
+                        };
+                        let Some(text) = text else {
+                            continue;
                         };
                         if !details.is_empty() {
                             details.push('\n');
@@ -1655,7 +1717,7 @@ impl Projection {
                         if details.len() > 16000 {
                             details = clipped(&details, 16000);
                             details.push_str("\n[Output truncated]");
-                            break;
+                            details_full = true;
                         }
                     }
                     tool.details = details;
@@ -1668,6 +1730,12 @@ impl Projection {
                         ToolStatus::Failed => "failed",
                     }
                     .into();
+                    match status {
+                        ToolStatus::Completed | ToolStatus::Failed => {
+                            tool.ended_at_ms = tool.ended_at_ms.or(at);
+                        }
+                        ToolStatus::Pending | ToolStatus::Running => tool.ended_at_ms = None,
+                    }
                 }
             }
         }
@@ -1965,6 +2033,12 @@ pub fn bound_view_within(
             .find(|tool| tool.structured_content.is_some())
         {
             tool.structured_content = None;
+            continue;
+        }
+        // So are the structured changes: the same text is in the details.
+        if let Some(tool) = view.tools.iter_mut().find(|tool| !tool.changes.is_empty()) {
+            tool.changes.clear();
+            tool.changes_cut = true;
             continue;
         }
         // Only the interactions are left, and they are not to be given up:
