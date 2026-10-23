@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "e08b90cf01ecd2fef3e78ce4b707935e1fb2abfa"
+sourceRevision: "c2bbb2705fe03ec77efc727460893cbadd264639"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
@@ -14,6 +14,11 @@ sources:
   - crates/nessa-auth/src/application/ports.rs
   - crates/nessa-auth/src/application/revocation.rs
   - crates/nessa-server/src/webhooks/application/outbox.rs
+  - crates/nessa-server/src/webhooks/application/registration_stop.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/stop.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_stop.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/stop_rows.rs
+  - crates/nessa-auth/tests/revocation.rs
   - crates/nessa-server/src/webhooks/application/registration.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/intents.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs
@@ -72,6 +77,39 @@ asks the existing auth owner and correlates its actual result before installing
 under a current credential hold. The private intent supplies no permission verdict;
 product command ownership, source replay and the sender remain pending. Application installation #1052 and inbound
 workflow triggers #1088 remain separate.
+
+## Observing an actual credential stop
+
+The inner stop use case holds the current Auth snapshot while it asks the outbox
+to stop that credential. A revocation must carry the original journal record;
+missing or mismatched evidence fails before the stop is requested. Without a
+revocation, only elapsed expiry creates an expiry observation. A credential whose
+start time is still in the future does not create an expiry event. This use case
+is not mounted and does not own caller cancellation or startup reconciliation.
+
+The same bounded stop value is stored with live registrations, retirements and
+causal audit. It retains the original principal or offline operator, revocation
+cause, replacement identity, sequence, revision and command correlation. Original
+Auth command and effective revocation times stay in seconds; the first local stop
+observation stays in milliseconds. Expiry retains its actual first reader instead
+of inventing an Auth event. A later revocation does not replace prior expiry.
+
+A current-bound Auth fact and a decoded retained record are distinct types.
+Decoding retained shape establishes neither journal origin nor current permission.
+Restoration correlates it with the owning registration and audit; live delivery
+still needs current credential, grant and Cedar admission. A new stop input is
+checked against retained original facts before owed audit publication. A different
+original record refuses; a retry of the same record preserves the first local
+observation, including after retirement and cold restore. The credential lookup
+uses a bounded indexed selection and refuses ambiguous retained ownership.
+
+The [actual-source tests](../../../../crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_stop.rs)
+cover original facts, the held Auth read through sink acknowledgement, lost
+acknowledgement, restoration and substitution before
+publication. [Row and lookup tests](../../../../crates/nessa-server/tests/webhooks/infrastructure/outbox/stop_rows.rs)
+check borrowed allocation budgets, valid maximum stop bytes and bounded lookup
+work at the registration ceiling. This source checkpoint records inspected code,
+not platform, browser, CI or full feature qualification.
 
 ## Restoration redesign
 
@@ -140,6 +178,7 @@ stateDiagram-v2
     [*] --> Restoring
     Restoring --> Refused: Invalid fields, histories, registration/cursor facts or accounting
     Restoring --> Ready: Checked current schema and acquired lifetime owner lock
+    Ready --> Refused: Supplied stop contradicts retained original facts
     Ready --> Writing: Queue, transition, stop or recovery
     Writing --> Refused: Validation, compare-and-swap or audit insertion fails
     Writing --> Owed: Commit state, checkpoint and audit after retention checks

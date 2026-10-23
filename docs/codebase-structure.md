@@ -1661,7 +1661,12 @@ validation before effects; `retirement` retains bounded secret-free original
 identity/stop facts and the exact retirement audit identity through lost
 acknowledgement; `source_reset` owns immutable original reset facts and first-capture
 membership (`source_reset/store.rs`) and bounded reference retention; `registry`
-persists installation target facts. `application/registration.rs` asks the
+persists installation target facts. `infrastructure/outbox/stop.rs` is the single
+bounded retained stop codec shared by live, retired and audit state.
+`application/registration_stop.rs` consumes the actual held Auth fact and derives
+the lifecycle projection; it grants no delivery permission and is not a command
+supervisor. Auth owns retained revocation decoding separately from its
+current-credential binding. `application/registration.rs` asks the
 existing auth owner to issue and correlates the returned credential/transition,
 then installs under a current credential hold. `infrastructure/outbox/intents.rs`
 retains bounded immutable private proposal/configuration facts across uncertain
