@@ -64,6 +64,7 @@ import {
 
 const checks = [
   "channels-alone",
+  "list-request",
   "quiet-composer",
   "overview-narrow",
   "sidebar-motion",
@@ -101,6 +102,9 @@ Usage: node verification/desktop/scripts/columns.mjs [options]
   --sizes <list>   Window sizes (default 1440x900,1000x700,760x700; --quick: the first).
 
 Checks, per engine, layout and size:
+  list-request    three columns: a waiting row in Needs you is a card with the
+                  exact command, and Allow from it settles the review — the
+                  row leaves Needs you, its card with it
   channels-alone  three columns: the sidebar lists channels and no session
                   under them; the chosen channel's pinned sessions lead its
                   list under "Pinned", each listed once. Sessions in sidebar:
@@ -676,6 +680,39 @@ const body = {
     if (tall.some((c) => !c.choices && !c.running))
       failures.push("in a tall window a composer is still quiet")
     return { short, after, tall, failures }
+  },
+
+  "list-request": async ({ page, layout }) => {
+    if (layout !== "columns") throw new CannotRun("only three columns has a session list")
+    const failures = []
+    const card = page.locator('[data-list-group="needs-you"] .workspace-request').first()
+    await card.waitFor({ timeout: 10_000 }).catch(() => {})
+    if (!(await card.count())) throw new CannotRun("nothing waits in Needs you")
+    const row = page
+      .locator('[data-list-group="needs-you"] .workspace-request-card [data-session-row]')
+      .first()
+    const id = await row.getAttribute("data-session-row")
+    const command = (await card.locator(".workspace-approval-command").innerText()).trim()
+    if (!command.startsWith("$")) failures.push(`the card shows no command: "${command}"`)
+    const allow = card.locator('button[data-answer="once"]')
+    const deny = card.locator('button[data-answer="deny"]')
+    const [a, d] = [await allow.boundingBox(), await deny.boundingBox()]
+    if (!a || !d || Math.abs(a.y - d.y) > 1)
+      failures.push("Deny and Allow do not stand on one row")
+    await allow.click()
+    const left = await page
+      .waitForFunction(
+        (sessionId) =>
+          !document.querySelector(
+            `[data-list-group="needs-you"] [data-session-row="${CSS.escape(sessionId)}"]`,
+          ),
+        id,
+        { timeout: 5_000 },
+      )
+      .then(() => true)
+      .catch(() => false)
+    if (!left) failures.push("after Allow, the row is still in Needs you")
+    return { failures, detail: { id, command } }
   },
 
   "channels-alone": async ({ page, layout }) => {

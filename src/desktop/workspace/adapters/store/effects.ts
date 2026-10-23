@@ -1,8 +1,9 @@
 import { modelConfirmed } from "../../model/model-choice"
 /**
  * What follows from a change of state, whoever caused it — a click, a
- * keystroke, an agent's dispatch: a session on screen now — in a pane, or in
- * the open Agents overview (`shownSessionIds`) — has its conversation read,
+ * keystroke, an agent's dispatch: a session on screen now — in a pane, in
+ * the open Agents overview, or asked about by the session list
+ * (`shownSessionIds`) — has its conversation read,
  * once (a refused read waits for `retryTranscript`); the index read again —
  * the resync — reads every conversation on screen again, setting aside any
  * read already on its way, which may predate what the stream lost; a
@@ -97,6 +98,10 @@ export function workspaceEffects(
       current.workspace.sessions !== previous.workspace.sessions ||
       current.workspace.content !== previous.workspace.content ||
       current.workspace.overview !== previous.workspace.overview ||
+      // The session list's requests: what it lists, and whether it is drawn.
+      current.workspace.view !== previous.workspace.view ||
+      current.workspace.chrome !== previous.workspace.chrome ||
+      current.workspace.arrangement !== previous.workspace.arrangement ||
       current.workspace.transcriptFailures !== previous.workspace.transcriptFailures,
     effect: (_action, api) => {
       const state = api.getState().workspace

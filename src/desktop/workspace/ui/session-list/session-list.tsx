@@ -55,6 +55,7 @@ import {
 } from "../../../ui/menu"
 import { knownToSource } from "../../model/revision"
 import { useRowFocusKept } from "../row-focus"
+import { ListRequest } from "./list-request"
 import { useSessionRowActions, type SessionRowActions } from "../session-row-actions"
 
 /**
@@ -196,13 +197,21 @@ export const SessionList = memo(function SessionList() {
                   label={group.label}
                   count={group.ids.length}
                 />
-                {group.ids.map((sessionId) => (
-                  <SessionRow
-                    key={sessionId}
-                    sessionId={sessionId}
-                    tabStop={sessionId === tabStop}
-                  />
-                ))}
+                {group.ids.map((sessionId) =>
+                  // What waits on the person is asked here too, the row its card's head.
+                  group.id === "needs-you" ? (
+                    <div key={sessionId} className="workspace-request-card" role="none">
+                      <SessionRow sessionId={sessionId} tabStop={sessionId === tabStop} />
+                      <ListRequest sessionId={sessionId} />
+                    </div>
+                  ) : (
+                    <SessionRow
+                      key={sessionId}
+                      sessionId={sessionId}
+                      tabStop={sessionId === tabStop}
+                    />
+                  ),
+                )}
               </div>
             ))}
           </div>
