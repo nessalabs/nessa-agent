@@ -1629,6 +1629,15 @@ in one catch-all file. New MCP shell code is the small Rust example; the desktop
 gateway context demonstrates an application port with native adapters. Older SDK
 paths remain current until the coordinated TODO updates all consumers.
 
+## Outbound webhook foundation
+
+The outbound [webhook foundation](design/webhook-delivery-implementation.md)
+lives under `crates/nessa-server/src/webhooks`: immutable delivery and destination
+values in `domain/value_objects`, message/transport ports in `application`, and
+JSON, HMAC, DNS and HTTPS in `infrastructure`. Tests use the same layer names
+under `tests/webhooks`. This first slice is not composed into the gateway;
+registration, durable replay/outbox and grant admission remain future work.
+
 ## Browser sessions
 
 `crates/nessa-server/src/browser_session/` owns browser sign-in: `application/`
