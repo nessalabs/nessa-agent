@@ -27,8 +27,8 @@
  *                    each group's card starts below the list's top fade; a
  *                    row opened beneath itself keeps everything inside its
  *                    card; every tab is one width (a merged chat within 8%).
- *   sidebar-motion   ⌘B folds and unfolds the sidebar as the classic shell's
- *                    split view does: what stands beside it (the session
+ *   sidebar-motion   ⌘B folds and unfolds the sidebar as a drawer, on
+ *                    --desktop-drawer's curve: what stands beside it (the session
  *                    list, or the panes) and the pane's composer — its left
  *                    edge and its centre — move over several frames, one way,
  *                    to where they rest; with reduced motion they land at once.

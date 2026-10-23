@@ -1003,8 +1003,8 @@ phone's scanner is not this screen.
   `settings-view.test.tsx`, `settings-controls.test.tsx`; by eye.
 - [ ] **A setting for one layout says so elsewhere**: "Show session list" and
   "Keep running sessions at the top" work in three columns; in sessions in
-  the sidebar and classic their switches are disabled and say "Three columns
-  only". _Check:_ unit test `settings-view.test.tsx` (per layout).
+  the sidebar their switches are disabled and say "Three columns only"; a
+  "classic" layout an earlier build stored reads as three columns. _Check:_ unit test `settings-view.test.tsx` (per layout).
 - [ ] **Segmented choices are one Tab stop each option, for now**: they are
   the kit's `SegmentedControl` (a group of pressed buttons, no arrow keys);
   one Tab stop with arrows waits on its radio-group mode (nessalabs/nessa_ui#120).
@@ -1184,7 +1184,7 @@ pointer, and outlined by `--desktop-focus-outline` under the keyboard.
 
 - [ ] **Every icon button holds the contract, and none of the replaced classes
   is left.** _Check:_ `icon-buttons.mjs` (`contract`, per engine and layout;
-  `--layout classic` for the classic shell). Rule: `ui/icon-button.css`.
+  both layouts). Rule: `ui/icon-button.css`.
 - [ ] **The pointer fills it with the stronger hover.** _Check:_
   `icon-buttons.mjs` (`hover`).
 - [ ] **Keyboard focus on one draws an outline.** _Check:_ `icon-buttons.mjs`
@@ -1228,26 +1228,24 @@ it is redesigned on its own branch.
   commit no row was either component, and unread weighed 560, 600 or 650 by
   list.
 - [ ] **The window's name is one control in every place (#657).** "nessa
-  Studio" at the workspace's and the classic shell's foot and "‹ nessa Agent"
+  Studio" at the workspace's foot and "‹ nessa Agent"
   at Settings' are `ui/identity.tsx`: a pill the corner controls' size and
   radius, "nessa" and its word in `--desktop-muted`, named, filled with
   `--desktop-hover` under the pointer; Settings' row stands where the
   window's does. _Check:_ `shared-controls.mjs` (`identity`, per engine and
   layout; "‹ nessa Agent" measured inside Settings, over the inert window
-  that keeps its own; and in the classic shell). Rule:
+  that keeps its own). Rule:
   `ui/identity.css`. Sampling waits for its finite hover transition through
   `waitUntilSettled`, retaining the exact fill assertion. Browser measurement
   ordering is in [UI workspace load](../../docs/design/ui-workspace-load.md#verification-sampling-order).
-  At the base commit the classic shell's read
-  "nessaStudio" with no name, no pill and no fill, in the kit's grey.
 - [ ] **Every empty state is the kit's `EmptyState`, in the window's type
   (#657).** The session list's, the workspace's failure, an overview group
-  shown alone, "Nothing needs you", the classic shell's notes, the subagents
+  shown alone, "Nothing needs you", the right panel's "Nothing open", the subagents
   panel's and a widget's line: a quiet one (`compact`) a faint footnote line
   with its action 12px under it, a titled one at reading size, 600, its
   sentence muted. Where each sits is its surface's. _Check:_
   `shared-controls.mjs` (`empty`: the quiet ones — the session list with no
-  match, the classic shell's notes); `gateway-states.mjs` reads the
+  match, the right panel's "Nothing open"); `gateway-states.mjs` reads the
   workspace's sentence from the kit's title. The titled ones ("Nothing needs
   you", the subagents panel's) show only with nothing listed, which the
   sample never is: their type is held by #657's before/after shots

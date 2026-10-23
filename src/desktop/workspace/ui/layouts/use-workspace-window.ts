@@ -293,7 +293,7 @@ function useWorkspaceChrome(region: SidebarRegion) {
       rail,
     )
   const railDrawn = railOffered && railOpen && railRoom
-  // The right panel, Classic's, beside the panes. Maximized, it covers the
+  // The right panel, beside the panes. Maximized, it covers the
   // workspace until Escape or its button; a full view hides it.
   const [panelPlace, setPanelPlace] = usePanelPreference()
   const [panelMaximized, setPanelMaximized] = useState(false)

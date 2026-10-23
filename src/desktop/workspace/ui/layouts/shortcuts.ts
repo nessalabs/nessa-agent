@@ -4,7 +4,6 @@
  * them, so a chord is named only where it works.
  */
 import type { Chord } from "../../../model/keyboard"
-import { panelChord } from "../../../ui/right-panel"
 import type { Binding } from "../../adapters/dom/shortcuts"
 import type { ShortcutCommand } from "../workspace-frame"
 
@@ -22,7 +21,8 @@ const bind = (chord: Chord, command: ShortcutCommand): Binding<ShortcutCommand> 
 export const workspaceShortcuts: readonly Binding<ShortcutCommand>[] = [
   bind({ code: "KeyB", command: true }, "toggleSidebar"),
   bind({ code: "KeyS", command: true, alt: true }, "toggleSessionList"),
-  bind(panelChord, "togglePanel"),
+  // ⌥⌘B: the sidebar's ⌘B, for the panel on the other side.
+  bind({ code: "KeyB", command: true, alt: true }, "togglePanel"),
   bind({ code: "KeyN", command: true }, "newSession"),
   bind({ code: "KeyN", command: true, shift: true }, "newSessionBeside"),
   // Splits the chat in front: a new session beside it, merged into its tab.

@@ -273,13 +273,8 @@ function MotionTab() {
 /** A small drawing of each layout, so the choice is seen rather than read. */
 function LayoutSketch({ id }: { id: WorkspaceLayoutId }) {
   // Three columns: sidebar, session list, chat. Sessions in sidebar: a wider
-  // sidebar holding the sessions, then chat. Classic: sidebar, home, panel.
-  const columns =
-    id === "columns"
-      ? ["side", "list", "main"]
-      : id === "sidebar"
-        ? ["tree", "main"]
-        : ["side", "main", "panel"]
+  // sidebar holding the sessions, then chat.
+  const columns = id === "columns" ? ["side", "list", "main"] : ["tree", "main"]
   return (
     <span className="settings-choice-art settings-sketch" aria-hidden="true">
       {columns.map((kind, index) => (

@@ -189,7 +189,7 @@ async function hovered(page, selector) {
  * words and its row, against the corner controls' scale. In the page.
  */
 function measureIdentity([selector, sel]) {
-  // On screen: the classic shell keeps a second sidebar off it, for its edge reveal.
+  // On screen: a folded sidebar waits off it, for its edge reveal.
   const button = [...document.querySelectorAll(selector)].find((candidate) => {
     const box = candidate.getBoundingClientRect()
     return (
@@ -431,7 +431,7 @@ const rowKinds = {
 }
 
 const checks = {
-  identity: async (page, { open }) => {
+  identity: async (page) => {
     const scale = await page.evaluate(windowScale)
     const failures = []
     const inWindow = await page.evaluate(measureIdentity, [css.studio, css])
@@ -480,28 +480,7 @@ const checks = {
               `Settings' row is at ${side} ${inSettings.row[side]}, the window's at ${inWindow.row[side]}`,
             )
     }
-    const classic = await open("classic")
-    let inClassic
-    try {
-      inClassic = await classic.evaluate(measureIdentity, [css.identityButton, css])
-      if (!inClassic) failures.push("no identity in the classic shell")
-      else {
-        failures.push(
-          ...inClassic.failures.map((f) => `classic "${inClassic.text}": ${f}`),
-        )
-        failures.push(
-          ...(await identityHover(classic, scale, css.identityButton)).map(
-            (f) => `classic: ${f}`,
-          ),
-        )
-      }
-    } finally {
-      await classic
-        .context()
-        .close()
-        .catch(() => {})
-    }
-    return { failures, measured: { inWindow, inSettings, inClassic } }
+    return { failures, measured: { inWindow, inSettings } }
   },
   badges: async (page, { layout }) => {
     const failures = []
@@ -607,7 +586,7 @@ const checks = {
       if (!seen[kind]) failures.push(`no ${kind} was shown to measure`)
     return { failures, measured: seen }
   },
-  empty: async (page, { layout, open }) => {
+  empty: async (page, { layout }) => {
     const failures = []
     let inList = { seen: [] }
     // The session list is a column of its own only in the three-column layout.
@@ -622,20 +601,15 @@ const checks = {
       if (inList.seen.length === 0) failures.push("no kit EmptyState in the session list")
       failures.push(...(await emptyListPill(page)))
     }
-    const classic = await open("classic")
-    let inClassic
-    try {
-      inClassic = await classic.evaluate(measureEmptyStates, css)
-      failures.push(...inClassic.failures.map((f) => `classic ${f}`))
-      if (inClassic.seen.length < 2)
-        failures.push("the classic shell's two notes are not shown")
-    } finally {
-      await classic
-        .context()
-        .close()
-        .catch(() => {})
-    }
-    return { failures, measured: { inList: inList.seen, inClassic: inClassic?.seen } }
+    // The right panel's "Nothing open", in either layout.
+    await page.getByRole("button", { name: "Show Panel" }).click()
+    await need(page, "#workspace-panel [data-slot='empty-state']", "the panel's note")
+    const inPanel = await page.evaluate(measureEmptyStates, css)
+    failures.push(...inPanel.failures.map((f) => `panel ${f}`))
+    if (!inPanel.seen.some((each) => /Nothing open/.test(JSON.stringify(each))))
+      failures.push('the right panel\'s "Nothing open" is not shown')
+    await page.getByRole("button", { name: "Hide Panel" }).click()
+    return { failures, measured: { inList: inList.seen, inPanel: inPanel.seen } }
   },
   keys: async (page) => {
     await need(page, `${css.keyCap}:visible`, "a key cap")
@@ -872,16 +846,16 @@ Checks, per engine and layout (--only badges,empty,identity,keys,list,rims,rows,
              least 18 wide, no border, the needs light for what waits); every
              lit point — unread, needs you, the overview's heading included —
              is StatusGlyph's 6px point in its light. On load and in the overview.
-  empty      every empty state — the session list's with no match, the classic
-             shell's notes — is the kit's EmptyState in the window's type: a
+  empty      every empty state — the session list's with no match, the right
+             panel's "Nothing open" — is the kit's EmptyState in the window's type: a
              quiet one faint footnote, a titled one at reading size, 600.
              Columns: the writing channel's one session is archived, and New
              Session is the kit's tinted pill (28px, fully round,
              --desktop-selected, press scale 0.97). A missing button, the old
              button, another corner, another fill, or a press that does not
              scale fails.
-  identity   "nessa Studio" at the sidebar's foot, "‹ nessa Agent" at Settings'
-             and the classic shell's are one control (ui/identity.tsx): a pill
+  identity   "nessa Studio" at the sidebar's foot and "‹ nessa Agent" at
+             Settings' are one control (ui/identity.tsx): a pill
              the corner controls' size and radius, "nessa" and a word in
              --desktop-muted, named, filled with --desktop-hover under the
              pointer; Settings' row stands where the window's does.

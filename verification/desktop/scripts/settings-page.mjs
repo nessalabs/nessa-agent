@@ -557,12 +557,12 @@ const checks = {
   /** Keyboard focus on a tab and a switch shows the window's focus ring. */
   /**
    * "nessa Studio" at the foot of the sidebar opens Settings in every layout,
-   * the window whole beneath it, and Back returns. In the classic shell its
-   * button handed its click on as the tab to open, and the window went blank.
+   * the window whole beneath it, and Back returns. An earlier "nessa Studio"
+   * handed its click on as the tab to open, and the window went blank.
    */
   studio: async (_page, { browser, url }) => {
     const failures = []
-    for (const layout of ["classic", "columns"]) {
+    for (const layout of ["sidebar", "columns"]) {
       const opened = await openPage(browser, { url, layout, width: 1000, height: 700 })
       const errors = []
       opened.page.on("pageerror", (error) => errors.push(error.message))
@@ -661,8 +661,8 @@ Per engine:
               the window's controls; scrolled back, it goes
   arrive      a page's motion is at most 300ms; none under less motion
   search      Enter lands on the setting, in view and marked a moment; ⌘F
-  studio      "nessa Studio" opens Settings, whole, in the classic and
-              three-column layouts, with no page error; Back returns
+  studio      "nessa Studio" opens Settings, whole, in both layouts, with
+              no page error; Back returns
   focus-ring  a tab and a switch show the window's focus ring
   review-notices  Access offers Allow and does not ask before that press
   remembered-rules  Access rests the remembered-rules row without a gateway

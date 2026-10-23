@@ -38,11 +38,6 @@
   padding-left: calc(var(--desktop-identity-mark) - 12px);
 }
 
-.desktop-identity-trailing {
-  display: flex;
-  margin-left: auto;
-}
-
 .desktop-identity-button {
   display: flex;
   min-width: 0;

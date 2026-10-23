@@ -10,13 +10,11 @@ import { SessionsInSidebar, ThreeColumns } from "../workspace"
 import { useWorkspaceSelector } from "../workspace/adapters/store/hooks"
 import { selectFailure } from "../workspace/adapters/store/selectors"
 import { startupFailureCode } from "../workspace/ui/startup-failure"
-import { DesktopApp } from "./desktop-app"
 import { StartupFallback } from "./startup-fallback"
 
 /**
  * The window: the workspace in the layout chosen in Settings › Workspace ›
- * Layout — three columns, sessions in the sidebar, or the classic shell —
- * and Settings, which opens over whichever it is.
+ * Layout — three columns, or sessions in the sidebar — and Settings, which opens over whichever it is.
  *
  * `inspectable` is a development build: the webview's own right-click menu,
  * kept off the window otherwise, stays on ⌥-right-click for Inspect Element.
@@ -49,9 +47,7 @@ export function DesktopWindow({
         className="desktop-window-under"
         inert={settings.open || startup !== null || undefined}
       >
-        {layout === "classic" ? (
-          <DesktopApp {...props} />
-        ) : layout === "sidebar" ? (
+        {layout === "sidebar" ? (
           <SessionsInSidebar {...props} />
         ) : (
           <ThreeColumns {...props} />

@@ -198,7 +198,7 @@ describe("both layouts are the one shell", () => {
     })
 })
 
-describe("the right panel is Classic's, in both layouts", () => {
+describe("the right panel, in both layouts", () => {
   // Wide enough that the panel's room folds no column.
   const width = window.innerWidth
   beforeEach(() => {

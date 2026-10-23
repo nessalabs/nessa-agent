@@ -34,8 +34,8 @@ it("moves panes and side columns on one drawer motion, instant with reduced moti
   const reduced = /:root\[data-motion="reduced"\] \[data-surface\] \{([^}]*)\}/.exec(
     styles,
   )?.[1]
-  // Panes travel as a side column does: the same duration (the classic
-  // split view's), and none at all with reduced motion.
+  // Panes travel as a side column does: the same duration, and none at all
+  // with reduced motion.
   expect(token(full, "--desktop-flight")).toBe(token(full, "--desktop-drawer"))
   expect(Number(token(full, "--desktop-drawer"))).toBe(340)
   expect(token(reduced ?? "", "--desktop-flight")).toBe("0")

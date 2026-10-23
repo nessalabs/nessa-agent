@@ -201,8 +201,8 @@ export interface WorkspaceState {
   readonly chrome: Chrome
   /**
    * The layout drawing the panes now, as the layout itself says when it is
-   * on screen (`arrangementShown`); `null` while none is, as in the classic
-   * shell. What the window tells the person's agents it shows
+   * on screen (`arrangementShown`); `null` while none is, as before the
+   * first one mounts. What the window tells the person's agents it shows
    * (`usecases/window.ts`) is said only while one is.
    */
   readonly arrangement: WindowArrangement | null

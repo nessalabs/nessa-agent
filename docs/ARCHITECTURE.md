@@ -45,7 +45,7 @@ closing the window hides it with its Dock icon kept, so a click on the Dock
 opens it again; where there is no Dock either, closing it quits the app
 (`desktop_window::on_close`) — it is never destroyed while the app runs on,
 since nothing could open it again. On macOS an overlay titlebar retains the native traffic lights;
-a fixed full-width WindowTitlebar places the sidebar toggle beside them, without
+the workspace's full-width titlebar places the sidebar toggle beside them, without
 a title label or divider. The host centres the native buttons 24px below the
 window's top (`platform/macos/traffic_lights.rs`), on the same centre as the
 titlebar's controls. It places them by their measured centre rather than a
@@ -55,16 +55,15 @@ notice (a title change does), so it checks them each time the main run loop
 is about to sleep and moves only a button that is off the row. `tauri.conf.json` sets no `trafficLightPosition`, so nothing else moves them.
 The inset is macOS-only; browser and other hosts use ordinary header padding.
 The surface uses the design system's dark theme. Back/forward controls are
-disabled because the single-view shell has no navigation history.
+disabled because the window keeps no navigation history yet.
 Its drag region and double-click maximize have desktop-scoped capabilities.
 
 `desktop.html` mounts `src/desktop/main.tsx`, which builds the window's
 dependencies (`dependencies.ts`) and store (`store.ts`) and renders
 `ui/desktop-window.tsx`: the workspace (below) in the layout chosen in
-Settings, or the classic shell. The classic shell, `ui/desktop-app.tsx`,
-composes the design system's AppShell frame and Sidebar with a Home link, an
-empty Recents group, and `ui/home.tsx` in the main area — the same home a new
-session's pane shows, its composer wired to that session through `Home`'s
+Settings. A layout named "classic", which earlier builds offered, reads as the
+default, three columns (`model/workspace-layout.ts`). A new session's pane
+shows `ui/home.tsx`, its composer wired to that session through `Home`'s
 props: a night scene in text heading one stack
 from the top of the workspace with the greeting and composer (`model/night-scene.ts`, a dim and a lit
 layer of one grid, set one over the other by `ui/night-scene.tsx` as
@@ -120,20 +119,8 @@ heading, the text sits on the window beneath it and scrolls, with a thin
 translucent scrollbar kept for orientation and dragging, and the toolbar rests at the foot. It opens at seven
 lines and closes at three, apart so a draft near one threshold does not flip
 the layout, and the change is immediate, with no animation. In a narrow composer the project shows only its folder, so the model keeps
-its name. The app controls SidebarProvider from its shared layout; the
-provider supplies Cmd/Ctrl+B for the left sidebar and the app adds
-Cmd/Ctrl+Alt+B for the right one.
-The reusable `src/desktop/ui/window-titlebar.tsx` stays in this app. It accepts
-leading/trailing slots, optional labeled history actions, height, and native-control
-inset. It renders design-system Buttons and forwards native header props; it does
-not detect the OS, call Tauri, control Sidebar state, or own navigation history.
-Reuse it with AppShell by placing it before AppShellBody and passing a
-SidebarTrigger in `leading`. Each consuming app must configure its own native
-window and drag permissions. No changes to `nessa_ui` are required.
-
-The classic shell uses one titlebar over its split view, with the sidebar
-control after the native traffic lights and the right-panel control at the
-trailing edge. The workspace keeps navigation in the window's top row; New Session remains
+its name.
+The workspace keeps navigation in the window's top row; New Session remains
 available through its keyboard shortcut.
 Its row holds the window's tabs: each tab is one conversation or a merged group
 of panes with its own layout (`workspace/model/window-tabs.ts`). The chat
@@ -142,18 +129,19 @@ below it, so folding the sidebar cannot put a pane's actions behind the
 navigation.
 Column titles clear that group, moving below only where they cannot fit. The side rail (Settings › Advanced › Experimental) is a compact 48px
 column below that bar on every host, independent of the native traffic lights.
-Its toggle stays at the bottom-left control edge. When the rail folds, the
-sidebar footer reserves a control-sized slot before "nessa Studio", keeping the
-toggle aligned to the window's left edge rather than the traffic lights.
+Its toggle is nessa's mark at the sidebar's foot: wherever the rail is offered,
+Studio's square steps aside and the toggle stands in the footer's control-sized
+mark slot, on its line just before "nessa Studio"; with the rail open beside the
+sidebar it travels past the rail on the drawer's curve.
 The toggle remains available with both side columns closed. The workspace sidebar
 uses a soft gradient wash without a rounded card, rim or shadow. Its content clears the titlebar while the wash blends into the window's
 background. A rail item's full view covers the underlying workspace up to the
 window's top, including its cards and chat navigation controls. Each plugin
 keeps one top sidebar toggle for its rail, alongside the persistent bottom toggle.
-The classic sidebar remains an inset, rounded pane of translucent glass; the
-workspace sidebar uses the window's theme lights for its frameless gradient.
-Their content begins below the titlebar row, and closing one fades and slides
-it toward its edge while the split view animates its width.
+The workspace sidebar uses the window's theme lights for its frameless
+gradient. Its content begins below the titlebar row, and folding it slides it
+toward its edge on the drawer's curve (`--desktop-drawer`) while what stands
+beside it follows.
 Corner controls follow one geometry in `styles.css`: each sits the same
 distance from its pane's top and side edges, and its corner radius is the pane's
 radius minus that distance, so hover shapes are concentric with the pane. The
@@ -243,7 +231,7 @@ The workspace (`src/desktop/workspace/`,
 and what it is about: its index — sections hold channels, channels hold
 sessions — and sessions open in chat panes that split, stack, move and close.
 Two layouts, chosen in Settings › Workspace › Layout
-(`adapters/workspace-layout-preference.ts`; `classic` keeps the shell above),
+(`adapters/workspace-layout-preference.ts`),
 arrange the same parts. *Three columns* (`ui/layouts/three-columns.tsx`) is a
 sidebar of channels under the Agents overview's entry, the chosen channel's
 session list (grouped Needs you, Running, Earlier; searchable; ⌥⌘S folds it),
@@ -268,7 +256,7 @@ commits its arrangement in an animation frame, avoiding a synchronous React
 flush that could mount pending neighboring observers during delivery.
 
 The **Agents overview** (`ui/overview/`, ⌘0 or "Agents" at the top of the
-sidebar, in every layout but Classic, with nothing to turn on) takes the
+sidebar, in both layouts, with nothing to turn on) takes the
 content region while open, as a layer over the session list and the panes,
 which stay laid out beneath it — so a pane command asked meanwhile measures
 the room they really have, and first goes back to them. It lists what waits
@@ -390,51 +378,17 @@ panes fly, their blur and deep shadows pause. A new pane fills in the frame
 after its shell. Less motion — Settings › Appearance › Motion, or the
 system's setting — skips every flight (`data-motion` on the root).
 
-The classic shell, `ui/desktop-app.tsx`, composes two existing Sidebar components inside the design
-system's SplitView panels. SplitView owns pointer capture, accessible separators,
-keyboard resizing, and collapse snapping. The left sidebar opens at 250px,
-with a 200px minimum and 450px maximum (`adapters/sidebar-sizing.ts`). The main workspace has a 350px expanded minimum. The right panel has a 200px
-minimum and takes precedence over the left: `fitSidebarWidths` gives the
-workspace its minimum, then the open right panel its minimum, then the left what
-it asked for (narrowing, then closing below 200px), then grows the right with
-what remains. Opening the right panel in a narrow window therefore narrows or
-closes the left, and the right closes rather than shrinking under 200px. Both
-fit together from a 750px window up. Asking for the left sidebar when there is
-no room beside the right panel closes the right to make room.
-It can use all remaining space, with no percentage cap. It defaults to 400px, leaving the remainder for
-the workspace; at a 1100px window with two 1px borders, that is 250px left,
-448px workspace, and 400px right. A window too narrow for 250px plus the
-workspace narrows the left to 200px before closing it. Its maximum while resizing is usable width minus the current left width
-minus 350px while the workspace is expanded. Dragging the right divider below
-350px of workspace snaps the workspace to zero and gives all its space to the
-right panel. Dragging back to 350px restores the workspace. Right-edge pointer
-and keyboard changes preserve the current left width, preventing propagation
-from collapsing the left sidebar.
-Dragging below half the effective minimum snaps that sidebar closed.
-
-The app's `useSidebarLayout` measures usable width excluding separators, converts
-pixel defaults to the SplitView percentage layout, and preserves sidebar pixel
-widths across window resizes. It uses the design system's layout validator for
-constraints, remembers expanded pixel widths for reopening, and owns width and
-visibility together. Sidebars stay inline, including in browsers.
-Closed panels are inert and hidden from assistive technology.
-
-Borders show a localized glow in the theme's edge colour, centered on the
-pointer during hover and drag, instead of highlighting the entire edge. Keyboard focus shows the same
-glow at the center. The low-opacity gradient fades across a 220px vertical area. Regular drag resizing tracks the pointer immediately; collapse and
-toggle transitions animate for 340ms and respect reduced motion. The center
-uses 350px while expanded and is inert while snapped closed. On window shrink the same order applies: the left gives way first,
-then the right closes once it cannot keep 200px. The shell itself has a 350px
-minimum width. Right-edge resizing never changes the left sidebar. Widths
-animate only after the first measured layout has painted, so a window opens at
-its final layout instead of sliding in from equal thirds.
-
-The expand/restore button in the titlebar, beside the panel toggle, fills the
-app window with that panel. This is an in-app focus mode, not OS fullscreen: the native control
-row stays available. A fixed content layer preserves the measured split layout
-underneath; restore (or Escape) reveals the previous widths and open states.
-Hidden workspace/navigation panels are inert and resize separators are hidden.
-The right toggle exits this mode and closes the panel.
+The **right panel** (`ui/chrome/right-panel.tsx`) is a column beside the
+panes in both layouts. Its toggle and expand button stand at the titlebar's
+end; ⌥⌘B shows and hides it. Its edge resizes it between 260px and 560px,
+never more than a third of the window, and dragging the edge past its minimum
+folds it. Whether it is open and its width are remembered in the webview's
+storage (`model/right-panel.ts`); the side columns are fitted to the room left
+beside it, as beside the side rail. Expand covers the workspace, which stays
+laid out and inert beneath, until Escape or Restore; expanded is not
+remembered. It folds and unfolds on the drawer's curve, instantly with less
+motion. Until something opens in it, it says "Nothing open"
+([state chart](state/services/desktop/workspace/open-resize-expand-and-restore-the-right-panel.md)).
 
 The workspace layouts read the desktop store, a projection of one
 `WorkspaceSource`. Where that source comes from is

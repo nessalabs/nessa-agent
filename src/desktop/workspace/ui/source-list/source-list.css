@@ -83,7 +83,7 @@
 
 /*
  * Revealed from the window's edge while folded (`useEdgePeek`, the same
- * reveal as the classic shell and Settings): it slides in over the panes,
+ * reveal as Settings'): it slides in over the panes,
  * more opaque than when docked since there is content under it, and lifted
  * with a deeper shadow. Its opaque fill keeps text underneath out of the peek.
  */

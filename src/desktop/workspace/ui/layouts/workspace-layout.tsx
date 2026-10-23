@@ -15,8 +15,7 @@ import { IconButton } from "../../../ui/icon-button"
 import { SideRail, SideRailButton, RailView } from "../chrome/side-rail"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
 import { WindowTabs } from "../chrome/window-tabs"
-import { PANEL_ID, WorkspacePanel } from "../chrome/right-panel"
-import { PanelMaximize, PanelToggle } from "../../../ui/right-panel"
+import { PanelMaximize, PanelToggle, WorkspacePanel } from "../chrome/right-panel"
 import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
 import { SessionList } from "../session-list/session-list"
@@ -169,15 +168,10 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                           {panelOpen ? (
                             <PanelMaximize
                               maximized={panelMaximized}
-                              controls={PANEL_ID}
                               onToggle={onTogglePanelMaximized}
                             />
                           ) : null}
-                          <PanelToggle
-                            shown={panelOpen}
-                            controls={PANEL_ID}
-                            onToggle={onTogglePanel}
-                          />
+                          <PanelToggle shown={panelOpen} onToggle={onTogglePanel} />
                         </div>
                       </>
                     )}

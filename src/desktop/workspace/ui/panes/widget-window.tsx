@@ -97,7 +97,11 @@ function WindowParts({
         actions={
           <>
             {/* Expanded, the same place offers the way back to its pane. */}
-            <IconButton icon="restore" label="Back to Pane" onClick={() => host.open("pane")} />
+            <IconButton
+              icon="restore"
+              label="Back to Pane"
+              onClick={() => host.open("pane")}
+            />
             <IconButton
               icon="close"
               label="Close"

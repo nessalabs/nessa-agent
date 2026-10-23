@@ -243,7 +243,7 @@ export class FlipScope extends Component<{
   /**
    * Which side columns are open. A change of these alone — the panes as they
    * were — is a drawer: the columns and panes beside it follow on the
-   * drawer's curve, as the classic shell's split view does.
+   * drawer's curve.
    */
   columns?: string
   /**

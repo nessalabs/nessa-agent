@@ -1,17 +1,58 @@
 /**
- * The right panel in the workspace: Classic's panel (`ui/right-panel.tsx`
- * holds the parts both share), as a column beside the panes. Its edge
- * resizes it, and dragged far enough right folds it. Maximized, it covers the
- * workspace — the sidebar, the list and the panes are inert under it — until
- * Escape or Restore.
+ * The right panel: a column beside the panes, in both layouts, with its
+ * toggle and maximize button at the titlebar's end (⌥⌘B shows and hides it).
+ * Its edge resizes it, and dragged far enough right folds it. Maximized, it
+ * covers the workspace — the sidebar, the list and the panes are inert under
+ * it — until Escape or Restore. Until something opens in it, it says so.
  */
 import { memo, useLayoutEffect, useRef, type RefObject } from "react"
+import { EmptyState } from "@nessa-ui/react/empty-state"
 import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "../../../model/right-panel"
+import { IconButton } from "../../../ui/icon-button"
 import { ResizeEdge } from "../../../ui/resize-edge"
-import { PanelEmpty } from "../../../ui/right-panel"
+import { useWorkspaceFrame } from "../workspace-frame"
 import "./right-panel.css"
 
 export const PANEL_ID = "workspace-panel"
+
+export function PanelToggle({
+  shown,
+  onToggle,
+}: {
+  shown: boolean
+  onToggle: () => void
+}) {
+  const frame = useWorkspaceFrame()
+  return (
+    <IconButton
+      icon="panelRight"
+      label={`${shown ? "Hide" : "Show"} Panel`}
+      shortcut={frame.shortcut("togglePanel")}
+      aria-expanded={shown}
+      aria-controls={PANEL_ID}
+      onClick={onToggle}
+    />
+  )
+}
+
+export function PanelMaximize({
+  maximized,
+  onToggle,
+}: {
+  maximized: boolean
+  onToggle: () => void
+}) {
+  return (
+    <IconButton
+      icon={maximized ? "restore" : "maximize"}
+      label={maximized ? "Restore Panel" : "Expand Panel"}
+      shortcut={maximized ? "Esc" : undefined}
+      aria-pressed={maximized}
+      aria-controls={PANEL_ID}
+      onClick={onToggle}
+    />
+  )
+}
 
 export const WorkspacePanel = memo(function WorkspacePanel({
   root,
@@ -69,7 +110,11 @@ export const WorkspacePanel = memo(function WorkspacePanel({
         aria-hidden={!open || undefined}
       >
         <div className="workspace-panel-body">
-          <PanelEmpty />
+          <EmptyState
+            variant="compact"
+            className="desktop-empty-note"
+            title="Nothing open"
+          />
         </div>
       </aside>
     </>

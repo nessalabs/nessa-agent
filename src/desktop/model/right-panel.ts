@@ -1,5 +1,6 @@
 /**
- * The panel on the window's right: the one Classic has, in every layout.
+ * The panel on the window's right, beside the panes in both layouts
+ * (`workspace/ui/chrome/right-panel.tsx`).
  * Whether it is open and how wide the person dragged it are remembered
  * between launches (`adapters/window-preferences.ts`); maximized is not —
  * it is a moment, which Escape ends.
