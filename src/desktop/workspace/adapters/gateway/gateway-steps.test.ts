@@ -134,5 +134,14 @@ describe("an edit's line counts", () => {
       added: 2,
       removed: 0,
     })
+    // The closing newline is not a line; a blank line before it is.
+    expect(lineDelta({ filename: "a", from: "", to: "x\n" })).toEqual({
+      added: 1,
+      removed: 0,
+    })
+    expect(lineDelta({ filename: "a", from: "x\n\n", to: "" })).toEqual({
+      added: 0,
+      removed: 2,
+    })
   })
 })

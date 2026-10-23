@@ -63,7 +63,8 @@ export function stepDiff(
  * side does not also hold. A moved line counts as neither.
  */
 export function lineDelta(diff: StepDiff): { added: number; removed: number } {
-  const lines = (text: string) => (text === "" ? [] : text.split("\n"))
+  // A file's closing newline ends its last line; it does not start another.
+  const lines = (text: string) => (text === "" ? [] : text.replace(/\n$/, "").split("\n"))
   const before = new Map<string, number>()
   for (const line of lines(diff.from)) before.set(line, (before.get(line) ?? 0) + 1)
   let added = 0
