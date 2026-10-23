@@ -795,7 +795,9 @@ mod reversible_tests {
             })
         ));
         assert_eq!(
-            ToolCallInput::new("[1]").unwrap_err(),
+            // One instantiation (String) meets every arm: the coverage gate
+            // scores a generic function by its best single instantiation.
+            ToolCallInput::new(String::from("[1]")).unwrap_err(),
             ExecutionError::InvalidToolInput
         );
         let id = ToolCallId::new("tool").unwrap();
@@ -813,6 +815,13 @@ mod reversible_tests {
         assert_eq!(
             original.payload_bytes_after(&bare().with_input(longer)),
             original.payload_bytes() + 4
+        );
+        // The gate scores this function per test binary, so this one names
+        // the MCP arguments arm too.
+        let arguments = McpCallArguments::new(String::from(r#"{"q":1}"#)).unwrap();
+        assert_eq!(
+            original.payload_bytes_after(&bare().with_mcp_arguments(arguments.clone())),
+            original.payload_bytes() + size_of::<McpCallArguments>() + arguments.as_str().len()
         );
         let (kept, undo) = original.clone().with_reversible_update(bare());
         assert_eq!(kept.input(), Some(&input));
