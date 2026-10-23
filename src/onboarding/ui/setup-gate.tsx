@@ -291,7 +291,9 @@ export function SetupGate({
           className="nessa-setup-art"
           data-showing={picking ? "" : undefined}
         >
-          {beat === "open" ? <AgentShowcase chosen={shown.agent} pointed={pointed} /> : null}
+          {beat === "open" ? (
+            <AgentShowcase chosen={shown.agent} pointed={pointed} />
+          ) : null}
         </div>
       </div>
     </div>

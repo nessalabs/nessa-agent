@@ -1,4 +1,3 @@
-
 /**
  * The opening of the setup window, as beats on one clock.
  *
@@ -91,7 +90,11 @@ export type FigureId = "claude" | "codex" | "local"
  */
 export function setupField(beat: OpeningBeat): SetupField {
   if (beat === "glow") {
-    return { spread: { from: 0, to: 0.08, duration: 1000, easing: "out" }, clear: 1, x: 0.5 }
+    return {
+      spread: { from: 0, to: 0.08, duration: 1000, easing: "out" },
+      clear: 1,
+      x: 0.5,
+    }
   }
   if (beat === "fill") return { spread: { to: 1.25, duration: 1000 }, clear: 1, x: 0.5 }
   if (beat === "form") {

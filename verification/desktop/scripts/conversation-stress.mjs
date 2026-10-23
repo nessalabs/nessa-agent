@@ -2987,11 +2987,13 @@ async function pickerOffers(page, failures) {
     failures.push(`the picture holds cards ${JSON.stringify(resting)}`)
   await page.getByRole("button", { name: /^Codex/ }).hover()
   const lit = await waitFor(
-    () =>
-      cards().then((shown) => shown.join(",") === "codex"),
+    () => cards().then((shown) => shown.join(",") === "codex"),
     5_000,
   )
-  if (!lit) failures.push(`pointing at Codex did not show its card: ${JSON.stringify(await cards())}`)
+  if (!lit)
+    failures.push(
+      `pointing at Codex did not show its card: ${JSON.stringify(await cards())}`,
+    )
   await page.mouse.move(1, 1)
 }
 
