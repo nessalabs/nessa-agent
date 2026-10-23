@@ -424,6 +424,25 @@ pub fn restart_onboarding(app: &AppHandle, settings: &dyn SettingsStore) {
         ));
     }
 
+    show_setup_from_start(app);
+}
+
+/// Shows first-run setup again from Settings, keeping what it recorded.
+///
+/// A replay rather than [`restart_onboarding`]'s restart: the completion and
+/// the chosen agent stay written, so somebody who closes it part-way is left
+/// exactly where they were — the next launch does not open setup again. Only
+/// finishing writes, and then it writes the agent that finish chose, the same
+/// as a first run's finish does.
+#[tauri::command]
+pub fn replay_onboarding(app: AppHandle) {
+    show_setup_from_start(&app);
+}
+
+/// Puts setup on screen at its first step: a fresh window when there is none,
+/// and a reload of one still open, because setup holds its progress in memory
+/// and showing it again mid-flow would resume it rather than start it over.
+fn show_setup_from_start(app: &AppHandle) {
     let Some(window) = app.get_webview_window(SETUP_WINDOW) else {
         // A fresh window is revealed by its page, the same as at startup.
         open_setup_window(app);

@@ -280,6 +280,40 @@ export function pressSummon(state: OnboardingState, showing: boolean): Onboardin
   return { ...state, summon, summonTaught }
 }
 
+/**
+ * The step a Back press returns to, or nothing where there is no earlier step.
+ *
+ * The welcome screen has nothing before it, and `done` is not on screen.
+ */
+function previousStep(step: OnboardingStep): OnboardingStep | undefined {
+  if (step === "agent") return "welcome"
+  if (step === "summon") return "agent"
+  if (step === "linger") return "summon"
+  return undefined
+}
+
+/** Whether a Back press would move setup. */
+export function canGoBack(state: OnboardingState): boolean {
+  return previousStep(state.step) !== undefined
+}
+
+/**
+ * Go back one step, keeping what was chosen on the way.
+ *
+ * The agent and the readiness answer stay, so the picker comes back as it was
+ * left. The shortcut lesson starts again from the picker, because coming back
+ * to it is asking to see it again. From linger the lesson was already learned
+ * — linger is only reached past it — so the way on is there at once. The host's
+ * linger report is dropped: it belongs to the step being left, and the step is
+ * asked again on the way forward.
+ */
+export function goBack(state: OnboardingState): OnboardingState {
+  const step = previousStep(state.step)
+  if (!step) return state
+  const { summon: _summon, summonTaught: _taught, linger: _linger, ...kept } = state
+  return step === "summon" ? { ...kept, step, summonTaught: true } : { ...kept, step }
+}
+
 /** Leave setup without finishing it, from any step. Nothing is recorded: an
  * agent chosen on the way out is not a completed setup, and the next run starts
  * over. */

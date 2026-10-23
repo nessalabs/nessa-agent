@@ -17,11 +17,13 @@ import type { AgentReadinessSource } from "../application/ports"
 import { summonAccelerator } from "../model/shortcut-display"
 import {
   beginOnboarding,
+  canGoBack,
   clearReadiness,
   chooseAgent,
   completeOnboarding,
   confirmAgent,
   dismissOnboarding,
+  goBack,
   isOnboarding,
   pressSummon,
   recordLinger,
@@ -75,6 +77,10 @@ export interface Onboarding {
   finish: () => void
   /** Leave setup without finishing it. */
   dismiss: () => void
+  /** True where there is an earlier step for `back` to return to. */
+  canGoBack: boolean
+  /** Return to the step before this one, keeping what was chosen. */
+  back: () => void
   /** Ask the runtimes again after an agent was installed or signed in. Does
    * nothing while an ask is already in flight, or while the managed gateway is
    * not ready to answer. */
@@ -402,6 +408,14 @@ export function useOnboarding(
       if (practising) playCue("celebrate")
       setState(dismissOnboarding)
     }, [practising]),
+    canGoBack: canGoBack(state),
+    // Quiet, like leaving part-way: going back undoes a step rather than taking
+    // one. Back onto the picker asks the runtimes again, because whatever was
+    // not ready the last time it was on screen may be by now.
+    back: React.useCallback(() => {
+      setState(goBack)
+      if (state.step === "summon") recheck()
+    }, [recheck, state.step]),
     recheck,
     retryGatewayStartup: retryStartup,
     checking,

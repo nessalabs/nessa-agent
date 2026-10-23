@@ -1099,6 +1099,20 @@ export async function revealSetupWindow() {
 }
 
 /**
+ * Shows first-run setup again, from its first step, for somebody who asked to
+ * see it from Settings.
+ *
+ * A replay, not a restart: what setup recorded stays recorded, so leaving
+ * part-way changes nothing and only finishing writes a choice again. A browser
+ * has no setup window to open; Settings only offers this with a native host.
+ */
+export async function replayOnboarding(): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("replay_onboarding")
+}
+
+/**
  * What the host has to say about the agent first-run setup chose.
  *
  * `"unavailable"` is kept apart from `"none"` on purpose. Both leave this
