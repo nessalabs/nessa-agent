@@ -12,10 +12,7 @@ export type WorkspaceLayoutId = (typeof workspaceLayouts)[number]["id"]
 
 export const defaultWorkspaceLayout: WorkspaceLayoutId = "columns"
 
-/**
- * Reads a stored or requested layout, falling back to the default for
- * anything unknown — "classic" included, a layout earlier builds offered.
- */
+/** Reads a stored or requested layout, falling back to the default for anything unknown. */
 export function parseWorkspaceLayout(value: unknown): WorkspaceLayoutId {
   return (
     workspaceLayouts.find((layout) => layout.id === value)?.id ?? defaultWorkspaceLayout

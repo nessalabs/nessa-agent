@@ -1003,8 +1003,7 @@ phone's scanner is not this screen.
   `settings-view.test.tsx`, `settings-controls.test.tsx`; by eye.
 - [ ] **A setting for one layout says so elsewhere**: "Show session list" and
   "Keep running sessions at the top" work in three columns; in sessions in
-  the sidebar their switches are disabled and say "Three columns only"; a
-  "classic" layout an earlier build stored reads as three columns. _Check:_ unit test `settings-view.test.tsx` (per layout).
+  the sidebar their switches are disabled and say "Three columns only". _Check:_ unit test `settings-view.test.tsx` (per layout).
 - [ ] **Segmented choices are one Tab stop each option, for now**: they are
   the kit's `SegmentedControl` (a group of pressed buttons, no arrow keys);
   one Tab stop with arrows waits on its radio-group mode (nessalabs/nessa_ui#120).

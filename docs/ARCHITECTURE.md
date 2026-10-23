@@ -61,8 +61,7 @@ Its drag region and double-click maximize have desktop-scoped capabilities.
 `desktop.html` mounts `src/desktop/main.tsx`, which builds the window's
 dependencies (`dependencies.ts`) and store (`store.ts`) and renders
 `ui/desktop-window.tsx`: the workspace (below) in the layout chosen in
-Settings. A layout named "classic", which earlier builds offered, reads as the
-default, three columns (`model/workspace-layout.ts`). A new session's pane
+Settings. A new session's pane
 shows `ui/home.tsx`, its composer wired to that session through `Home`'s
 props: a night scene in text heading one stack
 from the top of the workspace with the greeting and composer (`model/night-scene.ts`, a dim and a lit

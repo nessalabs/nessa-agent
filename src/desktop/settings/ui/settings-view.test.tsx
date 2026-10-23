@@ -331,11 +331,9 @@ describe("what Settings offers", () => {
     }
   })
 
-  // Every layout has the workspace shell the side rail stands beside; a
-  // "classic" an earlier build stored reads as three columns.
   for (const [layout, applies] of [
+    ["columns", true],
     ["sidebar", true],
-    ["classic", true],
   ] as const)
     it(`enables the side rail's switch in ${layout}`, async () => {
       const kept = new Map<string, string>([["nessa.desktop.workspace-layout", layout]])
@@ -372,8 +370,6 @@ describe("what Settings offers", () => {
   for (const [layout, applies] of [
     ["columns", true],
     ["sidebar", false],
-    // An earlier build's "classic" reads as three columns, the default.
-    ["classic", true],
   ] as const)
     it(`${applies ? "enables" : "disables, saying where they apply,"} the session list's settings in ${layout}`, async () => {
       // The layout as the window stored it (jsdom here keeps no storage of its own).
