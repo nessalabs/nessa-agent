@@ -92,4 +92,3 @@ test webhooks::infrastructure::outbox::store::tests::terminal_retention_is_bound
 test webhooks::infrastructure::outbox::store::tests::stop_retention_is_bounded_when_publication_fails ... ok
 
 test result: ok. 90 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.94s
-
