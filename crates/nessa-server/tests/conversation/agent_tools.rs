@@ -1589,10 +1589,9 @@ fn a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit() {
 /// (`src/desktop/workspace/model/thread-report.ts`). Both read the same cases.
 #[test]
 fn a_report_heading_is_the_one_the_desktop_reads() {
-    let cases: serde_json::Value = serde_json::from_str(include_str!(
-        "../fixtures/thread-report.json"
-    ))
-    .expect("the shared cases parse");
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/thread-report.json"))
+            .expect("the shared cases parse");
     for case in cases["cases"].as_array().expect("cases") {
         let child = ConversationId::new(case["child"].as_str().unwrap()).unwrap();
         let reply = case["reply"].as_str().map(str::to_owned);
