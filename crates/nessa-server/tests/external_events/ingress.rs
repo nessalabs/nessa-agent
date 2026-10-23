@@ -146,6 +146,7 @@ async fn authority() -> (Arc<Authority>, AuthenticatedSession) {
             )
             .unwrap();
             AccessSnapshot {
+                revocation: None,
                 credential,
                 membership,
                 revision,

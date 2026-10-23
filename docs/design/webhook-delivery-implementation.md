@@ -518,3 +518,26 @@ demonstrates repeated whole-history work, not a Windows deadlock diagnosis.
 Production ceilings, retry/deadline behavior, fixtures' full boundary loops, test
 assertions and CI timeouts stay intact. Platform qualification still requires an
 allowed exact-head run; local profile numbers alone do not prove Windows fixed.
+
+## Parent-selected held revocation fact
+
+The parent chose the minimal typed optional fact in the existing AccessSnapshot,
+without renaming CredentialOrigin or adding a journal. Actual revocation comes
+from the same published registry read and lifetime hold as current metadata and
+original issuance. It has no bearer and makes no permission decision.
+
+| Facts at consumption | Owning relationship and refusal | Required evidence |
+| --- | --- | --- |
+| Active credential, no actual revocation | Explicit None is valid; expiry alone does not create a revocation or actor | Ordinary Product compatibility and first expiry observation |
+| Revoked credential, actual original record | Existing domain transition validates Explicit or Superseded and Principal or LocalOperator; typed fact binds current lifecycle and actual sequence/revision/correlation | Explicit, both supersession kinds, offline action and cold restore |
+| Revoked metadata, absent original record | Fail closed; do not derive actor/cause from caller or issuance | Missing-fact accessor and malformed retained state |
+| Supplied fact names another credential, lifecycle or future revision | Fail before lifecycle coordination; actual snapshot ordering must follow original issuance | Identity/time/before-after/revision substitution and restore |
+| First expiry precedes later canonical revocation | Preserve two different original facts; expiry is a reader observation and revocation remains its actual auth event | Actual journal read after expiry, no invented expiry initiator |
+| Historical ordinary issuance and replay | Keep original one-time Product behavior and existing Cedar/session policy | Product issuance/replay and historical actor regressions |
+| Journal identity fields | One private shared decoder enforces nonzero sequence/revision and bounded command correlation for issuance and revocation | Existing original-issuance controls and new fact mutations |
+
+The outbox coordinator must consume the checked fact when a canonical revocation
+is required. It must not substitute its current caller for an offline actor or
+collapse supersession provenance into an explicit command. This auth checkpoint
+publishes provenance only; product command/source/sender composition remains
+separate and unfinished.

@@ -1279,13 +1279,32 @@ impl AccessReader for LocalCredentialStore {
                     .cloned()
                     .ok_or(AccessError::IdentityMismatch)?;
                 let origin = credential_origin(registry, &credential)?;
-                Ok(AccessSnapshot {
+                let revocation = if credential.revoked_at().is_some() {
+                    let record = registry
+                        .transitions
+                        .iter()
+                        .rev()
+                        .find(|record| record.credential_id == credential.id().as_str())
+                        .ok_or(AccessError::Unavailable)?;
+                    Some(
+                        crate::application::revocation::CredentialRevocation::restore(
+                            record.clone(),
+                            &credential,
+                        )?,
+                    )
+                } else {
+                    None
+                };
+                let snapshot = AccessSnapshot {
                     origin,
+                    revocation,
                     credential,
                     membership: Membership::try_from(membership)
                         .map_err(|_| AccessError::Unavailable)?,
                     revision: registry.revision,
-                })
+                };
+                snapshot.revocation_fact()?;
+                Ok(snapshot)
             })
         })
     }

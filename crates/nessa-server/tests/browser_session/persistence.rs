@@ -117,6 +117,7 @@ async fn session(expires_at: Option<u64>) -> BrowserSessionState {
             )
             .unwrap();
             AccessSnapshot {
+                revocation: None,
                 credential,
                 membership,
                 revision,
