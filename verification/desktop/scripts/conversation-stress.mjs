@@ -1500,10 +1500,20 @@ const steps = {
       // Open, closed, open again. Each open sends its own phrase: settled
       // counts copies of one phrase, and the first send is already there.
       let opened = 0
+      let place
       for (const open of [true, false, true]) {
         if ((await toggle.getAttribute("aria-expanded")) !== String(open))
           await toggle.click()
         if (!(await aroundTheLights(run.page, open ? "open" : "closed", failures))) return
+        // The toggle stays under the pointer: opening or closing the rail
+        // moves what is beside it, never the toggle itself.
+        const box = await toggle.boundingBox()
+        const at = box && [box.x, box.y, box.width, box.height].map(Math.round).join()
+        place ??= at
+        if (at !== place)
+          failures.push(
+            `the rail's toggle moved to [${at}] with the rail ${open ? "open" : "closed"}, from [${place}]`,
+          )
         // The workspace still takes a message with the rail beside it.
         if (open && failures.length === 0) {
           opened += 1
