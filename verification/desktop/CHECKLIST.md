@@ -2140,3 +2140,21 @@ rejected acknowledgement. SDK ACP tests cover remembered allow and deny, exact
 logical attribution and the mapped provider wire option. Service tests keep a
 second review pending and require live publication after success or consumption
 with a typed failure.
+
+## Pending settings action owners (#1087)
+
+- [ ] **Native-hook saves retain one owner through the fresh read.** Repeated
+  inputs cannot dispatch another write while pending; focus/visibility do not
+  replace it. A replaced source starts its own read, and retired save/reread
+  continuations cannot publish or release its pending action. Same-task repeated
+  clicks and controlled provider replacement are qualified component orderings;
+  production provider replacement remains unproven.
+- [ ] **Allow admits one outstanding notification permission API request.** Its
+  button is disabled until settlement; refusal or rejection permits recovery.
+  Retired source/view completions cannot invoke replacement waiting-review
+  replay. Counts establish API dispatch and callback ownership, not duplicate
+  visible OS prompts or authorization bypass.
+
+_Check:_ `settings-action-owners.mjs` (both engines), component regressions in
+`native-hooks-rows.test.tsx` and `review-notice-rows.test.tsx`. See
+[settings action ownership](../../docs/design/settings-action-owners.md).
