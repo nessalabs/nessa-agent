@@ -58,3 +58,34 @@ existing large-chunk warning. Full frontend: **5130 passed, 2 failed in 390
 files** (the same two unchanged private-file acceptance fixtures). Architecture:
 **107 passed, 1 could not execute Cargo metadata**, reported by that test runner
 as a failure. Required exact-head CI remains pending on GitHub.
+
+Documentation slice: source/test checkpoint
+`11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1`; unchanged linked-device and
+sharing owners reviewed at mainline
+`0b8019cf45f99b285f10c41199875d474492c6d1`. Navigation-only changes do not
+advance unrelated checkpoints. Renderer/skill checkout:
+`nessalabs/nessa-docs@c0bc0627611b100ab71a96cc6fe2fb65f1a014d8`.
+
+From that renderer checkout:
+
+```sh
+npm run --silent validate:docs -- --project /workspace/nessa-agent
+NESSA_DOCS_PROJECT=/workspace/nessa-agent PORT=4312 npm start
+```
+
+Final catalog: **125 pages, 0 issues** ([JSON](catalog.json)). Installed Chromium
+rendered **24 diagrams across all 13 changed state pages**, opened **31 authored
+node/edge detail bindings** and followed **10 drill-down paths**, with **0 page
+errors** ([per-page and navigation evidence](statecharts.json)). All **173
+relative Markdown links** in changed state pages resolve to existing files.
+The viewer pass covered root → journey index → startup feature → session flow →
+supervisor → client recovery; gateway observation and runtime downloads;
+workspace → linked devices and sharing; and device → conversation sharing.
+
+![Runtime download chart in Nessa Docs](runtime-statechart.png)
+
+The explicit `--engine chromium,webkit` ordering invocation retained all six
+Chromium results and then reported missing WebKit executable:
+**6/7 held, exit 2/could-not-run**. This is not a two-engine pass. The full desktop
+run-all gate remains unrun. No screenshot or docs renderer check replaces the
+missing WebKit, gateway stress or native-platform gates.

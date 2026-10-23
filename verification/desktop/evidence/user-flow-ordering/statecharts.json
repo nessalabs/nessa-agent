@@ -1,0 +1,143 @@
+{
+  "engine": "installed Chromium",
+  "pages": 13,
+  "diagrams": 24,
+  "details": 31,
+  "navigationPaths": 10,
+  "pageErrors": 0,
+  "results": [
+    {
+      "id": "nessa",
+      "file": "docs/state/README.md",
+      "diagrams": 3,
+      "details": 0,
+      "navigation": 14
+    },
+    {
+      "id": "inventory",
+      "file": "docs/state/inventory.md",
+      "diagrams": 0,
+      "details": 0,
+      "navigation": 0
+    },
+    {
+      "id": "desktop-chat-compose-and-send-the-first-message",
+      "file": "docs/state/services/desktop/chat/compose-and-send-the-first-message.md",
+      "diagrams": 3,
+      "details": 2,
+      "navigation": 0
+    },
+    {
+      "id": "desktop-workspace",
+      "file": "docs/state/services/desktop/workspace/README.md",
+      "diagrams": 1,
+      "details": 0,
+      "navigation": 10
+    },
+    {
+      "id": "host-startup-authenticate-reconnect-expire-or-revoke-a-surface-session",
+      "file": "docs/state/services/host/startup/authenticate-reconnect-expire-or-revoke-a-surface-session.md",
+      "diagrams": 2,
+      "details": 0,
+      "navigation": 1
+    },
+    {
+      "id": "host-startup-recover-or-update-the-managed-gateway",
+      "file": "docs/state/services/host/startup/recover-or-update-the-managed-gateway.md",
+      "diagrams": 2,
+      "details": 0,
+      "navigation": 1
+    },
+    {
+      "id": "host-startup-save-provider-credentials-and-download-a-runtime",
+      "file": "docs/state/services/host/startup/save-provider-credentials-and-download-a-runtime.md",
+      "diagrams": 2,
+      "details": 0,
+      "navigation": 1
+    },
+    {
+      "id": "desktop-conversation-sharing",
+      "file": "docs/state/services/desktop/workspace/conversation-sharing.md",
+      "diagrams": 2,
+      "details": 4,
+      "navigation": 1
+    },
+    {
+      "id": "desktop-linked-devices",
+      "file": "docs/state/services/desktop/workspace/linked-devices.md",
+      "diagrams": 4,
+      "details": 6,
+      "navigation": 2
+    },
+    {
+      "id": "runtime-download",
+      "file": "docs/state/services/host/startup/runtime-download.md",
+      "diagrams": 1,
+      "details": 3,
+      "navigation": 0
+    },
+    {
+      "id": "surface-session-supervision",
+      "file": "docs/state/services/host/startup/session-supervision.md",
+      "diagrams": 1,
+      "details": 6,
+      "navigation": 1
+    },
+    {
+      "id": "gateway-startup-observation",
+      "file": "docs/state/services/host/startup/startup-observation.md",
+      "diagrams": 1,
+      "details": 6,
+      "navigation": 0
+    },
+    {
+      "id": "user-flow-coverage",
+      "file": "docs/state/user-flow-coverage.md",
+      "diagrams": 2,
+      "details": 4,
+      "navigation": 9
+    }
+  ],
+  "paths": [
+    {
+      "from": "nessa",
+      "to": "user-flow-coverage"
+    },
+    {
+      "from": "user-flow-coverage",
+      "to": "host-startup"
+    },
+    {
+      "from": "host-startup",
+      "to": "host-startup-authenticate-reconnect-expire-or-revoke-a-surface-session"
+    },
+    {
+      "from": "host-startup-authenticate-reconnect-expire-or-revoke-a-surface-session",
+      "to": "surface-session-supervision"
+    },
+    {
+      "from": "surface-session-supervision",
+      "to": "client-connection"
+    },
+    {
+      "from": "host-startup-recover-or-update-the-managed-gateway",
+      "to": "gateway-startup-observation"
+    },
+    {
+      "from": "host-startup-save-provider-credentials-and-download-a-runtime",
+      "to": "runtime-download"
+    },
+    {
+      "from": "desktop-workspace",
+      "to": "desktop-linked-devices"
+    },
+    {
+      "from": "desktop-workspace",
+      "to": "desktop-conversation-sharing"
+    },
+    {
+      "from": "desktop-linked-devices",
+      "to": "desktop-conversation-sharing"
+    }
+  ]
+}

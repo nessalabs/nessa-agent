@@ -4,7 +4,7 @@ title: "compose and send the first message"
 kind: "flow"
 status: "mixed"
 summary: "Open a new conversation, choose a model and write a message."
-sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
+sourceRevision: "11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1"
 parent: "desktop-chat"
 sources:
   - "src/panel/ui/use-composer.ts"
@@ -24,6 +24,16 @@ sources:
   - "packages/nessa-client/src/presentation/conversation-api.test.ts"
   - "crates/nessa-server/tests/conversation/application.rs"
 diagramLinks: {}
+diagramDetails:
+  - diagram: 2
+    node: AwaitingDraft
+    section: Composer ownership while a send waits
+  - diagram: 2
+    edge:
+      from: AwaitingDraft
+      to: Retired
+      label: Empty draft [same conversation] / collapse editor
+    section: Composer ownership while a send waits
 ---
 
 # compose and send the first message
@@ -85,3 +95,25 @@ sequenceDiagram
 ## Further reading
 
 [Source](../../../../../src/panel/ui/use-composer.ts) · [Related source](../../../../../src/conversation/ui/use-conversation.ts) · [Related tests](../../../../../src/panel/ui/use-composer.test.ts)
+
+## Composer ownership while a send waits
+
+The expanded editor closes when its own submitted draft leaves. Switching tabs gives the selected tab a fresh collapsed editor; subsequently expanding that tab is a new local choice. A pending send from another tab must not collapse it when its draft is cleared.
+
+Submission callbacks also carry operation identity. An old refusal clears only its own pending observation, so it cannot prevent a newer accepted send from closing its editor. The correction is local presentation; the conversation store remains the admission and prepared-command owner.
+
+This small chart follows one pending observation, rather than the transport or the expanded editor itself. A replacement observation has a new identity. A promise callback for an older one cannot clear that replacement.
+
+```mermaid
+stateDiagram-v2
+    [*] --> AwaitingDraft: Submit passes attachment-read check / capture tab and observation
+    AwaitingDraft --> Retired: Empty draft [same conversation] / collapse editor
+    AwaitingDraft --> Retired: Refused [same observation] / keep editor open
+    AwaitingDraft --> Retired: Another submit / replace observation
+    AwaitingDraft --> AwaitingDraft: Different tab draft changes / retain observation
+    Retired --> [*]
+```
+
+The [CO1–CO4 design table](../../../../design/user-flow-ordering.md#composer-draft-observation) owns these orderings. The [hook regressions](../../../../../src/panel/ui/use-composer-ordering.test.tsx) exercise the actual hook through a form with controlled submission promises; they do not establish provider completion.
+
+This is a bounded correction to the composer owner. The other linked source files have no implementation changes since the earlier checkpoint. The checkpoint advances to the committed correction after reconciling that hook and its regression tests; the other source owners retain their unchanged implementation.
