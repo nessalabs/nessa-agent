@@ -101,6 +101,9 @@ pub struct ToolCallUpdate {
     /// already observed as they were: an update that does not repeat them
     /// does not clear them.
     mcp_arguments: Option<McpCallArguments>,
+    /// The input the agent reported for this call. None leaves any already
+    /// observed as it was.
+    input: Option<ToolCallInput>,
 }
 impl ToolCallUpdate {
     /// Own one sparse update for `id`. `title`, `kind`, and `status` replace their
@@ -124,6 +127,7 @@ impl ToolCallUpdate {
             content,
             mcp_tool: None,
             mcp_arguments: None,
+            input: None,
         }
     }
     /// This update with `content` as its replacement content collection, which
@@ -152,6 +156,16 @@ impl ToolCallUpdate {
     pub fn with_mcp_arguments(self, arguments: McpCallArguments) -> Self {
         Self {
             mcp_arguments: Some(arguments),
+            ..self
+        }
+    }
+    /// This update, also carrying the input the agent reported for the call.
+    /// Returns a replacement; the original value is consumed, never changed
+    /// in place. Without it the update leaves any input already observed as
+    /// it was.
+    pub fn with_input(self, input: ToolCallInput) -> Self {
+        Self {
+            input: Some(input),
             ..self
         }
     }
@@ -187,6 +201,10 @@ impl ToolCallUpdate {
     pub fn mcp_arguments(&self) -> Option<&McpCallArguments> {
         self.mcp_arguments.as_ref()
     }
+    /// The input the agent reported; None leaves the observed one.
+    pub fn input(&self) -> Option<&ToolCallInput> {
+        self.input.as_ref()
+    }
     /// Retained title, path, content, MCP identity and argument allocations,
     /// including vector and box storage. ToolCall accounts for retained
     /// identities in addition to these observation bytes.
@@ -203,6 +221,7 @@ impl ToolCallUpdate {
             &self.content,
             &self.mcp_tool,
             &self.mcp_arguments,
+            &self.input,
             limit,
         )
     }
@@ -222,11 +241,12 @@ pub struct ToolObservation {
     // undone) inline in larger values.
     mcp_tool: Option<Box<McpTool>>,
     mcp_arguments: Option<McpCallArguments>,
+    input: Option<ToolCallInput>,
 }
 /// Moved prior fields for a reversible entity-owned observation replacement.
 pub(crate) struct ToolObservationUndo {
     previous: ToolObservation,
-    changed: [bool; 7],
+    changed: [bool; 8],
 }
 impl ToolObservation {
     /// Last observed display title; None means no title has been observed.
@@ -259,6 +279,11 @@ impl ToolObservation {
     pub fn mcp_arguments(&self) -> Option<&McpCallArguments> {
         self.mcp_arguments.as_ref()
     }
+    /// The input the agent last reported for this call; None where no update
+    /// has carried one.
+    pub fn input(&self) -> Option<&ToolCallInput> {
+        self.input.as_ref()
+    }
     /// Retained payload allocation in bytes, including vector capacity. Saturates at
     /// usize::MAX on overflow; excludes fixed identity/entity storage.
     pub fn payload_bytes(&self) -> usize {
@@ -273,6 +298,7 @@ impl ToolObservation {
             &self.content,
             &self.mcp_tool,
             &self.mcp_arguments,
+            &self.input,
             limit,
         )
     }
@@ -289,6 +315,7 @@ impl ToolObservation {
             content: self.content.clone(),
             mcp_tool: self.mcp_tool.clone(),
             mcp_arguments: self.mcp_arguments.clone(),
+            input: self.input.clone(),
         }
     }
     pub(crate) fn payload_bytes_after(&self, update: &ToolCallUpdate) -> usize {
@@ -318,6 +345,11 @@ impl ToolObservation {
             } else {
                 &self.mcp_arguments
             },
+            if update.input.is_some() {
+                &update.input
+            } else {
+                &self.input
+            },
             usize::MAX,
         )
     }
@@ -327,6 +359,7 @@ impl ToolObservation {
         content: &Option<Vec<ToolContent>>,
         mcp_tool: &Option<Box<McpTool>>,
         mcp_arguments: &Option<McpCallArguments>,
+        input: &Option<ToolCallInput>,
         limit: usize,
     ) -> usize {
         let mut bytes = title.as_ref().map_or(0, String::capacity);
@@ -335,6 +368,9 @@ impl ToolObservation {
         }));
         bytes = bytes.saturating_add(mcp_arguments.as_ref().map_or(0, |arguments| {
             size_of::<McpCallArguments>().saturating_add(arguments.as_str().len())
+        }));
+        bytes = bytes.saturating_add(input.as_ref().map_or(0, |input| {
+            size_of::<ToolCallInput>().saturating_add(input.as_str().len())
         }));
         if let Some(locations) = locations {
             bytes = bytes.saturating_add(
@@ -384,6 +420,7 @@ impl ToolObservation {
             update.content.is_some(),
             update.mcp_tool.is_some(),
             update.mcp_arguments.is_some(),
+            update.input.is_some(),
         ];
         let mut previous = self;
         let next = Self {
@@ -396,6 +433,7 @@ impl ToolObservation {
             mcp_arguments: update
                 .mcp_arguments
                 .or_else(|| previous.mcp_arguments.take()),
+            input: update.input.or_else(|| previous.input.take()),
         };
         (next, ToolObservationUndo { previous, changed })
     }
@@ -408,6 +446,7 @@ impl ToolObservation {
             content,
             mcp_tool,
             mcp_arguments,
+            input,
         } = self;
         let ToolObservationUndo { previous, changed } = undo;
         Self {
@@ -434,6 +473,7 @@ impl ToolObservation {
             } else {
                 mcp_arguments
             },
+            input: if changed[7] { previous.input } else { input },
         }
     }
 }
@@ -475,6 +515,48 @@ impl McpCallArguments {
         }
         if !is_json_object(&json) {
             return Err(ExecutionError::InvalidMcpCallArguments);
+        }
+        Ok(Self(json.into_boxed_str()))
+    }
+
+    /// The encoded object, exactly as it was kept.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The most the input an agent reports for one tool call may be, in UTF-8
+/// bytes of its JSON text. The product schema states it as the bound of
+/// `ConversationTool.input`, and `nessa-server/tests/conversation/agreement.rs`
+/// holds the two together. Past it the input is not kept: JSON cut short is
+/// not the call's input.
+pub const MAX_TOOL_INPUT_BYTES: usize = 32 * 1024;
+
+/// The input an agent reported for one tool call (ACP `rawInput`): one JSON
+/// object, encoded, at most [`MAX_TOOL_INPUT_BYTES`]. What the agent says it
+/// asked for, for display; it authorizes nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolCallInput(Box<str>);
+
+impl ToolCallInput {
+    /// Own `json` when it is one JSON object within [`MAX_TOOL_INPUT_BYTES`].
+    /// The length is checked first, so a longer text is refused before it is
+    /// read as JSON.
+    ///
+    /// # Errors
+    ///
+    /// [`ExecutionError::ValueTooLong`] past the bound, and
+    /// [`ExecutionError::InvalidToolInput`] when `json` is not one JSON object.
+    pub fn new(json: impl Into<String>) -> Result<Self, ExecutionError> {
+        let json = json.into();
+        if json.len() > MAX_TOOL_INPUT_BYTES {
+            return Err(ExecutionError::ValueTooLong {
+                field: "tool input",
+                max_bytes: MAX_TOOL_INPUT_BYTES,
+            });
+        }
+        if !is_json_object(&json) {
+            return Err(ExecutionError::InvalidToolInput);
         }
         Ok(Self(json.into_boxed_str()))
     }
@@ -699,6 +781,38 @@ mod reversible_tests {
             ToolObservation::default().with_reversible_update(bare().with_mcp_tool(first));
         assert!(named.mcp_tool().is_some());
         assert_eq!(named.restored(undo).mcp_tool(), None);
+    }
+
+    #[test]
+    fn a_tool_input_is_one_object_within_the_bound_and_rollback_restores_it() {
+        let at_the_bound = format!(r#"{{"a":"{}"}}"#, "x".repeat(MAX_TOOL_INPUT_BYTES - 8));
+        assert!(ToolCallInput::new(at_the_bound.clone()).is_ok());
+        assert!(matches!(
+            ToolCallInput::new(format!("{at_the_bound} ")),
+            Err(ExecutionError::ValueTooLong {
+                field: "tool input",
+                ..
+            })
+        ));
+        assert_eq!(
+            ToolCallInput::new("[1]").unwrap_err(),
+            ExecutionError::InvalidToolInput
+        );
+        let id = ToolCallId::new("tool").unwrap();
+        let bare = || ToolCallUpdate::new(id.clone(), None, None, None, None, None);
+        let input = ToolCallInput::new(r#"{"cmd":"ls"}"#).unwrap();
+        let original = ToolObservation::default().with_update(bare().with_input(input.clone()));
+        assert_eq!(original.input(), Some(&input));
+        assert!(original.payload_bytes() >= input.as_str().len());
+        let (kept, undo) = original.clone().with_reversible_update(bare());
+        assert_eq!(kept.input(), Some(&input));
+        assert_eq!(kept.restored(undo).input(), Some(&input));
+        let (replaced, undo) =
+            original.with_reversible_update(bare().with_input(ToolCallInput::new("{}").unwrap()));
+        assert_eq!(replaced.input().map(ToolCallInput::as_str), Some("{}"));
+        let rebuilt = ToolObservation::default().with_update(replaced.clone().as_update(id));
+        assert_eq!(rebuilt, replaced);
+        assert_eq!(replaced.restored(undo).input(), Some(&input));
     }
 
     #[test]

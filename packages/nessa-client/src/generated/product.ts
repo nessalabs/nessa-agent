@@ -641,7 +641,7 @@ export interface ConversationTool {
   status: string
   /** Bounded provider-observed tool output and file changes; omitted content is marked. */
   details: string
-  /** Exact tool arguments observed through a permission request, or empty when unavailable. */
+  /** The call's input, one JSON object encoded: the arguments the agent reported with the call, or those its permission request asked with, whichever came last and fit. Empty when none was reported or none fit — never cut. */
   input: string
   /** The MCP server and tool the call went to, as the agent's harness named them (Claude's harness replaces characters outside [A-Za-z0-9_-] in a tool name with _); absent for a harness's own tools and where the harness does not say which server. */
   mcp?: ConversationMcpTool
@@ -649,6 +649,23 @@ export interface ConversationTool {
   structuredContent?: string
   /** The hooks choice of the process start this tool call ran under, saved with the call so it survives a gateway restart. Absent when that start recorded none: a harness without the choice, or a call saved before it was recorded. Recorded input and output are what the model proposed or the tool returned, and a hook may have changed or approved them when this is on. */
   nativeHooks?: NativeHooksChoice
+  /** When the gateway first heard of the call, in Unix milliseconds, saved with the call so it survives a restart. Absent for a call saved before the time was recorded. */
+  startedAtMs?: number
+  /** When the gateway heard the call completed or failed, in Unix milliseconds. Absent while the call runs, for a call that never settled, and for a call saved before the time was recorded. */
+  endedAtMs?: number
+  /** The files the call changed, as the agent reported them and in its order, at most 16. The same changes are written into details as text; these are for a reader that draws them, and the first a view gives up for room, before any turn. Absent when the call reported none. */
+  changes?: ConversationToolChange[]
+}
+/** One file a tool call changed: its path, and its text before and after. */
+export interface ConversationToolChange {
+  /** The file's path as the agent named it, unresolved; cut past 4096 bytes. */
+  path: string
+  /** The text before the change, cut past 7000 bytes. Absent when the agent did not say — a file it created reads that way — which differs from an empty file. */
+  before?: string
+  /** The text after the change, which may be empty, cut past 7000 bytes. */
+  after: string
+  /** A side was longer than 7000 bytes and is cut, so the two sides do not say the whole change. */
+  cut: boolean
 }
 /** An MCP tool's identity: the server by the name it was configured under, and the tool on it; the UI the tool declared, when known; and the arguments the gateway's connection saw for the call, when it could match them. */
 export interface ConversationMcpTool {

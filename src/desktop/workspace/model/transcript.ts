@@ -21,6 +21,12 @@ import type {
 } from "../../../conversation"
 
 export type StepKind = "read" | "edit" | "run" | "search"
+export type StepStatus = "pending" | "running" | "completed" | "failed" | "stopped"
+export type StepDiff = {
+  readonly filename: string
+  readonly from: string
+  readonly to: string
+}
 
 export type Part =
   | { readonly kind: "text"; readonly text: string }
@@ -37,6 +43,22 @@ export type Part =
       /** Lines added and removed, for an edit. */
       readonly added?: number
       readonly removed?: number
+      /** The tool call, the same across its updates. */
+      readonly id?: string
+      /**
+       * Where the call is. A call its turn ended under before it settled is
+       * `stopped`. Absent where nothing said; read as finished once the turn is.
+       */
+      readonly status?: StepStatus
+      /** When it started and settled, in Unix milliseconds on this device's clock. */
+      readonly startedAtMs?: number
+      readonly endedAtMs?: number
+      /** What the call was given: the agent's arguments, as JSON text. */
+      readonly input?: string
+      /** What the call gave back. */
+      readonly output?: string
+      /** What an edit changed: the file before and after. */
+      readonly diff?: StepDiff
     }
   | { readonly kind: "code"; readonly code: string }
   | { readonly kind: "list"; readonly items: readonly string[] }
@@ -176,7 +198,7 @@ export interface TurnMessage {
    * Set on the agent's reply while its turn still runs or waits to, as the
    * source reported the turn. Absent once the turn ended, however it ended:
    * a settled reply folds each run of its steps into one line
-   * (`workSummary`, `ui/transcript/tool-steps.tsx`).
+   * (`ui/transcript/tool-steps.tsx`).
    */
   readonly working?: true
   /**
@@ -546,19 +568,6 @@ export function groupSteps(
     } else groups.push(part)
   }
   return groups
-}
-
-/**
- * What a settled run of steps is called when it is one line: how many tools
- * it ran and, first, whether it touched the person's files. Only the kinds a
- * step says are counted; a search or a command is a tool, not a read.
- */
-export function workSummary(steps: readonly StepPart[]): string {
-  const count = `Ran ${steps.length} tool${steps.length === 1 ? "" : "s"}`
-  const read = steps.filter((step) => step.step === "read").length
-  const edited = steps.filter((step) => step.step === "edit").length
-  const bits = [read && `${read} read`, edited && `${edited} edited`].filter(Boolean)
-  return bits.length ? `${count} · ${bits.join(", ")}` : count
 }
 
 export type InlineRun =

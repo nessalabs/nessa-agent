@@ -1985,6 +1985,19 @@ impl SessionManager {
         };
         usage.with_event(event)
     }
+    /// Stamps a provider's report with when this session received it, as it
+    /// arrives and before anyone reads it, so the live stream and the saved
+    /// copy carry the same time. Every report is stamped, so a reader after a
+    /// restart draws the same timeline — a tool's start and end, when a
+    /// review was asked — from what was saved; a report without a time was
+    /// saved before times were kept.
+    pub(crate) fn observed(&self, event: ExecutionEvent) -> ExecutionEvent {
+        match event.observed_at_ms() {
+            Some(_) => event,
+            None => event.with_observed_at_ms(self.message_commit_clock.unix_milliseconds()),
+        }
+    }
+
     pub(crate) async fn event(&self, event: ExecutionEvent) -> Result<(), StorageError> {
         let save = !matches!(event.update(), ExecutionUpdate::Message(_));
         let message_bytes = match event.update() {

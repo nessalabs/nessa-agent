@@ -62,7 +62,8 @@ use nessa_sdk::domain::agent_execution::sessions::{
     ExecutionSessionId, ProviderContext, SessionId,
 };
 use nessa_sdk::domain::agent_execution::tools::{
-    McpCallArguments, McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus,
+    FilePath, McpCallArguments, McpTool, ToolCallId, ToolCallInput, ToolCallUpdate, ToolContent,
+    ToolObservation, ToolStatus,
 };
 use uuid::Uuid;
 
@@ -682,6 +683,93 @@ fn an_mcp_tool_carries_the_arguments_its_connection_saw_and_a_later_update_keeps
         .unwrap()
         .get("argumentsJson")
         .is_none());
+}
+
+#[test]
+fn a_tool_spans_from_its_first_report_to_the_one_that_settles_it_and_keeps_its_input() {
+    let tool = ToolCallId::new("grep").unwrap();
+    let at = |update: ToolCallUpdate, ms: u64| {
+        event(ExecutionUpdate::Tool(update)).with_observed_at_ms(ms)
+    };
+    let bare = |status| ToolCallUpdate::new(tool.clone(), None, None, status, None, None);
+    let mut events = vec![at(
+        bare(Some(ToolStatus::Pending))
+            .with_input(ToolCallInput::new(r#"{"pattern":"todo"}"#).unwrap()),
+        1_000,
+    )];
+    let running = committed_tool_view(&events);
+    assert_eq!(running.tools[0].started_at_ms, Some(1_000));
+    assert_eq!(running.tools[0].ended_at_ms, None);
+    assert_eq!(running.tools[0].input, r#"{"pattern":"todo"}"#);
+    // A report that does not repeat the input leaves it; one that settles the
+    // call ends it, and a later report of the settled call does not move that.
+    events.push(at(bare(Some(ToolStatus::Running)), 1_200));
+    events.push(at(bare(Some(ToolStatus::Completed)), 1_900));
+    events.push(at(bare(Some(ToolStatus::Completed)), 2_500));
+    let settled = committed_tool_view(&events);
+    assert_eq!(settled.tools[0].started_at_ms, Some(1_000));
+    assert_eq!(settled.tools[0].ended_at_ms, Some(1_900));
+    assert_eq!(settled.tools[0].input, r#"{"pattern":"todo"}"#);
+    let json = serde_json::to_value(&settled.tools[0]).unwrap();
+    assert_eq!(json["startedAtMs"], 1_000);
+    assert_eq!(json["endedAtMs"], 1_900);
+    // A call saved before times were kept shows none, rather than a guess.
+    let old = committed_tool_view(&[event(ExecutionUpdate::Tool(bare(Some(
+        ToolStatus::Completed,
+    ))))]);
+    assert_eq!(old.tools[0].started_at_ms, None);
+    assert_eq!(old.tools[0].ended_at_ms, None);
+    let json = serde_json::to_value(&old.tools[0]).unwrap();
+    assert!(json.get("startedAtMs").is_none() && json.get("endedAtMs").is_none());
+}
+
+#[test]
+fn a_tool_lists_the_files_it_changed_and_says_when_a_side_was_cut() {
+    use crate::conversation::view::{
+        ConversationToolChange, MAX_TOOL_CHANGES, MAX_TOOL_CHANGE_SIDE_BYTES,
+    };
+    let tool = ToolCallId::new("edit").unwrap();
+    let path = |name: &str| FilePath::new(name).unwrap();
+    let long = "x".repeat(MAX_TOOL_CHANGE_SIDE_BYTES + 10);
+    let view = committed_tool_view(&[event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(tool.clone(), None, None, None, None, None).with_content(vec![
+            ToolContent::text("Applied"),
+            // Created: nothing before it, which is not an empty file.
+            ToolContent::diff(path("new.ts"), None, "export {}"),
+            ToolContent::diff(path("big.ts"), Some(long.clone()), "short"),
+        ]),
+    ))]);
+    assert_eq!(
+        view.tools[0].changes,
+        vec![
+            ConversationToolChange {
+                path: "new.ts".into(),
+                before: None,
+                after: "export {}".into(),
+                cut: false,
+            },
+            ConversationToolChange {
+                path: "big.ts".into(),
+                before: Some("x".repeat(MAX_TOOL_CHANGE_SIDE_BYTES)),
+                after: "short".into(),
+                cut: true,
+            },
+        ]
+    );
+    // The details still say the same in text, for readers that print them.
+    assert!(view.tools[0].details.contains("File: new.ts"));
+    let json = serde_json::to_value(&view.tools[0]).unwrap();
+    assert_eq!(json["changes"][0]["path"], "new.ts");
+    assert!(json["changes"][0].get("before").is_none());
+    // A later report replaces the changes, as it does the details; past the
+    // bound the rest are left to the details.
+    let many = (0..MAX_TOOL_CHANGES + 2)
+        .map(|index| ToolContent::diff(path(&format!("f{index}.ts")), Some("a".into()), "b"))
+        .collect();
+    let view = committed_tool_view(&[event(ExecutionUpdate::Tool(
+        ToolCallUpdate::new(tool, None, None, None, None, None).with_content(many),
+    ))]);
+    assert_eq!(view.tools[0].changes.len(), MAX_TOOL_CHANGES);
 }
 
 #[test]

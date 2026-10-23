@@ -12,9 +12,10 @@ use super::view::{
     ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
     ConversationQuestion, ConversationQuestionEntry, ConversationReviewEntry,
     ConversationReviewKind, ConversationRuntime, ConversationSelectionView, ConversationTool,
-    ConversationTranscriptState, ConversationUnreadable, ConversationUsageLimit,
-    ConversationUsageLimitProvider, ConversationUsageLimitRecovery, ConversationView,
-    NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationToolChange, ConversationTranscriptState, ConversationUnreadable,
+    ConversationUsageLimit, ConversationUsageLimitProvider, ConversationUsageLimitRecovery,
+    ConversationView, NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES, MAX_TOOL_CHANGES,
+    MAX_TOOL_CHANGE_PATH_BYTES, MAX_TOOL_CHANGE_SIDE_BYTES,
 };
 use nessa_sdk::application::agent_execution::permissions::{
     ApprovalRuleReference, CancellationOrigin, DeclinedReview, PermissionCancellation,
@@ -31,7 +32,10 @@ use nessa_sdk::domain::agent_execution::leases::{
     EnvironmentRef, LeaseCleanup, LeaseEndCause, LeasePhase, LeaseRefusal, LeaseRevision,
     SandboxProfile,
 };
-use nessa_sdk::domain::agent_execution::tools::McpTool;
+// The schema's bound on `ConversationTool.input` is the SDK's bound on the
+// input an agent reports. A review's input past it is left off the tool row;
+// the review still offers all of it.
+use nessa_sdk::domain::agent_execution::tools::{McpTool, MAX_TOOL_INPUT_BYTES};
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{
@@ -78,9 +82,6 @@ pub const MAX_QUESTION_LIST_BYTES: usize = MAX_OPEN_QUESTIONS * MAX_QUESTION_ENT
 /// which it never gives up.
 pub const MAX_INTERACTION_LIST_BYTES: usize = MAX_REVIEW_LIST_BYTES + MAX_QUESTION_LIST_BYTES;
 const _: () = assert!(MAX_INTERACTION_LIST_BYTES <= MAX_VIEW_BYTES * 2 / 5);
-/// The schema's bound on `ConversationTool.input`, in UTF-8 bytes. An input
-/// past it is left off the tool row; its review still offers all of it.
-const MAX_TOOL_INPUT_BYTES: usize = 32_768;
 const REQUIRED_WORK_FAILURE: &str = "The turn could not complete all required work.";
 const PROVIDER_FAILURE_PREFIX: &str = "The agent provider reported an error: ";
 
@@ -1191,11 +1192,11 @@ impl Projection {
             .iter_mut()
             .find(|tool| tool.execution_id == execution && tool.tool_id == tool_id.as_str())
         {
-            tool.input = if input.arguments_json.len() <= MAX_TOOL_INPUT_BYTES {
-                input.arguments_json.clone()
-            } else {
-                String::new()
-            };
+            // Past the bound the review's arguments are left out, never cut,
+            // and the input the call already reported stays.
+            if input.arguments_json.len() <= MAX_TOOL_INPUT_BYTES {
+                tool.input = input.arguments_json.clone();
+            }
         }
     }
 
@@ -1559,9 +1560,22 @@ impl Projection {
                         mcp: None,
                         structured_content: None,
                         native_hooks: None,
+                        started_at_ms: None,
+                        ended_at_ms: None,
+                        changes: Vec::new(),
                     });
                     self.view.tools.last_mut().unwrap()
                 };
+                // The call's span is when the session first heard of it, to
+                // when it heard the call settle. A later report of a settled
+                // call does not move its end.
+                let at = event.observed_at_ms();
+                if tool.started_at_ms.is_none() {
+                    tool.started_at_ms = at;
+                }
+                if let Some(input) = update.input() {
+                    tool.input = input.as_str().to_owned();
+                }
                 if let Some(agreed) = hooks {
                     tool.native_hooks = agreed.map(|allowed| {
                         if allowed {
@@ -1637,16 +1651,33 @@ impl Projection {
                         .filter(|json| json.len() <= MAX_STRUCTURED_CONTENT_BYTES)
                         .map(str::to_owned);
                     let mut details = String::new();
+                    tool.changes.clear();
                     for item in content {
                         let text = match item.view() {
                             ToolContentView::Structured(_) => continue,
                             ToolContentView::Text(text) => clipped(text, 16384),
-                            ToolContentView::Diff { path, old, new } => format!(
-                                "File: {}\nBefore:\n{}\nAfter:\n{}",
-                                path.as_str(),
-                                clipped(old.unwrap_or("(not provided)"), 7000),
-                                clipped(new, 7000)
-                            ),
+                            ToolContentView::Diff { path, old, new } => {
+                                let before =
+                                    old.map(|old| clipped(old, MAX_TOOL_CHANGE_SIDE_BYTES));
+                                let after = clipped(new, MAX_TOOL_CHANGE_SIDE_BYTES);
+                                let text = format!(
+                                    "File: {}\nBefore:\n{}\nAfter:\n{}",
+                                    path.as_str(),
+                                    before.as_deref().unwrap_or("(not provided)"),
+                                    after
+                                );
+                                if tool.changes.len() < MAX_TOOL_CHANGES {
+                                    tool.changes.push(ConversationToolChange {
+                                        path: clipped(path.as_str(), MAX_TOOL_CHANGE_PATH_BYTES),
+                                        cut: before.as_ref().is_some_and(|before| {
+                                            before.len() < old.map_or(0, str::len)
+                                        }) || after.len() < new.len(),
+                                        before,
+                                        after,
+                                    });
+                                }
+                                text
+                            }
                         };
                         if !details.is_empty() {
                             details.push('\n');
@@ -1668,6 +1699,12 @@ impl Projection {
                         ToolStatus::Failed => "failed",
                     }
                     .into();
+                    match status {
+                        ToolStatus::Completed | ToolStatus::Failed => {
+                            tool.ended_at_ms = tool.ended_at_ms.or(at);
+                        }
+                        ToolStatus::Pending | ToolStatus::Running => tool.ended_at_ms = None,
+                    }
                 }
             }
         }
@@ -1965,6 +2002,11 @@ pub fn bound_view_within(
             .find(|tool| tool.structured_content.is_some())
         {
             tool.structured_content = None;
+            continue;
+        }
+        // So are the structured changes: the same text is in the details.
+        if let Some(tool) = view.tools.iter_mut().find(|tool| !tool.changes.is_empty()) {
+            tool.changes.clear();
             continue;
         }
         // Only the interactions are left, and they are not to be given up:

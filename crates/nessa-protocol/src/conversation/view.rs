@@ -538,6 +538,46 @@ pub struct ConversationTool {
     /// the call's saved events. Absent when that start recorded none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_hooks: Option<NativeHooksChoice>,
+    /// When the session first heard of the call, in Unix milliseconds.
+    /// Absent for a call saved before the time was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<u64>,
+    /// When the session heard the call finished or failed, in Unix
+    /// milliseconds. Absent while it runs, and for a call saved before the
+    /// time was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+    /// The files the call changed, as the agent reported them, in its order:
+    /// at most [`MAX_TOOL_CHANGES`]. The same changes are written into
+    /// `details` as text; these are for a reader that draws them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<ConversationToolChange>,
+}
+/// The most file changes one tool call lists. The schema states it again;
+/// `nessa-server/tests/conversation/agreement.rs` holds the two together.
+pub const MAX_TOOL_CHANGES: usize = 16;
+/// The most bytes of one side of a file change a view carries, before or
+/// after. Past it the side is cut at a character boundary and the change says
+/// so (`cut`). The schema states it again; the agreement test holds the two
+/// together.
+pub const MAX_TOOL_CHANGE_SIDE_BYTES: usize = 7000;
+/// The most bytes of a changed file's path a view carries; a longer one is
+/// cut. Stated again by the schema, held to it by the agreement test.
+pub const MAX_TOOL_CHANGE_PATH_BYTES: usize = 4096;
+/// One file a tool call changed: its path, and its text before and after.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ConversationToolChange {
+    /// The file's path as the agent named it, unresolved, at most
+    /// [`MAX_TOOL_CHANGE_PATH_BYTES`].
+    pub path: String,
+    /// The text before the change. Absent when the agent did not say — a
+    /// file it created reads that way — which differs from an empty file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    /// The text after the change, which may be empty.
+    pub after: String,
+    /// A side was longer than [`MAX_TOOL_CHANGE_SIDE_BYTES`] and is cut.
+    pub cut: bool,
 }
 /// The most bytes of a tool's structured result a view carries. The schema
 /// states it again; `nessa-server/tests/conversation/agreement.rs` holds the two together.
