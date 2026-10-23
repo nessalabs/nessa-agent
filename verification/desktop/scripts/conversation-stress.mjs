@@ -2955,8 +2955,9 @@ async function openedAsAGlow(page, failures) {
 
 /**
  * The picker lists Claude, Codex and a Local AI that cannot be chosen yet,
- * and never OpenCode; each has its figure on the picture, and pointing at a
- * row lights its figure.
+ * and never OpenCode. The picture holds one card, the chosen agent's (Claude
+ * Code's mascot for Claude), and pointing at a row puts that agent's card
+ * there instead.
  */
 async function pickerOffers(page, failures) {
   const rows = await page
@@ -2977,21 +2978,20 @@ async function pickerOffers(page, failures) {
     failures.push(`Local AI is not listed as coming: ${JSON.stringify(rows)}`)
   if (named.some((name) => /opencode/i.test(name)))
     failures.push(`the picker still offers OpenCode: ${JSON.stringify(named)}`)
-  const figures = await page
-    .locator(".nessa-setup-art [data-slot='agent-figure']")
-    .evaluateAll((all) => all.map((figure) => figure.dataset.agent))
-  if (figures.join(",") !== "claude,codex,local")
-    failures.push(`the picture holds figures ${JSON.stringify(figures)}`)
+  const cards = () =>
+    page
+      .locator(".nessa-setup-art [data-slot='agent-card']")
+      .evaluateAll((all) => all.map((card) => card.dataset.agent))
+  const resting = await cards()
+  if (resting.join(",") !== "clawd")
+    failures.push(`the picture holds cards ${JSON.stringify(resting)}`)
   await page.getByRole("button", { name: /^Codex/ }).hover()
   const lit = await waitFor(
     () =>
-      page
-        .locator(".nessa-setup-figure[data-pointed] [data-agent='codex']")
-        .count()
-        .then((count) => count === 1),
+      cards().then((shown) => shown.join(",") === "codex"),
     5_000,
   )
-  if (!lit) failures.push("pointing at Codex did not light its figure")
+  if (!lit) failures.push(`pointing at Codex did not show its card: ${JSON.stringify(await cards())}`)
   await page.mouse.move(1, 1)
 }
 

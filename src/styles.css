@@ -1536,35 +1536,32 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
 }
 
 /*
- * One agent's figure on the picture. Pointing at its row brings it to life,
- * choosing it brings it forward; the others rest, smaller and dimmer.
+ * The agent on the picture, on its own card, centred in the picture. A new
+ * agent's card replaces the last and fades in; off the picker it steps back
+ * out of sight.
  */
-.nessa-setup-figure {
+.nessa-setup-card {
   position: absolute;
-  width: 34%;
-  aspect-ratio: 1;
+  top: 50%;
+  left: 50%;
+  width: min(62%, 340px);
   translate: -50% -50%;
-  scale: 0.82;
-  opacity: 0.7;
-  filter: drop-shadow(0 10px 14px rgb(40 10 60 / 0.35));
+  animation: nessa-setup-card-in 200ms var(--nessa-motion-easing-standard) both;
   transition:
-    scale 300ms var(--nessa-motion-easing-standard),
-    opacity 300ms var(--nessa-motion-easing-standard);
+    scale 250ms var(--nessa-motion-easing-standard),
+    opacity 250ms var(--nessa-motion-easing-standard);
 }
 
-/* Off the picker the agents step back out of sight. */
-.nessa-setup-art:not([data-showing]) .nessa-setup-figure {
-  scale: 0.6;
+@keyframes nessa-setup-card-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+
+.nessa-setup-art:not([data-showing]) .nessa-setup-card {
+  scale: 0.9;
   opacity: 0;
-}
-
-.nessa-setup-figure[data-pointed] {
-  opacity: 0.95;
-}
-
-.nessa-setup-figure[data-chosen] {
-  scale: 1.12;
-  opacity: 1;
 }
 
 /*
@@ -1648,7 +1645,7 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
   .nessa-setup-window,
   .nessa-setup-window[data-beat] .nessa-setup-pane,
   .nessa-setup-window[data-beat] .nessa-setup-chrome,
-  .nessa-setup-figure,
+  .nessa-setup-card,
   .nessa-setup-after {
     animation: none;
     transition: none;

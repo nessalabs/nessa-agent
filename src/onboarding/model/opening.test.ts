@@ -7,7 +7,6 @@ import {
   flightFrames,
   flightTarget,
   nextBeat,
-  onPicture,
   openingBeat,
   setupField,
 } from "./opening"
@@ -36,8 +35,7 @@ describe("the opening's beats", () => {
 })
 
 describe("the window's light", () => {
-  const at = (beat: Parameters<typeof setupField>[0]["beat"]) =>
-    setupField({ beat, picking: false, chosen: undefined, pointed: undefined })
+  const at = setupField
 
   it("is a see-through glow until it forms, then the window's own ground", () => {
     expect(at("glow").clear).toBe(1)
@@ -51,29 +49,8 @@ describe("the window's light", () => {
     expect(at("form").spread).toMatchObject({ to: 1 })
   })
 
-  it("puts a light under each figure on the picker, and tints toward the chosen one", () => {
-    const picking = setupField({
-      beat: "open",
-      picking: true,
-      chosen: "codex",
-      pointed: "claude",
-    })
-    expect(picking.lights.map((light) => light.emphasis)).toEqual([1, 2, 0])
-    expect(picking.tint).toBeDefined()
-    expect(picking.tintAmount).toMatchObject({ to: 0.35 })
-    // Every light stands on the picture, right of the pane.
-    for (const light of picking.lights) expect(light.x).toBeGreaterThan(0.46)
-  })
-
-  it("has no lights and no tint away from the picker", () => {
-    const welcome = at("open")
-    expect(welcome.lights).toEqual([])
-    expect(welcome.tint).toBeUndefined()
-  })
-
-  it("places a picture spot inside the picture's column", () => {
-    expect(onPicture({ x: 0, y: 0.5 }).x).toBeCloseTo(0.46)
-    expect(onPicture({ x: 1, y: 0.5 }).x).toBeCloseTo(1)
+  it("sits to the right once open, behind the picture", () => {
+    expect(at("open").x).toMatchObject({ to: 0.72 })
   })
 })
 

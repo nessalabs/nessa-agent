@@ -1,7 +1,7 @@
 import type { AgentInstallations } from "../application/agent-installations"
 import * as React from "react"
 import { BloomField } from "@nessa-ui/react/bloom-field"
-import { AgentFigures, Onboarding, SETUP_HEADING_ID, showsPicker } from "./onboarding"
+import { AgentShowcase, Onboarding, SETUP_HEADING_ID, showsPicker } from "./onboarding"
 import { SetupChrome } from "./setup-chrome"
 import { useIntroSound } from "./use-intro-sound"
 import { useOnboarding } from "./use-onboarding"
@@ -195,10 +195,9 @@ export function SetupGate({
   const cover = useCoverScale(shell)
   const picking = showsPicker(shown, onboarding.gatewayStartup)
   const [pointed, setPointed] = useWhilePicking<FigureId>(picking)
-  // Off the picker no figure is pointed at or chosen, so none is lively and
-  // none keeps drawing behind the steps that follow.
-  const chosen = picking ? shown.agent : undefined
-  const field = setupField({ beat, picking, chosen, pointed })
+  // Off the picker nothing is pointed at, so the card's figure rests rather
+  // than keep drawing behind the steps that follow.
+  const field = setupField(beat)
   const ripple = useSummonRipple(shown)
 
   if (!onScreen) {
@@ -253,9 +252,6 @@ export function SetupGate({
           spread={field.spread}
           clear={field.clear}
           x={field.x}
-          tint={field.tint}
-          tintAmount={field.tintAmount}
-          lights={field.lights}
           ripple={ripple}
           rippleX={0.73}
           rippleY={0.5}
@@ -286,16 +282,16 @@ export function SetupGate({
           platform={onboarding.platform}
           runtimeCopy={runtimeCopy}
         />
-        {/* The picture beside the pane. The agents stand on it while they are
-          being chosen; they are built once the window is open, so Three.js
-          loads after the opening rather than during it, and stay built
-          across steps so the picker never waits on them. */}
+        {/* The picture beside the pane. The agent being chosen stands on it on
+          its card; the card is built once the window is open, so Three.js
+          loads after the opening rather than during it, and stays built
+          across steps so the picker never waits on it. */}
         <div
           aria-hidden="true"
           className="nessa-setup-art"
           data-showing={picking ? "" : undefined}
         >
-          {beat === "open" ? <AgentFigures chosen={chosen} pointed={pointed} /> : null}
+          {beat === "open" ? <AgentShowcase chosen={shown.agent} pointed={pointed} /> : null}
         </div>
       </div>
     </div>

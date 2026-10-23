@@ -23,7 +23,7 @@ import type { RuntimeCopy } from "../../host"
 import type { GatewayStartupStatus } from "../../startup/application/gateway-startup"
 import { COULD_NOT_START } from "../../startup/application/copy"
 import type { ShortcutPlatform } from "../model/shortcut-display"
-import { AgentFigure } from "@nessa-ui/react/agent-figure/agent-figure"
+import { AgentCard } from "@nessa-ui/react/agent-card"
 import { Button } from "@nessa-ui/react/button"
 import { StepDots } from "@nessa-ui/react/step-dots"
 import { TypeIn } from "@nessa-ui/react/type-in"
@@ -36,7 +36,7 @@ import {
   type AgentReadinessFailure,
   type OnboardingState,
 } from "../model/onboarding"
-import { FIGURES, FIGURE_SPOTS, type FigureId } from "../model/opening"
+import type { FigureId } from "../model/opening"
 import type { LingerShown, LingerView } from "../model/linger"
 
 /** The id the setup window's `aria-labelledby` points at. Every step titles the
@@ -390,38 +390,38 @@ export function showsPicker(
   )
 }
 
+/** What each agent is called on its card, and the figure that stands on it:
+ * Claude's is Claude Code's mascot. */
+const CARDS = Object.freeze({
+  claude: Object.freeze({ name: "Claude", figure: "clawd" }),
+  codex: Object.freeze({ name: "Codex", figure: "codex" }),
+  local: Object.freeze({ name: "Local AI", figure: "local" }),
+} as const satisfies Record<FigureId, { name: string; figure: string }>)
+
 /**
- * The agents standing on the picture beside the picker. Pointing at a row
- * brings its figure to life and choosing one brings it forward; Local AI is
- * there too, as what is coming. Decorative: the rows say all of it.
+ * The one agent on the picture beside the picker, on its own card: the row
+ * pointed at, else the chosen one, else Claude. Pointing at a row plays its
+ * figure. Keyed by agent, so a new agent's card comes in fresh rather than the
+ * old one changing under it. Decorative: the rows say all of it.
  */
-export function AgentFigures({
+export function AgentShowcase({
   chosen,
   pointed,
 }: {
   chosen: AgentId | undefined
   pointed: FigureId | undefined
 }) {
-  return FIGURES.map((id) => (
-    <span
-      key={id}
-      className="nessa-setup-figure"
-      data-pointed={pointed === id ? "" : undefined}
-      data-chosen={chosen === id ? "" : undefined}
-      style={
-        {
-          left: `${FIGURE_SPOTS[id].x * 100}%`,
-          top: `${FIGURE_SPOTS[id].y * 100}%`,
-        } as React.CSSProperties
-      }
-    >
-      <AgentFigure
-        agent={id}
-        lively={pointed === id || chosen === id}
-        className="size-full"
-      />
-    </span>
-  ))
+  const shown: FigureId = pointed ?? (chosen === "codex" ? "codex" : "claude")
+  const card = CARDS[shown]
+  return (
+    <AgentCard
+      key={shown}
+      className="nessa-setup-card"
+      agent={card.figure}
+      name={card.name}
+      lively={pointed === shown}
+    />
+  )
 }
 
 /** The Local AI row: listed so the picker says it is coming, and never
@@ -486,8 +486,8 @@ export function Onboarding({
   /** Whether the window has opened. Until it has, the welcome waits to type
    * and nothing takes the focus. Defaults to true. */
   open?: boolean
-  /** Told which agent's row is pointed at or focused, so the light under its
-   * figure can answer. */
+  /** Told which agent's row is pointed at or focused, so the picture can
+   * show that agent's card. */
   onPoint?: (id: FigureId | undefined) => void
   /** Secure-store effect injected by native setup composition. */
   apiKeys?: AgentApiKeySink

@@ -1,4 +1,3 @@
-import type { AgentId } from "./onboarding"
 
 /**
  * The opening of the setup window, as beats on one clock.
@@ -61,15 +60,6 @@ export type FieldValue =
       easing?: "out" | "in-out"
     }
 
-/** A point of light for one agent on the picker's side of the window. */
-export interface FieldLight {
-  x: number
-  y: number
-  color: string
-  /** 0 resting, 1 pointed at, 2 chosen. */
-  emphasis: number
-}
-
 /** What the window's light is told to do. */
 export interface SetupField {
   spread: FieldValue
@@ -77,9 +67,6 @@ export interface SetupField {
   clear: FieldValue
   /** Where the colour is centred across the window. */
   x: FieldValue
-  tint?: string
-  tintAmount: FieldValue
-  lights: readonly FieldLight[]
 }
 
 /**
@@ -89,114 +76,32 @@ export interface SetupField {
  */
 export const FIELD_GROUND = "#e6dcf3"
 
-/** The agents with a figure on the picker's side, and the Local AI that is
- * shown there but cannot be chosen yet. */
+/** The agents the picker can show on its card: the two it offers, and the
+ * Local AI that is listed but cannot be chosen yet. */
 export type FigureId = "claude" | "codex" | "local"
-
-/** The order the figures are listed in, which is the picker's order. */
-export const FIGURES: readonly FigureId[] = Object.freeze(["claude", "codex", "local"])
-
-/** The colour each figure's light leans the window toward. */
-export const FIGURE_COLORS: Readonly<Record<FigureId, string>> = Object.freeze({
-  claude: "#e0875f",
-  codex: "#6f8cff",
-  local: "#b48cf0",
-})
-
-/**
- * Where each figure stands, as a share of the picker's side of the window
- * (its right-hand column), not of the whole window. Staggered rather than in a
- * column, so three objects read as a group someone chooses from.
- */
-export const FIGURE_SPOTS: Readonly<Record<FigureId, { x: number; y: number }>> =
-  Object.freeze({
-    claude: Object.freeze({ x: 0.36, y: 0.3 }),
-    codex: Object.freeze({ x: 0.7, y: 0.5 }),
-    local: Object.freeze({ x: 0.4, y: 0.74 }),
-  })
-
-/** Where the pane ends and the picture begins, as a share of the window. */
-export const PANE_SHARE = 0.46
-
-/** A point on the picture's side, as a point on the whole window. */
-export function onPicture(spot: { x: number; y: number }): { x: number; y: number } {
-  return { x: PANE_SHARE + (1 - PANE_SHARE) * spot.x, y: spot.y }
-}
-
-/** How a light stands out: chosen beats pointed at beats resting. */
-export function emphasis(
-  id: FigureId,
-  chosen: AgentId | undefined,
-  pointed: FigureId | undefined,
-) {
-  if (chosen === id) return 2
-  if (pointed === id) return 1
-  return 0
-}
 
 /**
  * What the light does for where setup is.
  *
  * Through the opening it is a glow on a see-through ground that floods and
  * then comes in to the window's shape; once the window is open its colour sits
- * to the right, behind the picture, with the pane over the rest. On the picker
- * each agent has a light under its figure, and the chosen one tints the whole
- * field.
+ * to the right, behind the picture, with the pane over the rest. It is the
+ * same on every step: the picker's agent stands on its own card, not on the
+ * light.
  */
-export function setupField({
-  beat,
-  picking,
-  chosen,
-  pointed,
-}: {
-  beat: OpeningBeat
-  /** Whether the picker is on screen, which is when the figures are. */
-  picking: boolean
-  chosen: AgentId | undefined
-  pointed: FigureId | undefined
-}): SetupField {
+export function setupField(beat: OpeningBeat): SetupField {
   if (beat === "glow") {
-    return {
-      spread: { from: 0, to: 0.08, duration: 1000, easing: "out" },
-      clear: 1,
-      x: 0.5,
-      tintAmount: 0,
-      lights: [],
-    }
+    return { spread: { from: 0, to: 0.08, duration: 1000, easing: "out" }, clear: 1, x: 0.5 }
   }
-  if (beat === "fill") {
-    return {
-      spread: { to: 1.25, duration: 1000 },
-      clear: 1,
-      x: 0.5,
-      tintAmount: 0,
-      lights: [],
-    }
-  }
+  if (beat === "fill") return { spread: { to: 1.25, duration: 1000 }, clear: 1, x: 0.5 }
   if (beat === "form") {
     return {
       spread: { to: 1, duration: 900 },
       clear: { to: 0, delay: 400, duration: 500 },
       x: 0.5,
-      tintAmount: 0,
-      lights: [],
     }
   }
-  const tinted = picking && chosen !== undefined && Object.hasOwn(FIGURE_COLORS, chosen)
-  return {
-    spread: 1,
-    clear: 0,
-    x: { to: 0.72, duration: 300, easing: "out" },
-    tint: tinted ? FIGURE_COLORS[chosen as FigureId] : undefined,
-    tintAmount: { to: tinted ? 0.35 : 0, duration: 300 },
-    lights: picking
-      ? FIGURES.map((id) => ({
-          ...onPicture(FIGURE_SPOTS[id]),
-          color: FIGURE_COLORS[id],
-          emphasis: emphasis(id, chosen, pointed),
-        }))
-      : [],
-  }
+  return { spread: 1, clear: 0, x: { to: 0.72, duration: 300, easing: "out" } }
 }
 
 /**
