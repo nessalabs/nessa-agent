@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private delivery state and causal audit survive restart; registration admission, source replay and the sender are still uncomposed.
-sourceRevision: "26b2bd355f8d3d203b0db76b94f9f78a2da41ffe"
+sourceRevision: "fb0f403648a2bb9d8dc6f43385c1e1e5371588f2"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/application/outbox.rs
@@ -20,6 +20,8 @@ sources:
   - crates/nessa-server/src/webhooks/infrastructure/outbox/queue.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/journal.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/publication.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/restoration.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/retirement.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox.rs
 diagramLinks: {}
 diagramDetails:
@@ -53,13 +55,12 @@ The parent explicitly authorized a focused redesign after the prior bounded
 review handoff. The original [findings and reproductions](../../../reviews/evidence/webhook-outbox/blocked-review.md)
 remain historical evidence. This source replaces open audit JSON with one
 closed record type and routes every cursor read through a complete decoder.
-The first fresh review found two remaining context correlations, corrected in
-this checkpoint. The second fresh review found two major contextual-validation
-gaps. Registration
-audit attribution/target and cursor audit checkpoint can contradict their
-retained owning facts and still publish. The [review and exact probes](../../../reviews/evidence/webhook-outbox/typed-state/review-2/report.md)
-are preserved. Persistence is not approved, and runtime composition remains held
-for the parent’s structural design decision under the bounded review process.
+The first two fresh reviews found missing contextual correlations. Their
+[reports and exact demonstrations](../../../reviews/evidence/webhook-outbox/typed-state/README.md)
+remain preserved as findings at their historical source. The parent adopted a
+total contextual restoration owner, implemented at this checkpoint. Final source checks passed80 canonical webhook tests,50 isolated tests,
+required Clippy/architecture and28 fail/restore probes. Fresh independent review
+remains pending; persistence and full feature acceptance are not claimed.
 
 The same typed audit validator serves writing, restoration and publication.
 It rejects unknown fields, malformed identities and actors, negative timestamps,
@@ -77,12 +78,27 @@ cannot supply credential-stop evidence. Settled source context must equal the
 current delivery's complete context. Sending alone permits captured context to
 precede its first observation audit; recovery then carries that context forward.
 
-Registration retirement evidence contains its original target and revocation
-or expiry actor. It can be replayed after the registration has been deleted;
-restoration does not reconstruct an actor from current ownership. The cursor
-decoder covers identity, scope, integer position and reset flag at startup and
-before live duplicate acknowledgement. SQLite corruption refusals map to
-Invalid; transient I/O remains Unavailable.
+The restoration owner matches every closed audit variant explicitly. Registration
+Issue evidence matches the original target and issuance time; Stop matches its
+original cause, actor and time. Cursor evidence matches the retained prior
+checkpoint plus the captured replacement scope, reader and observation time.
+Delivery evidence matches its retained target/checkpoint and credential stop;
+its history must end at the current delivery. Publication validates all owed
+records before writing the first immutable audit file.
+
+Retirement deletes private URL/key/cursors while retaining secret-free original
+target, issuance, stop and retirement-time facts. Those facts name the exact
+retirement audit, whose deferred foreign key prevents losing that owed identity.
+Issue/Stop evidence from the same atomic retirement can correlate against these
+facts after the private registration has gone. Drained requires this retirement
+and no live registration. Acknowledged audit projections and retirement facts
+trim together. Recovery never reconstructs an actor from current ownership.
+
+The cursor decoder covers identity, scope, integer position, reset flag and
+complete captured reset observation at startup and before live duplicate
+acknowledgement. A reset requires its observation; a following cursor carries
+none. This remains checked after the published cursor audit has been trimmed.
+SQLite corruption refusals map to Invalid; transient I/O remains Unavailable.
 
 ## Acknowledging one durable operation
 
@@ -92,7 +108,7 @@ durability; it says nothing about a recipient's effects.
 ```mermaid
 stateDiagram-v2
     [*] --> Restoring
-    Restoring --> Refused: Malformed fields, delivery history or accounting
+    Restoring --> Refused: Invalid fields, histories, owning facts or accounting
     Restoring --> Ready: Checked current schema and acquired lifetime owner lock
     Ready --> Writing: Queue, transition, stop or recovery
     Writing --> Refused: Validation, compare-and-swap or audit insertion fails
@@ -139,7 +155,8 @@ Registration stop records its canonical cause, initiator and stop time, and
 refuses pending work in one transaction. Sending still settles its own
 observation. A later retry is refused using the saved stop cause. After its
 published terminal projections drain, the registration, URL, key and cursors
-are deleted with retirement evidence. Actual credential-revoke coordination
+are deleted with retirement evidence. Secret-free original retirement facts
+survive until that exact audit is acknowledged and trimmed. Actual credential-revoke coordination
 and first-expiry-observer persistence are not yet implemented.
 
 ## Bounds and private data
@@ -150,7 +167,8 @@ was cancelled. The owner and permit survive until that physical operation
 returns. Cancellation cannot open a replacement store behind an active worker.
 
 There are at most 64 registrations, 1024 pending rows and 1024 retained terminal
-rows per registration. Startup checks these counts before collecting bulk
+rows per registration. At most 64 secret-free retirements can await audit
+cleanup. Startup checks these counts before collecting bulk
 work; bounded scans take at most the owner limit plus one sentinel. Existing
 schema bounds include a 128-KiB body and 16-KiB audit record. Terminal SQL
 projections may be removed only after audit publication; immutable audit files
@@ -172,27 +190,27 @@ and transport policy remain owned by the linked delivery mechanics page.
 | SQL publication acknowledgement affects zero rows | Conflict; do not spin or report publication success. |
 | Sending observer disappears or process restarts | Startup recovery records Unknown; no automatic POST. |
 | Stop or source replacement reaches retention ceiling | Shared commit owner trims only eligible published rows in the same write. |
-| Invalid typed identity, cursor, record-local lifecycle, delivery history, encoding or capacity | Refuse before publication, cleanup or filtered ready scans. |
+| Invalid identity, cursor/reset observation, audit-to-owning facts, history, encoding or capacity | Refuse before publication, cleanup or filtered ready scans. |
 | Caller stops awaiting a blocking operation | Physical worker retains its capacity permit and owner lock until completion. |
 
 ## Evidence and remaining gates
 
-The [outbox adapter tests](https://github.com/nessalabs/nessa-agent/blob/26b2bd355f8d3d203b0db76b94f9f78a2da41ffe/crates/nessa-server/tests/webhooks/infrastructure/outbox.rs)
+The [outbox adapter tests](https://github.com/nessalabs/nessa-agent/blob/fb0f403648a2bb9d8dc6f43385c1e1e5371588f2/crates/nessa-server/tests/webhooks/infrastructure/outbox.rs)
 exercise actual private SQLite/filesystem state with synthetic keys and no
 recipient network. They cover checkpoint identity, compare-and-swap, stop and
 source replacement, unknown restart, audit failures, restoration and capacity,
 physical ownership after cancellation and retained-history limits.
 
-This source checkpoint passed 72 canonical webhook tests, including 42 outbox
-tests, required seven-package Clippy, architecture, formatting and diff checks.
-The second fresh review at dc86bc2d found two major open evidence-correlation
-defects, described above. These passing checks do not resolve them.
-This redesign adds malformed
-historical audit, transition/chain, complete cursor and lost-ack retirement
-recovery regressions. Twenty-nine new copied-source mutations were caught and
-the affected tests passed after restoration. Canonical checks and the completed fresh
-review findings are recorded in [typed-state evidence](../../../reviews/evidence/webhook-outbox/typed-state/README.md).
-Historical earlier checks do not establish acceptance of newer source.
+This checkpoint adds refusal regressions for contradictory Registration, Cursor
+and Delivery evidence, the whole owed batch, secret-free retirement identity
+and capacity, missing or changed original facts, reset observations after audit
+trim, and lost-ack valid recovery after private registration deletion. The prior
+review demonstrations are historical bug evidence, not fixed test passes.
+
+Exact-source validation, fail/restore probes and the pending fresh independent
+review are recorded in [total-context evidence](../../../reviews/evidence/webhook-outbox/total-context/README.md).
+Historical checks do not establish acceptance of newer source. No clean review
+or gateway/browser qualification is claimed by this source checkpoint.
 
 Canonical Chromium/WebKit, stress and chaos evidence remains an applicable
 integration gate. The foundation's hosted browser setup timed out before
