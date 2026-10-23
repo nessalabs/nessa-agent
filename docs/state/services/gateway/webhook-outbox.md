@@ -37,6 +37,7 @@ sources:
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/store.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/fact.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/retention.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/cleanup.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/source_reset.rs
 diagramLinks: {}
@@ -311,3 +312,27 @@ stateDiagram-v2
 The immutable registration lifecycle value owns legal replacements; its shared decoder validates restored phase and fact together. Audit decoding uses that same transition owner, and contextual restoration correlates observation, stop and retirement records against the retained original fact before publication. One observation per already-bounded registration adds no unbounded history.
 
 This is an unpublished inner lifecycle checkpoint. The retained command supervisor, startup reader, credential/grant admission and sender still require composition; this chart does not claim that they run. [Private evidence](../../../reviews/evidence/webhook-runtime/lifecycle-observation/README.md) distinguishes completed isolated tests from pending canonical checks and independent review.
+
+## Retained-state cleanup work
+
+Terminal retention uses one indexed cutoff per registration instead of ranking
+every retained row on each maintenance pass. The newest1024 count includes
+rows whose audit is still owed; an older row is deleted only after its audit
+acknowledges. Deleting that terminal row retires only its published audit
+history in the same transaction. Owed and nonterminal history remains available
+for recovery/refusal. Published registration projections have their own indexed
+cleanup; they do not require scanning retained delivery histories.
+
+This changes query work, not delivery authority, audit flushes or replay order.
+The original full-boundary tests and ceilings remain unchanged. [Cost evidence](../../../reviews/evidence/webhook-runtime/retention-cost/README.md)
+records source611b5a87,120 canonical webhook passes,212 auth unit+55 integration
+passes, nine mutation controls and measured work reductions. Windows is still
+unqualified: its old-head job timed out, and unchanged flush counts leave
+filesystem cost to be checked by actual permitted CI. This page's diagrams retain
+the same lifecycle and require render validation at the new checkpoint.
+
+## Assembled correction checkpoint
+
+Source `8f83f7394251814575429f5f1362cb3abac61687` combines the clean original-issuance correction (`1c1355b5`) and cleanup-cost correction (`611b5a87`). Their independent reports are scoped to their original bases; combined review remains pending. It also includes the earlier typed expiry-observer helper (`7b83e425`), which combined review must cover explicitly. That helper does not implement the separate observation-before-stop lifecycle. That reviewed correction excluded W24. This unpublished composition checkout adds the observation-before-stop lifecycle described above; its combined tests and independent review remain pending.
+
+Windows and scripted gateway Chromium/WebKit, stress/chaos, recipient capability/revoke E2E and exact-head CI remain unqualified. Historical timeout and unrelated cleanup failures remain evidence, not passing gates.

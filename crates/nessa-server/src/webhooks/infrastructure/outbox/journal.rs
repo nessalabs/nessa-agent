@@ -79,26 +79,34 @@ pub(super) fn delivery_audit(
     append(transaction, record)
 }
 
-/// Retention ranks all terminal rows, including this transaction's newly owed
-/// audit, while deletion remains conditional on the old row's published audit.
+/// A cutoff counts all terminal rows, including newly owed ones. Deletion is
+/// still conditional on each old row's audit being published. The materialized
+/// relation computes one indexed cutoff per bounded registration, not per row.
+pub(super) const TRIM_TERMINALS: &str = "WITH cutoffs AS MATERIALIZED (
+    SELECT r.id, (
+        SELECT oldest.rowid FROM deliveries AS oldest INDEXED BY terminal_deliveries
+        WHERE oldest.registration=r.id AND oldest.phase NOT IN ('queued','sending','retry')
+        ORDER BY oldest.rowid DESC LIMIT 1 OFFSET ?1
+    ) AS oldest_retained FROM registrations r
+)
+DELETE FROM deliveries WHERE rowid IN (
+    SELECT d.rowid FROM cutoffs c JOIN deliveries AS d INDEXED BY terminal_deliveries ON d.registration=c.id
+    WHERE d.phase NOT IN ('queued','sending','retry') AND d.rowid<c.oldest_retained
+) AND NOT EXISTS (SELECT 1 FROM audit a WHERE a.delivery=deliveries.id AND a.published=0)";
+
+/// Published delivery history belongs to its delivery-delete trigger. This
+/// indexed cleanup visits only the separate registration projections.
+pub(super) const TRIM_REGISTRATION_AUDIT: &str =
+    "DELETE FROM audit INDEXED BY published_registration_audit WHERE published=1 AND delivery IS NULL";
+
 fn trim(connection: &Connection) -> Result<(), OutboxError> {
     connection
-        .execute(
-            "DELETE FROM deliveries WHERE id IN (
-            SELECT id FROM (
-                SELECT d.id,row_number() OVER (
-                    PARTITION BY registration ORDER BY d.rowid DESC
-                ) AS retained FROM deliveries d
-                WHERE phase NOT IN ('queued','sending','retry')
-            ) WHERE retained>?1
-        ) AND NOT EXISTS (
-            SELECT 1 FROM audit a WHERE a.delivery=deliveries.id AND a.published=0
-        )",
-            [RETAINED_LIMIT as i64],
-        )
+        .execute(TRIM_TERMINALS, [RETAINED_LIMIT as i64 - 1])
         .map_err(unavailable)?;
     connection.execute("DELETE FROM deliveries WHERE registration IN (SELECT id FROM registrations WHERE active=0) AND phase NOT IN ('queued','sending','retry') AND NOT EXISTS(SELECT 1 FROM audit a WHERE a.delivery=deliveries.id AND a.published=0)",[]).map_err(unavailable)?;
-    connection.execute("DELETE FROM audit WHERE published=1 AND (delivery IS NULL OR NOT EXISTS(SELECT 1 FROM deliveries d WHERE d.id=audit.delivery))",[]).map_err(unavailable)?;
+    connection
+        .execute(TRIM_REGISTRATION_AUDIT, [])
+        .map_err(unavailable)?;
     connection.execute("DELETE FROM retirements WHERE NOT EXISTS(SELECT 1 FROM audit WHERE audit.registration=retirements.id)",[]).map_err(unavailable)?;
     Ok(())
 }

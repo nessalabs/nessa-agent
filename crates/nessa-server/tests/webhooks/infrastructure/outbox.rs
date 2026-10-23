@@ -2432,3 +2432,6 @@ mod source_reset_tests;
 
 #[path = "outbox/registration.rs"]
 mod registration_tests;
+
+#[path = "outbox/cleanup.rs"]
+mod cleanup_tests;

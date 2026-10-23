@@ -1,0 +1,16 @@
+
+running 1 test
+PROFILE stop-terminal-setup position=1 elapsed_ms=36 vm_steps_approx=200
+PROFILE stop-terminal-setup position=128 elapsed_ms=4385 vm_steps_approx=5916000
+PROFILE stop-terminal-setup position=256 elapsed_ms=8987 vm_steps_approx=23661600
+PROFILE stop-terminal-setup position=512 elapsed_ms=18576 vm_steps_approx=94640400
+PROFILE stop-terminal-setup position=768 elapsed_ms=52608 vm_steps_approx=212936900
+test webhooks::infrastructure::outbox::store::tests::stop_retention_is_bounded_when_publication_fails has been running for over 60 seconds
+PROFILE stop-terminal-setup position=1024 elapsed_ms=97384 vm_steps_approx=378550500
+PROFILE stop-pending-setup position=1025 elapsed_ms=97464 vm_steps_approx=378797300
+PROFILE stop-pending-setup position=1536 elapsed_ms=133272 vm_steps_approx=521799400
+PROFILE stop-pending-setup position=2048 elapsed_ms=178346 vm_steps_approx=698864800
+PROFILE stop setup_done_ms=178346 vm_steps_approx=698864800
+test webhooks::infrastructure::outbox::store::tests::stop_retention_is_bounded_when_publication_fails ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 180.05s

@@ -1,8 +1,7 @@
 # Typed expiry observer checkpoint
 
 Source `7b83e4255048e0c4ba7516cb5948aa27af730e21`; combined registration source
-`0d922ce16543e6627efe8b710ac87a80bd507a96`. This branch is local and unreviewed.
-The published registration remains blocked by its separate auth findings.
+`0d922ce16543e6627efe8b710ac87a80bd507a96`. At that historical checkpoint this helper was local and unreviewed, and registration was blocked by separate auth findings. The later clean [origin correction review](../origin/review-2/report.md) resolves that auth scope. The helper remains subject to fresh assembled review; it does not implement the separate observation-before-stop lifecycle.
 
 A lifecycle owner may observe expiry before any delivery exists. A closed typed
 observer retains that original fact without inventing a delivery ID. Later

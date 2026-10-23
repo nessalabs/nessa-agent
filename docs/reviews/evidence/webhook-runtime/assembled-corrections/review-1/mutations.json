@@ -1,0 +1,27 @@
+[
+  {
+    "name": "helper-actor",
+    "caught": true,
+    "restored_sha256": "6ef6d544826e4c95c7c22bc83d78144d48bebd803af4f27752215d9b8929d0a2"
+  },
+  {
+    "name": "first-stop",
+    "caught": true,
+    "restored_sha256": "6ef6d544826e4c95c7c22bc83d78144d48bebd803af4f27752215d9b8929d0a2"
+  },
+  {
+    "name": "session-purpose",
+    "caught": true,
+    "restored_sha256": "7a77b82d556204544ba5dd5d20a2defc09e01942fa80a931c7dbaa3d1c1e39c9"
+  },
+  {
+    "name": "origin-revision",
+    "caught": true,
+    "restored_sha256": "8757cf350faeef30629bd43054cf6865c7b0902373b55ad057714d9e86c3b793"
+  },
+  {
+    "name": "materialized",
+    "caught": true,
+    "restored_sha256": "9d6a7bdba5fdad5ee57ecf900313422d76742093910ebac4429a2d0f505afdb9"
+  }
+]
