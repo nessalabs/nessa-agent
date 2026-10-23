@@ -17,6 +17,11 @@
  *   rail-view-inert  under an item's full view the workspace takes no keys:
  *                    ⌘B, ⌘0 and ⌥⌘S change nothing behind it, and coming back
  *                    to Agents finds it as it was left.
+ *   quiet-composer   three stacked panes: in a short window a pane you are not
+ *                    in has a one-line composer, Stop alone while its turn
+ *                    runs; going into one grows its composer out of the
+ *                    corner over several frames while the others stay quiet;
+ *                    in a tall window every composer is whole.
  *   overview-narrow  the Agents overview at the size checked: its cover meets
  *                    the sidebar with no strip of what lies beneath; at rest
  *                    each group's card starts below the list's top fade; a
@@ -58,6 +63,7 @@ import {
 } from "./lib/workspace.mjs"
 
 const checks = [
+  "quiet-composer",
   "overview-narrow",
   "sidebar-motion",
   "split-motion",
@@ -542,6 +548,91 @@ const body = {
         await rest(page, size)
       }
     return { failures, detail: seen }
+  },
+
+  "quiet-composer": async ({ page }) => {
+    const failures = []
+    const composers = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll("article.workspace-pane")].map((pane) => {
+          const form = pane.querySelector(".desktop-composer")
+          const field = form?.querySelector("textarea")
+          return {
+            key: pane.dataset.paneKey,
+            focused: pane.hasAttribute("data-focused"),
+            running: form?.hasAttribute("data-running") ?? false,
+            height: form?.getBoundingClientRect().height ?? 0,
+            field: field
+              ? getComputedStyle(field.closest(".desktop-composer-body")).display
+              : "none",
+            choices: [...(form?.querySelectorAll(".desktop-chip") ?? [])].some(
+              (chip) => chip.getBoundingClientRect().width > 0,
+            ),
+          }
+        }),
+      )
+    const stack = async (height) => {
+      await page.setViewportSize({ width: 1200, height })
+      await page.locator(css.composer).first().click()
+      for (let i = 0; i < 2; i++) {
+        const count = await page.locator(css.pane).count()
+        await page.keyboard.press(keys.splitDown)
+        await page
+          .waitForFunction(
+            ([sel, n]) => document.querySelectorAll(sel).length > n,
+            [css.pane, count],
+            { timeout: 2000 },
+          )
+          .catch(() => {})
+      }
+      await settled(page)
+      await frames(page, 6)
+    }
+    await stack(760)
+    const short = await composers()
+    if (short.length < 3) throw new CannotRun(`only ${short.length} panes stacked`)
+    for (const c of short.filter((c) => !c.focused)) {
+      if (c.choices) failures.push(`pane ${c.key}, not focused, still shows its choices`)
+      if (c.running && c.field !== "none")
+        failures.push(`pane ${c.key}, running and not focused, shows more than Stop`)
+      if (!c.running && c.height > 48)
+        failures.push(
+          `pane ${c.key}, not focused, has a ${c.height}px composer, not one line`,
+        )
+    }
+    // Into a quiet pane: its composer grows, over several frames, from the corner.
+    const quiet = short.find((c) => !c.focused)
+    await page.evaluate((key) => {
+      window.__grow = []
+      const form = () =>
+        document.querySelector(`[data-pane-key="${key}"] .desktop-composer`)
+      const start = performance.now()
+      const tick = () => {
+        const f = form()
+        window.__grow.push(f ? getComputedStyle(f).clipPath : "none")
+        if (performance.now() - start < 600) requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    }, quiet.key)
+    await page.locator(`[data-pane-key="${quiet.key}"] ${css.paneHeader}`).click()
+    await page.waitForTimeout(650)
+    const clips = new Set(await page.evaluate(() => window.__grow))
+    if (clips.size < 3)
+      failures.push(`its composer grew in ${clips.size - 1} frames, not several`)
+    const after = await composers()
+    const grown = after.find((c) => c.key === quiet.key)
+    if (!grown?.choices)
+      failures.push(`pane ${quiet.key}, focused, does not show its whole composer`)
+    if (after.filter((c) => !c.focused).some((c) => c.choices))
+      failures.push("a pane left behind kept its whole composer")
+    // Tall: room for every composer.
+    await page.setViewportSize({ width: 1200, height: 1500 })
+    await settled(page)
+    await frames(page, 6)
+    const tall = await composers()
+    if (tall.some((c) => !c.choices && !c.running))
+      failures.push("in a tall window a composer is still quiet")
+    return { short, after, tall, failures }
   },
 
   "overview-narrow": async ({ page }) => {

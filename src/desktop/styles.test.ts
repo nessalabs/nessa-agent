@@ -7,6 +7,7 @@ import { join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import { expect, it } from "vitest"
 import { classes, marks } from "./split-panes"
+import { paneLimits } from "./split-panes/model/pane-layout"
 
 const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8")
 
@@ -641,4 +642,15 @@ it("says !important in the workspace's stylesheets only where a rule waits on it
     "ui/source-list/source-list.css": 6,
     "ui/transcript/approval-card.css": 1,
   })
+})
+
+it("quiets a short pane's composer at the height the pane limits name", () => {
+  // A container query cannot read a property: the stylesheet repeats the limit.
+  const sheet = readFileSync(
+    new URL("./workspace/ui/panes/conversation.css", import.meta.url),
+    "utf8",
+  )
+  expect(sheet).toContain(
+    `@container workspace-pane (max-height: ${paneLimits.quietComposerBelow - 1}px)`,
+  )
 })
