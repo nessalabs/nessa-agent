@@ -555,11 +555,17 @@ Production ceilings, retry/deadline behavior, fixtures' full boundary loops, tes
 assertions and CI timeouts stay intact. Platform qualification still requires an
 allowed exact-head run; local profile numbers alone do not prove Windows fixed.
 
-## Canonical revocation provenance boundary still pending
+## Canonical revocation coordination still pending
 
-The current held access snapshot exposes actual original issuance plus current credential lifecycle, membership and revision. It does not expose the actual original revocation transition. Auth already supports Explicit and Superseded revocations with Principal or offline LocalOperator initiators; the private outbox's current Revoked input accepts a PrincipalId. That restriction is not permission to synthesize a principal for an offline action or to rewrite a supersession as an explicit command.
-
-Before composing revoke/startup/replacement, consume the existing auth journal's immutable revocation fact from the same held snapshot. Re-reading a separate transition list under a held authority may introduce ordering or lock-wait problems and does not establish snapshot agreement. The actual auth owner must publish the coherent fact; a returned command DTO cannot invent it. This is a pending structural boundary, not implemented by the expiry-observation adapter or covered by its principal-only positive revoke test. Parent coordination precedes this auth correction. Generic application-principal admission remains #1052.
+The auth correction at d883b0ed6544c112f441ae1de73f443c7306280f now exposes
+original issuance and optional actual revocation in the same held snapshot.
+Explicit and Superseded retain Principal or offline LocalOperator. The current
+outbox Revoked input still accepts a PrincipalId; runtime coordination must
+consume the complete checked original fact without inventing a principal or
+rewriting supersession. Its first expiry observation remains independent.
+The held-fact contract and evidence are recorded below. Outbox/runtime mapping
+and supervised command completion remain unfinished. Generic application
+installation/no-binding admission stays in #1052.
 
 ## W24 M1 retained-context correction
 
@@ -595,3 +601,26 @@ only retained proof; absent historical rows do not authorize invented history.
 No new lifecycle state, acknowledgement flag, schema, authority or history owner
 is introduced. The existing contextual owner checks the owed Issue prerequisite;
 published original Issue still follows the existing target/time relationship.
+
+## Parent-selected held revocation fact
+
+The parent chose the minimal typed optional fact in the existing AccessSnapshot,
+without renaming CredentialOrigin or adding a journal. Actual revocation comes
+from the same published registry read and lifetime hold as current metadata and
+original issuance. It has no bearer and makes no permission decision.
+
+| Facts at consumption | Owning relationship and refusal | Required evidence |
+| --- | --- | --- |
+| Active credential, no actual revocation | Explicit None is valid; expiry alone does not create a revocation or actor | Ordinary Product compatibility and first expiry observation |
+| Revoked credential, actual original record | Existing domain transition validates Explicit or Superseded and Principal or LocalOperator; typed fact binds current lifecycle and actual sequence/revision/correlation | Explicit, both supersession kinds, offline action and cold restore |
+| Revoked metadata, absent original record | Fail closed; do not derive actor/cause from caller or issuance | Missing-fact accessor and malformed retained state |
+| Supplied fact names another credential, lifecycle or future revision | Fail before lifecycle coordination; actual snapshot ordering must follow original issuance | Identity/time/before-after/revision substitution and restore |
+| First expiry precedes later canonical revocation | Preserve two different original facts; expiry is a reader observation and revocation remains its actual auth event | Actual journal read after expiry, no invented expiry initiator |
+| Historical ordinary issuance and replay | Keep original one-time Product behavior and existing Cedar/session policy | Product issuance/replay and historical actor regressions |
+| Journal identity fields | One private shared decoder enforces nonzero sequence/revision and bounded command correlation for issuance and revocation | Existing original-issuance controls and new fact mutations |
+
+The outbox coordinator must consume the checked fact when a canonical revocation
+is required. It must not substitute its current caller for an offline actor or
+collapse supersession provenance into an explicit command. This auth checkpoint
+publishes provenance only; product command/source/sender composition remains
+separate and unfinished.

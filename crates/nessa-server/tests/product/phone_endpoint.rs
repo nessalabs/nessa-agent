@@ -82,6 +82,7 @@ async fn context(owner: &str, membership: &str, credential: &str, audience: &str
         )
         .unwrap();
         AccessSnapshot {
+            revocation: None,
             credential,
             membership,
             revision,

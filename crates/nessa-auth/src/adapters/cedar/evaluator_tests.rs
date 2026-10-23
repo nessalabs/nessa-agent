@@ -62,6 +62,7 @@ fn request_values() -> (AuthContext, Action, Resource, AccessSnapshot) {
         )
         .unwrap();
         AccessSnapshot {
+            revocation: None,
             credential,
             membership,
             revision,

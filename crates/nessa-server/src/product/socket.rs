@@ -4175,6 +4175,7 @@ mod tests {
             let revision = 1;
             let origin = test_product_origin(&credential);
             AccessSnapshot {
+                revocation: None,
                 credential,
                 membership,
                 revision,

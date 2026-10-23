@@ -563,6 +563,7 @@ impl AccessReader for ShareTarget {
                 )
                 .unwrap();
                 AccessSnapshot {
+                    revocation: None,
                     credential,
                     membership,
                     revision,

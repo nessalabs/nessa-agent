@@ -1,0 +1,36 @@
+
+running 7 tests
+
+thread 'expiry_has_no_revocation_actor_and_later_fact_does_not_rewrite_issuance' (155507) panicked at /tmp/nessa-revocation-controls/auth/tests/revocation.rs:234:47:
+called `Result::unwrap()` on an `Err` value: Unavailable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test expiry_has_no_revocation_actor_and_later_fact_does_not_rewrite_issuance ... FAILED
+
+thread 'explicit_fact_is_coherent_held_original_and_survives_cold_restore' (155508) panicked at /tmp/nessa-revocation-controls/auth/tests/revocation.rs:123:46:
+called `Result::unwrap()` on an `Err` value: Unavailable
+
+thread 'both_actual_supersessions_preserve_cause_actor_and_replacement' (155506) panicked at /tmp/nessa-revocation-controls/auth/tests/revocation.rs:185:51:
+called `Result::unwrap()` on an `Err` value: Unavailable
+test explicit_fact_is_coherent_held_original_and_survives_cold_restore ... FAILED
+test both_actual_supersessions_preserve_cause_actor_and_replacement ... FAILED
+test missing_mismatched_future_and_out_of_order_facts_fail_closed ... ok
+
+thread 'historical_revocation_actor_and_absent_correlation_are_not_inferred_from_receipt' (155509) panicked at /tmp/nessa-revocation-controls/auth/tests/revocation.rs:508:18:
+called `Result::unwrap()` on an `Err` value: Unavailable
+test historical_revocation_actor_and_absent_correlation_are_not_inferred_from_receipt ... FAILED
+test ordinary_product_keeps_one_time_secret_and_facts_are_secret_free ... ok
+
+thread 'malformed_actual_revocation_history_rejects_cold_open_without_replacing_bytes' (155510) panicked at /tmp/nessa-revocation-controls/auth/tests/revocation.rs:443:14:
+called `Result::unwrap()` on an `Err` value: Unavailable
+test malformed_actual_revocation_history_rejects_cold_open_without_replacing_bytes ... FAILED
+
+failures:
+
+failures:
+    both_actual_supersessions_preserve_cause_actor_and_replacement
+    expiry_has_no_revocation_actor_and_later_fact_does_not_rewrite_issuance
+    explicit_fact_is_coherent_held_original_and_survives_cold_restore
+    historical_revocation_actor_and_absent_correlation_are_not_inferred_from_receipt
+    malformed_actual_revocation_history_rejects_cold_open_without_replacing_bytes
+
+test result: FAILED. 2 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

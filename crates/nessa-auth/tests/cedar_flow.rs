@@ -237,6 +237,7 @@ fn snapshot(role: MembershipRole, status: MembershipStatus, grants: Vec<Grant>) 
         )
         .unwrap();
         AccessSnapshot {
+            revocation: None,
             credential,
             membership,
             revision,

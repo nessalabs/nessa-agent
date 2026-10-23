@@ -114,7 +114,7 @@ mod gateway {
  nessa_auth::domain::Initiator::LocalOperator, credential.issued_at()).unwrap();
  let origin = nessa_auth::application::origin::CredentialOrigin::restore(
  nessa_auth::application::dto::CredentialTransitionDto::record(&original, 1, 1, None), &credential).unwrap();
- AccessSnapshot { credential, membership, revision, origin }
+ AccessSnapshot { revocation: None, credential, membership, revision, origin }
 }
     }
     pub(super) fn chat_state() -> ProductRouteState {

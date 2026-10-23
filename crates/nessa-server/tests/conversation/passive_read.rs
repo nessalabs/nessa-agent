@@ -461,6 +461,7 @@ fn access() -> Access {
         )
         .unwrap();
         AccessSnapshot {
+            revocation: None,
             credential,
             membership,
             revision,
