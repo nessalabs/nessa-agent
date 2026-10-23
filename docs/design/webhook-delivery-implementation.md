@@ -148,3 +148,96 @@ replays queued/due work and marks unresolved sending unknown. A live process
 reconciles held outcomes without reposting. Incarnation reset remains explicit
 and atomic with each affected row's audit. These are the W-* contract's gates,
 not behavior delivered by this first slice.
+
+
+## Dependent outbox ordering design (implementation in progress)
+
+The private outbox owns a separate SQLite schema, a lifetime filesystem lock,
+and four retained blocking-operation permits. This adds persistence, not an
+additional authorization decision. The registration caller and dispatcher still
+have to compose existing credential/grant/Cedar admission.
+
+| Saved state | Event / guard | Commit and effect | Required regression |
+| --- | --- | --- | --- |
+| no cursor | authorized contiguous first checkpoint | queue ID, exact body, physical source scope, grant epoch, cursor and audit commit together | `checkpoint_and_identity_survive_reopen` |
+| existing checkpoint | identical body, scope and epoch | return original identity without another audit or cursor advance | `conflicting_checkpoint_does_not_replace_bytes` |
+| existing checkpoint | conflicting bytes or scope | refuse conflict; retain original | `conflicting_checkpoint_does_not_replace_bytes` |
+| live cursor | predecessor differs | refuse conflict; no skipped checkpoint | `cursor_cas_and_queue_limit_preserve_predecessor` |
+| live cursor | source origin/incarnation/schema changes | commit reset-required plus refusal and causal audit for queued/retry rows; sending untouched | `source_change_requires_explicit_reset` |
+| queued / retry | registration stop with canonical initiator | stop registration and refuse pending rows in one transaction; sending resolves own observation | `stop_preserves_inflight_observation_and_cause` |
+| queued / due retry | valid current authority, sending CAS saved and audit projected | caller may dispatch exact bytes; persistence refusal means no POST | `checkpoint_and_identity_survive_reopen`, dispatcher E2E pending |
+| sending | known response observed | CAS observation and audit; loss of local acknowledgement never authorizes a second POST | `transition_cas_rejects_lost_ack_repost` |
+| sending | restart | commit terminal unknown and restart audit; no automatic POST | `restart_recovers_sending_without_repost` |
+| SQL state committed | audit projection fails | return unavailable; replay immutable audit projection before more work | `audit_failure_recovers_before_work` |
+| any pending work | queue or blocking-worker limit reached | typed capacity refusal without cursor/identity advance | `cursor_cas_and_queue_limit_preserve_predecessor`, physical permit test pending |
+| terminal | published audit; retention exceeded | delete old SQL projections, retain immutable audit files | `terminal_retention_is_bounded` |
+
+No outbox-only test is registration, capability/revoke E2E or browser evidence.
+The full integration acceptance remains open.
+
+### Outbox review corrections before sender composition
+
+Round-one adversarial review found four structural defects and one restoration
+bound. The corrected design uses one StoredDelivery decoder for enclosing SQL
+identity, scope, epoch and state agreement. Indexed phase and due time are
+SQLite generated projections of the saved state, so the index cannot classify
+a different phase. Startup validates all restored rows before publication or
+cleanup; every mutation validates its enclosing row again. A canonical owner
+lock excludes a second store adapter while this process owns the database.
+
+| Ordering | Guard / same-write correction | Required regression |
+| --- | --- | --- |
+| restored row hidden by contradictory phase projection | phase/due are generated from state; direct projection writes fail; startup validates saved state before any filtered scan or trim | `restored_rows_are_checked_before_projection_cleanup` |
+| bulk refusal sees another delivery's valid state | shared decoder correlates enclosing ID and complete checkpoint before any update; affected-row count is one; failure rolls back the whole bulk commit | `bulk_refusal_rejects_foreign_state_without_partial_effects` |
+| cursor names a different receiver or stream | refuse Invalid before replacing cursor or touching deliveries | `cursor_scope_identity_is_not_overwritten` |
+| stopped Sending produces retryable response | preserve the response transition and audit; common stopped cleanup refuses Retry with the original stored stop cause; inactive work is not returned ready | `late_retry_after_stop_does_not_become_ready` |
+| incarnation replacement creates terminal rows beyond retention | trim older already-published terminal projections in the same state/audit transaction | `bulk_reset_retention_is_bounded_in_the_commit` |
+| one reader replaces a physical source | explicit Live/Restart reader attribution is copied to cursor and every actually changed delivery audit | `bulk_reset_keeps_one_reader_initiator` |
+| restored retry has an impossible due time | due must be at least its backoff delay from Unix zero; do not compare it with the original timestamp, because the wall clock can move backward | `restored_retry_respects_backoff_without_assuming_wall_clock_order` |
+
+Retirement and stopped-response cleanup read an injected auth Clock for the new
+transition time, while retaining the original stop timestamp and initiator as
+causal facts. They do not relabel the old stop time as a new observation.
+
+### Consistency-boundary redesign after consecutive review rounds
+
+Round two found the retention omission on credential stop as well as source
+reset. Rather than add another call-site repair, the outbox journal will own
+**one transaction commit path**. Every state transaction (queue, reset-required,
+stop, observation, recovery, registration and cleanup) uses it. Before commit it
+removes only terminal projections whose audit is already published, enforces
+the active retention ceiling, and removes already-published terminal projections
+of stopped registrations. Publication failure cannot postpone those deletes.
+The cleanup path publishes owed immutable records, retires drained registration
+material and commits through that same owner. No new delivery state or policy
+rule is introduced.
+
+The restore boundary also covers audit keys and resource accounting. UUID text
+must be the canonical spelling the writer emits; encoded delivery state must
+match the current encoder shape, so a semantic alias cannot strand a byte-CAS.
+An audit row's key, recordId, registration and optional delivery must agree.
+Publishing acknowledges exactly one saved row or refuses; it cannot loop on a
+zero-row acknowledgement. Restored registrations and nonterminal/terminal rows
+must fit their existing limits before scanning or collecting them. Bulk reads
+also take at most the owning limit plus one sentinel row before allocation,
+then refuse an excess. These are file/consistency facts, not Cedar decisions.
+
+| Ordering | Shared owner / regression |
+| --- | --- |
+| full retained history + full pending queue + stop, publication unavailable | same commit owner as source reset; inspect committed SQL before recovery in `stop_retention_is_bounded_when_publication_fails` |
+| noncanonical restored audit key | canonical restore refusal before any publication in `noncanonical_audit_key_is_refused_before_publication` |
+| canonical SQL key with aliased saved-state UUID/encoding | current encoder shape is required in `aliased_saved_state_is_refused_on_restore` |
+| individually valid rows exceed registration or pending bounds | shared accounting rejects restored excess before bulk allocation in `restored_capacity_is_bounded_before_collection` |
+
+This redesign addresses the store review. It does not provide registration
+issuance coordination, the source/sender loop, an expiry-observation journal,
+owner reset admission or capability/revoke E2E. Those remain integration work.
+
+An already-Sending row now also needs the source-change context that existed
+when its cursor was reset-required. The source-change transaction captures that
+immutable reader/time context without cancelling Sending or claiming a phase
+transition. A later retry is refused by common cleanup using that same context,
+even if an owner reset has since replaced the cursor. A known success remains
+success; restart without an observation remains Unknown. When a credential stop
+is already committed at settlement, its canonical stop cause owns refusal.
+No new delivery phase or grant/authorization epoch is introduced.

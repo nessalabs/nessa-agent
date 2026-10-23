@@ -32,6 +32,7 @@ nessa-sdk = { path = "../nessa-sdk" }
 nessa-sync = { workspace = true }
 nessa-images = { path = "../nessa-images" }
 nessa-local-database = { path = "../nessa-local-database" }
+fs2 = "0.4"
 nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
 nessa-gateway-endpoint = { path = "../nessa-gateway-endpoint" }
 nessa-auth = { path = "../nessa-auth" }

@@ -2,9 +2,14 @@
 //! authenticity evidence, not conversation authority.
 mod admission;
 mod message;
+mod outbox;
 mod ports;
 
 pub use admission::{AdmissionFailure, AdmitDelivery, DeliveryHold, Target};
+pub use outbox::{
+    DeliveryCause, Outbox, OutboxError, PendingDelivery, QueueInitiator, QueuedRecord,
+    Registration, StopReason, MAX_OUTBOX_WORKERS, MAX_REGISTRATIONS, PENDING_LIMIT, RETAINED_LIMIT,
+};
 
 pub use message::{InvalidMessage, MacKey, Message, MAX_BODY_BYTES};
 pub use ports::{

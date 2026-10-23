@@ -1639,8 +1639,17 @@ under `tests/webhooks`. `application/admission.rs` combines current credential
 effect holds, principal grant revision holds, checked conversation metadata and
 the existing conversation Cedar evaluator. Credential mutation fences live in
 the auth registry; principal/resource fences remain in the grant store.
-Registration, durable replay/outbox and the running delivery worker remain
-uncomposed work.
+`application/outbox.rs` publishes the persistence port and limits.
+`infrastructure/outbox` owns the private database: `stored` validates restored
+identity and scope; `codec` owns the current serialized values; `capacity` owns
+accounting; `queue` advances source cursor and delivery together; `journal` owns
+state/audit commits, source-change context and retirement; `publication` writes
+immutable audit files and exact acknowledgements; `registry` persists target
+facts supplied by the future credential lifecycle coordinator. Tests remain in
+`tests/webhooks/infrastructure/outbox.rs`.
+Registration authorization/configuration, the committed source reader, sender
+supervision and capability/revoke E2E remain uncomposed work. The outbox does not
+supply permission or open a listener.
 
 ## Browser sessions
 
