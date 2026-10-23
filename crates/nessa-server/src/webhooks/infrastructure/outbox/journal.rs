@@ -73,7 +73,10 @@ pub(super) fn delivery_audit(
         &registration_facts.registration.target,
         before,
         cause,
-        registration_facts.lifecycle.stopped(),
+        registration_facts
+            .stop
+            .as_ref()
+            .filter(|_| registration_facts.lifecycle.stopped().is_some()),
         at_ms,
     )?;
     append(transaction, record)
@@ -160,7 +163,7 @@ fn retire_drained(transaction: &Transaction<'_>, at_ms: u64) -> Result<(), Outbo
     }
     for id in retired {
         let saved = super::registry::by_id(transaction, uuid(&id)?)?;
-        let stop = saved.lifecycle.stopped().ok_or(OutboxError::Invalid)?;
+        let stop = saved.stop.as_ref().ok_or(OutboxError::Invalid)?;
         let record =
             Record::registration(&saved.registration, RegistrationChange::Retire(stop), at_ms);
         let (audit_id, _, _) = record.keys()?;

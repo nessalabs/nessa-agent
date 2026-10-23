@@ -1,13 +1,18 @@
 //! Original credential-stop observations and immutable registration lifecycle.
 //! Callers supply facts and times; this owner performs no policy or I/O.
-use nessa_auth::domain::PrincipalId;
+use nessa_auth::domain::{Initiator, PrincipalId, RevocationCause};
 use uuid::Uuid;
 
 /// The canonical cause retained by a registration's first stop observation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StopReason {
-    Revoked { initiator: PrincipalId },
-    Expired { observed_by: ExpiryObserver },
+    Revoked {
+        initiator: Initiator,
+        cause: RevocationCause,
+    },
+    Expired {
+        observed_by: ExpiryObserver,
+    },
 }
 
 /// The reader that first observed expiry, without inventing a human initiator.
@@ -141,17 +146,19 @@ impl RegistrationLifecycle {
             RegistrationPhase::ExpiryObserved | RegistrationPhase::Stopped => (self.clone(), None),
         }
     }
-    /// Revocation supplies its actual auth actor/time. A prior expiry fact wins
+    /// Revocation supplies its actual actor/cause and local observation time.
+    /// The original Auth command times remain in the retained record. A prior expiry fact wins
     /// registration cleanup; the auth revocation remains its own journal event.
     pub fn stop_revoked(
         &self,
-        initiator: PrincipalId,
+        initiator: Initiator,
+        cause: RevocationCause,
         at_ms: u64,
     ) -> (Self, Option<LifecycleChange>) {
         match self.phase {
             RegistrationPhase::Active => self.changed(
                 RegistrationPhase::Stopped,
-                StopObservation::new(StopReason::Revoked { initiator }, at_ms),
+                StopObservation::new(StopReason::Revoked { initiator, cause }, at_ms),
             ),
             RegistrationPhase::ExpiryObserved => self.finish_observed(),
             RegistrationPhase::Stopped => (self.clone(), None),

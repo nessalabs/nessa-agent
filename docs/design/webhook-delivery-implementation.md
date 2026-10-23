@@ -655,3 +655,78 @@ Contradictory pending initial publication is rejected without repair or invented
 history. Both M3 substitutions (reset-only proof and a second initial UUID beside
 a published original) must fail before publication and on cold restore. Valid
 lost-answer recovery and unrelated registrations remain accepted.
+
+### General credential-stop composition boundary
+
+The held Auth snapshot is the source of an actual original revocation fact.
+A principal-only outbox stop input cannot represent LocalOperator, supersession,
+original command time and effective revocation time faithfully. The isolated
+correction carries the canonical fact through the application boundary;
+expiry remains a distinct first-reader observation and never invents revocation.
+
+| Ordering | Fact and recovery contract |
+| --- | --- |
+| Explicit revoke | Consume the actual held original fact, retaining principal, cause, journal identity/correlation and command time |
+| Offline surface/owner supersession | Retain LocalOperator or the actual original principal and replacement/cause; never substitute the current observer |
+| Expiry observed first, revoke later | Keep the first expiry reader/time for registration cleanup; retain the independent original Auth event unchanged |
+| Original supersession command predates effective revoked_at | Preserve both original command time and the canonical lifecycle's effective revocation time; do not clamp one into the other |
+| Cold retained stop restoration | Reuse Auth's journal identity and transition decoder; bind projections to the original registration target, without fabricated Credential objects |
+| Missing or mismatched current canonical fact | Typed failure before admission/effects; no inferred actor or synthetic history |
+
+Auth exposes a validated bound fact through AccessSnapshot. Its current-binding
+restoration method requires a whole current Credential. Reconstructing a
+Credential with invented grants solely to decode historical evidence would create
+false authorization state. Copying the private journal-identity checks into the
+outbox would create a second owner. The implemented seam is a clearly named
+typed RevocationRecord decoder in the existing Auth fact owner, shared by its
+current-binding restoration method and the outbox's secret-free historical
+representation. CredentialRevocation retains its current-binding construction
+contract; shape-only decoding returns a different type, never an unbound
+CredentialRevocation.
+Decoding proves shape, not actual journal origin or permission; current admission
+still requires the actual held snapshot and its binding checks. This seam changes
+no authorization policy and adds no parallel history owner.
+
+The isolated implementation uses a distinct validated RevocationRecord for
+retained shape and keeps CredentialRevocation bound at construction. It never
+returns an unbound CredentialRevocation from the new decoder. RegistrationStop
+retains that record or an actual first expiry reader, with an immutable derived
+domain projection. The domain uses Auth's Initiator and RevocationCause values;
+it does not turn a LocalOperator into a principal or erase supersession.
+
+| Stored projection | Single retained representation and checks |
+| --- | --- |
+| Live registration | One bounded stop JSON value; phase decoder consumes its derived observation |
+| Retirement | Same codec and complete original fact after live private configuration is removed |
+| Registration audit | Complete retained stop plus human-readable projection, checked together against the owning live/retired fact |
+| Delivery audit | Same retained stop, compared to the stopped registration; no authority from the record itself |
+| Source restoration | Shared Auth record decoder and domain transition owner, then original registration credential/issuance binding |
+| Revocation after observed expiry | Preserve the existing expiry stop record; the later canonical Auth event remains independent |
+
+This replaces the independent SQL stop cause/actor/time columns in the current
+private schema. Old malformed-state tests must exercise the new representation
+without changing their refusal and valid-recovery assertions. The eight-table
+inventory, capacity ceilings, acknowledgement order and external grant/credential
+admission rules remain the existing owners. This work is not yet qualified or
+published; completion requires actual Auth fact integration, mutation/recovery
+coverage and fresh independent review before runtime mounting.
+
+The stop record distinguishes clocks explicitly: its `atMs` is the first local
+stop observation/effect time, with millisecond precision. A revoked record also
+retains the unchanged Auth transition's original command `at` and effective
+`revokedAt` in seconds. Those are distinct facts. Do not replace local observation
+time with a rounded Auth command time, or rewrite the original command time with
+a later cleanup clock. Clock rollback does not synthesize chronology; original
+journal identity remains the correlation. Expiry keeps its actual first reader
+and millisecond read time. Repeated stops preserve the original retained value.
+
+| New canonical stop input versus retained state | Before owed publication |
+| --- | --- |
+| Different credential or original issuance | Refuse Invalid before replaying any owed projection |
+| Same credential with a different retained revocation record | Refuse Invalid; a retry cannot replace original journal identity, actor, cause or time |
+| Same original record, later observer clock | Preserve the first local observation and unchanged original event |
+| Prior expiry followed by actual revocation | Keep the first expiry fact while Auth retains its independent original event |
+
+The retained physical-operation owner performs this data-correlation preflight
+before its existing owed-publication step. It is not an authorization decision;
+Cedar/current credential/grant admission remain required at the runtime boundary.

@@ -3,10 +3,11 @@
 use super::codec::{self, SavedDelivery, SavedScope, SourceStop};
 use super::cursor;
 use super::registry;
+use super::stop::SavedStop;
 use super::stored::CheckedDelivery;
 use super::{invalid, uuid};
 use crate::webhooks::application::{
-    DeliveryCause, OutboxError, QueueInitiator, Registration, StopReason, Target,
+    DeliveryCause, OutboxError, QueueInitiator, Registration, RegistrationStop, StopReason, Target,
 };
 use crate::webhooks::domain::StopObservation;
 use crate::webhooks::domain::{Delivery, LifecycleChange, Phase, RegistrationPhase};
@@ -35,27 +36,6 @@ pub(super) enum Cause {
     SourceCheckpoint,
 }
 
-/// Original credential lifecycle evidence, distinct from this observation's time.
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct SavedStop {
-    cause: Cause,
-    initiator: String,
-    at_ms: u64,
-}
-impl SavedStop {
-    fn of(stop: &StopObservation) -> Self {
-        Self {
-            cause: stop_cause(stop),
-            initiator: registry::stop_actor(stop),
-            at_ms: stop.at_ms(),
-        }
-    }
-    fn checked(&self) -> Result<StopObservation, OutboxError> {
-        check_stop(&self.cause, &self.initiator, self.at_ms)
-    }
-}
-
 /// No open JSON fields or secret-bearing registration DTO can enter evidence.
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields, rename_all_fields = "camelCase")]
@@ -76,6 +56,8 @@ pub(super) enum Record {
         stop_cause: Option<Cause>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stop_at_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        credential_stop: Option<SavedStop>,
         at_ms: u64,
     },
     #[serde(rename = "webhook_delivery")]
@@ -93,7 +75,7 @@ pub(super) enum Record {
         scope: Box<SavedScope>,
         source_stop: Option<SourceStop>,
         source_reset_id: Option<String>,
-        credential_stop: Option<SavedStop>,
+        credential_stop: Option<Box<SavedStop>>,
         before_state: Option<SavedDelivery>,
         after_state: SavedDelivery,
         before: String,
@@ -125,8 +107,11 @@ pub(super) enum Record {
 
 pub(super) enum RegistrationChange<'a> {
     Issue,
-    Lifecycle(&'a LifecycleChange),
-    Retire(&'a StopObservation),
+    Lifecycle {
+        change: &'a LifecycleChange,
+        stop: &'a RegistrationStop,
+    },
+    Retire(&'a RegistrationStop),
 }
 
 pub(super) struct DeliveryEvidence {
@@ -139,7 +124,7 @@ pub(super) struct DeliveryEvidence {
     pub after: Delivery,
     pub source_stop: Option<SourceStop>,
     pub source_reset: Option<Uuid>,
-    pub credential_stop: Option<StopObservation>,
+    pub credential_stop: Option<RegistrationStop>,
 }
 impl DeliveryEvidence {
     pub fn follows(&self, previous: &Self) -> bool {
@@ -163,6 +148,12 @@ impl Record {
         change: RegistrationChange<'_>,
         at_ms: u64,
     ) -> Self {
+        let credential_stop = match &change {
+            RegistrationChange::Issue => None,
+            RegistrationChange::Lifecycle { stop, .. } | RegistrationChange::Retire(stop) => {
+                Some(SavedStop::of(stop))
+            }
+        };
         let (before, after, cause, initiator, stop_cause, stop_at_ms) = match change {
             RegistrationChange::Issue => (
                 "absent",
@@ -172,7 +163,7 @@ impl Record {
                 None,
                 None,
             ),
-            RegistrationChange::Lifecycle(change) => {
+            RegistrationChange::Lifecycle { change, .. } => {
                 let stop = change.observation();
                 let before = match change.before() {
                     RegistrationPhase::Active => "delivering",
@@ -194,9 +185,9 @@ impl Record {
                 "stopped",
                 "absent",
                 Cause::Drained,
-                registry::stop_actor(stop),
-                Some(stop_cause(stop)),
-                Some(stop.at_ms()),
+                registry::stop_actor(stop.observation()),
+                Some(stop_cause(stop.observation())),
+                Some(stop.observation().at_ms()),
             ),
         };
         Self::Registration {
@@ -212,6 +203,7 @@ impl Record {
             initiator,
             stop_cause,
             stop_at_ms,
+            credential_stop,
             at_ms,
         }
     }
@@ -220,18 +212,21 @@ impl Record {
         target: &Target,
         before: Option<&Delivery>,
         cause: DeliveryCause,
-        stop: Option<&StopObservation>,
+        stop: Option<&RegistrationStop>,
         at_ms: u64,
     ) -> Result<Self, OutboxError> {
         let credential_stop = if cause == DeliveryCause::AuthorityStopped {
-            stop.map(SavedStop::of)
+            stop.map(|stop| Box::new(SavedStop::of(stop)))
         } else {
             None
         };
         let (cause, initiator) = match cause {
             DeliveryCause::AuthorityStopped => {
                 let stop = stop.ok_or(OutboxError::Invalid)?;
-                (stop_cause(stop), registry::stop_actor(stop))
+                (
+                    stop_cause(stop.observation()),
+                    registry::stop_actor(stop.observation()),
+                )
             }
             DeliveryCause::SourceChanged { initiator } => {
                 (Cause::SourceChanged, initiator.label(saved.registration))
@@ -339,7 +334,7 @@ impl Record {
                 source_stop: *source_stop,
                 source_reset: source_reset_id.as_ref().map(|id| uuid(id)).transpose()?,
                 credential_stop: credential_stop
-                    .as_ref()
+                    .as_deref()
                     .map(SavedStop::checked)
                     .transpose()?,
             }))
@@ -403,6 +398,7 @@ impl Record {
                 initiator,
                 stop_cause,
                 stop_at_ms,
+                credential_stop,
                 at_ms,
                 ..
             } => {
@@ -415,7 +411,7 @@ impl Record {
                     stop_at_ms,
                 ) {
                     ("absent", "delivering", Cause::CredentialIssue, None, None)
-                        if initiator == owner => {}
+                        if initiator == owner && credential_stop.is_none() => {}
                     (
                         before @ ("delivering" | "expiry_observed"),
                         after @ ("stopped" | "expiry_observed"),
@@ -425,10 +421,17 @@ impl Record {
                         None,
                         None,
                     ) => {
-                        check_lifecycle(before, after, cause, initiator, *at_ms)?;
+                        check_lifecycle(
+                            before,
+                            after,
+                            cause,
+                            initiator,
+                            *at_ms,
+                            credential_stop.as_ref(),
+                        )?;
                     }
                     ("stopped", "absent", Cause::Drained, Some(cause), Some(at)) => {
-                        check_stop(cause, initiator, *at)?;
+                        check_stop(cause, initiator, *at, credential_stop.as_ref())?;
                     }
                     _ => return Err(OutboxError::Invalid),
                 }
@@ -484,7 +487,9 @@ impl Record {
                             .credential_stop
                             .as_ref()
                             .ok_or(OutboxError::Invalid)?;
-                        if stop_cause(stop) != *cause || registry::stop_actor(stop) != *initiator {
+                        if stop_cause(stop.observation()) != *cause
+                            || registry::stop_actor(stop.observation()) != *initiator
+                        {
                             return Err(OutboxError::Invalid);
                         }
                         DeliveryCause::AuthorityStopped
@@ -576,36 +581,50 @@ fn check_lifecycle(
     cause: &Cause,
     actor: &str,
     at_ms: u64,
+    saved: Option<&SavedStop>,
 ) -> Result<(), OutboxError> {
     let before = lifecycle_phase(before)?;
     let after = lifecycle_phase(after)?;
     let fact = match cause {
-        Cause::CredentialExpiryObserved => check_stop(&Cause::CredentialExpired, actor, at_ms)?,
-        Cause::CredentialRevoked | Cause::CredentialExpired => check_stop(cause, actor, at_ms)?,
+        Cause::CredentialExpiryObserved => {
+            check_stop(&Cause::CredentialExpired, actor, at_ms, saved)?
+        }
+        Cause::CredentialRevoked | Cause::CredentialExpired => {
+            check_stop(cause, actor, at_ms, saved)?
+        }
         _ => return Err(OutboxError::Invalid),
     };
     let prior = crate::webhooks::domain::RegistrationLifecycle::restore(
         before,
         match before {
             RegistrationPhase::Active => None,
-            RegistrationPhase::ExpiryObserved | RegistrationPhase::Stopped => Some(fact.clone()),
+            RegistrationPhase::ExpiryObserved | RegistrationPhase::Stopped => {
+                Some(fact.observation().clone())
+            }
         },
     )
     .map_err(invalid)?;
-    let (_, change) = match (cause, fact.reason()) {
+    let (_, change) = match (cause, fact.observation().reason()) {
         (Cause::CredentialExpiryObserved, StopReason::Expired { observed_by }) => {
             prior.observe_expiry(observed_by.clone(), at_ms)
         }
-        (Cause::CredentialRevoked, StopReason::Revoked { initiator }) => {
-            prior.stop_revoked(initiator.clone(), at_ms)
-        }
+        (
+            Cause::CredentialRevoked,
+            StopReason::Revoked {
+                initiator,
+                cause: original_cause,
+            },
+        ) => prior.stop_revoked(initiator.clone(), original_cause.clone(), at_ms),
         (Cause::CredentialExpired, StopReason::Expired { .. }) => {
             prior.stop_observed().map_err(invalid)?
         }
         _ => return Err(OutboxError::Invalid),
     };
     let change = change.ok_or(OutboxError::Invalid)?;
-    if change.before() != before || change.after() != after || change.observation() != &fact {
+    if change.before() != before
+        || change.after() != after
+        || change.observation() != fact.observation()
+    {
         return Err(OutboxError::Invalid);
     }
     Ok(())
@@ -621,13 +640,16 @@ pub(super) fn check_stop(
     cause: &Cause,
     initiator: &str,
     at_ms: u64,
-) -> Result<StopObservation, OutboxError> {
-    let cause = match cause {
-        Cause::CredentialRevoked => "credential_revoked",
-        Cause::CredentialExpired => "credential_expired",
-        _ => return Err(OutboxError::Invalid),
-    };
-    registry::restore_stop(cause, initiator, at_ms)
+    saved: Option<&SavedStop>,
+) -> Result<RegistrationStop, OutboxError> {
+    let stop = saved.ok_or(OutboxError::Invalid)?.checked()?;
+    if stop_cause(stop.observation()) != *cause
+        || registry::stop_actor(stop.observation()) != initiator
+        || stop.observation().at_ms() != at_ms
+    {
+        return Err(OutboxError::Invalid);
+    }
+    Ok(stop)
 }
 pub(super) fn check_reader(actor: &str, registration: Uuid) -> Result<QueueInitiator, OutboxError> {
     if actor == QueueInitiator::Live.label(registration) {

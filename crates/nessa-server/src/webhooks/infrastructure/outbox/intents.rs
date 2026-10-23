@@ -36,7 +36,7 @@ impl Saved {
     fn row(row: &Row<'_>) -> SqlResult<Self> {
         // Borrow SQLite values first: the byte cap precedes owned strings or
         // key allocation. Format/domain validation follows in checked().
-        check_row_bytes(row, 6, ROW_BYTES)?;
+        check_row_bytes(row, 0..6, ROW_BYTES)?;
         Ok(Self {
             id: row.get(0)?,
             issuer: row.get(1)?,

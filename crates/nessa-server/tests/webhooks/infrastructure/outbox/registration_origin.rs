@@ -236,7 +236,10 @@ async fn retiring_private_configuration_cannot_restore_product_session_authority
         .stop(
             id.clone(),
             StopReason::Revoked {
-                initiator: PrincipalId::new("owner").unwrap(),
+                initiator: nessa_auth::domain::Initiator::Principal(
+                    PrincipalId::new("owner").unwrap(),
+                ),
+                cause: nessa_auth::domain::RevocationCause::Explicit,
             },
             11_000,
         )

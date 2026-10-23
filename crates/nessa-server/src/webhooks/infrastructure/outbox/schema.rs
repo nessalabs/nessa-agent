@@ -14,7 +14,7 @@ struct SchemaEntry {
 }
 impl SchemaEntry {
     fn row(row: &Row<'_>) -> SqlResult<Self> {
-        check_row_bytes(row, 4, 2 * SCHEMA.len())?;
+        check_row_bytes(row, 0..4, 2 * SCHEMA.len())?;
         Ok(Self {
             kind: row.get(0)?,
             name: row.get(1)?,

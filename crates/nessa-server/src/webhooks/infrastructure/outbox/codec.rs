@@ -6,15 +6,19 @@ use nessa_local_database::rusqlite::{
 };
 use nessa_sync::replication::domain::{Id, Scope};
 use serde::{Deserialize, Serialize};
-use std::{error::Error as StdError, fmt};
+use std::{error::Error as StdError, fmt, ops::Range};
 use uuid::Uuid;
 
 pub(super) const STATE_BYTES: usize = 512;
 
 /// Borrow SQLite values before allocating their owned representation.
-pub(super) fn check_row_bytes(row: &Row<'_>, columns: usize, budget: usize) -> SqlResult<()> {
+pub(super) fn check_row_bytes(
+    row: &Row<'_>,
+    columns: Range<usize>,
+    budget: usize,
+) -> SqlResult<()> {
     let mut bytes = 0usize;
-    for column in 0..columns {
+    for column in columns {
         let length = match row.get_ref(column)? {
             ValueRef::Text(bytes) | ValueRef::Blob(bytes) => bytes.len(),
             ValueRef::Null | ValueRef::Integer(_) | ValueRef::Real(_) => 0,

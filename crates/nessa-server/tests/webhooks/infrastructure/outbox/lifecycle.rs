@@ -133,6 +133,13 @@ async fn delivery_expiry_observation_keeps_the_actual_queued_identity() {
 
 #[test]
 fn automatic_expiry_observer_decoding_is_closed_and_canonical() {
+    fn decode(
+        actor: &str,
+        at_ms: u64,
+    ) -> Result<crate::webhooks::application::RegistrationStop, OutboxError> {
+        let text = json!({"cause":"credential_expired","initiator":actor,"atMs":at_ms}).to_string();
+        crate::webhooks::infrastructure::outbox::stop::SavedStop::decode(&text)
+    }
     let delivery = Uuid::new_v4();
     for (actor, expected) in [
         ("restart".to_owned(), ExpiryObserver::Restart),
@@ -145,15 +152,18 @@ fn automatic_expiry_observer_decoding_is_closed_and_canonical() {
             ExpiryObserver::Delivery(delivery),
         ),
     ] {
-        let stop = registry::restore_stop("credential_expired", &actor, 12_000).unwrap();
+        let stop = decode(&actor, 12_000).unwrap();
         assert_eq!(
-            stop.reason(),
+            stop.observation().reason(),
             &StopReason::Expired {
                 observed_by: expected
             }
         );
-        assert_eq!(registry::stop_actor(&stop), actor);
-        assert_eq!(registry::stop_reason(&stop), "credential_expired");
+        assert_eq!(registry::stop_actor(stop.observation()), actor);
+        assert!(matches!(
+            stop.observation().reason(),
+            StopReason::Expired { .. }
+        ));
     }
     for actor in [
         "lifecycle".to_owned(),
@@ -166,15 +176,12 @@ fn automatic_expiry_observer_decoding_is_closed_and_canonical() {
         format!("delivery:{}", delivery.to_string().to_uppercase()),
     ] {
         assert!(
-            matches!(
-                registry::restore_stop("credential_expired", &actor, 12_000),
-                Err(OutboxError::Invalid)
-            ),
+            matches!(decode(&actor, 12_000), Err(OutboxError::Invalid)),
             "{actor}"
         );
     }
     assert!(matches!(
-        registry::restore_stop("credential_expired", "restart", u64::MAX),
+        decode("restart", u64::MAX),
         Err(OutboxError::Invalid)
     ));
 }
@@ -275,7 +282,7 @@ async fn owner_expiry_observation_survives_failed_stop_and_later_canonical_revoc
         let c = f.store.owner.connection.lock().unwrap();
         let saved: (i64, String, String, i64) = c
             .query_row(
-                "SELECT active,stop_cause,stop_initiator,stop_at FROM registrations",
+                "SELECT active,json_extract(stop,'$.cause'),json_extract(stop,'$.initiator'),json_extract(stop,'$.atMs') FROM registrations",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
@@ -308,20 +315,17 @@ async fn owner_expiry_observation_survives_failed_stop_and_later_canonical_revoc
             revoked_at: 101,
         })
         .unwrap();
-    let InitiatorDto::Principal { id: actor } = canonical.revocation.initiator else {
-        panic!("canonical explicit owner revocation")
-    };
+    assert!(matches!(
+        canonical.revocation.initiator,
+        InitiatorDto::Principal { .. }
+    ));
     assert_eq!(canonical.revocation.at, 101);
-    f.store
-        .stop(
-            credential,
-            StopReason::Revoked {
-                initiator: PrincipalId::new(actor).unwrap(),
-            },
-            101_000,
-        )
-        .await
-        .unwrap();
+    use nessa_auth::application::ports::AccessAdmission;
+    let held = f.auth.hold(&credential).await.unwrap();
+    let original = held.snapshot.revocation_fact().unwrap().unwrap();
+    let stop = crate::webhooks::application::RegistrationStop::revoked(original, 101_000);
+    f.store.stop_credential(credential, stop).await.unwrap();
+    drop(held);
     assert_eq!(f.count("registrations"), 0);
     assert_eq!(f.count("registration_intents"), 0);
     let logs = std::fs::read_dir(&f.audit)
@@ -516,7 +520,8 @@ async fn first_expiry_and_actual_auth_revocation_remain_distinct_after_retiremen
             .stop(
                 id.clone(),
                 StopReason::Revoked {
-                    initiator: actor.clone(),
+                    initiator: nessa_auth::domain::Initiator::Principal(actor.clone()),
+                    cause: nessa_auth::domain::RevocationCause::Explicit,
                 },
                 101_000,
             )

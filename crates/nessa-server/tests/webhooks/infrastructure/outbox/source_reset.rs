@@ -291,7 +291,10 @@ async fn reset_references_release_with_retirement_and_lost_ack_recovery() {
             .stop(
                 f.registration.target.credential.clone(),
                 StopReason::Revoked {
-                    initiator: PrincipalId::new("original-retirement-actor").unwrap()
+                    initiator: nessa_auth::domain::Initiator::Principal(
+                        PrincipalId::new("original-retirement-actor").unwrap()
+                    ),
+                    cause: nessa_auth::domain::RevocationCause::Explicit
                 },
                 3200
             )
@@ -327,7 +330,7 @@ async fn reset_references_release_with_retirement_and_lost_ack_recovery() {
         .into_iter()
         .find(|a| a["cause"] == "drained")
         .unwrap();
-    assert_eq!(retired["initiator"], "original-retirement-actor");
+    assert_eq!(retired["initiator"], "principal:original-retirement-actor");
 }
 
 #[test]

@@ -5,6 +5,7 @@ mod message;
 mod outbox;
 mod ports;
 mod registration;
+mod registration_stop;
 
 pub use admission::{AdmissionFailure, AdmitDelivery, DeliveryHold, Target};
 pub use outbox::{
@@ -15,6 +16,11 @@ pub use outbox::{
 pub use registration::{
     RegisterWebhook, RegisteredWebhook, RegistrationConfig, RegistrationFailure,
     RegistrationIntent, RegistrationIntents,
+};
+pub(crate) use registration_stop::StopFact;
+pub use registration_stop::{
+    ObserveRegistrationStop, RegistrationStop, RegistrationStops, StopFailure,
+    StopObservationResult,
 };
 
 pub use message::{InvalidMessage, MacKey, Message, MAX_BODY_BYTES};

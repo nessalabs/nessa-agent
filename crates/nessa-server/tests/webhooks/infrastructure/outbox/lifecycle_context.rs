@@ -4,7 +4,7 @@ use super::*;
 fn saved(f: &Fixture) -> Vec<String> {
     let c = f.store.owner.connection.lock().unwrap();
     [
-        "SELECT json_group_array(json_array(id,active,stop_cause,stop_initiator,stop_at)) FROM registrations",
+        "SELECT json_group_array(json_array(id,active,stop)) FROM registrations",
         "SELECT json_group_array(json_array(id,state)) FROM deliveries",
         "SELECT json_group_array(json_array(id,record,published)) FROM audit",
         "SELECT json_group_array(json_array(id,audit)) FROM retirements",
@@ -259,7 +259,10 @@ async fn stopped_queue_admission_refuses_before_cursor_or_delivery_commit() {
         .stop(
             f.registration.target.credential.clone(),
             StopReason::Revoked {
-                initiator: PrincipalId::new("owner").unwrap(),
+                initiator: nessa_auth::domain::Initiator::Principal(
+                    PrincipalId::new("owner").unwrap(),
+                ),
+                cause: nessa_auth::domain::RevocationCause::Explicit,
             },
             2001,
         )

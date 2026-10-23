@@ -85,6 +85,7 @@ pub(super) struct SavedAudit {
 }
 impl SavedAudit {
     pub(super) fn row(row: &Row<'_>) -> SqlResult<Self> {
+        super::codec::check_row_bytes(row, 0..6, AUDIT_BYTES + 4 * uuid::fmt::Hyphenated::LENGTH)?;
         Ok(Self {
             id: row.get(0)?,
             registration: row.get(1)?,

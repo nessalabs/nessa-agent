@@ -18,7 +18,7 @@ fn insert_issue(f: &Fixture, issue: &Value, published: bool) {
 fn retained(f: &Fixture) -> Vec<String> {
     let c = f.store.owner.connection.lock().unwrap();
     [
-        "SELECT json_group_array(json_array(id,active,stop_cause,stop_initiator,stop_at)) FROM registrations",
+        "SELECT json_group_array(json_array(id,active,stop)) FROM registrations",
         "SELECT json_group_array(json_array(id,state)) FROM deliveries",
         "SELECT json_group_array(json_array(id,record,published)) FROM audit",
         "SELECT json_group_array(json_array(id,audit)) FROM retirements",
@@ -94,7 +94,10 @@ async fn later_history(kind: usize, reader: ExpiryObserver) -> (Fixture, Value) 
                     .stop(
                         f.registration.target.credential.clone(),
                         StopReason::Revoked {
-                            initiator: f.registration.target.owner.clone(),
+                            initiator: nessa_auth::domain::Initiator::Principal(
+                                f.registration.target.owner.clone()
+                            ),
+                            cause: nessa_auth::domain::RevocationCause::Explicit
                         },
                         2001,
                     )

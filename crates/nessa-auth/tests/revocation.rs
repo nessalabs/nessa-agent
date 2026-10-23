@@ -12,7 +12,7 @@ use nessa_auth::{
         dto::*,
         origin::CredentialOrigin,
         ports::{AccessAdmission, AccessError, AccessReader, AccessSnapshot},
-        revocation::CredentialRevocation,
+        revocation::{CredentialRevocation, RevocationRecord},
     },
     domain::*,
 };
@@ -529,5 +529,55 @@ fn historical_revocation_actor_and_absent_correlation_are_not_inferred_from_rece
             );
             drop(f.store.take());
         }
+    });
+}
+
+#[test]
+fn retained_decoder_reuses_canonical_validation_without_claiming_current_binding() {
+    ready(async {
+        let f = Fixture::new();
+        let _issued = f.issue(CredentialIssuePurpose::Webhook);
+        let request = RevokeCredentialRequest {
+            request_id: "retained-revoke".into(),
+            issuer_principal_id: "owner".into(),
+            credential_id: "synthetic-hook".into(),
+            revoked_at: 101,
+        };
+        let outcome = f.store().revoke_sync(request).unwrap();
+        let id = CredentialId::new("synthetic-hook").unwrap();
+        let held = f.store().hold(&id).await.unwrap();
+        let original = held.snapshot.revocation_fact().unwrap().unwrap();
+        assert_eq!(
+            RevocationRecord::decode(outcome.revocation.clone()).unwrap(),
+            *original.retained_record()
+        );
+        let owner = f
+            .store()
+            .read(&CredentialId::new("owner-key").unwrap())
+            .await
+            .unwrap();
+        assert!(!original.matches(&owner.credential, owner.revision));
+        assert_eq!(
+            CredentialRevocation::restore(outcome.revocation.clone(), &owner.credential),
+            Err(AccessError::IdentityMismatch)
+        );
+        for mutation in 0..6 {
+            let mut row = outcome.revocation.clone();
+            match mutation {
+                0 => row.sequence = 0,
+                1 => row.revision = 0,
+                2 => row.correlation = Some(" ".into()),
+                3 => row.correlation = Some("x".repeat(201)),
+                4 => row.at += 1,
+                5 => {
+                    row.cause = TransitionCauseDto::Issued {
+                        cause: IssuanceCauseDto::WebhookIssue,
+                    }
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(RevocationRecord::decode(row), Err(AccessError::Unavailable));
+        }
+        assert_eq!(held.snapshot.revocation_fact().unwrap(), Some(original));
     });
 }

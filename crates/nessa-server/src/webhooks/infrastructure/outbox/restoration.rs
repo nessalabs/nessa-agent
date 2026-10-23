@@ -66,6 +66,7 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
             initiator,
             stop_cause,
             stop_at_ms,
+            credential_stop,
             at_ms,
             ..
         } => {
@@ -84,7 +85,9 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
             let (target, stop, issued_at) = match (&live, &retired) {
                 (Some(live), None) => (
                     &live.registration.target,
-                    live.lifecycle.stopped(),
+                    live.stop
+                        .as_ref()
+                        .filter(|_| live.lifecycle.stopped().is_some()),
                     live.issued_at_ms,
                 ),
                 (None, Some(retired)) => {
@@ -108,7 +111,7 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
                         return Err(OutboxError::Invalid);
                     }
                     let observed = match (&live, &retired) {
-                        (Some(live), None) => live.lifecycle.observation(),
+                        (Some(live), None) => live.stop.as_ref(),
                         (None, Some(retired)) => Some(&retired.stop),
                         _ => None,
                     };
@@ -117,13 +120,21 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
                             &audit::Cause::CredentialExpired,
                             initiator,
                             *at_ms,
+                            credential_stop.as_ref(),
                         )?)
                     {
                         return Err(OutboxError::Invalid);
                     }
                 }
                 audit::Cause::CredentialRevoked | audit::Cause::CredentialExpired => {
-                    if stop != Some(&audit::check_stop(cause, initiator, *at_ms)?) {
+                    if stop
+                        != Some(&audit::check_stop(
+                            cause,
+                            initiator,
+                            *at_ms,
+                            credential_stop.as_ref(),
+                        )?)
+                    {
                         return Err(OutboxError::Invalid);
                     }
                 }
@@ -137,6 +148,7 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
                                 stop_cause.as_ref().ok_or(OutboxError::Invalid)?,
                                 initiator,
                                 stop_at_ms.ok_or(OutboxError::Invalid)?,
+                                credential_stop.as_ref(),
                             )?
                     {
                         return Err(OutboxError::Invalid);
@@ -227,10 +239,10 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
                 || evidence.conversation != saved.conversation
                 || evidence.scope != saved.scope
                 || evidence.position != saved.position
-                || evidence
-                    .credential_stop
-                    .as_ref()
-                    .is_some_and(|stop| registration.lifecycle.stopped() != Some(stop))
+                || evidence.credential_stop.as_ref().is_some_and(|stop| {
+                    registration.lifecycle.stopped().is_none()
+                        || registration.stop.as_ref() != Some(stop)
+                })
             {
                 return Err(OutboxError::Invalid);
             }

@@ -13,6 +13,7 @@ mod restoration;
 mod retirement;
 mod schema;
 mod source_reset;
+mod stop;
 mod store;
 mod stored;
 

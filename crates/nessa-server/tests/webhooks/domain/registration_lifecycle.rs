@@ -20,7 +20,8 @@ fn restoration_accepts_only_the_closed_phase_fact_relationship() {
     );
     let revoked = StopObservation::new(
         StopReason::Revoked {
-            initiator: owner("original-admin"),
+            initiator: nessa_auth::domain::Initiator::Principal(owner("original-admin")),
+            cause: nessa_auth::domain::RevocationCause::Explicit,
         },
         11_000,
     );
@@ -96,7 +97,11 @@ fn expiry_requires_observation_and_retains_the_first_actual_reader() {
         let (same, repeated) = stopped.stop_observed().unwrap();
         assert_eq!(same, stopped);
         assert_eq!(repeated, None);
-        let (same, repeated) = stopped.stop_revoked(owner("later-admin"), 15_000);
+        let (same, repeated) = stopped.stop_revoked(
+            nessa_auth::domain::Initiator::Principal(owner("later-admin")),
+            nessa_auth::domain::RevocationCause::Explicit,
+            15_000,
+        );
         assert_eq!(same, stopped);
         assert_eq!(repeated, None);
         let (same, repeated) = stopped.observe_expiry(ExpiryObserver::Restart, 16_000);
@@ -108,10 +113,15 @@ fn expiry_requires_observation_and_retains_the_first_actual_reader() {
 #[test]
 fn actual_revocation_stops_directly_and_does_not_replace_an_earlier_expiry_fact() {
     let active = RegistrationLifecycle::active();
-    let (revoked, change) = active.stop_revoked(owner("canonical-revoker"), 20_000);
+    let (revoked, change) = active.stop_revoked(
+        nessa_auth::domain::Initiator::Principal(owner("canonical-revoker")),
+        nessa_auth::domain::RevocationCause::Explicit,
+        20_000,
+    );
     let fact = StopObservation::new(
         StopReason::Revoked {
-            initiator: owner("canonical-revoker"),
+            initiator: nessa_auth::domain::Initiator::Principal(owner("canonical-revoker")),
+            cause: nessa_auth::domain::RevocationCause::Explicit,
         },
         20_000,
     );
@@ -125,7 +135,11 @@ fn actual_revocation_stops_directly_and_does_not_replace_an_earlier_expiry_fact(
     let (observed, change) =
         active.observe_expiry(ExpiryObserver::Owner(owner("first-reader")), 10_000);
     let original = change.unwrap().observation().clone();
-    let (stopped, change) = observed.stop_revoked(owner("later-canonical-revoker"), 21_000);
+    let (stopped, change) = observed.stop_revoked(
+        nessa_auth::domain::Initiator::Principal(owner("later-canonical-revoker")),
+        nessa_auth::domain::RevocationCause::Explicit,
+        21_000,
+    );
     let evidence = change.unwrap();
     assert_eq!(
         (evidence.before(), evidence.after()),

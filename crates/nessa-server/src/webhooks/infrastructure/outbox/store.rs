@@ -85,6 +85,16 @@ impl SqlOutbox {
         &self,
         work: impl FnOnce(&mut Connection, &Path) -> Result<T, OutboxError> + Send + 'static,
     ) -> Result<T, OutboxError> {
+        self.run_checked(|_| Ok(()), work).await
+    }
+
+    /// Correlate supplied original facts before owed publication. This check
+    /// grants no credential or conversation permission.
+    pub(super) async fn run_checked<T: Send + 'static>(
+        &self,
+        check: impl FnOnce(&Connection) -> Result<(), OutboxError> + Send + 'static,
+        work: impl FnOnce(&mut Connection, &Path) -> Result<T, OutboxError> + Send + 'static,
+    ) -> Result<T, OutboxError> {
         let owner = self.owner.clone();
         let permit = owner
             .capacity
@@ -94,6 +104,7 @@ impl SqlOutbox {
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let mut connection = owner.connection.lock().map_err(unavailable)?;
+            check(&connection)?;
             finish(
                 &mut connection,
                 &owner.audit,
@@ -117,7 +128,7 @@ impl Outbox for SqlOutbox {
         self.run(move |connection,_| {
             let mut statement=connection.prepare(
                 "SELECT d.id,d.registration,d.conversation,d.incarnation,d.position,d.scope,d.state,d.phase,d.due_at,(SELECT reset FROM source_reset_members WHERE delivery=d.id),d.body,
-                    r.id,r.credential,r.principal,r.organization,r.owner,r.destination,r.mac_key,r.active,r.stop_cause,r.stop_initiator,r.stop_at,r.issued_at
+                    r.id,r.credential,r.principal,r.organization,r.owner,r.destination,r.mac_key,r.active,r.stop,r.issued_at
                  FROM deliveries d JOIN registrations r ON d.registration=r.id
                  WHERE d.phase='queued' OR (d.phase='retry' AND d.due_at<=?1)
                  ORDER BY d.registration,d.conversation,d.position LIMIT 4"

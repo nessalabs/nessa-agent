@@ -285,7 +285,10 @@ async fn stop_preserves_inflight_observation_and_cause() {
         .stop(
             credential.clone(),
             StopReason::Revoked {
-                initiator: PrincipalId::new("canonical-revoker").unwrap(),
+                initiator: nessa_auth::domain::Initiator::Principal(
+                    PrincipalId::new("canonical-revoker").unwrap(),
+                ),
+                cause: nessa_auth::domain::RevocationCause::Explicit,
             },
             2001,
         )
@@ -315,7 +318,7 @@ async fn stop_preserves_inflight_observation_and_cause() {
             .iter()
             .filter(|a| a["after"] == "not_sent"
                 && a["cause"] == "credential_revoked"
-                && a["initiator"] == "canonical-revoker")
+                && a["initiator"] == "principal:canonical-revoker")
             .count(),
         1
     );
@@ -324,7 +327,7 @@ async fn stop_preserves_inflight_observation_and_cause() {
         .iter()
         .find(|a| a["before"] == "stopped" && a["after"] == "absent")
         .unwrap();
-    assert_eq!(retired["initiator"], "canonical-revoker");
+    assert_eq!(retired["initiator"], "principal:canonical-revoker");
     assert_eq!(retired["stopAtMs"], 2001);
     assert_eq!(retired["cause"], "drained");
     assert_eq!(retired["stopCause"], "credential_revoked");
@@ -537,7 +540,10 @@ async fn late_retry_after_stop_does_not_become_ready() {
         .stop(
             f.registration.target.credential.clone(),
             StopReason::Revoked {
-                initiator: PrincipalId::new("original-owner").unwrap(),
+                initiator: nessa_auth::domain::Initiator::Principal(
+                    PrincipalId::new("original-owner").unwrap(),
+                ),
+                cause: nessa_auth::domain::RevocationCause::Explicit,
             },
             2001,
         )
@@ -571,7 +577,7 @@ async fn late_retry_after_stop_does_not_become_ready() {
         .find(|a| a["before"] == "retry" && a["after"] == "not_sent")
         .unwrap();
     assert_eq!(refusal["cause"], "credential_revoked");
-    assert_eq!(refusal["initiator"], "original-owner");
+    assert_eq!(refusal["initiator"], "principal:original-owner");
     assert_eq!(refusal["atMs"], 2100);
 }
 
@@ -589,7 +595,10 @@ async fn bulk_refusal_rejects_foreign_state_without_partial_effects() {
             .stop(
                 f.registration.target.credential.clone(),
                 StopReason::Revoked {
-                    initiator: PrincipalId::new("owner").unwrap()
+                    initiator: nessa_auth::domain::Initiator::Principal(
+                        PrincipalId::new("owner").unwrap()
+                    ),
+                    cause: nessa_auth::domain::RevocationCause::Explicit
                 },
                 2000
             )
@@ -907,7 +916,10 @@ async fn stop_retention_is_bounded_when_publication_fails() {
             .stop(
                 f.registration.target.credential.clone(),
                 StopReason::Revoked {
-                    initiator: PrincipalId::new("canonical-revoker").unwrap()
+                    initiator: nessa_auth::domain::Initiator::Principal(
+                        PrincipalId::new("canonical-revoker").unwrap()
+                    ),
+                    cause: nessa_auth::domain::RevocationCause::Explicit
                 },
                 2001
             )
@@ -954,7 +966,7 @@ async fn stop_retention_is_bounded_when_publication_fails() {
         .iter()
         .find(|a| a["before"] == "stopped" && a["after"] == "absent")
         .unwrap();
-    assert_eq!(retired["initiator"], "canonical-revoker");
+    assert_eq!(retired["initiator"], "principal:canonical-revoker");
 }
 
 #[tokio::test]
@@ -1189,14 +1201,26 @@ async fn restored_registration_facts_are_checked_before_effects() {
         "owner=''",
         "destination='http://recipient.test/'",
         "id=upper(id)",
-        "active=0,stop_cause='credential_revoked',stop_initiator='',stop_at=1000",
-        "active=0,stop_cause='credential_expired',stop_initiator='delivery:invalid',stop_at=1000",
-        "active=0,stop_cause='credential_expired',stop_initiator='delivery:AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA',stop_at=1000",
-        "active=0,stop_cause='credential_revoked',stop_initiator='synthetic-owner',stop_at='invalid'",
+        "active=0,stop=json_set(?1,'$.initiator','')",
+        "active=0,stop=json_object('cause','credential_expired','initiator','delivery:invalid','atMs',1000)",
+        "active=0,stop=json_object('cause','credential_expired','initiator','delivery:AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA','atMs',1000)",
+        "active=0,stop=json_set(?1,'$.atMs','invalid')",
     ];
     for set in cases {
         let mut f = Fixture::new().await;
         let audit_before = f.audits();
+        let base_stop = crate::webhooks::infrastructure::outbox::stop::SavedStop::of(
+            &registry::installation_fixture::revocation(
+                f.registration.target.credential.clone(),
+                1,
+                nessa_auth::domain::Initiator::Principal(f.registration.target.owner.clone()),
+                nessa_auth::domain::RevocationCause::Explicit,
+                1000,
+            )
+            .unwrap(),
+        )
+        .encode()
+        .unwrap();
         {
             let c = f.store.owner.connection.lock().unwrap();
             let mutation = format!("UPDATE registrations SET {set}");
@@ -1208,7 +1232,11 @@ async fn restored_registration_facts_are_checked_before_effects() {
                 // offline damaged file separately to preserve the cold guard.
                 c.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
             }
-            c.execute(&mutation, []).unwrap();
+            if set.contains("?1") {
+                c.execute(&mutation, [&base_stop]).unwrap();
+            } else {
+                c.execute(&mutation, []).unwrap();
+            }
             c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
         }
         let placeholder = Fixture::new().await;
@@ -1230,15 +1258,32 @@ async fn restored_registration_facts_are_checked_before_effects() {
         ),
     ] {
         let mut f = Fixture::new().await;
+        let stop = if cause == "credential_revoked" {
+            registry::installation_fixture::revocation(
+                f.registration.target.credential.clone(),
+                1,
+                nessa_auth::domain::Initiator::Principal(PrincipalId::new(initiator).unwrap()),
+                nessa_auth::domain::RevocationCause::Explicit,
+                i64::MAX as u64,
+            )
+            .unwrap()
+        } else {
+            crate::webhooks::application::RegistrationStop::expired(
+                ExpiryObserver::Delivery(
+                    Uuid::parse_str(initiator.strip_prefix("delivery:").unwrap()).unwrap(),
+                ),
+                i64::MAX as u64,
+            )
+        };
+        let text = crate::webhooks::infrastructure::outbox::stop::SavedStop::of(&stop)
+            .encode()
+            .unwrap();
         f.store
             .owner
             .connection
             .lock()
             .unwrap()
-            .execute(
-                "UPDATE registrations SET active=0,stop_cause=?1,stop_initiator=?2,stop_at=?3",
-                nessa_local_database::rusqlite::params![cause, initiator, i64::MAX],
-            )
+            .execute("UPDATE registrations SET active=0,stop=?1", [text])
             .unwrap();
         let placeholder = Fixture::new().await;
         drop(std::mem::replace(&mut f.store, placeholder.store));
@@ -1251,7 +1296,14 @@ async fn restored_registration_facts_are_checked_before_effects() {
             ("credential_revoked", StopReason::Revoked { .. })
                 | ("credential_expired", StopReason::Expired { .. })
         ));
-        assert_eq!(registry::stop_actor(stopped), initiator);
+        assert_eq!(
+            registry::stop_actor(stopped),
+            if cause == "credential_revoked" {
+                format!("principal:{initiator}")
+            } else {
+                initiator.into()
+            }
+        );
         assert_eq!(stopped.at_ms(), i64::MAX as u64);
     }
 }
@@ -1594,7 +1646,10 @@ async fn retired_historical_actor_survives_lost_publication_ack_and_restart() {
             .stop(
                 f.registration.target.credential.clone(),
                 StopReason::Revoked {
-                    initiator: PrincipalId::new("original-other-revoker").unwrap()
+                    initiator: nessa_auth::domain::Initiator::Principal(
+                        PrincipalId::new("original-other-revoker").unwrap()
+                    ),
+                    cause: nessa_auth::domain::RevocationCause::Explicit
                 },
                 2000
             )
@@ -1622,7 +1677,7 @@ async fn retired_historical_actor_survives_lost_publication_ack_and_restart() {
     assert!(reopened.due(3000).await.unwrap().is_empty());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
     let record: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(record["initiator"], "original-other-revoker");
+    assert_eq!(record["initiator"], "principal:original-other-revoker");
     assert_eq!(record["owner"], "synthetic-owner");
     assert_eq!(record["stopAtMs"], 2000);
     assert_eq!(record["stopCause"], "credential_revoked");
@@ -1635,7 +1690,10 @@ async fn registration_audit_lifecycle_and_actor_are_validated() {
         .stop(
             f.registration.target.credential.clone(),
             StopReason::Revoked {
-                initiator: PrincipalId::new("historical-revoker").unwrap(),
+                initiator: nessa_auth::domain::Initiator::Principal(
+                    PrincipalId::new("historical-revoker").unwrap(),
+                ),
+                cause: nessa_auth::domain::RevocationCause::Explicit,
             },
             2000,
         )
@@ -1702,7 +1760,10 @@ async fn typed_delivery_actors_are_correlated_to_saved_cause() {
         .stop(
             f.registration.target.credential.clone(),
             StopReason::Revoked {
-                initiator: PrincipalId::new("original-revoker").unwrap(),
+                initiator: nessa_auth::domain::Initiator::Principal(
+                    PrincipalId::new("original-revoker").unwrap(),
+                ),
+                cause: nessa_auth::domain::RevocationCause::Explicit,
             },
             6000,
         )
@@ -1907,7 +1968,10 @@ async fn owed_credential_stop_evidence_matches_original_registration_facts() {
                     .stop(
                         f.registration.target.credential.clone(),
                         StopReason::Revoked {
-                            initiator: PrincipalId::new("original-revoker").unwrap()
+                            initiator: nessa_auth::domain::Initiator::Principal(
+                                PrincipalId::new("original-revoker").unwrap()
+                            ),
+                            cause: nessa_auth::domain::RevocationCause::Explicit
                         },
                         2001
                     )
@@ -1959,7 +2023,10 @@ async fn owed_credential_stop_evidence_matches_original_registration_facts() {
             assert!(reopened.due(3000).await.unwrap().is_empty());
             assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
             let actual: Value = serde_json::from_str(&text).unwrap();
-            assert_eq!(actual["credentialStop"]["initiator"], "original-revoker");
+            assert_eq!(
+                actual["credentialStop"]["initiator"],
+                "principal:original-revoker"
+            );
             assert_eq!(actual["credentialStop"]["atMs"], 2001);
         } else {
             assert!(
@@ -2037,7 +2104,10 @@ async fn registration_stop_evidence_matches_original_stop_and_target() {
                 .stop(
                     f.registration.target.credential.clone(),
                     StopReason::Revoked {
-                        initiator: PrincipalId::new("original-revoker").unwrap()
+                        initiator: nessa_auth::domain::Initiator::Principal(
+                            PrincipalId::new("original-revoker").unwrap()
+                        ),
+                        cause: nessa_auth::domain::RevocationCause::Explicit
                     },
                     2001
                 )
@@ -2087,7 +2157,10 @@ async fn retirement_evidence_uses_retained_original_facts_after_private_row_dele
                 .stop(
                     f.registration.target.credential.clone(),
                     StopReason::Revoked {
-                        initiator: PrincipalId::new("original-other-revoker").unwrap()
+                        initiator: nessa_auth::domain::Initiator::Principal(
+                            PrincipalId::new("original-other-revoker").unwrap()
+                        ),
+                        cause: nessa_auth::domain::RevocationCause::Explicit
                     },
                     2000
                 )
@@ -2127,7 +2200,7 @@ async fn retirement_evidence_uses_retained_original_facts_after_private_row_dele
                 }
                 "changed_facts" => {
                     c.execute(
-                        "UPDATE retirements SET stop_initiator='changed-original'",
+                        "UPDATE retirements SET stop=json_set(stop,'$.initiator','changed-original')",
                         [],
                     )
                     .unwrap();
@@ -2171,7 +2244,7 @@ async fn retirement_evidence_uses_retained_original_facts_after_private_row_dele
                             params![another, registration, record.to_string()],
                         )
                         .unwrap();
-                        c.execute("INSERT INTO retirements(id,audit,credential,principal,organization,owner,issued_at,stop_cause,stop_initiator,stop_at,retired_at) SELECT ?1,?2,credential,principal,organization,owner,issued_at,stop_cause,stop_initiator,stop_at,retired_at FROM retirements WHERE id=?3",params![registration,another,f.registration.id.to_string()]).unwrap();
+                        c.execute("INSERT INTO retirements(id,audit,credential,principal,organization,owner,issued_at,stop,retired_at) SELECT ?1,?2,credential,principal,organization,owner,issued_at,stop,retired_at FROM retirements WHERE id=?3",params![registration,another,f.registration.id.to_string()]).unwrap();
                     }
                 }
                 "missing_retirement_record" => {
@@ -2199,7 +2272,7 @@ async fn retirement_evidence_uses_retained_original_facts_after_private_row_dele
                 &std::fs::read_to_string(f.audit.join(format!("{id}.json"))).unwrap(),
             )
             .unwrap();
-            assert_eq!(record["initiator"], "original-other-revoker");
+            assert_eq!(record["initiator"], "principal:original-other-revoker");
             assert_eq!(
                 reopened
                     .owner

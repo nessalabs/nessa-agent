@@ -10,12 +10,8 @@ CREATE TABLE registrations (
     destination TEXT NOT NULL CHECK(length(destination) <= 2048),
     mac_key BLOB NOT NULL CHECK(length(mac_key) = 32),
     active INTEGER NOT NULL CHECK(active IN (0, 1)),
-    stop_cause TEXT,
-    stop_initiator TEXT,
-    stop_at INTEGER,
-    CHECK((active=1 AND stop_cause IS NULL AND stop_initiator IS NULL AND stop_at IS NULL)
-       OR (active=1 AND stop_cause='credential_expired' AND stop_initiator IS NOT NULL AND stop_at IS NOT NULL AND stop_at>=0)
-       OR (active=0 AND stop_cause IS NOT NULL AND stop_at IS NOT NULL AND stop_cause IN ('credential_revoked','credential_expired') AND stop_initiator IS NOT NULL AND stop_at>=0))
+    stop TEXT CHECK(stop IS NULL OR (json_valid(stop) AND length(CAST(stop AS BLOB))<=16384)),
+    CHECK(active=1 OR stop IS NOT NULL)
 );
 CREATE UNIQUE INDEX active_principal ON registrations(principal) WHERE active = 1;
 
@@ -89,11 +85,11 @@ CREATE TABLE retirements (
     organization TEXT NOT NULL,
     owner TEXT NOT NULL,
     issued_at INTEGER NOT NULL CHECK(issued_at>=0),
-    stop_cause TEXT NOT NULL,
-    stop_initiator TEXT NOT NULL,
-    stop_at INTEGER NOT NULL CHECK(stop_at>=0),
+    stop TEXT NOT NULL CHECK(json_valid(stop) AND length(CAST(stop AS BLOB))<=16384),
     retired_at INTEGER NOT NULL CHECK(retired_at>=0)
 );
+
+CREATE INDEX retirement_credential ON retirements(credential);
 
 CREATE TABLE source_reset_facts (
     id TEXT PRIMARY KEY,
