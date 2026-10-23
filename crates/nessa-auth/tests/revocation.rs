@@ -20,12 +20,15 @@ use std::sync::Arc;
 
 struct Fixture {
     store: Option<LocalCredentialStore>,
-    root: tempfile::TempDir,
+    private: std::path::PathBuf,
+    _root: tempfile::TempDir,
 }
 impl Fixture {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        let store = Self::open(root.path());
+        let private = root.path().join("private");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let store = Self::open(&private);
         let _owner = store
             .bootstrap(BootstrapRequest {
                 gateway_id: "gateway".into(),
@@ -48,7 +51,8 @@ impl Fixture {
             })
             .unwrap();
         Self {
-            root,
+            _root: root,
+            private,
             store: Some(store),
         }
     }
@@ -65,7 +69,7 @@ impl Fixture {
     }
     fn reopen(&mut self) {
         drop(self.store.take());
-        self.store = Some(Self::open(self.root.path()));
+        self.store = Some(Self::open(&self.private));
     }
     fn issue(&self, purpose: CredentialIssuePurpose) -> IssueCredentialOutcome {
         self.store()
@@ -391,7 +395,7 @@ fn malformed_actual_revocation_history_rejects_cold_open_without_replacing_bytes
             })
             .unwrap();
         drop(f.store.take());
-        let path = f.root.path().join("auth.json");
+        let path = f.private.join("auth.json");
         let original = std::fs::read(&path).unwrap();
         let document: serde_json::Value = serde_json::from_slice(&original).unwrap();
         for change in [
@@ -427,7 +431,7 @@ fn malformed_actual_revocation_history_rejects_cold_open_without_replacing_bytes
             assert_ne!(bytes, original);
             std::fs::write(&path, &bytes).unwrap();
             assert!(LocalCredentialStore::open(
-                f.root.path(),
+                &f.private,
                 "auth.json",
                 Arc::new(CedarPolicyEvaluator::new().unwrap())
             )
@@ -475,7 +479,7 @@ fn historical_revocation_actor_and_absent_correlation_are_not_inferred_from_rece
         };
         let _outcome = f.store().revoke_sync(request.clone()).unwrap();
         drop(f.store.take());
-        let path = f.root.path().join("auth.json");
+        let path = f.private.join("auth.json");
         let original: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         // A receipt can record a later request for an already-revoked key. It
