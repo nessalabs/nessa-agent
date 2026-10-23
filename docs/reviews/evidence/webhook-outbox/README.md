@@ -6,6 +6,10 @@ covers storage and admission foundations, not a usable composed #896 feature.
 Registration authorization, credential stop/expiry coordination, source replay,
 sender supervision, owner reset admission and capability/revoke E2E remain open.
 
+**Review blocked.** The bounded final round found one major audit restore gap
+and one minor cursor restore gap. No further code patch/review loop was started.
+See [the owner handoff](blocked-review.md).
+
 ## Checks and environment
 
 Linux cloud workspace; Rust 1.99.1; synthetic identities, keys and private
@@ -53,7 +57,9 @@ restore validation and reaching audit identity fields. Source c608eaa2 adds one
 checked registration decoder for startup and live audit/retirement consumers.
 Ten malformed persisted cases refuse before effects; legal revoked/expired
 controls preserve maximum i64 timestamps. Nine fail/restore probes cover the
-new rules. Its fresh follow-up review is pending at this writing.
+new rules. The last permitted fresh follow-up round remains blocked: saved audit fields
+and cursor position bypass complete restore validation.
+[Findings, exact reproduction, diagnosis and owner next step](blocked-review.md).
 
 Earlier diagnostic failures are preserved in /tmp: an unindexed full-retention
 case exceeded two minutes before indexes were added; test imports initially

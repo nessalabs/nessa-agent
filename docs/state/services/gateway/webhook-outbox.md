@@ -45,6 +45,19 @@ The storage registration methods accept trusted facts; they do not authorize
 credential issuance or sharing. Application installation #1052 and inbound
 workflow triggers #1088 remain separate.
 
+## Review hold
+
+Final independent review at assembled head 2ef1264a found two restoration gaps
+in this source checkpoint. Saved audit records validate envelope keys but can
+still publish malformed principal, phase and timestamp fields. Cursor-only
+startup validation omits its position, so a text position can survive reopen
+and fail on the next advance. These defects remain open; the diagram describes
+the implemented operation, not complete restoration acceptance.
+
+The repository's bounded review rounds are exhausted. Implementation is paused
+for the parent/person to revisit the typed audit and cursor restoration owners.
+[Exact probes, diagnosis and suggested next step](../../../reviews/evidence/webhook-outbox/blocked-review.md).
+
 ## Acknowledging one durable operation
 
 The outbox owns the operation below. Publication acknowledgement is local audit
@@ -133,7 +146,7 @@ and transport policy remain owned by the linked delivery mechanics page.
 | SQL publication acknowledgement affects zero rows | Conflict; do not spin or report publication success. |
 | Sending observer disappears or process restarts | Startup recovery records Unknown; no automatic POST. |
 | Stop or source replacement reaches retention ceiling | Shared commit owner trims only eligible published rows in the same write. |
-| Invalid restored identity, lifecycle, encoding or capacity | Refuse before publication, cleanup or filtered ready scans. |
+| Invalid decoded registration/delivery identity, lifecycle, encoding or capacity | Refuse before publication, cleanup or filtered ready scans; audit fields and cursor positions still have the review gaps above. |
 | Caller stops awaiting a blocking operation | Physical worker retains its capacity permit and owner lock until completion. |
 
 ## Evidence and remaining gates
