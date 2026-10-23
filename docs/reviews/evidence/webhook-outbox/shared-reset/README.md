@@ -75,8 +75,11 @@ terminal blank EOF lines from evidence. No permission, lifecycle, timeout or tes
 assertion changes. The initial focused correction source is `6e624b490283d3908f747dc591ce8f04b4a639b6`;
 97canonical/67isolated tests, required Clippy/architecture and27fail/restore probes
 passed again. The assembled PR also moves the parent outbox behavior/schema into named owners
-at `b3dc0d46`; see [final layout checks](layout/README.md). Fresh round two is pending.
-Runtime stays uncomposed until clean.
+at `b3dc0d46`; see [final layout checks](layout/README.md). [Fresh round two](review-2/report.md) is clean at
+`546de7af208bdb621bd2bfddc585a7ff10dbac23`: all priority buckets empty,
+independent combined 71 tests passed, all 33 production source copies match,
+and all three committed ranges pass. Both first-round findings are closed.
+Runtime composition may now proceed; its feature and acceptance gates remain.
 
 Main56602fc69d0dc50868f68cb0bb485bed1b7de2be (including #1097/#1098) was fetched
 and will be preserved before composition. No shared auth/grant/protocol or runtime

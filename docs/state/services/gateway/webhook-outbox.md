@@ -70,7 +70,9 @@ provenance gap and a live selection-cost regression. The [report](../../../revie
 and original demonstrations remain preserved. The parent adopted a shared immutable
 reset owner, implemented at this source checkpoint. Current validation and review
 status belongs to [shared reset evidence](../../../reviews/evidence/webhook-outbox/shared-reset/README.md).
-Persistence approval and full feature acceptance remain separate gates.
+Fresh [independent round two](../../../reviews/evidence/webhook-outbox/shared-reset/review-2/report.md)
+is clean at `546de7af`, with all priority buckets empty. This clears the persistence
+review gate. Full feature acceptance remains separate.
 
 The same typed audit validator serves writing, restoration and publication.
 It rejects unknown fields, malformed identities and actors, negative timestamps,
@@ -250,8 +252,9 @@ review demonstrations are historical bug evidence, not fixed test passes.
 
 Historical validation and findings remain in [total-context evidence](../../../reviews/evidence/webhook-outbox/total-context/README.md).
 Current exact-source checks and review status are in [shared reset evidence](../../../reviews/evidence/webhook-outbox/shared-reset/README.md).
-Historical checks do not establish acceptance of newer source. No clean review
-or gateway/browser qualification is claimed by this source checkpoint.
+Historical checks do not establish acceptance of newer source. Independent
+persistence review at `546de7af` checked the unchanged `b3dc0d46` source and is
+clean; gateway/browser qualification and full feature acceptance remain open.
 
 Canonical Chromium/WebKit, stress and chaos evidence remains an applicable
 integration gate. The foundation's hosted browser setup timed out before

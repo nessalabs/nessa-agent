@@ -37,8 +37,12 @@ operation chart PNG is byte-identical to the previously inspected render.
 This is documentation evidence, not canonical gateway browser qualification.
 
 The [intermediate focused checks](../organization/README.md) qualify only source
-`6e624b49`. Fresh independent round two, canonical gateway Chromium/WebKit,
-stress/chaos, exact-head CI and full runtime composition remain pending.
+`6e624b49`. [Fresh independent round two](../review-2/report.md) is clean at
+`546de7af208bdb621bd2bfddc585a7ff10dbac23`, with no findings at any priority.
+Its independent combined suite passed 71 tests, and it independently verified all
+33 production source copies and the three committed-range checks. This clears
+the persistence review gate. Canonical gateway Chromium/WebKit, stress/chaos,
+exact-head CI and full runtime composition remain pending.
 Explicit committed-range diff checks passed at evidence head `129bb424`, against
 immediate correction base `43a90946`, original correction base `0f6bea1e`, and
 intended PR base `6c38915d` ([results](committed-diff-checks.json)). These execute
