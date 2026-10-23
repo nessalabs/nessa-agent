@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "1c1355b537037e7416486856211b74c605804fa7"
+sourceRevision: "8f83f7394251814575429f5f1362cb3abac61687"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/application/outbox.rs
@@ -309,3 +309,9 @@ passes, nine mutation controls and measured work reductions. Windows is still
 unqualified: its old-head job timed out, and unchanged flush counts leave
 filesystem cost to be checked by actual permitted CI. This page's diagrams retain
 the same lifecycle and require render validation at the new checkpoint.
+
+## Assembled correction checkpoint
+
+Source `8f83f7394251814575429f5f1362cb3abac61687` combines the clean original-issuance correction (`1c1355b5`) and cleanup-cost correction (`611b5a87`). Their independent reports are scoped to their original bases; combined review remains pending. It also includes the earlier typed expiry-observer helper (`7b83e425`), which combined review must cover explicitly. That helper does not implement the separate observation-before-stop lifecycle. Uncommitted W24 work remains outside this checkout.
+
+Windows and scripted gateway Chromium/WebKit, stress/chaos, recipient capability/revoke E2E and exact-head CI remain unqualified. Historical timeout and unrelated cleanup failures remain evidence, not passing gates.
