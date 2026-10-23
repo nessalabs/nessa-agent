@@ -936,6 +936,14 @@ serializable state. Client regressions live in
 `adapters/store/prepared-operations.test.ts`. See
 [prepared submissions](design/prepared-submissions.md) for ordering and ownership.
 
+`crates/nessa-server/src/external_events/` owns optional inbound event admission.
+Its `domain/value_objects` bounds delivery identities, `application` rechecks the
+binding's current Auth/Cedar authority and asks the existing durable submit owner,
+and `entrypoint` verifies bounded signed HTTP envelopes. It creates no listener;
+production composition does not mount it. Tests under
+`crates/nessa-server/tests/external_events/` drive loopback HTTP through the SQLite
+command store and deterministic SDK execution. See [external events](design/external-events.md).
+
 `crates/nessa-server/src/conversation/` groups durable conversation ownership and
 access (domain), shared Agent orchestration (application), and private
 metadata/audit adapters (infrastructure). The conversation's identity and summary,

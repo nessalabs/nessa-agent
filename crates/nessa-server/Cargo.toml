@@ -37,6 +37,8 @@ nessa-gateway-endpoint = { path = "../nessa-gateway-endpoint" }
 nessa-auth = { path = "../nessa-auth" }
 nessa-agent-credentials = { path = "../nessa-agent-credentials" }
 axum = { version = "0.8", features = ["ws"] }
+# Name the bounded HTTP-body rejection separately from transport read failures.
+http-body-util = "0.1"
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 # `raw_value` keeps each mcpServers entry's original JSON so a repeated
