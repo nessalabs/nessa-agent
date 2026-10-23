@@ -208,3 +208,7 @@ Source `0d30b39e440c97523dd925ba90e187fd92da8b9d` adds the ordering fixture to t
 ## Current-main integration checkpoint
 
 The isolated integration joins main `084b79aeedf157286810512c524aede59887f17b` with the reviewed #1090, #1093 and #1094 heads. Both selector exports, both checklist sections and all workspace navigation links are retained. The native-hook and notice-permission journeys now describe the corrected pending owners and link to the detailed action page; their source checkpoints advance only after this focused review. [Assembly evidence and remaining browser gates](../reviews/user-flow-integration-1087.md) preserve exact inputs, tests and access limitations. Published PR branches remain unchanged pending coordinator disposition.
+
+## Main tool-trace integration
+
+Main `d029d1cf126585e5e2b0146d92d37e7585ad67ab` was subsequently merged non-destructively into runtime checkpoint `110dacd432341d4801c39c554f774f52b82b89b0`. Its protocol/client/transcript changes and UI pin `8cc1dee2409ac6334377effcd2cf0ca998e5a62f` are preserved, together with both custom selector exports. [Current integration qualification](../reviews/user-flow-integration-1087.md) separates the fresh checks from earlier reviewed checkpoints. No unrelated state-page checkpoint is advanced for this mainline update.
