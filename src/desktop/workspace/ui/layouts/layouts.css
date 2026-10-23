@@ -16,9 +16,12 @@
   top: 0;
   right: 0;
   bottom: 0;
-  left: calc(2 * var(--desktop-gutter) + var(--workspace-sidebar-width));
+  /* From the sidebar's own edge: the resize edge's gutter is under the
+     cover too, so no strip of what lies beneath shows beside the sidebar. */
+  left: calc(var(--desktop-gutter) + var(--workspace-sidebar-width));
   display: flex;
-  padding: var(--desktop-titlebar-height) var(--desktop-gutter) var(--desktop-gutter) 0;
+  padding: var(--desktop-titlebar-height) var(--desktop-gutter) var(--desktop-gutter)
+    var(--desktop-gutter);
   pointer-events: none;
 }
 
@@ -31,8 +34,8 @@
    place it had, so the fold's attribute does not move it. */
 .workspace[data-spare-held][data-folding][data-sidebar="closed"]
   .workspace-overview-layer {
-  left: calc(2 * var(--desktop-gutter) + var(--workspace-sidebar-width));
-  padding-left: 0;
+  left: calc(var(--desktop-gutter) + var(--workspace-sidebar-width));
+  padding-left: var(--desktop-gutter);
 }
 
 .workspace-overview-layer[data-open] {

@@ -260,6 +260,11 @@
   background: color-mix(in oklab, var(--foreground) 7%, transparent);
   font-family: var(--nessa-font-mono);
   font-size: 0.86em;
+  /* Wrapped, each line keeps the chip's padding and corners, and a long
+     command breaks where it must rather than running past its column. */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  overflow-wrap: anywhere;
 }
 
 .workspace-message strong {

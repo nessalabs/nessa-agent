@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it } from "vitest"
 import { loadWorkspace } from "../../adapters/store/commands"
 import { paneIds } from "../../application/workspace-state"
 import type { Message as MessageValue } from "../../model/transcript"
-import { settle, testStore } from "../../testing"
+import { fakeSource, settle, summary, testIndex, testStore } from "../../testing"
 import { AgentProse } from "./rich-text"
 import { Message } from "./message"
 
@@ -88,4 +88,31 @@ it("draws a chat id an agent wrote as that chat's pill, and other code as code",
   )
   expect(host.querySelector('[data-chat-pill="b"]')?.textContent).toBe("Session b")
   expect([...host.querySelectorAll("code")].map((e) => e.textContent)).toEqual(["ls -la"])
+})
+
+it("draws a known chat's id in plain prose as its pill; other ids, code and links stay as written", async () => {
+  const known = "fcd9bdb0-1111-4222-8333-444455556666"
+  const unknown = "00000000-0000-4000-8000-000000000000"
+  const index = testIndex()
+  const s = testStore(
+    fakeSource({
+      ...index,
+      sessions: [...index.sessions, summary(known, "desktop", 50)],
+    }),
+  )
+  await s.dispatch(loadWorkspace())
+  await settle()
+  await act(async () =>
+    root.render(
+      <Provider store={s}>
+        <AgentProse
+          text={`Created ${known}, not ${unknown}. See [${known}](https://example.com) and:\n\n\`\`\`\n${known}\n\`\`\``}
+        />
+      </Provider>,
+    ),
+  )
+  expect(host.querySelectorAll(`[data-chat-pill="${known}"]`)).toHaveLength(1)
+  expect(host.textContent).toContain(`not ${unknown}.`)
+  expect(host.querySelector("a")?.textContent).toBe(known)
+  // One pill: the copies in the link and the code block stay as written.
 })

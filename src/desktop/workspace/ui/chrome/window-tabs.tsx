@@ -5,10 +5,11 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  type CSSProperties,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react"
-import { panesOf } from "../../../split-panes/model/pane-layout"
+import { panesOf, type PaneLayout } from "../../../split-panes/model/pane-layout"
 import { DesktopIcon } from "../../../ui/icons"
 import { IconButton } from "../../../ui/icon-button"
 import {
@@ -29,7 +30,7 @@ import {
   selectTabs,
 } from "../../adapters/store/selectors"
 import { paneItemKey, paneItemOf, sessionItem } from "../../model/pane-item"
-import { layoutOf } from "../../model/window-tabs"
+import { layoutOf, type WindowTabs as TabsState } from "../../model/window-tabs"
 import { useWorkspaceFrame } from "../workspace-frame"
 import { AgentTile } from "./agent-tile"
 import "./window-tabs.css"
@@ -76,6 +77,8 @@ export const WindowTabs = memo(function WindowTabs() {
         ref={list}
         role="tablist"
         aria-label="Open views"
+        // Its natural width: every chat a unit, every merged group its glyph.
+        style={stripMeasure(tabs, panes)}
         onKeyDown={moveTab}
       >
         {tabs.tabs.map((tab) => {
@@ -102,6 +105,7 @@ export const WindowTabs = memo(function WindowTabs() {
               role="group"
               data-tab={tab.id}
               data-active={active || undefined}
+              style={{ "--tab-chats": shown.length } as CSSProperties}
               aria-label={`${shown.length} chats side by side`}
               title={`${shown.length} chats side by side`}
             >
@@ -277,4 +281,21 @@ function MergedGlyph() {
       <path d="M4 5.25c0 2.75 2.5 2.75 6.25 2.75" />
     </svg>
   )
+}
+
+/** The strip's natural width, as units of tab and merged groups (`window-tabs.css`). */
+function stripMeasure(tabs: TabsState, panes: PaneLayout | null): CSSProperties {
+  let units = 0
+  let groups = 0
+  for (const tab of tabs.tabs) {
+    const layout = layoutOf(tabs, panes, tab)
+    const count = layout ? panesOf(layout).length : 0
+    units += Math.max(1, count)
+    if (count > 1) groups += 1
+  }
+  return {
+    "--tab-units": units,
+    "--tab-groups": groups,
+    "--tab-count": tabs.tabs.length,
+  } as CSSProperties
 }

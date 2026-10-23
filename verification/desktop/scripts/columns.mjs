@@ -17,6 +17,11 @@
  *   rail-view-inert  under an item's full view the workspace takes no keys:
  *                    ⌘B, ⌘0 and ⌥⌘S change nothing behind it, and coming back
  *                    to Agents finds it as it was left.
+ *   overview-narrow  the Agents overview at the size checked: its cover meets
+ *                    the sidebar with no strip of what lies beneath; at rest
+ *                    each group's card starts below the list's top fade; a
+ *                    row opened beneath itself keeps everything inside its
+ *                    card; every tab is one width (a merged chat within 8%).
  *   sidebar-motion   ⌘B folds and unfolds the sidebar as the classic shell's
  *                    split view does: what stands beside it (the session
  *                    list, or the panes) and the pane's composer — its left
@@ -53,6 +58,7 @@ import {
 } from "./lib/workspace.mjs"
 
 const checks = [
+  "overview-narrow",
   "sidebar-motion",
   "split-motion",
   "window-tabs",
@@ -536,6 +542,85 @@ const body = {
         await rest(page, size)
       }
     return { failures, detail: seen }
+  },
+
+  "overview-narrow": async ({ page }) => {
+    const failures = []
+    await page.keyboard.press(keys.overview)
+    await page.locator(".agents-overview-list").first().waitFor({ timeout: 5000 })
+    await settled(page)
+    const at = await page.evaluate(() => {
+      const box = (e) => e?.getBoundingClientRect() ?? null
+      const sidebar = box(document.querySelector(".workspace-sidebar"))
+      const cover = box(document.querySelector(".workspace-overview-layer"))
+      const scroll = document.querySelector(
+        ".agents-overview-side > .agents-overview-scroll",
+      )
+      const fade = scroll
+        ? parseFloat(getComputedStyle(scroll).maskImage.match(/(\d+)px/)?.[1] ?? "0")
+        : 0
+      const top = box(scroll)?.top ?? 0
+      const cards = [...document.querySelectorAll(".agents-overview-list")]
+        .map((e) => box(e).top)
+        .filter((y) => y < top + 200)
+      return {
+        sidebar:
+          sidebar && document.querySelector('.workspace[data-sidebar="open"]')
+            ? sidebar.right
+            : null,
+        cover: cover?.left ?? null,
+        fadeEnd: top + fade,
+        cards,
+        scrolled: scroll?.scrollTop ?? 0,
+      }
+    })
+    if (at.sidebar !== null && Math.abs(at.sidebar - at.cover) > 1)
+      failures.push(
+        `the overview's cover starts at ${at.cover}, the sidebar ends at ${at.sidebar}`,
+      )
+    if (at.scrolled === 0)
+      for (const y of at.cards)
+        if (y < at.fadeEnd - 1)
+          failures.push(`a card's top (${y}) is under the list's fade (to ${at.fadeEnd})`)
+    // A row opened beneath itself: nothing in it past its card.
+    const row = page.locator(".agents-row").first()
+    await row.click()
+    await page
+      .locator(".agents-inline-peek")
+      .first()
+      .waitFor({ timeout: 3000 })
+      .catch(() => {})
+    await settled(page)
+    const over = await page.evaluate(() => {
+      const peek = document.querySelector(".agents-inline-peek")
+      if (!peek) return null
+      const card = peek.closest(".agents-overview-list").getBoundingClientRect()
+      return [...peek.querySelectorAll("*")]
+        .filter((e) => {
+          if (e.closest(".agents-truncate, [data-slot='code-block']")) return false
+          const b = e.getBoundingClientRect()
+          return b.width > 0 && (b.right > card.right + 0.5 || b.left < card.left - 0.5)
+        })
+        .map((e) => `${e.tagName.toLowerCase()}.${String(e.className).split(" ")[0]}`)
+    })
+    if (over?.length)
+      failures.push(`inside an opened row, past its card: ${over.slice(0, 4).join(", ")}`)
+    // Every tab one width; a merged group's chats share their glyph.
+    const widths = await page.evaluate(() =>
+      [...document.querySelectorAll(".workspace-window-tab")].map((t) => ({
+        width: t.getBoundingClientRect().width,
+        merged: t.closest(".workspace-tab-group") !== null,
+      })),
+    )
+    const plain = widths.filter((t) => !t.merged).map((t) => t.width)
+    if (plain.length && Math.max(...plain) - Math.min(...plain) > 1)
+      failures.push(`plain tabs are ${plain.map(Math.round)} wide, not one width`)
+    for (const t of widths.filter((t) => t.merged))
+      if (plain.length && Math.abs(t.width - plain[0]) / plain[0] > 0.08)
+        failures.push(
+          `a merged chat's tab is ${Math.round(t.width)} wide, a plain one ${Math.round(plain[0])}`,
+        )
+    return { at, failures }
   },
 
   "sidebar-motion": async ({ page, layout }) => {
