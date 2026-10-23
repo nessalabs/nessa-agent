@@ -205,7 +205,7 @@ await main(meta, async ({ options, rep, url }) => {
         // and its pending/refusal states are held by setup-tab.test.tsx.
         advanced.replayOffered = (await replay.count()) !== 0
         advanced.setupHint = await page
-          .getByText(content.setupBrowserHint, { exact: true })
+          .getByText(names.setupBrowserHint, { exact: true })
           .waitFor({ state: "visible", timeout: 3000 })
           .then(() => true)
           .catch(() => false)

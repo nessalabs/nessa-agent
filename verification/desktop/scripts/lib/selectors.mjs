@@ -8,7 +8,6 @@
 
 /** What `[data-workspace]`'s data-content says is filling the content region. */
 export const content = {
-  setupBrowserHint: "Setup can be replayed in the Nessa app.",
   panes: "panes",
   overview: "agents",
   widget: "widget",
@@ -548,6 +547,7 @@ export const names = {
   experimental: "Experimental",
   /** Settings › Advanced's tab holding first-run setup, and its row's button. */
   setupTab: "Setup",
+  setupBrowserHint: "Setup can be replayed in the Nessa app.",
   replayOnboarding: "Replay",
   /** First-run setup (`onboarding/ui`): its steps' headings, the way on, and its corner buttons. */
   setup: {
