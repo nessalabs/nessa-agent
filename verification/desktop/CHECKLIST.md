@@ -1047,12 +1047,18 @@ phone's scanner is not this screen.
   _Check:_ by hand.
 - [ ] **Advanced › Experimental is the home of previews**: Advanced sits just
   before About with its flask in both icon families; one line under its
-  title says what it is for, and with one tab there is no tab strip; it
+  title says what it is for, and its strip offers Experimental and Setup; Experimental
   offers each preview as one switch — the subagents preview (on unless
   turned off) and the side rail (off until turned on); General has no Experimental tab; search finds it as "advanced",
   "experimental", "labs" or "preview". _Check:_ `smoke.mjs` (`settings`);
   unit tests `settings-view.test.tsx`, `settings-catalogue.test.ts`,
   `icon-provider.test.tsx`; the flask by eye in both families.
+- [ ] **Advanced › Setup distinguishes the native app from a browser.** The
+  native app offers Replay; a browser offers the app-only hint without a button
+  that cannot work. Visiting the tab does not replay setup; Settings' Back
+  returns to the panes. _Check:_ `smoke.mjs` (`settings`, browser fallback);
+  `setup-tab.test.tsx` (native Replay, pending/refused and browser cases);
+  conversation stress (`onboarding`, the native-host replay sequence).
 - [ ] **A page's title stands clear of the window's controls**: at 1440 × 900,
   1000 × 700, 760 × 700 and 600 × 700 (sidebar folded) every category's
   title starts at least 16px below the titlebar row; at 1000 × 700 every row

@@ -4,6 +4,7 @@ title: "drag or move a session or pane"
 kind: "statechart"
 status: "implemented"
 summary: "Dragging a session previews where it will open."
+sourceRevision: "da3fc984032d6b6590d41157cf9721253fb044dc"
 parent: "desktop-workspace"
 sources:
   - "src/desktop/workspace/adapters/dom/split-panes-drag.ts"
@@ -21,9 +22,11 @@ diagramLinks: {}
 
 # drag or move a session or pane
 
-Dragging a session previews where it will open. Dragging a pane previews where its content will move. The layout at the time of the drop determines the available targets.
+Dragging a session previews where it will open. Dragging a pane previews where its content will move. Releasing uses the target already shown. A change to the source layout or available room cancels the drag instead of choosing a different drop at release.
 
 Dropping in the middle swaps content; dropping at a supported edge splits a pane. Side columns are not pane drop targets. Keyboard moves use the same layout rules as dragging.
+
+The workspace carries a compact title card while live chats keep their usual material. Cancelling or dropping the card does not briefly remove the composer's blur. A full-pane preview restores only the material it held.
 
 ```mermaid
 stateDiagram-v2
@@ -47,6 +50,12 @@ stateDiagram-v2
     end note
 ```
 
+## Source review scope
+
+The recorded revision covers drag admission, displayed-target commitment, layout cancellation and material release after current-main integration. The model's phases and the workspace's compact-card composition were traced with their owning regression controls. This checkpoint records source review; it does not certify browser appearance, native glass or the failed performance budget. Other state pages retain their own checkpoints.
+
 ## Further reading
 
 [Source](../../../../../src/desktop/workspace/adapters/dom/split-panes-drag.ts) · [Related source](../../../../../src/desktop/split-panes/adapters/dom/drag.ts) · [Related tests](../../../../../src/desktop/split-panes/adapters/dom/drag.test.tsx)
+
+[Material resource ownership](../../../../design/pane-frame-budget.md)

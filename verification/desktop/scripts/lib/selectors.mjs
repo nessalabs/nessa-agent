@@ -8,6 +8,7 @@
 
 /** What `[data-workspace]`'s data-content says is filling the content region. */
 export const content = {
+  setupBrowserHint: "Setup can be replayed in the Nessa app.",
   panes: "panes",
   overview: "agents",
   widget: "widget",
