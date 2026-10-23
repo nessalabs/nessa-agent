@@ -56,13 +56,26 @@ malformed 1 MiB identity caused a 1,048,576-byte Rust allocation before `Invalid
 Against the correction it [passes](review-1/outer-id-after.txt), with largest
 allocation 196 bytes and the same typed refusal. This measures Rust allocations
 around the validator, not SQLite page/storage allocations. The committed
-`retirement_identity_is_bounded_in_every_shared_row_read` test checks borrowed
+[retirement identity and maximum-row tests](../../../../../crates/nessa-server/tests/webhooks/infrastructure/outbox/stop_rows.rs) checks borrowed
 refusal and a valid adjacent identity; the maximum stop-size control also decodes
 a valid complete retirement. Omitting the ID from that budget [fails the
 regression](review-1/outer-id-mutation.txt). Private source was restored afterward.
 N1 groups the new test imports at module scope; N2 states that future composition
 **must** retain the inner observer, rather than claiming a supervisor exists.
 Fresh round TWO must review these dispositions and the complete correction.
+
+At source `d742cf55ef740716a7a8dfebe5eaea427819138c`, the canonical server webhook
+suite passed **170/170**. The first local canonical compile was killed by SIGKILL
+before tests; the cgroup reported one OOM kill (no pre-run baseline). After private
+compiles ended, serial Cargo jobs and `MALLOC_ARENA_MAX=2` completed the same test
+command without another OOM kill. No assertions, timeouts or production limits
+changed. Private owner baseline140 plus the allocation probe passed141; six prior
+mutations and the new identity-budget omission were caught and restored. The Auth
+source is byte-identical to preceding c2, whose full282 tests passed. Formatting,
+architecture, docs135/0 and three rendered/visually inspected diagrams passed at
+the new source. Required seven-package all-target Clippy `-D warnings` passed;
+fresh review is pending.
+
 
 ## Remaining gates
 
