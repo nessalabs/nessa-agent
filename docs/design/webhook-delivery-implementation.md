@@ -407,5 +407,5 @@ remains its separately documented unbounded history.
 | later cursor replacement/deletion or repeated physical source | old delivery retains first membership; compatibility permits differing logical access epochs but refuses foreign scope/checkpoint/member identity |
 | malformed/dangling reset reference or changed audit actor/time/scope | reject before publication/recovery effects; no manufactured reset history |
 | cursor, delivery history or registration retires | release only those references; final reference removes reset fact transactionally; valid retired-registration audit still replays |
-| count/byte capacity or failed capture write | typed Capacity/Invalid or Unavailable, transaction rolls back all reset/member/cursor/evidence changes |
+| count/byte capacity or failed capture write | typed Capacity/Invalid/Conflict or Unavailable, transaction rolls back all reset/member/cursor/evidence changes |
 | fixed owed count and growing published history | direct published=0 query uses existing index; deterministic fullscan/VM counts stay independent of published history |

@@ -88,7 +88,15 @@ pub(super) fn capture(
                 codec::encode(&saved.delivery)?
             ],
         )
-        .map_err(|_| OutboxError::Conflict)?;
+        .map_err(|error| match error {
+            nessa_local_database::rusqlite::Error::SqliteFailure(details, _)
+                if details.code
+                    == nessa_local_database::rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                OutboxError::Conflict
+            }
+            _ => OutboxError::Unavailable,
+        })?;
     Ok(())
 }
 

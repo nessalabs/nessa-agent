@@ -45,6 +45,9 @@ async fn sending_and_cursor_share_original_immutable_reset_and_membership() {
                 [Uuid::new_v4().to_string()]
             )
             .is_err());
+        assert!(c
+            .execute("UPDATE source_reset_members SET reset=reset", [])
+            .is_err());
         assert!(c.execute("DELETE FROM source_reset_members", []).is_err());
         assert_eq!(
             c.query_row(
@@ -361,10 +364,15 @@ async fn missing_references_and_reference_accounting_refuse_restore_before_effec
         "missing_fact",
         "member_reference",
         "member_state",
+        "member_identity",
+        "member_epoch",
+        "member_attempt",
+        "member_timestamp",
+        "member_position",
         "counter",
     ] {
         let mut f = Fixture::new().await;
-        captured_sender(&f).await;
+        let captured = captured_sender(&f).await;
         let files = || {
             let mut paths = std::fs::read_dir(&f.audit)
                 .unwrap()
@@ -388,7 +396,8 @@ async fn missing_references_and_reference_accounting_refuse_restore_before_effec
                     c.execute("UPDATE source_reset_facts SET refs=refs+1", [])
                         .unwrap();
                 }
-                "member_reference" | "member_state" => {
+                "member_reference" | "member_state" | "member_identity" | "member_epoch"
+                | "member_attempt" | "member_timestamp" | "member_position" => {
                     let guard:String=c.query_row("SELECT sql FROM sqlite_schema WHERE name='source_reset_member_immutable'",[],|r|r.get(0)).unwrap();
                     c.execute_batch("DROP TRIGGER source_reset_member_immutable")
                         .unwrap();
@@ -396,6 +405,22 @@ async fn missing_references_and_reference_accounting_refuse_restore_before_effec
                         c.execute(
                             "UPDATE source_reset_members SET reset=?1",
                             [Uuid::new_v4().to_string()],
+                        )
+                        .unwrap();
+                    } else if corruption == "member_position" {
+                        c.execute("UPDATE source_reset_members SET position=position+1", [])
+                            .unwrap();
+                    } else if corruption != "member_state" {
+                        let (path, value) = match corruption {
+                            "member_identity" => ("$.id", json!(Uuid::new_v4().to_string())),
+                            "member_epoch" => ("$.epoch", json!(8)),
+                            "member_attempt" => ("$.attempts", json!(2)),
+                            "member_timestamp" => ("$.timestamp_ms", json!(2001)),
+                            _ => unreachable!(),
+                        };
+                        c.execute(
+                            "UPDATE source_reset_members SET state=json_set(state,?1,json(?2))",
+                            params![path, value.to_string()],
                         )
                         .unwrap();
                     } else {
@@ -407,6 +432,12 @@ async fn missing_references_and_reference_accounting_refuse_restore_before_effec
                 _ => unreachable!(),
             }
             c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+            if corruption.starts_with("member_") {
+                assert!(
+                    matches!(stored::by_id(&c, captured.id()), Err(OutboxError::Invalid)),
+                    "{corruption}"
+                );
+            }
         }
         assert_eq!(reopen_store(&mut f).await.err(), Some(OutboxError::Invalid));
         let mut paths = std::fs::read_dir(&f.audit)
@@ -527,7 +558,15 @@ async fn cursor_capacity_refuses_new_chat_without_partial_queue_or_reset() {
         }
         tx.commit().unwrap();
     }
+    f.store.owner.connection.lock().unwrap().execute_batch("CREATE TRIGGER reject_delivery_insert BEFORE INSERT ON deliveries BEGIN SELECT RAISE(ABORT,'cursor capacity must refuse first'); END;").unwrap();
     assert_eq!(f.store.queue(f.record(1)).await, Err(OutboxError::Capacity));
+    f.store
+        .owner
+        .connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER reject_delivery_insert")
+        .unwrap();
     {
         let c = f.store.owner.connection.lock().unwrap();
         assert_eq!(
@@ -655,6 +694,18 @@ async fn reset_metadata_substitutions_reject_before_recovery_publication() {
     ] {
         let mut f = Fixture::new().await;
         captured_sender(&f).await;
+        let reset = current_reset(&f);
+        if field == "position" {
+            // Historical cursor evidence still owns the original position after
+            // its mutable cursor projection has been removed.
+            f.store
+                .owner
+                .connection
+                .lock()
+                .unwrap()
+                .execute("DELETE FROM cursors", [])
+                .unwrap();
+        }
         let original = f.audits();
         {
             let c = f.store.owner.connection.lock().unwrap();
@@ -686,6 +737,12 @@ async fn reset_metadata_substitutions_reject_before_recovery_publication() {
                 params![path, value.to_string()],
             )
             .unwrap();
+            if field == "id" {
+                assert!(matches!(
+                    source_reset::read(&c, reset),
+                    Err(OutboxError::Invalid)
+                ));
+            }
             c.execute_batch(&guard).unwrap();
         }
         assert_eq!(
@@ -745,4 +802,39 @@ async fn reset_fact_decoder_rejects_noncanonical_or_invalid_original_values() {
         source_reset::Fact::decode(&"x".repeat(SOURCE_RESET_BYTES + 1)),
         Err(OutboxError::Invalid)
     ));
+}
+
+#[tokio::test]
+async fn capture_storage_failure_remains_unavailable_instead_of_conflict() {
+    let f = Fixture::new().await;
+    let delivery = f.store.queue(f.record(1)).await.unwrap();
+    let mut c = f.store.owner.connection.lock().unwrap();
+    let tx = c.transaction().unwrap();
+    let saved = stored::by_id(&tx, delivery).unwrap().unwrap();
+    let fact = source_reset::Fact {
+        id: Uuid::new_v4(),
+        registration: f.registration.id,
+        conversation: f.conversation.clone(),
+        prior_scope: saved.scope.clone(),
+        prior_position: 1,
+        observed_scope: replaced_source(f.record(2)).scope,
+        stop: codec::SourceStop {
+            initiator: QueueInitiator::Live,
+            at_ms: 1002,
+        },
+    };
+    source_reset::insert(&tx, &fact).unwrap();
+    tx.execute_batch("PRAGMA query_only=ON").unwrap();
+    assert_eq!(
+        source_reset::capture(&tx, &fact, &saved),
+        Err(OutboxError::Unavailable)
+    );
+    tx.rollback().unwrap();
+    c.execute_batch("PRAGMA query_only=OFF").unwrap();
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM source_reset_facts", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
 }
