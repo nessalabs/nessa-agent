@@ -7,3 +7,7 @@ mod signature;
 pub use https::{HttpsWebhook, SystemResolver, MAX_IN_FLIGHT};
 pub use message::record_message;
 pub use signature::signature;
+
+#[cfg(test)]
+#[path = "../../../tests/webhooks/infrastructure/message.rs"]
+mod message_tests;

@@ -60,6 +60,12 @@ The outer JSON fields are `conversationId`, `incarnation`, `position`, `record`
 in that order. Raw record bytes are preserved, without sorting keys or changing
 escaping. The source must supply the authorized committed `recordsPage` record.
 
+The current owner representation is `RecordWireRecord`: a decimal-string
+position, record ID and base64 payload (`product/record_read.rs`). The adapter
+preserves that record JSON; it does not decode or reconstruct the payload. The
+`{text:...}` signing golden is a synthetic framing fixture, not a declaration of
+the record schema. A separate regression constructs the actual owner DTO.
+
 Destinations are HTTPS DNS names on port 443, bounded to 2048 bytes, with no
 userinfo, query, fragment or control bytes. This deliberately permits a subset
 of HTTPS URLs. Endpoint paths can contain secrets and diagnostic output hides

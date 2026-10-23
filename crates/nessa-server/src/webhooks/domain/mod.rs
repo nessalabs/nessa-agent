@@ -9,3 +9,7 @@ pub use value_objects::{
 #[cfg(test)]
 #[path = "../../../tests/webhooks/domain/delivery.rs"]
 mod delivery_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/webhooks/domain/destination.rs"]
+mod destination_tests;
