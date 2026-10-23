@@ -10,6 +10,7 @@ mod queue;
 mod registry;
 mod restoration;
 mod retirement;
+mod source_reset;
 mod stored;
 use journal::{commit, delivery_audit, finish};
 use registry::StoredRegistration;
@@ -69,6 +70,8 @@ impl SqlOutbox {
                 | nessa_local_database::OpenError::Version { .. } => OutboxError::Invalid,
                 _ => OutboxError::Unavailable,
             })?;
+        source_reset::validate_schema(&connection)?;
+        source_reset::validate_all(&connection)?;
         stored::validate(&connection)?;
         restoration::validate(&connection)?;
         nessa_local_storage::create_directory(&audit).map_err(unavailable)?;
@@ -119,7 +122,7 @@ impl Outbox for SqlOutbox {
     async fn due(&self, now_ms: u64) -> Result<Vec<PendingDelivery>, OutboxError> {
         self.run(move |connection,_| {
             let mut statement=connection.prepare(
-                "SELECT d.id,d.registration,d.conversation,d.incarnation,d.position,d.scope,d.state,d.phase,d.due_at,d.source_stop,d.body,
+                "SELECT d.id,d.registration,d.conversation,d.incarnation,d.position,d.scope,d.state,d.phase,d.due_at,(SELECT reset FROM source_reset_members WHERE delivery=d.id),d.body,
                     r.id,r.credential,r.principal,r.organization,r.owner,r.destination,r.mac_key,r.active,r.stop_cause,r.stop_initiator,r.stop_at,r.issued_at
                  FROM deliveries d JOIN registrations r ON d.registration=r.id
                  WHERE d.phase='queued' OR (d.phase='retry' AND d.due_at<=?1)
@@ -128,7 +131,7 @@ impl Outbox for SqlOutbox {
             let mut rows=statement.query([integer(now_ms)?]).map_err(unavailable)?;
             let mut result=Vec::new();
             while let Some(row)=rows.next().map_err(unavailable)? {
-                let saved=StoredDelivery::row(row).map_err(unavailable)?.checked()?;
+                let saved=StoredDelivery::row(row).map_err(unavailable)?.checked(connection)?;
                 stored::check_current(connection,&saved)?;
                 let registration=StoredRegistration::row(row,11).map_err(unavailable)?.checked()?.registration;
                 let body:Vec<u8>=row.get(10).map_err(unavailable)?;
@@ -194,7 +197,7 @@ impl Outbox for SqlOutbox {
                 let Some(saved) = next else {
                     break;
                 };
-                let saved = saved.checked()?;
+                let saved = saved.checked(connection)?;
                 let before = saved.delivery;
                 if before.phase() != Phase::Sending {
                     return Err(OutboxError::Invalid);

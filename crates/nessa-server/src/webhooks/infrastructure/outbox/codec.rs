@@ -4,6 +4,8 @@ use crate::webhooks::domain::{Delivery, Outcome, Phase};
 use nessa_sync::replication::domain::{Id, Scope};
 use serde::{Deserialize, Serialize};
 
+pub(super) const STATE_BYTES: usize = 512;
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SavedDelivery {
@@ -48,7 +50,7 @@ impl SavedDelivery {
 }
 
 pub(super) fn decode(value: &str) -> Result<Delivery, OutboxError> {
-    if value.len() > 512 {
+    if value.len() > STATE_BYTES {
         return Err(OutboxError::Invalid);
     }
     let saved: SavedDelivery = serde_json::from_str(value).map_err(|_| OutboxError::Invalid)?;
@@ -134,20 +136,6 @@ pub(super) struct SourceStop {
     pub initiator: QueueInitiator,
     pub at_ms: u64,
 }
-pub(super) fn source_stop(value: &str) -> Result<SourceStop, OutboxError> {
-    if value.len() > 128 {
-        return Err(OutboxError::Invalid);
-    }
-    let stop: SourceStop = serde_json::from_str(value).map_err(|_| OutboxError::Invalid)?;
-    if source_stop_text(stop)? != value {
-        return Err(OutboxError::Invalid);
-    }
-    Ok(stop)
-}
-pub(super) fn source_stop_text(stop: SourceStop) -> Result<String, OutboxError> {
-    serde_json::to_string(&stop).map_err(|_| OutboxError::Invalid)
-}
-
 pub(super) fn same_source(left: &Scope, right: &Scope) -> bool {
     left.origin() == right.origin()
         && left.stream() == right.stream()

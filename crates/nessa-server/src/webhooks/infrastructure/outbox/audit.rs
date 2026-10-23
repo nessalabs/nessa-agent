@@ -90,6 +90,7 @@ pub(super) enum Record {
         position: u64,
         scope: Box<SavedScope>,
         source_stop: Option<SourceStop>,
+        source_reset_id: Option<String>,
         credential_stop: Option<SavedStop>,
         before_state: Option<SavedDelivery>,
         after_state: SavedDelivery,
@@ -105,6 +106,7 @@ pub(super) enum Record {
     },
     #[serde(rename = "webhook_cursor")]
     Cursor {
+        source_reset_id: String,
         record_id: String,
         registration: String,
         conversation_id: String,
@@ -134,6 +136,7 @@ pub(super) struct DeliveryEvidence {
     pub before: Option<Delivery>,
     pub after: Delivery,
     pub source_stop: Option<SourceStop>,
+    pub source_reset: Option<Uuid>,
     pub credential_stop: Option<Stopped>,
 }
 impl DeliveryEvidence {
@@ -144,6 +147,9 @@ impl DeliveryEvidence {
             && self.position == previous.position
             && self.scope == previous.scope
             && self.target == previous.target
+            && previous
+                .source_reset
+                .is_none_or(|id| self.source_reset == Some(id))
             && previous
                 .source_stop
                 .is_none_or(|stop| self.source_stop == Some(stop))
@@ -247,6 +253,7 @@ impl Record {
             position: saved.position,
             scope: Box::new(SavedScope::of(&saved.scope)),
             source_stop: saved.source_stop,
+            source_reset_id: saved.source_reset.map(|id| id.to_string()),
             credential_stop,
             before_state: before.map(SavedDelivery::of),
             after_state: SavedDelivery::of(after),
@@ -261,27 +268,31 @@ impl Record {
             at_ms,
         })
     }
-    pub fn cursor(
-        registration: Uuid,
-        conversation: &ConversationId,
-        prior: &Scope,
-        position: u64,
-        observed: &Scope,
-        initiator: QueueInitiator,
-        at_ms: u64,
-    ) -> Self {
+    pub fn cursor(fact: &super::source_reset::Fact) -> Self {
         Self::Cursor {
+            source_reset_id: fact.id.to_string(),
             record_id: Uuid::new_v4().to_string(),
-            registration: registration.to_string(),
-            conversation_id: conversation.to_string(),
+            registration: fact.registration.to_string(),
+            conversation_id: fact.conversation.to_string(),
             before: "following".into(),
             after: "reset_required".into(),
-            prior_scope: SavedScope::of(prior),
-            prior_position: position,
-            observed_scope: SavedScope::of(observed),
+            prior_scope: SavedScope::of(&fact.prior_scope),
+            prior_position: fact.prior_position,
+            observed_scope: SavedScope::of(&fact.observed_scope),
             cause: Cause::SourceChanged,
-            initiator: initiator.label(registration),
-            at_ms,
+            initiator: fact.stop.initiator.label(fact.registration),
+            at_ms: fact.stop.at_ms,
+        }
+    }
+    pub fn reset_key(&self) -> Result<Option<Uuid>, OutboxError> {
+        match self {
+            Self::Registration { .. } => Ok(None),
+            Self::Cursor {
+                source_reset_id, ..
+            } => Ok(Some(uuid(source_reset_id)?)),
+            Self::Delivery {
+                source_reset_id, ..
+            } => source_reset_id.as_ref().map(|id| uuid(id)).transpose(),
         }
     }
     pub fn delivery_evidence(&self) -> Result<Option<DeliveryEvidence>, OutboxError> {
@@ -297,6 +308,7 @@ impl Record {
             before_state,
             after_state,
             source_stop,
+            source_reset_id,
             credential_stop,
             ..
         } = self
@@ -313,6 +325,7 @@ impl Record {
                     .transpose()?,
                 after: after_state.checked()?,
                 source_stop: *source_stop,
+                source_reset: source_reset_id.as_ref().map(|id| uuid(id)).transpose()?,
                 credential_stop: credential_stop
                     .as_ref()
                     .map(SavedStop::checked)
@@ -365,6 +378,7 @@ impl Record {
     }
     fn checked(&self) -> Result<(), OutboxError> {
         let (_, registration, delivery_id) = self.keys()?;
+        let reset_id = self.reset_key()?;
         match self {
             Self::Registration {
                 credential,
@@ -441,6 +455,7 @@ impl Record {
                             .map(|d| codec::phase(d).0)
                             .unwrap_or("absent")
                     || source_stop.is_some() && next.phase() == Phase::Queued
+                    || source_stop.is_some() != reset_id.is_some()
                 {
                     return Err(OutboxError::Invalid);
                 }
@@ -462,10 +477,7 @@ impl Record {
                     }
                     Cause::SourceChanged => {
                         let actor = check_reader(initiator, registration)?;
-                        if source_stop
-                            .as_ref()
-                            .is_some_and(|stop| stop.initiator != actor)
-                        {
+                        if source_stop.as_ref().map(|stop| stop.initiator) != Some(actor) {
                             return Err(OutboxError::Invalid);
                         }
                         DeliveryCause::SourceChanged { initiator: actor }

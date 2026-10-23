@@ -2241,18 +2241,35 @@ async fn cursor_evidence_matches_complete_original_reset_observation() {
             let c = f.store.owner.connection.lock().unwrap();
             match field {
                 "missing_observation" => {
-                    c.execute("UPDATE cursors SET reset_stop=NULL", []).unwrap();
+                    c.execute("UPDATE cursors SET source_reset=NULL", [])
+                        .unwrap();
                 }
                 "changed_observation" => {
-                    c.execute(
-                        "UPDATE cursors SET reset_stop=?1",
-                        [codec::source_stop_text(codec::SourceStop {
+                    let old: String = c
+                        .query_row("SELECT source_reset FROM cursors", [], |r| r.get(0))
+                        .unwrap();
+                    let original = source_reset::read(&c, Uuid::parse_str(&old).unwrap())
+                        .unwrap()
+                        .unwrap();
+                    let other = source_reset::Fact {
+                        id: Uuid::new_v4(),
+                        stop: codec::SourceStop {
                             initiator: QueueInitiator::Restart,
                             at_ms: 2001,
-                        })
-                        .unwrap()],
+                        },
+                        ..original
+                    };
+                    c.execute(
+                        "INSERT INTO source_reset_facts(id,registration,fact) VALUES(?1,?2,?3)",
+                        params![
+                            other.id.to_string(),
+                            other.registration.to_string(),
+                            other.encode().unwrap()
+                        ],
                     )
                     .unwrap();
+                    c.execute("UPDATE cursors SET source_reset=?1", [other.id.to_string()])
+                        .unwrap();
                 }
                 _ => {}
             }
@@ -2336,12 +2353,10 @@ async fn delivery_evidence_matches_enclosing_facts_before_publication() {
 async fn reset_facts_survive_audit_trim_and_decode_completely() {
     for change in [
         "valid",
-        "observed_scope=NULL",
-        "reset_stop=NULL",
+        "source_reset=NULL",
         "reset_required=0",
-        "reset_stop='invalid'",
-        "reset_stop='{}'",
-        "reset_stop='{\"initiator\":\"live\",\"at_ms\":18446744073709551615}'",
+        "source_reset='invalid'",
+        "source_reset='00000000-0000-0000-0000-000000000001'",
     ] {
         let mut f = Fixture::new().await;
         f.store.queue(f.record(1)).await.unwrap();
@@ -2354,8 +2369,11 @@ async fn reset_facts_survive_audit_trim_and_decode_completely() {
             let c = f.store.owner.connection.lock().unwrap();
             assert_eq!(c.query_row("SELECT count(*) FROM audit WHERE json_extract(record,'$.kind')='webhook_cursor'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
             if change != "valid" {
+                // Isolated malformed-reference fixture; production FK stays enabled.
+                c.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
                 c.execute(&format!("UPDATE cursors SET {change}"), [])
                     .unwrap();
+                c.execute_batch("PRAGMA foreign_keys=ON").unwrap();
             }
         }
         let reopened = reopen_store(&mut f).await;
@@ -2392,3 +2410,6 @@ async fn live_owed_delivery_history_matches_current_before_publication() {
     }
     rejects_evidence_before_live_or_restored_publication(&mut f, &id).await;
 }
+
+#[path = "outbox/source_reset.rs"]
+mod source_reset_tests;

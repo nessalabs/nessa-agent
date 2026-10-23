@@ -46,7 +46,7 @@ pub(super) fn queue(
         |r|Ok((StoredDelivery::row(r)?,r.get(10)?)),
     ).optional().map_err(unavailable)?;
     if let Some((saved, body)) = existing {
-        let existing = saved.checked()?;
+        let existing = saved.checked(&transaction)?;
         if codec::scope_text(&existing.scope)? != scope
             || body != record.body
             || existing.delivery.epoch() != record.epoch
@@ -61,35 +61,25 @@ pub(super) fn queue(
             return Err(OutboxError::ResetRequired);
         }
         if !codec::same_source(old, &record.scope) {
-            let changed=transaction.execute(
-                "UPDATE cursors SET reset_required=1,observed_scope=?3,reset_stop=?4 WHERE registration=?1 AND conversation=?2 AND reset_required=0",
-                params![registration,conversation,scope,codec::source_stop_text(codec::SourceStop { initiator: record.initiator, at_ms: record.observed_at_ms })?],
-            ).map_err(unavailable)?;
-            if changed != 1 {
-                return Err(OutboxError::Conflict);
-            }
-            invalidate_source(
-                &transaction,
-                record.registration,
-                &record.conversation,
-                old,
-                codec::SourceStop {
+            let fact = super::source_reset::Fact {
+                id: Uuid::new_v4(),
+                registration: record.registration,
+                conversation: record.conversation.clone(),
+                prior_scope: old.clone(),
+                prior_position: current.position,
+                observed_scope: record.scope.clone(),
+                stop: codec::SourceStop {
                     initiator: record.initiator,
                     at_ms: record.observed_at_ms,
                 },
-            )?;
-            append(
-                &transaction,
-                Record::cursor(
-                    record.registration,
-                    &record.conversation,
-                    old,
-                    current.position,
-                    &record.scope,
-                    record.initiator,
-                    record.observed_at_ms,
-                ),
-            )?;
+            };
+            super::source_reset::insert(&transaction, &fact)?;
+            let changed=transaction.execute("UPDATE cursors SET reset_required=1,source_reset=?3 WHERE registration=?1 AND conversation=?2 AND reset_required=0",params![registration,conversation,fact.id.to_string()]).map_err(unavailable)?;
+            if changed != 1 {
+                return Err(OutboxError::Conflict);
+            }
+            invalidate_source(&transaction, &fact)?;
+            append(&transaction, Record::cursor(&fact))?;
             commit(
                 transaction,
                 Some(record.registration),
@@ -103,6 +93,9 @@ pub(super) fn queue(
         }
     } else if record.expected_after != 0 {
         return Err(OutboxError::Conflict);
+    }
+    if current.is_none() {
+        super::capacity::admit_cursor(&transaction, record.registration)?;
     }
     let delivery = Delivery::queued(record.id, record.epoch);
     transaction.execute(

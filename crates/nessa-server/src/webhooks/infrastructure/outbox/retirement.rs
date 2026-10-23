@@ -94,7 +94,7 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
         let facts = read(connection, uuid(&id)?)?.ok_or(OutboxError::Invalid)?;
         let saved = connection
             .query_row(
-                "SELECT id,registration,delivery,record,published FROM audit WHERE id=?1",
+                "SELECT id,registration,delivery,record,published,source_reset FROM audit WHERE id=?1",
                 [facts.audit.to_string()],
                 super::publication::SavedAudit::row,
             )

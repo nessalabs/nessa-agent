@@ -9,28 +9,32 @@ use super::{
 };
 use crate::webhooks::{application::OutboxError, domain::Phase};
 use nessa_local_database::rusqlite::{Connection, OptionalExtension};
-use nessa_protocol::conversation::domain::ConversationId;
 
 pub(super) fn validate_owed(connection: &Connection) -> Result<(), OutboxError> {
+    super::source_reset::validate_owed(connection)?;
     validate_records(connection, true)?;
     validate_histories(connection, true)
 }
 
 fn validate_records(connection: &Connection, owed: bool) -> Result<(), OutboxError> {
     retirement::validate(connection)?;
-    let mut statement = connection.prepare("SELECT id,registration,delivery,record,published FROM audit WHERE (?1=0 OR published=0)").map_err(unavailable)?;
+    let mut statement = connection
+        .prepare(audit_selection(owed))
+        .map_err(unavailable)?;
     let rows = statement
-        .query_map([owed], SavedAudit::row)
+        .query_map([], SavedAudit::row)
         .map_err(unavailable)?;
     for row in rows {
-        let (_, text) = row.map_err(unavailable)?.checked()?;
-        contextual(connection, &Record::decode(&text)?)?;
+        let saved = row.map_err(unavailable)?;
+        let is_owed = saved.published == 0;
+        let (_, text) = saved.checked()?;
+        contextual(connection, &Record::decode(&text)?, is_owed)?;
     }
     Ok(())
 }
 
 /// No wildcard arm: adding an audit variant requires its owning relationship.
-fn contextual(connection: &Connection, record: &Record) -> Result<(), OutboxError> {
+fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<(), OutboxError> {
     match record {
         Record::Registration {
             record_id,
@@ -102,6 +106,7 @@ fn contextual(connection: &Connection, record: &Record) -> Result<(), OutboxErro
             }
         }
         Record::Cursor {
+            source_reset_id,
             registration,
             conversation_id,
             prior_scope,
@@ -111,26 +116,66 @@ fn contextual(connection: &Connection, record: &Record) -> Result<(), OutboxErro
             at_ms,
             ..
         } => {
-            let id = uuid(registration)?;
-            let conversation =
-                ConversationId::new(conversation_id).map_err(|_| OutboxError::Invalid)?;
-            let current =
-                cursor::read(connection, id, &conversation)?.ok_or(OutboxError::Invalid)?;
-            let reset = current.reset.ok_or(OutboxError::Invalid)?;
-            if current.scope != prior_scope.checked()?
-                || current.position != *prior_position
-                || reset.observed_scope != observed_scope.checked()?
-                || reset.stop.initiator != audit::check_reader(initiator, id)?
-                || reset.stop.at_ms != *at_ms
+            let fact = super::source_reset::read(connection, uuid(source_reset_id)?)?
+                .ok_or(OutboxError::Invalid)?;
+            if fact.registration.to_string() != *registration
+                || fact.conversation.to_string() != *conversation_id
+                || fact.prior_scope != prior_scope.checked()?
+                || fact.prior_position != *prior_position
+                || fact.observed_scope != observed_scope.checked()?
+                || fact.stop.initiator.label(fact.registration) != *initiator
+                || fact.stop.at_ms != *at_ms
             {
                 return Err(OutboxError::Invalid);
             }
+            if owed {
+                let current = cursor::read(connection, fact.registration, &fact.conversation)?
+                    .ok_or(OutboxError::Invalid)?;
+                if current.reset != Some(fact.id) {
+                    return Err(OutboxError::Invalid);
+                }
+            }
         }
-        Record::Delivery { .. } => {
+        Record::Delivery {
+            cause,
+            initiator,
+            at_ms,
+            ..
+        } => {
             let evidence = record.delivery_evidence()?.ok_or(OutboxError::Invalid)?;
             let saved =
                 stored::by_id(connection, evidence.after.id())?.ok_or(OutboxError::Invalid)?;
             let registration = registry::by_id(connection, saved.registration)?;
+            if evidence.source_reset.is_some()
+                && (evidence.source_reset != saved.source_reset
+                    || evidence.source_stop != saved.source_stop)
+            {
+                return Err(OutboxError::Invalid);
+            }
+            if *cause == audit::Cause::SourceChanged {
+                let capture = super::source_reset::delivery(
+                    connection,
+                    saved.registration,
+                    &saved.conversation,
+                    &saved.scope,
+                    saved.position,
+                    &saved.delivery,
+                )?
+                .ok_or(OutboxError::Invalid)?;
+                if evidence.source_reset != Some(capture.fact.id)
+                    || evidence.source_stop != Some(capture.fact.stop)
+                    || *initiator != capture.fact.stop.initiator.label(capture.fact.registration)
+                {
+                    return Err(OutboxError::Invalid);
+                }
+                if evidence.before.as_ref() == Some(&capture.before) {
+                    if *at_ms != capture.fact.stop.at_ms {
+                        return Err(OutboxError::Invalid);
+                    }
+                } else if capture.before.phase() != Phase::Sending {
+                    return Err(OutboxError::Invalid);
+                }
+            }
             if evidence.registration != saved.registration
                 || evidence.target != registration.registration.target
                 || evidence.conversation != saved.conversation
@@ -168,18 +213,25 @@ fn validate_histories(connection: &Connection, owed: bool) -> Result<(), OutboxE
         .query_map([], StoredDelivery::row)
         .map_err(unavailable)?;
     for row in rows {
-        let saved = row.map_err(unavailable)?.checked()?;
-        let mut statement=connection.prepare("SELECT id,registration,delivery,record,published FROM audit WHERE delivery=?1 ORDER BY rowid").map_err(unavailable)?;
+        let saved = row.map_err(unavailable)?.checked(connection)?;
+        let mut statement=connection.prepare("SELECT id,registration,delivery,record,published,source_reset FROM audit WHERE delivery=?1 ORDER BY rowid").map_err(unavailable)?;
         let history = statement
             .query_map([saved.delivery.id().to_string()], SavedAudit::row)
             .map_err(unavailable)?;
         let mut previous: Option<DeliveryEvidence> = None;
+        let mut capture_seen = saved.capture_before.is_none();
         // Streaming chain validation keeps one predecessor. Delivery's finite
         // transition owner rejects any extension past its attempt/terminal budget.
         for row in history {
             let (_, text) = row.map_err(unavailable)?.checked()?;
             let record = Record::decode(&text)?;
             let next = record.delivery_evidence()?.ok_or(OutboxError::Invalid)?;
+            if next.source_reset.is_some() && !capture_seen {
+                return Err(OutboxError::Invalid);
+            }
+            if let Some(capture) = &saved.capture_before {
+                capture_seen |= next.before.as_ref() == Some(capture) || &next.after == capture;
+            }
             if previous
                 .as_ref()
                 .map_or(next.before.is_some(), |prior| !next.follows(prior))
@@ -189,7 +241,12 @@ fn validate_histories(connection: &Connection, owed: bool) -> Result<(), OutboxE
             previous = Some(next);
         }
         let last = previous.ok_or(OutboxError::Invalid)?;
-        if last.after != saved.delivery
+        if !capture_seen
+            || last.after != saved.delivery
+            || (last.source_reset != saved.source_reset
+                && !(saved.delivery.phase() == Phase::Sending
+                    && last.source_reset.is_none()
+                    && saved.capture_before.as_ref() == Some(&saved.delivery)))
             || (last.source_stop != saved.source_stop
                 && !(saved.delivery.phase() == Phase::Sending && last.source_stop.is_none()))
         {
@@ -197,4 +254,13 @@ fn validate_histories(connection: &Connection, owed: bool) -> Result<(), OutboxE
         }
     }
     Ok(())
+}
+
+/// Separate SQL shapes let live publication search the published-state index.
+pub(super) fn audit_selection(owed: bool) -> &'static str {
+    if owed {
+        "SELECT id,registration,delivery,record,published,source_reset FROM audit WHERE published=0"
+    } else {
+        "SELECT id,registration,delivery,record,published,source_reset FROM audit"
+    }
 }

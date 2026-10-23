@@ -363,3 +363,49 @@ still have its retained reset checkpoint. This introduces no reset API.
 This is the parent-authorized bounded structural correction, not erasure of
 prior findings or a relaxation of browser/CI gates. Composition follows only a
 clean fresh persistence review.
+
+### Parent-adopted immutable source-reset owner
+
+After the complete review at5bb457db was preserved in0f6bea1e, the parent adopted
+one retained source-reset identity. The three source-provenance demonstrations
+are the same structural gap; the selector scan is a separate query-shape fix.
+No other independent structural constraint was reported.
+
+The source-reset owner retains immutable registration/chat, prior checkpoint,
+observed source and original reader/time. An immutable first-capture membership
+links each actually affected delivery to that identity and its original saved
+state/position. This prevents a later physically repeated source event from
+claiming an old Sending delivery. Current cursor and audit references retain the
+same identity; actor/time snapshots in audit are checked projections, never a
+second source of provenance. Logical access epochs may differ between the old
+delivery and newer cursor; physical source and immutable captured identity must
+still agree. Cleanup time is separate from the original reset observation.
+
+Reference accounting is an indexed SQLite projection owned by the reset schema.
+Cursor, capture membership and audit insertion/removal retain/release the fact.
+The last reference releases it in the same state transaction; a published cursor
+audit alone does not release a fact still owned by an old Sending delivery.
+Membership survives until the delivery is removed with its acknowledged history.
+Immutable schema guards forbid replacing facts or reassigning captured members;
+restoration checks the owning schema definitions and indexed reference counts.
+
+New cursor capacity is1024per registration. A reset fact is at most16KiB, and
+there are at most cursor1024+pending1024+retained1024=3072facts per registration,
+including detached delivery/history owners. This yields48MiB of reset fact bytes
+per registration; captured saved states are at most512bytes and one per retained
+delivery. Capacity is refused before partial reset/capture effects. Startup
+checks count/byte/reference bounds before bulk reads; live preflight checks
+only facts/history named by owed audit identities. Immutable audit-file retention
+remains its separately documented unbounded history.
+
+| Ordering / contradiction | Single owner and required evidence |
+| --- | --- |
+| immediate Queued/Retry source refusal | original capture state matches the before-state; original actor and reset time are projected into the audit |
+| Sending capture before any response audit | immutable membership names the actual original Sending state/reset identity; no copied unproven source-stop value |
+| audit claims the reset before the original capture state existed | history must reach the member’s captured state before any audit may project that reset identity; no inference from wall time |
+| later response creates Retry then cleanup refuses | original reset actor/time remain causal; cleanup records its own observation time |
+| later cursor replacement/deletion or repeated physical source | old delivery retains first membership; compatibility permits differing logical access epochs but refuses foreign scope/checkpoint/member identity |
+| malformed/dangling reset reference or changed audit actor/time/scope | reject before publication/recovery effects; no manufactured reset history |
+| cursor, delivery history or registration retires | release only those references; final reference removes reset fact transactionally; valid retired-registration audit still replays |
+| count/byte capacity or failed capture write | typed Capacity/Invalid or Unavailable, transaction rolls back all reset/member/cursor/evidence changes |
+| fixed owed count and growing published history | direct published=0 query uses existing index; deterministic fullscan/VM counts stay independent of published history |

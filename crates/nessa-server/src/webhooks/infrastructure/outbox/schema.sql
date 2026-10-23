@@ -24,8 +24,7 @@ CREATE TABLE cursors (
     scope TEXT NOT NULL CHECK(length(scope) <= 4096),
     position INTEGER NOT NULL CHECK(position >= 0),
     reset_required INTEGER NOT NULL DEFAULT 0 CHECK(reset_required IN (0, 1)),
-    observed_scope TEXT CHECK(observed_scope IS NULL OR length(observed_scope)<=4096),
-    reset_stop TEXT CHECK(reset_stop IS NULL OR length(reset_stop)<=128),
+    source_reset TEXT REFERENCES source_reset_facts(id),
     PRIMARY KEY(registration, conversation)
 );
 
@@ -37,7 +36,6 @@ CREATE TABLE deliveries (
     position INTEGER NOT NULL CHECK(position > 0),
     scope TEXT NOT NULL CHECK(length(scope) <= 4096),
     body BLOB NOT NULL CHECK(length(body) <= 131072),
-    source_stop TEXT CHECK(source_stop IS NULL OR length(source_stop)<=128),
     state TEXT NOT NULL CHECK(length(state) <= 512 AND json_valid(state)),
     phase TEXT GENERATED ALWAYS AS (json_extract(state, '$.phase')) STORED NOT NULL,
     due_at INTEGER GENERATED ALWAYS AS (json_extract(state, '$.due_at')) STORED NOT NULL CHECK(due_at >= 0),
@@ -50,10 +48,11 @@ CREATE TABLE audit (
     delivery TEXT,
     registration TEXT NOT NULL,
     record TEXT NOT NULL CHECK(length(record) <= 16384),
-    published INTEGER NOT NULL DEFAULT 0 CHECK(published IN (0, 1))
+    published INTEGER NOT NULL DEFAULT 0 CHECK(published IN (0, 1)),
+    source_reset TEXT REFERENCES source_reset_facts(id)
 );
 
-CREATE INDEX unpublished_audit ON audit(published);
+CREATE INDEX unpublished_audit ON audit(published,source_reset);
 CREATE INDEX delivery_audit ON audit(delivery, published);
 
 -- Original secret-free ownership facts survive private registration retirement
@@ -71,3 +70,61 @@ CREATE TABLE retirements (
     stop_at INTEGER NOT NULL CHECK(stop_at>=0),
     retired_at INTEGER NOT NULL CHECK(retired_at>=0)
 );
+
+CREATE TABLE source_reset_facts (
+    id TEXT PRIMARY KEY,
+    registration TEXT NOT NULL REFERENCES registrations(id),
+    fact TEXT NOT NULL,
+    bytes INTEGER GENERATED ALWAYS AS (length(CAST(fact AS BLOB))) STORED,
+    refs INTEGER NOT NULL DEFAULT 0 CHECK(refs>=0)
+);
+CREATE INDEX source_reset_registration ON source_reset_facts(registration);
+CREATE TABLE source_reset_members (
+    delivery TEXT PRIMARY KEY REFERENCES deliveries(id) ON DELETE CASCADE,
+    reset TEXT NOT NULL REFERENCES source_reset_facts(id),
+    position INTEGER NOT NULL CHECK(position>0),
+    state TEXT NOT NULL
+);
+CREATE INDEX source_reset_members_ref ON source_reset_members(reset);
+CREATE INDEX source_reset_cursor_ref ON cursors(source_reset);
+CREATE INDEX source_reset_audit_ref ON audit(source_reset);
+CREATE TRIGGER source_reset_fact_immutable BEFORE UPDATE OF id,registration,fact ON source_reset_facts
+BEGIN SELECT RAISE(ABORT,'immutable source reset'); END;
+CREATE TRIGGER source_reset_member_immutable BEFORE UPDATE ON source_reset_members
+BEGIN SELECT RAISE(ABORT,'immutable source capture'); END;
+CREATE TRIGGER source_reset_member_retention BEFORE DELETE ON source_reset_members
+WHEN EXISTS(SELECT 1 FROM deliveries WHERE id=OLD.delivery)
+BEGIN SELECT RAISE(ABORT,'source capture still owned'); END;
+CREATE TRIGGER source_reset_last_reference AFTER UPDATE OF refs ON source_reset_facts
+WHEN NEW.refs=0
+BEGIN DELETE FROM source_reset_facts WHERE id=NEW.id; END;
+CREATE TRIGGER source_reset_cursor_retain AFTER INSERT ON cursors
+WHEN NEW.source_reset IS NOT NULL
+BEGIN UPDATE source_reset_facts SET refs=refs+1 WHERE id=NEW.source_reset; END;
+CREATE TRIGGER source_reset_cursor_release AFTER DELETE ON cursors
+WHEN OLD.source_reset IS NOT NULL
+BEGIN UPDATE source_reset_facts SET refs=refs-1 WHERE id=OLD.source_reset; END;
+CREATE TRIGGER source_reset_cursor_replace AFTER UPDATE OF source_reset ON cursors
+WHEN OLD.source_reset IS NOT NEW.source_reset
+BEGIN
+UPDATE source_reset_facts SET refs=refs-1 WHERE id=OLD.source_reset;
+UPDATE source_reset_facts SET refs=refs+1 WHERE id=NEW.source_reset;
+END;
+CREATE TRIGGER source_reset_member_retain AFTER INSERT ON source_reset_members
+WHEN NEW.reset IS NOT NULL
+BEGIN UPDATE source_reset_facts SET refs=refs+1 WHERE id=NEW.reset; END;
+CREATE TRIGGER source_reset_member_release AFTER DELETE ON source_reset_members
+WHEN OLD.reset IS NOT NULL
+BEGIN UPDATE source_reset_facts SET refs=refs-1 WHERE id=OLD.reset; END;
+CREATE TRIGGER source_reset_audit_retain AFTER INSERT ON audit
+WHEN NEW.source_reset IS NOT NULL
+BEGIN UPDATE source_reset_facts SET refs=refs+1 WHERE id=NEW.source_reset; END;
+CREATE TRIGGER source_reset_audit_release AFTER DELETE ON audit
+WHEN OLD.source_reset IS NOT NULL
+BEGIN UPDATE source_reset_facts SET refs=refs-1 WHERE id=OLD.source_reset; END;
+CREATE TRIGGER source_reset_audit_replace AFTER UPDATE OF source_reset ON audit
+WHEN OLD.source_reset IS NOT NEW.source_reset
+BEGIN
+UPDATE source_reset_facts SET refs=refs-1 WHERE id=OLD.source_reset;
+UPDATE source_reset_facts SET refs=refs+1 WHERE id=NEW.source_reset;
+END;

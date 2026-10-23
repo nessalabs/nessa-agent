@@ -1650,9 +1650,11 @@ immutable audit files and exact acknowledgements; `restoration` exhaustively
 correlates every audit variant with retained facts and owns delivery-history
 validation before effects; `retirement` retains bounded secret-free original
 identity/stop facts and the exact retirement audit identity through lost
-acknowledgement; `registry` persists target
+acknowledgement; `source_reset` owns immutable original reset facts and first-capture
+membership, bounded reference retention and canonical schema validation; `registry` persists target
 facts supplied by the future credential lifecycle coordinator. Tests remain in
-`tests/webhooks/infrastructure/outbox.rs`.
+`tests/webhooks/infrastructure/outbox.rs`, with shared reset ownership cases in
+`tests/webhooks/infrastructure/outbox/source_reset.rs`.
 Registration authorization/configuration, the committed source reader, sender
 supervision and capability/revoke E2E remain uncomposed work. The outbox does not
 supply permission or open a listener.

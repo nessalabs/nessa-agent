@@ -8,25 +8,21 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sync::replication::domain::Scope;
 use uuid::Uuid;
 
-const SELECT: &str = "SELECT registration,conversation,scope,position,reset_required,observed_scope,reset_stop FROM cursors";
+const SELECT: &str =
+    "SELECT registration,conversation,scope,position,reset_required,source_reset FROM cursors";
 struct StoredCursor {
     registration: String,
     conversation: String,
     scope: String,
     position: i64,
     reset_required: i64,
-    observed_scope: Option<String>,
-    reset_stop: Option<String>,
+    source_reset: Option<String>,
 }
 pub(super) struct Cursor {
     pub scope: Scope,
     pub position: u64,
     pub reset_required: bool,
-    pub reset: Option<Reset>,
-}
-pub(super) struct Reset {
-    pub observed_scope: Scope,
-    pub stop: codec::SourceStop,
+    pub reset: Option<Uuid>,
 }
 impl StoredCursor {
     fn row(row: &Row<'_>) -> SqlResult<Self> {
@@ -36,11 +32,10 @@ impl StoredCursor {
             scope: row.get(2)?,
             position: row.get(3)?,
             reset_required: row.get(4)?,
-            observed_scope: row.get(5)?,
-            reset_stop: row.get(6)?,
+            source_reset: row.get(5)?,
         })
     }
-    fn checked(self) -> Result<Cursor, OutboxError> {
+    fn checked(self, connection: &Connection) -> Result<Cursor, OutboxError> {
         let scope = codec::scope(&self.scope)?;
         check_identity(&self.registration, &self.conversation, &scope)?;
         let position = u64::try_from(self.position).map_err(invalid)?;
@@ -49,22 +44,19 @@ impl StoredCursor {
             1 => true,
             _ => return Err(OutboxError::Invalid),
         };
-        let reset = match (reset_required, self.observed_scope, self.reset_stop) {
-            (false, None, None) => None,
-            (true, Some(observed), Some(stop)) => {
-                let observed_scope = codec::scope(&observed)?;
-                check_replacement(
-                    &self.registration,
-                    &self.conversation,
-                    &scope,
-                    &observed_scope,
-                )?;
-                let stop = codec::source_stop(&stop)?;
-                super::integer(stop.at_ms)?;
-                Some(Reset {
-                    observed_scope,
-                    stop,
-                })
+        let reset = match (reset_required, self.source_reset) {
+            (false, None) => None,
+            (true, Some(id)) => {
+                let fact = super::source_reset::read(connection, uuid(&id)?)?
+                    .ok_or(OutboxError::Invalid)?;
+                if fact.registration.to_string() != self.registration
+                    || fact.conversation.to_string() != self.conversation
+                    || fact.prior_scope != scope
+                    || fact.prior_position != position
+                {
+                    return Err(OutboxError::Invalid);
+                }
+                Some(fact.id)
             }
             _ => return Err(OutboxError::Invalid),
         };
@@ -103,7 +95,7 @@ pub(super) fn read(
         )
         .optional()
         .map_err(row_error)?
-        .map(StoredCursor::checked)
+        .map(|saved| saved.checked(connection))
         .transpose()
 }
 pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
@@ -112,7 +104,7 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
         .query_map([], StoredCursor::row)
         .map_err(unavailable)?;
     for row in rows {
-        row.map_err(row_error)?.checked()?;
+        row.map_err(row_error)?.checked(connection)?;
     }
     Ok(())
 }
