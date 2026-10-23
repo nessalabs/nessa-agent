@@ -63,6 +63,7 @@ import {
 } from "./lib/workspace.mjs"
 
 const checks = [
+  "channels-alone",
   "quiet-composer",
   "overview-narrow",
   "sidebar-motion",
@@ -100,6 +101,10 @@ Usage: node verification/desktop/scripts/columns.mjs [options]
   --sizes <list>   Window sizes (default 1440x900,1000x700,760x700; --quick: the first).
 
 Checks, per engine, layout and size:
+  channels-alone  three columns: the sidebar lists channels and no session
+                  under them; the chosen channel's pinned sessions lead its
+                  list under "Pinned", each listed once. Sessions in sidebar:
+                  a channel still discloses its sessions
   pane-level      the panes are one flat surface, divided by hairlines, and focus
                   changes no pane's fill or elevation, in both themes, beside and
                   stacked
@@ -671,6 +676,37 @@ const body = {
     if (tall.some((c) => !c.choices && !c.running))
       failures.push("in a tall window a composer is still quiet")
     return { short, after, tall, failures }
+  },
+
+  "channels-alone": async ({ page, layout }) => {
+    const failures = []
+    await settled(page)
+    const seen = await page.evaluate(() => {
+      const rows = (scope) =>
+        [...document.querySelectorAll(`${scope} [data-session-row]`)].map((row) =>
+          row.getAttribute("data-session-row"),
+        )
+      const groups = [...document.querySelectorAll(".workspace-list [data-list-group]")]
+      return {
+        sidebar: rows(".workspace-sidebar"),
+        list: rows(".workspace-list"),
+        first: groups[0]?.getAttribute("data-list-group") ?? null,
+        pinned: rows('.workspace-list [data-list-group="pinned"]'),
+      }
+    })
+    if (layout === "columns") {
+      if (seen.sidebar.length)
+        failures.push(
+          `the sidebar lists ${seen.sidebar.length} sessions under its channels`,
+        )
+      if (seen.first !== "pinned" || seen.pinned.length === 0)
+        failures.push(`the list starts with ${seen.first}, not the pinned sessions`)
+      if (new Set(seen.list).size !== seen.list.length)
+        failures.push("a session is listed twice")
+    } else if (seen.sidebar.length === 0) {
+      failures.push("sessions in sidebar discloses no session under its channels")
+    }
+    return { failures, detail: seen }
   },
 
   "overview-narrow": async ({ page }) => {

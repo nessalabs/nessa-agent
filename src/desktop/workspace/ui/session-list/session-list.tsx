@@ -180,6 +180,7 @@ export const SessionList = memo(function SessionList() {
               <div
                 key={group.id}
                 role="group"
+                data-list-group={group.id}
                 aria-label={`${group.label} ${group.ids.length}`}
               >
                 {/* The kit caption is a heading. Hidden here, so the listbox

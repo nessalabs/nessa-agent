@@ -2027,9 +2027,9 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   naming 3 answers "Shared.".
 - [ ] **Tab stays in the dialog; Escape closes it and focus is back on the
   session's row.** _Check:_ `focus` (waits for that end state, 3 s).
-- [ ] **A pinned session under a folded sidebar gets that focus on the list's
-  row, not the inert sidebar copy.** _Check:_ `focus-pinned` (the sample
-  workspace, which can pin; the gateway keeps no pin).
+- [ ] **A pinned session gets that focus on its row in the list's Pinned
+  group, its only row.** _Check:_ `focus-pinned` (the sample workspace,
+  which can pin; the gateway keeps no pin).
 - [ ] **The panel fits the window.** _Check:_ `fit-1200`, `fit-420`; with
   `--shots <dir>`, screenshots of the grants, Drive form, budget, refusal,
   changed refusal and the narrow panel.
@@ -2052,7 +2052,7 @@ row.
   _Check:_ `hover`. Away from the row its time shows and no button does;
   under it the two show at 26 px and the time does not.
 - [ ] **More holds what the row can do, less the ways to open it; Rename
-  edits the title where it stood.** _Check:_ `more`. Rename, Pin to Sidebar,
+  edits the title where it stood.** _Check:_ `more`. Rename, Pin (Unpin when pinned), Fork,
   (Share…,) Archive, Delete…; the row keeps its buttons while the menu is
   open; the field takes focus and ↩ keeps "Rain plan".
 - [ ] **Delete asks first.** _Check:_ `delete`. Cancel deletes nothing, and

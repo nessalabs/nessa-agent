@@ -73,7 +73,8 @@ Checks, per engine:
         const words = await page.locator(css.menuItem).allInnerTexts()
         // Share… is there for a session the window may share.
         const asked = words.filter((word) => word !== "Share…").join("|")
-        if (asked !== "Rename|Pin to Sidebar|Archive|Delete…")
+        // A pinned row offers Unpin in Pin's place.
+        if (!/^Rename\|(Pin|Unpin)\|Fork\|Archive\|Delete…$/.test(asked))
           failures.push(`the menu read ${JSON.stringify(words)}`)
         if ((await row.getAttribute("data-actions")) !== "true")
           failures.push("the row let its buttons go while its menu was open")
@@ -121,9 +122,7 @@ Checks, per engine:
           }
           requestAnimationFrame(tick)
         })
-        await page
-          .getByRole("menuitem", { name: /^(Pin to|Unpin from) Sidebar$/ })
-          .click()
+        await page.getByRole("menuitem", { name: /^(Pin|Unpin)$/ }).click()
         await page.waitForFunction(() => window.__pinMenuFramesDone)
         const pinFrames = await page.evaluate(() => window.__pinMenuFrames)
         if (pinFrames.some((frame) => frame.x < 16 && frame.y < 16))

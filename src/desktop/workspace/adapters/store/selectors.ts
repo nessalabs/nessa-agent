@@ -304,12 +304,6 @@ const channelSessions = (state: Root, channelId: string) =>
 export const selectChannelActivity = (state: Root, channelId: string): ChannelActivity =>
   channelActivity(channelSessions(state, channelId))
 
-/** The pinned sessions a channel hangs beneath it, as ids; compare with `shallowEqual`. */
-export const selectPinnedIds = (state: Root, channelId: string): string[] =>
-  channelSessions(state, channelId)
-    .filter((session) => session.pinned)
-    .map((session) => session.id)
-
 /** The sessions a channel's branch discloses, as ids, and how many it holds back. */
 export function selectBranch(
   state: Root,

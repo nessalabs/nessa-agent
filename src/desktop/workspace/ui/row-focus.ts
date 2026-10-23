@@ -13,8 +13,8 @@
  * (`focusRowPlace`): to the row, or past it when it went meanwhile, and only
  * ever in the list it was asked from. A dialog that outlives that menu, such
  * as Share, looks the session's row up when it closes (`focusSessionRow`).
- * A pinned session is drawn twice. A copy inside an inert ancestor, such as
- * the folded sidebar, cannot take focus, so the lookup skips it.
+ * A row inside an inert ancestor, such as a folded sidebar, cannot take
+ * focus, so the lookup skips it.
  */
 import { useEffect, type RefObject } from "react"
 

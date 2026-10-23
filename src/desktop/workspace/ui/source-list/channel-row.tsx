@@ -5,17 +5,16 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import {
   selectChannel,
   selectChannelActivity,
-  selectPinnedIds,
   selectView,
 } from "../../adapters/store/selectors"
-import { ThreadRow } from "./thread-row"
 import { SidebarRow } from "./sidebar-row"
 import { useOverviewQuiet } from "./overview-quiet"
 
 /**
  * A channel in the sidebar beside a session list: choosing it shows its
- * sessions there. It counts what waits on the person, shows when something
- * runs, and — while chosen — hangs its pinned sessions beneath it.
+ * sessions there — its pinned ones first — so the row holds none of its own
+ * beneath it. It counts what waits on the person and shows when something
+ * runs.
  */
 export const ChannelRow = memo(function ChannelRow({ channelId }: { channelId: string }) {
   const dispatch = useWorkspaceDispatch()
@@ -31,11 +30,6 @@ export const ChannelRow = memo(function ChannelRow({ channelId }: { channelId: s
     (state) => selectChannelActivity(state, channelId),
     shallowEqual,
   )
-  const pinned = useWorkspaceSelector(
-    (state) =>
-      selectView(state).channelId === channelId ? selectPinnedIds(state, channelId) : [],
-    shallowEqual,
-  )
   if (!channel) return null
   return (
     <SidebarRow
@@ -49,20 +43,6 @@ export const ChannelRow = memo(function ChannelRow({ channelId }: { channelId: s
       badgeTone="needs"
       running={activity.running}
       onClick={() => dispatch(chooseChannel({ channelId }))}
-      submenu={
-        pinned.length > 0 ? (
-          <ul role="list" className="workspace-thread workspace-rise">
-            {pinned.map((sessionId) => (
-              <ThreadRow
-                key={sessionId}
-                sessionId={sessionId}
-                channelId={channelId}
-                kind="pinned"
-              />
-            ))}
-          </ul>
-        ) : undefined
-      }
     />
   )
 })

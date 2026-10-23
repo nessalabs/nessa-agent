@@ -1,6 +1,6 @@
 /**
- * What a session row offers, wherever the row is — the session list, a
- * channel's pinned sessions, a channel's branch in the sidebar: open it,
+ * What a session row offers, wherever the row is — the session list (its
+ * pinned ones first), a channel's branch in the sidebar: open it,
  * open it beside the focused pane (⌘-click), and its context menu.
  */
 import { shallowEqual } from "react-redux"
@@ -131,7 +131,7 @@ export function SessionMenuItems({
           void dispatch(pinSession({ sessionId, pinned: !pinned, initiator: "person" }))
         }
       >
-        {pinned ? "Unpin from Sidebar" : "Pin to Sidebar"}
+        {pinned ? "Unpin" : "Pin"}
       </MenuItem>
       {/* A copy of what was said, so none before it has spoken. */}
       <MenuItem

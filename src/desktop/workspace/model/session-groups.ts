@@ -1,6 +1,7 @@
 /**
- * How sessions are gathered for the sidebar and the session list: by status
- * into "Needs you", "Running" and "Earlier"; by channel, with only the few a
+ * How sessions are gathered for the sidebar and the session list: the ones
+ * the person pinned, then by status into "Needs you", "Running" and
+ * "Earlier"; by channel, with only the few a
  * person needs disclosed; and by what a search asks for.
  */
 import {
@@ -42,8 +43,9 @@ interface StatusGroup {
 }
 
 /**
- * Sessions by status in the list's order, newest first in each; empty groups
- * are left out. With `runningFirst` off (Settings › Workspace › Sessions),
+ * Sessions in the list's order, newest first in each group: the ones the
+ * person pinned, each there only, then the rest by status; empty groups are
+ * left out. With `runningFirst` off (Settings › Workspace › Sessions),
  * running sessions are not kept above the rest: "Needs you", then every other
  * session in one group, newest first.
  */
@@ -51,7 +53,13 @@ export function groupByStatus(
   sessions: readonly SessionSummary[],
   { runningFirst = true }: { runningFirst?: boolean } = {},
 ): StatusGroup[] {
-  const newest = [...sessions].sort(byRecency)
+  const sorted = [...sessions].sort(byRecency)
+  const pinned: StatusGroup = {
+    id: "pinned",
+    label: "Pinned",
+    sessions: sorted.filter((session) => session.pinned),
+  }
+  const newest = sorted.filter((session) => !session.pinned)
   const groups: StatusGroup[] = runningFirst
     ? groupOrder.map((status) => ({
         id: status,
@@ -70,7 +78,7 @@ export function groupByStatus(
           sessions: newest.filter((session) => session.status !== "needs-you"),
         },
       ]
-  return groups.filter((group) => group.sessions.length > 0)
+  return [pinned, ...groups].filter((group) => group.sessions.length > 0)
 }
 
 /** Whether a session answers the list's search, by title, preview, model or agent. */
