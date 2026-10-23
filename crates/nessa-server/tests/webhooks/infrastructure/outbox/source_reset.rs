@@ -1,5 +1,6 @@
 use super::*;
 use crate::webhooks::application::{MAX_CURSORS, MAX_SOURCE_RESETS, SOURCE_RESET_BYTES};
+use nessa_local_database::rusqlite::{types::Type, StatementStatus};
 
 async fn captured_sender(f: &Fixture) -> Delivery {
     f.store.queue(f.record(1)).await.unwrap();
@@ -331,7 +332,6 @@ async fn reset_references_release_with_retirement_and_lost_ack_recovery() {
 
 #[test]
 fn owed_selection_work_does_not_grow_with_published_history() {
-    use nessa_local_database::rusqlite::StatementStatus;
     let mut previous = None;
     for count in [0, 100, 10000] {
         let mut c = Connection::open_in_memory().unwrap();
@@ -643,7 +643,6 @@ async fn reset_factory_count_capacity_does_not_insert_a_partial_fact() {
 
 #[tokio::test]
 async fn oversized_fact_is_not_materialized_before_typed_decoding() {
-    use nessa_local_database::rusqlite::types::Type;
     assert_eq!(SOURCE_RESET_BYTES, 16 * 1024);
     let f = Fixture::new().await;
     let mut c = f.store.owner.connection.lock().unwrap();

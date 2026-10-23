@@ -1651,7 +1651,7 @@ correlates every audit variant with retained facts and owns delivery-history
 validation before effects; `retirement` retains bounded secret-free original
 identity/stop facts and the exact retirement audit identity through lost
 acknowledgement; `source_reset` owns immutable original reset facts and first-capture
-membership, bounded reference retention and canonical schema validation; `registry` persists target
+membership (`source_reset/store.rs`), bounded reference retention and canonical schema validation; `registry` persists target
 facts supplied by the future credential lifecycle coordinator. Tests remain in
 `tests/webhooks/infrastructure/outbox.rs`, with shared reset ownership cases in
 `tests/webhooks/infrastructure/outbox/source_reset.rs`.
