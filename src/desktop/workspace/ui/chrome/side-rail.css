@@ -209,12 +209,26 @@
   transition:
     color var(--desktop-fast) ease,
     background-color var(--desktop-fast) ease,
-    transform 220ms var(--rail-spring);
+    transform 220ms var(--rail-spring),
+    left var(--desktop-drawer) var(--desktop-ease);
 }
 
-/* With the rail folded, its toggle is the footer's mark: Studio's square steps aside. */
-.workspace-window[data-rail="closed"] .workspace-identity .desktop-mark {
+/*
+ * Wherever the rail is offered, its toggle is nessa's mark at the footer:
+ * Studio's square steps aside and the toggle stands in its slot, right before
+ * "nessa Studio", so the two read as one logo. With the rail open beside an
+ * open sidebar or a full view, the slot is past the rail, and the toggle
+ * travels there on the drawer's curve as the sidebar does.
+ */
+.workspace-window:is([data-rail="open"], [data-rail="closed"])
+  .workspace-identity
+  .desktop-mark {
   visibility: hidden;
+}
+
+.workspace-window[data-rail="open"]:is([data-sidebar="open"], [data-rail-view])
+  .side-rail-toggle {
+  left: calc(var(--rail-width) + var(--desktop-gutter) + 6px);
 }
 
 /* The toggle doubles as nessa's mark: its top-right tile is lit. */

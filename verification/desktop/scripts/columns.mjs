@@ -410,6 +410,8 @@ const body = {
             rail: rect(document.querySelector(sel.sideRail)),
             drawnRail:
               document.querySelector(sel.workspaceWindow).dataset.rail === "open",
+            drawnSidebar:
+              document.querySelector(sel.workspaceWindow).dataset.sidebar === "open",
           }
         }, css)
         states.push({ requestedRail: rail, requestedSidebar: sidebar, ...state })
@@ -424,11 +426,14 @@ const body = {
           failures.push(`${label}: a pane's header sits under the window toolbar`)
         // The toggle stands in the footer row's mark slot (`ui/identity.css`,
         // `side-rail.css`): 6px in from the sidebar's content edge — the
-        // gutter, from the window's — on the row's line, its foot 13px above
+        // gutter, from the window's, past the rail when it is open beside
+        // the sidebar — on the row's line, its foot 13px above
         // the row's. The row keeps its own 6px inset in every state.
         if (
           state.toggle &&
-          (state.toggle.x !== 14 || state.toggle.bottom !== size.height - 21)
+          (state.toggle.x !==
+            (state.drawnRail && state.drawnSidebar ? 14 + state.rail.width : 14) ||
+            state.toggle.bottom !== size.height - 21)
         )
           failures.push(
             `${label}: rail toggle at x ${state.toggle.x}, foot ${state.toggle.bottom}, not in the footer's mark slot`,
@@ -490,6 +495,32 @@ const body = {
   },
 
   "rail-corner": async ({ page, size }) => {
+    // The visible footer's mark slot, as the toggle's box would be in it.
+    const markSlot = (page) =>
+      page.evaluate((toggleSelector) => {
+        const slot = [
+          ...document.querySelectorAll(".workspace-identity .desktop-identity-mark"),
+        ]
+          .filter(
+            (each) =>
+              getComputedStyle(each).visibility !== "hidden" && !each.closest("[inert]"),
+          )
+          .map((each) => each.getBoundingClientRect())
+          .find((r) => r.width > 0 && r.left >= 0 && r.left < window.innerWidth)
+        const toggle = document.querySelector(toggleSelector)?.getBoundingClientRect()
+        if (!slot || !toggle) return null
+        const x = slot.left + (slot.width - toggle.width) / 2
+        const y = slot.top + (slot.height - toggle.height) / 2
+        return [x, y, toggle.width, toggle.height].map(Math.round)
+      }, css.sideRailToggle)
+    const squareShown = (page) =>
+      page.evaluate(() =>
+        [...document.querySelectorAll(".workspace-identity .desktop-mark")].some(
+          (each) =>
+            getComputedStyle(each).visibility === "visible" &&
+            each.getBoundingClientRect().width > 0,
+        ),
+      )
     const failures = []
     const seen = []
     let toggle = null
@@ -512,11 +543,21 @@ const body = {
         seen.push({ label, toggle: at, studio })
         if (!at) failures.push(`${label}: the toggle is not drawn`)
         if (!at) continue
-        toggle ??= at
-        if (at.join() !== toggle.join())
+        // The toggle is nessa's mark: in the footer's mark slot, right before
+        // "nessa Studio", wherever the footer is drawn; in its corner otherwise.
+        const slot = await markSlot(page)
+        if (slot && at.join() !== slot.join())
+          failures.push(
+            `${label}: the toggle is at [${at}], not in the mark slot [${slot}]`,
+          )
+        // With no footer beside it, it holds its corner.
+        if (!slot) toggle ??= at
+        if (!slot && at.join() !== toggle.join())
           failures.push(`${label}: the toggle is at [${at}], not [${toggle}]`)
         if (studio && studio[0] < at[0] + at[2])
           failures.push(`${label}: "nessa Studio" at x ${studio[0]} is under the toggle`)
+        if (await squareShown(page))
+          failures.push(`${label}: Studio's square is drawn beside the toggle`)
         // An item's full view puts "nessa Studio" where the sidebar's foot does.
         if (!now.sidebar) continue
         const roomy =
@@ -534,9 +575,10 @@ const body = {
           failures.push(
             `${label}: "nessa Studio" is at [${inView}] in a full view, [${studio}] in Agents`,
           )
-        if (viewToggle?.join() !== toggle.join())
+        const viewSlot = await markSlot(page)
+        if (viewToggle?.join() !== viewSlot?.join())
           failures.push(
-            `${label}, Notes: the toggle is at [${viewToggle}], not [${toggle}]`,
+            `${label}, Notes: the toggle is at [${viewToggle}], not in the mark slot [${viewSlot}]`,
           )
         if (!now.rail) await setRail(page, true)
         await page.locator(selectorFor.railItem("agents")).click()
