@@ -216,4 +216,3 @@ test adapters::pairing::tests::server_start_uses_original_request_decoder_refusa
 test adapters::pairing::tests::server_finalization_bound_refuses_padded_valid_ke3 ... ok
 
 test result: ok. 212 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.98s
-

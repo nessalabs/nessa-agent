@@ -27,3 +27,8 @@ registered or contacted, and no real keys, credentials or conversation data were
 No denied foundation CI retry, manual dispatch or alternate trigger was attempted.
 Canonical scripted Chromium/WebKit and feature stress/chaos remain applicable and
 unqualified; see [the gate handoff](../../webhook-validation-gates/README.md).
+
+Only terminal blank lines in copied text logs were normalized; result lines and
+original mutation failures are preserved. The initial local evidence commit
+failed the explicit committed-range EOF check; this correction closes it before
+publication or independent review.
