@@ -11,3 +11,7 @@ pub use signature::signature;
 #[cfg(test)]
 #[path = "../../../tests/webhooks/infrastructure/message.rs"]
 mod message_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/webhooks/infrastructure/admission.rs"]
+mod admission_tests;

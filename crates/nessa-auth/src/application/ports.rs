@@ -147,6 +147,30 @@ pub trait AccessReader: Send + Sync {
     fn read<'a>(&'a self, credential: &'a CredentialId) -> PortFuture<'a, AccessSnapshot>;
 }
 
+/// A coherent access read kept still through one bounded external effect.
+/// This is synchronization evidence, not an authorization decision. Callers
+/// still validate identity, expiry and Cedar policy, and own the effect deadline.
+pub struct AccessHold {
+    pub snapshot: AccessSnapshot,
+    _keep: Box<dyn Send>,
+}
+
+impl AccessHold {
+    pub fn held(snapshot: AccessSnapshot, keep: impl Send + 'static) -> Self {
+        Self {
+            snapshot,
+            _keep: Box::new(keep),
+        }
+    }
+}
+
+/// Credential mutation and effect admission share this authority's fence.
+/// A successful mutation waits for previously held effects; subsequent holds
+/// observe the mutation. Implementations must cover every mutation entry point.
+pub trait AccessAdmission: Send + Sync {
+    fn hold<'a>(&'a self, credential: &'a CredentialId) -> PortFuture<'a, AccessHold>;
+}
+
 /// Absolute time for credential expiration, distinct from the server uptime clock.
 pub trait Clock: Send + Sync {
     /// Current absolute Unix time in milliseconds, used to advertise deadlines.

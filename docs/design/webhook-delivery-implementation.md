@@ -11,6 +11,35 @@ coordination are not wired yet. No gateway sends a webhook from this slice.
 Application registrations (#1052) and inbound workflow triggers (#1088) remain
 separate. The existing principal-keyed grant row is the authority to reuse.
 
+## Dependent integration work
+
+`codex/896-webhook-delivery` starts at frozen foundation head
+`2613b8f68a6f12d08a74903a14fddce2b3cdba1d`. It is work in progress, not
+an implemented usable delivery flow. Issue #1052 remains open at this
+checkpoint; no implementation PR was found. This branch does not add an
+application registration or change unbound product-session owner fallback.
+
+The credential registry owns effect holds and mutation publication. The grant
+store owns principal/resource revision holds using its existing change gates.
+The webhook application composes those facts with the existing checked metadata
+loader and conversation Cedar evaluator. A new `WebhookReader` Cedar subject
+has only a read permit; it is never represented as a receiver or person.
+
+| Before | Guard/event | Effect and recovery |
+| --- | --- | --- |
+| credential live | effect hold acquired | Read a coherent snapshot while mutation publication is fenced; this is not permission. The caller must bound the hold and evaluate current lifetime, linkage and Cedar. |
+| credential held | asynchronous revoke | Wait for the hold, then persist revocation and its existing audit before publication. A subsequent hold reads the revoked credential. |
+| credential held | synchronous registry mutation | Return the existing Locked refusal without changing state; synchronous callers may retry after the bounded effect. No runtime thread blocks waiting for an HTTP effect. |
+| grant present at epoch E | principal/resource hold acquired | Reload that principal's grant after taking the same gate that changes use. Missing or unequal revision refuses; another conversation has another gate. |
+| grant held at E | unshare or replacement | Wait for the hold before changing the row. A queued attempt taking the gate afterwards cannot reuse E. |
+| credential and grant held | Cedar webhook.read permits | Both holds remain owned by delivery admission; record source selection and dispatch must consume them within their deadline. |
+| credential or grant held | policy/lifetime/linkage/target mismatch or unavailable | Release both holds and make no POST. Unavailable does not become a final policy refusal. |
+
+Shared files are `nessa-auth` ports/local registry, conversation share-grant
+ports/store and access-policy/Cedar bundle. Registration/configuration,
+durable outbox/source replay, runtime composition and end-to-end delivery remain
+required before this dependent branch can satisfy #896.
+
 ## Delivery ordering
 
 The immutable domain value returns a replacement. Only an acknowledged store

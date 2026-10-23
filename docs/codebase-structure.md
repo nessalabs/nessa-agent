@@ -1635,8 +1635,12 @@ The outbound [webhook foundation](design/webhook-delivery-implementation.md)
 lives under `crates/nessa-server/src/webhooks`: immutable delivery and destination
 values in `domain/value_objects`, message/transport ports in `application`, and
 JSON, HMAC, DNS and HTTPS in `infrastructure`. Tests use the same layer names
-under `tests/webhooks`. This first slice is not composed into the gateway;
-registration, durable replay/outbox and grant admission remain future work.
+under `tests/webhooks`. `application/admission.rs` combines current credential
+effect holds, principal grant revision holds, checked conversation metadata and
+the existing conversation Cedar evaluator. Credential mutation fences live in
+the auth registry; principal/resource fences remain in the grant store.
+Registration, durable replay/outbox and the running delivery worker remain
+uncomposed work.
 
 ## Browser sessions
 

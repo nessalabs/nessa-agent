@@ -28,8 +28,9 @@ use crate::{
         },
         pairing::StageGate,
         ports::{
-            AccessError, AccessReader, AccessSnapshot, CredentialEvidence, CredentialVerifier,
-            Decision, GrantPolicyEvaluator, IssuePath, PortFuture, VerifiedCredential,
+            AccessAdmission, AccessError, AccessHold, AccessReader, AccessSnapshot,
+            CredentialEvidence, CredentialVerifier, Decision, GrantPolicyEvaluator, IssuePath,
+            PortFuture, VerifiedCredential,
         },
     },
     domain::{
@@ -48,6 +49,7 @@ use std::{
     fmt,
     fs::File,
     io::{self, Read, Write},
+    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -55,6 +57,7 @@ use std::{
     },
 };
 use subtle::ConstantTimeEq;
+use tokio::sync::{OwnedRwLockWriteGuard, RwLock as AdmissionRwLock};
 
 mod pairing;
 
@@ -294,8 +297,9 @@ pub struct LocalCredentialStore {
     grants: Arc<dyn GrantPolicyEvaluator>,
     root: PathBuf,
     path: PathBuf,
-    _lock: RegistryLock,
+    _lock: Arc<RegistryLock>,
     registry: Mutex<Option<Registry>>,
+    admission: Arc<AdmissionRwLock<()>>,
     published: RwLock<Option<Registry>>,
     subscribers: Mutex<Vec<mpsc::Sender<u64>>>,
     healthy: AtomicBool,
@@ -306,6 +310,34 @@ pub struct LocalCredentialStore {
     fail_next_directory_sync: AtomicBool,
     #[cfg(test)]
     fail_before_replace: AtomicBool,
+}
+
+struct RegistrySlot<'a> {
+    guard: MutexGuard<'a, Option<Registry>>,
+    _fence: OwnedRwLockWriteGuard<()>,
+}
+
+impl Deref for RegistrySlot<'_> {
+    type Target = Option<Registry>;
+    fn deref(&self) -> &Self::Target {
+        &self.guard
+    }
+}
+
+impl DerefMut for RegistrySlot<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard
+    }
+}
+
+impl AccessAdmission for LocalCredentialStore {
+    fn hold<'a>(&'a self, credential: &'a CredentialId) -> PortFuture<'a, AccessHold> {
+        Box::pin(async move {
+            let fence = Arc::clone(&self.admission).read_owned().await;
+            let snapshot = self.read(credential).await?;
+            Ok(AccessHold::held(snapshot, (fence, Arc::clone(&self._lock))))
+        })
+    }
 }
 
 impl LocalCredentialStore {
@@ -405,8 +437,9 @@ impl LocalCredentialStore {
             grants,
             root,
             path,
-            _lock: RegistryLock(lock),
+            _lock: Arc::new(RegistryLock(lock)),
             registry: Mutex::new(registry.clone()),
+            admission: Arc::new(AdmissionRwLock::new(())),
             published: RwLock::new(registry),
             subscribers: Mutex::new(Vec::new()),
             healthy: AtomicBool::new(true),
@@ -437,7 +470,7 @@ impl LocalCredentialStore {
     /// principal are `Ok(None)`. A stored principal whose kind does not parse
     /// is `Conflict`.
     pub fn principal_kind(&self, id: &str) -> Result<Option<PrincipalKind>, LocalStoreError> {
-        let slot = self.slot()?;
+        let slot = self.unfenced_slot()?;
         let Some(registry) = slot.as_ref() else {
             return Ok(None);
         };
@@ -945,7 +978,17 @@ impl LocalCredentialStore {
         &self,
         request: RevokeCredentialRequest,
     ) -> Result<RevokeCredentialOutcome, LocalStoreError> {
-        let mut slot = self.slot()?;
+        let _fence = Arc::clone(&self.admission)
+            .try_write_owned()
+            .map_err(|_| LocalStoreError::Locked)?;
+        self.revoke_fenced(request)
+    }
+
+    fn revoke_fenced(
+        &self,
+        request: RevokeCredentialRequest,
+    ) -> Result<RevokeCredentialOutcome, LocalStoreError> {
+        let mut slot = self.unfenced_slot()?;
         let current = slot.as_ref().ok_or(LocalStoreError::NotInitialized)?;
         if request.request_id.trim().is_empty() || request.request_id.len() > 200 {
             return Err(LocalStoreError::Conflict);
@@ -1022,7 +1065,17 @@ impl LocalCredentialStore {
         })
     }
 
-    fn slot(&self) -> Result<MutexGuard<'_, Option<Registry>>, LocalStoreError> {
+    fn slot(&self) -> Result<RegistrySlot<'_>, LocalStoreError> {
+        let fence = Arc::clone(&self.admission)
+            .try_write_owned()
+            .map_err(|_| LocalStoreError::Locked)?;
+        Ok(RegistrySlot {
+            guard: self.unfenced_slot()?,
+            _fence: fence,
+        })
+    }
+
+    fn unfenced_slot(&self) -> Result<MutexGuard<'_, Option<Registry>>, LocalStoreError> {
         if !self.healthy.load(Ordering::Acquire) {
             return Err(LocalStoreError::Corrupt);
         }
@@ -1033,8 +1086,16 @@ impl LocalCredentialStore {
         Ok(guard)
     }
 
-    fn registry(&self) -> Result<MutexGuard<'_, Option<Registry>>, LocalStoreError> {
+    fn mutation_registry(&self) -> Result<RegistrySlot<'_>, LocalStoreError> {
         let guard = self.slot()?;
+        if guard.is_none() {
+            return Err(LocalStoreError::NotInitialized);
+        }
+        Ok(guard)
+    }
+
+    fn registry(&self) -> Result<MutexGuard<'_, Option<Registry>>, LocalStoreError> {
+        let guard = self.unfenced_slot()?;
         if guard.is_none() {
             return Err(LocalStoreError::NotInitialized);
         }
@@ -1224,7 +1285,8 @@ impl CredentialAdmin for LocalCredentialStore {
         request: RevokeCredentialRequest,
     ) -> PortFuture<'a, RevokeCredentialOutcome, CredentialAdminError> {
         Box::pin(async move {
-            self.revoke_sync(request)
+            let _fence = Arc::clone(&self.admission).write_owned().await;
+            self.revoke_fenced(request)
                 .map_err(CredentialAdminError::from)
         })
     }
@@ -2130,6 +2192,70 @@ mod tests {
             Poll::Ready(value) => value,
             Poll::Pending => panic!("local adapter unexpectedly yielded"),
         }
+    }
+
+    #[test]
+    fn effect_hold_fences_revocation_and_reads_the_committed_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let store = open_store(root.path().join("auth/credentials.v1.json")).unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        let id = CredentialId::new("owner-credential").unwrap();
+        let hold = ready(store.hold(&id)).unwrap();
+        assert_eq!(
+            store.principal_kind("owner").unwrap(),
+            Some(PrincipalKind::Human)
+        );
+        assert_eq!(store.identity().unwrap().gateway_id, "gateway-1");
+        let request = RevokeCredentialRequest {
+            request_id: "revoke-held".into(),
+            issuer_principal_id: "owner".into(),
+            credential_id: id.as_str().into(),
+            revoked_at: 120,
+        };
+        assert!(matches!(
+            store.revoke_sync(request.clone()),
+            Err(LocalStoreError::Locked)
+        ));
+        let mut revoke = store.revoke(request);
+        assert!(matches!(
+            revoke
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Pending
+        ));
+        assert_eq!(
+            ready(store.read(&id)).unwrap().credential.revoked_at(),
+            None
+        );
+        drop(hold);
+        assert!(matches!(
+            revoke
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Ok(_))
+        ));
+        assert_eq!(
+            ready(store.hold(&id))
+                .unwrap()
+                .snapshot
+                .credential
+                .revoked_at(),
+            Some(120)
+        );
+    }
+
+    #[test]
+    fn effect_hold_retains_the_physical_registry_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        let id = CredentialId::new("owner-credential").unwrap();
+        let hold = ready(store.hold(&id)).unwrap();
+        drop(store);
+        assert!(matches!(open_store(&path), Err(LocalStoreError::Locked)));
+        drop(hold);
+        assert!(open_store(&path).is_ok());
     }
 
     fn trusted_root(path: &Path) -> (&Path, &Path) {
