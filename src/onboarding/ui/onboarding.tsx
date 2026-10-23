@@ -12,6 +12,7 @@ import {
   Download,
   KeyRound,
   LoaderCircle,
+  Cpu,
   Settings,
   Unplug,
 } from "lucide-react"
@@ -22,13 +23,12 @@ import type { RuntimeCopy } from "../../host"
 import type { GatewayStartupStatus } from "../../startup/application/gateway-startup"
 import { COULD_NOT_START } from "../../startup/application/copy"
 import type { ShortcutPlatform } from "../model/shortcut-display"
+import { AgentFigure } from "@nessa-ui/react/agent-figure/agent-figure"
 import { Button } from "@nessa-ui/react/button"
+import { StepDots } from "@nessa-ui/react/step-dots"
+import { TypeIn } from "@nessa-ui/react/type-in"
 import {
-  MorphingMeshGradient,
-  morphingMeshGradientPresets,
-} from "@nessa-ui/react/morphing-mesh-gradient"
-import {
-  AGENT_CHOICES,
+  SETUP_AGENTS,
   agentReadiness,
   isChoosable,
   type AgentId,
@@ -36,12 +36,8 @@ import {
   type AgentReadinessFailure,
   type OnboardingState,
 } from "../model/onboarding"
-import { revealChunks } from "../model/reveal-text"
+import { FIGURES, FIGURE_SPOTS, type FigureId } from "../model/opening"
 import type { LingerShown, LingerView } from "../model/linger"
-
-/** Setup's primary action, sized the same on every step. */
-const PILL =
-  "nessa-setup-arrive h-12 min-w-56 rounded-full bg-white px-10 nessa-text-5 font-medium text-neutral-950 shadow-lg hover:bg-white/90"
 
 /** The id the setup window's `aria-labelledby` points at. Every step titles the
  * dialog with its own heading, so there is exactly one of these on screen. */
@@ -49,6 +45,25 @@ export const SETUP_HEADING_ID = "nessa-setup-heading"
 
 /** Every button in a setup pane: one height, one width, one shape. */
 const PANE_BUTTON = "h-11 w-full rounded-full nessa-text-3 font-medium"
+
+/** A step's way on: the pane's one dark pill, as wide as its words. */
+const PANE_PILL = "h-11 self-start rounded-full px-6 nessa-text-3 font-medium"
+
+/** One row of the agent picker, on the pane's light glass. */
+const OPTION =
+  "flex w-full items-center gap-3 rounded-xl border border-border bg-card/55 px-3 py-2.5 text-left transition-[background-color,border-color,box-shadow] outline-none hover:bg-card/85 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 aria-pressed:border-foreground/55 aria-pressed:bg-card aria-pressed:shadow-md"
+
+/** A step's heading in the pane. */
+const PANE_HEADING = "nessa-setup-display font-semibold text-foreground"
+
+/** The steps the dots count. Linger is the last step's own question, so it
+ * keeps the last dot rather than adding one only some systems ever see. */
+const DOTTED_STEPS = ["welcome", "agent", "summon"] as const
+
+function dotFor(step: OnboardingState["step"]): number {
+  if (step === "linger" || step === "done") return DOTTED_STEPS.length - 1
+  return DOTTED_STEPS.indexOf(step)
+}
 
 /**
  * What the summon step says, which is a different thing at each press.
@@ -73,66 +88,24 @@ function summonHeading(state: OnboardingState, configured: boolean) {
 }
 
 /**
- * A heading that resolves a few letters at a time.
+ * One step of setup: its words and controls, on the pane.
  *
- * Whole words arrive in too few, too large steps to read as a line being said.
- * A couple of characters at a time is continuous — and because each piece
- * takes far longer to resolve than the gap between its neighbours, what is
- * seen is one movement crossing the line rather than pieces arriving in turn.
- *
- * Each piece carries its place in the order and the stylesheet turns that into
- * a delay, so the pace of the line is one number in one file.
- *
- * The pieces exist only to be animated, so the heading carries the line as its
- * own name and every piece is hidden — the same arrangement `Keycaps` uses.
- * Without it a screen reader reads two-character fragments and the product's
- * own name arrives in halves.
+ * The pane is the step's focus target and its scroller. Everything in it is in
+ * normal flow, centred down the pane, and the pane scrolls: a button clipped
+ * off the window at a large text size is a setup nobody can finish.
  */
-function SetupHeading({ children }: { children: string }) {
-  return (
-    <h1
-      id={SETUP_HEADING_ID}
-      data-words
-      aria-label={children}
-      className="nessa-setup-title font-semibold text-white"
-    >
-      {revealChunks(children).map((chunk, index) => (
-        <span
-          // Chunks repeat within a line, so position is the only identity.
-          key={`${chunk}-${index}`}
-          aria-hidden="true"
-          className="nessa-setup-word"
-          style={{ "--nessa-word": index } as React.CSSProperties}
-        >
-          {chunk}
-        </span>
-      ))}
-    </h1>
-  )
-}
-
-/**
- * A step that is a line and a way on.
- *
- * Everything is in normal flow and the column scrolls. The action used to be
- * positioned against the box so the heading could sit at its centre whether or
- * not there was an action yet; that bought a still heading at the price of a
- * button that could be clipped clean off the window at a large text size, with
- * nothing scrolling to reach it. Since every step now always offers a way on,
- * the jump it was avoiding no longer happens.
- */
-const SetupStep = React.forwardRef<
+const SetupPane = React.forwardRef<
   HTMLDivElement,
-  { children: React.ReactNode; action?: React.ReactNode }
->(function SetupStep({ children, action }, ref) {
+  { step: OnboardingState["step"]; children: React.ReactNode }
+>(function SetupPane({ step, children }, ref) {
   return (
-    <div
-      ref={ref}
-      tabIndex={-1}
-      className="flex size-full min-h-0 flex-col items-center justify-center gap-7 overflow-y-auto px-6 py-10 text-center outline-none"
-    >
-      {children}
-      <div className="flex shrink-0 justify-center pt-3">{action}</div>
+    <div ref={ref} tabIndex={-1} className="nessa-setup-pane nessa-setup-light">
+      <StepDots
+        className="nessa-setup-dots"
+        count={DOTTED_STEPS.length}
+        current={dotFor(step)}
+      />
+      <div className="my-auto flex flex-col gap-5 pt-4">{children}</div>
     </div>
   )
 })
@@ -232,6 +205,7 @@ function AgentOption({
   startup,
   selected,
   onSelect,
+  onPoint,
 }: {
   id: AgentId
   name: string
@@ -240,8 +214,11 @@ function AgentOption({
   startup: GatewayStartupStatus
   selected: boolean
   onSelect: (id: AgentId) => void
+  /** Told when the row is pointed at or focused, and when it no longer is. */
+  onPoint: (id: FigureId | undefined) => void
 }) {
   const note = readinessNote(readiness, failure, startup)
+  const figure: FigureId | undefined = id === "claude" || id === "codex" ? id : undefined
   return (
     <button
       type="button"
@@ -258,9 +235,13 @@ function AgentOption({
         if (note) return
         onSelect(id)
       }}
-      className="group flex w-full items-center gap-3 rounded-xl border border-white/15 bg-background/45 p-3 text-left backdrop-blur-md transition-[background-color,border-color] outline-none hover:bg-background/65 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 aria-disabled:cursor-default aria-disabled:opacity-60 aria-disabled:hover:bg-background/45 aria-pressed:border-ring aria-pressed:bg-background/75"
+      onPointerEnter={() => onPoint(figure)}
+      onPointerLeave={() => onPoint(undefined)}
+      onFocus={() => onPoint(figure)}
+      onBlur={() => onPoint(undefined)}
+      className={`group ${OPTION} aria-disabled:cursor-default aria-disabled:opacity-60`}
     >
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground">
+      <span className="flex size-8 shrink-0 items-center justify-center text-foreground">
         <AgentMark id={id} name={name} />
       </span>
       <span className="nessa-text-4 font-medium text-foreground">{name}</span>
@@ -294,68 +275,6 @@ function AgentOption({
     </button>
   )
 }
-
-/**
- * The wash every setup step is painted on.
- *
- * It is decorative: inert to the pointer, hidden from assistive technology by
- * the component, and still under a reduced-motion preference. Its pigments
- * travel, so anything laid straight on it has to stay legible wherever they
- * go — plain white type over the palette's own lighter stops measures about
- * 1.7:1, which is why the type carries a stacked shadow rather than one soft
- * one: a tight, near-opaque layer close to the glyph for an edge that holds
- * regardless of what is behind it, and a wider, softer one for depth.
- */
-function SetupStage({ children }: { children: React.ReactNode }) {
-  return (
-    <MorphingMeshGradient
-      colors={morphingMeshGradientPresets.glass}
-      type="mesh"
-      speed={1.1}
-      blur={88}
-      className="nessa-setup-stage size-full"
-    >
-      {/* Setup's controls are always the light treatment: a dark pill over
-        these pigments reads as a hole punched in the wash, and the light
-        palette is what the design system's own components are built against
-        here. Headings set their colour explicitly for the same reason. */}
-      <div className="nessa-setup-light relative flex size-full min-h-0 items-center justify-center p-5">
-        {children}
-      </div>
-    </MorphingMeshGradient>
-  )
-}
-
-/**
- * The glass pane for a step that carries more than a line and a button.
- *
- * A list of options cannot be read off the moving wash, so it gets a surface.
- * The pane is scoped to the light palette because a dark slab over these
- * pigments reads as a hole rather than glass, and because its own components
- * then keep the contrast they were built for.
- *
- * It scrolls rather than clips. At a large text size or a high UI scale the
- * list and its Continue button are taller than the window, and a pane that
- * hid the button made setup impossible to finish.
- */
-const SetupPanel = React.forwardRef<HTMLDivElement, { children: React.ReactNode }>(
-  function SetupPanel({ children }, ref) {
-    return (
-      <div
-        ref={ref}
-        tabIndex={-1}
-        className="nessa-setup-light relative flex max-h-full w-full max-w-sm flex-col gap-5 overflow-y-auto rounded-2xl border border-white/40 bg-background/60 p-6 text-foreground shadow-2xl ring-1 ring-black/5 outline-none backdrop-blur-2xl backdrop-saturate-150"
-      >
-        {/* The lit top edge that reads as a pane of glass catching light. */}
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/45 to-transparent"
-        />
-        {children}
-      </div>
-    )
-  },
-)
 
 /** Sentences for one host tag. `enabled` is the only claim of logged-out operation. */
 function lingerCopy(shown: LingerShown): { heading: string; detail: string } {
@@ -408,91 +327,145 @@ export const LingerStep = React.forwardRef<
   const { heading, detail } = lingerCopy(shown)
   const manual = shown === "refused" || shown === "failed"
   return (
-    <SetupStage>
-      <SetupPanel ref={ref}>
-        <div
-          className="flex flex-col gap-3 text-center"
-          data-linger={shown}
-          data-linger-claim={claim}
+    <SetupPane ref={ref} step="linger">
+      <div className="flex flex-col gap-3" data-linger={shown} data-linger-claim={claim}>
+        <h1 id={SETUP_HEADING_ID} className={PANE_HEADING}>
+          {heading}
+        </h1>
+        <p
+          role="status"
+          aria-live="polite"
+          className="nessa-text-3 text-muted-foreground"
         >
-          <h1
-            id={SETUP_HEADING_ID}
-            className="nessa-text-6 font-semibold text-foreground"
-          >
-            {heading}
-          </h1>
-          <p
-            role="status"
-            aria-live="polite"
-            className="nessa-text-3 text-muted-foreground"
-          >
-            {detail}
+          {detail}
+        </p>
+        {manual ? (
+          <p className="nessa-text-3 text-muted-foreground">
+            You can run <code>loginctl enable-linger</code>.
           </p>
-          {manual ? (
-            <p className="nessa-text-3 text-muted-foreground">
-              You can run <code>loginctl enable-linger</code>.
-            </p>
-          ) : null}
-        </div>
-        {shown === "offer" ? (
-          <>
-            <Button
-              size="lg"
-              className={PANE_BUTTON}
-              disabled={pending}
-              onClick={onAccept}
-            >
-              Keep it running
-            </Button>
-            <Button
-              size="lg"
-              className={PANE_BUTTON}
-              disabled={pending}
-              onClick={onFinish}
-            >
-              Only while I’m signed in
-            </Button>
-          </>
         ) : null}
-        {shown === "refused" || shown === "failed" ? (
-          <>
-            <Button
-              size="lg"
-              className={PANE_BUTTON}
-              disabled={pending}
-              onClick={onAccept}
-            >
-              Try again
-            </Button>
-            <Button
-              size="lg"
-              className={PANE_BUTTON}
-              disabled={pending}
-              onClick={onFinish}
-            >
-              Start using Nessa
-            </Button>
-          </>
-        ) : null}
-        {shown === "enabled" || shown === "unsupported" || shown === "not-applicable" ? (
+      </div>
+      {shown === "offer" ? (
+        <>
+          <Button size="lg" className={PANE_BUTTON} disabled={pending} onClick={onAccept}>
+            Keep it running
+          </Button>
+          <Button size="lg" className={PANE_BUTTON} disabled={pending} onClick={onFinish}>
+            Only while I’m signed in
+          </Button>
+        </>
+      ) : null}
+      {shown === "refused" || shown === "failed" ? (
+        <>
+          <Button size="lg" className={PANE_BUTTON} disabled={pending} onClick={onAccept}>
+            Try again
+          </Button>
           <Button size="lg" className={PANE_BUTTON} disabled={pending} onClick={onFinish}>
             Start using Nessa
           </Button>
-        ) : null}
-      </SetupPanel>
-    </SetupStage>
+        </>
+      ) : null}
+      {shown === "enabled" || shown === "unsupported" || shown === "not-applicable" ? (
+        <Button size="lg" className={PANE_BUTTON} disabled={pending} onClick={onFinish}>
+          Start using Nessa
+        </Button>
+      ) : null}
+    </SetupPane>
   )
 })
 
 /**
- * First-run setup for the panel.
+ * Whether the agent picker is what setup is showing. A gateway that did not
+ * come up replaces it with a retry, so the picture beside it has no agents to
+ * stand there either.
+ */
+export function showsPicker(
+  state: OnboardingState,
+  gatewayStartup: GatewayStartupStatus,
+): boolean {
+  return (
+    state.step === "agent" &&
+    gatewayStartup.state !== "failed" &&
+    gatewayStartup.state !== "unavailable"
+  )
+}
+
+/**
+ * The agents standing on the picture beside the picker. Pointing at a row
+ * brings its figure to life and choosing one brings it forward; Local AI is
+ * there too, as what is coming. Decorative: the rows say all of it.
+ */
+export function AgentFigures({
+  chosen,
+  pointed,
+}: {
+  chosen: AgentId | undefined
+  pointed: FigureId | undefined
+}) {
+  return FIGURES.map((id) => (
+    <span
+      key={id}
+      className="nessa-setup-figure"
+      data-pointed={pointed === id ? "" : undefined}
+      data-chosen={chosen === id ? "" : undefined}
+      style={
+        {
+          left: `${FIGURE_SPOTS[id].x * 100}%`,
+          top: `${FIGURE_SPOTS[id].y * 100}%`,
+        } as React.CSSProperties
+      }
+    >
+      <AgentFigure
+        agent={id}
+        lively={pointed === id || chosen === id}
+        className="size-full"
+      />
+    </span>
+  ))
+}
+
+/** The Local AI row: listed so the picker says it is coming, and never
+ * choosable. Named with what it is waiting on, like any agent that cannot be
+ * picked, and still focusable so a keyboard reaches that reason. */
+function LocalAiOption({ onPoint }: { onPoint: (id: FigureId | undefined) => void }) {
+  return (
+    <button
+      type="button"
+      aria-disabled
+      aria-label="Local AI, coming soon"
+      onPointerEnter={() => onPoint("local")}
+      onPointerLeave={() => onPoint(undefined)}
+      onFocus={() => onPoint("local")}
+      onBlur={() => onPoint(undefined)}
+      className={`${OPTION} aria-disabled:cursor-default aria-disabled:opacity-60 aria-disabled:hover:bg-card/55`}
+    >
+      <span className="flex size-8 shrink-0 items-center justify-center text-foreground">
+        <Cpu aria-hidden className="size-5" />
+      </span>
+      <span className="nessa-text-4 font-medium text-foreground">Local AI</span>
+      <span
+        aria-hidden="true"
+        className="ml-auto nessa-text-2 whitespace-nowrap text-muted-foreground"
+      >
+        Coming soon
+      </span>
+    </button>
+  )
+}
+
+/**
+ * First-run setup, as the step on the pane and what the picture shows beside
+ * it.
  *
- * This renders and dispatches; it holds no state and decides nothing. Choosing
- * an agent records the choice and nothing more — no credential is collected and
- * no provider is started — so the copy promises setup, not a ready agent.
+ * This renders and dispatches; it holds no setup state and decides nothing.
+ * Choosing an agent records the choice and nothing more — no credential is
+ * collected and no provider is started — so the copy promises setup, not a
+ * ready agent.
  */
 export function Onboarding({
   state,
+  open = true,
+  onPoint = () => {},
   apiKeys,
   installations,
   gatewayStartup,
@@ -510,6 +483,12 @@ export function Onboarding({
   runtimeCopy,
 }: {
   state: OnboardingState
+  /** Whether the window has opened. Until it has, the welcome waits to type
+   * and nothing takes the focus. Defaults to true. */
+  open?: boolean
+  /** Told which agent's row is pointed at or focused, so the light under its
+   * figure can answer. */
+  onPoint?: (id: FigureId | undefined) => void
   /** Secure-store effect injected by native setup composition. */
   apiKeys?: AgentApiKeySink
   installations?: AgentInstallations
@@ -541,41 +520,54 @@ export function Onboarding({
   // Called unconditionally, as a hook must be; it only listens on the step
   // that has keys to light.
   const held = useHeldKeys(state.step === "summon")
+  const point = onPoint
+  // Whether the welcome has finished typing its name: the line under it and
+  // its way on come in then. Back to the welcome types it again, so the rest
+  // waits for it again rather than standing under half a name.
+  const [typed, setTyped] = React.useState(false)
+  React.useEffect(() => {
+    if (state.step !== "welcome") setTyped(false)
+  }, [state.step])
 
   // Each step is a different subtree, so a button that moves setup on takes its
   // own focus with it and leaves the caret on `<body>`. A keyboard user then
   // tabs from the top of the document every time and a screen reader is told
-  // nothing at all. The new step takes the focus instead.
+  // nothing at all. The new step takes the focus instead — once the window is
+  // open, because a pane still hidden behind the glow cannot hold it.
   const step = React.useRef<HTMLDivElement>(null)
   React.useEffect(() => {
-    step.current?.focus()
-  }, [state.step])
+    if (open) step.current?.focus()
+  }, [state.step, open])
 
   if (state.step === "welcome") {
     return (
-      <SetupStage>
-        <SetupStep
-          ref={step}
-          action={
-            <Button
-              size="lg"
-              className={PILL}
-              onClick={onBegin}
-              // After the last of the line, so the sentence finishes being
-              // said before anything is asked.
-              style={
-                {
-                  "--nessa-word": revealChunks("Welcome to Nessa").length,
-                } as React.CSSProperties
-              }
-            >
-              Get started
-            </Button>
-          }
-        >
-          <SetupHeading>Welcome to Nessa</SetupHeading>
-        </SetupStep>
-      </SetupStage>
+      <SetupPane ref={step} step={state.step}>
+        <div className="flex flex-col gap-3" data-typed={typed ? "" : undefined}>
+          <h1
+            id={SETUP_HEADING_ID}
+            aria-label="Welcome to Nessa"
+            className={PANE_HEADING}
+          >
+            <TypeIn
+              text="Welcome to Nessa"
+              plain={11}
+              play={open}
+              delay={250}
+              onTyped={() => setTyped(true)}
+            />
+          </h1>
+          <p className="nessa-setup-after nessa-text-5 text-muted-foreground">
+            Your personal sidekick
+          </p>
+          <Button
+            size="lg"
+            className={`nessa-setup-after mt-4 ${PANE_PILL}`}
+            onClick={onBegin}
+          >
+            Get started
+          </Button>
+        </div>
+      </SetupPane>
     )
   }
 
@@ -590,48 +582,43 @@ export function Onboarding({
     // no exit but abandoning setup, which records nothing and starts over.
     const taught = state.summonTaught === true || !accelerator
     return (
-      <SetupStage>
-        <SetupStep
-          ref={step}
-          action={
-            taught ? (
-              <Button size="lg" className={PILL} onClick={onFinish}>
-                Start using Nessa
-              </Button>
-            ) : (
-              <Button
-                variant="ghost"
-                size="lg"
-                onClick={onFinish}
-                className="nessa-setup-arrive rounded-full px-6 text-white/85 hover:bg-white/15 hover:text-white"
-              >
-                Skip this step
-              </Button>
-            )
-          }
-        >
-          <h1
-            id={SETUP_HEADING_ID}
-            className="nessa-setup-title nessa-setup-arrive font-semibold text-white"
+      <SetupPane ref={step} step={state.step}>
+        <h1 id={SETUP_HEADING_ID} className={`nessa-setup-arrive ${PANE_HEADING}`}>
+          {heading}
+        </h1>
+        {/* The lesson's only report is that the heading changed, which is a
+          change nothing announces. A press of a global shortcut is exactly
+          the moment someone needs telling it registered. */}
+        <p role="status" aria-live="polite" className="sr-only">
+          {heading}
+        </p>
+        {accelerator ? (
+          <Keycaps
+            keys={accelerator}
+            platform={platform}
+            pressed={state.summon}
+            held={held}
+          />
+        ) : null}
+        {taught ? (
+          <Button
+            size="lg"
+            className={`nessa-setup-arrive ${PANE_PILL}`}
+            onClick={onFinish}
           >
-            {heading}
-          </h1>
-          {/* The lesson's only report is that the heading changed, which is a
-            change nothing announces. A press of a global shortcut is exactly
-            the moment someone needs telling it registered. */}
-          <p role="status" aria-live="polite" className="sr-only">
-            {heading}
-          </p>
-          {accelerator ? (
-            <Keycaps
-              keys={accelerator}
-              platform={platform}
-              pressed={state.summon}
-              held={held}
-            />
-          ) : null}
-        </SetupStep>
-      </SetupStage>
+            Start using Nessa
+          </Button>
+        ) : (
+          <Button
+            variant="ghost"
+            size="lg"
+            onClick={onFinish}
+            className={`nessa-setup-arrive ${PANE_PILL} -ml-3 text-muted-foreground`}
+          >
+            Skip this step
+          </Button>
+        )}
+      </SetupPane>
     )
   }
 
@@ -651,32 +638,23 @@ export function Onboarding({
   // be checked, chosen or started until it does, so the list gives way to it
   // rather than printing one failure beside every agent. The host's own words
   // for what went wrong are for its log, not for this screen.
-  if (gatewayStartup.state === "failed" || gatewayStartup.state === "unavailable") {
+  if (!showsPicker(state, gatewayStartup)) {
     return (
-      <SetupStage>
-        <SetupPanel ref={step}>
-          {/* This replaces the list without the step changing, so nothing
-            moves focus to it; the failure has to announce itself. */}
-          <div
-            role="status"
-            aria-live="polite"
-            className="flex flex-col items-center gap-3 pt-2 text-center"
-          >
-            <span className="flex size-11 items-center justify-center rounded-full border border-border bg-card text-foreground">
-              <CircleAlert aria-hidden className="size-5" />
-            </span>
-            <h1
-              id={SETUP_HEADING_ID}
-              className="nessa-text-6 font-semibold text-foreground"
-            >
-              {COULD_NOT_START}
-            </h1>
-          </div>
-          <Button size="lg" className={PANE_BUTTON} onClick={onRetryGateway}>
-            Try starting Nessa again
-          </Button>
-        </SetupPanel>
-      </SetupStage>
+      <SetupPane ref={step} step={state.step}>
+        {/* This replaces the list without the step changing, so nothing
+          moves focus to it; the failure has to announce itself. */}
+        <div role="status" aria-live="polite" className="flex flex-col gap-3">
+          <span className="flex size-11 items-center justify-center rounded-full border border-border bg-card text-foreground">
+            <CircleAlert aria-hidden className="size-5" />
+          </span>
+          <h1 id={SETUP_HEADING_ID} className={PANE_HEADING}>
+            {COULD_NOT_START}
+          </h1>
+        </div>
+        <Button size="lg" className={PANE_BUTTON} onClick={onRetryGateway}>
+          Try starting Nessa again
+        </Button>
+      </SetupPane>
     )
   }
 
@@ -687,101 +665,96 @@ export function Onboarding({
   // stuck: every agent's mark says so, and the list fills in once it is up.
   const stuck =
     gatewayStartup.state !== "starting" &&
-    !AGENT_CHOICES.some((choice) => isChoosable(state, choice.id))
+    !SETUP_AGENTS.some((choice) => isChoosable(state, choice.id))
   return (
-    <SetupStage>
-      <SetupPanel ref={step}>
-        <h1 id={SETUP_HEADING_ID} className="nessa-text-6 font-semibold text-foreground">
-          Choose an agent
-        </h1>
-        <RuntimeCopyBar progress={runtimeCopy} />
-        <div role="group" aria-label="Agent" className="flex flex-col gap-2">
-          {AGENT_CHOICES.map((choice) => {
-            const readiness = agentReadiness(state, choice.id)
-            const keyAgent =
-              choice.id === "claude" || choice.id === "opencode" ? choice.id : undefined
-            const canSaveApiKey =
-              keyAgent !== undefined &&
-              readiness === "needs-authentication" &&
-              apiKeys !== undefined &&
-              (gatewayStartup.state === "ready" || gatewayStartup.state === "unmanaged")
-            return (
-              <React.Fragment key={choice.id}>
-                <AgentOption
-                  id={choice.id}
-                  name={choice.name}
-                  readiness={readiness}
-                  failure={state.readinessFailure}
-                  startup={gatewayStartup}
-                  selected={state.agent === choice.id}
-                  onSelect={onChoose}
-                />
-                {canSaveApiKey ? (
-                  <div className="flex flex-col gap-2">
-                    <AgentApiKeyForm
-                      agent={keyAgent}
-                      agentName={choice.name}
-                      // A cost disclosure, so it stays — but beside the key it
-                      // is about, not under the list for everyone who never
-                      // enters one.
-                      hint={
-                        choice.id === "opencode"
-                          ? "OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered."
-                          : undefined
-                      }
-                      onSave={credentials.save}
-                      onSaved={onRecheck}
-                    />
-                  </div>
-                ) : null}
-              </React.Fragment>
-            )
-          })}
-        </div>
-        {installations ? (
-          <AgentDownloads source={installations} onChanged={onRecheck} />
-        ) : null}
-        <AgentApiKeyAuditWarning failure={credentials.auditFailure} />
+    <SetupPane ref={step} step={state.step}>
+      <h1 id={SETUP_HEADING_ID} className={PANE_HEADING}>
+        Choose an agent
+      </h1>
+      <RuntimeCopyBar progress={runtimeCopy} />
+      <div role="group" aria-label="Agent" className="flex flex-col gap-2">
+        {SETUP_AGENTS.map((choice) => {
+          const readiness = agentReadiness(state, choice.id)
+          const keyAgent = choice.id === "claude" ? choice.id : undefined
+          const canSaveApiKey =
+            keyAgent !== undefined &&
+            readiness === "needs-authentication" &&
+            apiKeys !== undefined &&
+            (gatewayStartup.state === "ready" || gatewayStartup.state === "unmanaged")
+          return (
+            <React.Fragment key={choice.id}>
+              <AgentOption
+                id={choice.id}
+                name={choice.name}
+                readiness={readiness}
+                failure={state.readinessFailure}
+                startup={gatewayStartup}
+                selected={state.agent === choice.id}
+                onSelect={onChoose}
+                onPoint={point}
+              />
+              {canSaveApiKey ? (
+                <div className="flex flex-col gap-2">
+                  <AgentApiKeyForm
+                    agent={keyAgent}
+                    agentName={choice.name}
+                    onSave={credentials.save}
+                    onSaved={onRecheck}
+                  />
+                </div>
+              ) : null}
+            </React.Fragment>
+          )
+        })}
+        <LocalAiOption onPoint={point} />
+      </div>
+      {installations ? (
+        <AgentDownloads
+          source={installations}
+          agents={SETUP_AGENTS.map((choice) => choice.id)}
+          onChanged={onRecheck}
+        />
+      ) : null}
+      <AgentApiKeyAuditWarning failure={credentials.auditFailure} />
+      {stuck ? (
+        // Said once, under the list, rather than repeated on every agent:
+        // each agent's mark says what it is waiting on, and this says what to
+        // do about it. Polite rather than assertive, because it appears while
+        // the list above it is being read.
+        <p
+          role="status"
+          aria-live="polite"
+          className="nessa-text-2 text-muted-foreground"
+        >
+          {state.readinessFailure
+            ? "Couldn’t check your agents."
+            : "Install or sign in to an agent."}
+        </p>
+      ) : null}
+      {/* One column of identical buttons, so a second one lines up with
+        Continue instead of sitting beside it at a different size. */}
+      <div className="flex flex-col gap-2">
         {stuck ? (
-          // Said once, under the list, rather than repeated on every agent:
-          // each agent's mark says what it is waiting on, and this says what to
-          // do about it. Polite rather than assertive, because it appears while
-          // the list above it is being read.
-          <p
-            role="status"
-            aria-live="polite"
-            className="text-center nessa-text-2 text-muted-foreground"
-          >
-            {state.readinessFailure
-              ? "Couldn’t check your agents."
-              : "Install or sign in to an agent."}
-          </p>
-        ) : null}
-        {/* One column of identical buttons, so a second one lines up with
-          Continue instead of sitting beside it at a different size. */}
-        <div className="flex flex-col gap-2">
-          {stuck ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="lg"
-              className={PANE_BUTTON}
-              disabled={checking}
-              onClick={onRecheck}
-            >
-              {checking ? "Checking…" : "Check again"}
-            </Button>
-          ) : null}
           <Button
+            type="button"
+            variant="outline"
             size="lg"
             className={PANE_BUTTON}
-            disabled={!state.agent}
-            onClick={onConfirm}
+            disabled={checking}
+            onClick={onRecheck}
           >
-            Continue
+            {checking ? "Checking…" : "Check again"}
           </Button>
-        </div>
-      </SetupPanel>
-    </SetupStage>
+        ) : null}
+        <Button
+          size="lg"
+          className={PANE_BUTTON}
+          disabled={!state.agent}
+          onClick={onConfirm}
+        >
+          Continue
+        </Button>
+      </div>
+    </SetupPane>
   )
 }

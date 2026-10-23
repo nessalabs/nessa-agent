@@ -5,12 +5,12 @@ import { ChevronLeft, X } from "lucide-react"
  * floating in the window's top corners, Back on the left and Close on the
  * right, where a sheet on a phone keeps them.
  *
- * It belongs to the window rather than to the step, for two reasons. A control
- * that is always there should not be re-mounted by every step, and — the one
- * that matters — the wash the steps are painted on fades in behind the whole
- * opening, which took the only visible exit with it. Sitting on the window
- * instead, these are on screen as soon as the window is, which is what a
- * full-screen surface covering the menu bar owes the person looking at it.
+ * It belongs to the window rather than to the step, so a control that is
+ * always there is not re-mounted by every step. It comes in with the pane once
+ * the window has formed (`styles.css`): over the glow, buttons hanging in
+ * empty space gave the shape away before the light did. Escape leaves from the
+ * first frame. While the finished window flies into the menu bar neither is
+ * drawn, as there is nothing left to go back to or close.
  *
  * Drawn window controls were never convincing — they have to reimplement every
  * state the system already draws, and the one that could not do anything had to

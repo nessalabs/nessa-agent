@@ -11,6 +11,7 @@ use tauri::{
     AppHandle, Emitter, Manager, Wry,
 };
 
+use serde::Serialize;
 use std::io;
 
 use crate::composition::HostDependencies;
@@ -150,9 +151,80 @@ pub fn create(app: &AppHandle, deps: &HostDependencies) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Where the menu bar icon is, in the setup window's own CSS pixels.
+///
+/// The finished setup window gathers into a small light and flies here, so it
+/// lands on the icon it becomes rather than somewhere near it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct TrayPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// The menu bar icon's centre, as a point in the setup window's page.
+///
+/// None when there is nothing to aim at: no tray, no setup window, or a system
+/// that does not say where its tray items are (Linux reports no rect). The
+/// page then aims at the top right corner, where the icon is on every desktop
+/// this runs on.
+#[tauri::command]
+pub fn setup_tray_point(app: AppHandle) -> Option<TrayPoint> {
+    let tray = app.tray_by_id(TRAY_ID)?;
+    let rect = tray.rect().ok()??;
+    let window = app.get_webview_window(panel::SETUP_WINDOW)?;
+    let scale = window.scale_factor().ok()?;
+    let origin = window.inner_position().ok()?;
+    let position = rect.position.to_physical::<f64>(scale);
+    let size = rect.size.to_physical::<f64>(scale);
+    tray_point(
+        (
+            position.x + size.width / 2.0,
+            position.y + size.height / 2.0,
+        ),
+        (f64::from(origin.x), f64::from(origin.y)),
+        scale,
+    )
+}
+
+/// A point on the screen in physical pixels, as CSS pixels from the page's
+/// top left corner.
+fn tray_point(centre: (f64, f64), origin: (f64, f64), scale: f64) -> Option<TrayPoint> {
+    let finite = [centre.0, centre.1, origin.0, origin.1, scale]
+        .iter()
+        .all(|value| value.is_finite());
+    if !finite || scale <= 0.0 {
+        return None;
+    }
+    Some(TrayPoint {
+        x: (centre.0 - origin.0) / scale,
+        y: (centre.1 - origin.1) / scale,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tray_point_is_measured_from_the_page_in_css_pixels() {
+        // A Retina screen: the icon's centre at (2800, 22) physical, the page
+        // at the screen's origin.
+        assert_eq!(
+            tray_point((2800.0, 22.0), (0.0, 0.0), 2.0),
+            Some(TrayPoint { x: 1400.0, y: 11.0 })
+        );
+        // A window that does not start at the screen's origin.
+        assert_eq!(
+            tray_point((1300.0, 12.0), (100.0, -20.0), 1.0),
+            Some(TrayPoint { x: 1200.0, y: 32.0 })
+        );
+    }
+
+    #[test]
+    fn no_tray_point_is_made_up_from_a_broken_scale() {
+        assert_eq!(tray_point((10.0, 10.0), (0.0, 0.0), 0.0), None);
+        assert_eq!(tray_point((f64::NAN, 10.0), (0.0, 0.0), 1.0), None);
+    }
     use crate::settings::testing::in_memory;
 
     /// What the item ticks is what reached the disk. Previously this rule could

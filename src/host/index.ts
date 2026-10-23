@@ -31,6 +31,7 @@ export {
   onAttachmentDropped,
   closeSetupWindow,
   finishSetupWindow,
+  setupTrayPoint,
   gatewayStartup,
   hostStartup,
   lingerAccept,
