@@ -85,6 +85,10 @@ fn every_issuance_cause_round_trips_without_purpose_inference() {
         let decoded = serde_json::from_slice(&json).unwrap();
         let origin = CredentialOrigin::restore(decoded, &credential).unwrap();
         assert_eq!(origin.cause(), cause);
+        assert_eq!(
+            origin.requires_webhook_recovery(),
+            cause == IssuanceCause::AdminIssue
+        );
         assert_eq!(origin.transition(), &original);
     }
 }

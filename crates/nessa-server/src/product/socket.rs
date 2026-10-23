@@ -429,6 +429,7 @@ where
 fn credential_admin_code(error: CredentialAdminError) -> &'static str {
     match error {
         CredentialAdminError::Conflict => "credential_conflict",
+        CredentialAdminError::OriginRecoveryRequired => "credential_conflict",
         CredentialAdminError::Capacity => "credential_capacity",
         CredentialAdminError::NotFound => "credential_not_found",
         CredentialAdminError::Unavailable => "credential_store_unavailable",
@@ -4290,6 +4291,10 @@ mod tests {
     async fn administration_reports_typed_rejections_from_a_substitute_adapter() {
         for (error, code) in [
             (CredentialAdminError::Conflict, "credential_conflict"),
+            (
+                CredentialAdminError::OriginRecoveryRequired,
+                "credential_conflict",
+            ),
             (CredentialAdminError::Capacity, "credential_capacity"),
             (CredentialAdminError::NotFound, "credential_not_found"),
             (

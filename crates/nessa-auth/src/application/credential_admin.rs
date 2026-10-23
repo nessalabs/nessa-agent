@@ -112,6 +112,9 @@ pub enum CredentialAdminError {
     Capacity,
     /// The requested credential does not exist.
     NotFound,
+    /// A matching webhook command has an ambiguous historical issuance origin.
+    /// Preserve its evidence and revoke/reissue instead of retrying unchanged.
+    OriginRecoveryRequired,
     /// The authority could not read or durably commit its state.
     Unavailable,
 }

@@ -147,6 +147,9 @@ impl RegisterWebhook<'_> {
             .map_err(|_| RegistrationFailure::Inconsistent)?;
         let outcome = match self.credentials.issue(intent.issue.clone()).await {
             Ok(outcome) => outcome,
+            Err(CredentialAdminError::OriginRecoveryRequired) => {
+                return Err(RegistrationFailure::OriginRecoveryRequired);
+            }
             Err(error @ (CredentialAdminError::Conflict | CredentialAdminError::Capacity)) => {
                 // These auth outcomes did not issue this command. An uncertain
                 // storage failure is handled below without discarding intent.
@@ -260,7 +263,7 @@ impl RegisterWebhook<'_> {
             return Err(RegistrationFailure::Inconsistent);
         }
         let origin = &hold.snapshot.origin;
-        if origin.cause() == IssuanceCause::AdminIssue {
+        if origin.requires_webhook_recovery() {
             return Err(RegistrationFailure::OriginRecoveryRequired);
         }
         if !origin.matches(&credential, hold.snapshot.revision)

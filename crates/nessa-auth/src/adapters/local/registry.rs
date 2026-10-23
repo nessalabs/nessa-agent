@@ -124,6 +124,8 @@ pub enum LocalStoreError {
     Capacity,
     Conflict,
     NotFound,
+    /// A matching webhook receipt retains an older ambiguous issuance origin.
+    OriginRecoveryRequired,
     Io(io::Error),
 }
 
@@ -164,6 +166,8 @@ impl fmt::Display for LocalStoreError {
             Self::Capacity => formatter.write_str("credential registry capacity reached"),
             Self::Conflict => formatter.write_str("credential command conflicts with stored state"),
             Self::NotFound => formatter.write_str("credential was not found"),
+            Self::OriginRecoveryRequired => formatter
+                .write_str("credential origin requires explicit revoke and reissue recovery"),
             Self::Io(error) => write!(formatter, "credential registry I/O failed: {error}"),
         }
     }
@@ -624,6 +628,14 @@ impl LocalCredentialStore {
                 .ok_or(LocalStoreError::Corrupt)?
                 .metadata
                 .clone();
+            if request.purpose == CredentialIssuePurpose::Webhook {
+                let credential = domain_credential(&metadata)?;
+                let origin = credential_origin(current, &credential)
+                    .map_err(|_| LocalStoreError::Corrupt)?;
+                if origin.requires_webhook_recovery() {
+                    return Err(LocalStoreError::OriginRecoveryRequired);
+                }
+            }
             let transitions =
                 transitions_of_command(current, &request.issuer_principal_id, &request.request_id);
             if transitions.is_empty() {
@@ -1266,18 +1278,7 @@ impl AccessReader for LocalCredentialStore {
                     })
                     .cloned()
                     .ok_or(AccessError::IdentityMismatch)?;
-                let original = registry
-                    .transitions
-                    .iter()
-                    .find(|transition| transition.credential_id == stored.metadata.id)
-                    .ok_or(AccessError::Unavailable)?;
-                let origin = crate::application::origin::CredentialOrigin::restore(
-                    original.clone(),
-                    &credential,
-                )?;
-                if !origin.matches(&credential, registry.revision) {
-                    return Err(AccessError::Unavailable);
-                }
+                let origin = credential_origin(registry, &credential)?;
                 Ok(AccessSnapshot {
                     origin,
                     credential,
@@ -1365,6 +1366,7 @@ impl From<LocalStoreError> for CredentialAdminError {
             LocalStoreError::Conflict => Self::Conflict,
             LocalStoreError::Capacity => Self::Capacity,
             LocalStoreError::NotFound => Self::NotFound,
+            LocalStoreError::OriginRecoveryRequired => Self::OriginRecoveryRequired,
             LocalStoreError::Locked
             | LocalStoreError::NotInitialized
             | LocalStoreError::AlreadyInitialized
@@ -1373,6 +1375,25 @@ impl From<LocalStoreError> for CredentialAdminError {
             | LocalStoreError::Io(_) => Self::Unavailable,
         }
     }
+}
+
+/// Restore the authority's original fact from the same locked/published registry
+/// as current metadata. Receipt replay and access snapshots share this decoder.
+fn credential_origin(
+    registry: &Registry,
+    credential: &Credential,
+) -> Result<crate::application::origin::CredentialOrigin, AccessError> {
+    let original = registry
+        .transitions
+        .iter()
+        .find(|transition| transition.credential_id == credential.id().as_str())
+        .ok_or(AccessError::Unavailable)?;
+    let origin =
+        crate::application::origin::CredentialOrigin::restore(original.clone(), credential)?;
+    if !origin.matches(credential, registry.revision) {
+        return Err(AccessError::Unavailable);
+    }
+    Ok(origin)
 }
 
 fn issue_secret(credential_id: &str) -> Result<(CredentialEvidence, String), LocalStoreError> {

@@ -9,7 +9,7 @@ use nessa_auth::application::{
     },
     session::{AuthenticateSession, ResumeSession},
 };
-use nessa_auth::domain::AudienceId;
+use nessa_auth::domain::{AudienceId, IssuanceCause};
 
 struct OpaqueSession(CredentialId);
 impl SessionVerifier for OpaqueSession {
@@ -161,45 +161,69 @@ async fn bearer_never_enters_registration_result_database_or_audit_and_replay_is
 
 #[tokio::test]
 async fn ambiguous_historical_admin_origin_is_preserved_and_requires_recovery() {
-    let f = Registered::new();
-    let proposed = f.proposed();
-    let intent = f.store.reserve(proposed.clone()).await.unwrap();
-    let _issued = f.auth.issue_sync(intent.issue).unwrap();
-    let private = f._root.path().join("private");
-    drop(f.auth);
-    let path = private.join("auth.json");
-    let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    saved["transitions"][1]["cause"]["cause"] = json!("admin_issue");
-    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
-    let original = std::fs::read(&path).unwrap();
-    let auth = LocalCredentialStore::open(
-        &private,
-        "auth.json",
-        Arc::new(CedarPolicyEvaluator::new().unwrap()),
-    )
-    .unwrap();
-    let command = RegisterWebhook {
-        credentials: &auth,
-        admission: &auth,
-        intents: &f.store,
-        clock: f.clock.as_ref(),
-    };
-    assert_eq!(
-        command.execute(proposed).await,
-        Err(RegistrationFailure::OriginRecoveryRequired)
-    );
-    assert_eq!(
-        f.store
-            .owner
-            .connection
-            .lock()
-            .unwrap()
-            .query_row("SELECT COUNT(*) FROM registrations", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
-    assert_eq!(std::fs::read(&path).unwrap(), original);
+    let changes: [fn(&mut Value); 5] = [
+        |_| {},
+        |v| v["transitions"][1]["correlation"] = Value::Null,
+        |v| {
+            v["transitions"][1]["initiator"] = json!({"kind":"local_operator"});
+            v["transitions"][1]["correlation"] = Value::Null;
+        },
+        |v| v["transitions"][1]["initiator"] = json!({"kind":"principal","id":"hook"}),
+        |v| v["transitions"][1]["correlation"] = json!("original-nonreceipt-command"),
+    ];
+    for change in changes {
+        let f = Registered::new();
+        let proposed = f.proposed();
+        let intent = f.store.reserve(proposed.clone()).await.unwrap();
+        let request = intent.issue;
+        drop(f.auth.issue_sync(request.clone()).unwrap());
+        let private = f._root.path().join("private");
+        drop(f.auth);
+        let path = private.join("auth.json");
+        let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        saved["transitions"][1]["cause"]["cause"] = json!("admin_issue");
+        change(&mut saved);
+        std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let auth = LocalCredentialStore::open(
+            &private,
+            "auth.json",
+            Arc::new(CedarPolicyEvaluator::new().unwrap()),
+        )
+        .unwrap();
+        let id = CredentialId::new(&request.credential_id).unwrap();
+        assert_eq!(
+            auth.read(&id).await.unwrap().origin.cause(),
+            IssuanceCause::AdminIssue
+        );
+        assert!(matches!(
+            auth.issue(request).await,
+            Err(CredentialAdminError::OriginRecoveryRequired)
+        ));
+        let command = RegisterWebhook {
+            credentials: &auth,
+            admission: &auth,
+            intents: &f.store,
+            clock: f.clock.as_ref(),
+        };
+        for _ in 0..2 {
+            assert_eq!(
+                command.execute(proposed.clone()).await,
+                Err(RegistrationFailure::OriginRecoveryRequired)
+            );
+            let connection = f.store.owner.connection.lock().unwrap();
+            for (table, expected) in [("registrations", 0), ("registration_intents", 1)] {
+                assert_eq!(
+                    connection
+                        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row
+                            .get::<_, i64>(0))
+                        .unwrap(),
+                    expected
+                );
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
+    }
 }
 
 #[tokio::test]
@@ -218,8 +242,30 @@ async fn retiring_private_configuration_cannot_restore_product_session_authority
         )
         .await
         .unwrap();
-    assert_eq!(f.count("registrations"), 0);
-    assert_eq!(f.count("registration_intents"), 0);
+    assert_eq!(
+        f.store
+            .owner
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM registrations", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        f.store
+            .owner
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM registration_intents", [], |row| row
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        0
+    );
     assert_eq!(f.auth.read(&id).await.unwrap().origin, original);
     let policy = CedarPolicyEvaluator::new().unwrap();
     let verifier = OpaqueSession(id);
@@ -284,7 +330,7 @@ async fn historical_product_actor_and_absent_command_correlation_are_not_rewritt
     let mut issue = f.proposed().issue;
     issue.purpose = CredentialIssuePurpose::Product;
     let id = CredentialId::new(issue.credential_id.clone()).unwrap();
-    drop(f.auth.issue_sync(issue).unwrap());
+    drop(f.auth.issue_sync(issue.clone()).unwrap());
     let private = f._root.path().join("private");
     drop(f.auth);
     let path = private.join("auth.json");
@@ -299,6 +345,14 @@ async fn historical_product_actor_and_absent_command_correlation_are_not_rewritt
         Arc::new(CedarPolicyEvaluator::new().unwrap()),
     )
     .unwrap();
+    // Product replay keeps its existing unavailable-evidence outcome. It must
+    // not acquire the webhook-only recovery classification or rewrite history.
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(matches!(
+        auth.issue(issue).await,
+        Err(CredentialAdminError::Unavailable)
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
     let before = auth.read(&id).await.unwrap().origin;
     assert_eq!(
         before.transition().initiator(),

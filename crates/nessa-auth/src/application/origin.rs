@@ -89,4 +89,18 @@ impl CredentialOrigin {
             TransitionCause::Revoked(_) => unreachable!("origin restoration accepts issuance only"),
         }
     }
+
+    /// An older admin issuance does not establish webhook provenance. Retain
+    /// its actual actor and command, and require explicit revoke/reissue recovery.
+    /// This classifies recorded provenance; it does not grant permission.
+    pub fn requires_webhook_recovery(&self) -> bool {
+        match self.cause() {
+            IssuanceCause::AdminIssue => true,
+            IssuanceCause::Bootstrap
+            | IssuanceCause::WebhookIssue
+            | IssuanceCause::DevicePairing
+            | IssuanceCause::SurfaceProvision
+            | IssuanceCause::OwnerRecovery => false,
+        }
+    }
 }
