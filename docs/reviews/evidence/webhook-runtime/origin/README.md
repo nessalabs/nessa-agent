@@ -101,6 +101,6 @@ No exactly-once remote-effects claim.
 [Correction and execution evidence](recovery/README.md) at
 `1c1355b537037e7416486856211b74c605804fa7` preserve that report and failure,
 cover all accepted historical shapes, and retain ordinary Product behavior.
-Fresh round 2 remains required.
+Fresh round 2 was required at this checkpoint; its clean result is linked below.
 
 Fresh [round 2](review-2/report.md) is clean at `8346c4ae9b69a6127041e4e07d2156143d0b2732`, source/test `1c1355b537037e7416486856211b74c605804fa7`: all four severity buckets empty and M1 independently verified fixed. Full #896 integration and qualification remain pending.

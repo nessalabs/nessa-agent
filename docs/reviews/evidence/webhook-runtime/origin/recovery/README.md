@@ -1,6 +1,6 @@
 # Historical webhook receipt recovery
 
-Source checkpoint `1c1355b537037e7416486856211b74c605804fa7`, immediate base `ee0d8eff159d96eeb70161f1c3ad774ae16da558`. This closes the reproduced behavior for Minor M1 from [fresh review round 1](../review-1/report.md), pending independent round 2 verification. It is not full #896 completion.
+Source checkpoint `1c1355b537037e7416486856211b74c605804fa7`, immediate base `ee0d8eff159d96eeb70161f1c3ad774ae16da558`. This closes the reproduced behavior for Minor M1 from [fresh review round 1](../review-1/report.md), with subsequent clean independent round 2 verification linked below. It is not full #896 completion.
 
 The actual auth issuance owner reads original provenance before selecting command transitions for a matching webhook receipt. One shared origin decoder serves access snapshots and receipt replay. Original AdminIssue returns typed OriginRecoveryRequired through LocalStoreError, CredentialAdminError and RegistrationFailure. No original actor, command, receipt or auth bytes are replaced; no destination is installed, and the private intent stays. Product request replay retains its existing behavior. The existing Product wire contract maps a substitute adapter's webhook-only recovery refusal to credential_conflict; the new webhook result remains an unmounted application API.
 
