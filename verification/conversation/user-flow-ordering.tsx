@@ -7,6 +7,14 @@ import type {
   InstallationOffer,
   InstallationOutcome,
 } from "../../src/onboarding/application/agent-installations"
+import {
+  PermissionRulesProvider,
+  PermissionRuleRows,
+} from "../../src/desktop/settings/ui/permission-rule-rows"
+import type {
+  PermissionRulesGateway,
+  PermissionRulesRevoke,
+} from "../../src/desktop/settings/adapters/permission-rules-gateway"
 import { useComposer } from "../../src/panel/ui/use-composer"
 import type { useConversation } from "../../src/conversation"
 import "../../src/styles.css"
@@ -101,10 +109,46 @@ function Composer() {
     </section>
   )
 }
+const revoked = deferred<PermissionRulesRevoke>()
+function Permissions() {
+  const [requests, setRequests] = React.useState(0)
+  const gateway = React.useMemo<PermissionRulesGateway>(
+    () => ({
+      read: async () => ({
+        ok: true,
+        rules: [
+          {
+            id: "pr_fixture",
+            revision: "1",
+            workspace: "/fixture",
+            source: "claude",
+            tool: "Bash",
+            effect: "allow",
+          },
+        ],
+      }),
+      revoke: async () => {
+        setRequests((count) => count + 1)
+        return revoked.promise
+      },
+    }),
+    [],
+  )
+  return (
+    <section aria-label="Permission revoke ordering fixture">
+      <PermissionRulesProvider gateway={gateway}>
+        <PermissionRuleRows />
+      </PermissionRulesProvider>
+      <output aria-label="Revoke requests">{requests}</output>
+      <button onClick={() => revoked.resolve({ ok: false })}>Finish revoke</button>
+    </section>
+  )
+}
 createRoot(document.getElementById("root")!).render(
   <main data-user-flow-ordering>
     <h1>User flow ordering</h1>
     <Downloads />
     <Composer />
+    <Permissions />
   </main>,
 )

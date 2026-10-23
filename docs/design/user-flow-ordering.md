@@ -69,3 +69,31 @@ conversation admission path; the new ordering fixture covers these frontend
 interleavings directly. Defaults and raised-count stress were not run here.
 See [evidence](../../verification/desktop/evidence/user-flow-ordering/README.md)
 for environment limits and reproducible commands.
+
+## Permission-rule revoke versus background reads
+
+The audit independently reproduced a focus read replacing a pending revoke's
+presentation and its generation. Revoke became enabled and another click
+issued a second request with a different request ID. Physical duplicate effects
+were not established.
+
+The row component's existing request owner must distinguish a read from a
+revoke, retaining identity through the revoke and its mandatory reread. Focus
+and visibility refreshes defer while that owner is a revoke; completion already
+performs the fresh read. The UI's disabled state is a projection of that owner,
+not the authority for rejecting repeated callbacks. Source retirement invalidates
+the owner before an obsolete result can schedule a follow-up read.
+
+| Row | Ordering | Required result and regression |
+| --- | --- | --- |
+| PR1 | Revoke pending; focus or visibility refresh arrives | Keep controls disabled and one mutation request; two event cases. |
+| PR2 | Revoke answered; its reread pending; focus arrives | Retain owner through reread; no competing read can replace it. |
+| PR3 | Background read began first; revoke begins; old read answers | Old read cannot clear revoke ownership. |
+| PR4 | Source replaced or view unmounted; revoke answers later | No obsolete follow-up read or publication into replacement. |
+| PR5 | Two clicks in one task before DOM disable commits | One revoke dispatch, with synchronous admission by the request owner. |
+
+The composer counterexample CO1 has an application reachability qualification:
+the independent real-store reproduction submits A and switches to B in the
+**same task**, before A's emptied draft is observed by the hook. Ordinary,
+separately delivered human-click reachability remains unverified. Controlled
+ports establish hook ordering only. Keep that distinction in state pages and PRs.

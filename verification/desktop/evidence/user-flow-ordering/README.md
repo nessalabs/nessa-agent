@@ -89,3 +89,31 @@ Chromium results and then reported missing WebKit executable:
 **6/7 held, exit 2/could-not-run**. This is not a two-engine pass. The full desktop
 run-all gate remains unrun. No screenshot or docs renderer check replaces the
 missing WebKit, gateway stress or native-platform gates.
+## Revoke-focus follow-up and composer qualification
+
+A separate focused commit after `11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1`
+fixes the third independent finding. Permission-rule revoke now retains one
+identified owner through command acknowledgement and its fresh read. Background
+focus/visibility checks cannot replace it. Repeated callbacks are refused by
+that synchronous owner; source/view retirement invalidates late continuations.
+No server authorization rule changed.
+
+Seven permission cases plus one actual Redux-store composer case bring this
+work to **41 added tests**. The actual-store counterexample sends A and switches
+to B in the **same task**; separate, ordinary human-click reachability remains
+unverified. Controlled hook fixtures are not proof of that reachability.
+
+Reverting only the permission component gives **6 failed / 6 passed**; reverting
+the composer hook and running the actual-store file gives **1 failed / 7
+passed**. The original permission component in Chromium permits a second
+frontend revoke dispatch after focus and gives **6/7 held**. Fixed source
+restored: **7/7 Chromium checks held**, including **one pending revoke dispatch**,
+controls disabled through ownership, and recovery enabled after settlement.
+The evidence makes no duplicate-physical-effect claim.
+
+Updated source checks: **142/142 targeted tests in 20 files**, TypeScript,
+changed-file ESLint, formatting and production build passed. Full frontend:
+**5138 passed / 2 failed in 390 files**, retaining the same unchanged private-file
+fixture failures. The initial source commit's evidence above remains historical.
+System-Chromium overview/focus findings are being triaged separately and are
+not attributed to these changes.
