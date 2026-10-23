@@ -1,0 +1,18 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::intents::row_tests::oversized_borrowed_row_is_refused_before_constructing_owned_configuration ... FAILED
+
+failures:
+
+---- webhooks::infrastructure::outbox::intents::row_tests::oversized_borrowed_row_is_refused_before_constructing_owned_configuration stdout ----
+
+thread 'webhooks::infrastructure::outbox::intents::row_tests::oversized_borrowed_row_is_refused_before_constructing_owned_configuration' (82697) panicked at /tmp/nessa-registration-probes/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/intent_rows.rs:25:13:
+assertion failed: matches!(row, Err(Error::FromSqlConversionFailure(_,_,source)) if
+    source.downcast_ref::<RowTooLarge>().is_some())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::intents::row_tests::oversized_borrowed_row_is_refused_before_constructing_owned_configuration
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.00s

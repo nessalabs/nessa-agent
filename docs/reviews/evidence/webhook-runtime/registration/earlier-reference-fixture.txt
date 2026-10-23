@@ -1,0 +1,73 @@
+   Compiling nessa-server v0.1.0 (/workspace/nessa-webhook-runtime/crates/nessa-server)
+warning: constant evaluation is taking a long time
+   --> /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/slice/mod.rs:117:8
+    |
+    = note: the const evaluator is currently interpreting this expression
+help: the constant being evaluated
+   --> crates/nessa-server/src/env/config.rs:51:9
+    |
+ 51 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 63 | / lease_protocol!(
+ 64 | |     "../../../nessa-protocol/src/lease.rs",
+ 65 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+ 66 | |     "../env_serve/mod.rs",
+...   |
+105 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+106 | | );
+    | |_- in this macro invocation
+    = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `nessa-server` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 1m 28s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_server-4b67837d0bb95863)
+
+running 29 tests
+test conversation::infrastructure::catalogue_changes::tests::cancelled_wait_keeps_the_registration_until_its_handle_drops ... ok
+test core::ending::tests::a_standalone_run_leaves_a_registration_s_recovery_record_alone ... ok
+test core::launch::tests::a_registration_this_process_cannot_name_is_not_one_it_answers_for ... ok
+test core::launch::tests::a_standalone_launch_has_no_registration_to_act_for ... ok
+test mcp_authorization::tests::callback_application::a2d_exact_issuer_mismatch_refuses_before_registration ... ok
+test mcp_authorization::tests::dynamic_registration_is_posted_as_json ... ok
+test relay::application::tests::rl4_a_reader_asking_for_a_gateway_with_no_registration_is_told_offline ... ok
+test relay::application::tests::rl8_past_the_registration_limit_a_new_key_is_closed_and_a_known_one_still_replaces ... ok
+test relay::gateway::application::tests::a_lasting_registration_starts_the_waits_over ... ok
+test attachments::infrastructure::store::tests::artifact_tests::an_uncertain_archive_move_creates_no_fresh_pending_registration ... ok
+test relay::gateway::application::tests::a_refused_registration_is_tried_again_after_a_doubling_wait ... ok
+test relay::gateway::application::tests::stop_ends_the_registration_and_its_accept_legs ... ok
+test relay::gateway::application::tests::a_silent_registration_is_dropped_and_made_again ... ok
+test webhooks::infrastructure::outbox::store::tests::delivery_audit_uses_checked_registration_facts ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_audit_lifecycle_and_actor_are_validated ... ok
+test conversation::infrastructure::catalogue_changes::tests::registrations_scale_and_a_commit_wakes_only_its_owner ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_issue_evidence_matches_retained_target ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::auth_commit_and_uncertain_install_ack_recover_without_another_credential_or_secret ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_stop_evidence_matches_original_stop_and_target ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::conflicting_config_and_caller_inputs_do_not_rewrite_reserved_command ... ok
+test webhooks::infrastructure::outbox::store::tests::owed_credential_stop_evidence_matches_original_registration_facts ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::registration_commits_real_auth_and_replays_original_config_after_restart ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::registration_retirement_removes_private_intent_even_when_audit_ack_is_lost ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::replayed_current_revocation_and_expiry_do_not_install_reserved_destination ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::unrelated_ordinary_receipt_cannot_install_a_webhook_or_leave_an_intent ... ok
+test webhooks::infrastructure::outbox::store::tests::registration_tests::installed_intent_contradictions_reject_before_live_or_restored_publication ... ok
+test webhooks::infrastructure::outbox::store::tests::restored_registration_facts_are_checked_before_effects ... FAILED
+test webhooks::infrastructure::outbox::store::tests::registration_tests::intent_count_and_byte_capacity_refuse_without_partial_insert ... ok
+test conversation::application::service::mutation::tests::agent_tool_tests::a_second_registration_of_a_report_at_once_does_not_mark_it_restored ... ok
+
+failures:
+
+---- webhooks::infrastructure::outbox::store::tests::restored_registration_facts_are_checked_before_effects stdout ----
+
+thread 'webhooks::infrastructure::outbox::store::tests::restored_registration_facts_are_checked_before_effects' (76142) panicked at crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox.rs:1197:14:
+called `Result::unwrap()` on an `Err` value: SqliteFailure(Error { code: ConstraintViolation, extended_code: 787 }, Some("FOREIGN KEY constraint failed"))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::restored_registration_facts_are_checked_before_effects
+
+test result: FAILED. 28 passed; 1 failed; 0 ignored; 0 measured; 3844 filtered out; finished in 0.43s
+
+error: test failed, to rerun pass `-p nessa-server --lib`
+error: 1 target failed:
+    `-p nessa-server --lib`

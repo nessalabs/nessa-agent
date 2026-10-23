@@ -3,11 +3,17 @@ id: gateway-webhook-outbox
 title: Durable outbound webhook state
 kind: feature
 status: mixed
-summary: Private delivery state and causal audit survive restart; registration admission, source replay and the sender are still uncomposed.
-sourceRevision: "b3dc0d4688e473fa40bbbeddf00bb9f510130bf1"
+summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
+sourceRevision: "460a1c85935973f367cfd5fd033bcb81dd181469"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/application/outbox.rs
+  - crates/nessa-server/src/webhooks/application/registration.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/intents.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_failures.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/intent_rows.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/schema.rs
   - crates/nessa-server/src/webhooks/domain/value_objects/delivery.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/mod.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/store.rs
@@ -52,8 +58,10 @@ This checkpoint is an uncomposed storage adapter. No product command registers
 it, no authorized source reader feeds it, and no supervised sender consumes it.
 Those pieces and capability/revoke delivery E2E remain required for
 [issue #896](https://github.com/nessalabs/nessa-agent/issues/896).
-The storage registration methods accept trusted facts; they do not authorize
-credential issuance or sharing. Application installation #1052 and inbound
+The [inner registration use case](webhook-issuance.md#destination-installation)
+asks the existing auth owner and correlates its actual result before installing
+under a current credential hold. The private intent supplies no permission verdict;
+product command ownership, source replay and the sender remain pending. Application installation #1052 and inbound
 workflow triggers #1088 remain separate.
 
 ## Restoration redesign
@@ -68,7 +76,7 @@ remain preserved as findings at their historical source. The parent adopted a
 total contextual restoration owner. Fresh review at `5bb457db` then found a source-reset
 provenance gap and a live selection-cost regression. The [report](../../../reviews/evidence/webhook-outbox/total-context/review-1/report.md)
 and original demonstrations remain preserved. The parent adopted a shared immutable
-reset owner, implemented at this source checkpoint. Current validation and review
+reset owner, originally implemented at `b3dc0d46`. Its validation and review
 status belongs to [shared reset evidence](../../../reviews/evidence/webhook-outbox/shared-reset/README.md).
 Fresh [independent round two](../../../reviews/evidence/webhook-outbox/shared-reset/review-2/report.md)
 is clean at `546de7af`, with all priority buckets empty. This clears the persistence
@@ -173,8 +181,9 @@ Known success stays success; restart without an observation stays Unknown.
 Cursor, delivery membership and audit references retain the fact. Indexed reference
 counters are checked against their actual owners at restoration and for owed
 publication. Triggers prohibit changing original facts or membership and release a
-fact after its last reference disappears. Startup checks those schema definitions
-against the canonical schema before interpreting state. Retirement and audit trimming
+fact after its last reference disappears. The outbox schema owner checks all owned
+non-internal SQLite definitions against the canonical schema before interpreting
+state, including the private intent's immutable guard and retirement trigger. Retirement and audit trimming
 release references in the same transaction; they do not invent historical actors.
 
 ```mermaid
@@ -251,7 +260,8 @@ trim, and lost-ack valid recovery after private registration deletion. The prior
 review demonstrations are historical bug evidence, not fixed test passes.
 
 Historical validation and findings remain in [total-context evidence](../../../reviews/evidence/webhook-outbox/total-context/README.md).
-Current exact-source checks and review status are in [shared reset evidence](../../../reviews/evidence/webhook-outbox/shared-reset/README.md).
+Historical reset-source checks and review status are in [shared reset evidence](../../../reviews/evidence/webhook-outbox/shared-reset/README.md).
+Current registration and schema checks are recorded in [registration evidence](../../../reviews/evidence/webhook-runtime/registration/README.md): 114 canonical webhook tests, 212 auth tests and 21 failure/restore probes. Independent registration review is pending.
 Historical checks do not establish acceptance of newer source. Independent
 persistence review at `546de7af` checked the unchanged `b3dc0d46` source and is
 clean; gateway/browser qualification and full feature acceptance remain open.

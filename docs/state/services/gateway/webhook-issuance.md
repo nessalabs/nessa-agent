@@ -3,8 +3,8 @@ id: gateway-webhook-issuance
 title: Webhook credential issuance
 kind: operation
 status: mixed
-summary: The existing auth registry applies Cedar webhook restrictions and binds issuance purpose to its durable receipt; endpoint registration is still pending.
-sourceRevision: "8e9f8c93277f4654f15632c89503d37be6d8a2e8"
+summary: Cedar owns webhook issuance; a bounded private intent coordinates actual auth receipts and fenced installation, while product and worker composition remain pending.
+sourceRevision: "460a1c85935973f367cfd5fd033bcb81dd181469"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/credential_admin.rs
@@ -15,6 +15,13 @@ sources:
   - crates/nessa-auth/src/adapters/local/registry.rs
   - crates/nessa-auth/tests/adapters/local/webhook_issue.rs
   - crates/nessa-server/src/product/socket.rs
+  - crates/nessa-server/src/webhooks/application/registration.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/intents.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/schema.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_failures.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/intent_rows.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/schema.rs
 diagramLinks: {}
 diagramDetails:
   - diagram: 0
@@ -23,13 +30,16 @@ diagramDetails:
   - diagram: 0
     node: Original
     section: Refusal and recovery
+  - diagram: 1
+    node: Installed
+    section: Destination installation
 ---
 
 # Webhook credential issuance
 
 The auth boundary can issue a read-only integration credential through the
 existing registry. This checkpoint implements that issuing path and receipt
-identity. The product handler still selects ordinary issuance: there is no
+identity, plus an inner registration use case. The product handler still selects ordinary issuance: there is no
 webhook configuration field or composed endpoint registration yet. Application
 installation (#1052) remains separate.
 
@@ -45,7 +55,7 @@ stateDiagram-v2
     Validate --> Commit: Cedar permits integration member and conversation.read
     Commit --> Refused: Durable write unavailable
     Commit --> Issued: Credential, verifier, receipt and audit commit together
-    Original --> [*]: Original metadata and transitions without secret
+    Original --> [*]: Current metadata and original transitions without secret
     Issued --> [*]: One-time bearer evidence
     Refused --> [*]: No successful issuance response
 ```
@@ -65,9 +75,9 @@ and webhook issuance under the same issuer/request refuses before a registry
 write, including after restart. A matching retry returns the original selected
 credential ID and immutable transitions, even if a new ID or issuance time was
 proposed. It cannot recover the bearer secret; the existing explicit recovery is
-revoke and reissue. Configuration intent and endpoint installation must correlate
-that returned identity before installing a destination; that coordinator is
-still pending.
+revoke and reissue. Metadata reflects the credential's current lifecycle, including
+later revocation. The inner registration use case correlates that returned identity
+and original transition against its retained inputs before installation.
 
 The fresh-command refusal test compares registry bytes before and after each
 denied request. Storage failure remains a typed failure, not proof of a remote
@@ -76,10 +86,56 @@ exactly-once remote effects. Attempt admission and durable delivery recovery are
 owned by the [admission](webhook-admission.md) and [outbox](webhook-outbox.md)
 pages.
 
+## Destination installation
+
+`RegisterWebhook` selects the webhook purpose and issuance-time projection before
+reserving one immutable private intent. The SQLite owner retains the selected IDs,
+original issuer/request, observation, destination and key. Same-input retries reuse
+the original proposal; changed caller inputs or configuration conflict before auth.
+There are at most 64 intents, with 16-KiB issuance JSON and a borrowed whole-row byte
+budget before owned configuration allocation. An intent is proposed input, not an
+authorization decision or an auth receipt.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Reserved: Private intent commits
+    Reserved --> Reserved: Auth or installation outcome unavailable
+    Reserved --> Discarded: Auth proves Conflict or Capacity
+    Reserved --> Held: Actual auth result correlates with original intent
+    Held --> Reserved: Current authority unavailable or contradictory
+    Held --> Stopped: Revoked, expired or inactive current authority
+    Held --> Installed: Credential hold spans installation and acknowledgement
+    Installed --> Installed: Same intent retry acknowledges original installation
+    Installed --> Retired: Canonical stop drains retained state
+    Retired --> [*]: Transaction deletes registration and private intent
+    Discarded --> [*]: No registration installed
+```
+
+The auth domain's validated transition type owns lifecycle evidence validation;
+registration checks its relationship to the original command and request correlation.
+It compares the complete current credential and membership with the returned metadata
+and original inputs under an existing credential hold. A revoked, expired or inactive
+result installs nothing. A lost auth or installation acknowledgement retains the
+intent for retry and never recovers a bearer secret. Replaying a retired receipt
+cannot resurrect a destination; the auth owner must prove the newly proposed selected
+ID was not issued before that uninstalled proposal can be discarded.
+
+Installed identity has a mandatory foreign key to the original intent. The restoration
+owner correlates target, configuration and observation before owed publication. The
+schema owner compares every non-internal SQLite definition against its single schema,
+including immutable guards and transactional retirement cleanup. Removing a guard,
+weakening a reference or adding an effectful trigger rejects cold restoration.
+
+This inner use case is **not** the W1 coordinator or a supervised command owner.
+Caller cancellation, complete revocation coordination, automatic pending-command
+recovery and the product configuration entry point still require runtime composition.
+
 ## Evidence and limits
 
-At this exact source, the full auth library suite passed **212 tests**. The
-[registry tests](../../../../crates/nessa-auth/tests/adapters/local/webhook_issue.rs)
+The full auth library suite passed **212 tests** at this source. The canonical
+server webhook suite passed **114 tests**. The registration [evidence](../../../reviews/evidence/webhook-runtime/registration/README.md)
+records 21 caught-and-restored probes, the earlier failed fixtures, source boundaries
+and pending independent review. The [registry tests](../../../../crates/nessa-auth/tests/adapters/local/webhook_issue.rs)
 exercise policy refusal before writes, cross-purpose receipt substitution in
 both directions, cold replay, original transitions and unavailable secret.
 The [Cedar matrix](../../../../crates/nessa-auth/src/adapters/cedar/evaluator_tests.rs)
@@ -92,7 +148,13 @@ check and the architecture checker passed. The first architecture invocation
 could not find Cargo on PATH; the corrected invocation passed. The pre-existing
 lease const-evaluation notice remains in check/Clippy output.
 
-Registration, W1 coordination across ordinary issuance, revocation/expiry stop
+Product registration, W1 coordination across ordinary issuance, revocation/expiry stop
 composition, source capture, supervised sending and actual recipient E2E remain
 unfinished. Canonical scripted Chromium/WebKit and feature stress/chaos remain
 applicable and unqualified. A documentation render does not qualify those gates.
+
+The intended no-product-session classification still needs an auth-owned immutable
+purpose fact and the existing Cedar product-entry boundary. The issuing-path purpose
+currently binds the receipt; it does not persist a credential-use classification.
+This gap is not addressed by looking up only active registration rows. General
+application installation and its session model remain owned by #1052.

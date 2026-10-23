@@ -1,0 +1,29 @@
+error: could not create home directory: '/home/agent/.rustup': Read-only file system (os error 30)
+node:internal/errors:985
+  const err = new Error(message);
+              ^
+
+Error: Command failed: cargo metadata --no-deps --format-version 1
+error: could not create home directory: '/home/agent/.rustup': Read-only file system (os error 30)
+
+    at genericNodeError (node:internal/errors:985:15)
+    at wrappedFn (node:internal/errors:539:14)
+    at checkExecSyncError (node:child_process:942:11)
+    at execFileSync (node:child_process:978:15)
+    at file:///workspace/nessa-webhook-runtime/scripts/check-architecture.mjs:71:3
+    at ModuleJob.run (node:internal/modules/esm/module_job:439:25)
+    at async node:internal/modules/esm/loader:643:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5) {
+  status: 1,
+  signal: null,
+  output: [
+    null,
+    '',
+    "error: could not create home directory: '/home/agent/.rustup': Read-only file system (os error 30)\n"
+  ],
+  pid: 82467,
+  stdout: '',
+  stderr: "error: could not create home directory: '/home/agent/.rustup': Read-only file system (os error 30)\n"
+}
+
+Node.js v24.19.0

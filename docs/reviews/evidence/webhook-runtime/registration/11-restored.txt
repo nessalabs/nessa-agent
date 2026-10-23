@@ -1,0 +1,5 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::registration_tests::installation_requires_the_retained_original_intent_before_any_effect ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.01s
