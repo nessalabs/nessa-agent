@@ -4,9 +4,11 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "946bbc8647b681fbd34440a116ecb3fb8efe5a6f"
+sourceRevision: "27515a3e4629db4b401cbf2333c424bd48924807"
 parent: gateway
 sources:
+  - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
+  - crates/nessa-server/tests/webhooks/domain/registration_lifecycle.rs
   - crates/nessa-server/src/webhooks/application/outbox.rs
   - crates/nessa-server/src/webhooks/application/registration.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/intents.rs
@@ -290,3 +292,22 @@ records exact inputs and exclusions. No browser gate is waived by this
 adapter being unmounted. Full registration, authorized source selection,
 current-authority dispatch, live outcome reconciliation and capability/revoke
 E2E remain unfinished.
+
+## Expiry observation before stopping
+
+A registration retains the first reader that notices expiry before it stops. That reader can be the issuing principal, an actual delivery, or restart. The observation and its audit have a separate durability acknowledgement. If stopping then fails, another reader resumes the original fact rather than replacing its actor or time. A later canonical auth revocation remains a separate journal event.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Active
+    Active --> ExpiryObserved: First expiry read / commit original reader and observation time
+    ExpiryObserved --> ExpiryObserved: Observation publication or later stop fails / retain original fact
+    ExpiryObserved --> Stopped: Acknowledged observation / commit stop with original fact
+    Active --> Stopped: Canonical credential revocation / retain original actor and time
+    Stopped --> Stopped: Another stop / preserve original registration cause
+    Stopped --> Retired: Outcomes drained / remove private configuration and retain owed audit facts
+```
+
+The immutable registration lifecycle value owns legal replacements; its shared decoder validates restored phase and fact together. Audit decoding uses that same transition owner, and contextual restoration correlates observation, stop and retirement records against the retained original fact before publication. One observation per already-bounded registration adds no unbounded history.
+
+This is an unpublished inner lifecycle checkpoint. The retained command supervisor, startup reader, credential/grant admission and sender still require composition; this chart does not claim that they run. [Private evidence](../../../reviews/evidence/webhook-runtime/lifecycle-observation/README.md) distinguishes completed isolated tests from pending canonical checks and independent review.

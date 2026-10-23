@@ -1,0 +1,11 @@
+# Original expiry observation lifecycle
+
+Unpublished source `27515a3e4629db4b401cbf2333c424bd48924807`, base `1ea4cd8e133ba16f68704090f4695a181ce46548`. This is isolated from the reviewed corrections being assembled for PR1101. No product command, source reader, startup supervisor or sender is mounted.
+
+A closed immutable domain value owns Active, ExpiryObserved and Stopped replacements. The SQL owner acknowledges an original owner/delivery/restart expiry observation before attempting stop, and retains it through stop failure and later canonical revocation. The original auth revocation remains its own fact. Shared decoding and exhaustive contextual restoration cover observation, stop and retired projections before owed publication.
+
+Actual Auth was compiled privately against frozen third-party dependencies, and actual copied domain/application/SQLite modules were compiled with the unchanged data-shaped Target substitute. The private104-test baseline passed; the later added focused substitution test also passed, covering owed observation and retired stop actor/time/target/transition contradictions before publication plus original-byte recovery. This is not canonical gateway/package-selection qualification.
+
+The owner observation regression injects a failing stop transaction after acknowledged observation, reopens, performs actual canonical auth revocation, and proves retirement keeps the original observation. Four private mutation controls were caught and byte-restored: observation prerequisite, acknowledgement-before-stop, first cause through later revocation, and observation contextual correlation. Original partial-move compile failure is preserved, fixed by removing a redundant post-move debug assertion; it is not a passing test. Text copies trim trailing whitespace.
+
+Full canonical source checks, remaining failure/mutation cases, independent review, docs validation/render and actual capability/revoke/expiry/cancellation/cleanup recipient E2E remain pending. The retention-cost correction is not yet merged into this source. Bounds and existing durability/flush behavior remain intact. No live credentials, registrations or transmissions; no denied CI/report/browser retry. Parent owns merges.

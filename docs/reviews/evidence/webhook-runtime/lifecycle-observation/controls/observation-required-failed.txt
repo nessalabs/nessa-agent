@@ -1,0 +1,17 @@
+
+running 1 test
+
+thread 'webhooks::domain::registration_lifecycle_tests::expiry_requires_observation_and_retains_the_first_actual_reader' (140157) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/tests/webhooks/domain/registration_lifecycle.rs:58:9:
+assertion `left == right` failed
+  left: Ok((RegistrationLifecycle { phase: Active, observation: None }, None))
+ right: Err(ObservationRequired)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::domain::registration_lifecycle_tests::expiry_requires_observation_and_retains_the_first_actual_reader ... FAILED
+
+failures:
+
+failures:
+    webhooks::domain::registration_lifecycle_tests::expiry_requires_observation_and_retains_the_first_actual_reader
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 104 filtered out; finished in 0.00s
+
