@@ -250,6 +250,10 @@ pub(super) struct Event<T = String> {
     /// for a start without one, and on events saved before it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) native_hooks: Option<bool>,
+    /// When the session received the event, in Unix milliseconds. Absent on
+    /// events saved before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) at_ms: Option<u64>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -483,6 +487,7 @@ impl<'a> From<&'a ExecutionEvent> for Event<&'a str> {
             },
             execution_id: event.execution_id().as_str().into(),
             native_hooks: event.native_hooks(),
+            at_ms: event.observed_at_ms(),
             update: match event.update() {
                 ExecutionUpdate::Finished(outcome) => Update::Finished((*outcome).into()),
                 ExecutionUpdate::Message(chunk) => match chunk.kind() {
@@ -834,8 +839,12 @@ impl Event {
             (_, Some(_)) => return Err(corrupt("message identity on a non-message observation")),
         };
         let event = ExecutionEvent::new(execution_id.clone(), update);
-        Ok(match self.native_hooks {
+        let event = match self.native_hooks {
             Some(allowed) => event.with_native_hooks(allowed),
+            None => event,
+        };
+        Ok(match self.at_ms {
+            Some(at_ms) => event.with_observed_at_ms(at_ms),
             None => event,
         })
     }
@@ -950,6 +959,20 @@ mod borrowed_event_tests {
         let (bytes, decoded) = round_trip(&tool_event());
         assert!(!String::from_utf8(bytes).unwrap().contains("native_hooks"));
         assert_eq!(decoded.native_hooks(), None);
+    }
+
+    #[test]
+    fn a_tool_event_keeps_the_time_it_was_received() {
+        let event = tool_event().with_observed_at_ms(1_700_000_000_123);
+        let (bytes, decoded) = round_trip(&event);
+        assert!(String::from_utf8(bytes)
+            .unwrap()
+            .contains(r#""at_ms":1700000000123"#));
+        assert_eq!(decoded.observed_at_ms(), Some(1_700_000_000_123));
+        assert_eq!(decoded, event);
+        let (bytes, decoded) = round_trip(&tool_event());
+        assert!(!String::from_utf8(bytes).unwrap().contains("at_ms"));
+        assert_eq!(decoded.observed_at_ms(), None);
     }
 
     #[test]

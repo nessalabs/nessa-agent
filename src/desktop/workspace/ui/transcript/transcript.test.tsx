@@ -267,13 +267,18 @@ describe("a transcript", () => {
     expect(host.querySelector(".workspace-heading h2")?.textContent).toBe("Session b")
     expect(host.querySelector(".workspace-bubble code")?.textContent).toBe("cargo")
     // The turn has ended, so its steps are one line until opened.
-    const work = host.querySelector<HTMLButtonElement>(".workspace-work button")
-    expect(work?.textContent).toBe("Ran 2 tools · 1 read, 1 edited")
-    expect(host.querySelector(".workspace-steps")).toBeNull()
+    const work = host.querySelector<HTMLButtonElement>(
+      ".workspace-work [data-slot=tool-trace-line]",
+    )
+    expect(work?.textContent).toContain("Ran 2 tools")
+    expect(work?.getAttribute("aria-expanded")).toBe("false")
     await act(async () => work?.click())
+    expect(work?.getAttribute("aria-expanded")).toBe("true")
     expect(
-      [...host.querySelectorAll(".workspace-steps li")].map((step) => step.textContent),
-    ).toEqual(["ReadCargo.toml", "Editedlib.rs+3−1"])
+      [...host.querySelectorAll("[data-slot=tool-trace-step]")].map(
+        (step) => step.textContent,
+      ),
+    ).toEqual(["ReadCargo.toml", "Editedlib.rs3 additions, 1 deletion+3-1"])
     expect(host.querySelector(".workspace-message-body strong")?.textContent).toBe(
       "the lockfile",
     )
