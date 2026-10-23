@@ -1,0 +1,1 @@
+{"old": "if origin.requires_webhook_recovery() {", "new": "if false {", "changed_sha256": "da9f4aafd18d849bc26e879ad3487c6d708e2337cbcb95a4db8a86d66dede1be"}

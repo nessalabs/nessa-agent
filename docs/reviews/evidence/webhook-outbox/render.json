@@ -1,0 +1,18 @@
+{
+  "page": "gateway-webhook-outbox",
+  "rendererRevision": "c0bc0627611b100ab71a96cc6fe2fb65f1a014d8",
+  "sourceRevision": "c608eaa2de4e24143d349f9eb60fe63b74f34193",
+  "browser": "151.0.7922.173",
+  "diagrams": [
+    {
+      "state": "rendered",
+      "svgs": 4,
+      "rect": {
+        "width": 1136,
+        "height": 843.953125
+      },
+      "text": "Acknowledging one durable operationIn DetailsFit96%#mmd-1{font-family:\"Geist Variable\",Geist,ui-sans-serif,system-ui,san"
+    }
+  ],
+  "pageErrors": []
+}

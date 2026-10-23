@@ -1,0 +1,16 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::independent_review_probes::independent_m1_three_forms_all_readers_reject_before_effects_then_recover ...
+thread 'webhooks::infrastructure::outbox::store::tests::independent_review_probes::independent_m1_three_forms_all_readers_reject_before_effects_then_recover' (152859) panicked at /tmp/nessa-expiry-context-final-review/probes.rs:150:4:
+assertion `left == right` failed: reader 0, form 0
+  left: Some(Unavailable)
+ right: Some(Invalid)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::independent_review_probes::independent_m1_three_forms_all_readers_reject_before_effects_then_recover
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 120 filtered out; finished in 0.01s

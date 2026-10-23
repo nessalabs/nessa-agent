@@ -419,6 +419,7 @@ async fn gateway_child() {
         // First start: pair this test's device through the real listener.
         Some(evidence) => {
             let session = AuthenticateSession {
+                policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
                 verifier: auth.as_ref(),
                 access: auth.as_ref(),
                 clock: &SystemClock,

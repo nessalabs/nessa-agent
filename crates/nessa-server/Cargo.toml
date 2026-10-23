@@ -32,6 +32,7 @@ nessa-sdk = { path = "../nessa-sdk" }
 nessa-sync = { workspace = true }
 nessa-images = { path = "../nessa-images" }
 nessa-local-database = { path = "../nessa-local-database" }
+fs2 = "0.4"
 nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
 nessa-gateway-endpoint = { path = "../nessa-gateway-endpoint" }
 nessa-auth = { path = "../nessa-auth" }
@@ -110,6 +111,10 @@ security-framework = "3.7"
 security-framework-sys = "2.17"
 
 [dev-dependencies]
+# Ephemeral isolated TLS recipients use real platform verification with a
+# fresh CA and short-lived server-auth leaf, including on macOS.
+rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "ring"] }
+time = "0.3"
 # Cancel actual HTTP service futures at a deterministic command-storage gate.
 tower = { version = "0.5", features = ["util"] }
 # Online process tests drive the example's command entry point.

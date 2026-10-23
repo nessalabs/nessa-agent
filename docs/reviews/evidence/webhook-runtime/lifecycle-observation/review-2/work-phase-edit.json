@@ -1,0 +1,8 @@
+{
+  "name": "work-phase",
+  "path": "/tmp/nessa-expiry-context-final-review/crates/nessa-server/src/webhooks/infrastructure/outbox/restoration.rs",
+  "before": "bd744a0e4ccf5ef39a90108265a20db980066ad38071388a706c29b319887ed2",
+  "after": "2bbf03d1ce2e7bb977584166b53c47b04629ce67cee16f378a3a4596d655f435",
+  "removed": "    validate_queued(connection)?;\n",
+  "replacement": ""
+}

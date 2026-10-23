@@ -521,6 +521,11 @@ connection carries leases. It is not the peer poller.
 
 ## Webhooks
 
+Implementation checkpoint: the [signed delivery foundation](webhook-delivery-implementation.md)
+and [state page](../state/services/gateway/webhook-foundation.md) describe the
+uncomposed values and transport from #896. Registration, grants, durable outbox
+and replay coordination below remain unimplemented by that first slice.
+
 Delivery states are the webhook outbox table in [Lifecycles](#lifecycles).
 This section does not add a delivery state.
 

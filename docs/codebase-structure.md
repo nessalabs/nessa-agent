@@ -1637,6 +1637,49 @@ in one catch-all file. New MCP shell code is the small Rust example; the desktop
 gateway context demonstrates an application port with native adapters. Older SDK
 paths remain current until the coordinated TODO updates all consumers.
 
+## Outbound webhook foundation
+
+The outbound [webhook foundation](design/webhook-delivery-implementation.md)
+lives under `crates/nessa-server/src/webhooks`: immutable delivery and destination
+values in `domain/value_objects`, message/transport ports in `application`, and
+JSON, HMAC, DNS and HTTPS in `infrastructure`. Tests use the same layer names
+under `tests/webhooks`. `application/admission.rs` combines current credential
+effect holds, principal grant revision holds, checked conversation metadata and
+the existing conversation Cedar evaluator. Credential mutation fences live in
+the auth registry; principal/resource fences remain in the grant store.
+`application/outbox.rs` publishes the persistence port and limits.
+`infrastructure/outbox` owns the private database: `store` owns the lifetime lock
+and bounded physical operations; `schema` publishes and validates every owned SQLite definition against its one SQL schema; `stored` validates restored
+identity and scope; `cursor` decodes complete cursor values for startup and live
+reads; `audit` owns closed typed historical records and validates transitions
+through the domain owner; `codec` owns the current serialized values; `capacity` owns
+accounting; `queue` advances source cursor and delivery together; `journal` owns
+state/audit commits, source-change context and retirement; `publication` writes
+immutable audit files and exact acknowledgements; `restoration` exhaustively
+correlates every audit variant with retained facts and owns delivery-history
+validation before effects; `retirement` retains bounded secret-free original
+identity/stop facts and the exact retirement audit identity through lost
+acknowledgement; `source_reset` owns immutable original reset facts and first-capture
+membership (`source_reset/store.rs`) and bounded reference retention; `registry`
+persists installation target facts. `infrastructure/outbox/stop.rs` is the single
+bounded retained stop codec shared by live, retired and audit state.
+`application/registration_stop.rs` consumes the actual held Auth fact and derives
+the lifecycle projection; it grants no delivery permission and is not a command
+supervisor. Auth owns retained revocation decoding separately from its
+current-credential binding. `application/registration.rs` asks the
+existing auth owner to issue and correlates the returned credential/transition,
+then installs under a current credential hold. `infrastructure/outbox/intents.rs`
+retains bounded immutable private proposal/configuration facts across uncertain
+auth and installation acknowledgements; they supply no permission verdict.
+The installed registration references that original intent, and transactional
+retirement deletes the private configuration together with the registration. Tests remain in
+`tests/webhooks/infrastructure/outbox.rs`, with shared reset ownership cases in
+`tests/webhooks/infrastructure/outbox/source_reset.rs`.
+Product registration configuration, W1 command/lifecycle coordination, the
+committed source reader, sender supervision and capability/revoke E2E remain
+uncomposed work. The outbox does not
+supply permission or open a listener.
+
 ## Browser sessions
 
 `crates/nessa-server/src/browser_session/` owns browser sign-in: `application/`

@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::lifecycle_context_tests::owed_observation_cannot_restore_as_stopped_before_its_acknowledgement' (148823) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/lifecycle_context.rs:62:5:
+assertion `left == right` failed
+  left: Some(Unavailable)
+ right: Some(Invalid)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::lifecycle_context_tests::owed_observation_cannot_restore_as_stopped_before_its_acknowledgement ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::lifecycle_context_tests::owed_observation_cannot_restore_as_stopped_before_its_acknowledgement
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 116 filtered out; finished in 0.01s

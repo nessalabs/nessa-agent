@@ -93,6 +93,7 @@ async fn fixture() -> Fixture {
         .unwrap();
     let audience = AudienceId::new("gateway").unwrap();
     let bootstrap = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: registry.as_ref(),
         access: registry.as_ref(),
         clock: &Time,
@@ -217,6 +218,7 @@ async fn fixture() -> Fixture {
     let channel = worker.join().unwrap();
     let verifier = registry.device_verifier(channel.device_proof());
     let session = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: &verifier,
         access: registry.as_ref(),
         clock: &Time,

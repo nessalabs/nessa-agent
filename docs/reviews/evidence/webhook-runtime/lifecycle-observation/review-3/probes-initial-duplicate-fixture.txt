@@ -1,0 +1,15 @@
+
+running 2 tests
+
+thread 'webhooks::infrastructure::outbox::store::tests::independent_probes::diagnostic_retained_cursor_history_proves_initial_issue_completion' (162510) panicked at /tmp/nessa-w24-m2-independent-review/probes.rs:42:204:
+called `Result::unwrap()` on an `Err` value: SqliteFailure(Error { code: ConstraintViolation, extended_code: 1555 }, Some("UNIQUE constraint failed: audit.id"))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::independent_probes::diagnostic_retained_cursor_history_proves_initial_issue_completion ... FAILED
+test webhooks::infrastructure::outbox::store::tests::independent_probes::independent_owed_issue_expiry_refuses_first_cold_open_before_bytes_or_files_change ... ok
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::independent_probes::diagnostic_retained_cursor_history_proves_initial_issue_completion
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.05s

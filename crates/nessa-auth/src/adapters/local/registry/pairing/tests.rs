@@ -16,8 +16,8 @@ use crate::{
     application::{
         authorization::AuthorizeAction,
         credential_admin::{
-            AuthRevisionSource, IssueCredentialOutcome, IssueCredentialRequest,
-            RevokeCredentialRequest,
+            AuthRevisionSource, CredentialIssuePurpose, IssueCredentialOutcome,
+            IssueCredentialRequest, RevokeCredentialRequest,
         },
         credential_registry::{CredentialRegistryFault, RegistryInvariant},
         dto::{
@@ -107,6 +107,7 @@ fn claim_fixture_as(
     let audience = AudienceId::new("gateway-1").unwrap();
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: store.as_ref(),
             access: store.as_ref(),
             clock: &Time,
@@ -562,6 +563,7 @@ fn native_key_publication_and_canonical_explicit_revoke_agree() {
     let audience = AudienceId::new("gateway-1").unwrap();
     let device = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: &verifier,
             access: fixture.store.as_ref(),
             clock: &Time,
@@ -674,6 +676,7 @@ fn owner_recovery_preserves_read_only_key_binding() {
     let evidence = CredentialEvidence::new(b"native-device".to_vec()).unwrap();
     let device = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: &verifier,
             access: fixture.store.as_ref(),
             clock: &Time,
@@ -943,6 +946,7 @@ fn first_key_publication_holds_current_history_admission() {
     let audience = AudienceId::new("gateway-1").unwrap();
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: store.as_ref(),
             access: store.as_ref(),
             clock: &Time,
@@ -1076,6 +1080,7 @@ fn first_key_publication_holds_current_history_admission() {
 
 fn ordinary_issue(identity: &str) -> IssueCredentialRequest {
     IssueCredentialRequest {
+        purpose: CredentialIssuePurpose::Product,
         request_id: format!("issue-{identity}"),
         issuer_principal_id: "owner".into(),
         credential_id: identity.into(),
@@ -2065,6 +2070,7 @@ fn pairing_admission_current_access_policy_revision_and_deadline_neighbors() {
     let evidence = CredentialEvidence::new(b"injected-verified-proof".to_vec()).unwrap();
     let short_session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: &proof,
             access: fixture.store.as_ref(),
             clock: &Time,
@@ -2566,6 +2572,7 @@ fn alternate_store_requires_original_issuer(original_has_issuer: bool) {
     );
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: &alternate,
             access: &alternate,
             clock: &Time,
@@ -2704,6 +2711,7 @@ fn equal_revision_alternate_gateway_admission_requires_current_issuer_audience()
     .unwrap();
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: &alternate,
             access: &alternate,
             clock: &Time,
@@ -2884,6 +2892,7 @@ fn align_admission_revision(authority: &AdmissionAuthority, target: &AdmissionAu
     let expected = target.store.identity().unwrap().revision;
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: authority.store.as_ref(),
             access: authority.store.as_ref(),
             clock: &Time,
@@ -2934,6 +2943,7 @@ fn admission_record(owner: &str, member: &str, organization: &str, identity: u8)
 fn admit_record(authority: &AdmissionAuthority, record: &PairingRecord) -> PairingAdmission {
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: authority.store.as_ref(),
             access: authority.store.as_ref(),
             clock: &Time,

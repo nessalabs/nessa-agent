@@ -1,0 +1,22 @@
+   Compiling nessa-auth v0.1.0 (/workspace/nessa-webhook-runtime/crates/nessa-auth)
+    Finished `test` profile [unoptimized] target(s) in 3.33s
+     Running unittests src/lib.rs (/workspace/nessa-agent/target/debug/deps/nessa_auth-d8c2b69b9ce32e17)
+
+running 1 test
+test adapters::local::registry::webhook_issue_tests::issuing_purpose_is_bound_to_the_existing_receipt_across_restart ... FAILED
+
+failures:
+
+---- adapters::local::registry::webhook_issue_tests::issuing_purpose_is_bound_to_the_existing_receipt_across_restart stdout ----
+
+thread 'adapters::local::registry::webhook_issue_tests::issuing_purpose_is_bound_to_the_existing_receipt_across_restart' (68208) panicked at crates/nessa-auth/src/adapters/local/../../../tests/adapters/local/webhook_issue.rs:104:9:
+assertion failed: matches!(store.issue_sync(different), Err(LocalStoreError::Conflict))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    adapters::local::registry::webhook_issue_tests::issuing_purpose_is_bound_to_the_existing_receipt_across_restart
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 211 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p nessa-auth --lib`

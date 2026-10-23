@@ -148,6 +148,7 @@ pub async fn login(
             };
             let (lifetime, replaced) = SignIn {
                 authentication: AuthenticateSession {
+                    policy: operation_state.policy.as_ref(),
                     verifier: operation_state.verifier.as_ref(),
                     access: operation_state.access.as_ref(),
                     clock: operation_state.clock.as_ref(),
@@ -249,6 +250,7 @@ pub async fn check(State(state): State<ProductRouteState>, headers: HeaderMap) -
                 now,
             };
             let identity = match (ResumeSession {
+                policy: operation_state.policy.as_ref(),
                 verifier: &verifier,
                 access: operation_state.access.as_ref(),
                 clock: operation_state.clock.as_ref(),
@@ -334,6 +336,7 @@ pub async fn logout(State(state): State<ProductRouteState>, headers: HeaderMap) 
                         now: operation_state.clock.unix_seconds(),
                     };
                     let (reason, initiator) = match (ResumeSession {
+                        policy: operation_state.policy.as_ref(),
                         verifier: &verifier,
                         access: operation_state.access.as_ref(),
                         clock: operation_state.clock.as_ref(),

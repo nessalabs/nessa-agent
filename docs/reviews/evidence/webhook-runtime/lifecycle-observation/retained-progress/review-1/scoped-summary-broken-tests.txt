@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'webhooks::infrastructure::outbox::store::tests::independent_retained_progress_tests::independent_reset_and_sending_proof_is_scoped_away_from_a_new_pending_registration' (170359) panicked at /tmp/nessa-retained-progress-independent-review/probes.rs:24:3:
+assertion `left == right` failed
+  left: Err(Invalid)
+ right: Err(Unavailable)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::independent_retained_progress_tests::independent_reset_and_sending_proof_is_scoped_away_from_a_new_pending_registration ... FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::independent_retained_progress_tests::independent_reset_and_sending_proof_is_scoped_away_from_a_new_pending_registration
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 132 filtered out; finished in 0.01s

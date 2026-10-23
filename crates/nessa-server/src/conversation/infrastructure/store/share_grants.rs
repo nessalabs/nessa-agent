@@ -26,7 +26,7 @@ use crate::conversation::application::{
 use crate::conversation::domain::{
     Capabilities, CommandHosts, ShareAccess, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
 };
-use nessa_auth::domain::{CredentialId, MAX_IDENTIFIER_BYTES};
+use nessa_auth::domain::{CredentialId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use nessa_protocol::conversation::domain::ConversationId;
 use serde_json::{json, Value};
@@ -399,6 +399,30 @@ fn count(transaction: &Transaction<'_>, sql: &str, id: &str) -> Result<i64, Conv
 }
 
 impl ShareGrants for LocalConversationStore {
+    fn hold_principal_revision<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        principal: &'a PrincipalId,
+        policy_revision: u64,
+    ) -> ConversationFuture<'a, RevisionHold> {
+        Box::pin(async move {
+            let permit = self
+                .grant_gates
+                .lock(
+                    CONVERSATION.to_owned(),
+                    id.to_string(),
+                    principal.as_str().to_owned(),
+                )
+                .await;
+            match self.principal_grant(id, principal).await? {
+                Some(grant) if grant.policy_revision == policy_revision => {
+                    Ok(RevisionHold::held(permit))
+                }
+                _ => Err(ConversationError::Revoked),
+            }
+        })
+    }
+
     fn held_grant<'a>(
         &'a self,
         id: &'a ConversationId,

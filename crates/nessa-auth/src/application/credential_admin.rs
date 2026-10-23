@@ -7,10 +7,23 @@ use super::{
     },
     ports::{AccessError, CredentialEvidence, PortFuture},
 };
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Composition selects the issuing use case; this is not a policy decision.
+/// Offline provisioning and recovery have separate entry points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialIssuePurpose {
+    Product,
+    Webhook,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 /// Request to issue one exact credential, with retry identity separate from its secret.
 pub struct IssueCredentialRequest {
+    /// Server-selected use case whose restrictions the grant-policy owner applies.
+    pub purpose: CredentialIssuePurpose,
     /// Caller-generated idempotency key scoped to `issuer_principal_id`.
     pub request_id: String,
     /// Verified issuing principal used to scope the idempotency receipt.
@@ -99,6 +112,9 @@ pub enum CredentialAdminError {
     Capacity,
     /// The requested credential does not exist.
     NotFound,
+    /// A matching webhook command has an ambiguous historical issuance origin.
+    /// Preserve its evidence and revoke/reissue instead of retrying unchanged.
+    OriginRecoveryRequired,
     /// The authority could not read or durably commit its state.
     Unavailable,
 }

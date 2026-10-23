@@ -1,0 +1,6 @@
+{
+  "before": "FROM cursors WHERE registration=?1)",
+  "after": "FROM cursors NOT INDEXED WHERE registration=?1)",
+  "originalSHA256": "414539bc2d69209ae414ae483c1309b26a6893763b3cc3e51205882f7d3f24fa",
+  "mutatedSHA256": "f3d5a15b1f92ba87f62e0dffe9d8e2dbd1fad7469e38832ec67f6048da51309c"
+}

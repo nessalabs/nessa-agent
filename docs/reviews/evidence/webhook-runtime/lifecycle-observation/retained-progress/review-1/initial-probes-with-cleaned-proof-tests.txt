@@ -1,0 +1,7 @@
+
+running 3 tests
+test webhooks::infrastructure::outbox::store::tests::independent_retained_progress_tests::independent_mismatched_initial_actor_does_not_establish_progress ... ok
+test webhooks::infrastructure::outbox::store::tests::independent_retained_progress_tests::independent_published_cursor_actor_still_requires_original_reset_fact ... ok
+test webhooks::infrastructure::outbox::store::tests::independent_retained_progress_tests::independent_reset_only_proof_is_scoped_away_from_a_new_pending_registration ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 130 filtered out; finished in 0.06s

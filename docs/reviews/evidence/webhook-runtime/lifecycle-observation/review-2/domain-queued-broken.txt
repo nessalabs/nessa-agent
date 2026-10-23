@@ -1,0 +1,16 @@
+
+running 1 test
+test webhooks::infrastructure::outbox::store::tests::lifecycle_context_tests::stopped_queue_admission_refuses_before_cursor_or_delivery_commit ...
+thread 'webhooks::infrastructure::outbox::store::tests::lifecycle_context_tests::stopped_queue_admission_refuses_before_cursor_or_delivery_commit' (153051) panicked at /tmp/nessa-expiry-context-final-review/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/lifecycle_context.rs:269:5:
+assertion `left == right` failed
+  left: Ok(270c7f71-32cc-4e8b-961e-8d465cda1573)
+ right: Err(Conflict)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::lifecycle_context_tests::stopped_queue_admission_refuses_before_cursor_or_delivery_commit
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 120 filtered out; finished in 0.01s

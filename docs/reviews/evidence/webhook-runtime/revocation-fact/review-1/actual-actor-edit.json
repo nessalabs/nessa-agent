@@ -1,0 +1,7 @@
+{
+  "path": "adapters/local/registry.rs",
+  "old": "                            record.clone(),\n                            &credential,",
+  "new": "                            { let mut fabricated = record.clone(); fabricated.initiator = InitiatorDto::LocalOperator; fabricated },\n                            &credential,",
+  "originalHash": "2a588de0a86baba3a9701074993e703e3da118943e4c6ade6da0a39f2d421045",
+  "changedHash": "a7a8dcac6703b4f96602f9b39e862b86c6463c66662e05eae35397fea911b06b"
+}

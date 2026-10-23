@@ -1,0 +1,3 @@
+RegistrationPhase::Active => Err(LifecycleError::ObservationRequired),
+=>
+RegistrationPhase::Active => Ok((self.clone(), None)),

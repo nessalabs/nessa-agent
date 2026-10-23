@@ -1,0 +1,6 @@
+
+running 2 tests
+test webhooks::infrastructure::outbox::store::tests::independent_probes::diagnostic_retained_cursor_history_proves_initial_issue_completion ... ok
+test webhooks::infrastructure::outbox::store::tests::independent_probes::independent_owed_issue_expiry_refuses_first_cold_open_before_bytes_or_files_change ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.05s

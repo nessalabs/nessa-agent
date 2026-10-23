@@ -100,8 +100,8 @@ fn resource() -> Resource {
 }
 async fn authority() -> (Arc<Authority>, AuthenticatedSession) {
     let authority = Arc::new(Authority {
-        snapshot: Mutex::new(AccessSnapshot {
-            credential: Credential::new(
+        snapshot: Mutex::new({
+            let credential = Credential::new(
                 CredentialId::new("credential").unwrap(),
                 PrincipalId::new("person").unwrap(),
                 OrganizationId::new("org").unwrap(),
@@ -113,15 +113,45 @@ async fn authority() -> (Arc<Authority>, AuthenticatedSession) {
                     resource(),
                 )],
             )
-            .unwrap(),
-            membership: Membership::new(
+            .unwrap();
+            let membership = Membership::new(
                 MembershipId::new("membership").unwrap(),
                 PrincipalId::new("person").unwrap(),
                 OrganizationId::new("org").unwrap(),
                 MembershipRole::Member,
                 MembershipStatus::Active,
-            ),
-            revision: 1,
+            );
+            let revision = 1;
+            // This fixture explicitly creates its own original product issuance.
+            let original = nessa_auth::domain::CredentialTransition::new(
+                credential.id().clone(),
+                None,
+                nessa_auth::domain::CredentialLifecycle {
+                    issued_at: credential.issued_at(),
+                    expires_at: credential.expires_at(),
+                    revoked_at: None,
+                },
+                nessa_auth::domain::TransitionCause::Issued(
+                    nessa_auth::domain::IssuanceCause::AdminIssue,
+                ),
+                nessa_auth::domain::Initiator::LocalOperator,
+                credential.issued_at(),
+            )
+            .unwrap();
+            let origin = nessa_auth::application::origin::CredentialOrigin::restore(
+                nessa_auth::application::dto::CredentialTransitionDto::record(
+                    &original, 1, 1, None,
+                ),
+                &credential,
+            )
+            .unwrap();
+            AccessSnapshot {
+                revocation: None,
+                credential,
+                membership,
+                revision,
+                origin,
+            }
         }),
         now: AtomicU64::new(100_000),
         unavailable: AtomicBool::new(false),
@@ -129,6 +159,7 @@ async fn authority() -> (Arc<Authority>, AuthenticatedSession) {
         panic_read: AtomicBool::new(false),
     });
     let session = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: authority.as_ref(),
         access: authority.as_ref(),
         clock: authority.as_ref(),

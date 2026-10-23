@@ -1,0 +1,23 @@
+
+running 4 tests
+
+thread 'webhooks::infrastructure::outbox::store::tests::issuance_context_tests::issuance_work_proof_uses_registration_keys_at_retained_capacity' (158106) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/issuance_context.rs:236:132:
+called `Result::unwrap()` on an `Err` value: SqliteFailure(Error { code: ConstraintViolation, extended_code: 787 }, Some("FOREIGN KEY constraint failed"))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::issuance_work_proof_uses_registration_keys_at_retained_capacity ... FAILED
+
+thread 'webhooks::infrastructure::outbox::store::tests::issuance_context_tests::genuine_initial_issue_lost_publication_ack_recovers_before_work' (158105) panicked at /tmp/nessa-lifecycle-frozen/crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/issuance_context.rs:182:9:
+assertion `left == right` failed
+  left: Err(Conflict)
+ right: Err(Unavailable)
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::genuine_initial_issue_lost_publication_ack_recovers_before_work ... FAILED
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::published_original_issue_remains_valid_with_later_history ... ok
+test webhooks::infrastructure::outbox::store::tests::issuance_context_tests::completed_issue_cannot_be_owed_after_later_retained_work ... ok
+
+failures:
+
+failures:
+    webhooks::infrastructure::outbox::store::tests::issuance_context_tests::genuine_initial_issue_lost_publication_ack_recovers_before_work
+    webhooks::infrastructure::outbox::store::tests::issuance_context_tests::issuance_work_proof_uses_registration_keys_at_retained_capacity
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 117 filtered out; finished in 0.32s

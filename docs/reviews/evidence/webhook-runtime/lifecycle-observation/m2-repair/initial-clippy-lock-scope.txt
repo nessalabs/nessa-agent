@@ -1,0 +1,48 @@
+    Checking nessa-auth v0.1.0 (/workspace/nessa-webhook-composition/crates/nessa-auth)
+    Checking nessa-protocol v0.1.0 (/workspace/nessa-webhook-composition/crates/nessa-protocol)
+    Checking nessa-client-core v0.1.0 (/workspace/nessa-webhook-composition/crates/nessa-client-core)
+    Checking nessa-server v0.1.0 (/workspace/nessa-webhook-composition/crates/nessa-server)
+    Checking nessa-device-client v0.1.0 (/workspace/nessa-webhook-composition/crates/nessa-device-client)
+warning: constant evaluation is taking a long time
+   --> /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/slice/mod.rs:117:8
+    |
+    = note: the const evaluator is currently interpreting this expression
+help: the constant being evaluated
+   --> crates/nessa-server/src/env/config.rs:51:9
+    |
+ 51 |           const LEASE_PROTOCOL_DIGITS: [u8; 16] =
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 63 | / lease_protocol!(
+ 64 | |     "../../../nessa-protocol/src/lease.rs",
+ 65 | |     "../../../nessa-protocol/src/pairing/frames.rs",
+ 66 | |     "../env_serve/mod.rs",
+...   |
+105 | |     "../../../nessa-sdk/src/domain/agent_execution/leases/value_objects.rs",
+106 | | );
+    | |_- in this macro invocation
+    = note: this warning originates in the macro `lease_protocol` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `nessa-server` (lib) generated 1 warning
+error: this `MutexGuard` is held across an await point
+   --> crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/issuance_context.rs:191:13
+    |
+191 |         let c = f.store.owner.connection.lock().unwrap();
+    |             ^
+    |
+    = help: consider using an async-aware `Mutex` type or ensuring the `MutexGuard` is dropped before calling `await`
+note: these are all the await points this lock is held through
+   --> crates/nessa-server/src/webhooks/infrastructure/outbox/../../../../tests/webhooks/infrastructure/outbox/issuance_context.rs:215:40
+    |
+215 |         f.store = reopen_store(&mut f).await.unwrap();
+    |                                        ^^^^^
+216 |         f.store.queue(f.record(1)).await.unwrap();
+    |                                    ^^^^^
+217 |         assert_eq!(f.store.due(1001).await.unwrap().len(), 1);
+    |                                      ^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#await_holding_lock
+    = note: `-D clippy::await-holding-lock` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::await_holding_lock)]`
+
+warning: `nessa-server` (lib test) generated 1 warning (1 duplicate)
+error: could not compile `nessa-server` (lib test) due to 1 previous error; 1 warning emitted
