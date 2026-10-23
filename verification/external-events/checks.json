@@ -1,0 +1,79 @@
+{
+  "sourceRevision": "0c320bd82744247a771773562510d0e5c0b8b479",
+  "baseRevision": "0b8019cf45f99b285f10c41199875d474492c6d1",
+  "environment": {
+    "os": "Linux x86_64",
+    "rust": "1.99.1",
+    "node": "24.19.0",
+    "cargoBuildJobs": 2
+  },
+  "featureTests": {
+    "command": "cargo test -p nessa-server --lib external_events::",
+    "exit": 0,
+    "passed": 16
+  },
+  "affectedSuites": {
+    "command": "cargo test -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client --no-fail-fast",
+    "exit": 101,
+    "results": [
+      "test result: ok. 437 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.11s",
+      "test result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.43s",
+      "test result: ok. 180 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.77s",
+      "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3763 filtered out; finished in 0.00s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3763 filtered out; finished in 0.00s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3763 filtered out; finished in 0.00s",
+      "test result: FAILED. 3753 passed; 1 failed; 10 ignored; 0 measured; 0 filtered out; finished in 96.79s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+      "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+      "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+      "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s",
+      "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+      "test result: ok. 117 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.94s",
+      "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+      "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s"
+    ],
+    "failedTests": [
+      "agents::infrastructure::codex::tests::status_cleanup_removes_descendants_after_root_exit_and_after_timeout"
+    ],
+    "baselineComparison": "baseline-cleanup.txt"
+  },
+  "clippy": {
+    "command": "cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk --all-targets -- -D warnings",
+    "exit": 0,
+    "note": "Existing allowed long_running_const_eval diagnostic; no new allowances."
+  },
+  "format": {
+    "command": "cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk -- --check",
+    "exit": 0
+  },
+  "architecture": {
+    "tests": 108,
+    "exit": 0,
+    "checkExit": 0,
+    "commands": [
+      "node --test scripts/architecture/*.test.mjs",
+      "node scripts/check-architecture.mjs"
+    ],
+    "note": "An initial invocation lacked workspace Cargo in PATH and failed ENOENT; rerun with the documented toolchain environment passed."
+  },
+  "docs": {
+    "command": "npm --prefix /workspace/nessa-docs run --silent validate:docs -- --project /workspace/nessa-agent",
+    "documents": 120,
+    "issues": 0,
+    "renderEvidence": "docs-render.json"
+  },
+  "limitations": [
+    "No production mount, provider registration or external workflow effects.",
+    "Cancellation tests drop real Axum service futures; no TCP-reset simulation.",
+    "Desktop UI/cross-platform execution not run; inherited stress scenarios own shared execution behavior.",
+    "Hosted exact-head CI remains required; parent owns merge and baseline-blocker qualification."
+  ]
+}
