@@ -2341,6 +2341,7 @@ async fn reset_facts_survive_audit_trim_and_decode_completely() {
         "reset_required=0",
         "reset_stop='invalid'",
         "reset_stop='{}'",
+        "reset_stop='{\"initiator\":\"live\",\"at_ms\":18446744073709551615}'",
     ] {
         let mut f = Fixture::new().await;
         f.store.queue(f.record(1)).await.unwrap();
