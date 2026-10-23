@@ -88,3 +88,25 @@ fn every_issuance_cause_round_trips_without_purpose_inference() {
         assert_eq!(origin.transition(), &original);
     }
 }
+
+#[test]
+fn a_valid_revocation_record_is_not_an_original_issuance() {
+    let (mut credential, _) = fixture();
+    let revoked = credential
+        .revoke(20, Initiator::LocalOperator)
+        .unwrap()
+        .unwrap();
+    let record = CredentialTransitionDto::record(&revoked, 4, 3, Some("stop".into()));
+    assert!(CredentialOrigin::restore(record, &credential).is_err());
+}
+
+#[test]
+fn webhook_origin_requires_its_actual_principal_command_shape() {
+    let (credential, record) = fixture();
+    let mut missing_command = record.clone();
+    missing_command.correlation = None;
+    assert!(CredentialOrigin::restore(missing_command, &credential).is_err());
+    let mut offline_actor = record;
+    offline_actor.initiator = nessa_auth::application::dto::InitiatorDto::LocalOperator;
+    assert!(CredentialOrigin::restore(offline_actor, &credential).is_err());
+}
