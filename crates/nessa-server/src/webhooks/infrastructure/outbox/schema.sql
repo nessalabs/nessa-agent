@@ -59,6 +59,7 @@ CREATE TABLE deliveries (
     UNIQUE(registration, conversation, incarnation, position)
 );
 CREATE INDEX ready_deliveries ON deliveries(phase, due_at, registration, conversation, position);
+CREATE INDEX terminal_deliveries ON deliveries(registration) WHERE phase NOT IN ('queued','sending','retry');
 
 CREATE TABLE audit (
     id TEXT PRIMARY KEY,
@@ -71,6 +72,10 @@ CREATE TABLE audit (
 
 CREATE INDEX unpublished_audit ON audit(published,source_reset);
 CREATE INDEX delivery_audit ON audit(delivery, published);
+CREATE INDEX published_registration_audit ON audit(published) WHERE delivery IS NULL;
+CREATE TRIGGER delivery_audit_retire AFTER DELETE ON deliveries
+WHEN OLD.phase NOT IN ('queued','sending','retry')
+BEGIN DELETE FROM audit WHERE delivery=OLD.id AND published=1; END;
 
 -- Original secret-free ownership facts survive private registration retirement
 -- until all its audit projections have been acknowledged and trimmed.
