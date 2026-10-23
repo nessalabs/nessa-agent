@@ -15,7 +15,9 @@ cover lost publication acknowledgement, cold recovery and retirement, saved audi
 actor substitution, canonical decoding, integer overflow, known response and
 unknown Sending recovery. [Isolated baseline](baseline.txt): 88 passed.
 [Combined canonical server webhook suite](webhooks.txt): 120 passed, zero failed.
-[Architecture](architecture.txt) passed. Six focused fail/restore controls were
+[Architecture](architecture.txt) and the required seven-package all-target locked
+[Clippy run with `-D warnings`](clippy.txt) passed. The existing lease constant
+evaluation notice remains in the log. Six focused fail/restore controls were
 caught and restored; [results](results.json) and [progress](progress.txt) retain
 those observations. They establish enforcement, not independent review.
 
