@@ -187,3 +187,28 @@ pnpm exec vitest run \
 
 The focused run retained a React list-key warning from `ServerRow`; all seven
 files passed. No assertion or rendered runtime source was changed to silence it.
+
+## Manual two-engine qualification follow-up
+
+Source commit `0d30b39e440c97523dd925ba90e187fd92da8b9d` adds the ordering
+script to the existing manual `canonical-browser-verification.yml` job. It
+requests Chromium and WebKit with the pinned bundled browsers, writes its JSON
+and screenshots below the same provenance/artifact directory, and propagates
+nonzero exit status. No always-on browser job, permissions change or runtime
+change was added. Existing state-page behavior checkpoints remain at the source
+commits actually reviewed.
+
+Local validation: **8/8 provenance tests**, YAML parsing, shell syntax, manual-only
+trigger/read-only permission and artifact assertions, script help and workflow
+formatting passed. The new workflow still needs exact-head CI and independent
+review. The parent reported ordinary CI terminal green at the preceding
+`7f434845423686cdd01a17300c47d10d46911f50`; that does not supply WebKit evidence.
+
+Dispatch attempted with `gh workflow run canonical-browser-verification.yml`,
+repository `nessalabs/nessa-agent`, ref `codex/1087-user-flow-regressions`,
+`source=0d30b39e440c97523dd925ba90e187fd92da8b9d`, and empty `base`.
+**Denied:** CLI exited 1 during
+`GET https://api.github.com/repos/nessalabs/nessa-agent/actions/workflows/canonical-browser-verification.yml`
+with `Forbidden`. It did not reach the dispatch POST; no manual run was started.
+No retry or alternate dispatch route was attempted. Both-engine ordering and
+canonical scripted acceptance remain pending and block merge readiness.
