@@ -1,0 +1,146 @@
+{
+  "check": "settings-page",
+  "ok": false,
+  "started": "2026-10-23T08:47:34.470Z",
+  "finished": "2026-10-23T08:48:07.735Z",
+  "target": {
+    "url": "http://127.0.0.1:1440/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "failures": [
+        "console.error: Failed to load resource: the server responded with a status of 403 (Forbidden) (http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2)",
+        "requestfailed: http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2 net::ERR_ABORTED",
+        "console.error: Failed to load resource: the server responded with a status of 403 (Forbidden) (http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist-mono@5.3.0/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2)",
+        "requestfailed: http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist-mono@5.3.0/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2 net::ERR_ABORTED"
+      ],
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1440/favicon.ico)"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "name": "review-notices",
+      "permission": "denied",
+      "rows": 1,
+      "allowButtons": 0,
+      "text": "Review notificationsBlocked in this browser. Allow notifications for this site to turn them on.",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "failures": [
+        "console.error: Failed to load resource: the server responded with a status of 403 (Forbidden) (http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2)",
+        "requestfailed: http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2 net::ERR_ABORTED",
+        "console.error: Failed to load resource: the server responded with a status of 403 (Forbidden) (http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist-mono@5.3.0/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2)",
+        "requestfailed: http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist-mono@5.3.0/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2 net::ERR_ABORTED"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "name": "native-hooks",
+      "read": [
+        {
+          "id": "claude-native-hooks",
+          "disabled": true,
+          "switches": 0,
+          "text": "Claude Code hooksNot available in this window."
+        },
+        {
+          "id": "codex-native-hooks",
+          "disabled": true,
+          "switches": 0,
+          "text": "Codex hooksNot available in this window."
+        }
+      ],
+      "routing": [
+        {
+          "id": "claude-native-hooks",
+          "tab": "Native hooks",
+          "top": 179,
+          "bottom": 240,
+          "inView": true
+        },
+        {
+          "id": "codex-native-hooks",
+          "tab": "Native hooks",
+          "top": 240,
+          "bottom": 300,
+          "inView": true
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "failures": [
+        "console.error: Failed to load resource: the server responded with a status of 403 (Forbidden) (http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2)",
+        "requestfailed: http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2 net::ERR_ABORTED",
+        "console.error: Failed to load resource: the server responded with a status of 403 (Forbidden) (http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist-mono@5.3.0/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2)",
+        "requestfailed: http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist-mono@5.3.0/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2 net::ERR_ABORTED",
+        "console.error: Failed to load resource: the server responded with a status of 403 (Forbidden) (http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2)",
+        "requestfailed: http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2 net::ERR_ABORTED"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "name": "native-hooks-on",
+      "checked": "true",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "failures": [
+        "console.error: Failed to load resource: the server responded with a status of 403 (Forbidden) (http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2)",
+        "requestfailed: http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2 net::ERR_ABORTED",
+        "console.error: Failed to load resource: the server responded with a status of 403 (Forbidden) (http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist-mono@5.3.0/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2)",
+        "requestfailed: http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist-mono@5.3.0/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2 net::ERR_ABORTED",
+        "console.error: Failed to load resource: the server responded with a status of 403 (Forbidden) (http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2)",
+        "requestfailed: http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2 net::ERR_ABORTED"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "name": "native-hooks-unset",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "failures": [
+        "console.error: Failed to load resource: the server responded with a status of 403 (Forbidden) (http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2)",
+        "requestfailed: http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2 net::ERR_ABORTED",
+        "console.error: Failed to load resource: the server responded with a status of 403 (Forbidden) (http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist-mono@5.3.0/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2)",
+        "requestfailed: http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist-mono@5.3.0/node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2 net::ERR_ABORTED",
+        "console.error: Failed to load resource: the server responded with a status of 403 (Forbidden) (http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2)",
+        "requestfailed: http://127.0.0.1:1440/@fs/workspace/nessa-agent/node_modules/.pnpm/@fontsource-variable+geist@5.3.0/node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2 net::ERR_ABORTED"
+      ],
+      "ok": false
+    },
+    {
+      "engine": "chromium",
+      "name": "native-hooks-failed",
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

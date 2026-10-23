@@ -15,6 +15,7 @@ sources:
   - "src/desktop/workspace/adapters/store/session-commands.ts"
   - "src/desktop/widgets/app/model/lifecycle.ts"
 diagramLinks:
+  SettingsActions: desktop-settings-action-owners
   F0: "desktop-workspace-open-dismiss-and-reopen-the-desktop-window"
   F1: "desktop-workspace-load-browse-and-resynchronize-the-workspace"
   F2: "desktop-workspace-start-a-workspace-session-send-and-retry"
@@ -49,6 +50,8 @@ These boxes open related pages. They are parts of the system, rather than mutual
 ```mermaid
 flowchart TB
     Feature["Browse this feature"]
+    SettingsActions["Finish or retire a settings action"]
+    Feature --> SettingsActions
     F0["Open, dismiss, and reopen the desktop window"]
     Feature --> F0
     F1["Load, browse, and resynchronize the workspace"]
@@ -68,6 +71,8 @@ flowchart TB
 ```
 
 ## Browse flows
+
+- [Finish or retire a settings action](settings-action-owners.md)
 
 - [Discover subagents and experimental features](discover-subagents-and-experimental-features.md)
 - [Drag or move a session or pane](drag-or-move-a-session-or-pane.md)
