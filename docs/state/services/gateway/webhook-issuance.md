@@ -4,7 +4,7 @@ title: Webhook credential issuance
 kind: operation
 status: mixed
 summary: Cedar owns webhook issuance; a bounded private intent coordinates actual auth receipts and fenced installation, while product and worker composition remain pending.
-sourceRevision: "946bbc8647b681fbd34440a116ecb3fb8efe5a6f"
+sourceRevision: "1c1355b537037e7416486856211b74c605804fa7"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/credential_admin.rs
@@ -116,6 +116,7 @@ stateDiagram-v2
     Reserved --> Reserved: Auth or installation outcome unavailable
     Reserved --> Discarded: Auth proves Conflict or Capacity
     Reserved --> Reserved: Invalid returned reservation / refuse before auth
+    Reserved --> Recovery: Matching receipt has historical AdminIssue origin
     Reserved --> Held: Auth returns metadata / acquire current authority hold
     Held --> Reserved: Current authority unavailable or contradictory
     Held --> Stopped: Revoked, expired or inactive current authority
@@ -194,9 +195,19 @@ than claiming rollback.
 
 Historical AdminIssue is preserved exactly. Registration does not infer webhook
 purpose from read-only grants or an old destination. Such an ambiguous origin
-returns OriginRecoveryRequired without installing anything. Explicit revoke and a
+returns OriginRecoveryRequired without installing anything. Matching webhook receipt
+replay reads the actual original fact before selecting command transitions. Missing
+original correlation, a local operator or a different existing historical actor
+therefore produce explicit recovery, not transient auth unavailability. The auth
+reader and receipt owner use the same origin decoder. The private intent and auth
+bytes remain; ordinary Product replay keeps its existing behavior. Explicit revoke and a
 fresh issuance/request are required. Automatic cleanup of an already-issued,
 uninstalled intent still needs the pending lifecycle coordinator; meanwhile the
 private intent cap bounds retention. Other contradictory facts are inconsistent.
 Ordinary product issuance is unchanged. Application installation and its session
 model remain owned by #1052.
+
+The recovery-classification correction at this source checkpoint is covered by
+five accepted historical shapes, repeated registration, byte-preservation and
+intent-retention checks in the linked registration tests. [Fresh review round 1](../../../reviews/evidence/webhook-runtime/origin/review-1/report.md)
+reproduced the missing classification; the fix still requires fresh round 2.

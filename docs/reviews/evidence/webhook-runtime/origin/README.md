@@ -93,3 +93,12 @@ no project file was written until rerunning against the absolute project root.
 Full sender/source/W1 composition, recipient E2E and exact-head CI remain pending.
 No live credential, production recipient or provider registration is used.
 No exactly-once remote-effects claim.
+
+## Fresh review and recovery classification
+
+[Round 1](review-1/report.md) found one Minor recovery classification gap at
+`ee0d8eff159d96eeb70161f1c3ad774ae16da558`; no Blocker/Major/Nit.
+[Correction and execution evidence](recovery/README.md) at
+`1c1355b537037e7416486856211b74c605804fa7` preserve that report and failure,
+cover all accepted historical shapes, and retain ordinary Product behavior.
+Fresh round 2 remains required.
