@@ -30,6 +30,7 @@ export const STRESS = {
   long: "stress long",
   window: "stress window",
   table: "stress table",
+  trace: "stress trace",
 }
 
 /**
@@ -68,6 +69,7 @@ export const SAYS = {
   long: "Long answer: ",
   window: "Window: ",
   table: "Tables: ",
+  trace: "Traced: ",
   carried: "Carried on by ",
 }
 
@@ -96,6 +98,20 @@ export const TABLE_LINES = [
  * wait out their `waitMs`.
  */
 export const WATCH_CALLS = 12
+
+/** How long a `trace` turn waits after each call but the last. */
+export const TRACE_PAUSE_MS = 400
+/**
+ * The calls a `trace` turn makes, in order: what each is called with, which
+ * the gateway keeps as its input, and how each ends.
+ */
+export const TRACE_CALLS = [
+  { tool: "report_rows", arguments: {}, status: "completed" },
+  { tool: "link_resources", arguments: {}, status: "completed" },
+  // The server refuses what it does not take, so this call fails either
+  // way; the arguments are there to be kept as its input.
+  { tool: "always_fails", arguments: { reason: "stress trace" }, status: "failed" },
+]
 
 /** The tool every review asks for: the test server's own, so an allow can run it. */
 const TOOL = "report_rows"
@@ -194,6 +210,21 @@ export function stressScenario({
               ...TABLE_LINES.map((line) => `${line}\n`),
             ],
           },
+          { do: "end" },
+        ],
+      },
+      {
+        // Calls before the answer, one of them failing, with a pause after
+        // each so the bars of the waterfall start apart.
+        when: STRESS.trace,
+        steps: [
+          ...TRACE_CALLS.flatMap(({ tool, arguments: args }, index) => [
+            { do: "tool", tool, arguments: args },
+            ...(index < TRACE_CALLS.length - 1
+              ? [{ do: "pause", ms: TRACE_PAUSE_MS }]
+              : []),
+          ]),
+          { do: "text", chunks: [SAYS.trace, "${prompt.text}"] },
           { do: "end" },
         ],
       },

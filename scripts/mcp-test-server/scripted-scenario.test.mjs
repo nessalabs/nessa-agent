@@ -1047,3 +1047,12 @@ test("a tool step with times makes that many calls at once and saves every resul
     .filter((text) => typeof text === "string" && text.startsWith("Saved"))
   assert.deepEqual(said, ["Saved 3 results."])
 })
+
+test("the stress check's scenario is one the agent runs, its trace calling tools the server has", async () => {
+  const { stressScenario, TRACE_CALLS } = await import("./scenarios/stress.mjs")
+  const { TOOLS } = await import("./server.mjs")
+  // A scenario the agent refuses ends its process before the first turn,
+  // which the stress check only sees as a conversation that cannot open.
+  assert.doesNotThrow(() => parseScenario(stressScenario()))
+  for (const call of TRACE_CALLS) assert.ok(Object.hasOwn(TOOLS, call.tool), call.tool)
+})

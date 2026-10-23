@@ -485,6 +485,32 @@ export function PendingAction({ children }: { children: ReactNode }) {
   )
 }
 
+/** A button that runs its row's action, described by its row's line. */
+export function RowAction({
+  children,
+  onClick,
+  disabled,
+}: {
+  children: ReactNode
+  onClick: () => void
+  /** Resting for now, such as while the action it started is in flight. */
+  disabled?: boolean
+}) {
+  const description = useContext(RowDescription)
+  const available = useContext(RowAvailable)
+  return (
+    <button
+      type="button"
+      className="settings-button"
+      disabled={!available || disabled === true}
+      aria-describedby={description}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  )
+}
+
 /** Local, unsaved state for settings that only show their shape for now. */
 export function usePrototype<T>(initial: T) {
   return useState<T>(initial)

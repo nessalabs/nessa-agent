@@ -23,7 +23,7 @@ use crate::domain::agent_execution::{
     },
     tools::{
         FileLocation, ToolContent, MAX_MCP_ARGUMENTS_BYTES, MAX_MCP_NAME_BYTES,
-        MAX_STRUCTURED_RESULT_BYTES,
+        MAX_STRUCTURED_RESULT_BYTES, MAX_TOOL_INPUT_BYTES,
     },
 };
 use crate::domain::common::value_objects::MediaType;
@@ -285,6 +285,7 @@ impl Shape {
             (Image, "digest") => Text(DIGEST_BYTES),
             (Image, "media_type") => Text(MEDIA_TYPE_BYTES),
             (Event, "update") => Update,
+            (Event, "at_ms") => Number,
             (Update, "Text" | "Thought") => Text(MAX_MESSAGE_CHUNK_BYTES),
             (Update, "Tool") | (Review, "tool") => Tool,
             (Update, "PermissionRequested" | "PermissionCancelled") => Review,
@@ -305,6 +306,7 @@ impl Shape {
             (Tool, "locations") => Locations,
             (Tool, "mcp_tool") => McpTool,
             (Tool, "mcp_arguments") => Text(MAX_MCP_ARGUMENTS_BYTES),
+            (Tool, "input") => Text(MAX_TOOL_INPUT_BYTES),
             (McpTool, "server" | "tool") => Text(MAX_MCP_NAME_BYTES),
             (ContentItem, "Structured") => Text(MAX_STRUCTURED_RESULT_BYTES),
             (Tool, "id") | (Review, "id" | "execution_id" | "tool_id" | "session_id") => Text(256),

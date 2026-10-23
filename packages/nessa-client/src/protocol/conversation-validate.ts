@@ -759,6 +759,10 @@ export function conversationView(value: unknown, expected: string): Conversation
       "mcp",
       "structuredContent",
       "nativeHooks",
+      "startedAtMs",
+      "endedAtMs",
+      "changes",
+      "changesCut",
     ])
     // Absent when the process start the call ran under recorded no choice.
     if (Object.hasOwn(tool, "nativeHooks")) {
@@ -814,6 +818,29 @@ export function conversationView(value: unknown, expected: string): Conversation
     }
     if (tool.structuredContent !== undefined)
       text(tool, "structuredContent", bounds.maxToolStructuredContentBytes)
+    // When the gateway heard the call start and settle; absent on calls saved
+    // before it kept them, and the end absent while the call runs. Wall-clock
+    // times, so an end before its start (a clock step) is the reader's to clamp.
+    for (const key of ["startedAtMs", "endedAtMs"]) {
+      const at = tool[key]
+      if (at !== undefined && (!Number.isSafeInteger(at) || (at as number) < 0))
+        throw new Error(`Invalid conversation tool ${key}`)
+    }
+    // The files the call changed, as the agent reported them; absent when it
+    // reported none. Each side is cut to its bound, and says so.
+    if (tool.changes !== undefined) {
+      for (const change of items(tool, "changes", 16)) {
+        exact(change, ["path", "before", "after", "cut"])
+        text(change, "path", 4096, false)
+        if (change.before !== undefined) text(change, "before", 7000)
+        text(change, "after", 7000)
+        if (typeof change.cut !== "boolean")
+          throw new Error("Invalid conversation tool change")
+      }
+    }
+    // Present only when changes leaves out files the call changed.
+    if (tool.changesCut !== undefined && typeof tool.changesCut !== "boolean")
+      throw new Error("Invalid conversation tool changesCut")
   }
   if (!item.truncated) {
     for (const toolKey of toolIds) {

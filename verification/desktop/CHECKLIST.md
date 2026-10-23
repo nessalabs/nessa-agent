@@ -2207,3 +2207,30 @@ with a typed failure.
   fold, then retain their next-frame reply and Stop assertions. _Check:_
   `session-rows.mjs`, `responsive.mjs --only list-gutter`, and
   `columns.mjs --only content-visible,reply-held,stop-held --sizes 760x700`.
+### Pending action ownership (#1087)
+
+`user-flow-ordering.mjs` drives production AgentDownloads and useComposer against controlled ports in Chromium and WebKit: Busy and Not confirmed both keep Download absent after an older offers response (0 stale buttons, 1 dispatch), while a newer check restores it (1 button). Sending in A and clearing B leaves B expanded; refusing A while B sends cannot suppress B's own collapse. This is frontend dispatch/presentation evidence, not a claim about physical backend installation. The fixture needs dev mode and no gateway credentials.
+
+The same `user-flow-ordering.mjs` fixture also checks a real permission-rule
+Revoke during a focus refresh: 1 pending revoke dispatch, disabled controls
+through its post-command reread, then enabled recovery. It does not prove
+physical server mutation or ordinary separate-click reachability of the
+qualified same-task composer counterexample.
+
+## Pending settings action owners (#1087)
+
+- [ ] **Native-hook saves retain one owner through the fresh read.** Repeated
+  inputs cannot dispatch another write while pending; focus/visibility do not
+  replace it. A replaced source starts its own read, and retired save/reread
+  continuations cannot publish or release its pending action. Same-task repeated
+  clicks and controlled provider replacement are qualified component orderings;
+  production provider replacement remains unproven.
+- [ ] **Allow admits one outstanding notification permission API request.** Its
+  button is disabled until settlement; refusal or rejection permits recovery.
+  Retired source/view completions cannot invoke replacement waiting-review
+  replay. Counts establish API dispatch and callback ownership, not duplicate
+  visible OS prompts or authorization bypass.
+
+_Check:_ `settings-action-owners.mjs` (both engines), component regressions in
+`native-hooks-rows.test.tsx` and `review-notice-rows.test.tsx`. See
+[settings action ownership](../../docs/design/settings-action-owners.md).

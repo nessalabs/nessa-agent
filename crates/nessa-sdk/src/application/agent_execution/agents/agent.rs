@@ -1710,7 +1710,7 @@ impl Agent {
             let event = match ready {
                 Poll::Pending | Poll::Ready(Ok(None)) => return Ok(()),
                 Poll::Ready(Err(error)) => return Err(error),
-                Poll::Ready(Ok(Some(event))) => event,
+                Poll::Ready(Ok(Some(event))) => self.inner.manager.observed(event),
             };
             self.inner
                 .manager
@@ -2187,6 +2187,7 @@ impl Agent {
                 next = events.next(), if !ended => {
                     match next {
                         Ok(Some(event)) => {
+                            let event = self.inner.manager.observed(event);
                             observed_current_execution |= event.execution_id() == &input.execution_id;
                             if admission_rejected && observed_current_execution {
                                 // Fence controls before validation or persistence can suspend.

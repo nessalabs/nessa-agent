@@ -20,6 +20,7 @@ pub use identity::ToolCallId;
 pub use mcp::{McpTool, MAX_MCP_NAME_BYTES};
 pub(crate) use tool::ToolObservationUndo;
 pub use tool::{
-    FileLocation, FilePath, McpCallArguments, ToolCallUpdate, ToolContent, ToolContentView,
-    ToolKind, ToolObservation, ToolStatus, MAX_MCP_ARGUMENTS_BYTES, MAX_STRUCTURED_RESULT_BYTES,
+    FileLocation, FilePath, McpCallArguments, ToolCallInput, ToolCallUpdate, ToolContent,
+    ToolContentView, ToolKind, ToolObservation, ToolStatus, MAX_MCP_ARGUMENTS_BYTES,
+    MAX_STRUCTURED_RESULT_BYTES, MAX_TOOL_INPUT_BYTES,
 };

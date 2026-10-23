@@ -25,6 +25,7 @@ diagramLinks:
   F6: "sdk-runtime-an-app-calls-a-tool-through-gateway-policy-and-review"
   F7: "sdk-runtime-read-an-app-resource-once-and-release-its-ticket"
   F8: "sdk-runtime-an-app-sends-a-message-and-gives-the-model-context"
+  F9: "sdk-runtime-usage-limit-continuation"
 ---
 
 # Runtime and tools
@@ -58,6 +59,8 @@ flowchart TB
     Feature --> F7
     F8["An app sends a message and gives the model context"]
     Feature --> F8
+    F9["Usage limits and scheduled continuation"]
+    Feature --> F9
 ```
 
 ```mermaid
@@ -72,7 +75,7 @@ flowchart TB
     Resource[One-use app resource]
     AppMessage[App message and model context]
     Install[Install pinned runtime]
-    Stop[Stop and confirm cleanup]
+    Stop[Attachment close and confirmed cleanup]
     Restore[Restore committed history]
     Read[Authorized physical history read]
     Opening --> Execute
@@ -91,6 +94,8 @@ flowchart TB
 
 ## Browse flows
 
+- [Usage limits and scheduled continuation](usage-limit-continuation.md)
+
 - [A conversation opens its selected provider](a-conversation-opens-its-selected-provider.md)
 - [An admitted message streams through the SDK and settles](an-admitted-message-streams-through-the-sdk-and-settles.md)
 - [An app calls a tool through gateway policy and review](an-app-calls-a-tool-through-gateway-policy-and-review.md)
@@ -102,5 +107,5 @@ flowchart TB
 - [Read an app resource once and release its ticket](read-an-app-resource-once-and-release-its-ticket.md)
 - [Restart and restore committed conversation history](restart-and-restore-committed-conversation-history.md)
 - [Select a model, approval preset, or reasoning effort](select-a-model-approval-preset-or-reasoning-effort.md)
-- [Stop cancels owned work and confirms process cleanup](stop-cancels-owned-work-and-confirms-process-cleanup.md)
+- [Turn Stop and attachment cleanup have different owners](stop-cancels-owned-work-and-confirms-process-cleanup.md)
 - [The first agent launch is warmed in the background](the-first-agent-launch-is-warmed-in-the-background.md)

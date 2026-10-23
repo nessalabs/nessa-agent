@@ -1,0 +1,11 @@
+{
+  "bound": 1,
+  "hit": {
+    "tag": "rect",
+    "id": "",
+    "closestNode": "mmd-1-state-AwaitingAck-10"
+  },
+  "centerClickOpened": 0,
+  "keyboardOpened": 1,
+  "title": "Revoke owns its acknowledgement and reread"
+}

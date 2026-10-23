@@ -9,11 +9,8 @@ import {
   titleLength,
   toolWidget,
   unconfirmed,
-  workSummary,
   type Message,
   type Part,
-  type StepKind,
-  type StepPart,
 } from "./transcript"
 import { sameWidget } from "../../widgets/model/widget-ref"
 
@@ -27,17 +24,6 @@ describe("an agent message's parts", () => {
     ]
     expect(groupSteps(parts)).toEqual([[parts[0], parts[1]], parts[2], [parts[3]]])
     expect(groupSteps([])).toEqual([])
-  })
-
-  it("says what a settled run of steps came to, its reads and edits first", () => {
-    const step = (kind: StepKind): StepPart => ({ kind: "step", step: kind, label: kind })
-    expect(workSummary([step("search")])).toBe("Ran 1 tool")
-    expect(workSummary([step("read"), step("read"), step("run")])).toBe(
-      "Ran 3 tools · 2 read",
-    )
-    expect(workSummary([step("read"), step("edit"), step("search")])).toBe(
-      "Ran 3 tools · 1 read, 1 edited",
-    )
   })
 
   it("marks out inline code and strong text, leaving the rest plain", () => {

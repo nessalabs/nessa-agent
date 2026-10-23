@@ -225,7 +225,10 @@ export function SetupGate({
         <AgentBloom />
         {/* Above the wash rather than inside it, so the way out does not wait
           out the opening's choreography with it. */}
-        <SetupChrome onClose={onboarding.dismiss} />
+        <SetupChrome
+          onBack={onboarding.canGoBack ? onboarding.back : undefined}
+          onClose={onboarding.dismiss}
+        />
         <Onboarding
           state={onboarding.state}
           apiKeys={apiKeys}

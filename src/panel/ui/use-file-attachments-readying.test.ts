@@ -34,6 +34,7 @@ vi.mock("../../host", () => ({
   chooseAttachmentFiles,
   readAttachmentBytes,
   hasNativeHost: () => true,
+  onSetupRecorded: () => Promise.resolve(() => {}),
 }))
 vi.mock("../../conversation", () => import("../../conversation/testing"))
 

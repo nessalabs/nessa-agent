@@ -24,6 +24,7 @@ diagramLinks:
   Credentials: "credentials"
   Extensions: "extensions"
   Tooling: "tooling"
+  Journeys: "user-flow-coverage"
 ---
 
 # Nessa system
@@ -130,6 +131,30 @@ The browser connects to an existing gateway using its browser session. The nativ
 | Validated agent secret namespaces | [Credential values](services/credentials/README.md) |
 | MCP Apps and external UI package boundaries | [Extensions and UI](services/extensions/README.md) |
 | Runtime assembly and release operations | [Tooling](services/tooling/README.md) |
+
+## Which source do these pages describe?
+
+Individual pages record `sourceRevision` when their behavior is reviewed against
+an exact source commit. Nessa Docs displays that checkpoint and exposes its full
+ID under Sources and provenance. Pages without it have no recorded checkpoint;
+the system root does not make its children current. The [checkpoint contract](authoring.md#source-review-checkpoint)
+explains how to maintain it and compare it with a failing checkout.
+
+The [latest bounded audit](provenance.md#mainline-lifecycle-refresh-2026-10-23)
+records its source and scope. Its reviewed behavior pages carry that source
+revision; unrelated historical pages remain unmarked. A checkpoint records a
+source review, not a runtime test result.
+
+## User journey coverage
+
+This navigation box opens the goal-oriented coverage inventory; it is separate from the component map above.
+
+```mermaid
+flowchart LR
+    Journeys[User journeys and transition coverage]
+```
+
+Start with the [user journey inventory](user-flow-coverage.md) to follow goals into their feature charts, transition owners, regression evidence and explicit unrun gates.
 
 ## How this stays useful
 

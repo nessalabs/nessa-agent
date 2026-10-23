@@ -1,0 +1,44 @@
+[
+  {
+    "rule": "native-synchronous-admission",
+    "exit": 1,
+    "summary": "1 failed | 27 passed (28)",
+    "mutationVerified": true
+  },
+  {
+    "rule": "native-before-reread",
+    "exit": 1,
+    "summary": "2 failed | 26 passed (28)",
+    "mutationVerified": true
+  },
+  {
+    "rule": "native-after-reread",
+    "exit": 1,
+    "summary": "1 failed | 27 passed (28)",
+    "mutationVerified": true
+  },
+  {
+    "rule": "native-retire-owner",
+    "exit": 1,
+    "summary": "3 failed | 25 passed (28)",
+    "mutationVerified": true
+  },
+  {
+    "rule": "notice-synchronous-admission",
+    "exit": 1,
+    "summary": "1 failed | 27 passed (28)",
+    "mutationVerified": true
+  },
+  {
+    "rule": "notice-request-identity",
+    "exit": 1,
+    "summary": "1 failed | 27 passed (28)",
+    "mutationVerified": true
+  },
+  {
+    "rule": "notice-bound-source",
+    "exit": 1,
+    "summary": "1 failed | 27 passed (28)",
+    "mutationVerified": true
+  }
+]

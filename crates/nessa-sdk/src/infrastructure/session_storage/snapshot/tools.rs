@@ -21,6 +21,9 @@ pub(super) struct Tool {
     /// Absent when no update carried the arguments the gateway's connection saw.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mcp_arguments: Option<String>,
+    /// Absent when no update carried the input the agent reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,7 +78,7 @@ impl From<&ToolCallUpdate> for Tool {
             value.status(),
             value.locations(),
             value.content(),
-            (value.mcp_tool(), value.mcp_arguments()),
+            (value.mcp_tool(), value.mcp_arguments(), value.input()),
         )
     }
 }
@@ -88,7 +91,7 @@ impl Tool {
             value.status(),
             value.locations(),
             value.content(),
-            (value.mcp_tool(), value.mcp_arguments()),
+            (value.mcp_tool(), value.mcp_arguments(), value.input()),
         )
     }
     fn fields(
@@ -98,13 +101,20 @@ impl Tool {
         status: &Option<ToolStatus>,
         locations: &Option<Vec<FileLocation>>,
         content: &Option<Vec<ToolContent>>,
-        mcp: (Option<&McpTool>, Option<&McpCallArguments>),
+        // What the call was made with: its MCP identity and arguments, and
+        // the input the agent reported.
+        asked: (
+            Option<&McpTool>,
+            Option<&McpCallArguments>,
+            Option<&ToolCallInput>,
+        ),
     ) -> Self {
-        let mcp_tool = mcp.0.map(|tool| Mcp {
+        let (mcp_tool, mcp_arguments, input) = asked;
+        let mcp_tool = mcp_tool.map(|tool| Mcp {
             server: tool.server().into(),
             tool: tool.tool().into(),
         });
-        let mcp_arguments = mcp.1.map(|value| value.as_str().to_owned());
+        let mcp_arguments = mcp_arguments.map(|value| value.as_str().to_owned());
         Self {
             id: id.as_str().into(),
             title: title.clone(),
@@ -151,6 +161,7 @@ impl Tool {
             }),
             mcp_tool,
             mcp_arguments,
+            input: input.map(|value| value.as_str().to_owned()),
         }
     }
     pub(super) fn decode(self) -> Result<ToolCallUpdate, StorageError> {
@@ -162,6 +173,11 @@ impl Tool {
         let mcp_arguments = self
             .mcp_arguments
             .map(McpCallArguments::new)
+            .transpose()
+            .map_err(corrupt)?;
+        let input = self
+            .input
+            .map(ToolCallInput::new)
             .transpose()
             .map_err(corrupt)?;
         let update = ToolCallUpdate::new(
@@ -223,8 +239,12 @@ impl Tool {
             Some(mcp_tool) => update.with_mcp_tool(mcp_tool),
             None => update,
         };
-        Ok(match mcp_arguments {
+        let update = match mcp_arguments {
             Some(arguments) => update.with_mcp_arguments(arguments),
+            None => update,
+        };
+        Ok(match input {
+            Some(input) => update.with_input(input),
             None => update,
         })
     }

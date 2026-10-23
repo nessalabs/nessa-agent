@@ -5,6 +5,7 @@
 //! between displays re-places the panel rather than stranding it.
 
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 use tauri::{
@@ -142,8 +143,9 @@ pub fn open_setup_window(app: &AppHandle) {
 ///
 /// Only the steps that can fail without the handoff failing. Showing the panel
 /// is not among them: a handoff whose panel did not come up is an `Err` and
-/// changes nothing else, so there is no shape of this struct in which the panel
-/// is not already on screen.
+/// changes nothing else, so the panel is on screen in every shape of this
+/// struct but one: a replay from Settings left without finishing, which
+/// summons no panel by design (see [`finish_setup`]).
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupHandoff {
@@ -195,9 +197,17 @@ pub fn finish_setup(
     agent: Option<String>,
 ) -> Result<SetupHandoff, String> {
     let settings_store = deps.settings.clone();
+    // Asked for from Settings, and left without finishing: the person goes
+    // back to what they were doing, not to a panel they did not summon.
+    // Read, not cleared: a close that fails leaves the window up, and its retry
+    // is the same replay. The flag ends with the window (`setup_window_gone`).
+    let left_replay = REPLAYING.load(Ordering::SeqCst) && !completed;
     hand_over(
         completed,
         || {
+            if left_replay {
+                return Ok(());
+            }
             let window = app
                 .get_webview_window(MAIN_WINDOW)
                 .ok_or_else(|| "there is no panel to summon".to_string())?;
@@ -214,9 +224,24 @@ pub fn finish_setup(
         // The managed `Settings` snapshot is deliberately not updated in place:
         // nothing after startup reads this flag, and the launch that does reads
         // it off disk before anything is managed at all.
-        || record_completion(&*settings_store, agent.clone()),
+        || record_and_announce(&app, &*settings_store, agent.clone()),
         || close_setup_window(&app),
     )
+}
+
+/// Record completion, and tell every window it changed.
+///
+/// A window that already asked which agent setup chose keeps that answer, so a
+/// replay finished on another agent has to say so, or the panel would go on
+/// starting conversations on the old one until the next launch.
+fn record_and_announce(
+    app: &AppHandle,
+    settings: &dyn SettingsStore,
+    agent: Option<String>,
+) -> Result<(), String> {
+    record_completion(settings, agent)?;
+    let _ = app.emit(host::SETUP_RECORDED, ());
+    Ok(())
 }
 
 /// Write setup off again, after a handoff whose write was refused.
@@ -239,7 +264,7 @@ pub fn retry_setup_record(
     tracing::info!(target: "nessa.retry", command = "retry_setup_record", "attempt");
     let settings_store = deps.settings.clone();
     let handoff = settle(
-        || record_completion(&*settings_store, agent),
+        || record_and_announce(&app, &*settings_store, agent),
         || close_setup_window(&app),
     );
     tracing::info!(
@@ -424,6 +449,38 @@ pub fn restart_onboarding(app: &AppHandle, settings: &dyn SettingsStore) {
         ));
     }
 
+    REPLAYING.store(false, Ordering::SeqCst);
+    show_setup_from_start(app);
+}
+
+/// Whether the setup on screen was asked for from Settings rather than opened
+/// by a first run. Set by the ask, and cleared when the window goes, however
+/// it goes.
+static REPLAYING: AtomicBool = AtomicBool::new(false);
+
+/// The setup window is gone, so whatever replay it was showing is over.
+pub fn setup_window_gone() {
+    REPLAYING.store(false, Ordering::SeqCst);
+}
+
+/// Shows first-run setup again from Settings, keeping what it recorded.
+///
+/// A replay rather than [`restart_onboarding`]'s restart: the completion and
+/// the chosen agent stay written, so somebody who closes it part-way is left
+/// exactly where they were — setup closes, no panel is summoned, and the next
+/// launch does not open setup again. Only finishing writes, and then it writes
+/// the agent that finish chose, as a first run's finish does, and every window
+/// is told (`SETUP_RECORDED`).
+#[tauri::command]
+pub fn replay_onboarding(app: AppHandle) {
+    REPLAYING.store(true, Ordering::SeqCst);
+    show_setup_from_start(&app);
+}
+
+/// Puts setup on screen at its first step: a fresh window when there is none,
+/// and a reload of one still open, because setup holds its progress in memory
+/// and showing it again mid-flow would resume it rather than start it over.
+fn show_setup_from_start(app: &AppHandle) {
     let Some(window) = app.get_webview_window(SETUP_WINDOW) else {
         // A fresh window is revealed by its page, the same as at startup.
         open_setup_window(app);

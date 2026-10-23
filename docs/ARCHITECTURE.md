@@ -953,8 +953,8 @@ audit sink that cannot take that record refuses the send. This is local-only
 by construction. See [ADR 0013](adr/done/0013-files-by-path-not-by-payload.md).
 
 ADRs 0009 and 0011's exact replay and broader collaboration remain proposed work.
-Remote TLS/device provisioning, audio and video in a message, and more
-provider adapters remain separate features. Existing design proposals do not replace the implemented Agent contract.
+Audio and video in a message, and more provider adapters, remain separate
+features. Implemented native TLS enrollment is described below. Existing design proposals do not replace the implemented Agent contract.
 
 **Identity/access contracts** (`crates/nessa-auth`) — reusable library, no binary.
 Owns domain identities/memberships/credential metadata, boundary DTO validation,
@@ -964,11 +964,24 @@ gateway runtime and listener. The device client is owned by `nessa-client-core`.
 Both consume the JSON codec, framing and enrollment deadline socket in
 `crates/nessa-protocol` —
 owner create, PAKE claim over TLS, exact-key approval and pinned status recovery.
-It ends at Approved. When `config.json` names `native.listenAddress`, composition
-restores the gateway key before any bind, mounts the listener and joins its drain
-into the shutdown report, and the owner `pairing.*` product methods drive it;
-otherwise nothing native is opened. Receiver staging and Active publication are
-later slices. See [device pairing](design/auth/device-pairing.md).
+Exact-key approval is followed by implemented receiver staging and Active
+publication. The server application [activation owner](../crates/nessa-server/src/device_pairing/application/activation.rs)
+commits approval, stages the credential, pairs and remembers the stage-correlated
+receiver, confirms its current holding, and asks Auth to publish with fresh
+admission. Approved and Staging can remain retained when a later step stops;
+approval acknowledgement alone does not prove Active publication.
+[Status projection](../crates/nessa-server/src/device_pairing/application/read_status.rs)
+reports Active only with the current receiver holding and access epoch.
+[Activation regressions](../crates/nessa-server/tests/device_pairing/infrastructure/activation.rs)
+cover publication, retry joining, receiver revocation before publication and
+current-holding refusal. These are implemented source/test contracts, not a new
+native execution claim from this documentation pass.
+
+When `config.json` names `native.listenAddress`, composition restores the
+gateway key before any bind, mounts the listener and joins its drain into the
+shutdown report, and the owner `pairing.*` product methods drive it; otherwise
+nothing native is opened. See [device pairing](design/auth/device-pairing.md)
+and the [linked-device journey](state/services/desktop/workspace/linked-devices.md).
 
 See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
 

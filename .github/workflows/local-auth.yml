@@ -337,7 +337,8 @@ jobs:
       - name: Install the pinned browsers and their runtime dependencies
         run: pnpm exec playwright install --with-deps chromium webkit
         timeout-minutes: 15
-      - run: cargo build -p nessa-server
+      - id: gateway-build
+        run: cargo build -p nessa-server
       # Reuse this job's gateway build and browser install. The reset-boundary
       # regression needs both engines, including WebKit's ticking-clock path.
       - name: Run the scripted gateway checks in both browsers
@@ -357,7 +358,7 @@ jobs:
       # gateway build (conversation-chaos.mjs): a few short seeds here, many
       # long ones nightly. A failure prints its seed and a shrunk action list.
       - name: Run the conversation chaos check
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.gateway-build.outcome == 'success' }}
         shell: bash
         run: |
           set -o pipefail

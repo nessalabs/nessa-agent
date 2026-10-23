@@ -1,9 +1,10 @@
 ---
 id: "gateway-attachments-stop-or-delete-a-conversation-and-release-its-uploaded-images"
-title: "Stop or delete a conversation and release its uploaded images"
+title: "Close or delete a conversation and release its uploaded images"
 kind: "flow"
 status: "mixed"
-summary: "Stop ends active and waiting work."
+summary: "Attachment close ends active and waiting work; turn Stop does not release image holds."
+sourceRevision: "aa91831b5331d3461969f6a7be723a6d3325f29b"
 parent: "gateway-attachments"
 sources:
   - "src/conversation/adapters/store/slice.ts"
@@ -18,9 +19,9 @@ sources:
 diagramLinks: {}
 ---
 
-# Stop or delete a conversation and release its uploaded images
+# Close or delete a conversation and release its uploaded images
 
-Stop ends active and waiting work. The gateway releases uploaded images when no unsettled invocation still needs them. Delete also blocks further commands, disposes of the provider session where supported, and erases Nessa-owned history and summaries.
+Attachment close ends active and waiting work; turn Stop does not release image holds. The gateway releases uploaded images on close when cleanup establishes that no unsettled invocation still needs them. A turn cancellation alone leaves the attachment and holds available for later work. Delete also blocks further commands, disposes of the provider session where supported, and erases Nessa-owned history and summaries.
 
 Closing a tab normally just removes the view. Its automatic-close exception requires a proven-empty idle conversation; ordinary prepared sessions do not qualify. Deletion can be confirmed while erasure remains unfinished. Provider cleanup, local erasure and saved audit evidence are separate results.
 

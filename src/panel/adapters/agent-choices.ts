@@ -37,9 +37,15 @@ export function followAgentChoices(
   /** The agent setup chose, asked again for each catalog until somebody has
    * chosen. */
   chosenAgent: () => Promise<string | undefined>,
+  /** Tells the listener when setup recorded a choice — a replay can finish on
+   * another agent while the panel runs, with no new catalog to carry it — and
+   * answers the way to stop listening. */
+  setupRecorded: (listener: () => void) => () => void = () => () => undefined,
 ): FollowConversationChoices {
   return (show) => {
     let stopped = false
+    // The catalog last shown, so a recorded choice is shown against it.
+    let shown: AgentsListResult | undefined
     // The open whose frames apply: anything an earlier open brings is dropped.
     let token = {}
     let giveUp: AbortController | undefined
@@ -64,16 +70,7 @@ export function followAgentChoices(
           return now.subscriptions.agents(
             {
               catalog: (catalog) => {
-                if (!current()) return
-                const order = ++newest
-                void chosenAgent().then(
-                  (agent) => {
-                    if (current() && order === newest)
-                      show({ catalog, chosenAgent: agent })
-                  },
-                  // Not an answer: the next catalog asks again.
-                  () => undefined,
-                )
+                if (current()) choose(catalog, current)
               },
               ended: (end) => {
                 if (!current()) return
@@ -94,10 +91,29 @@ export function followAgentChoices(
           },
         )
     }
+    // The agent is asked for each catalog, and shown with it unless a newer
+    // catalog or choice was asked about since.
+    const choose = (catalog: AgentsListResult, still: () => boolean) => {
+      const order = ++newest
+      void chosenAgent().then(
+        (agent) => {
+          if (still() && order === newest) {
+            shown = catalog
+            show({ catalog, chosenAgent: agent })
+          }
+        },
+        // Not an answer: the next catalog asks again.
+        () => undefined,
+      )
+    }
+    const unlisten = setupRecorded(() => {
+      if (!stopped && shown) choose(shown, () => !stopped)
+    })
     open()
     return () => {
       stopped = true
       giveUp?.abort()
+      unlisten()
     }
   }
 }

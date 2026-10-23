@@ -869,3 +869,35 @@ async fn failed_trailing_timer_save_keeps_an_already_recorded_provider_outcome()
         );
     }
 }
+
+#[tokio::test]
+async fn every_report_carries_the_sessions_arrival_time_not_the_providers() {
+    let clock = Arc::new(ManualMessageClock::new());
+    let test = StreamingTest::with_clock(clock.clone()).await;
+    let mut events = test.agent.subscribe();
+    let running = test.start().await;
+    clock.advance(Duration::from_millis(5_000));
+    // A provider that sets its own time is not trusted: the session's clock
+    // is the only author of when a report arrived.
+    let (consumed, received) = oneshot::channel();
+    test.chunks
+        .send((
+            ExecutionEvent::new(
+                ExecutionId::new("batch").unwrap(),
+                ExecutionUpdate::Message(MessageChunk::text("stamped")),
+            )
+            .with_observed_at_ms(42),
+            consumed,
+        ))
+        .unwrap();
+    received.await.unwrap();
+    let live = events.next().await.unwrap().unwrap();
+    assert_eq!(live.observed_at_ms(), Some(5_000));
+    test.finish().await;
+    running.await.unwrap().unwrap();
+    // The saved copy carries the same time as the live one.
+    assert_eq!(
+        test.storage.snapshot().invocations[0].events[0].observed_at_ms(),
+        Some(5_000)
+    );
+}
