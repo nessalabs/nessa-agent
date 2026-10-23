@@ -1572,6 +1572,7 @@ impl Projection {
                         started_at_ms: at,
                         ended_at_ms: None,
                         changes: Vec::new(),
+                        changes_cut: false,
                     });
                     self.view.tools.last_mut().unwrap()
                 };
@@ -1658,6 +1659,7 @@ impl Projection {
                     // file changes; only their text is left out.
                     let mut details_full = false;
                     tool.changes.clear();
+                    tool.changes_cut = false;
                     for item in content {
                         let text = match item.view() {
                             ToolContentView::Structured(_) => continue,
@@ -1672,7 +1674,9 @@ impl Projection {
                                     before.as_deref().unwrap_or("(not provided)"),
                                     after
                                 );
-                                if tool.changes.len() < MAX_TOOL_CHANGES {
+                                if tool.changes.len() == MAX_TOOL_CHANGES {
+                                    tool.changes_cut = true;
+                                } else {
                                     tool.changes.push(ConversationToolChange {
                                         path: clipped(path.as_str(), MAX_TOOL_CHANGE_PATH_BYTES),
                                         cut: before.as_ref().is_some_and(|before| {
@@ -2016,6 +2020,7 @@ pub fn bound_view_within(
         // So are the structured changes: the same text is in the details.
         if let Some(tool) = view.tools.iter_mut().find(|tool| !tool.changes.is_empty()) {
             tool.changes.clear();
+            tool.changes_cut = true;
             continue;
         }
         // Only the interactions are left, and they are not to be given up:

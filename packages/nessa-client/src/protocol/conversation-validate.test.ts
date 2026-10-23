@@ -369,6 +369,13 @@ describe("conversation view agreement", () => {
     ]
     Object.assign(value.tools[0]!, { changes })
     expect(conversationView(value, "conversation").tools[0]?.changes).toEqual(changes)
+    Object.assign(value.tools[0]!, { changesCut: true })
+    expect(conversationView(value, "conversation").tools[0]?.changesCut).toBe(true)
+    for (const changesCut of ["yes", 1]) {
+      const value = view()
+      Object.assign(value.tools[0]!, { changes, changesCut })
+      expect(() => conversationView(value, "conversation")).toThrow()
+    }
     for (const changes of [
       [{ path: "", after: "", cut: false }],
       [{ path: "a", after: "x".repeat(7001), cut: false }],

@@ -777,6 +777,9 @@ fn a_tool_lists_the_files_it_changed_and_says_when_a_side_was_cut() {
     let json = serde_json::to_value(&view.tools[0]).unwrap();
     assert_eq!(json["changes"][0]["path"], "new.ts");
     assert!(json["changes"][0].get("before").is_none());
+    // Every reported file is listed, so the list is not marked cut.
+    assert!(!view.tools[0].changes_cut);
+    assert!(json.get("changesCut").is_none());
     // A later report replaces the changes, as it does the details; past the
     // bound the rest are left to the details.
     let many = (0..MAX_TOOL_CHANGES + 2)
@@ -786,6 +789,12 @@ fn a_tool_lists_the_files_it_changed_and_says_when_a_side_was_cut() {
         ToolCallUpdate::new(tool, None, None, None, None, None).with_content(many),
     ))]);
     assert_eq!(view.tools[0].changes.len(), MAX_TOOL_CHANGES);
+    // The list says it leaves files out, so no reader totals it as the call's.
+    assert!(view.tools[0].changes_cut);
+    assert_eq!(
+        serde_json::to_value(&view.tools[0]).unwrap()["changesCut"],
+        true
+    );
     // Text that fills the details does not hide a later file change.
     let view = committed_tool_view(&[event(ExecutionUpdate::Tool(
         ToolCallUpdate::new(
@@ -804,6 +813,11 @@ fn a_tool_lists_the_files_it_changed_and_says_when_a_side_was_cut() {
     assert!(view.tools[0].details.ends_with("[Output truncated]"));
     assert_eq!(view.tools[0].changes.len(), 1);
     assert_eq!(view.tools[0].changes[0].path, "after.ts");
+    // A view short of room gives the list up and says so.
+    let full = serde_json::to_vec(&view).unwrap().len();
+    let bounded = bound_view_within(view, full - 1, true);
+    assert!(bounded.tools[0].changes.is_empty());
+    assert!(bounded.tools[0].changes_cut);
 }
 
 #[test]

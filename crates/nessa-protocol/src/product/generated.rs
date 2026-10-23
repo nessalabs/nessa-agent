@@ -720,6 +720,8 @@ pub struct ConversationTool {
     pub ended_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<Vec<ConversationToolChange>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes_cut: Option<bool>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

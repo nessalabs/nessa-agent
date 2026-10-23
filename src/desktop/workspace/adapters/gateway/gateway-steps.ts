@@ -87,8 +87,9 @@ export function toolStep(
   const endedAtMs = onClient(tool.endedAtMs)
   const changes = tool.changes ?? []
   const diff = stepDiff(changes)
-  // Lines added and removed, across every file; unknown once a side was cut.
-  const delta = changes.some((change) => change.cut)
+  // Lines added and removed, across every file; unknown once a side was cut
+  // or the list leaves out files the call changed.
+  const delta = tool.changesCut || changes.some((change) => change.cut)
     ? {}
     : changes
         .map((change) =>

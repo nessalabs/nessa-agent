@@ -552,6 +552,11 @@ pub struct ConversationTool {
     /// `details` as text; these are for a reader that draws them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub changes: Vec<ConversationToolChange>,
+    /// The call changed files `changes` does not list: more than
+    /// [`MAX_TOOL_CHANGES`], or the list was given up for room. A reader
+    /// totalling the changes knows the total is not the call's.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub changes_cut: bool,
 }
 /// The most file changes one tool call lists. The schema states it again;
 /// `nessa-server/tests/conversation/agreement.rs` holds the two together.

@@ -762,6 +762,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       "startedAtMs",
       "endedAtMs",
       "changes",
+      "changesCut",
     ])
     // Absent when the process start the call ran under recorded no choice.
     if (Object.hasOwn(tool, "nativeHooks")) {
@@ -837,6 +838,9 @@ export function conversationView(value: unknown, expected: string): Conversation
           throw new Error("Invalid conversation tool change")
       }
     }
+    // Present only when changes leaves out files the call changed.
+    if (tool.changesCut !== undefined && typeof tool.changesCut !== "boolean")
+      throw new Error("Invalid conversation tool changesCut")
   }
   if (!item.truncated) {
     for (const toolKey of toolIds) {

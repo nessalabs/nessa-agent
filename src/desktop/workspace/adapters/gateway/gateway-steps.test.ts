@@ -102,6 +102,20 @@ describe("a tool call as a step", () => {
     expect(step.removed).toBeUndefined()
   })
 
+  it("counts no lines when the list leaves out files the call changed", () => {
+    const step = toolStep(
+      tool({
+        kind: "edit",
+        changes: [{ path: "a", before: "x", after: "y", cut: false }],
+        changesCut: true,
+      }),
+      clock,
+    )
+    expect(step.diff).toEqual({ filename: "a", from: "x", to: "y" })
+    expect(step.added).toBeUndefined()
+    expect(step.removed).toBeUndefined()
+  })
+
   it("keeps the details of a call that changed no file as what it printed", () => {
     const step = toolStep(tool({ kind: "edit", details: "Applied 3 hunks" }), clock)
     expect(step.diff).toBeUndefined()
