@@ -92,7 +92,18 @@ geometry share one layout.
 | Carrying | `pointerup` on a shown zone | The copy flies to the box `paneBox` already computed. No pane layout is committed. |
 | Painted | The next frame | The drop commits in state. The grid is still on its last boxes. The room is read before the unmark dirties the tree. A side column folded for the new count is painted on this frame. The spare fold was recorded in the commit; the page did not restyle it there. |
 | Gliding | The frame after that | The copy has let go. A column title that changed rows glides. The grid is still on its last boxes. |
-| Drawn | The frame after that | The grid paints the new boxes. The grain comes back the frame after that paint, and the composer's blur the frame after the grain. |
+| Drawn | The frame after that | The grid paints the new boxes. For a pane preview, the grain comes back the frame after that paint, and the composer's blur the frame after the grain. A compact card never held these materials, so it schedules no restoration pulse. |
+
+Glass release follows the acquisition owned by the drag's options:
+
+| Preview | Carrying | Cancel or committed drop |
+| --- | --- | --- |
+| Pane preview | Holds glass while live panes preview another shape | Restores grain and composer blur in their separate frames. |
+| Compact card (`previewPanes=false`) | Leaves live pane materials unchanged | Does not set the glass-release mark, including in reduced motion. |
+
+`drag.test.tsx` observes every release-mark write, not just its final absence,
+for cancel and drop in both motion modes. This prevents a transient pulse from
+passing unnoticed. It also retains the full-preview restoration controls.
 
 The sidebar's row geometry uses `data-sidebar-row`, published from the
 existing box-frame `sidebarOpen` read. `FoldMark` writes `data-sidebar` on
