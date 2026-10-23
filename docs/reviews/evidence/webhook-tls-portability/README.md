@@ -42,6 +42,11 @@ corrected exact source passes all 27.
   error-walker correction. A separate typed-error probe detects a nested
   certificate error and rejects ordinary ConnectionRefused.
 
+A fresh full base-to-PR-head review found no functional findings and one nit:
+three captured test logs had extra blank lines at EOF. Those trailing blanks
+were removed, and the full committed-diff whitespace check was rerun against
+base `0b8019cf45f99b285f10c41199875d474492c6d1`.
+
 [`mutations.json`](mutations.json) records two verified changes applied only
 to copied source under `/tmp`: accepting invalid certificates, and adding the
 wrong hostname to the leaf SAN. Both fail the new negative control. Restoring
