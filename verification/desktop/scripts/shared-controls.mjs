@@ -421,7 +421,8 @@ function measureCardRims(selectors) {
 const rowKinds = {
   columns: {
     "sidebar row": `${css.sidebar} ${css.kitRow}`,
-    "pinned session": `${css.sidebar} [data-row='session']`,
+    // Pinned sessions lead the list in three columns, never the sidebar.
+    "pinned session": `[data-list-group="pinned"] [data-session-row]`,
     "session list row": css.sessionListRow,
   },
   sidebar: {

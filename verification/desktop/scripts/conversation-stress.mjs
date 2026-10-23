@@ -458,9 +458,13 @@ async function aroundTheLights(page, rail, failures) {
         near(now.at.railWidth, 48) &&
         near(now.at.item, now.at.railWidth / 2)
       : near(now.at.workspace, 0)) &&
+    // The toggle is nessa's mark: in the footer's mark slot, right before
+    // "nessa Studio", wherever the footer is drawn; at the corner otherwise.
     (rail === "off" ||
-      (near(now.at.toggle, now.at.itemColumn) &&
-        near(now.at.toggleBottom, now.at.windowBottom - now.at.itemColumn)))
+      (now.at.slot && now.at.toggleMiddle
+        ? near(now.at.toggleMiddle[0], now.at.slot[0]) &&
+          near(now.at.toggleMiddle[1], now.at.slot[1])
+        : near(now.at.toggle, now.at.itemColumn)))
   if (await waitFor(async () => holds(await railLayout(page)), 10_000)) return true
   const now = await railLayout(page)
   failures.push(
@@ -515,6 +519,27 @@ function railLayout(page) {
           item: middle(item),
           toggle: box(toggle)?.left ?? NaN,
           toggleBottom: box(toggle)?.bottom ?? NaN,
+          toggleMiddle: box(toggle)
+            ? [
+                box(toggle).left + box(toggle).width / 2,
+                box(toggle).top + box(toggle).height / 2,
+              ]
+            : null,
+          // The footer's mark slot the toggle stands in: the visible one, if any.
+          slot: (() => {
+            const found = [
+              ...document.querySelectorAll(".workspace-identity .desktop-identity-mark"),
+            ]
+              .filter(
+                (e) =>
+                  getComputedStyle(e).visibility !== "hidden" && !e.closest("[inert]"),
+              )
+              .map((e) => e.getBoundingClientRect())
+              .find((r) => r.width > 0 && r.left >= 0 && r.left < innerWidth)
+            return found
+              ? [found.left + found.width / 2, found.top + found.height / 2]
+              : null
+          })(),
           windowBottom: innerHeight,
           itemColumn: length(document.querySelector(frame), "--desktop-control-edge"),
           railTop: box(rail)

@@ -64,11 +64,17 @@ export const WindowTabs = memo(function WindowTabs() {
   const overview = useWorkspaceSelector(selectOverviewOpen)
   const focused = useWorkspaceSelector(selectFocusedSessionId)
   const list = useRef<HTMLDivElement>(null)
+  // Past the room even at icon size, the selected tab is brought into the
+  // strip by scrolling the strip alone. Never `scrollIntoView`: it scrolls
+  // every clipping ancestor too, and once moved the window itself sideways.
   useLayoutEffect(() => {
-    list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({
-      block: "nearest",
-      inline: "nearest",
-    })
+    const strip = list.current
+    const tab = strip?.querySelector<HTMLElement>('[aria-selected="true"]')
+    if (!strip || !tab) return
+    const from = strip.getBoundingClientRect()
+    const at = tab.getBoundingClientRect()
+    if (at.left < from.left) strip.scrollLeft -= from.left - at.left
+    else if (at.right > from.right) strip.scrollLeft += at.right - from.right
   }, [panes?.focused, focused, overview, tabs.activeTab])
   const frame = useWorkspaceFrame()
   return (
