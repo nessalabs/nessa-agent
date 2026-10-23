@@ -12,8 +12,9 @@
  *                    the window's edges. A column placed from the window's edge
  *                    without counting a column beside it (the overview that
  *                    slid under the sidebar once the rail opened) breaks it.
- *   rail-corner      the toggle holds its bottom-left slot; the sidebar
- *                    reserves space beside it when the rail is folded.
+ *   rail-corner      the toggle holds one bottom-left place in the rail's
+ *                    column, rail open or closed; with the rail closed it is
+ *                    the footer's mark, right before "nessa Studio".
  *   rail-view-inert  under an item's full view the workspace takes no keys:
  *                    ⌘B, ⌘0 and ⌥⌘S change nothing behind it, and coming back
  *                    to Agents finds it as it was left.
@@ -156,8 +157,8 @@ Checks, per engine, layout and size:
   no-overlap       every combination of the rail, the sidebar, the session list
                    (columns layout) and the overview leaves the drawn columns in
                    order, none overlapping the next, none past the window's edges
-  rail-corner      the bottom-left toggle holds its slot; "nessa Studio"
-                   stays clear in Agents and a full view
+  rail-corner      the bottom-left toggle never moves as the rail or sidebar
+                   toggles; "nessa Studio" stays clear in Agents and a full view
   rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it
   rail-loading     an item's view opens empty; still loading at 3 s it shows
                    only the kit's sweeping text, with no panel or border
@@ -592,17 +593,24 @@ const body = {
         seen.push({ label, toggle: at, studio })
         if (!at) failures.push(`${label}: the toggle is not drawn`)
         if (!at) continue
-        // The toggle is nessa's mark: in the footer's mark slot, right before
-        // "nessa Studio", wherever the footer is drawn; in its corner otherwise.
+        // One place in every state: toggling the rail or the sidebar moves
+        // what is beside the toggle, never the toggle under the pointer.
+        toggle ??= at
+        if (at.join() !== toggle.join())
+          failures.push(`${label}: the toggle is at [${at}], not [${toggle}]`)
+        // In the rail's column: the rail's items stand over it.
+        const item = now.rail ? await boxOf(page, selectorFor.railItem("agents")) : null
+        if (item && item[0] !== at[0])
+          failures.push(
+            `${label}: the toggle is at x ${at[0]}, the rail's items at ${item[0]}`,
+          )
+        // Where the footer keeps a mark slot (the rail closed), the toggle is
+        // in it, right before "nessa Studio".
         const slot = await markSlot(page)
         if (slot && at.join() !== slot.join())
           failures.push(
             `${label}: the toggle is at [${at}], not in the mark slot [${slot}]`,
           )
-        // With no footer beside it, it holds its corner.
-        if (!slot) toggle ??= at
-        if (!slot && at.join() !== toggle.join())
-          failures.push(`${label}: the toggle is at [${at}], not [${toggle}]`)
         if (studio && studio[0] < at[0] + at[2])
           failures.push(`${label}: "nessa Studio" at x ${studio[0]} is under the toggle`)
         if (await squareShown(page))
@@ -624,10 +632,9 @@ const body = {
           failures.push(
             `${label}: "nessa Studio" is at [${inView}] in a full view, [${studio}] in Agents`,
           )
-        const viewSlot = await markSlot(page)
-        if (viewToggle?.join() !== viewSlot?.join())
+        if (viewToggle?.join() !== toggle.join())
           failures.push(
-            `${label}, Notes: the toggle is at [${viewToggle}], not in the mark slot [${viewSlot}]`,
+            `${label}, Notes: the toggle is at [${viewToggle}], not [${toggle}]`,
           )
         if (!now.rail) await setRail(page, true)
         await page.locator(selectorFor.railItem("agents")).click()
