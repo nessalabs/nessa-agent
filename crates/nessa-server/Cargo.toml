@@ -108,6 +108,10 @@ security-framework = "3.7"
 security-framework-sys = "2.17"
 
 [dev-dependencies]
+# Ephemeral isolated TLS recipients use real platform verification with a
+# fresh CA and short-lived server-auth leaf, including on macOS.
+rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "ring"] }
+time = "0.3"
 # Online process tests drive the example's command entry point.
 nessa-client-core = { path = "../nessa-client-core", features = ["cli"] }
 # Actual native-session tests share the existing paired gateway process fixture.

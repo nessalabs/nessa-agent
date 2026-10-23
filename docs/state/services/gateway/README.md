@@ -51,3 +51,4 @@ flowchart TB
 - [Attachments and content](attachments/README.md)
 - [Conversation identity and deletion](conversation.md)
 - [Bounded physical history reads](record-reads.md)
+- [Outbound webhook foundation and remaining integration](webhook-foundation.md)
