@@ -97,7 +97,8 @@ describe("a tool call as a step", () => {
       }),
       clock,
     )
-    expect(step.diff).toEqual({ filename: "a", from: "x", to: "y" })
+    // The trace says the diff shows only the file's start.
+    expect(step.diff).toEqual({ filename: "a", from: "x", to: "y", cut: true })
     expect(step.added).toBeUndefined()
     expect(step.removed).toBeUndefined()
   })

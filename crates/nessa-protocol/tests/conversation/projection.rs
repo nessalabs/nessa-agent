@@ -737,6 +737,33 @@ fn a_tool_spans_from_its_first_report_to_the_one_that_settles_it_and_keeps_its_i
     )]);
     assert_eq!(damaged.tools[0].started_at_ms, None);
     assert_eq!(damaged.tools[0].ended_at_ms, None);
+    // A call whose row was let go for newer calls, and is back when it
+    // settles, keeps its start unknown rather than seeming to take no time.
+    let call = |name: &str, status, ms| {
+        at(
+            ToolCallUpdate::new(
+                ToolCallId::new(name).unwrap(),
+                None,
+                None,
+                status,
+                None,
+                None,
+            ),
+            ms,
+        )
+    };
+    let mut events = vec![call("first", Some(ToolStatus::Running), 1_000)];
+    events.extend((0..16).map(|index| call(&format!("t{index}"), None, 1_100)));
+    events.push(call("first", Some(ToolStatus::Completed), 4_000));
+    let crowded = committed_tool_view(&events);
+    let first = crowded
+        .tools
+        .iter()
+        .find(|tool| tool.tool_id == "first")
+        .unwrap();
+    assert_eq!(first.started_at_ms, None);
+    assert_eq!(first.ended_at_ms, Some(4_000));
+    assert!(crowded.truncated);
 }
 
 #[test]

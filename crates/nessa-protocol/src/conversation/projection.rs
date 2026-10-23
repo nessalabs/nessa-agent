@@ -279,11 +279,12 @@ pub struct Projection {
     /// deadline did not settle them, so a later notice is ignored.
     cancelled_otherwise: HashSet<(String, String)>,
     terminal_executions: HashSet<String>,
-    /// The calls that have a part in their turn, by execution and clipped tool
-    /// id, so a call's later updates find it without scanning the turn's
-    /// parts. A call goes in only when its part is pushed, and an execution
-    /// leaves when its parts do: cleared for a replayed record, or its message
-    /// let go.
+    /// The calls heard in each turn, by execution and clipped tool id, so a
+    /// call's later updates find its part without scanning the turn's parts,
+    /// and a call whose row was let go is not mistaken for a new one. A call
+    /// goes in on its first report, even when the turn had no room left for
+    /// its part, and an execution leaves when its parts do: cleared for a
+    /// replayed record, or its message let go.
     tool_parts: HashMap<String, HashSet<String>>,
     /// The hooks choice each execution's tool events were saved with. One
     /// execution runs on one process start, so its events agree. `None`
@@ -1344,6 +1345,15 @@ impl Projection {
         {
             self.view.truncated = true;
         }
+        // Whether this turn heard the call before this report: its row may
+        // since have been let go for room, but this is not its first report.
+        let heard = match event.update() {
+            ExecutionUpdate::Tool(update) => self
+                .tool_parts
+                .get(id)
+                .is_some_and(|calls| calls.contains(&clipped(update.id().as_str(), 256))),
+            _ => false,
+        };
         let part = match event.update() {
             ExecutionUpdate::Message(chunk) => Some(ConversationPart {
                 message_id: chunk.message_id().map(str::to_owned),
@@ -1361,22 +1371,15 @@ impl Projection {
             }),
             // One part per tool call, where it was first seen: a call's later
             // updates change its `tools` entry, not the turn's parts.
-            ExecutionUpdate::Tool(update) => {
-                let tool_id = clipped(update.id().as_str(), 256);
-                let seen = self
-                    .tool_parts
-                    .get(id)
-                    .is_some_and(|calls| calls.contains(&tool_id));
-                (!seen).then(|| ConversationPart {
-                    message_id: None,
-                    offset,
-                    kind: "tool".into(),
-                    text: String::new(),
-                    tool_id,
-                    notice_id: String::new(),
-                    notice_kind: String::new(),
-                })
-            }
+            ExecutionUpdate::Tool(update) => (!heard).then(|| ConversationPart {
+                message_id: None,
+                offset,
+                kind: "tool".into(),
+                text: String::new(),
+                tool_id: clipped(update.id().as_str(), 256),
+                notice_id: String::new(),
+                notice_kind: String::new(),
+            }),
             ExecutionUpdate::DeadlineAnswered {
                 id: permission,
                 effect,
@@ -1474,16 +1477,16 @@ impl Projection {
             _ => None,
         };
         if let Some(part) = part {
+            if part.kind == "tool" {
+                self.tool_parts
+                    .entry(id.to_owned())
+                    .or_default()
+                    .insert(part.tool_id.clone());
+            }
             let message = &mut self.view.messages[index];
             if message.parts.len() < 512 && message.retained_text + part.text.len() <= MAX_TEXT * 2
             {
                 message.retained_text += part.text.len();
-                if part.kind == "tool" {
-                    self.tool_parts
-                        .entry(id.to_owned())
-                        .or_default()
-                        .insert(part.tool_id.clone());
-                }
                 message.parts.push(part);
             } else {
                 self.view.truncated = true;
@@ -1565,11 +1568,12 @@ impl Projection {
                         structured_content: None,
                         native_hooks: None,
                         // The call's span is when the session first heard of
-                        // it, to when it heard the call settle. Only the row's
-                        // first report sets the start: a call first reported
-                        // before arrivals were stamped keeps an unknown start
-                        // rather than taking a later report's time.
-                        started_at_ms: at,
+                        // it, to when it heard the call settle. Only the
+                        // call's first report sets the start: a call first
+                        // reported before arrivals were stamped, or whose row
+                        // was let go for room and is back, keeps an unknown
+                        // start rather than taking a later report's time.
+                        started_at_ms: at.filter(|_| !heard),
                         ended_at_ms: None,
                         changes: Vec::new(),
                         changes_cut: false,

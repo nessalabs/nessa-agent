@@ -26,6 +26,8 @@ export type StepDiff = {
   readonly filename: string
   readonly from: string
   readonly to: string
+  /** Only the start of the file was kept, on either side. */
+  readonly cut?: boolean
 }
 
 export type Part =

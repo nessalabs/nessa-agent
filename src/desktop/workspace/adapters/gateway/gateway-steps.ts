@@ -48,7 +48,14 @@ export function stepDiff(
   changes: readonly ConversationToolChange[],
 ): StepDiff | undefined {
   const [first] = changes
-  return first && { filename: first.path, from: first.before ?? "", to: first.after }
+  return (
+    first && {
+      filename: first.path,
+      from: first.before ?? "",
+      to: first.after,
+      ...(first.cut ? { cut: true } : {}),
+    }
+  )
 }
 
 /**
