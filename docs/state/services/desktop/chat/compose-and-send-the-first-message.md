@@ -4,7 +4,7 @@ title: "compose and send the first message"
 kind: "flow"
 status: "mixed"
 summary: "Open a new conversation, choose a model and write a message."
-sourceRevision: "4d718da047acbcf200c10feab62cb45b097ee939"
+sourceRevision: "7f434845423686cdd01a17300c47d10d46911f50"
 parent: "desktop-chat"
 sources:
   - "src/panel/ui/use-composer.ts"

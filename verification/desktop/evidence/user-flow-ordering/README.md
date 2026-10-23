@@ -60,6 +60,7 @@ files** (the same two unchanged private-file acceptance fixtures). Architecture:
 as a failure. Required exact-head CI remains pending on GitHub.
 
 Documentation source/test checkpoints include current
+`7f434845423686cdd01a17300c47d10d46911f50`, the revoke owner at
 `4d718da047acbcf200c10feab62cb45b097ee939`, the unchanged startup/session/download
 owners at `11e2746f7df088a1bd5ee3b2e579ad8a40b5cbd1`, and linked-device and
 sharing owners reviewed at mainline
@@ -140,3 +141,11 @@ normal Rust installer, and **all 108 architecture tests plus the actual
 repository scan passed**. This supersedes the earlier missing-Cargo architecture
 limitation, without changing that historical result. Gateway compilation is
 being attempted separately; it is not an E2E pass.
+
+The inspector diagnostic was pointer targeting, not a missing binding: the
+composite RevokeOwned state had its detail control, but its center hit the
+unexplained AwaitingAck child rectangle. That center click opened no inspector;
+keyboard activation of the composite control opened the correct section. The
+published chart binds that section to the acknowledgement leaf instead, so its
+clickable + has an unambiguous target. [Diagnostic](detail-hit-target.json).
+The final published bindings were opened individually in the 35-binding pass.

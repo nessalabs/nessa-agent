@@ -49,6 +49,13 @@
       "navigation": 2
     },
     {
+      "id": "desktop-permission-rule-revocation",
+      "file": "docs/state/services/desktop/workspace/permission-rule-revocation.md",
+      "diagrams": 1,
+      "details": 4,
+      "navigation": 0
+    },
+    {
       "id": "host-startup-authenticate-reconnect-expire-or-revoke-a-surface-session",
       "file": "docs/state/services/host/startup/authenticate-reconnect-expire-or-revoke-a-surface-session.md",
       "diagrams": 2,
@@ -96,13 +103,6 @@
       "diagrams": 2,
       "details": 4,
       "navigation": 9
-    },
-    {
-      "id": "desktop-permission-rule-revocation",
-      "file": "docs/state/services/desktop/workspace/permission-rule-revocation.md",
-      "diagrams": 1,
-      "details": 4,
-      "navigation": 0
     }
   ],
   "paths": [

@@ -5,7 +5,7 @@ kind: guide
 status: mixed
 summary: Start from a user goal, follow its owning feature, and inspect regression evidence and remaining verification gaps.
 parent: nessa
-sourceRevision: "4d718da047acbcf200c10feab62cb45b097ee939"
+sourceRevision: "7f434845423686cdd01a17300c47d10d46911f50"
 sources:
   - docs/state/inventory.md
   - src/startup/application/gateway-startup.ts
@@ -170,12 +170,12 @@ Runs use Linux, Node 24.19.0 and pinned Nessa UI `d550fac7a59b8f9b6c9d6f1e7dced0
 - Browser installation: **denied** (`403 Domain forbidden`, `cdn.playwright.dev`). No alternate download route attempted. Installed system Chromium can independently verify docs; this does not replace gateway E2E.
 - GitHub listing and issue creation: **denied** (`POST https://api.github.com/graphql: Forbidden`), including one issue-creation retry after user direction. The parent subsequently created [issue 1087](https://github.com/nessalabs/nessa-agent/issues/1087). The source branch was then created and pushed through normal Git transport. GraphQL operations were not retried again; the parent owns draft-PR creation and project updates.
 
-Final verification at the committed source checkpoint:
+Verification history (full source checks at `4d718da047acbcf200c10feab62cb45b097ee939`; the later test-import correction is recorded below):
 
 - **41 added regression cases** across monitor ordering, supervisor timing/cleanup, browser renewal, mounted React/store lifetime and the three audit findings, including the qualified actual-store composer case.
 - **142 passed / 20 targeted files**, **401 passed verification-library tests**. TypeScript, changed-file ESLint, formatting and production build passed.
 - **5138 passed, 2 failed / 390 frontend files**. The same two private-file fixture failures remain; security checks were preserved.
-- **107 architecture tests passed, 1 failed to execute Cargo metadata** (`spawnSync cargo ENOENT`); the final architecture scan did not run after that prerequisite failed.
+- Initially **107 architecture tests passed, 1 failed to execute Cargo metadata** (`spawnSync cargo ENOENT`). After normal Rust installation and the CI-discovered import correction, **108/108 architecture tests and the actual repository scanner passed** at `7f434845423686cdd01a17300c47d10d46911f50`.
 - Chromium ordering script after the revoke follow-up: **7/7 checks held**. Both uncertain outcomes retained **0 stale Download buttons and 1 dispatch**, then **1 button after a fresh check**. Both composer ownership checks held. The permission-rule case retained one revoke dispatch and disabled controls through its reread, then enabled recovery.
 - Revert probes: original download hook gives **2 failed / 9 passed**; original composer hook gives **2 failed / 1 passed**. Both original hooks in the browser give **2/6 held**, with the four ordering checks failing. Fixed source restored and browser 6/6 held.
 - Nessa Docs validation accepted **126 pages / 0 catalog issues**; installed Chromium rendered **25 diagrams on all 14 changed pages**, opened **35 detail bindings** and followed **11 drill-down paths** with **0 page errors**. All **181 relative Markdown links** resolve. Changed-chart rendering, detail bindings, drill-down counts and source-review checkpoints are recorded in [the committed verification evidence](../../verification/desktop/evidence/user-flow-ordering/README.md) and the documentation handoff.
@@ -185,3 +185,7 @@ The [design table](../design/user-flow-ordering.md) preserves the corrected orde
 ## Separate focus triage
 
 The independent audit reported a system-Chromium overview focus result of 15/17. The [separate focus diagnostics](../reviews/user-flow-focus-triage-1087.md) record an initial 16/21 run with contention/reload exclusions and a frozen-source quick run at 18/21. The latter retains two assertion failures and one could-not-run result. No overview focus owner is changed by these fixes, and no causal attribution has been established. This finding remains for coordinator disposition; it is not a passed gate or an excuse to weaken assertions.
+
+## Exact-head CI correction
+
+The parent retained failed CI run `39919232935` at `4d718da047acbcf200c10feab62cb45b097ee939`. Frontend, gateway-contract and the three local-auth platform jobs failed the same actual architecture scan: the new TSX composer test mocked the conversation testing entry instead of using public contracts. The correction removes that mock, preserving the checker and assertions. At `7f434845423686cdd01a17300c47d10d46911f50`, **23/23 affected regressions**, TypeScript, lint and formatting passed, followed by **108/108 architecture tests and the actual scanner** with Rust stable 1.99.1 installed under `/tmp`. Gateway compilation is now being attempted; earlier missing-Cargo E2E results remain historical and no E2E success is claimed. Independent review of the earlier runtime fixes was clean; parent review/CI at the final head remains the merge gate.

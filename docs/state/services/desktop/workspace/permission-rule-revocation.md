@@ -47,6 +47,7 @@ stateDiagram-v2
         Unread --> Reading: Focus or visible event / read again
         Ready --> Reading: Focus or visible event [no revoke owned]
         Ready --> RevokeOwned: Revoke [ready list and no revoke owner] / capture request identity
+        Reading --> RevokeOwned: Revoke [retained ready list] / retire earlier read
         state RevokeOwned {
             [*] --> AwaitingAck
             AwaitingAck --> Rereading: Current typed outcome / request fresh rules
@@ -60,7 +61,7 @@ stateDiagram-v2
 
 ## Read ownership and repeated inputs
 
-The component owns an identified Read or Revoke request. A later background read replaces an earlier read, and an earlier reply cannot overwrite it. Starting a revoke replaces the read owner, so a read already in flight cannot clear the pending action when it returns.
+The component owns an identified Read or Revoke request. Reading in this chart is request progress, not a promise that rows disappeared: a background read can retain the ready list, whose Revoke action can supersede that read. A later background read replaces an earlier read, and an earlier reply cannot overwrite it. Starting a revoke replaces the read owner, so a read already in flight cannot clear the pending action when it returns.
 
 A synchronous admission check on this request owner coalesces repeated Revoke callbacks before React has rendered the disabled button. Disabled controls display the owned operation; their rendered state is not the sole dispatch guard. The same pending owner protects every rule button until settlement.
 
