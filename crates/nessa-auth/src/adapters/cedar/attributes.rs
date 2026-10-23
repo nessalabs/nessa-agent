@@ -18,6 +18,7 @@ pub(super) struct ActorAttributes<'a> {
     role: MembershipRole,
     active: bool,
     grants: &'a [Grant],
+    issuance: crate::domain::IssuanceCause,
 }
 
 impl<'a> From<&'a AccessSnapshot> for ActorAttributes<'a> {
@@ -27,6 +28,7 @@ impl<'a> From<&'a AccessSnapshot> for ActorAttributes<'a> {
             role: snapshot.membership.role(),
             active: snapshot.membership.is_active(),
             grants: snapshot.credential.grants(),
+            issuance: snapshot.origin.cause(),
         }
     }
 }
@@ -54,6 +56,20 @@ impl ActorAttributes<'_> {
                 RestrictedExpression::new_bool(self.active),
             ),
             ("grants".to_owned(), RestrictedExpression::new_set(grants)),
+            (
+                "issuance".to_owned(),
+                RestrictedExpression::new_string(
+                    match self.issuance {
+                        crate::domain::IssuanceCause::Bootstrap => "bootstrap",
+                        crate::domain::IssuanceCause::AdminIssue => "admin_issue",
+                        crate::domain::IssuanceCause::WebhookIssue => "webhook_issue",
+                        crate::domain::IssuanceCause::DevicePairing => "device_pairing",
+                        crate::domain::IssuanceCause::SurfaceProvision => "surface_provision",
+                        crate::domain::IssuanceCause::OwnerRecovery => "owner_recovery",
+                    }
+                    .to_owned(),
+                ),
+            ),
         ]))
     }
 }

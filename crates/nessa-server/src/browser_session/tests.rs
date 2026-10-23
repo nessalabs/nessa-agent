@@ -336,6 +336,7 @@ async fn minimal_session_survives_restart_and_rejects_malformed_credential_ids()
         now: 100,
     };
     assert!((ResumeSession {
+policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: &verifier,
         access: state.access.as_ref(),
         clock: state.clock.as_ref(),

@@ -154,3 +154,15 @@ forbid (
     resource is Nessa::Resource
 )
 when { context.path == "webhook" && principal.kind != "integration" };
+
+// Issuance purpose is the original journal fact, not current registration presence.
+@id("session.product_origin")
+permit (
+    principal is Nessa::Actor,
+    action == Nessa::Action::"session.enter",
+    resource is Nessa::Resource
+)
+when {
+    principal.active &&
+    ["bootstrap", "admin_issue", "device_pairing", "surface_provision", "owner_recovery"].contains(principal.issuance)
+};

@@ -25,7 +25,8 @@
 //! ```
 //!
 //! Cedar sees facts, not verdicts: the actor's grants are an entity attribute,
-//! and each `permit` requires the requested grant among them. Which grants a
+//! and operation permits require the requested grant among them. Session entry
+//! reads the original issuing cause instead; it grants no operation. Which grants a
 //! principal kind may hold is the `credential.hold` action, and who a new
 //! credential may be issued to is `credential.issue`; both read the issuing
 //! path (`IssuePath`) as the context string `path`, never a yes/no about it.

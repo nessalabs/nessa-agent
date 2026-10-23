@@ -9,7 +9,7 @@
 //!                                      │
 //!                            credential + membership + revision
 //!                                      │
-//!                         AuthenticateSession + Clock
+//!                         AuthenticateSession + Clock + PolicyEvaluator
 //!                                      │
 //!                              AuthenticatedSession
 //!
@@ -17,7 +17,7 @@
 //!                                            │
 //!                                    ResumeSession
 //!                                            │
-//!                         current AuthenticatedSession + snapshot
+//!                         Cedar session entry + current AuthenticatedSession + snapshot
 //! ```
 //!
 //! `dto` defines serialized input shapes; `mapping` validates their domain values.
@@ -25,6 +25,10 @@
 //! verifies credential evidence or opaque session proof before returning a context.
 //! A credential identifier alone is never proof. Composition owns adapter selection
 //! and lifetime; this module opens no socket or database.
+//!
+//! `origin` validates the original retained issuance and its command identity;
+//! readers expose it with current metadata under the existing access fence.
+//! The session-entry policy consumes its cause without granting operations.
 //!
 //! Authentication is not ongoing authorization. A gateway must apply current
 //! policy to each action and handle expiry and revision invalidation. A DTO that
@@ -34,6 +38,7 @@ pub mod credential_admin;
 pub mod credential_registry;
 pub mod dto;
 mod mapping;
+pub mod origin;
 /// Bounded device enrollment through current authentication and policy.
 pub mod pairing;
 pub mod ports;

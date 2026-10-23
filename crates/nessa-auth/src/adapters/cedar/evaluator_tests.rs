@@ -40,16 +40,34 @@ fn request_values() -> (AuthContext, Action, Resource, AccessSnapshot) {
         credential_id,
         audience_id,
     );
-    (
-        context,
-        action,
-        resource,
+    (context, action, resource, {
+        let revision = 1;
+        // This fixture explicitly creates its own original product issuance.
+        let original = crate::domain::CredentialTransition::new(
+            credential.id().clone(),
+            None,
+            crate::domain::CredentialLifecycle {
+                issued_at: credential.issued_at(),
+                expires_at: credential.expires_at(),
+                revoked_at: None,
+            },
+            crate::domain::TransitionCause::Issued(crate::domain::IssuanceCause::AdminIssue),
+            crate::domain::Initiator::LocalOperator,
+            credential.issued_at(),
+        )
+        .unwrap();
+        let origin = crate::application::origin::CredentialOrigin::restore(
+            crate::application::dto::CredentialTransitionDto::record(&original, 1, 1, None),
+            &credential,
+        )
+        .unwrap();
         AccessSnapshot {
             credential,
             membership,
-            revision: 1,
-        },
-    )
+            revision,
+            origin,
+        }
+    })
 }
 
 #[test]
@@ -407,4 +425,67 @@ fn webhook_path_holds_only_an_integration_conversation_read_grant() {
             );
         }
     }
+}
+
+#[test]
+fn session_entry_uses_original_issuance_and_current_identity() {
+    use crate::{
+        application::{dto::CredentialTransitionDto, origin::CredentialOrigin},
+        domain::{Initiator, IssuanceCause},
+    };
+    let policy = CedarPolicyEvaluator::new().unwrap();
+    let (context, _, resource, mut snapshot) = request_values();
+    let action = Action::new("session.enter").unwrap();
+    for cause in [
+        IssuanceCause::Bootstrap,
+        IssuanceCause::AdminIssue,
+        IssuanceCause::WebhookIssue,
+        IssuanceCause::DevicePairing,
+        IssuanceCause::SurfaceProvision,
+        IssuanceCause::OwnerRecovery,
+    ] {
+        let issued = snapshot
+            .credential
+            .issued(
+                cause,
+                Initiator::Principal(PrincipalId::new("owner").unwrap()),
+            )
+            .unwrap();
+        snapshot.origin = CredentialOrigin::restore(
+            CredentialTransitionDto::record(&issued, 1, 1, Some("request".into())),
+            &snapshot.credential,
+        )
+        .unwrap();
+        assert_eq!(
+            policy
+                .evaluate(&context, &action, &resource, &snapshot)
+                .unwrap(),
+            if cause == IssuanceCause::WebhookIssue {
+                Decision::Deny
+            } else {
+                Decision::Allow
+            }
+        );
+    }
+    snapshot.revision = 0;
+    assert_eq!(
+        policy
+            .evaluate(&context, &action, &resource, &snapshot)
+            .unwrap(),
+        Decision::Deny
+    );
+    snapshot.revision = 1;
+    snapshot.membership = Membership::new(
+        snapshot.membership.id().clone(),
+        snapshot.membership.principal_id().clone(),
+        snapshot.membership.organization_id().clone(),
+        MembershipRole::Member,
+        MembershipStatus::Disabled,
+    );
+    assert_eq!(
+        policy
+            .evaluate(&context, &action, &resource, &snapshot)
+            .unwrap(),
+        Decision::Deny
+    );
 }

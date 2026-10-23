@@ -123,6 +123,7 @@ impl Fixture {
     ) -> Result<AuthenticatedSession, AccessError> {
         ready(
             AuthenticateSession {
+                policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
                 verifier: &self.verifier,
                 access: &self.store,
                 clock: &self.clock,
@@ -178,8 +179,8 @@ fn grant(action: &str, id: &str) -> Grant {
 }
 
 fn snapshot(role: MembershipRole, status: MembershipStatus, grants: Vec<Grant>) -> AccessSnapshot {
-    AccessSnapshot {
-        credential: Credential::new(
+    {
+        let credential = Credential::new(
             credential_id(),
             principal_id(),
             organization_id(),
@@ -188,15 +189,42 @@ fn snapshot(role: MembershipRole, status: MembershipStatus, grants: Vec<Grant>) 
             EXPIRES_AT,
             grants,
         )
-        .unwrap(),
-        membership: Membership::new(
+        .unwrap();
+        let membership = Membership::new(
             membership_id(),
             principal_id(),
             organization_id(),
             role,
             status,
-        ),
-        revision: 1,
+        );
+        let revision = 1;
+        // This fixture explicitly creates its own original product issuance.
+        let original = nessa_auth::domain::CredentialTransition::new(
+            credential.id().clone(),
+            None,
+            nessa_auth::domain::CredentialLifecycle {
+                issued_at: credential.issued_at(),
+                expires_at: credential.expires_at(),
+                revoked_at: None,
+            },
+            nessa_auth::domain::TransitionCause::Issued(
+                nessa_auth::domain::IssuanceCause::AdminIssue,
+            ),
+            nessa_auth::domain::Initiator::LocalOperator,
+            credential.issued_at(),
+        )
+        .unwrap();
+        let origin = nessa_auth::application::origin::CredentialOrigin::restore(
+            nessa_auth::application::dto::CredentialTransitionDto::record(&original, 1, 1, None),
+            &credential,
+        )
+        .unwrap();
+        AccessSnapshot {
+            credential,
+            membership,
+            revision,
+            origin,
+        }
     }
 }
 

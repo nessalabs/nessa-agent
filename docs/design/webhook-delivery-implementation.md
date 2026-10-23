@@ -478,3 +478,22 @@ stable delivery identity, and retries retain the initial timestamp/signature.
 Canonical Chromium/WebKit and feature stress/chaos remain required independently
 of private Rust recipient tests. Previously denied browser downloads and manual
 workflow operations are not retried by this composition.
+
+## Parent-adjudicated original issuance and secret-free acknowledgement
+
+At source `97d5c0991310cf7e10729e3f1cb3c2371be06460`, registration is unmounted.
+The parent selected removal of bearer output rather than verification of an
+unnecessary returned secret. Ordinary product issuance keeps its existing API.
+The auth journal owns provenance; registration does not create another authority.
+
+| Boundary | Owning fact and enforcement | Required evidence |
+| --- | --- | --- |
+| Original issuance | One validated first issuance transition per credential, including actual cause, initiator and command correlation; read with current metadata/member/revision under existing hold | Altered origin/correlation/identity, malformed restoration, valid original fact after revocation |
+| Purpose | Actual auth WebhookIssue path records distinct typed WebhookIssue cause; existing Cedar consumes that immutable cause for session admission | Webhook bearer and resumed session refused; ordinary product and paired entry unchanged |
+| Registration acknowledgement | Explicit secret-free RegisteredWebhook returned for initial and matching replay; auth bearer consumed/discarded internally | Same acknowledgement across lost response/restart, no bearer in registration output/storage/diagnostics |
+| Ambiguous historical origin | AdminIssue is preserved as AdminIssue; no inference from grant shape or current registration; registration returns typed recovery-required outcome | Historical ambiguity refuses installation without rewriting facts |
+| Retirement | Registration removal does not remove or replace auth provenance | Retired webhook remains barred from product entry; revoked original history stays valid |
+
+This correction does not recover or retry the prior flagged reviewer report.
+Fresh review will concern the new correction and its tests only. Sender composition
+and recipient E2E follow a clean correction review.

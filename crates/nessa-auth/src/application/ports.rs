@@ -130,6 +130,8 @@ pub trait SessionVerifier: Send + Sync {
 /// Credential and membership must come from one committed authorization revision.
 #[derive(Debug, Clone)]
 pub struct AccessSnapshot {
+    /// Actual original issuance read coherently from this authority's journal.
+    pub origin: super::origin::CredentialOrigin,
     /// Current secret-free credential metadata.
     pub credential: Credential,
     /// Membership linked to the credential actor and organization.

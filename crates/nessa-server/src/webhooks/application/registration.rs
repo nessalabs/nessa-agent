@@ -110,6 +110,15 @@ pub enum RegistrationFailure {
     Store(OutboxError),
     Inconsistent,
     Stopped,
+    /// Existing issuance lacks explicit webhook provenance; revoke and issue anew.
+    OriginRecoveryRequired,
+}
+
+/// Secret-free acknowledgement, identical for initial registration and matching replay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegisteredWebhook {
+    pub registration_id: Uuid,
+    pub credential: CredentialMetadataDto,
 }
 
 pub struct RegisterWebhook<'a> {
@@ -125,7 +134,7 @@ impl RegisterWebhook<'_> {
     pub async fn execute(
         &self,
         mut proposed: RegistrationIntent,
-    ) -> Result<IssueCredentialOutcome, RegistrationFailure> {
+    ) -> Result<RegisteredWebhook, RegistrationFailure> {
         proposed.issue.purpose = CredentialIssuePurpose::Webhook;
         proposed.issue.issued_at = proposed.observed_at_ms / 1000;
         let reserved = self
@@ -149,7 +158,13 @@ impl RegisterWebhook<'_> {
             }
             Err(error) => return Err(RegistrationFailure::Auth(error)),
         };
-        let (metadata, transitions) = match &outcome {
+        let replay = matches!(
+            &outcome,
+            IssueCredentialOutcome::ExistingSecretUnavailable { .. }
+        );
+        // Consume the auth result here. A newly generated bearer has no recipient
+        // in this use case and never enters registration storage or its result.
+        let (metadata, transitions) = match outcome {
             IssueCredentialOutcome::Issued {
                 metadata,
                 transitions,
@@ -160,11 +175,7 @@ impl RegisterWebhook<'_> {
                 transitions,
             } => (metadata, transitions),
         };
-        if matches!(
-            &outcome,
-            IssueCredentialOutcome::ExistingSecretUnavailable { .. }
-        ) && metadata.id != intent.issue.credential_id
-        {
+        if replay && metadata.id != intent.issue.credential_id {
             // A retired request may replay an older selected identity. Ask the
             // auth owner whether this proposal was issued; a diagnostic from
             // hold() is not proof of absence or rollback.
@@ -202,7 +213,7 @@ impl RegisterWebhook<'_> {
                 expires_at: intent.issue.expires_at,
                 revoked_at: None,
             },
-            TransitionCause::Issued(IssuanceCause::AdminIssue),
+            TransitionCause::Issued(IssuanceCause::WebhookIssue),
             Initiator::Principal(
                 PrincipalId::new(&intent.issue.issuer_principal_id)
                     .map_err(|_| RegistrationFailure::Inconsistent)?,
@@ -210,11 +221,7 @@ impl RegisterWebhook<'_> {
             intent.issue.issued_at,
         )
         .map_err(|_| RegistrationFailure::Inconsistent)?;
-        if !matches_request(&intent.issue, metadata)
-            || transitions.len() != 1
-            || transitions[0].correlation.as_deref() != Some(&intent.issue.request_id)
-            || CredentialTransition::try_from(transitions[0].clone()).as_ref() != Ok(&expected)
-        {
+        if !matches_request(&intent.issue, &metadata) {
             return Err(RegistrationFailure::Inconsistent);
         }
         let credential = Credential::try_from(metadata.clone())
@@ -249,12 +256,31 @@ impl RegisterWebhook<'_> {
         if hold.snapshot.credential != credential || hold.snapshot.membership != membership {
             return Err(RegistrationFailure::Inconsistent);
         }
+        let origin = &hold.snapshot.origin;
+        if origin.cause() == IssuanceCause::AdminIssue {
+            return Err(RegistrationFailure::OriginRecoveryRequired);
+        }
+        if !origin.matches(&credential, hold.snapshot.revision)
+            || origin.transition() != &expected
+            || origin.correlation() != Some(intent.issue.request_id.as_str())
+            || transitions.len() != 1
+            || transitions[0].sequence != origin.sequence()
+            || transitions[0].revision != origin.revision()
+            || transitions[0].correlation.as_deref() != Some(intent.issue.request_id.as_str())
+            || CredentialTransition::try_from(transitions[0].clone()).as_ref() != Ok(&expected)
+        {
+            return Err(RegistrationFailure::Inconsistent);
+        }
+        let registration_id = intent.id;
         self.intents
             .install(intent)
             .await
             .map_err(RegistrationFailure::Store)?;
         drop(hold);
-        Ok(outcome)
+        Ok(RegisteredWebhook {
+            registration_id,
+            credential: metadata,
+        })
     }
 }
 

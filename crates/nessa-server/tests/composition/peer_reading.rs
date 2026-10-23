@@ -146,6 +146,7 @@ pub(super) async fn owned(
         })
         .unwrap();
     let session = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: auth.as_ref(),
         access: auth.as_ref(),
         clock: &SystemClock,

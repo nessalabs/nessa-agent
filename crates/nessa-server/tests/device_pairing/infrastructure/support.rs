@@ -176,6 +176,7 @@ impl Fixture {
             })
             .unwrap();
         let session = AuthenticateSession {
+            policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: registry.as_ref(),
             access: registry.as_ref(),
             clock: &Time,

@@ -24,8 +24,9 @@ use crate::{
         },
         dto::{
             CredentialGrantDto, CredentialMetadataDto, CredentialTransitionDto, InitiatorDto,
-            MembershipInputDto, MembershipRoleDto, MembershipStateDto, OrganizationInputDto,
-            PrincipalInputDto, PrincipalKindDto, ResourceDto, TransitionCauseDto,
+            IssuanceCauseDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
+            OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
+            TransitionCauseDto,
         },
         pairing::StageGate,
         ports::{
@@ -690,10 +691,13 @@ impl LocalCredentialStore {
                 Some(&request.request_id),
             )?;
         }
-        let cause = if provisioning {
-            IssuanceCause::SurfaceProvision
-        } else {
-            IssuanceCause::AdminIssue
+        let cause = match path {
+            IssuePath::WebhookIssue => IssuanceCause::WebhookIssue,
+            IssuePath::SurfaceProvision => IssuanceCause::SurfaceProvision,
+            IssuePath::ProductIssue => IssuanceCause::AdminIssue,
+            IssuePath::Bootstrap | IssuePath::OwnerRecovery | IssuePath::StoredOnLoad => {
+                return Err(LocalStoreError::Corrupt)
+            }
         };
         record_transition(
             &mut next,
@@ -1262,7 +1266,20 @@ impl AccessReader for LocalCredentialStore {
                     })
                     .cloned()
                     .ok_or(AccessError::IdentityMismatch)?;
+                let original = registry
+                    .transitions
+                    .iter()
+                    .find(|transition| transition.credential_id == stored.metadata.id)
+                    .ok_or(AccessError::Unavailable)?;
+                let origin = crate::application::origin::CredentialOrigin::restore(
+                    original.clone(),
+                    &credential,
+                )?;
+                if !origin.matches(&credential, registry.revision) {
+                    return Err(AccessError::Unavailable);
+                }
                 Ok(AccessSnapshot {
+                    origin,
                     credential,
                     membership: Membership::try_from(membership)
                         .map_err(|_| AccessError::Unavailable)?,
@@ -1589,6 +1606,13 @@ fn validate_transitions(
             .ok_or_else(invalid)?;
         seen += chain.len();
         let (first, rest) = chain.split_first().ok_or_else(invalid)?;
+        let current = domain_credential(&stored.metadata).map_err(|_| invalid())?;
+        let origin =
+            crate::application::origin::CredentialOrigin::restore((*first).clone(), &current)
+                .map_err(|_| invalid())?;
+        if !origin.matches(&current, registry.revision) {
+            return Err(invalid());
+        }
         if !matches!(first.cause, TransitionCauseDto::Issued { .. }) || rest.len() > 1 {
             return Err(invalid());
         }
@@ -1664,6 +1688,12 @@ fn validate_registry(
         .collect();
     let principals: HashSet<_> = registry.principals.iter().map(|value| &value.id).collect();
     validate_transitions(registry, config, &principals)?;
+    let original_issuance: HashMap<_, _> = registry
+        .transitions
+        .iter()
+        .filter(|transition| matches!(transition.cause, TransitionCauseDto::Issued { .. }))
+        .map(|transition| (transition.credential_id.as_str(), transition))
+        .collect();
     let memberships: HashSet<_> = registry.memberships.iter().map(|value| &value.id).collect();
     let membership_bindings: HashSet<_> = registry
         .memberships
@@ -1799,12 +1829,22 @@ fn validate_registry(
             .ok_or(LocalStoreError::Corrupt)
             .and_then(principal_kind);
         kind.and_then(|kind| {
+            let path = match original_issuance
+                .get(credential.metadata.id.as_str())
+                .map(|record| &record.cause)
+            {
+                Some(TransitionCauseDto::Issued {
+                    cause: IssuanceCauseDto::WebhookIssue,
+                }) => IssuePath::WebhookIssue,
+                Some(TransitionCauseDto::Issued { .. }) => IssuePath::StoredOnLoad,
+                _ => return Err(LocalStoreError::Corrupt),
+            };
             validate_grants(
                 grants,
                 &credential.metadata,
                 kind,
                 &registry.gateway_id,
-                IssuePath::StoredOnLoad,
+                path,
             )
         })
         .map_err(|_| {
@@ -1846,11 +1886,32 @@ fn validate_registry(
         .iter()
         .map(|receipt| (&receipt.issuer_principal_id, &receipt.request_id))
         .collect();
+    let issue_by_credential: HashMap<_, _> = registry
+        .issue_receipts
+        .iter()
+        .map(|receipt| (receipt.credential_id.as_str(), receipt))
+        .collect();
+    if issue_by_credential.len() != registry.issue_receipts.len()
+        || original_issuance.values().any(|original| {
+            matches!(
+                original.cause,
+                TransitionCauseDto::Issued {
+                    cause: IssuanceCauseDto::WebhookIssue
+                }
+            ) && !issue_by_credential.contains_key(original.credential_id.as_str())
+        })
+    {
+        return Err(CredentialRegistryFault::InvalidState(
+            RegistryInvariant::CommandReceipt,
+        ));
+    }
     if issue_commands.len() != registry.issue_receipts.len()
         || revoke_commands.len() != registry.revoke_receipts.len()
         || registry.issue_receipts.iter().any(|receipt| {
             !principals.contains(&receipt.issuer_principal_id)
                 || !credentials.contains(&receipt.credential_id)
+                || original_issuance.get(receipt.credential_id.as_str()).is_none_or(|original| original.correlation.as_deref() != Some(receipt.request_id.as_str())
+                    || !matches!(&original.initiator, InitiatorDto::Principal { id } if id == &receipt.issuer_principal_id))
         })
         || registry.revoke_receipts.iter().any(|receipt| {
             !principals.contains(&receipt.issuer_principal_id)
@@ -2375,6 +2436,7 @@ mod tests {
         let audience = AudienceId::new("gateway-1").unwrap();
         let session = ready(
             AuthenticateSession {
+                policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
                 verifier: &store,
                 access: &store,
                 clock: &clock,

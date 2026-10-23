@@ -113,6 +113,7 @@ async fn record_use_case_admits_before_metadata_and_rechecks_each_request() {
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     let session = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: &access,
         access: &access,
         clock: &clock,
@@ -306,6 +307,7 @@ async fn passive_admission_preserves_unverifiable_authority_failures() {
     let clock = FixedClock;
     let policy = CedarPolicyEvaluator::new().unwrap();
     let session = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: &access,
         access: &access,
         clock: &clock,
@@ -415,8 +417,8 @@ fn access() -> Access {
     let org = OrganizationId::new("org").unwrap();
     let owner = PrincipalId::new("owner").unwrap();
     let resource = Resource::new(org.clone(), ResourceId::new("gateway").unwrap());
-    Access(Mutex::new(AccessSnapshot {
-        credential: Credential::new(
+    Access(Mutex::new({
+        let credential = Credential::new(
             CredentialId::new("credential").unwrap(),
             owner.clone(),
             org.clone(),
@@ -428,15 +430,42 @@ fn access() -> Access {
                 resource,
             )],
         )
-        .unwrap(),
-        membership: Membership::new(
+        .unwrap();
+        let membership = Membership::new(
             MembershipId::new("member").unwrap(),
             owner,
             org,
             MembershipRole::Member,
             MembershipStatus::Active,
-        ),
-        revision: 1,
+        );
+        let revision = 1;
+        // This fixture explicitly creates its own original product issuance.
+        let original = nessa_auth::domain::CredentialTransition::new(
+            credential.id().clone(),
+            None,
+            nessa_auth::domain::CredentialLifecycle {
+                issued_at: credential.issued_at(),
+                expires_at: credential.expires_at(),
+                revoked_at: None,
+            },
+            nessa_auth::domain::TransitionCause::Issued(
+                nessa_auth::domain::IssuanceCause::AdminIssue,
+            ),
+            nessa_auth::domain::Initiator::LocalOperator,
+            credential.issued_at(),
+        )
+        .unwrap();
+        let origin = nessa_auth::application::origin::CredentialOrigin::restore(
+            nessa_auth::application::dto::CredentialTransitionDto::record(&original, 1, 1, None),
+            &credential,
+        )
+        .unwrap();
+        AccessSnapshot {
+            credential,
+            membership,
+            revision,
+            origin,
+        }
     }))
 }
 fn binding() -> ReceiverBinding {
@@ -486,6 +515,7 @@ async fn every_refusal_precedes_source_and_valid_owner_reaches_it() {
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     let session = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: &access,
         access: &access,
         clock: &clock,
@@ -819,6 +849,7 @@ async fn catalogue_use_case_correlates_admitted_selector_and_operation_before_re
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     let session = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: &access,
         access: &access,
         clock: &clock,
@@ -1048,6 +1079,7 @@ async fn each_operation_asks_for_its_own_grant() {
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     let session = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: &access,
         access: &access,
         clock: &clock,
@@ -1306,6 +1338,7 @@ impl GrantFixture {
 async fn device_session() -> nessa_auth::application::session::AuthenticatedSession {
     let access = access();
     AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: &access,
         access: &access,
         clock: &FixedClock,

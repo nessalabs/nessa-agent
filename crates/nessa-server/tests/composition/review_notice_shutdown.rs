@@ -156,6 +156,7 @@ async fn review_audit_host_shutdown_joins_physical_write_and_queued_selection() 
     let fixture = HostProductFixture::new().await;
     let state = fixture.state().with_review_notice_auditor(auditor);
     let session = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: state.verifier.as_ref(),
         access: state.access.as_ref(),
         clock: state.clock.as_ref(),
@@ -330,6 +331,7 @@ async fn review_audit_host_deadline_preserves_first_delivery_failure() {
     ));
     let state = fixture.state().with_review_notice_auditor(auditor.clone());
     let session = AuthenticateSession {
+        policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
         verifier: state.verifier.as_ref(),
         access: state.access.as_ref(),
         clock: state.clock.as_ref(),

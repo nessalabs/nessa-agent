@@ -52,7 +52,7 @@ impl CredentialAdmin for ChangedIssue<'_> {
 
 #[tokio::test]
 async fn contradictory_auth_reply_installs_nothing_and_preserves_original_retry() {
-    let cases: [(&str, Alter); 17] = [
+    let cases: [(&str, Alter); 19] = [
         ("credential", |m, _| m.id = "different-key".into()),
         ("principal", |m, _| {
             m.principal_id = "different-principal".into()
@@ -66,6 +66,8 @@ async fn contradictory_auth_reply_installs_nothing_and_preserves_original_retry(
         ("issued_at", |m, _| m.issued_at += 1),
         ("expiry", |m, _| m.expires_at = Some(99)),
         ("grants", |m, _| m.grants.push(grant("conversation.write"))),
+        ("journal_sequence", |_, t| t[0].sequence += 1),
+        ("journal_revision", |_, t| t[0].revision += 1),
         ("transition_target", |_, t| {
             t[0].credential_id = "different-key".into()
         }),
@@ -109,11 +111,12 @@ async fn contradictory_auth_reply_installs_nothing_and_preserves_original_retry(
         );
         assert_eq!(f.count("registrations"), 0, "{name}");
         assert_eq!(f.count("registration_intents"), 1, "{name}");
-        let IssueCredentialOutcome::ExistingSecretUnavailable { metadata, .. } =
-            f.command(&f.store).execute(f.proposed()).await.unwrap()
-        else {
-            panic!("cannot replay discarded bearer")
-        };
+        let metadata = f
+            .command(&f.store)
+            .execute(f.proposed())
+            .await
+            .unwrap()
+            .credential;
         assert_eq!(
             f.store
                 .registration(CredentialId::new(metadata.id).unwrap())
@@ -146,11 +149,12 @@ async fn contradictory_existing_receipt_does_not_discard_the_known_issued_intent
     ));
     assert_eq!(f.count("registration_intents"), 1);
     assert_eq!(f.count("registrations"), 0);
-    let IssueCredentialOutcome::ExistingSecretUnavailable { metadata, .. } =
-        f.command(&f.store).execute(f.proposed()).await.unwrap()
-    else {
-        panic!("original secret stays unavailable")
-    };
+    let metadata = f
+        .command(&f.store)
+        .execute(f.proposed())
+        .await
+        .unwrap()
+        .credential;
     assert_eq!(
         f.store
             .registration(CredentialId::new(metadata.id).unwrap())
@@ -220,16 +224,15 @@ async fn uncertain_auth_commit_keeps_original_intent_and_typed_refusal_discards_
             i64::from(error == CredentialAdminError::Unavailable)
         );
         let outcome = f.command(&f.store).execute(f.proposed()).await.unwrap();
-        let metadata = match outcome {
-            IssueCredentialOutcome::Issued { metadata, .. } => {
-                assert!(!commit);
-                metadata
-            }
-            IssueCredentialOutcome::ExistingSecretUnavailable { metadata, .. } => {
-                assert!(commit);
-                metadata
-            }
-        };
+        let metadata = outcome.credential;
+        let retry = f
+            .auth
+            .issue_sync(f.store.reserve(f.proposed()).await.unwrap().issue)
+            .unwrap();
+        assert!(matches!(
+            retry,
+            IssueCredentialOutcome::ExistingSecretUnavailable { .. }
+        ));
         let installed = f
             .store
             .registration(CredentialId::new(metadata.id).unwrap())
@@ -293,7 +296,7 @@ async fn unavailable_or_substituted_current_authority_cannot_install_or_erase_in
         assert_eq!(f.count("registration_intents"), 1);
         assert!(matches!(
             f.command(&f.store).execute(f.proposed()).await,
-            Ok(IssueCredentialOutcome::ExistingSecretUnavailable { .. })
+            Ok(RegisteredWebhook { .. })
         ));
     }
     for inactive in [false, true] {
@@ -309,7 +312,7 @@ async fn unavailable_or_substituted_current_authority_cannot_install_or_erase_in
         assert_eq!(f.count("registration_intents"), 1);
         assert!(matches!(
             f.command(&f.store).execute(f.proposed()).await,
-            Ok(IssueCredentialOutcome::ExistingSecretUnavailable { .. })
+            Ok(RegisteredWebhook { .. })
         ));
     }
 }
@@ -493,4 +496,83 @@ async fn transient_intent_scan_interruption_is_unavailable_and_unchanged_state_r
         assert_eq!(intents::validate(&connection), Ok(()));
     }
     assert!(interrupted > 0);
+}
+
+#[tokio::test]
+async fn actual_original_command_cannot_be_replaced_by_an_honest_looking_reply() {
+    let f = Registered::new();
+    let changed = ChangedIssue {
+        auth: &f.auth,
+        rewrite: Some(|request| request.request_id = "actual-other-command".into()),
+        alter: |_, transitions| transitions[0].correlation = Some("register-synthetic".into()),
+    };
+    let mut command = f.command(&f.store);
+    command.credentials = &changed;
+    assert_eq!(
+        command.execute(f.proposed()).await,
+        Err(RegistrationFailure::Inconsistent)
+    );
+    assert_eq!(f.count("registrations"), 0);
+    assert_eq!(f.count("registration_intents"), 1);
+    let records = f
+        .auth
+        .list_transitions_sync(
+            &nessa_auth::application::credential_admin::ListTransitionsRequest {
+                organization_id: "org".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        records.last().unwrap().correlation.as_deref(),
+        Some("actual-other-command")
+    );
+}
+
+#[tokio::test]
+async fn ordinary_origin_requires_explicit_recovery_even_if_reply_claims_webhook() {
+    let f = Registered::new();
+    let changed = ChangedIssue {
+        auth: &f.auth,
+        rewrite: Some(|request| request.purpose = CredentialIssuePurpose::Product),
+        alter: |_, transitions| {
+            transitions[0].cause = TransitionCauseDto::Issued {
+                cause: IssuanceCauseDto::WebhookIssue,
+            }
+        },
+    };
+    let mut command = f.command(&f.store);
+    command.credentials = &changed;
+    assert_eq!(
+        command.execute(f.proposed()).await,
+        Err(RegistrationFailure::OriginRecoveryRequired)
+    );
+    assert_eq!(f.count("registrations"), 0);
+    assert_eq!(f.count("registration_intents"), 1);
+}
+
+#[tokio::test]
+async fn actual_original_actor_cannot_be_replaced_by_a_claimed_reply_actor() {
+    let f = Registered::new();
+    let mut other = f.proposed().issue;
+    other.purpose = CredentialIssuePurpose::Product;
+    other.request_id = "create-second-test-issuer".into();
+    other.principal.id = "second-test-issuer".into();
+    other.membership.id = "second-test-membership".into();
+    other.membership.principal_id = "second-test-issuer".into();
+    drop(f.auth.issue_sync(other).unwrap());
+    let changed = ChangedIssue {
+        auth: &f.auth,
+        rewrite: Some(|request| request.issuer_principal_id = "second-test-issuer".into()),
+        alter: |_, transitions| {
+            transitions[0].initiator = InitiatorDto::Principal { id: "owner".into() }
+        },
+    };
+    let mut command = f.command(&f.store);
+    command.credentials = &changed;
+    assert_eq!(
+        command.execute(f.proposed()).await,
+        Err(RegistrationFailure::Inconsistent)
+    );
+    assert_eq!(f.count("registrations"), 0);
+    assert_eq!(f.count("registration_intents"), 1);
 }

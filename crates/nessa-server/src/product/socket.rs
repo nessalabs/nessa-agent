@@ -371,6 +371,7 @@ where
             now: state.clock.unix_seconds(),
         };
         let identity = (ResumeSession {
+            policy: state.policy.as_ref(),
             verifier: &verifier,
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
@@ -402,6 +403,7 @@ where
         .map_err(|_| (frame.id.clone(), "unauthorized"))?;
     let verifier = proof.verifier(socket, state);
     let session = AuthenticateSession {
+        policy: state.policy.as_ref(),
         verifier: verifier.as_ref(),
         access: state.access.as_ref(),
         clock: state.clock.as_ref(),
@@ -2234,6 +2236,7 @@ async fn current_identity_inner(
             now: state.clock.unix_seconds(),
         };
         match (ResumeSession {
+            policy: state.policy.as_ref(),
             verifier: &verifier,
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
@@ -4126,8 +4129,8 @@ mod tests {
             organization.clone(),
             ResourceId::new("gateway-resource").unwrap(),
         );
-        AccessSnapshot {
-            credential: Credential::new(
+        {
+            let credential = Credential::new(
                 CredentialId::new("credential").unwrap(),
                 PrincipalId::new("principal").unwrap(),
                 organization.clone(),
@@ -4139,15 +4142,44 @@ mod tests {
                     .map(|action| Grant::new(Action::new(*action).unwrap(), resource.clone()))
                     .collect(),
             )
-            .unwrap(),
-            membership: Membership::new(
+            .unwrap();
+            let membership = Membership::new(
                 MembershipId::new("membership").unwrap(),
                 PrincipalId::new("principal").unwrap(),
                 organization,
                 role,
                 status,
-            ),
-            revision: 1,
+            );
+            let revision = 1;
+            // This fixture explicitly creates its own original product issuance.
+            let original = nessa_auth::domain::CredentialTransition::new(
+                credential.id().clone(),
+                None,
+                nessa_auth::domain::CredentialLifecycle {
+                    issued_at: credential.issued_at(),
+                    expires_at: credential.expires_at(),
+                    revoked_at: None,
+                },
+                nessa_auth::domain::TransitionCause::Issued(
+                    nessa_auth::domain::IssuanceCause::AdminIssue,
+                ),
+                nessa_auth::domain::Initiator::LocalOperator,
+                credential.issued_at(),
+            )
+            .unwrap();
+            let origin = nessa_auth::application::origin::CredentialOrigin::restore(
+                nessa_auth::application::dto::CredentialTransitionDto::record(
+                    &original, 1, 1, None,
+                ),
+                &credential,
+            )
+            .unwrap();
+            AccessSnapshot {
+                credential,
+                membership,
+                revision,
+                origin,
+            }
         }
     }
 
@@ -4200,6 +4232,7 @@ mod tests {
 
     async fn authenticate(state: &ProductRouteState) -> AuthenticatedSession {
         AuthenticateSession {
+            policy: state.policy.as_ref(),
             verifier: state.verifier.as_ref(),
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),

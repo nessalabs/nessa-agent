@@ -1,8 +1,8 @@
 use super::super::super::intents;
 use super::*;
 use crate::webhooks::application::{
-    RegisterWebhook, RegistrationConfig, RegistrationFailure, RegistrationIntent,
-    RegistrationIntents,
+    RegisterWebhook, RegisteredWebhook, RegistrationConfig, RegistrationFailure,
+    RegistrationIntent, RegistrationIntents,
 };
 use async_trait::async_trait;
 use nessa_auth::{
@@ -152,6 +152,9 @@ fn grant(action: &str) -> CredentialGrantDto {
     }
 }
 
+#[path = "registration_origin.rs"]
+mod origin_tests;
+
 #[path = "registration_failures.rs"]
 mod failure_tests;
 
@@ -163,16 +166,10 @@ async fn registration_commits_real_auth_and_replays_original_config_after_restar
     proposal.issue.issued_at = 999;
     let id = proposal.id;
     let credential = proposal.issue.credential_id.clone();
-    let IssueCredentialOutcome::Issued {
-        metadata,
-        evidence,
-        transitions,
-    } = f.command(&f.store).execute(proposal).await.unwrap()
-    else {
-        panic!("first issue")
-    };
+    let acknowledgement = f.command(&f.store).execute(proposal).await.unwrap();
+    let metadata = acknowledgement.credential.clone();
+    assert_eq!(acknowledgement.registration_id, id);
     assert_eq!(metadata.id, credential);
-    assert_eq!(transitions.len(), 1);
     let saved = f
         .store
         .registration(CredentialId::new(&credential).unwrap())
@@ -198,22 +195,16 @@ async fn registration_commits_real_auth_and_replays_original_config_after_restar
         .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(!logs.contains(std::str::from_utf8(evidence.expose_bytes()).unwrap()));
+    assert!(!logs.contains("nessa_v1."));
+    assert!(!format!("{acknowledgement:?}").contains("nessa_v1."));
     assert!(!logs.contains("recipient.test"));
     assert!(!logs.contains("private-only-fixture"));
     f.reopen();
     let mut retry = f.proposed();
     retry.observed_at_ms = 11_000;
     retry.issue.issued_at = 11;
-    let IssueCredentialOutcome::ExistingSecretUnavailable {
-        metadata: original,
-        transitions: history,
-    } = f.command(&f.store).execute(retry).await.unwrap()
-    else {
-        panic!("no bearer replay")
-    };
-    assert_eq!(original, metadata);
-    assert_eq!(history, transitions);
+    let replay = f.command(&f.store).execute(retry).await.unwrap();
+    assert_eq!(replay, acknowledgement);
     assert_eq!(f.count("registrations"), 1);
     assert_eq!(f.count("registration_intents"), 1);
 }
@@ -255,11 +246,12 @@ async fn auth_commit_and_uncertain_install_ack_recover_without_another_credentia
         ));
         assert_eq!(f.count("registrations"), i64::from(committed));
         f.reopen();
-        let IssueCredentialOutcome::ExistingSecretUnavailable { metadata, .. } =
-            f.command(&f.store).execute(f.proposed()).await.unwrap()
-        else {
-            panic!("original bearer is unavailable")
-        };
+        let metadata = f
+            .command(&f.store)
+            .execute(f.proposed())
+            .await
+            .unwrap()
+            .credential;
         assert_eq!(metadata.id, original);
         assert_eq!(f.count("registrations"), 1);
         assert_eq!(
@@ -538,7 +530,7 @@ async fn registration_retirement_removes_private_intent_even_when_audit_ack_is_l
     next.issue.request_id = "new-registration-after-retirement".into();
     assert!(matches!(
         f.command(&f.store).execute(next).await,
-        Ok(IssueCredentialOutcome::Issued { .. })
+        Ok(RegisteredWebhook { .. })
     ));
 }
 

@@ -13,8 +13,8 @@ pub use outbox::{
     MAX_SOURCE_RESETS, PENDING_LIMIT, RETAINED_LIMIT, SOURCE_RESET_BYTES,
 };
 pub use registration::{
-    RegisterWebhook, RegistrationConfig, RegistrationFailure, RegistrationIntent,
-    RegistrationIntents,
+    RegisterWebhook, RegisteredWebhook, RegistrationConfig, RegistrationFailure,
+    RegistrationIntent, RegistrationIntents,
 };
 
 pub use message::{InvalidMessage, MacKey, Message, MAX_BODY_BYTES};

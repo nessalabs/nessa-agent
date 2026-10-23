@@ -24,6 +24,7 @@ fn signed_fixture() -> SignedFixture {
     let bootstrap = store.bootstrap(bootstrap_request).unwrap();
     let session = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: store.as_ref(),
             access: store.as_ref(),
             clock: &Time,
@@ -301,6 +302,7 @@ fn another_valid_owner_credential_cannot_stage_the_original_signed_consent() {
     };
     let other = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: f.store.as_ref(),
             access: f.store.as_ref(),
             clock: &Time,
@@ -411,6 +413,7 @@ fn a_replacement_owner_can_end_the_enrollment_and_cannot_stage_or_approve_it() {
     };
     let replacement = ready(
         AuthenticateSession {
+            policy: &crate::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
             verifier: f.store.as_ref(),
             access: f.store.as_ref(),
             clock: &Time,

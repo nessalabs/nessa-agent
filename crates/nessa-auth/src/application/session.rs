@@ -1,10 +1,11 @@
-//! Authentication assembles identity only. Callers must authorize each operation
-//! against fresh state and own invalidation/expiry handling for open connections.
+//! Session entry verifies identity and asks the injected policy whether the
+//! original issuance permits entry. Callers still authorize each operation against
+//! fresh state and own invalidation/expiry handling for open connections.
 use super::ports::{
     AccessError, AccessReader, AccessSnapshot, Clock, CredentialEvidence, CredentialVerifier,
-    SessionEvidence, SessionVerifier,
+    Decision, PolicyEvaluator, SessionEvidence, SessionVerifier,
 };
-use crate::domain::{AudienceId, AuthContext};
+use crate::domain::{Action, AudienceId, AuthContext, Resource, ResourceId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Verified session identity plus the lifetime and state revision checked at entry.
@@ -57,6 +58,9 @@ impl ReadCurrentSession<'_> {
         }
         let credential = &snapshot.credential;
         let membership = &snapshot.membership;
+        if !snapshot.origin.matches(credential, snapshot.revision) {
+            return Err(AccessError::IdentityMismatch);
+        }
         let now = self.clock.unix_seconds();
         if credential.revoked_at().is_some() {
             return Err(AccessError::CredentialRevoked);
@@ -89,6 +93,8 @@ impl ReadCurrentSession<'_> {
 /// Reconstruct current identity only after a trusted adapter verifies an opaque
 /// browser or host session. Raw credential IDs cannot invoke this boundary.
 pub struct ResumeSession<'a> {
+    /// Existing policy owner decides whether this original issuance may enter a session.
+    pub policy: &'a dyn PolicyEvaluator,
     /// Verifies opaque session evidence and returns its credential binding.
     pub verifier: &'a dyn SessionVerifier,
     /// Reads current credential and membership state.
@@ -128,6 +134,7 @@ impl ResumeSession<'_> {
         if !membership.is_active() {
             return Err(AccessError::InactiveMembership);
         }
+        admit_session(self.policy, &snapshot)?;
         let session = AuthenticatedSession {
             context: AuthContext::new(
                 credential.principal_id().clone(),
@@ -146,6 +153,8 @@ impl ResumeSession<'_> {
 /// Application use case assembled from trusted adapters by the composition root.
 /// Borrows dependencies; owns no connections, global state, or background tasks.
 pub struct AuthenticateSession<'a> {
+    /// Existing policy owner decides whether this original issuance may enter a session.
+    pub policy: &'a dyn PolicyEvaluator,
     /// Trusted proof verifier and credential-binding resolver.
     pub verifier: &'a dyn CredentialVerifier,
     /// Reader of coherent current credential/membership state.
@@ -189,6 +198,7 @@ impl AuthenticateSession<'_> {
         if !membership.is_active() {
             return Err(AccessError::InactiveMembership);
         }
+        admit_session(self.policy, &snapshot)?;
         Ok(AuthenticatedSession {
             context: AuthContext::new(
                 credential.principal_id().clone(),
@@ -207,6 +217,34 @@ impl AuthenticateSession<'_> {
     }
 }
 
+/// One session-entry policy question shared by bearer and opaque session entry.
+fn admit_session(
+    policy: &dyn PolicyEvaluator,
+    snapshot: &AccessSnapshot,
+) -> Result<(), AccessError> {
+    let credential = &snapshot.credential;
+    if !snapshot.origin.matches(credential, snapshot.revision) {
+        return Err(AccessError::IdentityMismatch);
+    }
+    let context = AuthContext::new(
+        credential.principal_id().clone(),
+        credential.organization_id().clone(),
+        snapshot.membership.id().clone(),
+        credential.id().clone(),
+        credential.audience_id().clone(),
+    );
+    let action = Action::new("session.enter").map_err(|_| AccessError::Unavailable)?;
+    // The credential itself is the subject of entry, not a conversation grant.
+    let resource = Resource::new(
+        credential.organization_id().clone(),
+        ResourceId::new(credential.id().as_str()).map_err(|_| AccessError::Unavailable)?,
+    );
+    match policy.evaluate(&context, &action, &resource, snapshot)? {
+        Decision::Allow => Ok(()),
+        Decision::Deny => Err(AccessError::Denied),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +258,19 @@ mod tests {
         future::Future,
         task::{Context, Poll, Waker},
     };
+
+    struct EntryPolicy(Result<Decision, AccessError>);
+    impl PolicyEvaluator for EntryPolicy {
+        fn evaluate(
+            &self,
+            _: &AuthContext,
+            _: &Action,
+            _: &Resource,
+            _: &AccessSnapshot,
+        ) -> Result<Decision, AccessError> {
+            self.0
+        }
+    }
 
     struct Adapter {
         snapshot: AccessSnapshot,
@@ -270,8 +321,8 @@ mod tests {
     }
     fn fixture(org: &str, status: MembershipStatus) -> Adapter {
         Adapter {
-            snapshot: AccessSnapshot {
-                credential: Credential::new(
+            snapshot: {
+                let credential = Credential::new(
                     CredentialId::new("credential").unwrap(),
                     PrincipalId::new("person").unwrap(),
                     OrganizationId::new("org").unwrap(),
@@ -280,15 +331,42 @@ mod tests {
                     20,
                     vec![],
                 )
-                .unwrap(),
-                membership: Membership::new(
+                .unwrap();
+                let membership = Membership::new(
                     MembershipId::new("member").unwrap(),
                     PrincipalId::new("person").unwrap(),
                     OrganizationId::new(org).unwrap(),
                     MembershipRole::Member,
                     status,
-                ),
-                revision: 1,
+                );
+                let revision = 1;
+                // This fixture explicitly creates its own original product issuance.
+                let original = crate::domain::CredentialTransition::new(
+                    credential.id().clone(),
+                    None,
+                    crate::domain::CredentialLifecycle {
+                        issued_at: credential.issued_at(),
+                        expires_at: credential.expires_at(),
+                        revoked_at: None,
+                    },
+                    crate::domain::TransitionCause::Issued(
+                        crate::domain::IssuanceCause::AdminIssue,
+                    ),
+                    crate::domain::Initiator::LocalOperator,
+                    credential.issued_at(),
+                )
+                .unwrap();
+                let origin = crate::application::origin::CredentialOrigin::restore(
+                    crate::application::dto::CredentialTransitionDto::record(&original, 1, 1, None),
+                    &credential,
+                )
+                .unwrap();
+                AccessSnapshot {
+                    credential,
+                    membership,
+                    revision,
+                    origin,
+                }
             },
             now: 10,
         }
@@ -311,6 +389,7 @@ mod tests {
     ) -> Result<AuthenticatedSession, AccessError> {
         ready(
             AuthenticateSession {
+                policy: &EntryPolicy(Ok(Decision::Allow)),
                 verifier: adapter,
                 access: adapter,
                 clock: adapter,
@@ -327,6 +406,7 @@ mod tests {
         let audience = AudienceId::new("local").unwrap();
         let id = CredentialId::new("credential").unwrap();
         let reader = ResumeSession {
+            policy: &EntryPolicy(Ok(Decision::Allow)),
             verifier: &adapter,
             access: &adapter,
             clock: &adapter,
@@ -351,6 +431,7 @@ mod tests {
         assert!(matches!(
             ready(
                 ResumeSession {
+                    policy: &EntryPolicy(Ok(Decision::Allow)),
                     verifier: &expired,
                     access: &expired,
                     clock: &expired,
@@ -370,6 +451,7 @@ mod tests {
         assert!(matches!(
             ready(
                 ResumeSession {
+                    policy: &EntryPolicy(Ok(Decision::Allow)),
                     verifier: &revoked,
                     access: &revoked,
                     clock: &revoked,
@@ -383,6 +465,7 @@ mod tests {
         assert!(matches!(
             ready(
                 ResumeSession {
+                    policy: &EntryPolicy(Ok(Decision::Allow)),
                     verifier: &inactive,
                     access: &inactive,
                     clock: &inactive,
@@ -406,6 +489,7 @@ mod tests {
         assert!(matches!(
             ready(
                 ResumeSession {
+                    policy: &EntryPolicy(Ok(Decision::Allow)),
                     verifier: &current,
                     access: &current,
                     clock: &current,
@@ -466,5 +550,44 @@ mod tests {
             authenticate(&adapter, "local", b"test"),
             Err(AccessError::InvalidCredential)
         );
+    }
+    #[test]
+    fn both_entry_paths_propagate_policy_refusal_and_unavailability() {
+        let adapter = fixture("org", MembershipStatus::Active);
+        let audience = AudienceId::new("local").unwrap();
+        let proof = CredentialEvidence::new(b"test".to_vec()).unwrap();
+        let session = SessionEvidence::new(b"browser-session".to_vec()).unwrap();
+        for (answer, expected) in [
+            (Ok(Decision::Deny), AccessError::Denied),
+            (Err(AccessError::Unavailable), AccessError::Unavailable),
+        ] {
+            let policy = EntryPolicy(answer);
+            assert_eq!(
+                ready(
+                    AuthenticateSession {
+                        verifier: &adapter,
+                        access: &adapter,
+                        clock: &adapter,
+                        policy: &policy
+                    }
+                    .execute(&proof, &audience)
+                )
+                .unwrap_err(),
+                expected
+            );
+            assert_eq!(
+                ready(
+                    ResumeSession {
+                        verifier: &adapter,
+                        access: &adapter,
+                        clock: &adapter,
+                        policy: &policy
+                    }
+                    .execute(&session, &audience)
+                )
+                .unwrap_err(),
+                expected
+            );
+        }
     }
 }
