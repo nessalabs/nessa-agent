@@ -169,7 +169,7 @@ have to compose existing credential/grant/Cedar admission.
 | sending | known response observed | CAS observation and audit; loss of local acknowledgement never authorizes a second POST | `transition_cas_rejects_lost_ack_repost` |
 | sending | restart | commit terminal unknown and restart audit; no automatic POST | `restart_recovers_sending_without_repost` |
 | SQL state committed | audit projection fails | return unavailable; replay immutable audit projection before more work | `audit_failure_recovers_before_work` |
-| any pending work | queue or blocking-worker limit reached | typed capacity refusal without cursor/identity advance | `cursor_cas_and_queue_limit_preserve_predecessor`, physical permit test pending |
+| any pending work | queue or blocking-worker limit reached | typed capacity refusal without cursor/identity advance | `cursor_cas_and_queue_limit_preserve_predecessor`, `cancelled_observer_keeps_physical_worker_and_canonical_owner` |
 | terminal | published audit; retention exceeded | delete old SQL projections, retain immutable audit files | `terminal_retention_is_bounded` |
 
 No outbox-only test is registration, capability/revoke E2E or browser evidence.
@@ -241,3 +241,18 @@ even if an owner reset has since replaced the cursor. A known success remains
 success; restart without an observation remains Unknown. When a credential stop
 is already committed at settlement, its canonical stop cause owns refusal.
 No new delivery phase or grant/authorization epoch is introduced.
+
+### Registration restore integrity
+
+The first review after the consistency redesign found registrations were not
+included in restoration validation. The same persisted registration decoder now
+owns canonical identity, destination, key and active/stopped lifecycle metadata.
+Startup invokes it after resource accounting and before any audit publication or
+cleanup. Live delivery audit and retirement consume that decoder's checked facts,
+rather than reading unchecked identity strings. A malformed registration refuses
+before it can produce evidence with an invalid principal or initiator.
+
+| Ordering | Guard and regression |
+| --- | --- |
+| Reopen malformed registration identities, URL or stop attribution | Refuse Invalid before publication or cleanup; `restored_registration_facts_are_checked_before_effects` |
+| Live audit consumes malformed registration facts | Checked decoder refuses and transaction rolls back; `delivery_audit_uses_checked_registration_facts` |

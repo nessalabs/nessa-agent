@@ -73,23 +73,15 @@ pub(super) fn delivery_audit(
     let incarnation = saved.scope.incarnation().as_str();
     let position = saved.position;
     let scope = codec::scope_text(&saved.scope)?;
-    let target: (String, String, String, String) = transaction
-        .query_row(
-            "SELECT credential,principal,organization,owner FROM registrations WHERE id=?1",
-            [&registration],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )
-        .map_err(unavailable)?;
+    let registration_facts = super::registry::by_id(transaction, saved.registration)?;
+    let target = &registration_facts.registration.target;
     let before = before.map(|d| codec::phase(d).0).unwrap_or("absent");
     let stop = if cause == DeliveryCause::AuthorityStopped {
         Some(
-            transaction
-                .query_row(
-                    "SELECT stop_cause,stop_initiator FROM registrations WHERE id=?1",
-                    [&registration],
-                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-                )
-                .map_err(unavailable)?,
+            registration_facts
+                .stop
+                .as_ref()
+                .ok_or(OutboxError::Invalid)?,
         )
     } else {
         None
@@ -106,7 +98,7 @@ pub(super) fn delivery_audit(
         DeliveryCause::SourceQueued { .. } => "source_checkpoint",
     };
     let initiator = match (&stop, attribution) {
-        (Some((_, initiator)), _) => initiator.clone(),
+        (Some(stop), _) => stop.initiator(),
         (
             None,
             DeliveryCause::SourceChanged { initiator } | DeliveryCause::SourceQueued { initiator },
@@ -114,15 +106,12 @@ pub(super) fn delivery_audit(
         (None, DeliveryCause::Restart) => "restart".into(),
         _ => format!("delivery:{}", after.id()),
     };
-    let cause = stop
-        .as_ref()
-        .map(|(cause, _)| cause.as_str())
-        .unwrap_or(cause);
+    let cause = stop.as_ref().map(|stop| stop.cause()).unwrap_or(cause);
     append(
         transaction,
         uuid(&registration)?,
         Some(after.id()),
-        json!({"kind":"webhook_delivery","registration":registration,"credential":target.0,"principal":target.1,"organization":target.2,"owner":target.3,"deliveryId":after.id().to_string(),"conversationId":conversation,"incarnation":incarnation,"position":position,"scope":serde_json::from_str::<Value>(&scope).map_err(invalid)?,"sourceStop":saved.source_stop,"epoch":after.epoch(),"attempt":after.attempts(),"timestampMs":after.timestamp_ms(),"before":before,"after":codec::phase(after).0,"dueAtMs":codec::phase(after).1,"cause":cause,"initiator":initiator,"atMs":at_ms}),
+        json!({"kind":"webhook_delivery","registration":registration,"credential":target.credential.as_str(),"principal":target.principal.as_str(),"organization":target.organization.as_str(),"owner":target.owner.as_str(),"deliveryId":after.id().to_string(),"conversationId":conversation,"incarnation":incarnation,"position":position,"scope":serde_json::from_str::<Value>(&scope).map_err(invalid)?,"sourceStop":saved.source_stop,"epoch":after.epoch(),"attempt":after.attempts(),"timestampMs":after.timestamp_ms(),"before":before,"after":codec::phase(after).0,"dueAtMs":codec::phase(after).1,"cause":cause,"initiator":initiator,"atMs":at_ms}),
     )
 }
 
@@ -187,32 +176,24 @@ pub(super) fn finish(
 
 fn retire_drained(transaction: &Transaction<'_>, at_ms: u64) -> Result<(), OutboxError> {
     let retired = {
-        let mut statement=transaction.prepare("SELECT id,credential,principal,organization,owner,stop_cause,stop_initiator,stop_at FROM registrations r WHERE active=0 AND NOT EXISTS(SELECT 1 FROM deliveries d WHERE d.registration=r.id) LIMIT ?1").map_err(unavailable)?;
+        let mut statement=transaction.prepare("SELECT id FROM registrations r WHERE active=0 AND NOT EXISTS(SELECT 1 FROM deliveries d WHERE d.registration=r.id) LIMIT ?1").map_err(unavailable)?;
         let rows = statement
-            .query_map([(MAX_REGISTRATIONS + 1) as i64], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
-                    r.get::<_, String>(5)?,
-                    r.get::<_, String>(6)?,
-                    r.get::<_, i64>(7)?,
-                ))
-            })
+            .query_map([(MAX_REGISTRATIONS + 1) as i64], |r| r.get::<_, String>(0))
             .map_err(unavailable)?;
         rows.collect::<SqlResult<Vec<_>>>().map_err(unavailable)?
     };
     if retired.len() > MAX_REGISTRATIONS {
         return Err(OutboxError::Invalid);
     }
-    for (id, credential, principal, organization, owner, cause, initiator, stop_at_ms) in retired {
+    for id in retired {
+        let saved = super::registry::by_id(transaction, uuid(&id)?)?;
+        let target = &saved.registration.target;
+        let stop = saved.stop.as_ref().ok_or(OutboxError::Invalid)?;
         append(
             transaction,
             uuid(&id)?,
             None,
-            json!({"kind":"webhook_registration","registration":id,"credential":credential,"principal":principal,"organization":organization,"owner":owner,"before":"stopped","after":"absent","cause":"drained","stopCause":cause,"initiator":initiator,"stopAtMs":stop_at_ms,"atMs":at_ms}),
+            json!({"kind":"webhook_registration","registration":id,"credential":target.credential.as_str(),"principal":target.principal.as_str(),"organization":target.organization.as_str(),"owner":target.owner.as_str(),"before":"stopped","after":"absent","cause":"drained","stopCause":stop.cause(),"initiator":stop.initiator(),"stopAtMs":stop.at_ms,"atMs":at_ms}),
         )?;
         transaction
             .execute("DELETE FROM cursors WHERE registration=?1", [&id])

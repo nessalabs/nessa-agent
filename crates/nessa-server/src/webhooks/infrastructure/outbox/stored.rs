@@ -124,6 +124,7 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
             error
         }
     })?;
+    super::registry::validate(connection)?;
     let mut statement = connection
         .prepare(&format!("{SELECT} FROM deliveries"))
         .map_err(unavailable)?;

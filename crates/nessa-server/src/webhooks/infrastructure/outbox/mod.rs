@@ -8,7 +8,7 @@ mod queue;
 mod registry;
 mod stored;
 use journal::{commit, delivery_audit, finish};
-use registry::registration_value;
+use registry::StoredRegistration;
 use stored::StoredDelivery;
 
 use crate::webhooks::application::{
@@ -110,7 +110,7 @@ impl Outbox for SqlOutbox {
         self.run(move |connection,_| {
             let mut statement=connection.prepare(
                 "SELECT d.id,d.registration,d.conversation,d.incarnation,d.position,d.scope,d.state,d.phase,d.due_at,d.source_stop,d.body,
-                    r.id,r.credential,r.principal,r.organization,r.owner,r.destination,r.mac_key
+                    r.id,r.credential,r.principal,r.organization,r.owner,r.destination,r.mac_key,r.active,r.stop_cause,r.stop_initiator,r.stop_at
                  FROM deliveries d JOIN registrations r ON d.registration=r.id
                  WHERE d.phase='queued' OR (d.phase='retry' AND d.due_at<=?1)
                  ORDER BY d.registration,d.conversation,d.position LIMIT 4"
@@ -120,7 +120,7 @@ impl Outbox for SqlOutbox {
             while let Some(row)=rows.next().map_err(unavailable)? {
                 let saved=StoredDelivery::row(row).map_err(unavailable)?.checked()?;
                 stored::check_current(connection,&saved)?;
-                let registration=registration_value((row.get(11).map_err(unavailable)?,row.get(12).map_err(unavailable)?,row.get(13).map_err(unavailable)?,row.get(14).map_err(unavailable)?,row.get(15).map_err(unavailable)?,row.get(16).map_err(unavailable)?,row.get(17).map_err(unavailable)?))?;
+                let registration=StoredRegistration::row(row,11).map_err(unavailable)?.checked()?.registration;
                 let body:Vec<u8>=row.get(10).map_err(unavailable)?;
                 if registration.id!=saved.registration || body.len()>MAX_BODY_BYTES {return Err(OutboxError::Invalid);}
                 result.push(PendingDelivery {registration,conversation:saved.conversation,scope:saved.scope,position:saved.position,delivery:saved.delivery,body});

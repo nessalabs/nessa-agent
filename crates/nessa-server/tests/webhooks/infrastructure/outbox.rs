@@ -1164,3 +1164,97 @@ async fn audit_record_correlations_are_checked_before_cleanup() {
         assert_eq!(f.audits().len(), 2);
     }
 }
+
+#[tokio::test]
+async fn restored_registration_facts_are_checked_before_effects() {
+    let cases = [
+        "credential=''",
+        "principal=''",
+        "organization=''",
+        "owner=''",
+        "destination='http://recipient.test/'",
+        "id=upper(id)",
+        "active=0,stop_cause='credential_revoked',stop_initiator='',stop_at=1000",
+        "active=0,stop_cause='credential_expired',stop_initiator='delivery:invalid',stop_at=1000",
+        "active=0,stop_cause='credential_expired',stop_initiator='delivery:AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA',stop_at=1000",
+        "active=0,stop_cause='credential_revoked',stop_initiator='synthetic-owner',stop_at='invalid'",
+    ];
+    for set in cases {
+        let mut f = Fixture::new().await;
+        let audit_before = f.audits();
+        f.store
+            .owner
+            .connection
+            .lock()
+            .unwrap()
+            .execute(&format!("UPDATE registrations SET {set}"), [])
+            .unwrap();
+        let placeholder = Fixture::new().await;
+        drop(std::mem::replace(&mut f.store, placeholder.store));
+        assert!(
+            matches!(
+                SqlOutbox::open(&f.path, f.audit.clone(), f.clock.clone()),
+                Err(OutboxError::Invalid)
+            ),
+            "accepted {set}"
+        );
+        assert_eq!(f.audits(), audit_before, "published before refusing {set}");
+    }
+    for (cause, initiator) in [
+        ("credential_revoked", "synthetic-owner"),
+        (
+            "credential_expired",
+            "delivery:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        ),
+    ] {
+        let mut f = Fixture::new().await;
+        f.store
+            .owner
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE registrations SET active=0,stop_cause=?1,stop_initiator=?2,stop_at=?3",
+                nessa_local_database::rusqlite::params![cause, initiator, i64::MAX],
+            )
+            .unwrap();
+        let placeholder = Fixture::new().await;
+        drop(std::mem::replace(&mut f.store, placeholder.store));
+        let reopened = SqlOutbox::open(&f.path, f.audit.clone(), f.clock.clone()).unwrap();
+        let connection = reopened.owner.connection.lock().unwrap();
+        let saved = registry::by_id(&connection, f.registration.id).unwrap();
+        let stopped = saved.stop.unwrap();
+        assert_eq!(stopped.cause(), cause);
+        assert_eq!(stopped.initiator(), initiator);
+        assert_eq!(stopped.at_ms, i64::MAX as u64);
+    }
+}
+
+#[tokio::test]
+async fn delivery_audit_uses_checked_registration_facts() {
+    let f = Fixture::new().await;
+    f.store
+        .owner
+        .connection
+        .lock()
+        .unwrap()
+        .execute("UPDATE registrations SET principal=''", [])
+        .unwrap();
+    let audit_before = f.audits();
+    assert_eq!(f.store.queue(f.record(1)).await, Err(OutboxError::Invalid));
+    assert_eq!(f.audits(), audit_before);
+    let connection = f.store.owner.connection.lock().unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM deliveries", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM cursors", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
