@@ -12,7 +12,8 @@ use nessa_local_database::rusqlite::{Connection, OptionalExtension};
 use nessa_protocol::conversation::domain::ConversationId;
 
 pub(super) fn validate_owed(connection: &Connection) -> Result<(), OutboxError> {
-    validate_records(connection, true)
+    validate_records(connection, true)?;
+    validate_histories(connection, true)
 }
 
 fn validate_records(connection: &Connection, owed: bool) -> Result<(), OutboxError> {
@@ -150,8 +151,18 @@ fn contextual(connection: &Connection, record: &Record) -> Result<(), OutboxErro
 pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
     if connection.prepare("SELECT 1 FROM audit a WHERE a.delivery IS NOT NULL AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.id=a.delivery) LIMIT 1").map_err(unavailable)?.exists([]).map_err(unavailable)? { return Err(OutboxError::Invalid); }
     validate_records(connection, false)?;
+    validate_histories(connection, false)
+}
+
+/// Publication visits only histories named by owed rows; startup checks all.
+fn validate_histories(connection: &Connection, owed: bool) -> Result<(), OutboxError> {
+    let filter = if owed {
+        " WHERE id IN (SELECT delivery FROM audit WHERE published=0 AND delivery IS NOT NULL)"
+    } else {
+        ""
+    };
     let mut deliveries = connection
-        .prepare(&format!("{} FROM deliveries", stored::SELECT))
+        .prepare(&format!("{} FROM deliveries{filter}", stored::SELECT))
         .map_err(unavailable)?;
     let rows = deliveries
         .query_map([], StoredDelivery::row)

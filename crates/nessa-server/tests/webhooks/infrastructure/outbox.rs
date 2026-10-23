@@ -2369,3 +2369,26 @@ async fn reset_facts_survive_audit_trim_and_decode_completely() {
         }
     }
 }
+
+#[tokio::test]
+async fn live_owed_delivery_history_matches_current_before_publication() {
+    let mut f = Fixture::new().await;
+    f.store.queue(f.record(1)).await.unwrap();
+    let id = edit_evidence(&f, "webhook_delivery", "source_checkpoint", |r| {
+        r["beforeState"] = r["afterState"].clone();
+        r["before"] = json!("queued");
+        r["afterState"]["phase"] = json!("not_sent");
+        r["after"] = json!("not_sent");
+        r["cause"] = json!("admission_refused");
+        r["initiator"] = json!(format!("delivery:{}", r["deliveryId"].as_str().unwrap()));
+    });
+    {
+        let c = f.store.owner.connection.lock().unwrap();
+        let text: String = c
+            .query_row("SELECT record FROM audit WHERE id=?1", [&id], |r| r.get(0))
+            .unwrap();
+        // Locally valid values still describe an impossible owning history.
+        audit::Record::decode(&text).unwrap();
+    }
+    rejects_evidence_before_live_or_restored_publication(&mut f, &id).await;
+}

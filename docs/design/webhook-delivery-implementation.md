@@ -357,6 +357,7 @@ still have its retained reset checkpoint. This introduces no reset API.
 | Cursor reset flag and captured observation disagree | whole cursor decoder rejects at restoration and live reads |
 | Delivery target/checkpoint/credential stop differs | exhaustive variant branch checks enclosing facts; history owner checks chain/current/source contexts |
 | second owed record contradicts facts | validate the entire owed batch before the first immutable-file effect |
+| live owed Delivery record is locally legal but its history/current end contradicts the enclosing delivery | reuse the complete history validator for the deliveries selected by unpublished audit identity, before any publication; no scan of unrelated retained histories |
 | publication acknowledgement is lost | retain original contextual facts until exact ack and common trim; no replacement identities/history |
 
 This is the parent-authorized bounded structural correction, not erasure of
