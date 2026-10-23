@@ -13,6 +13,10 @@ export async function revealTranscriptWork(page) {
   for (const toggle of await page.locator(css.transcriptWorkToggle).all()) {
     if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click()
   }
+  // Each open run then shows the calls it folded before its last few.
+  for (const toggle of await page.locator(css.transcriptWorkEarlier).all()) {
+    if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click()
+  }
 }
 
 /** Every pane's key, rect and focus, in document order. */

@@ -1,0 +1,28 @@
+{
+  "base": "0b8019cf45f99b285f10c41199875d474492c6d1",
+  "observation": "Fresh sh/sleep and test processes during the one exact baseline test. Read-only /proc sampling; no tracer or reaper changes.",
+  "processes": [
+    {
+      "sample": 0,
+      "process": {
+        "pid": 71622,
+        "command": "nessa_server-a7",
+        "state": "S",
+        "ppid": 34297,
+        "pgid": 34251,
+        "bornSinceBootSeconds": 2115.05
+      }
+    },
+    {
+      "sample": 0,
+      "process": {
+        "pid": 71625,
+        "command": "sleep",
+        "state": "Z",
+        "ppid": 1,
+        "pgid": 71624,
+        "bornSinceBootSeconds": 2115.05
+      }
+    }
+  ]
+}

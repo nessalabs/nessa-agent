@@ -336,6 +336,63 @@ describe("conversation view agreement", () => {
     expect(conversationView(view(), "conversation").tools[0]?.mcp).toBeUndefined()
   })
 
+  it("accepts a tool's start and end times, and a tool without them", () => {
+    const value = view()
+    Object.assign(value.tools[0]!, {
+      startedAtMs: 1_700_000_000_000,
+      endedAtMs: 1_700_000_000_420,
+    })
+    expect(conversationView(value, "conversation").tools[0]).toMatchObject({
+      startedAtMs: 1_700_000_000_000,
+      endedAtMs: 1_700_000_000_420,
+    })
+    expect(conversationView(view(), "conversation").tools[0]?.startedAtMs).toBeUndefined()
+    for (const mutation of [
+      { startedAtMs: -1 },
+      { endedAtMs: 1.5 },
+      { startedAtMs: "1" },
+    ]) {
+      const value = view()
+      Object.assign(value.tools[0]!, mutation)
+      expect(
+        () => conversationView(value, "conversation"),
+        JSON.stringify(mutation),
+      ).toThrow()
+    }
+  })
+
+  it("accepts the files a tool changed within their bounds, and nothing past them", () => {
+    const value = view()
+    const changes = [
+      { path: "new.ts", after: "export {}", cut: false },
+      { path: "big.ts", before: "a", after: "b", cut: true },
+    ]
+    Object.assign(value.tools[0]!, { changes })
+    expect(conversationView(value, "conversation").tools[0]?.changes).toEqual(changes)
+    Object.assign(value.tools[0]!, { changesCut: true })
+    expect(conversationView(value, "conversation").tools[0]?.changesCut).toBe(true)
+    for (const changesCut of ["yes", 1]) {
+      const value = view()
+      Object.assign(value.tools[0]!, { changes, changesCut })
+      expect(() => conversationView(value, "conversation")).toThrow()
+    }
+    for (const changes of [
+      [{ path: "", after: "", cut: false }],
+      [{ path: "a", after: "x".repeat(7001), cut: false }],
+      [{ path: "a", before: "x".repeat(7001), after: "", cut: false }],
+      [{ path: "a", after: "", cut: "no" }],
+      [{ path: "a", after: "", cut: false, extra: 1 }],
+      Array.from({ length: 17 }, () => ({ path: "a", after: "", cut: false })),
+    ]) {
+      const value = view()
+      Object.assign(value.tools[0]!, { changes })
+      expect(
+        () => conversationView(value, "conversation"),
+        JSON.stringify(changes).slice(0, 80),
+      ).toThrow()
+    }
+  })
+
   it("rejects a tool's MCP identity or structured result outside the published bounds", () => {
     const mutations: Array<Record<string, unknown>> = [
       { mcp: { server: "", tool: "show" } },

@@ -217,8 +217,9 @@ export const css = {
   peekCommand: ".agents-peek .workspace-approval-command", // class: the command in the peek, beside the list or under the row
   peekStory: ".agents-peek-story", // class: the turn's story, top to bottom
   peekEarlier: ".agents-peek-earlier", // class: says the turn holds more above what the peek draws
-  transcriptStep: ".workspace-steps li", // class: one step the agent took, in a message
-  transcriptWorkToggle: ".workspace-work button[aria-expanded]", // completed tool work opens its steps in place
+  transcriptStep: '[data-slot="tool-trace-step"]', // kit slot: one call the agent made, a row of a message's trace
+  transcriptWorkToggle: '.workspace-work [data-slot="tool-trace-line"]', // a run of calls opens its rows in place
+  transcriptWorkEarlier: '.workspace-work [data-slot="tool-trace-earlier"]', // an open run shows the calls folded before its last few
   overviewColumn: ".agents-overview-column", // class: the list the arrow keys walk
   overviewGeometryItems:
     ".agents-overview-group > h2, .agents-row-item, .agents-clear, .agents-overview-resting, .agents-overview-footnote", // classes: list headings, rows and notices whose placement is observed

@@ -1,0 +1,14 @@
+[
+  {
+    "rule": "minimum-key-bytes",
+    "mutantCompiled": true,
+    "testExit": 101,
+    "failedTest": "signing_key_is_bounded"
+  },
+  {
+    "rule": "maximum-key-bytes",
+    "mutantCompiled": true,
+    "testExit": 101,
+    "failedTest": "signing_key_is_bounded"
+  }
+]

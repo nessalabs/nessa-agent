@@ -109,6 +109,10 @@ export const KNOBS = {
     default: 1,
     what: "turns whose answer streams Markdown tables, one narrow and one wider than the reply",
   },
+  traces: {
+    default: 1,
+    what: "turns whose tool calls the window draws as a waterfall, with their times and input kept by the gateway",
+  },
   notices: {
     default: 1,
     what: "reviews waiting in a conversation the window does not show: the host's notice opens it and is taken back once answered",
@@ -202,6 +206,7 @@ export function plan(knobs) {
   add(knobs.listAnswers, () => ({ kind: "listAnswer" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   add(knobs.tables, () => ({ kind: "table" }))
+  add(knobs.traces, () => ({ kind: "trace" }))
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
   add(knobs.drifts, () => ({ kind: "drift" }))

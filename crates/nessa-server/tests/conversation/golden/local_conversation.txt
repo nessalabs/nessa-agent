@@ -63,6 +63,9 @@ invocations: [
                     },
                 ),
                 native_hooks: None,
+                observed_at_ms: Some(
+                    1792000000000,
+                ),
             },
             ExecutionEvent {
                 execution_id: ExecutionId(
@@ -72,6 +75,9 @@ invocations: [
                     Completed,
                 ),
                 native_hooks: None,
+                observed_at_ms: Some(
+                    1792000000000,
+                ),
             },
         ],
         scheduling: [

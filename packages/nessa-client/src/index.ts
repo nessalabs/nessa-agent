@@ -330,6 +330,7 @@ export type {
   ConversationReviewEntry,
   ConversationPermissionOption,
   ConversationTool,
+  ConversationToolChange,
   ConversationCapabilities,
   ConversationAgentFeatures,
   PermissionDenialSupport,
