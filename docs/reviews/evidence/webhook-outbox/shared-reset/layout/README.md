@@ -42,4 +42,3 @@ stress/chaos, exact-head CI and full runtime composition remain pending.
 Committed-range diff checks against both the correction and intended PR base
 will be recorded after the evidence commit. Working-tree checks alone do not
 establish those ranges.
-
