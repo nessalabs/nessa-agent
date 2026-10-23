@@ -16,8 +16,8 @@ use crate::{
     application::{
         authorization::AuthorizeAction,
         credential_admin::{
-            AuthRevisionSource, IssueCredentialOutcome, IssueCredentialRequest,
-            RevokeCredentialRequest,
+            AuthRevisionSource, CredentialIssuePurpose, IssueCredentialOutcome,
+            IssueCredentialRequest, RevokeCredentialRequest,
         },
         credential_registry::{CredentialRegistryFault, RegistryInvariant},
         dto::{
@@ -1076,6 +1076,7 @@ fn first_key_publication_holds_current_history_admission() {
 
 fn ordinary_issue(identity: &str) -> IssueCredentialRequest {
     IssueCredentialRequest {
+        purpose: CredentialIssuePurpose::Product,
         request_id: format!("issue-{identity}"),
         issuer_principal_id: "owner".into(),
         credential_id: identity.into(),

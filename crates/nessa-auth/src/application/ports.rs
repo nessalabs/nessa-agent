@@ -216,6 +216,8 @@ pub enum IssuePath {
     Bootstrap,
     /// A signed-in administrator issues a credential over the product protocol.
     ProductIssue,
+    /// An outbound webhook registration proposes its integration credential.
+    WebhookIssue,
     /// The local operator provisions a surface's credential offline.
     SurfaceProvision,
     /// The local operator replaces the owner credential offline.

@@ -14,7 +14,9 @@ use nessa_auth::{
         local::{BootstrapRequest, LocalCredentialStore},
     },
     application::{
-        credential_admin::{IssueCredentialRequest, RevokeCredentialRequest},
+        credential_admin::{
+            CredentialIssuePurpose, IssueCredentialRequest, RevokeCredentialRequest,
+        },
         dto::{
             CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
             OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
@@ -99,6 +101,7 @@ impl Fixture {
             .unwrap();
         credentials
             .issue_sync(IssueCredentialRequest {
+                purpose: CredentialIssuePurpose::Product,
                 request_id: "issue-synthetic-hook".into(),
                 issuer_principal_id: "owner".into(),
                 credential_id: "hook-key".into(),

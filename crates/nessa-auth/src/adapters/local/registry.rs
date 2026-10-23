@@ -13,9 +13,10 @@
 use crate::{
     application::{
         credential_admin::{
-            AuthRevisionSource, CredentialAdmin, CredentialAdminError, CredentialTransitionReader,
-            IssueCredentialOutcome, IssueCredentialRequest, ListCredentialsRequest,
-            ListTransitionsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
+            AuthRevisionSource, CredentialAdmin, CredentialAdminError, CredentialIssuePurpose,
+            CredentialTransitionReader, IssueCredentialOutcome, IssueCredentialRequest,
+            ListCredentialsRequest, ListTransitionsRequest, RevokeCredentialOutcome,
+            RevokeCredentialRequest,
         },
         credential_registry::{
             CredentialRegistryFault, CredentialRegistryStorageRole, JsonFaultCategory,
@@ -583,7 +584,11 @@ impl LocalCredentialStore {
         &self,
         request: IssueCredentialRequest,
     ) -> Result<IssueCredentialOutcome, LocalStoreError> {
-        self.issue_internal(request, IssuePath::ProductIssue)
+        let path = match request.purpose {
+            CredentialIssuePurpose::Product => IssuePath::ProductIssue,
+            CredentialIssuePurpose::Webhook => IssuePath::WebhookIssue,
+        };
+        self.issue_internal(request, path)
     }
 
     /// Issue over `path`: [`IssuePath::ProductIssue`] or
@@ -789,6 +794,7 @@ impl LocalCredentialStore {
             .collect();
         self.issue_internal(
             IssueCredentialRequest {
+                purpose: CredentialIssuePurpose::Product,
                 request_id,
                 issuer_principal_id,
                 credential_id,
@@ -2088,13 +2094,19 @@ fn validate_grants(
 }
 
 fn issue_fingerprint(request: &IssueCredentialRequest) -> Result<String, LocalStoreError> {
-    let value = serde_json::json!({
+    let mut value = serde_json::json!({
         "principal": request.principal,
         "membership": request.membership,
         "audienceId": request.audience_id,
         "expiresAt": request.expires_at,
         "grants": request.grants,
     });
+    // The issuing use case is part of command identity. Ordinary product
+    // issuance has no additional purpose restriction; the webhook use case
+    // cannot replay its receipt (or bypass its Cedar path) as product issuance.
+    if request.purpose == CredentialIssuePurpose::Webhook {
+        value["purpose"] = serde_json::json!("webhook");
+    }
     let bytes = serde_json::to_vec(&value).map_err(|_| LocalStoreError::Corrupt)?;
     Ok(URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)))
 }
@@ -2545,6 +2557,7 @@ mod tests {
         store.bootstrap(bootstrap()).unwrap();
         let receiver = store.subscribe().unwrap();
         let request = IssueCredentialRequest {
+            purpose: CredentialIssuePurpose::Product,
             request_id: "issue-1".into(),
             issuer_principal_id: "owner".into(),
             credential_id: "reader-credential".into(),
@@ -3311,6 +3324,7 @@ mod tests {
     }
     fn member_issue(request_id: &str, credential_id: &str) -> IssueCredentialRequest {
         IssueCredentialRequest {
+            purpose: CredentialIssuePurpose::Product,
             request_id: request_id.into(),
             issuer_principal_id: "owner".into(),
             credential_id: credential_id.into(),
@@ -3956,3 +3970,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/adapters/local/webhook_issue.rs"]
+mod webhook_issue_tests;

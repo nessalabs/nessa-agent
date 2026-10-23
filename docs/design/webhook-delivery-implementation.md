@@ -409,3 +409,46 @@ remains its separately documented unbounded history.
 | cursor, delivery history or registration retires | release only those references; final reference removes reset fact transactionally; valid retired-registration audit still replays |
 | count/byte capacity or failed capture write | typed Capacity/Invalid/Conflict or Unavailable, transaction rolls back all reset/member/cursor/evidence changes |
 | fixed owed count and growing published history | direct published=0 query uses existing index; deterministic fullscan/VM counts stay independent of published history |
+
+## Runtime registration and delivery composition
+
+The isolated runtime branch starts from main `56602fc6` and clean persistence
+review head `78258a8f`. The following orderings are designed before composition;
+this section describes work in progress, not executed integration evidence.
+Application installation and general application-principal sessions (#1052) are
+separate. Existing credential issuance already creates a proposed integration
+principal/member. This slice registers its outbound destination, without a
+receiver binding or a second permission system.
+
+Cedar's existing credential grant-policy port receives a `WebhookIssue` path.
+Its existing member-issuance rule still owns the role decision. A webhook-path
+forbid restricts the principal to integration and grants to conversation.read.
+The registry derives that path from the server-selected `CredentialIssuePurpose`,
+not a client-provided role verdict. The existing issuance fingerprint binds the
+webhook purpose, so an earlier ordinary issuance receipt cannot bypass this path
+and an ordinary retry cannot reuse a webhook receipt. This is implemented at the
+auth boundary; product configuration and registration composition remain pending.
+The generic credential registry remains the owner of grant resources, audience,
+identity linkage, issuance receipts and credential mutation. The registration
+coordinator asks these owners; URL/key possession grants no authority.
+
+| Ordering | Guard and effect | Required isolated evidence |
+| --- | --- | --- |
+| webhook issue proposes human, agent, peer, administration, write or unrelated grant | existing Cedar owner refuses the webhook path before credential or registration writes | policy matrix and real issue refusal |
+| same issuer/request is retried with a different issuing purpose | existing auth receipt refuses the conflicting fingerprint before writes, including after restart; a matching retry preserves original identity/transitions and cannot replay the bearer secret | bidirectional purpose substitution, cold replay and byte-identical registry |
+| ordinary or webhook issue while a registration's credential remains current | one principal-scoped coordinator gate covers both issue modes; refuse another active credential/registration | competing issue and generic issue tests |
+| expired or revoked credential observed during issue, without due work | retain the original observed stop cause; stop old registration before admitting replacement | expiry/revoke without a queued record |
+| auth issue commits, registration acknowledgement is lost | retained bounded intent fixes issuer/request, configuration fingerprint and selected IDs; validate actual auth receipt before registration and expose no recovered bearer secret | crash/restart and unrelated prior-issue receipt |
+| credential revoke is replayed by a different caller | registration uses the canonical auth revocation actor/time, rather than the observer | revoke replay and failed stop recovery |
+| granted source selected for one conversation | read actual principal grant and epoch through existing Cedar/fences, then canonical recordsPage encoding; checkpoint/body/identity commit together | one-chat source isolation and capability refusal |
+| sender prepared endpoint, but Sending or its audit is unacknowledged | no POST; reconcile saved state on the next bounded read | uncertain Sending acknowledgement |
+| Sending receipt acknowledged | recheck absolute expiry immediately before POST; keep current credential/grant holds only within the attempt deadline | stale epoch, expiry, revoke and cancellation barriers |
+| known HTTP outcome cannot commit | bounded supervised owner retains the known observation while live; do not re-POST Sending; restart without saved outcome records Unknown | lost outcome acknowledgement and process restart |
+| physical source changes or is later reset | retain the reviewed immutable reset/capture owner; owner-authorized reset uses its exact identity, never reconstructed actor/time | reset CAS, source cycles and retirement |
+| registration, cursor, intent, queue or physical worker reaches its cap | explicit Capacity/backpressure; no partial admission, dropped record or unbounded notification queue | count/byte bounds and cleanup |
+
+No claim of exactly-once remote effects is made. A recipient deduplicates by the
+stable delivery identity, and retries retain the initial timestamp/signature.
+Canonical Chromium/WebKit and feature stress/chaos remain required independently
+of private Rust recipient tests. Previously denied browser downloads and manual
+workflow operations are not retried by this composition.

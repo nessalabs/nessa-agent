@@ -127,6 +127,7 @@ pub(super) fn path(path: IssuePath) -> &'static str {
     match path {
         IssuePath::Bootstrap => "bootstrap",
         IssuePath::ProductIssue => "product",
+        IssuePath::WebhookIssue => "webhook",
         IssuePath::SurfaceProvision => "provision",
         IssuePath::OwnerRecovery => "recovery",
         IssuePath::StoredOnLoad => "stored",

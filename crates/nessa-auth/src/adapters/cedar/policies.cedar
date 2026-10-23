@@ -71,7 +71,7 @@ when {
 // environment; a peer gateway may only read what it is granted and serve as an
 // environment, never the conversation authority's actions. `context.path` is
 // the way the credential comes in: "bootstrap", "product", "provision",
-// "recovery", or "stored" for one already in the registry.
+// "recovery", "webhook", or "stored" for one already in the registry.
 @id("hold.person")
 permit (
     principal is Nessa::Holder,
@@ -132,3 +132,25 @@ when {
     principal.role == "admin" &&
     ["bootstrap", "provision", "recovery"].contains(context.path)
 };
+
+// Outbound registration asks the same credential owner with its issuing path.
+// It cannot turn a person, agent or paired peer into a webhook principal, or
+// give that credential administration, catalogue, write or serving authority.
+@id("hold.webhook_read_only")
+forbid (
+    principal is Nessa::Holder,
+    action == Nessa::Action::"credential.hold",
+    resource is Nessa::Resource
+)
+when {
+    context.path == "webhook" &&
+    (principal.kind != "integration" || context.action != "conversation.read")
+};
+
+@id("issue.webhook_integration")
+forbid (
+    principal is Nessa::Recipient,
+    action == Nessa::Action::"credential.issue",
+    resource is Nessa::Resource
+)
+when { context.path == "webhook" && principal.kind != "integration" };

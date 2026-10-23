@@ -20,8 +20,8 @@ use futures_util::stream::{FuturesUnordered, SplitSink};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use nessa_auth::application::authorization::AuthorizeAction;
 use nessa_auth::application::credential_admin::{
-    CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest, ListCredentialsRequest,
-    RevokeCredentialOutcome, RevokeCredentialRequest,
+    CredentialAdminError, CredentialIssuePurpose, IssueCredentialOutcome, IssueCredentialRequest,
+    ListCredentialsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
 };
 use nessa_auth::application::dto::{CredentialGrantDto, MembershipStateDto, ResourceDto};
 use nessa_auth::application::ports::{
@@ -2010,6 +2010,7 @@ async fn dispatch_authorized(
             let credential_id = format!("credential-{}", Uuid::new_v4());
             let outcome = admin
                 .issue(IssueCredentialRequest {
+                    purpose: CredentialIssuePurpose::Product,
                     request_id: params.request_id,
                     issuer_principal_id: context.principal_id().as_str().to_owned(),
                     credential_id,

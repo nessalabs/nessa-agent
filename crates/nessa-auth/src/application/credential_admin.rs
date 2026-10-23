@@ -8,9 +8,19 @@ use super::{
     ports::{AccessError, CredentialEvidence, PortFuture},
 };
 
+/// Composition selects the issuing use case; this is not a policy decision.
+/// Offline provisioning and recovery have separate entry points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialIssuePurpose {
+    Product,
+    Webhook,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// Request to issue one exact credential, with retry identity separate from its secret.
 pub struct IssueCredentialRequest {
+    /// Server-selected use case whose restrictions the grant-policy owner applies.
+    pub purpose: CredentialIssuePurpose,
     /// Caller-generated idempotency key scoped to `issuer_principal_id`.
     pub request_id: String,
     /// Verified issuing principal used to scope the idempotency receipt.
