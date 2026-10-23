@@ -836,7 +836,7 @@ async fn cancelled_http_responses_keep_command_capacity_until_detached_admission
         .completed(receipt["executionId"].as_str().unwrap())
         .await;
     for index in 0..8 {
-        tokio::time::timeout(Duration::from_secs(15), async {
+        let response = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 let response = routes
                     .clone()
@@ -844,7 +844,7 @@ async fn cancelled_http_responses_keep_command_capacity_until_detached_admission
                     .await
                     .unwrap();
                 if response.status() == axum::http::StatusCode::ACCEPTED {
-                    break;
+                    break response;
                 }
                 assert_eq!(
                     response.status(),
@@ -855,6 +855,13 @@ async fn cancelled_http_responses_keep_command_capacity_until_detached_admission
         })
         .await
         .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let receipt: Value = serde_json::from_slice(&bytes).unwrap();
+        fixture
+            .completed(receipt["executionId"].as_str().unwrap())
+            .await;
     }
     assert_eq!(fixture.provider.executions.lock().unwrap().len(), 9);
     fixture.shutdown().await;
