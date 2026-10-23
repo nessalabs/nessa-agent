@@ -15,6 +15,9 @@ sources:
   - "src/desktop/workspace/adapters/store/session-commands.ts"
   - "src/desktop/widgets/app/model/lifecycle.ts"
 diagramLinks:
+  Integrations: desktop-mcp-integration-management
+  Hooks: desktop-native-hook-settings
+  Notices: desktop-review-notice-permission
   Permissions: desktop-permission-rule-revocation
   Devices: desktop-linked-devices
   Sharing: desktop-conversation-sharing
@@ -52,6 +55,12 @@ These boxes open related pages. They are parts of the system, rather than mutual
 ```mermaid
 flowchart TB
     Feature["Browse this feature"]
+    Integrations["Manage MCP integrations"]
+    Hooks["Configure native harness hooks"]
+    Notices["Enable waiting-review notifications"]
+    Feature --> Integrations
+    Feature --> Hooks
+    Feature --> Notices
     Permissions["Revoke remembered permission rules"]
     Feature --> Permissions
     Devices["Pair, approve and revoke linked devices"]
@@ -77,6 +86,10 @@ flowchart TB
 ```
 
 ## Browse flows
+
+- [Manage MCP integrations](manage-mcp-integrations.md)
+- [Configure native harness hooks](configure-native-hooks.md)
+- [Enable waiting-review notifications](enable-review-notices.md)
 
 - [Revoke a remembered permission rule](permission-rule-revocation.md)
 

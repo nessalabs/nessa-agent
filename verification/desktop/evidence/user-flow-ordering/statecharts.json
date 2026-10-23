@@ -1,9 +1,9 @@
 {
   "engine": "installed Chromium",
-  "pages": 14,
-  "diagrams": 25,
-  "details": 35,
-  "navigationPaths": 11,
+  "pages": 17,
+  "diagrams": 29,
+  "details": 45,
+  "navigationPaths": 14,
   "pageErrors": 0,
   "results": [
     {
@@ -32,7 +32,7 @@
       "file": "docs/state/services/desktop/workspace/README.md",
       "diagrams": 1,
       "details": 0,
-      "navigation": 11
+      "navigation": 14
     },
     {
       "id": "desktop-conversation-sharing",
@@ -103,6 +103,27 @@
       "diagrams": 2,
       "details": 4,
       "navigation": 9
+    },
+    {
+      "id": "desktop-native-hook-settings",
+      "file": "docs/state/services/desktop/workspace/configure-native-hooks.md",
+      "diagrams": 1,
+      "details": 3,
+      "navigation": 0
+    },
+    {
+      "id": "desktop-review-notice-permission",
+      "file": "docs/state/services/desktop/workspace/enable-review-notices.md",
+      "diagrams": 1,
+      "details": 3,
+      "navigation": 0
+    },
+    {
+      "id": "desktop-mcp-integration-management",
+      "file": "docs/state/services/desktop/workspace/manage-mcp-integrations.md",
+      "diagrams": 2,
+      "details": 4,
+      "navigation": 0
     }
   ],
   "paths": [
@@ -133,6 +154,18 @@
     {
       "from": "host-startup-save-provider-credentials-and-download-a-runtime",
       "to": "runtime-download"
+    },
+    {
+      "from": "desktop-workspace",
+      "to": "desktop-mcp-integration-management"
+    },
+    {
+      "from": "desktop-workspace",
+      "to": "desktop-native-hook-settings"
+    },
+    {
+      "from": "desktop-workspace",
+      "to": "desktop-review-notice-permission"
     },
     {
       "from": "desktop-workspace",
