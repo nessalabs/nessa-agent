@@ -3,6 +3,7 @@ import { AgentActivity, AgentActivityTrigger } from "@nessa-ui/react/agent-activ
 import { DesktopIcon, type DesktopIconRole } from "../../../ui/icons"
 import { workSummary, type StepKind, type StepPart } from "../../model/transcript"
 import { useSiteIcon } from "./site-icon"
+import { WithChats } from "./chat-pill"
 
 const stepIcons: Record<StepKind, DesktopIconRole> = {
   read: "file",
@@ -50,9 +51,13 @@ function StepList({ id, steps }: { id?: string; steps: readonly StepPart[] }) {
       {steps.map((step, index) => (
         <li key={index}>
           <StepIcon step={step} />
-          <span className="workspace-step-label">{step.label}</span>
+          <span className="workspace-step-label">
+            <WithChats text={step.label} />
+          </span>
           {step.detail ? (
-            <span className="workspace-step-detail">{step.detail}</span>
+            <span className="workspace-step-detail">
+              <WithChats text={step.detail} />
+            </span>
           ) : null}
           {step.added !== undefined ? (
             <span className="workspace-diff">

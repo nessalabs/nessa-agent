@@ -1,8 +1,39 @@
-import { Fragment, useEffect, useRef, useState } from "react"
+import { Fragment, Suspense, useEffect, useRef, useState } from "react"
+import { MathBlock } from "@nessa-ui/react/math-block"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import { useMessageStreamText } from "@nessa-ui/react/message"
 import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { inlineRuns } from "../../model/transcript"
+import { ChatPill, useKnownChat } from "./chat-pill"
+
+/**
+ * Inline code an agent wrote. The id of a chat this window has is that chat,
+ * as a pill (`ChatPill`); anything else is code, as the renderer draws it.
+ */
+function ProseCode({
+  node: _node,
+  className,
+  children,
+  ...rest
+}: React.ComponentProps<"code"> & { node?: unknown }) {
+  const text = typeof children === "string" ? children.trim() : ""
+  const known = useKnownChat(text)
+  if (!className && known) return <ChatPill sessionId={text} />
+  // Inline maths, as the renderer draws it.
+  if ((className ?? "").includes("math-inline") && typeof children === "string")
+    return (
+      <Suspense fallback={<code>{children}</code>}>
+        <MathBlock inline tex={children} />
+      </Suspense>
+    )
+  return (
+    <code className={className} {...rest}>
+      {children}
+    </code>
+  )
+}
+
+const proseComponents = { code: ProseCode }
 
 /**
  * A line the window wrote itself — the person's words in their bubble, an
@@ -72,6 +103,7 @@ export function AgentProse({
     <MessageMarkdown
       className="workspace-prose text-inherit text-[length:inherit] leading-[inherit] tracking-[inherit]"
       streaming={revealing}
+      components={proseComponents}
     >
       {revealing ? paced.text : text}
     </MessageMarkdown>

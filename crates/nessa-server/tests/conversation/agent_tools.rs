@@ -1584,6 +1584,29 @@ fn a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit() {
     }
 }
 
+/// The report's first line is a contract with the desktop, which shows a
+/// report as one line naming the chat and how its turn ended
+/// (`src/desktop/workspace/model/thread-report.ts`). Both read the same cases.
+#[test]
+fn a_report_heading_is_the_one_the_desktop_reads() {
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../fixtures/thread-report.json"
+    ))
+    .expect("the shared cases parse");
+    for case in cases["cases"].as_array().expect("cases") {
+        let child = ConversationId::new(case["child"].as_str().unwrap()).unwrap();
+        let reply = case["reply"].as_str().map(str::to_owned);
+        let text = crate::conversation::application::service::report_text_for_test(
+            &child,
+            case["execution"].as_str().unwrap(),
+            case["outcome"].as_str().unwrap(),
+            reply.unwrap_or_default(),
+            ConversationLimits::default().max_input_bytes,
+        );
+        assert_eq!(text.lines().next(), case["header"].as_str());
+    }
+}
+
 /// Holds a save that wrote its row, so a test can act between a send's save
 /// and its registration. A save that found the row already there is not held.
 #[cfg(unix)]

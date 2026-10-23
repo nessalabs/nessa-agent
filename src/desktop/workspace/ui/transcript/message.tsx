@@ -18,6 +18,8 @@ import {
   type MessageApp,
   type TurnTerminal,
 } from "../../model/transcript"
+import { reportVerb, threadReportOf } from "../../model/thread-report"
+import { ChatPill } from "./chat-pill"
 import { AgentProse, RichText } from "./rich-text"
 import { named, Saying, type Said } from "./said"
 import { ToolSteps } from "./tool-steps"
@@ -94,6 +96,23 @@ export const Message = memo(function Message({
     )
   }
   if (message.role === "user") {
+    // A thread's report reaches the agent whole; here it is one line: the
+    // thread, and what it did (`model/thread-report.ts`).
+    const first = message.parts[0]
+    const report = first?.kind === "text" ? threadReportOf(first.text) : null
+    if (report)
+      return (
+        <div
+          className="workspace-message"
+          data-role="thread-report"
+          data-new={isNew || undefined}
+        >
+          <p className="workspace-thread-report" data-outcome={report.outcome}>
+            <ChatPill sessionId={report.thread} />
+            <span>{reportVerb(report.outcome)}</span>
+          </p>
+        </div>
+      )
     return (
       <div
         className="workspace-message"

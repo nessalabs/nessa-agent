@@ -1661,7 +1661,10 @@ const steps = {
       failures.push("the thread's report never reached the conversation that sent it")
     else if (report.status !== "completed")
       failures.push(`the report's turn ended ${report.status}`)
-    else await expectShown(run.page, SAYS.report, failures)
+    else {
+      await expectShown(run.page, SAYS.report, failures)
+      await reportLine(run, report, failures)
+    }
   },
 
   async await(run, step, failures) {
@@ -2550,6 +2553,54 @@ const steps = {
  * merged tab's chats brings the split back as it was left, with that chat's
  * pane focused. The new tab is then closed.
  */
+/**
+ * The window shows a thread's report as one line — the thread's chat as a
+ * pill with its title, and what it did — never the report's text or ids;
+ * pressed, the pill brings that chat to the front, in a tab of its own.
+ */
+async function reportLine(run, report, failures) {
+  const thread = /^\[Thread report\] Thread (\S+) /.exec(report.userText)?.[1]
+  if (!thread) {
+    failures.push(`the report did not name its thread: ${report.userText.slice(0, 120)}`)
+    return
+  }
+  const line = run.page.locator('[data-role="thread-report"]').filter({
+    has: run.page.locator(`[data-chat-pill="${thread}"]`),
+  })
+  const shown = await line
+    .first()
+    .waitFor({ timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!shown) {
+    failures.push("the thread's report is not one line with the thread's pill")
+    return
+  }
+  const title = await titleOf(run, thread)
+  const said = (await line.first().innerText()).replace(/\s+/g, " ").trim()
+  if (!said.includes(title) || !said.endsWith("responded"))
+    failures.push(`the report line reads "${said}", not "${title} responded"`)
+  if (
+    /finished the turn you sent it|execution /.test(
+      await run.page.locator(css.pane).first().innerText(),
+    )
+  )
+    failures.push("the window shows the report's text, not just its line")
+  await line.first().locator(`[data-chat-pill="${thread}"]`).click()
+  const front = await waitFor(
+    async () =>
+      (await run.page
+        .getByRole("tablist", { name: "Open views" })
+        .locator('[role="tab"][aria-selected="true"]')
+        .locator("..")
+        .getAttribute("data-session-tab")) === thread,
+    10_000,
+  )
+  if (!front)
+    failures.push("pressing the report's pill did not bring its chat to the front")
+  await openStressConversation(run.page, run.main.id, run.main.title)
+}
+
 async function mergedTabStays(run, besideId, failures) {
   const tabs = run.page.getByRole("tablist", { name: "Open views" })
   const group = tabs.locator('[role="group"]')
