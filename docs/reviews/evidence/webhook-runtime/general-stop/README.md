@@ -97,11 +97,18 @@ seven-package all-target Clippy `-D warnings`, fmt and architecture passed. Docs
 validation passed135/0 and all three diagrams rendered and were visually inspected
 at the new owning checkpoint with zero page errors. There was no new OOM kill.
 Auth implementation remains byte-identical to the full282-test preceding source.
-Fresh round THREE is pending.
+[Fresh round THREE](review-3/report.md) is clean at exact candidate
+`ab5caa5bb28dd5a2c419f44f218999c8ec6ee910`: all four priority buckets empty.
+It independently passed145 owner tests,214 actual Auth unit tests,8 revocation
+integration tests, five final restored controls and docs135/0. Seven rule mutations
+were caught/restored; all119 production files matched frozen source. It verified
+the actual-validator ID-budget mutant allocates1048576bytes versus196 restored,
+with the same typed Invalid. This closes the narrow correction's local review
+loop. Later report/evidence closure changes contain no production or test changes.
 
 ## Remaining gates
 
-Fresh round THREE exact-head review and publication are pending. Windows, macOS, MSRV, exact-head CI, canonical scripted Chromium/WebKit,
+Publication and exact-head CI are separate qualification steps. Windows, macOS, MSRV, exact-head CI, canonical scripted Chromium/WebKit,
 default/raised stress and chaos, and the unfinished runtime/recipient E2E are not
 qualified by these Linux checks. The prior Windows enrollment assertion and
 cancelled jobs remain distinct evidence; there is no demonstrated Windows fix.

@@ -707,9 +707,10 @@ This replaces the independent SQL stop cause/actor/time columns in the current
 private schema. Old malformed-state tests must exercise the new representation
 without changing their refusal and valid-recovery assertions. The eight-table
 inventory, capacity ceilings, acknowledgement order and external grant/credential
-admission rules remain the existing owners. This work is not yet qualified or
-published; completion requires actual Auth fact integration, mutation/recovery
-coverage and fresh independent review before runtime mounting.
+admission rules remain the existing owners. The [general-stop evidence](../reviews/evidence/webhook-runtime/general-stop/README.md)
+records actual Auth fact integration, mutation/recovery checks and fresh independent
+review of this isolated correction. Runtime mounting remains incomplete; local
+qualification of this seam is not full feature acceptance.
 
 The stop record distinguishes clocks explicitly: its `atMs` is the first local
 stop observation/effect time, with millisecond precision. A revoked record also
