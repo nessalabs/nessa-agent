@@ -408,6 +408,7 @@ const body = {
   "shell-chrome": async ({ page, size }) => {
     const failures = []
     const states = []
+    let firstToggle = null
     for (const rail of [false, true])
       for (const sidebar of [true, false]) {
         await arrange(page, size, { rail, sidebar })
@@ -474,21 +475,23 @@ const body = {
           failures.push(`${label}: sidebar has an extra top row (${state.sidebar.y}px)`)
         if (state.pane && state.pane.y < state.titlebar.bottom)
           failures.push(`${label}: a pane's header sits under the window toolbar`)
-        // The toggle stands in the footer row's mark slot (`ui/identity.css`,
-        // `side-rail.css`): 6px in from the sidebar's content edge — the
-        // gutter, from the window's, past the rail when it is open beside
-        // the sidebar — on the row's line, its foot 13px above
-        // the row's. The row keeps its own 6px inset in every state.
-        if (
-          state.toggle &&
-          (state.toggle.x !==
-            (state.drawnRail && state.drawnSidebar ? 14 + state.rail.width : 14) ||
-            state.toggle.bottom !== size.height - 21)
-        )
-          failures.push(
-            `${label}: rail toggle at x ${state.toggle.x}, foot ${state.toggle.bottom}, not in the footer's mark slot`,
+        // The toggle holds one place in every state (`side-rail.css`): the
+        // rail's column, on the footer row's line, its foot 13px above the
+        // row's — toggling the rail or the sidebar moves what is beside it,
+        // never the toggle. With the rail open the footer keeps its own 6px
+        // inset; with it closed the footer's mark slot moves onto the
+        // toggle's column (`rail-corner` checks the slot).
+        if (state.toggle) {
+          firstToggle ??= state.toggle
+          if (
+            state.toggle.x !== firstToggle.x ||
+            state.toggle.bottom !== size.height - 21
           )
-        if (state.sidebar && state.footerInset !== 6)
+            failures.push(
+              `${label}: rail toggle at x ${state.toggle.x}, foot ${state.toggle.bottom}, not at x ${firstToggle.x} on the footer's line`,
+            )
+        }
+        if (state.sidebar && state.drawnRail && state.footerInset !== 6)
           failures.push(`${label}: footer inset ${state.footerInset}, not the row's 6px`)
         if (state.rail?.width && state.rail.width !== 48)
           failures.push(`${label}: rail width ${state.rail.width}, expected 48`)
