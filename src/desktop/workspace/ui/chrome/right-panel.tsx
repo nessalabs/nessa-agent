@@ -3,13 +3,15 @@
  * toggle and maximize button at the titlebar's end (⌥⌘B shows and hides it).
  * Its edge resizes it, and dragged far enough right folds it. Maximized, it
  * covers the workspace — the sidebar, the list and the panes are inert under
- * it — until Escape or Restore. Until something opens in it, it says so.
+ * it (`Covered`, `workspace-layout.tsx`) and the window's keys rest but ⌥⌘B —
+ * until Escape or Restore. Until something opens in it, it says so.
  */
-import { memo, useLayoutEffect, useRef, type RefObject } from "react"
+import { memo, useLayoutEffect, useRef } from "react"
 import { EmptyState } from "@nessa-ui/react/empty-state"
 import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from "../../../model/right-panel"
 import { IconButton } from "../../../ui/icon-button"
 import { ResizeEdge } from "../../../ui/resize-edge"
+import { focusInFront } from "../../adapters/dom/focus"
 import { useWorkspaceFrame } from "../workspace-frame"
 import "./right-panel.css"
 
@@ -55,15 +57,12 @@ export function PanelMaximize({
 }
 
 export const WorkspacePanel = memo(function WorkspacePanel({
-  root,
   open,
   maximized,
   width,
   onDragStart,
   onDragMove,
 }: {
-  /** The workspace, whose other regions go inert under the maximized panel. */
-  root: RefObject<HTMLDivElement | null>
   open: boolean
   maximized: boolean
   width: number
@@ -71,21 +70,21 @@ export const WorkspacePanel = memo(function WorkspacePanel({
   onDragMove: (delta: number) => void
 }) {
   const panel = useRef<HTMLElement>(null)
+  // Whether the caret is in the panel, as its last focus event said.
+  const holds = useRef(false)
+  // Maximized, the caret under the cover comes into the panel.
   useLayoutEffect(() => {
-    const scope = root.current
-    if (!maximized || !scope) return
-    const covered = [...scope.children].filter(
-      (child) => child !== panel.current && !child.hasAttribute("inert"),
-    )
-    for (const child of covered) child.setAttribute("inert", "")
-    // The caret was under the cover: it comes into the panel.
-    if (!panel.current?.contains(document.activeElement)) panel.current?.focus()
-    return () => {
-      // A column that folded meanwhile is hidden by its own markup: it stays inert.
-      for (const child of covered)
-        if (child.getAttribute("aria-hidden") !== "true") child.removeAttribute("inert")
-    }
-  }, [maximized, root])
+    if (maximized && !panel.current?.contains(document.activeElement))
+      panel.current?.focus()
+  }, [maximized])
+  // Closed with the caret in it, the caret goes back to the pane in front,
+  // rather than falling to the page.
+  useLayoutEffect(() => {
+    if (open || !holds.current) return
+    holds.current = false
+    const scope = panel.current?.closest<HTMLElement>("[data-workspace]")
+    if (scope) return focusInFront(scope)
+  }, [open])
   return (
     <>
       {open && !maximized ? (
@@ -108,6 +107,13 @@ export const WorkspacePanel = memo(function WorkspacePanel({
         data-maximized={maximized || undefined}
         inert={!open || undefined}
         aria-hidden={!open || undefined}
+        onFocus={() => {
+          holds.current = true
+        }}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+            holds.current = false
+        }}
       >
         <div className="workspace-panel-body">
           <EmptyState

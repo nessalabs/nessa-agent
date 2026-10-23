@@ -2662,7 +2662,8 @@ async function reportLine(run, report, failures) {
 
 async function mergedTabStays(run, besideId, failures) {
   const tabs = run.page.getByRole("tablist", { name: "Open views" })
-  const group = tabs.locator('[role="group"]')
+  // A merged tab draws its chats together; only its chats are tabs.
+  const group = tabs.locator(".workspace-tab-group")
   const widths = () =>
     run.page
       .locator(css.pane)
@@ -2698,7 +2699,7 @@ async function mergedTabStays(run, besideId, failures) {
   const restFill = () =>
     tabs.evaluate((list) => {
       const fill = (e) => (e ? getComputedStyle(e).backgroundColor : null)
-      const group = list.querySelector('[role="group"]:not([data-active])')
+      const group = list.querySelector(".workspace-tab-group:not([data-active])")
       const plain = list.querySelector(
         ":scope > .workspace-window-tab:not([data-active])",
       )

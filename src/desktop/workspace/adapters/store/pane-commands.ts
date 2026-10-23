@@ -254,3 +254,10 @@ export function closeSessionTab({ sessionId }: { sessionId: string }): Workspace
     dispatch(workspaceActions.tabClosed({ sessionId, draftId: newId() }))
   }
 }
+
+/** Closes a widget from the tab strip as a chat's close does: in place, its tab left where it is. */
+export function closeTabItem({ item }: { item: string }): WorkspaceCommand {
+  return (dispatch, _getState, { newId }) => {
+    dispatch(workspaceActions.tabItemClosed({ item, draftId: newId() }))
+  }
+}

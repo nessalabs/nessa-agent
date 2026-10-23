@@ -176,6 +176,12 @@ function signature(store: DesktopStore): {
   }
 }
 
+/** The caret is on the selected tab, and the last input was a key, not the pointer. */
+function stripDriven(active: Element | null, byKeyboard: boolean): boolean {
+  const tab = active?.closest('[role="tab"]')
+  return byKeyboard && tab?.getAttribute("aria-selected") === "true"
+}
+
 export function useFocusFollowsPane(
   store: DesktopStore,
   root: RefObject<HTMLElement | null>,
@@ -219,9 +225,10 @@ export function useFocusFollowsPane(
       const active = document.activeElement
       const lost = !active || active === document.body
       if (inModal(active)) return
-      // Document tabs own keyboard navigation while selecting another pane.
-      // Moving that selection must not take the next arrow key into a composer.
-      if (active?.closest('[role="tablist"]')) return
+      // A tab chosen from the keyboard keeps the caret in the strip, so the
+      // next arrow key moves along it rather than into a composer. A tab
+      // clicked, or a stale one left behind by ⌘N or ⌘D, lets it follow.
+      if (stripDriven(active, byKeyboard)) return
       const key = selectFocusedPaneKey(store.getState())
       const marked = scope.querySelector<HTMLElement>(`[${focusedPaneAttribute}]`)
       const markAgrees =
@@ -238,6 +245,17 @@ export function useFocusFollowsPane(
       if (inModal(active)) return
       follow()
     }
+
+    // How the person last reached for the window: a key, or the pointer.
+    let byKeyboard = false
+    const onKey = () => {
+      byKeyboard = true
+    }
+    const onPointer = () => {
+      byKeyboard = false
+    }
+    window.addEventListener("keydown", onKey, true)
+    window.addEventListener("pointerdown", onPointer, true)
 
     let seen = signature(store)
     const unsubscribe = store.subscribe(() => {
@@ -312,6 +330,8 @@ export function useFocusFollowsPane(
       watcher.disconnect()
       hiding?.disconnect()
       scope.removeEventListener("focusin", onFocusIn)
+      window.removeEventListener("keydown", onKey, true)
+      window.removeEventListener("pointerdown", onPointer, true)
     }
   }, [store, root])
 }

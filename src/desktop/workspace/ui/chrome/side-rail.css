@@ -197,6 +197,11 @@
   left: calc(var(--desktop-gutter) + 6px);
 }
 
+/* The maximized right panel covers the workspace, the rail's toggle with it. */
+.workspace-window[data-panel-maximized] .side-rail-toggle {
+  visibility: hidden;
+}
+
 .side-rail-toggle:active {
   transform: scale(0.9);
 }

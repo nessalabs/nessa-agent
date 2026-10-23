@@ -212,7 +212,7 @@ describe("the right panel, in both layouts", () => {
     ["sessions in the sidebar", SessionsInSidebar],
   ] as const)
     it(`opens, maximizes, leaves the maximized view with Escape and remembers its place, in ${name}`, async () => {
-      const { root } = await render(Layout)
+      const { store, root } = await render(Layout)
       const panel = () => host.querySelector<HTMLElement>("#workspace-panel") ?? host
       const button = (label: string) =>
         [
@@ -230,14 +230,38 @@ describe("the right panel, in both layouts", () => {
       await act(async () => button("Expand Panel")?.click())
       expect(panel().dataset.maximized).toBe("true")
       const sidebar = host.querySelector<HTMLElement>(".workspace-sidebar") ?? host
-      expect(sidebar.hasAttribute("inert")).toBe(true)
+      const covered = () =>
+        [".workspace-sidebar", ".split-panes-grid", ".workspace-overview-layer"].map(
+          (selector) => host.querySelector(selector)?.closest("[inert]") !== null,
+        )
+      expect(covered()).toEqual([true, true, true])
+      expect(panel().closest("[inert]")).toBeNull()
+      // Under it, the window's keys rest: no switcher, no overview, no fold.
+      await act(async () => press("switcher"))
+      await act(async () => press("showOverview"))
+      await act(async () => press("toggleSidebar"))
+      expect(host.querySelector('[role="dialog"]')).toBeNull()
+      expect(store.getState().workspace.content).toBe("panes")
+      expect(store.getState().workspace.chrome.sidebar.open).toBe(true)
+      // An Escape a menu or dialog over it takes is theirs, not the panel's.
+      const menu = document.createElement("div")
+      menu.setAttribute("role", "menu")
+      document.body.append(menu)
+      await act(async () =>
+        menu.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+      )
+      menu.remove()
+      expect(panel().dataset.maximized).toBe("true")
       await act(async () =>
         window.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
         ),
       )
       expect(panel().dataset.maximized).toBeUndefined()
-      expect(sidebar.hasAttribute("inert")).toBe(false)
+      expect(covered()).toEqual([false, false, false])
+      expect(sidebar.closest("[inert]")).toBeNull()
       expect(
         JSON.parse(window.localStorage.getItem("nessa.desktop.right-panel") ?? "null"),
       ).toMatchObject({
@@ -247,6 +271,70 @@ describe("the right panel, in both layouts", () => {
       expect(panel().hasAttribute("inert")).toBe(true)
       await act(async () => root.unmount())
     })
+
+  it("is room the side columns are fitted around: opened in a narrow window, a column folds for it", async () => {
+    // Open beside two panes at this width, nothing folds; the panel's room does.
+    const folds: Record<string, boolean>[] = []
+    for (const panel of [false, true]) {
+      window.innerWidth = 1500
+      window.localStorage.setItem(
+        "nessa.desktop.right-panel",
+        JSON.stringify({ open: panel, width: 360 }),
+      )
+      const { store, root } = await render(ThreeColumns)
+      await act(async () => settle())
+      const chrome = store.getState().workspace.chrome
+      folds.push({ sidebar: chrome.sidebar.folded, list: chrome.sessionList.folded })
+      await act(async () => root.unmount())
+    }
+    expect(folds[0]).toEqual({ sidebar: false, list: false })
+    expect(folds[1]).not.toEqual(folds[0])
+  })
+
+  it("moves its edge, and the sidebar's, from the widths they are drawn at", async () => {
+    window.localStorage.setItem(
+      "nessa.desktop.right-panel",
+      JSON.stringify({ open: true, width: 360 }),
+    )
+    const { store, root } = await render(ThreeColumns)
+    const key = (label: string, code: string) =>
+      act(async () =>
+        host
+          .querySelector(`[aria-label="${label}"]`)
+          ?.dispatchEvent(new KeyboardEvent("keydown", { key: code, bubbles: true })),
+      )
+    const stored = () =>
+      JSON.parse(window.localStorage.getItem("nessa.desktop.right-panel") ?? "null")
+    // One arrow is one step either way: the box's gutter is not counted in.
+    await key("Resize Panel", "ArrowLeft")
+    expect(stored()).toEqual({ open: true, width: 376 })
+    await key("Resize Panel", "ArrowRight")
+    expect(stored()).toEqual({ open: true, width: 360 })
+    await key("Resize Sidebar", "ArrowRight")
+    expect(store.getState().workspace.chrome.sidebarWidth).toBe(256)
+    await key("Resize Sidebar", "ArrowLeft")
+    expect(store.getState().workspace.chrome.sidebarWidth).toBe(240)
+    await act(async () => root.unmount())
+  })
+})
+
+it("keeps one tab the strip's Tab stop, the Agents overview open or not, and only tabs in its tablist", async () => {
+  const { root } = await render(ThreeColumns)
+  const stops = () =>
+    host.querySelectorAll('.workspace-tab-list [role="tab"][tabindex="0"]').length
+  expect(stops()).toBe(1)
+  await act(async () => press("showOverview"))
+  expect(
+    host.querySelectorAll('.workspace-tab-list [aria-selected="true"]'),
+  ).toHaveLength(0)
+  expect(stops()).toBe(1)
+  const named = [...host.querySelectorAll(".workspace-tab-list *")].filter(
+    (each) =>
+      each.getAttribute("role") !== null &&
+      !["tab", "none"].includes(each.getAttribute("role") ?? ""),
+  )
+  expect(named).toEqual([])
+  await act(async () => root.unmount())
 })
 
 describe("Agents in the sidebar is a place to go, like a channel", () => {

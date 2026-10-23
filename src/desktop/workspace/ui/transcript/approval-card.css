@@ -225,6 +225,25 @@
   }
 }
 
+/* What the copy did, beside its button: visible only once it said something. */
+.workspace-approval-copy-said {
+  position: absolute;
+  top: 8px;
+  right: 34px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  pointer-events: none;
+}
+
+.workspace-approval-copy-said:empty {
+  display: none;
+}
+
+/* Said, it stays in view until it is gone, hovered or not. */
+.workspace-approval-copy[data-said] {
+  opacity: 1;
+}
+
 /* A folded script fades out at its last shown line: there is more below. */
 .workspace-approval-script {
   min-width: 0;

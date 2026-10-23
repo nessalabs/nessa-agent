@@ -1128,10 +1128,28 @@ pub(crate) fn report_text_for_test(
     child: &ConversationId,
     execution: &str,
     outcome: &str,
-    reply: String,
+    reply: Option<String>,
     limit: usize,
 ) -> String {
-    report_text(child, execution, outcome, Some(reply), limit)
+    report_text(child, execution, outcome, reply, limit)
+}
+
+/// Every outcome a report can name: each a turn can settle with, and the
+/// one a restart leaves (`interrupted`). The desktop reads each of them
+/// (`tests/fixtures/thread-report.json`).
+#[cfg(test)]
+pub(crate) fn report_outcomes_for_test() -> Vec<&'static str> {
+    let settled: [Result<ExecutionOutcome, ()>; 6] = [
+        Ok(ExecutionOutcome::Completed),
+        Ok(ExecutionOutcome::OutputLimit),
+        Ok(ExecutionOutcome::RequestLimit),
+        Ok(ExecutionOutcome::Refused),
+        Ok(ExecutionOutcome::Cancelled),
+        Err(()),
+    ];
+    let mut names: Vec<_> = settled.iter().map(outcome).collect();
+    names.push("interrupted");
+    names
 }
 
 const CUT: &str = "\n[cut to fit]";

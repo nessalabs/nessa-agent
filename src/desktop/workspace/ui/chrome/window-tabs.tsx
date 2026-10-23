@@ -13,8 +13,8 @@ import { panesOf, type PaneLayout } from "../../../split-panes/model/pane-layout
 import { DesktopIcon } from "../../../ui/icons"
 import { IconButton } from "../../../ui/icon-button"
 import {
-  closePane,
   closeSessionTab,
+  closeTabItem,
   focusPane,
   newSession,
   openSession,
@@ -32,6 +32,7 @@ import {
 import { paneItemKey, paneItemOf, sessionItem } from "../../model/pane-item"
 import { layoutOf, type WindowTabs as TabsState } from "../../model/window-tabs"
 import { useWorkspaceFrame } from "../workspace-frame"
+import { WidgetAnswerOf, widgetTitle } from "../../../widgets"
 import { AgentTile } from "./agent-tile"
 import "./window-tabs.css"
 
@@ -82,10 +83,14 @@ export const WindowTabs = memo(function WindowTabs() {
         onKeyDown={moveTab}
       >
         {tabs.tabs.map((tab) => {
-          const active = !overview && tab.id === tabs.activeTab
+          const current = tab.id === tabs.activeTab
+          const active = !overview && current
           const layout = layoutOf(tabs, panes, tab)
           const shown = layout ? panesOf(layout) : []
           const lit = (key: number) => active && layout?.focused === key
+          // One tab is always the strip's Tab stop: the focused pane's, the
+          // overview open or not.
+          const stop = (key: number) => current && layout?.focused === key
           const members = shown.map((pane) => (
             <TabItem
               key={pane.item}
@@ -93,20 +98,22 @@ export const WindowTabs = memo(function WindowTabs() {
               item={pane.item}
               paneKey={pane.key}
               active={lit(pane.key)}
+              reachable={stop(pane.key)}
               merged={shown.length > 1}
             />
           ))
           if (shown.length < 2) return <Fragment key={tab.id}>{members}</Fragment>
           // A merged tab: the chats it shows side by side travel together.
           return (
+            // Only tabs belong in a tablist: the group is drawn, not named a
+            // role; each of its chats says it is side by side (`merged`).
             <div
               key={tab.id}
               className="workspace-tab-group"
-              role="group"
+              role="none"
               data-tab={tab.id}
               data-active={active || undefined}
               style={{ "--tab-chats": shown.length } as CSSProperties}
-              aria-label={`${shown.length} chats side by side`}
               title={`${shown.length} chats side by side`}
             >
               <MergedGlyph />
@@ -133,46 +140,94 @@ function TabItem({
   item,
   paneKey,
   active,
+  reachable,
   merged,
 }: {
   tabId: string
   item: string
   paneKey: number
   active: boolean
+  /** The strip's one Tab stop. */
+  reachable: boolean
+  merged: boolean
+}) {
+  const shown = paneItemOf(item)
+  if (shown?.kind === "session")
+    return (
+      <SessionTab
+        sessionId={shown.sessionId}
+        active={active}
+        reachable={reachable}
+        merged={merged}
+      />
+    )
+  if (shown?.kind !== "widget") return null
+  return (
+    <WidgetAnswerOf widget={shown.widget}>
+      {(answer) => (
+        <WidgetTab
+          tabId={tabId}
+          item={item}
+          paneKey={paneKey}
+          title={widgetTitle(answer)}
+          active={active}
+          reachable={reachable}
+          merged={merged}
+        />
+      )}
+    </WidgetAnswerOf>
+  )
+}
+
+function WidgetTab({
+  tabId,
+  item,
+  paneKey,
+  title,
+  active,
+  reachable,
+  merged,
+}: {
+  tabId: string
+  item: string
+  paneKey: number
+  title: string
+  active: boolean
+  reachable: boolean
   merged: boolean
 }) {
   const dispatch = useWorkspaceDispatch()
-  const shown = paneItemOf(item)
-  if (shown?.kind === "session")
-    return <SessionTab sessionId={shown.sessionId} active={active} merged={merged} />
   return (
-    <div className="workspace-window-tab" data-active={active || undefined}>
+    <div className="workspace-window-tab" role="none" data-active={active || undefined}>
       <button
         type="button"
         role="tab"
         aria-selected={active}
-        tabIndex={active ? 0 : -1}
+        aria-description={merged ? sideBySide : undefined}
+        tabIndex={reachable ? 0 : -1}
+        title={title}
         onClick={() => {
           dispatch(switchTab({ tabId }))
           dispatch(focusPane({ pane: paneKey }))
         }}
       >
         <DesktopIcon name="panelRight" size={16} />
-        <span>Widget</span>
+        <span>{title}</span>
       </button>
+      {/* Out of the Tab order; from the keyboard, ⌘W closes the focused tab's pane. */}
       <IconButton
         icon="close"
         size="sm"
-        label="Close Widget Tab"
+        label={`Close Tab: ${title}`}
         tabIndex={-1}
-        onClick={() => {
-          dispatch(switchTab({ tabId }))
-          dispatch(closePane({ pane: paneKey }))
-        }}
+        onClick={() => dispatch(closeTabItem({ item }))}
       />
     </div>
   )
 }
+
+/** What a tab in a merged group says of itself, after its name. */
+const sideBySide = "Side by side with other chats in this tab"
 
 /**
  * Pulled out of its merged tab onto the strip, a chat stands as a tab of its
@@ -214,10 +269,12 @@ function useDragOut(sessionId: string, merged: boolean) {
 function SessionTab({
   sessionId,
   active,
+  reachable,
   merged,
 }: {
   sessionId: string
   active: boolean
+  reachable: boolean
   merged: boolean
 }) {
   const dispatch = useWorkspaceDispatch()
@@ -227,6 +284,7 @@ function SessionTab({
   return (
     <div
       className="workspace-window-tab"
+      role="none"
       data-active={active || undefined}
       data-session-tab={sessionId}
       onPointerDown={onPointerDown}
@@ -237,7 +295,8 @@ function SessionTab({
         data-drag-item={session ? paneItemKey(sessionItem(sessionId)) : undefined}
         role="tab"
         aria-selected={active}
-        tabIndex={active ? 0 : -1}
+        aria-description={merged ? sideBySide : undefined}
+        tabIndex={reachable ? 0 : -1}
         title={title}
         onClick={() => dispatch(openSession({ sessionId }))}
       >

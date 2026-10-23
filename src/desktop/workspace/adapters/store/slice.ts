@@ -60,6 +60,8 @@ const workspaceSlice = createSlice({
       sessionTabs.switchTab(state, payload),
     tabClosed: (state, { payload }: Payload<{ sessionId: string; draftId: string }>) =>
       panes.closeTab(state, payload),
+    tabItemClosed: (state, { payload }: Payload<{ item: string; draftId: string }>) =>
+      panes.closeTabItem(state, payload),
     tabSplitOff: (state, { payload }: Payload<{ sessionId: string }>) =>
       panes.splitOffTab(state, payload),
     sessionWalked: (state, { payload }: Payload<{ sessionId: string }>) =>
@@ -459,6 +461,7 @@ const changesPanes: ReadonlySet<string> = new Set(
     workspaceActions.equalizePanes,
     workspaceActions.resizePanes,
     workspaceActions.tabClosed,
+    workspaceActions.tabItemClosed,
     workspaceActions.tabSplitOff,
   ].map((action) => action.type),
 )

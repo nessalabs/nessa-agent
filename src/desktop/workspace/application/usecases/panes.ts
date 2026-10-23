@@ -16,6 +16,7 @@ import {
   paneByKey,
   focusedPane,
   paneCount,
+  paneShowing,
   removePane,
   singlePane,
   showInPane,
@@ -475,7 +476,14 @@ export function closeTab(
   state: WorkspaceState,
   { sessionId, draftId }: { sessionId: string; draftId: string },
 ): WorkspaceState {
-  const key = paneItemKey(sessionItem(sessionId))
+  return closeTabItem(state, { item: paneItemKey(sessionItem(sessionId)), draftId })
+}
+
+/** A tab's close button, for any pane item — a chat or a widget — wherever its tab is. */
+export function closeTabItem(
+  state: WorkspaceState,
+  { item: key, draftId }: { item: string; draftId: string },
+): WorkspaceState {
   const tab = tabShowing(state.tabs, state.panes, key)
   if (!tab) return state
   if (tab.id !== state.tabs.activeTab)
@@ -484,7 +492,7 @@ export function closeTab(
       panes: state.panes,
     })
   const panes = state.panes
-  const pane = panes && paneShowingSession(panes, sessionId)
+  const pane = panes && paneShowing(panes, key)
   if (!panes || !pane) return state
   if (paneCount(panes) > 1) return withPanes(state, removePane(panes, pane.key), [key])
   if (state.tabs.tabs.length > 1) return closeActiveTab(state)

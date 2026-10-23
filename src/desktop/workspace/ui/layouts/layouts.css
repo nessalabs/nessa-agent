@@ -3,6 +3,11 @@
   display: contents;
 }
 
+/* What the maximized right panel covers (`workspace-layout.tsx`): only its inert state. */
+.workspace-covered {
+  display: contents;
+}
+
 /*
  * The Agents overview's layer (`ui/overview/overview-layer.tsx`): over the
  * session list and the panes, from where the list begins — past the sidebar

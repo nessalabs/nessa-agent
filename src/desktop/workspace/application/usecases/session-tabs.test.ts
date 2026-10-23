@@ -12,6 +12,7 @@ import {
 import {
   closePane,
   closeTab,
+  closeTabItem,
   createDraft,
   dropSession,
   openBeside,
@@ -178,4 +179,16 @@ it("a session removed upstream closes its tab when it was alone there", () => {
   const away = openSession(loaded(), { sessionId: "c" })
   const gone = sessionRemoved(away, { sessionId: "c", revision: 2, draftId: "unused" })
   expect(strip(gone)).toEqual(["*a"])
+})
+
+it("a widget's tab closes where it is, the tab in front staying in front", () => {
+  const run = { plugin: "p", id: "w" }
+  const two = openWidget(loaded(), { widget: run, origin: "a", room: roomyGrid })
+  const widget = panesOf(two.panes!).find((pane) => pane.item.startsWith("w:"))!.item
+  const away = openSession(splitOffTab(two, { sessionId: "a" }), { sessionId: "c" })
+  expect(strip(away).some((tab) => tab.includes("w:"))).toBe(true)
+  const closed = closeTabItem(away, { item: widget, draftId: "x" })
+  expect(strip(closed).some((tab) => tab.includes("w:"))).toBe(false)
+  expect(closed.tabs.activeTab).toBe(away.tabs.activeTab)
+  expect(paneIds(closed.panes)).toEqual(["c"])
 })

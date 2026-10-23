@@ -67,6 +67,7 @@ export {
   closeInFront,
   closePane,
   closeSessionTab,
+  closeTabItem,
   commitDrop,
   dropSession,
   fitPanes,

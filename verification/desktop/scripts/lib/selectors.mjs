@@ -116,7 +116,6 @@ export const css = {
   subagentDetail: "[data-subagent-detail]", // the open child's conversation
   subagentScroll: "[data-subagent-scroll]", // the conversation's scroller
   subagentMessages: "[data-subagent-messages]", // the messages that scroller follows
-  subagentSummary: "[data-subagent-summary]", // the list's counts
   subagentStack: "[data-subagent-stack]", // the conversation's subagents, in its pane header
   avatarFace: '[data-slot="random-avatar-paint"]', // one face; aria-label is its name
   avatarMore: '[data-slot="avatar-stack-more"]', // the count of faces the stack does not show

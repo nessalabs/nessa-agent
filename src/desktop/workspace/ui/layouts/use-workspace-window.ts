@@ -355,14 +355,18 @@ function useColumnDrag(
   region: SidebarRegion,
   root: RefObject<HTMLDivElement | null>,
   listOpen: boolean,
+  /** The sidebar's drawn width; its box is wider by the gutter it stands in. */
+  sidebarWidth: number,
 ) {
   const dispatch = useWorkspaceDispatch()
   const sidebarFrom = useRef<number | null>(0)
   const listFrom = useRef<number | null>(0)
+  const sidebarNow = useRef(sidebarWidth)
+  sidebarNow.current = sidebarWidth
   const limits = region.sidebar.limits
   const onSidebarDragStart = useCallback(() => {
-    sidebarFrom.current = drawnWidth(root.current, ".workspace-sidebar")
-  }, [root])
+    sidebarFrom.current = sidebarNow.current
+  }, [])
   const onSidebarDragMove = useCallback(
     (delta: number) => {
       const { open, width } = draggedEdge(sidebarFrom.current, delta, limits)
@@ -390,46 +394,53 @@ function useWorkspaceSwitcher(
   root: RefObject<HTMLDivElement | null>,
   shownRailItem: RailItem | undefined,
   togglePanel: () => void,
+  /** The right panel covers the workspace: only its own toggle answers. */
+  panelMaximized: boolean,
 ) {
   const dispatch = useWorkspaceDispatch()
   const [switcher, setSwitcher] = useState<SwitcherMode | null>(null)
   const frame = useWindowFrame(root, workspaceShortcuts, setSwitcher)
   // While the switcher is up it has the keyboard, but for ⌘K, which closes it.
-  // Under an item's full view the workspace answers no keys at all.
+  // Under an item's full view the workspace answers no keys at all; under the
+  // maximized panel, only ⌥⌘B, which closes it.
   useWorkspaceKeys(
     shownRailItem !== undefined
       ? {}
-      : {
-          switcher: () => setSwitcher((open) => (open ? null : "open")),
-          // Offered as "beside" only where a pane could open there; else it is a jump.
-          openBeside: () =>
-            switcher ? false : setSwitcher(dispatch(canOpenBeside()) ? "split" : "open"),
-          toggleSessionList: () => {
-            if (!region.sessionList) return false
-            dispatch(toggleSessionList())
+      : panelMaximized
+        ? { togglePanel }
+        : {
+            switcher: () => setSwitcher((open) => (open ? null : "open")),
+            // Offered as "beside" only where a pane could open there; else it is a jump.
+            openBeside: () =>
+              switcher
+                ? false
+                : setSwitcher(dispatch(canOpenBeside()) ? "split" : "open"),
+            toggleSessionList: () => {
+              if (!region.sessionList) return false
+              dispatch(toggleSessionList())
+            },
+            togglePanel: () => {
+              if (switcher) return false
+              togglePanel()
+            },
+            // A place to go, as the sidebar's entry is: asked again, it stays; Escape in it leaves.
+            showOverview: () => {
+              if (switcher) return false
+              dispatch(showContent({ content: "agents" }))
+            },
+            // Searching the list brings it back first; with no list, it is a jump.
+            search: () => {
+              if (switcher) return false
+              if (!region.sessionList) return setSwitcher("open")
+              dispatch(toggleSessionList({ open: true }))
+              requestAnimationFrame(() =>
+                root.current
+                  ?.querySelector<HTMLInputElement>(".workspace-search input")
+                  ?.focus(),
+              )
+            },
           },
-          togglePanel: () => {
-            if (switcher) return false
-            togglePanel()
-          },
-          // A place to go, as the sidebar's entry is: asked again, it stays; Escape in it leaves.
-          showOverview: () => {
-            if (switcher) return false
-            dispatch(showContent({ content: "agents" }))
-          },
-          // Searching the list brings it back first; with no list, it is a jump.
-          search: () => {
-            if (switcher) return false
-            if (!region.sessionList) return setSwitcher("open")
-            dispatch(toggleSessionList({ open: true }))
-            requestAnimationFrame(() =>
-              root.current
-                ?.querySelector<HTMLInputElement>(".workspace-search input")
-                ?.focus(),
-            )
-          },
-        },
-    switcher !== null || shownRailItem !== undefined,
+    switcher !== null || shownRailItem !== undefined || panelMaximized,
   )
   // Beside where the room allows it, in the focused pane's place where not —
   // what ⌘-click does — so a pick never goes nowhere, and a typed message is
@@ -525,15 +536,16 @@ export function useWorkspaceWindow({
   const [theme] = useThemePreference()
   const store = useWorkspaceStore()
   const chrome = useWorkspaceChrome(region)
-  const dragging = useColumnDrag(region, root, chrome.listOpen)
+  const dragging = useColumnDrag(region, root, chrome.listOpen, chrome.sidebarWidth)
   const switching = useWorkspaceSwitcher(
     region,
     root,
     chrome.shownRailItem,
     chrome.togglePanel,
+    chrome.panelMaximized,
   )
-  usePanelEscape(chrome.panelMaximized, chrome.setPanelMaximized)
-  const panelDrag = usePanelDrag(root, chrome.resizePanel, chrome.closePanel)
+  usePanelEscape(root, chrome.panelMaximized, chrome.setPanelMaximized)
+  const panelDrag = usePanelDrag(chrome.panelWidth, chrome.resizePanel, chrome.closePanel)
   useFocusFollowsPane(store, root)
   // The panes' drag spans the window: sessions are picked up from its lists.
   const splitPanes = useMemo(() => workspaceSplitPanes(store), [store])
@@ -614,33 +626,47 @@ export function useWorkspaceWindow({
 }
 
 /**
- * Escape leaves the maximized panel wherever the caret is, before anything
- * under it answers: the panel covers them.
+ * Escape leaves the maximized panel — what covers the workspace, so nothing
+ * under it answers — unless a dialog, menu or list over it takes Escape
+ * first, or the window itself is under Settings, whose keys are its own.
  */
-function usePanelEscape(maximized: boolean, setMaximized: (value: boolean) => void) {
+function usePanelEscape(
+  root: RefObject<HTMLElement | null>,
+  maximized: boolean,
+  setMaximized: (value: boolean) => void,
+) {
   useEffect(() => {
     if (!maximized) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return
+      if (root.current?.closest("[inert]")) return
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[role="dialog"], [role="menu"], [role="listbox"]')
+      )
+        return
+      // Ahead of the workspace's own Escapes, which leave a prevented one alone.
       event.preventDefault()
-      event.stopPropagation()
       setMaximized(false)
     }
     window.addEventListener("keydown", onKeyDown, true)
     return () => window.removeEventListener("keydown", onKeyDown, true)
-  }, [maximized, setMaximized])
+  }, [root, maximized, setMaximized])
 }
 
 /** The panel's edge, on its left: dragged left it widens, and far enough right it folds. */
 function usePanelDrag(
-  root: RefObject<HTMLDivElement | null>,
+  /** The panel's drawn width; its box is wider by the gutter it stands in. */
+  width: number,
   resize: (width: number) => void,
   close: () => void,
 ) {
   const from = useRef(0)
+  const now = useRef(width)
+  now.current = width
   const onPanelDragStart = useCallback(() => {
-    from.current = drawnWidth(root.current, ".workspace-panel")
-  }, [root])
+    from.current = now.current
+  }, [])
   const onPanelDragMove = useCallback(
     (delta: number) => {
       const { open, width } = draggedEdge(from.current, -delta, {

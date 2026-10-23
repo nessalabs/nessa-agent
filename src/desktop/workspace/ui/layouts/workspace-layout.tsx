@@ -3,7 +3,7 @@
  * and does not read the store or dispatch. A view that shows one fact —
  * the content mark, the switcher — keeps that subscription itself.
  */
-import { memo, type CSSProperties } from "react"
+import { memo, type CSSProperties, type ReactNode } from "react"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../../ui/history-buttons"
 import { ResizeEdge } from "../../../ui/resize-edge"
@@ -114,6 +114,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                   data-surface={browserSurface ? "browser" : "window"}
                   data-desktop-theme={theme}
                   data-sidebar={sidebarOpen ? "open" : "closed"}
+                  data-panel-maximized={panelMaximized || undefined}
                   style={
                     {
                       "--rail-width": `${railWidth}px`,
@@ -211,9 +212,11 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       } as CSSProperties
                     }
                   >
-                    {sidebarOpen ? null : (
-                      <EdgePeekStrip peek={peek} onDragOut={onRevealSidebar} />
-                    )}
+                    <Covered by={panelMaximized}>
+                      {sidebarOpen ? null : (
+                        <EdgePeekStrip peek={peek} onDragOut={onRevealSidebar} />
+                      )}
+                    </Covered>
                     <ContentMark root={root} />
                     <ColumnFit
                       windowWidth={windowWidth}
@@ -223,27 +226,30 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                     />
                     <ListMeasureHold root={root} />
                     <FoldMark root={root} />
-                    <Columns
-                      region={region}
-                      sidebarOpen={sidebarOpen}
-                      listOpen={listOpen}
-                      sidebarWidth={sidebarWidth}
-                      listWidth={listWidth}
-                      splitPanes={splitPanes}
-                      onSidebarDragStart={onSidebarDragStart}
-                      onSidebarDragMove={onSidebarDragMove}
-                      onListDragStart={onListDragStart}
-                      onListDragMove={onListDragMove}
-                    />
+                    <Covered by={panelMaximized}>
+                      <Columns
+                        region={region}
+                        sidebarOpen={sidebarOpen}
+                        listOpen={listOpen}
+                        sidebarWidth={sidebarWidth}
+                        listWidth={listWidth}
+                        splitPanes={splitPanes}
+                        onSidebarDragStart={onSidebarDragStart}
+                        onSidebarDragMove={onSidebarDragMove}
+                        onListDragStart={onListDragStart}
+                        onListDragMove={onListDragMove}
+                      />
+                    </Covered>
                     <WorkspacePanel
-                      root={root}
                       open={panelOpen}
                       maximized={panelMaximized}
                       width={panelWidth}
                       onDragStart={onPanelDragStart}
                       onDragMove={onPanelDragMove}
                     />
-                    <OverviewLayer root={root} />
+                    <Covered by={panelMaximized}>
+                      <OverviewLayer root={root} />
+                    </Covered>
                     <ShareDialogHost />
                     <DeleteSessionHost />
                     {switcher ? (
@@ -262,6 +268,19 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
         </EscapeScopesProvider>
       </WorkspaceFrameProvider>
     </OverviewQuietProvider>
+  )
+}
+
+/**
+ * What the maximized right panel covers: inert while it does, and laid out
+ * as if the wrapper were not there (`display: contents`), so the columns and
+ * their selectors are untouched. Each region keeps its own `inert` besides.
+ */
+function Covered({ by, children }: { by: boolean; children: ReactNode }) {
+  return (
+    <div className="workspace-covered" inert={by || undefined}>
+      {children}
+    </div>
   )
 }
 

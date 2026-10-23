@@ -25,8 +25,10 @@ it, and dragging that edge far enough right folds it. Whether it is open and
 its width are remembered between launches; the panes and side columns fit
 the room left beside it.
 
-Expanding it covers the workspace, which stays laid out and inert beneath;
-Escape or Restore brings the columns back as they were. Expanded is not
+Expanding it covers the workspace, which stays laid out and inert beneath,
+and the window's keys rest but ⌥⌘B; Escape or Restore brings the columns back
+as they were. An Escape a dialog, menu or list takes first is theirs, and
+under Settings the window's Escape is Settings'. Expanded is not
 remembered. A side rail item's full view hides the panel.
 
 ```mermaid
@@ -39,6 +41,7 @@ stateDiagram-v2
     Open --> Expanded: Expand
     Expanded --> Open: Escape or Restore
     Expanded --> Closed: toggle or ⌥⌘B / remember closed
+    Expanded --> Expanded: other window keys / rest
     note right of Expanded
         The workspace under it keeps its layout and is inert.
         Expanded is local to this window, never remembered.

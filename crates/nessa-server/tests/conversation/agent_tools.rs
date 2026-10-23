@@ -1566,7 +1566,7 @@ fn a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit() {
         &id(),
         "turn",
         "completed",
-        "é".repeat(limit),
+        Some("é".repeat(limit)),
         limit,
     );
     assert!(text.len() <= limit, "{} > {limit}", text.len());
@@ -1577,7 +1577,7 @@ fn a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit() {
             &id(),
             "turn",
             "completed",
-            "reply".into(),
+            Some("reply".into()),
             limit,
         );
         assert!(text.len() <= limit, "{} > {limit}", text.len());
@@ -1599,10 +1599,20 @@ fn a_report_heading_is_the_one_the_desktop_reads() {
             &child,
             case["execution"].as_str().unwrap(),
             case["outcome"].as_str().unwrap(),
-            reply.unwrap_or_default(),
+            reply,
             ConversationLimits::default().max_input_bytes,
         );
         assert_eq!(text.lines().next(), case["header"].as_str());
+    }
+    // Every outcome a report can name is a case the desktop reads.
+    let named: Vec<&str> = cases["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .map(|case| case["outcome"].as_str().unwrap())
+        .collect();
+    for outcome in crate::conversation::application::service::report_outcomes_for_test() {
+        assert!(named.contains(&outcome), "no shared case for {outcome}");
     }
 }
 

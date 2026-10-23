@@ -322,23 +322,30 @@ function CopyCommand({ command }: { command: string }) {
   }, [said])
   if (!write) return null
   return (
-    <IconButton
-      icon={said === "copied" ? "check" : "copy"}
-      label={
-        said === "copied"
-          ? "Copied"
-          : said === "refused"
-            ? "Couldn’t Copy"
-            : "Copy Command"
-      }
-      className="workspace-approval-copy"
-      size="sm"
-      onClick={() =>
-        void write(command).then(
-          () => setSaid("copied"),
-          () => setSaid("refused"),
-        )
-      }
-    />
+    <>
+      <IconButton
+        icon={said === "copied" ? "check" : said === "refused" ? "close" : "copy"}
+        label={
+          said === "copied"
+            ? "Copied"
+            : said === "refused"
+              ? "Couldn’t Copy"
+              : "Copy Command"
+        }
+        className="workspace-approval-copy"
+        data-said={said}
+        size="sm"
+        onClick={() =>
+          void write(command).then(
+            () => setSaid("copied"),
+            () => setSaid("refused"),
+          )
+        }
+      />
+      {/* Said aloud, and a refusal in words beside the button: the icon alone is not enough. */}
+      <span className="workspace-approval-copy-said" role="status">
+        {said === "refused" ? "Couldn’t copy" : said === "copied" ? "Copied" : ""}
+      </span>
+    </>
   )
 }

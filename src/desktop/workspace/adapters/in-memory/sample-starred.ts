@@ -38,7 +38,7 @@ export const starredSamples: readonly SampleSession[] = [
         "agent",
         18,
         [
-          read("src/desktop/ui/desktop-app.tsx"),
+          read("src/desktop/workspace/ui/layouts/workspace-layout.tsx"),
           read("split-view/split-view-math.ts"),
           searched("SplitView · 6 results"),
           text(

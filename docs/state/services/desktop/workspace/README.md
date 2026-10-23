@@ -71,6 +71,7 @@ flowchart TB
 
 - [Discover subagents and experimental features](discover-subagents-and-experimental-features.md)
 - [Drag or move a session or pane](drag-or-move-a-session-or-pane.md)
+- [Open, merge, unmerge, switch, and close window tabs](open-merge-unmerge-switch-and-close-window-tabs.md)
 - [Open, resize, expand and restore the right panel](open-resize-expand-and-restore-the-right-panel.md)
 - [Fold, reveal, and resize side columns](fold-reveal-and-resize-side-columns.md)
 - [Follow focus and route keyboard actions](follow-focus-and-route-keyboard-actions.md)
