@@ -43,6 +43,21 @@ const foldedLines = 4
  * a message to send as the person, whole. While an answer is on its way the
  * buttons rest; a failed answer says why.
  */
+/**
+ * What an approval's command reads as, the one rule for every card that
+ * shows it: an agent's tool call, read whole, is read for its script (a
+ * shell tool's command, re-lined only where every quote and operator was
+ * followed), the tool it calls and its other input (`approval-gist.ts`);
+ * anything else is shown as sent.
+ */
+export function approvalGist(approval: Approval): CommandGist | undefined {
+  return approval.origin.kind === "agent" &&
+    approval.ask === "tool" &&
+    shownWhole(approval)
+    ? commandGist(approval.command)
+    : undefined
+}
+
 export const ApprovalCard = memo(function ApprovalCard({
   sessionId,
   approval,
@@ -59,10 +74,7 @@ export const ApprovalCard = memo(function ApprovalCard({
   )
   const answer = useRememberedValue(sessionId, answerLive)
   const waiting = answering(answer, approval.id)
-  const gist =
-    approval.origin.kind === "agent" && approval.ask === "tool" && shownWhole(approval)
-      ? commandGist(approval.command)
-      : undefined
+  const gist = approvalGist(approval)
   return (
     <div
       className="workspace-approval"

@@ -222,9 +222,17 @@ export function ApprovalActions({
   disabled,
   onAnswer,
   tips = {},
+  compact = false,
 }: {
   /** The review's answers. Each is a button; an answer it does not list is not drawn. */
   options: readonly ApprovalOption[]
+  /**
+   * Two buttons, whatever the review offers: its first refusal and its
+   * primary allow (once, else always), each on one line, in the same place
+   * on every card; every other answer is in the menu beside them. For a card
+   * that must keep one height, as the session list's does.
+   */
+  compact?: boolean
   disabled: boolean
   /** `at`: when the answer was made (the event's `timeStamp`, on `performance.now()`'s clock). */
   onAnswer: (option: ApprovalOption, at: number) => void
@@ -236,6 +244,78 @@ export function ApprovalActions({
   const once = options.filter((option) => option.choice === "once")
   const answer = (option: ApprovalOption) => (event: { timeStamp: number }) =>
     onAnswer(option, event.timeStamp)
+  if (compact) {
+    const refuse = denies[0]
+    const allow = once[0] ?? always[0]
+    const rest = options.filter((option) => option !== refuse && option !== allow)
+    return (
+      <div
+        className="workspace-approval-answers"
+        data-compact
+        onKeyDown={(event) => {
+          if (event.repeat) event.preventDefault()
+        }}
+      >
+        <div className="workspace-approval-actions">
+          {refuse ? (
+            <button
+              type="button"
+              className="workspace-button workspace-approval-deny"
+              data-answer={refuse.choice}
+              disabled={disabled}
+              title={refuse.label}
+              {...tips.deny}
+              onClick={answer(refuse)}
+            >
+              <span>{refuse.label}</span>
+            </button>
+          ) : null}
+          {allow ? (
+            <div className="workspace-approval-allow">
+              <button
+                type="button"
+                className="workspace-button workspace-approval-once"
+                data-answer={allow.choice}
+                data-primary
+                disabled={disabled}
+                title={allow.label}
+                {...tips[allow.choice]}
+                onClick={answer(allow)}
+              >
+                <span>{allow.label}</span>
+              </button>
+              {rest.length > 0 ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="workspace-button workspace-approval-more"
+                      data-primary
+                      aria-label="More Answers"
+                      disabled={disabled}
+                    >
+                      <DesktopIcon name="chevronDown" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {rest.map((option) => (
+                      <MenuItem
+                        key={option.id}
+                        data-answer={option.choice}
+                        onSelect={answer(option)}
+                      >
+                        {option.label}
+                      </MenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
   return (
     <div
       className="workspace-approval-answers"

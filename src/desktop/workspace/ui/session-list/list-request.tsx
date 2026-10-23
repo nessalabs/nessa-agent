@@ -29,8 +29,9 @@ import {
   ApprovalCommand,
   approvalHead,
 } from "../transcript/approval-request"
+import { approvalGist } from "../transcript/approval-card"
 import { QuestionCard } from "../transcript/question-card"
-import { Saying } from "../transcript/said"
+import { Saying, shownName } from "../transcript/said"
 import "../transcript/transcript.css"
 import "./list-request.css"
 
@@ -68,6 +69,8 @@ export const ListRequest = memo(function ListRequest({
     )
   }
   const sent = answering(answer, approval.id)
+  // The transcript card's own reading of the command (`approvalGist`).
+  const gist = approvalGist(approval)
   const answerable = shownWhole(approval) && !sent
   return (
     <div
@@ -89,11 +92,16 @@ export const ListRequest = memo(function ListRequest({
           </p>
         ) : (
           <ApprovalCommand
-            command={approval.command}
+            command={gist?.script ?? approval.command}
             name={approval.origin.kind === "app" ? approval.origin.tool : undefined}
           />
         )}
       </div>
+      {gist?.tool ? (
+        <p className="workspace-request-tool">
+          Tool <bdi>{shownName(gist.tool)}</bdi>
+        </p>
+      ) : null}
       {answer?.failure ? (
         <p className="workspace-request-failure" role="status">
           {failureCopy(answer.failure)}
@@ -102,6 +110,7 @@ export const ListRequest = memo(function ListRequest({
       <div className="workspace-request-foot">
         {more}
         <ApprovalActions
+          compact
           options={approval.options}
           disabled={!answerable}
           onAnswer={(option) =>

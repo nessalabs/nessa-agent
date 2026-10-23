@@ -125,3 +125,49 @@
 .workspace-request-card .workspace-session {
   padding-bottom: 6px;
 }
+
+.workspace-request-tool {
+  margin: -2px 0 0;
+  overflow: hidden;
+  color: var(--desktop-muted);
+  font-family: var(--nessa-font-mono);
+  font-size: var(--desktop-text-footnote);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Two answers, each one line whatever its words: a long label ends in an
+   ellipsis (its whole words in its tooltip), never a column of letters. */
+.workspace-request-foot .workspace-approval-answers[data-compact] {
+  min-width: 0;
+}
+
+.workspace-request-foot .workspace-approval-actions .workspace-button {
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 28px;
+  min-height: 28px;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.workspace-request-foot .workspace-approval-actions .workspace-button > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-request-foot .workspace-approval-actions .workspace-approval-more {
+  display: inline-flex;
+  flex: none;
+  width: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+/* A question's card keeps the same bound: a long one scrolls inside it. */
+.workspace-request[data-request="question"] {
+  max-height: 320px;
+  overflow: auto;
+}

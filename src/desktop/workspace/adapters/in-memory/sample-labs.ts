@@ -155,7 +155,7 @@ export const labsSamples: readonly SampleSession[] = [
     id: "reconnect-storm",
     channelId: "gateway",
     title: "Reconnect storm after sleep",
-    model: models.astra,
+    model: models.sonnet,
     status: "needs-you",
     updated: 12,
     started: 40,
@@ -163,10 +163,23 @@ export const labsSamples: readonly SampleSession[] = [
     now: "Waiting to restart the gateway with 200 clients to prove the jitter",
     approval: {
       id: "storm-restart",
-      command: "cargo run -p nessa-gateway -- --simulate-clients 200",
+      // As Claude asks: its shell tool and the tool's input, five answers.
+      command: `mcp__nessa__shell ${JSON.stringify({
+        command: "cargo run -p nessa-gateway -- --simulate-clients 200",
+      })}`,
       reason: "Restarts the local gateway and opens 200 connections.",
       origin: { kind: "agent" },
-      options: sampleApprovalOptions,
+      options: [
+        { id: "no", label: "No", choice: "deny" },
+        { id: "never", label: "Always deny in this project", choice: "deny" },
+        { id: "project", label: "Always allow in this project", choice: "always" },
+        { id: "yes", label: "Yes", choice: "once" },
+        {
+          id: "shell",
+          label: "Yes, and don't ask again for Shell commands",
+          choice: "always",
+        },
+      ],
       ask: "tool",
     },
     messages: exchange(

@@ -13,6 +13,7 @@ import {
 import { listAskIds, onScreen } from "../../application/workspace-state"
 import { emptyTranscript, type Approval } from "../../model/transcript"
 import { fakeSource, settle, testStore, type FakeSource } from "../../testing"
+import { approvalGist } from "../transcript/approval-card"
 import { SessionList } from "./session-list"
 
 let root: Root
@@ -92,7 +93,8 @@ it("asks a waiting row's first request from the list: who asks, the exact comman
   const answers = [...(card()?.querySelectorAll("button[data-answer]") ?? [])].map(
     (button) => button.getAttribute("data-answer"),
   )
-  expect(answers).toEqual(["deny", "always", "once"])
+  // Two answers in place; Always waits in the menu beside them.
+  expect(answers).toEqual(["deny", "once"])
   // Only the waiting group's rows carry a card.
   expect(host.querySelectorAll(".workspace-request")).toHaveLength(1)
 })
@@ -132,4 +134,94 @@ it("asks nothing from the list under the overview, or where the layout has no li
   store.dispatch(arrangementShown({ arrangement: "sidebar" }))
   expect(listAskIds(store.getState().workspace)).toEqual([])
   expect(onScreen(store.getState().workspace, "b")).toBe(false)
+})
+
+/** "b" waiting on one review, as `transcript` holds it. */
+async function waitingOn(transcript: Partial<ReturnType<typeof emptyTranscript>>) {
+  const source = fakeSource()
+  source.transcripts.set("b", { ...emptyTranscript("b"), revision: 1, ...transcript })
+  const store = testStore(source)
+  unfollow = store.dispatch(followWorkspace())
+  await store.dispatch(loadWorkspace())
+  store.dispatch(arrangementShown({ arrangement: "columns" }))
+  await act(async () =>
+    root.render(
+      <Provider store={store}>
+        <ClockProvider now={() => 1_000}>
+          <SessionList />
+        </ClockProvider>
+      </Provider>,
+    ),
+  )
+  await act(async () => settle())
+}
+
+const answersShown = () =>
+  [
+    ...(card()?.querySelectorAll<HTMLButtonElement>(
+      ".workspace-approval-actions button",
+    ) ?? []),
+  ].map((button) => button.getAttribute("aria-label") ?? button.textContent)
+
+it("reads Claude's shell review as the transcript does, and offers two answers, the rest in its menu", async () => {
+  const shell = 'echo "Hello from Nessa – approval test at $(date)"'
+  const review: Approval = {
+    ...asked("claude", `mcp__nessa__shell ${JSON.stringify({ command: shell })}`),
+    options: [
+      { id: "no", label: "No", choice: "deny" },
+      { id: "never", label: "Always deny in this project", choice: "deny" },
+      { id: "project", label: "Always allow in this project", choice: "always" },
+      { id: "yes", label: "Yes", choice: "once" },
+      {
+        id: "shell",
+        label: "Yes, and don't ask again for Shell commands",
+        choice: "always",
+      },
+    ],
+  }
+  await waitingOn({ approvals: [review] })
+  // The transcript card's own reading: the shell command, and the tool under it.
+  const command = card()?.querySelector(".workspace-approval-command")?.textContent ?? ""
+  expect(command).toContain(shell)
+  expect(command).not.toContain("mcp__nessa__shell")
+  expect(command).toContain(approvalGist(review)?.script ?? "unread")
+  expect(card()?.querySelector(".workspace-request-tool")?.textContent).toBe(
+    "Tool mcp__nessa__shell",
+  )
+  expect(answersShown()).toEqual(["No", "Yes", "More Answers"])
+})
+
+it("offers a Codex review's refusal and its one-time allow, Always in the menu", async () => {
+  await waitingOn({ approvals: [asked("codex", "cargo test")] })
+  expect(answersShown()).toEqual(["Deny", "Allow Once", "More Answers"])
+})
+
+it("asks a question from the list, held to the card's bound", async () => {
+  await waitingOn({
+    questions: [
+      {
+        executionId: "e1",
+        questionId: "place",
+        message: "Where should this land?",
+        questions: [
+          {
+            key: "where",
+            prompt: "Pick a place",
+            multiSelect: false,
+            freeText: false,
+            required: true,
+            options: Array.from({ length: 12 }, (_, at) => ({
+              value: `p${at}`,
+              label: `Place ${at}`,
+            })),
+          },
+        ],
+      },
+    ],
+  })
+  const question = host.querySelector<HTMLElement>(
+    '[aria-label="Question from Session b"]',
+  )
+  expect(question?.querySelector('[data-question="place"]')).not.toBeNull()
+  expect(question?.dataset.request).toBe("question")
 })

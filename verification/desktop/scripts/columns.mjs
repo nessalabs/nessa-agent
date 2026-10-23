@@ -65,6 +65,7 @@ import {
 const checks = [
   "channels-alone",
   "list-request",
+  "list-request-claude",
   "quiet-composer",
   "overview-narrow",
   "sidebar-motion",
@@ -105,6 +106,10 @@ Checks, per engine, layout and size:
   list-request    three columns: a waiting row in Needs you is a card with the
                   exact command, and Allow from it settles the review — the
                   row leaves Needs you, its card with it
+  list-request-claude
+                  three columns, the list at its narrowest: Claude's shell
+                  review reads as the transcript card reads it, its two answers
+                  each fit their words, and the card keeps under 260px
   channels-alone  three columns: the sidebar lists channels and no session
                   under them; the chosen channel's pinned sessions lead its
                   list under "Pinned", each listed once. Sessions in sidebar:
@@ -713,6 +718,55 @@ const body = {
       .catch(() => false)
     if (!left) failures.push("after Allow, the row is still in Needs you")
     return { failures, detail: { id, command } }
+  },
+
+  "list-request-claude": async ({ page, layout }) => {
+    if (layout !== "columns") throw new CannotRun("only three columns has a session list")
+    const failures = []
+    await page
+      .locator(".workspace-sidebar button, .workspace-sidebar [role='button']", {
+        hasText: /^gateway/,
+      })
+      .first()
+      .click()
+    // The list at its narrowest: its edge moved left until it holds.
+    const edge = page.getByRole("separator", { name: "Resize Session List" })
+    await edge.focus()
+    for (let i = 0; i < 20; i++) await page.keyboard.press("ArrowLeft")
+    const card = page.locator('[aria-label="Request from Reconnect storm after sleep"]')
+    await card.waitFor({ timeout: 10_000 }).catch(() => {})
+    if (!(await card.count()))
+      throw new CannotRun("the Claude review is not in Needs you")
+    await settled(page)
+    const seen = await card.evaluate((element) => ({
+      command: element.querySelector(".workspace-approval-command")?.textContent ?? "",
+      height: element.closest(".workspace-request-card")?.getBoundingClientRect().height,
+      listWidth: document.querySelector(".workspace-list")?.getBoundingClientRect().width,
+      squeezed: [
+        ...element.querySelectorAll(".workspace-approval-actions .workspace-button"),
+      ]
+        .filter((button) => {
+          const words = button.querySelector("span") ?? button
+          return words.scrollWidth > words.clientWidth + 1
+        })
+        .map((button) => button.textContent),
+      answers: [...element.querySelectorAll(".workspace-approval-actions button")].map(
+        (button) => button.getAttribute("aria-label") ?? button.textContent,
+      ),
+    }))
+    if (seen.squeezed.length)
+      failures.push(`answers narrower than their words: ${seen.squeezed}`)
+    if (!(seen.height < 260)) failures.push(`the card is ${seen.height}px tall`)
+    if (seen.answers.join("|") !== "No|Yes|More Answers")
+      failures.push(`the answers read ${seen.answers.join("|")}`)
+    // The transcript card's own reading of the same command.
+    await page.locator('[data-session-row="reconnect-storm"]').first().click()
+    const pane = page.locator(".workspace-approval .workspace-approval-command").first()
+    await pane.waitFor({ timeout: 10_000 })
+    const transcript = (await pane.textContent()) ?? ""
+    if (transcript.trim() !== seen.command.trim())
+      failures.push(`the card reads "${seen.command}", the transcript "${transcript}"`)
+    return { failures, detail: seen }
   },
 
   "channels-alone": async ({ page, layout }) => {
