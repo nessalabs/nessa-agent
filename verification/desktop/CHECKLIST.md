@@ -2150,3 +2150,21 @@ Revoke during a focus refresh: 1 pending revoke dispatch, disabled controls
 through its post-command reread, then enabled recovery. It does not prove
 physical server mutation or ordinary separate-click reachability of the
 qualified same-task composer counterexample.
+
+## Pending settings action owners (#1087)
+
+- [ ] **Native-hook saves retain one owner through the fresh read.** Repeated
+  inputs cannot dispatch another write while pending; focus/visibility do not
+  replace it. A replaced source starts its own read, and retired save/reread
+  continuations cannot publish or release its pending action. Same-task repeated
+  clicks and controlled provider replacement are qualified component orderings;
+  production provider replacement remains unproven.
+- [ ] **Allow admits one outstanding notification permission API request.** Its
+  button is disabled until settlement; refusal or rejection permits recovery.
+  Retired source/view completions cannot invoke replacement waiting-review
+  replay. Counts establish API dispatch and callback ownership, not duplicate
+  visible OS prompts or authorization bypass.
+
+_Check:_ `settings-action-owners.mjs` (both engines), component regressions in
+`native-hooks-rows.test.tsx` and `review-notice-rows.test.tsx`. See
+[settings action ownership](../../docs/design/settings-action-owners.md).

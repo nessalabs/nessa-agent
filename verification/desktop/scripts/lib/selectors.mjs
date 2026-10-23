@@ -998,3 +998,23 @@ export const userFlowOrdering = {
   installRequests: 'output[aria-label="Installation requests"]',
   expanded: 'output[aria-label="Expanded editor"]',
 }
+
+/** Controlled native-hook/notification permission owners, #1087 follow-up. */
+export const settingsActionOwners = {
+  page: "/verification/desktop/fixtures/settings-action-owners/index.html",
+  ready: "[data-settings-action-owners]",
+  native: 'section[aria-label="Native hook ownership"]',
+  notices: 'section[aria-label="Notification permission ownership"]',
+  claude: '[data-setting="claude-native-hooks"] [role="switch"]',
+  codex: '[data-setting="codex-native-hooks"] [role="switch"]',
+  nativeCounts: 'output[aria-label="Native request counts"]',
+  noticeCounts: 'output[aria-label="Notice request counts"]',
+  allow: 'button:has-text("Allow")',
+  acknowledgeA: "A acknowledges save",
+  rereadA: "A finishes reread",
+  replaceNative: "Replace native source",
+  refuseB: "B refuses save",
+  grantA: "A grants notification access",
+  grantB: "B grants notification access",
+  replaceNotice: "Replace notification source",
+}
