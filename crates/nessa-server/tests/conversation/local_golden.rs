@@ -32,7 +32,7 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::view::ConversationMessageStatus;
 use nessa_protocol::{agents::AgentId, conversation::domain::ConversationId};
 use nessa_sdk::application::agent_execution::sessions::{
-    CurrentLease, LeaseRecord, SessionStorage,
+    CurrentLease, LeaseRecord, MessageCommitClock, MessageCommitSleep, SessionStorage,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseCleanup, LeaseEndCause, LeaseRevision};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
@@ -46,6 +46,26 @@ use std::{
 };
 
 const CONVERSATION: &str = "0b7d3c1e-5a4f-4e2b-9c8d-7f6a5b4c3d2e";
+
+/// The wall-clock moment every event of the golden conversation arrives at.
+/// The SDK stamps each event with the wall clock, which differs run to run;
+/// the commit timing itself stays on the real runtime clock.
+const ARRIVED_AT_MS: u64 = 1_792_000_000_000;
+
+/// Runtime commit timing with a fixed wall clock, so the stamped arrival
+/// times in the records read the same every run.
+struct FixedWallClock(RuntimeMessageCommitClock);
+impl MessageCommitClock for FixedWallClock {
+    fn now(&self) -> Duration {
+        self.0.now()
+    }
+    fn sleep_until(&self, deadline: Duration) -> MessageCommitSleep {
+        self.0.sleep_until(deadline)
+    }
+    fn unix_milliseconds(&self) -> u64 {
+        ARRIVED_AT_MS
+    }
+}
 const GOLDEN: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/conversation/golden/local_conversation.txt"
@@ -157,7 +177,7 @@ async fn run_local_conversation(root: &Path) -> Evidence {
             listing: metadata.clone(),
             provider_sessions: claude_erasers(),
             deletion_budgets: DELETION_BUDGETS,
-            message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
+            message_commit_clock: Arc::new(FixedWallClock(RuntimeMessageCommitClock::new())),
             clock,
             environment: crate::conversation::infrastructure::in_process_environment().into(),
         },

@@ -804,6 +804,16 @@ mod reversible_tests {
         let original = ToolObservation::default().with_update(bare().with_input(input.clone()));
         assert_eq!(original.input(), Some(&input));
         assert!(original.payload_bytes() >= input.as_str().len());
+        // Sizing an update counts its input in place of the observed one.
+        let longer = ToolCallInput::new(r#"{"cmd":"ls -la"}"#).unwrap();
+        assert_eq!(
+            original.payload_bytes_after(&bare()),
+            original.payload_bytes()
+        );
+        assert_eq!(
+            original.payload_bytes_after(&bare().with_input(longer)),
+            original.payload_bytes() + 4
+        );
         let (kept, undo) = original.clone().with_reversible_update(bare());
         assert_eq!(kept.input(), Some(&input));
         assert_eq!(kept.restored(undo).input(), Some(&input));
