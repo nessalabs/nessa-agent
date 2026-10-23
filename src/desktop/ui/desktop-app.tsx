@@ -38,6 +38,7 @@ import { ThemeMenu } from "./theme-menu"
 import { HistoryButtons } from "./history-buttons"
 import { IconButton } from "./icon-button"
 import { WindowTitlebar } from "./window-titlebar"
+import { panelChord, PanelEmpty, PanelMaximize, PanelToggle } from "./right-panel"
 
 /** Track only the local glow position; SplitView continues to own dragging. */
 function positionEdgeGlow(event: PointerEvent<HTMLDivElement>) {
@@ -48,7 +49,6 @@ function positionEdgeGlow(event: PointerEvent<HTMLDivElement>) {
 
 /** The chords this shell names, written and matched by the window's keyboard (`model/keyboard.ts`). */
 const sidebarChord: Chord = { code: "KeyB", command: true }
-const panelChord: Chord = { code: "KeyB", command: true, alt: true }
 const settingsChord: Chord = { code: "Comma", command: true }
 
 /** Composes the shell, sidebars, and split view without product/backend state. */
@@ -115,28 +115,16 @@ export function DesktopApp({
   }, [])
 
   const leftAction = `${leftDocked ? "Hide" : "Show"} Sidebar`
-  const rightAction = `${rightShown ? "Hide" : "Show"} Panel`
-
   const maximizeButton = (
-    <IconButton
-      icon={rightMaximized ? "restore" : "maximize"}
-      label={rightMaximized ? "Restore Panel" : "Expand Panel"}
-      shortcut={rightMaximized ? "Esc" : undefined}
-      aria-pressed={rightMaximized}
-      aria-controls="right"
-      onClick={() => setRightMaximized((value) => !value)}
+    <PanelMaximize
+      maximized={rightMaximized}
+      controls="right"
+      onToggle={() => setRightMaximized((value) => !value)}
     />
   )
 
   const rightToggle = (
-    <IconButton
-      icon="panelRight"
-      label={rightAction}
-      shortcut={chordLabel(panelChord, isMac)}
-      aria-expanded={rightShown}
-      aria-controls="right"
-      onClick={toggleRight}
-    />
+    <PanelToggle shown={rightShown} controls="right" onToggle={toggleRight} />
   )
 
   return (
@@ -301,11 +289,7 @@ export function DesktopApp({
                   className="desktop-sidebar desktop-glass"
                 >
                   <SidebarContent className="items-center justify-center">
-                    <EmptyState
-                      variant="compact"
-                      className="desktop-empty-note"
-                      title="Nothing open"
-                    />
+                    <PanelEmpty />
                   </SidebarContent>
                 </Sidebar>
               </SidebarProvider>

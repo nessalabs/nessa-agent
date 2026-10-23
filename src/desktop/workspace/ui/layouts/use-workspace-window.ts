@@ -11,7 +11,16 @@ import { reducedMotion } from "../../../adapters/motion-preference"
 import { useThemePreference } from "../../../adapters/theme-preference"
 import { useEdgePeek, type EdgePeekControls } from "../../../adapters/use-edge-peek"
 import { useWindowWidth } from "../../../adapters/window-width"
-import { useSideRailPreference } from "../../../adapters/window-preferences"
+import {
+  usePanelPreference,
+  useSideRailPreference,
+} from "../../../adapters/window-preferences"
+import {
+  clampPanel,
+  PANEL_MAX_WIDTH,
+  PANEL_MIN_WIDTH,
+  panelWidth,
+} from "../../../model/right-panel"
 import { draggedEdge } from "../../../model/side-column"
 import type { DesktopThemeId } from "../../../model/theme"
 import type { DesktopStore } from "../../../store"
@@ -284,10 +293,38 @@ function useWorkspaceChrome(region: SidebarRegion) {
       rail,
     )
   const railDrawn = railOffered && railOpen && railRoom
-  // The rail stands beside the workspace, not in it: the columns fit what is left.
-  // The fit itself is `ColumnFit`, so this count does not render the window.
-  const windowWidth = fullWidth - (railDrawn ? rail : 0)
+  // The right panel, Classic's, beside the panes. Maximized, it covers the
+  // workspace until Escape or its button; a full view hides it.
+  const [panelPlace, setPanelPlace] = usePanelPreference()
+  const [panelMaximized, setPanelMaximized] = useState(false)
+  const panelOpen = panelPlace.open && shownRailItem === undefined
+  if (!panelOpen && panelMaximized) setPanelMaximized(false)
+  const panelDrawnWidth = panelWidth(panelPlace.width, fullWidth)
+  // The rail and the panel stand beside the workspace's columns, not among
+  // them: the columns fit what is left. The fit itself is `ColumnFit`, so
+  // this count does not render the window.
+  const windowWidth =
+    fullWidth - (railDrawn ? rail : 0) - (panelOpen ? panelDrawnWidth : 0)
   const toggleRail = useCallback(() => setRailOpen((open) => !open), [])
+  const panelRef = useRef(panelPlace)
+  panelRef.current = panelPlace
+  const togglePanel = useCallback(() => {
+    setPanelMaximized(false)
+    setPanelPlace({ ...panelRef.current, open: !panelRef.current.open })
+  }, [setPanelPlace])
+  const resizePanel = useCallback(
+    (width: number) => {
+      const next = clampPanel(width)
+      if (next !== panelRef.current.width)
+        setPanelPlace({ ...panelRef.current, width: next })
+    },
+    [setPanelPlace],
+  )
+  const closePanel = useCallback(
+    () => setPanelPlace({ ...panelRef.current, open: false }),
+    [setPanelPlace],
+  )
+  const toggleMaximized = useCallback(() => setPanelMaximized((value) => !value), [])
   return {
     sidebarOpen,
     listOpen,
@@ -303,6 +340,14 @@ function useWorkspaceChrome(region: SidebarRegion) {
     shownRailItem,
     setRailItem,
     toggleRail,
+    panelOpen,
+    panelMaximized,
+    panelWidth: panelDrawnWidth,
+    setPanelMaximized,
+    togglePanel,
+    resizePanel,
+    closePanel,
+    toggleMaximized,
   }
 }
 
@@ -344,6 +389,7 @@ function useWorkspaceSwitcher(
   region: SidebarRegion,
   root: RefObject<HTMLDivElement | null>,
   shownRailItem: RailItem | undefined,
+  togglePanel: () => void,
 ) {
   const dispatch = useWorkspaceDispatch()
   const [switcher, setSwitcher] = useState<SwitcherMode | null>(null)
@@ -361,6 +407,10 @@ function useWorkspaceSwitcher(
           toggleSessionList: () => {
             if (!region.sessionList) return false
             dispatch(toggleSessionList())
+          },
+          togglePanel: () => {
+            if (switcher) return false
+            togglePanel()
           },
           // A place to go, as the sidebar's entry is: asked again, it stays; Escape in it leaves.
           showOverview: () => {
@@ -450,6 +500,14 @@ export interface WorkspaceWindowModel {
   onSidebarDragMove: (delta: number) => void
   onListDragStart: () => void
   onListDragMove: (delta: number) => void
+  /** The right panel: open, covering the workspace, and its drawn width. */
+  panelOpen: boolean
+  panelMaximized: boolean
+  panelWidth: number
+  onTogglePanel: () => void
+  onTogglePanelMaximized: () => void
+  onPanelDragStart: () => void
+  onPanelDragMove: (delta: number) => void
 }
 
 export function useWorkspaceWindow({
@@ -468,7 +526,14 @@ export function useWorkspaceWindow({
   const store = useWorkspaceStore()
   const chrome = useWorkspaceChrome(region)
   const dragging = useColumnDrag(region, root, chrome.listOpen)
-  const switching = useWorkspaceSwitcher(region, root, chrome.shownRailItem)
+  const switching = useWorkspaceSwitcher(
+    region,
+    root,
+    chrome.shownRailItem,
+    chrome.togglePanel,
+  )
+  usePanelEscape(chrome.panelMaximized, chrome.setPanelMaximized)
+  const panelDrag = usePanelDrag(root, chrome.resizePanel, chrome.closePanel)
   useFocusFollowsPane(store, root)
   // The panes' drag spans the window: sessions are picked up from its lists.
   const splitPanes = useMemo(() => workspaceSplitPanes(store), [store])
@@ -482,6 +547,7 @@ export function useWorkspaceWindow({
     chrome.sidebarOpen,
     chrome.listOpen,
     chrome.railDrawn,
+    chrome.panelOpen,
   )
   // Painted with the boxes, as the shape is: another tab's layout is a cut.
   const tab = usePaintedWithPanes(selectActiveTab, paneBoxFrame)
@@ -537,6 +603,54 @@ export function useWorkspaceWindow({
     onRevealSidebar,
     onCloseSwitcher,
     onPickSwitcher: switching.onPickSwitcher,
+    panelOpen: chrome.panelOpen,
+    panelMaximized: chrome.panelMaximized,
+    panelWidth: chrome.panelWidth,
+    onTogglePanel: chrome.togglePanel,
+    onTogglePanelMaximized: chrome.toggleMaximized,
+    ...panelDrag,
     ...dragging,
   }
+}
+
+/**
+ * Escape leaves the maximized panel wherever the caret is, before anything
+ * under it answers: the panel covers them.
+ */
+function usePanelEscape(maximized: boolean, setMaximized: (value: boolean) => void) {
+  useEffect(() => {
+    if (!maximized) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return
+      event.preventDefault()
+      event.stopPropagation()
+      setMaximized(false)
+    }
+    window.addEventListener("keydown", onKeyDown, true)
+    return () => window.removeEventListener("keydown", onKeyDown, true)
+  }, [maximized, setMaximized])
+}
+
+/** The panel's edge, on its left: dragged left it widens, and far enough right it folds. */
+function usePanelDrag(
+  root: RefObject<HTMLDivElement | null>,
+  resize: (width: number) => void,
+  close: () => void,
+) {
+  const from = useRef(0)
+  const onPanelDragStart = useCallback(() => {
+    from.current = drawnWidth(root.current, ".workspace-panel")
+  }, [root])
+  const onPanelDragMove = useCallback(
+    (delta: number) => {
+      const { open, width } = draggedEdge(from.current, -delta, {
+        min: PANEL_MIN_WIDTH,
+        max: PANEL_MAX_WIDTH,
+      })
+      if (!open) close()
+      else resize(width)
+    },
+    [close, resize],
+  )
+  return { onPanelDragStart, onPanelDragMove }
 }

@@ -93,6 +93,10 @@ export const KNOBS = {
     default: 1,
     what: "times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off",
   },
+  panels: {
+    default: 1,
+    what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, maximized and left with Escape, then closed",
+  },
   linkings: {
     default: 1,
     what: "times native linking is turned on and off again from Settings, each restarting the gateway",
@@ -190,6 +194,7 @@ export function plan(knobs) {
   add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
   add(knobs.rails, () => ({ kind: "rail" }))
+  add(knobs.panels, () => ({ kind: "panel" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   add(knobs.tables, () => ({ kind: "table" }))
   add(knobs.notices, () => ({ kind: "notice" }))

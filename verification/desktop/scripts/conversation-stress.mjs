@@ -1446,6 +1446,65 @@ const steps = {
     })
   },
 
+  async panel(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      const panel = page.locator("#workspace-panel")
+      const grid = () =>
+        page.evaluate(
+          () =>
+            document.querySelector(".split-panes-grid")?.getBoundingClientRect().right ??
+            0,
+        )
+      const before = await grid()
+      await page.keyboard.press("Meta+Alt+KeyB")
+      const opened = await waitFor(
+        async () => (await panel.getAttribute("aria-hidden")) === null,
+        3000,
+      )
+      if (!opened) {
+        failures.push("⌥⌘B did not open the right panel")
+        return
+      }
+      await page.waitForTimeout(500)
+      // The panes give the panel its room; the conversation still takes a message.
+      const beside = await grid()
+      if (!(beside < before - 100))
+        failures.push(`the panes did not make room for the panel: ${before} → ${beside}`)
+      await steps.reply(run, step, failures)
+      await page.getByRole("button", { name: "Expand Panel" }).click()
+      if (
+        !(await waitFor(
+          async () => (await panel.getAttribute("data-maximized")) !== null,
+          2000,
+        ))
+      )
+        failures.push("Expand Panel did not maximize it")
+      await page.keyboard.press("Escape")
+      if (
+        !(await waitFor(
+          async () => (await panel.getAttribute("data-maximized")) === null,
+          2000,
+        ))
+      )
+        failures.push("Escape did not restore the maximized panel")
+      await page.keyboard.press("Meta+Alt+KeyB")
+      if (
+        !(await waitFor(
+          async () => (await panel.getAttribute("aria-hidden")) === "true",
+          3000,
+        ))
+      )
+        failures.push("⌥⌘B did not close the right panel")
+      await page.waitForTimeout(500)
+      const after = await grid()
+      if (Math.abs(after - before) > 1)
+        failures.push(
+          `the panes did not take the panel's room back: ${before} → ${after}`,
+        )
+    })
+  },
+
   async pool(run, step, failures) {
     // Workers dial the gateway's native listener, which is off in this run
     // until a step turns it on: a person does it in Settings, here as in

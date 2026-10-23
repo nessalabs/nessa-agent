@@ -15,6 +15,8 @@ import { IconButton } from "../../../ui/icon-button"
 import { SideRail, SideRailButton, RailView } from "../chrome/side-rail"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
 import { WindowTabs } from "../chrome/window-tabs"
+import { PANEL_ID, WorkspacePanel } from "../chrome/right-panel"
+import { PanelMaximize, PanelToggle } from "../../../ui/right-panel"
 import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
 import { SessionList } from "../session-list/session-list"
@@ -90,6 +92,13 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
     onSidebarDragMove,
     onListDragStart,
     onListDragMove,
+    panelOpen,
+    panelMaximized,
+    panelWidth,
+    onTogglePanel,
+    onTogglePanelMaximized,
+    onPanelDragStart,
+    onPanelDragMove,
   } = model
   return (
     <OverviewQuietProvider store={store} root={root}>
@@ -106,7 +115,12 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                   data-surface={browserSurface ? "browser" : "window"}
                   data-desktop-theme={theme}
                   data-sidebar={sidebarOpen ? "open" : "closed"}
-                  style={{ "--rail-width": `${railWidth}px` } as CSSProperties}
+                  style={
+                    {
+                      "--rail-width": `${railWidth}px`,
+                      "--workspace-panel-width": `${panelWidth}px`,
+                    } as CSSProperties
+                  }
                 >
                   {/* The light behind the window spans the rail too, so the
                       rail and the workspace stand on one ground. */}
@@ -149,7 +163,23 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                     {shownRailItem ? (
                       <div className="workspace-titlebar-space" data-tauri-drag-region />
                     ) : (
-                      <WindowTabs />
+                      <>
+                        <WindowTabs />
+                        <div className="workspace-titlebar-trailing">
+                          {panelOpen ? (
+                            <PanelMaximize
+                              maximized={panelMaximized}
+                              controls={PANEL_ID}
+                              onToggle={onTogglePanelMaximized}
+                            />
+                          ) : null}
+                          <PanelToggle
+                            shown={panelOpen}
+                            controls={PANEL_ID}
+                            onToggle={onTogglePanel}
+                          />
+                        </div>
+                      </>
                     )}
                   </WorkspaceTitlebar>
                   {railOffered ? (
@@ -177,6 +207,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       region.sessionList ? (listOpen ? "open" : "closed") : undefined
                     }
                     data-panes-alone={(!sidebarOpen && !listOpen) || undefined}
+                    data-panel={panelOpen ? "open" : "closed"}
                     style={
                       {
                         "--workspace-sidebar-width": `${sidebarWidth}px`,
@@ -209,6 +240,14 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       onSidebarDragMove={onSidebarDragMove}
                       onListDragStart={onListDragStart}
                       onListDragMove={onListDragMove}
+                    />
+                    <WorkspacePanel
+                      root={root}
+                      open={panelOpen}
+                      maximized={panelMaximized}
+                      width={panelWidth}
+                      onDragStart={onPanelDragStart}
+                      onDragMove={onPanelDragMove}
                     />
                     <OverviewLayer root={root} />
                     <ShareDialogHost />

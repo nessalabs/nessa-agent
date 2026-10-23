@@ -67,6 +67,8 @@ beforeEach(() => {
   })) as unknown as typeof window.matchMedia
   host = document.createElement("div")
   document.body.append(host)
+  // The right panel remembers its place between launches; each test starts closed.
+  window.localStorage.removeItem("nessa.desktop.right-panel")
 })
 
 afterEach(() => {
@@ -143,6 +145,7 @@ function outcome(store: ReturnType<typeof testStore>) {
     sidebar: state.chrome.sidebar,
     content: state.content,
     dialog: host.querySelector('[role="dialog"]')?.getAttribute("aria-label") ?? null,
+    panel: host.querySelector<HTMLElement>("[data-workspace]")?.dataset.panel,
   }
 }
 
@@ -191,6 +194,57 @@ describe("both layouts are the one shell", () => {
       expect(host.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe(
         "Open beside",
       )
+      await act(async () => root.unmount())
+    })
+})
+
+describe("the right panel is Classic's, in both layouts", () => {
+  // Wide enough that the panel's room folds no column.
+  const width = window.innerWidth
+  beforeEach(() => {
+    window.innerWidth = 2400
+  })
+  afterEach(() => {
+    window.innerWidth = width
+  })
+  for (const [name, Layout] of [
+    ["three columns", ThreeColumns],
+    ["sessions in the sidebar", SessionsInSidebar],
+  ] as const)
+    it(`opens, maximizes, leaves the maximized view with Escape and remembers its place, in ${name}`, async () => {
+      const { root } = await render(Layout)
+      const panel = () => host.querySelector<HTMLElement>("#workspace-panel") ?? host
+      const button = (label: string) =>
+        [
+          ...host.querySelectorAll<HTMLButtonElement>(
+            ".workspace-titlebar-trailing button",
+          ),
+        ].find((each) => each.getAttribute("aria-label")?.startsWith(label))
+      expect(panel().hasAttribute("inert")).toBe(true)
+      expect(button("Expand Panel")).toBeUndefined()
+      await act(async () => button("Show Panel")?.click())
+      expect(panel().hasAttribute("inert")).toBe(false)
+      expect(panel().textContent).toBe("Nothing open")
+      expect(host.querySelector('[aria-label="Resize Panel"]')).not.toBeNull()
+      // Maximized, it covers the workspace: what is under it is inert.
+      await act(async () => button("Expand Panel")?.click())
+      expect(panel().dataset.maximized).toBe("true")
+      const sidebar = host.querySelector<HTMLElement>(".workspace-sidebar") ?? host
+      expect(sidebar.hasAttribute("inert")).toBe(true)
+      await act(async () =>
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+      )
+      expect(panel().dataset.maximized).toBeUndefined()
+      expect(sidebar.hasAttribute("inert")).toBe(false)
+      expect(
+        JSON.parse(window.localStorage.getItem("nessa.desktop.right-panel") ?? "null"),
+      ).toMatchObject({
+        open: true,
+      })
+      await act(async () => press("togglePanel"))
+      expect(panel().hasAttribute("inert")).toBe(true)
       await act(async () => root.unmount())
     })
 })
@@ -267,6 +321,7 @@ describe("every key of the shared map does the same in both layouts", () => {
     search: { columns: null, sidebar: "Jump to" },
   }
   const pressAll = async (command: string, Layout: typeof ThreeColumns) => {
+    window.localStorage.removeItem("nessa.desktop.right-panel")
     const { store, root } = await render(Layout, command)
     const list = () => store.getState().workspace.chrome.sessionList.open
     const listBefore = list()

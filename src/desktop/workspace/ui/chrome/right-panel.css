@@ -1,0 +1,84 @@
+/*
+ * The right panel (`right-panel.tsx`): the sidebar's material, mirrored. Full
+ * height and up behind the titlebar, reaching the window's right edge, with a
+ * hairline on its inner edge that fades in below the titlebar, so nothing
+ * rules across the window's top row.
+ */
+.workspace-panel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: calc(var(--workspace-panel-width) + var(--desktop-gutter));
+  flex: none;
+  flex-direction: column;
+  padding: var(--desktop-titlebar-height) var(--desktop-gutter) var(--desktop-gutter) 0;
+  outline: none;
+  background:
+    linear-gradient(
+        to bottom,
+        transparent calc(var(--desktop-titlebar-height) * 0.5),
+        var(--desktop-rim) calc(var(--desktop-titlebar-height) + 40px)
+      )
+      left top / 1px 100% no-repeat,
+    radial-gradient(
+      ellipse 90% 60% at 70% 0%,
+      color-mix(in oklab, var(--desktop-light-high) 26%, transparent),
+      transparent 75%
+    ),
+    color-mix(in oklab, var(--foreground) 3.5%, var(--background));
+  overflow: hidden;
+  transition:
+    transform var(--desktop-drawer) var(--desktop-ease),
+    visibility 0s;
+}
+
+/* Closed, it leaves the row and slides out past the window's right edge on
+   the drawer's curve, as the sidebar does past its left; reduced motion
+   makes the drawer instant. */
+.workspace[data-panel="closed"] .workspace-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  transform: translateX(calc(100% + var(--desktop-gutter)));
+  visibility: hidden;
+  transition:
+    transform var(--desktop-drawer) var(--desktop-ease),
+    visibility 0s linear var(--desktop-drawer);
+}
+
+/* Maximized, it covers the workspace, the overview's layer included. */
+.workspace-panel[data-maximized] {
+  position: absolute;
+  z-index: 35;
+  inset: 0;
+  width: auto;
+  padding-left: var(--desktop-gutter);
+  background-position:
+    -1px 0,
+    0 0,
+    0 0;
+}
+
+.workspace-panel-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--desktop-gutter);
+}
+
+/* The overview covers the list and the panes, not the panel beside them. */
+.workspace[data-panel="open"] .workspace-overview-layer {
+  right: calc(var(--workspace-panel-width) + var(--desktop-gutter));
+}
+
+/* The titlebar's own end: the panel's buttons, over its top corner. */
+.workspace-titlebar-trailing {
+  pointer-events: auto;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: inherit;
+}
