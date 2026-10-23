@@ -479,6 +479,42 @@ Canonical Chromium/WebKit and feature stress/chaos remain required independently
 of private Rust recipient tests. Previously denied browser downloads and manual
 workflow operations are not retried by this composition.
 
+## Durable credential-stop observation for composition
+
+This ordering is designed after the clean original-issuance correction at
+`1c1355b537037e7416486856211b74c605804fa7`; it is not implemented by that
+checkpoint. The domain owns a closed registration lifecycle and one immutable
+stop fact, identified by the registration identity. SQL retains that fact once
+with the registration; retirement carries it only while its existing owed
+historical evidence needs it. No second source of actor/time is introduced.
+
+The three states are Active (no stop fact), ExpiryObserved (the original expiry
+reader is durable, but stopping is not acknowledged), and Stopped (the same fact
+has taken effect). Only an expired observation can enter ExpiryObserved.
+Revocation uses the original auth transition actor/time directly. Expiry readers
+are explicitly the issuing principal, a delivery identity, or restart; a known
+issuer is not replaced with a generic lifecycle label. Nothing wakes exactly at
+expires_at. The observation's time is the original cause/read time, not an
+assertion of when an external effect or database commit occurred.
+
+| Before / event | Single owner, commit and recovery | Required evidence |
+| --- | --- | --- |
+| Active; owner issue reads expired credential | Existing auth lifetime fact; store ExpiryObserved with that actual principal and read time, then acknowledge its audit before stop | No queued row; actual issuer retained; no replacement issued before stop |
+| Active; delivery reads expiry | Store that actual delivery identity before stopping, without inventing an owner | Different later owner/restart cannot replace original delivery |
+| Active; startup is first expiry reader | Store Restart before stopping | Cold restore and repeated startup preserve original fact |
+| ExpiryObserved; stop fails or response disappears | Retained owner retries the original fact; restart reads it before any replacement or delivery | Observation commit followed by failed stop, lost observation acknowledgement and recovery |
+| ExpiryObserved; another reader or later revocation arrives | First stored registration-stop fact remains; canonical auth revocation still keeps its separate original journal event | Owner/delivery/restart substitution refuses; later canonical revocation does not erase first observation |
+| Active; credential already revoked | Stop directly from canonical original auth revocation actor/time, not current observer | Different revoke caller/replay/restart preserves original cause |
+| ExpiryObserved; stop commits | Transition to Stopped while retaining exact original observation; refuse queued/retry work through existing journal owner | Domain transition/audit agree; no stale work starts |
+| Stopped; repeated stop or retirement | Preserve first fact, drain pending outcomes, then existing bounded retirement removes private URL/key/intent/cursors | Original fact remains in owed retirement recovery; no fabricated historical actor |
+| Restored lifecycle, audit or observer contradicts retained original fact | Shared typed decoder and exhaustive contextual audit correlation reject before publication or effects | Every variant, actor/time/target mutation and valid retired recovery |
+| Capacity / cleanup | At most one fact per already-bounded registration; existing bounded retirement owns temporary historical references and final cleanup | Repeated failed observations do not grow state; capacity never discards pending work |
+
+The application coordinator consumes these transitions. It does not reimplement
+lifetime, Cedar or transition decisions. Runtime composition must retain the
+admitted command through acknowledgement/cleanup when its response observer
+leaves. Full source/sender and capability E2E gates remain separate.
+
 ## Parent-adjudicated original issuance and secret-free acknowledgement
 
 At source `97d5c0991310cf7e10729e3f1cb3c2371be06460`, registration is unmounted.

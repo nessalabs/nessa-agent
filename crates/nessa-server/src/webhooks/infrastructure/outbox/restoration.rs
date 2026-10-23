@@ -66,7 +66,7 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
             let (target, stop, issued_at) = match (&live, &retired) {
                 (Some(live), None) => (
                     &live.registration.target,
-                    live.stop.as_ref(),
+                    live.lifecycle.stopped(),
                     live.issued_at_ms,
                 ),
                 (None, Some(retired)) => {
@@ -80,6 +80,22 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
             match cause {
                 audit::Cause::CredentialIssue => {
                     if *at_ms != issued_at {
+                        return Err(OutboxError::Invalid);
+                    }
+                }
+                audit::Cause::CredentialExpiryObserved => {
+                    let observed = match (&live, &retired) {
+                        (Some(live), None) => live.lifecycle.observation(),
+                        (None, Some(retired)) => Some(&retired.stop),
+                        _ => None,
+                    };
+                    if observed
+                        != Some(&audit::check_stop(
+                            &audit::Cause::CredentialExpired,
+                            initiator,
+                            *at_ms,
+                        )?)
+                    {
                         return Err(OutboxError::Invalid);
                     }
                 }
@@ -185,7 +201,7 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
                 || evidence
                     .credential_stop
                     .as_ref()
-                    .is_some_and(|stop| registration.stop.as_ref() != Some(stop))
+                    .is_some_and(|stop| registration.lifecycle.stopped() != Some(stop))
             {
                 return Err(OutboxError::Invalid);
             }

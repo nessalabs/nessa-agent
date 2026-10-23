@@ -13,3 +13,12 @@ mod delivery_tests;
 #[cfg(test)]
 #[path = "../../../tests/webhooks/domain/destination.rs"]
 mod destination_tests;
+
+pub use value_objects::{
+    ExpiryObserver, LifecycleChange, LifecycleError, RegistrationLifecycle, RegistrationPhase,
+    StopObservation, StopReason,
+};
+
+#[cfg(test)]
+#[path = "../../../tests/webhooks/domain/registration_lifecycle.rs"]
+mod registration_lifecycle_tests;

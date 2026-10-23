@@ -2,7 +2,6 @@
 use super::{MacKey, Target};
 use crate::webhooks::domain::{Delivery, Destination, Observation, Phase};
 use async_trait::async_trait;
-use nessa_auth::domain::PrincipalId;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sync::replication::domain::Scope;
 use serde::{Deserialize, Serialize};
@@ -72,22 +71,6 @@ impl QueueInitiator {
             Self::Restart => "restart".into(),
         }
     }
-}
-
-/// Revocation supplies its canonical auth transition initiator. Expiry retains
-/// the first automatic observer; cleanup must not replace that cause.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StopReason {
-    Revoked { initiator: PrincipalId },
-    Expired { observed_by: ExpiryObserver },
-}
-
-/// The automatic owner that first observed credential expiry. The enclosing
-/// registration stop fact supplies its target and retains the original time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExpiryObserver {
-    Delivery(Uuid),
-    Lifecycle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

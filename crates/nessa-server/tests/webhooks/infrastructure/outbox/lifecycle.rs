@@ -17,15 +17,15 @@ async fn lifecycle_expiry_before_a_delivery_retains_original_observer_through_lo
             .stop(
                 credential.clone(),
                 StopReason::Expired {
-                    observed_by: ExpiryObserver::Lifecycle,
+                    observed_by: ExpiryObserver::Restart,
                 },
                 100_000
             )
             .await,
         Err(OutboxError::Unavailable)
     );
-    assert_eq!(f.count("registrations"), 0);
-    assert_eq!(f.count("registration_intents"), 0);
+    assert_eq!(f.count("registrations"), 1);
+    assert_eq!(f.count("registration_intents"), 1);
     let saved = {
         let c = f.store.owner.connection.lock().unwrap();
         let mut q = c
@@ -38,10 +38,10 @@ async fn lifecycle_expiry_before_a_delivery_retains_original_observer_through_lo
         .collect::<Result<Vec<_>, _>>()
         .unwrap()
     };
-    assert_eq!(saved.len(), 2);
+    assert_eq!(saved.len(), 1);
     for (id, text) in &saved {
         let mut value: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(value["initiator"], "lifecycle");
+        assert_eq!(value["initiator"], "restart");
         value["initiator"] = json!(format!("delivery:{}", Uuid::new_v4()));
         f.store
             .owner
@@ -68,6 +68,7 @@ async fn lifecycle_expiry_before_a_delivery_retains_original_observer_through_lo
     std::fs::rename(held, &f.audit).unwrap();
     f.reopen();
     assert!(f.store.due(100_000).await.unwrap().is_empty());
+    assert_eq!(f.count("registrations"), 1);
     // A later observer cannot replace the already committed lifecycle fact,
     // even after the private registration has retired.
     f.store
@@ -80,6 +81,8 @@ async fn lifecycle_expiry_before_a_delivery_retains_original_observer_through_lo
         )
         .await
         .unwrap();
+    assert_eq!(f.count("registrations"), 0);
+    assert_eq!(f.count("registration_intents"), 0);
     let logs = std::fs::read_dir(&f.audit)
         .unwrap()
         .map(|p| {
@@ -93,12 +96,12 @@ async fn lifecycle_expiry_before_a_delivery_retains_original_observer_through_lo
         .collect::<Vec<_>>();
     assert!(!stops.is_empty());
     for value in stops {
-        assert_eq!(value["initiator"], "lifecycle");
+        assert_eq!(value["initiator"], "restart");
         assert_eq!(value["atMs"], 100_000);
     }
     assert!(logs
         .iter()
-        .any(|v| v["cause"] == "drained" && v["initiator"] == "lifecycle"));
+        .any(|v| v["cause"] == "drained" && v["initiator"] == "restart"));
 }
 
 #[tokio::test]
@@ -132,24 +135,30 @@ async fn delivery_expiry_observation_keeps_the_actual_queued_identity() {
 fn automatic_expiry_observer_decoding_is_closed_and_canonical() {
     let delivery = Uuid::new_v4();
     for (actor, expected) in [
-        ("lifecycle".to_owned(), ExpiryObserver::Lifecycle),
+        ("restart".to_owned(), ExpiryObserver::Restart),
+        (
+            "owner:owner".to_owned(),
+            ExpiryObserver::Owner(nessa_auth::domain::PrincipalId::new("owner").unwrap()),
+        ),
         (
             format!("delivery:{delivery}"),
             ExpiryObserver::Delivery(delivery),
         ),
     ] {
-        let stop = registry::Stopped::restore("credential_expired", &actor, 12_000).unwrap();
+        let stop = registry::restore_stop("credential_expired", &actor, 12_000).unwrap();
         assert_eq!(
             stop.reason(),
             &StopReason::Expired {
                 observed_by: expected
             }
         );
-        assert_eq!(stop.initiator(), actor);
-        assert_eq!(stop.cause(), "credential_expired");
+        assert_eq!(registry::stop_actor(&stop), actor);
+        assert_eq!(registry::stop_reason(&stop), "credential_expired");
     }
     for actor in [
+        "lifecycle".to_owned(),
         "Lifecycle".to_owned(),
+        "owner:".into(),
         "lifecycle ".into(),
         format!("lifecycle:{delivery}"),
         format!("reader:{delivery}"),
@@ -158,14 +167,14 @@ fn automatic_expiry_observer_decoding_is_closed_and_canonical() {
     ] {
         assert!(
             matches!(
-                registry::Stopped::restore("credential_expired", &actor, 12_000),
+                registry::restore_stop("credential_expired", &actor, 12_000),
                 Err(OutboxError::Invalid)
             ),
             "{actor}"
         );
     }
     assert!(matches!(
-        registry::Stopped::restore("credential_expired", "lifecycle", u64::MAX),
+        registry::restore_stop("credential_expired", "restart", u64::MAX),
         Err(OutboxError::Invalid)
     ));
 }
@@ -185,7 +194,7 @@ async fn first_lifecycle_stop_survives_later_observer_and_sending_recovery() {
             .stop(
                 f.registration.target.credential.clone(),
                 StopReason::Expired {
-                    observed_by: ExpiryObserver::Lifecycle,
+                    observed_by: ExpiryObserver::Restart,
                 },
                 2001,
             )
@@ -220,13 +229,234 @@ async fn first_lifecycle_stop_survives_later_observer_and_sending_recovery() {
             .iter()
             .filter(|v| v["cause"] == "credential_expired")
         {
-            assert_eq!(value["initiator"], "lifecycle");
+            assert_eq!(value["initiator"], "restart");
             if value["after"] == "stopped" {
                 assert_eq!(value["atMs"], 2001);
             }
         }
         assert!(records.iter().any(|v| v["after"] == "absent"
-            && v["initiator"] == "lifecycle"
+            && v["initiator"] == "restart"
             && v["stopAtMs"] == 2001));
+    }
+}
+
+#[tokio::test]
+async fn owner_expiry_observation_survives_failed_stop_and_later_canonical_revocation() {
+    let mut f = Registered::new();
+    let proposed = f.proposed();
+    let credential = CredentialId::new(&proposed.issue.credential_id).unwrap();
+    let _issued = f.command(&f.store).execute(proposed).await.unwrap();
+    f.clock.0.store(100_000, Ordering::SeqCst);
+    // Fail only the second transaction. The first observation must already be
+    // durable and acknowledged, with its actual owner and original read time.
+    f.store
+        .owner
+        .connection
+        .lock()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER fixture_stop_failure BEFORE UPDATE OF active ON registrations
+         WHEN NEW.active=0 BEGIN SELECT RAISE(ABORT,'fixture stop failure'); END;",
+        )
+        .unwrap();
+    assert_eq!(
+        f.store
+            .stop(
+                credential.clone(),
+                StopReason::Expired {
+                    observed_by: ExpiryObserver::Owner(PrincipalId::new("owner").unwrap()),
+                },
+                100_000
+            )
+            .await,
+        Err(OutboxError::Unavailable),
+    );
+    {
+        let c = f.store.owner.connection.lock().unwrap();
+        let saved: (i64, String, String, i64) = c
+            .query_row(
+                "SELECT active,stop_cause,stop_initiator,stop_at FROM registrations",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            saved,
+            (
+                1,
+                "credential_expired".into(),
+                "owner:owner".into(),
+                100_000
+            )
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM audit WHERE published=0", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        c.execute_batch("DROP TRIGGER fixture_stop_failure")
+            .unwrap();
+    }
+    f.reopen();
+    let canonical = f
+        .auth
+        .revoke_sync(RevokeCredentialRequest {
+            request_id: "revoke-after-expiry-observation".into(),
+            issuer_principal_id: "owner".into(),
+            credential_id: credential.as_str().into(),
+            revoked_at: 101,
+        })
+        .unwrap();
+    let InitiatorDto::Principal { id: actor } = canonical.revocation.initiator else {
+        panic!("canonical explicit owner revocation")
+    };
+    assert_eq!(canonical.revocation.at, 101);
+    f.store
+        .stop(
+            credential,
+            StopReason::Revoked {
+                initiator: PrincipalId::new(actor).unwrap(),
+            },
+            101_000,
+        )
+        .await
+        .unwrap();
+    assert_eq!(f.count("registrations"), 0);
+    assert_eq!(f.count("registration_intents"), 0);
+    let logs = std::fs::read_dir(&f.audit)
+        .unwrap()
+        .map(|entry| {
+            serde_json::from_str::<Value>(&std::fs::read_to_string(entry.unwrap().path()).unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    for cause in ["credential_expiry_observed", "credential_expired"] {
+        let records = logs
+            .iter()
+            .filter(|v| v["cause"] == cause)
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 1, "{cause}");
+        assert_eq!(records[0]["initiator"], "owner:owner");
+        assert_eq!(records[0]["atMs"], 100_000);
+    }
+    let drained = logs.iter().find(|v| v["cause"] == "drained").unwrap();
+    assert_eq!(drained["initiator"], "owner:owner");
+    assert_eq!(drained["stopAtMs"], 100_000);
+    f.reopen();
+    assert!(f.store.due(102_000).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn owed_observation_and_retired_stop_refuse_cross_record_substitutions_before_publication() {
+    for stopped in [false, true] {
+        let mut f = Registered::new();
+        let proposed = f.proposed();
+        let credential = CredentialId::new(&proposed.issue.credential_id).unwrap();
+        let _issued = f.command(&f.store).execute(proposed).await.unwrap();
+        f.clock.0.store(100_000, Ordering::SeqCst);
+        if stopped {
+            f.store
+                .observe_expiry(credential.clone(), ExpiryObserver::Restart, 100_000)
+                .await
+                .unwrap();
+        }
+        let held = f.audit.with_extension("held");
+        std::fs::rename(&f.audit, &held).unwrap();
+        let outcome = if stopped {
+            f.store
+                .stop(
+                    credential.clone(),
+                    StopReason::Expired {
+                        observed_by: ExpiryObserver::Restart,
+                    },
+                    100_000,
+                )
+                .await
+        } else {
+            f.store
+                .observe_expiry(credential.clone(), ExpiryObserver::Restart, 100_000)
+                .await
+        };
+        assert_eq!(outcome, Err(OutboxError::Unavailable));
+        let rows = {
+            let c = f.store.owner.connection.lock().unwrap();
+            let mut q = c
+                .prepare("SELECT id,record FROM audit WHERE published=0")
+                .unwrap();
+            q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert!(!rows.is_empty());
+        for (id, original) in rows {
+            let value: Value = serde_json::from_str(&original).unwrap();
+            let mut changes = vec![
+                ("initiator", json!("owner:other-reader")),
+                ("atMs", json!(100_001)),
+                ("credential", json!("other-credential")),
+                ("principal", json!("other-principal")),
+                ("organization", json!("other-organization")),
+                ("owner", json!("other-owner")),
+                ("registration", json!(Uuid::new_v4().to_string())),
+            ];
+            if value["cause"] == "credential_expiry_observed" {
+                changes.push(("after", json!("stopped")));
+            } else if value["cause"] == "credential_expired" {
+                changes.push(("before", json!("active")));
+            } else {
+                assert_eq!(value["cause"], "drained");
+                changes.push(("stopAtMs", json!(100_001)));
+            }
+            for (field, replacement) in changes {
+                let mut altered = value.clone();
+                assert!(altered.get(field).is_some(), "missing {field}: {value}");
+                assert_ne!(altered[field], replacement);
+                altered[field] = replacement;
+                f.store
+                    .owner
+                    .connection
+                    .lock()
+                    .unwrap()
+                    .execute(
+                        "UPDATE audit SET record=?1 WHERE id=?2",
+                        params![serde_json::to_string(&altered).unwrap(), id],
+                    )
+                    .unwrap();
+                assert!(
+                    matches!(f.store.due(100_000).await, Err(OutboxError::Invalid)),
+                    "{stopped}/{field}: {altered}"
+                );
+                // With the sink unavailable, contextual refusal must still win
+                // before attempting publication or acknowledging any audit row.
+                assert!(!f.audit.exists());
+                f.store
+                    .owner
+                    .connection
+                    .lock()
+                    .unwrap()
+                    .execute(
+                        "UPDATE audit SET record=?1 WHERE id=?2",
+                        params![original, id],
+                    )
+                    .unwrap();
+            }
+        }
+        std::fs::rename(held, &f.audit).unwrap();
+        f.reopen();
+        assert!(f.store.due(100_000).await.unwrap().is_empty());
+        if !stopped {
+            f.store
+                .stop(
+                    credential,
+                    StopReason::Expired {
+                        observed_by: ExpiryObserver::Restart,
+                    },
+                    101_000,
+                )
+                .await
+                .unwrap();
+        }
     }
 }

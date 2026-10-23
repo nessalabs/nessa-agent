@@ -135,7 +135,8 @@ impl RegistrationIntents for SqlOutbox {
                 .map(registry::StoredRegistration::checked)
                 .transpose()?;
             if let Some(existing) = existing {
-                return if existing.stop.is_none()
+                return if existing.lifecycle.phase()
+                    == crate::webhooks::domain::RegistrationPhase::Active
                     && same_registration(&existing.registration, &expected)
                     && existing.issued_at_ms == saved.observed_at_ms
                 {

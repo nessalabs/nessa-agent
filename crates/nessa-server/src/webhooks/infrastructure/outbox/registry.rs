@@ -6,7 +6,9 @@ use super::{integer, invalid, unavailable, uuid, SqlOutbox};
 use crate::webhooks::application::{
     DeliveryCause, ExpiryObserver, MacKey, OutboxError, Registration, StopReason, Target,
 };
-use crate::webhooks::domain::Destination;
+use crate::webhooks::domain::{
+    Destination, RegistrationLifecycle, RegistrationPhase, StopObservation,
+};
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
 use nessa_local_database::rusqlite::{
     params, Connection, OptionalExtension, Result as SqlResult, Row, Transaction,
@@ -14,31 +16,73 @@ use nessa_local_database::rusqlite::{
 use std::sync::Arc;
 
 impl SqlOutbox {
-    /// Only the credential lifecycle coordinator calls stop. It supplies the
-    /// original revocation initiator, or the first expiry observer. The same
-    /// per-registration permit used by dispatch must surround this operation.
+    /// Retain the actual first expiry reader in its own acknowledged commit.
+    /// Caller lifetime ownership and credential/grant admission are composed by
+    /// the runtime coordinator; this operation grants no delivery authority.
+    pub async fn observe_expiry(
+        &self,
+        credential: CredentialId,
+        reader: ExpiryObserver,
+        at_ms: u64,
+    ) -> Result<(), OutboxError> {
+        let clock = self.owner.clock.clone();
+        self.run(move |connection, audit| {
+            integer(at_ms)?;
+            let transaction = connection.transaction().map_err(unavailable)?;
+            let saved = by_credential(&transaction, &credential)?;
+            let Some(saved) = saved else {
+                return Ok(());
+            };
+            let (_, change) = saved.lifecycle.observe_expiry(reader, at_ms);
+            let Some(change) = change else {
+                return Ok(());
+            };
+            save_lifecycle(&transaction, &saved.registration, &change)?;
+            commit(transaction, Some(saved.registration.id), at_ms)?;
+            finish(connection, audit, clock.unix_milliseconds())
+        })
+        .await
+    }
+
+    /// Expiry acknowledges its first observation before the stop transaction.
+    /// A lost caller can leave ExpiryObserved for the retained coordinator or
+    /// restart to resume; this inner API is not itself that lifetime owner.
     pub async fn stop(
         &self,
         credential: CredentialId,
         reason: StopReason,
         at_ms: u64,
     ) -> Result<(), OutboxError> {
+        if let StopReason::Expired { observed_by } = &reason {
+            self.observe_expiry(credential.clone(), observed_by.clone(), at_ms)
+                .await?;
+        }
         let clock = self.owner.clock.clone();
-        self.run(move |connection,audit| {
-            let transaction=connection.transaction().map_err(unavailable)?;
-            let row=transaction.query_row(&format!("{SELECT} FROM registrations WHERE credential=?1"),[credential.as_str()],|r|StoredRegistration::row(r,0)).optional().map_err(unavailable)?.map(StoredRegistration::checked).transpose()?;
-            let Some(saved)=row else { return Ok(()); };
-            if saved.stop.is_some() { return Ok(()); }
-            let id=saved.registration.id;
-            let registration=id.to_string();
-            let stopped=Stopped::new(reason,at_ms)?;
-            let (cause,initiator)=(stopped.cause(),stopped.initiator());
-            transaction.execute("UPDATE registrations SET active=0,stop_cause=?1,stop_initiator=?2,stop_at=?4 WHERE id=?3",params![cause,initiator,registration,integer(at_ms)?]).map_err(unavailable)?;
-            refuse_pending(&transaction,id,None,DeliveryCause::AuthorityStopped,at_ms)?;
-            append(&transaction,Record::registration(&saved.registration,RegistrationChange::Stop(&stopped),at_ms))?;
-            commit(transaction,Some(id),at_ms)?;
-            finish(connection,audit,clock.unix_milliseconds())
-        }).await
+        self.run(move |connection, audit| {
+            integer(at_ms)?;
+            let transaction = connection.transaction().map_err(unavailable)?;
+            let Some(saved) = by_credential(&transaction, &credential)? else {
+                return Ok(());
+            };
+            let (_, change) = match reason {
+                StopReason::Revoked { initiator } => saved.lifecycle.stop_revoked(initiator, at_ms),
+                StopReason::Expired { .. } => saved.lifecycle.stop_observed().map_err(invalid)?,
+            };
+            let Some(change) = change else {
+                return Ok(());
+            };
+            save_lifecycle(&transaction, &saved.registration, &change)?;
+            refuse_pending(
+                &transaction,
+                saved.registration.id,
+                None,
+                DeliveryCause::AuthorityStopped,
+                at_ms,
+            )?;
+            commit(transaction, Some(saved.registration.id), at_ms)?;
+            finish(connection, audit, clock.unix_milliseconds())
+        })
+        .await
     }
 
     pub async fn registration(
@@ -60,6 +104,44 @@ impl SqlOutbox {
         })
         .await
     }
+}
+
+fn by_credential(
+    connection: &Connection,
+    credential: &CredentialId,
+) -> Result<Option<CheckedRegistration>, OutboxError> {
+    connection
+        .query_row(
+            &format!("{SELECT} FROM registrations WHERE credential=?1"),
+            [credential.as_str()],
+            |row| StoredRegistration::row(row, 0),
+        )
+        .optional()
+        .map_err(super::cursor::row_error)?
+        .map(StoredRegistration::checked)
+        .transpose()
+}
+
+fn save_lifecycle(
+    transaction: &Transaction<'_>,
+    registration: &Registration,
+    change: &crate::webhooks::domain::LifecycleChange,
+) -> Result<(), OutboxError> {
+    let fact = change.observation();
+    let active = match change.after() {
+        RegistrationPhase::Active => return Err(OutboxError::Invalid),
+        RegistrationPhase::ExpiryObserved => 1,
+        RegistrationPhase::Stopped => 0,
+    };
+    transaction.execute("UPDATE registrations SET active=?1,stop_cause=?2,stop_initiator=?3,stop_at=?4 WHERE id=?5", params![active, stop_reason(fact), stop_actor(fact), integer(fact.at_ms())?, registration.id.to_string()]).map_err(unavailable)?;
+    append(
+        transaction,
+        Record::registration(
+            registration,
+            RegistrationChange::Lifecycle(change),
+            fact.at_ms(),
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -97,59 +179,52 @@ pub(super) struct StoredRegistration {
 
 pub(super) struct CheckedRegistration {
     pub registration: Registration,
-    pub stop: Option<Stopped>,
+    pub lifecycle: RegistrationLifecycle,
     pub issued_at_ms: u64,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub(super) struct Stopped {
-    reason: StopReason,
-    pub at_ms: u64,
+pub(super) fn restore_stop(
+    cause: &str,
+    initiator: &str,
+    at_ms: u64,
+) -> Result<StopObservation, OutboxError> {
+    integer(at_ms)?;
+    let reason = match cause {
+        "credential_revoked" => StopReason::Revoked {
+            initiator: PrincipalId::new(initiator).map_err(invalid)?,
+        },
+        "credential_expired" => StopReason::Expired {
+            observed_by: if initiator == "restart" {
+                ExpiryObserver::Restart
+            } else if let Some(owner) = initiator.strip_prefix("owner:") {
+                ExpiryObserver::Owner(PrincipalId::new(owner).map_err(invalid)?)
+            } else {
+                ExpiryObserver::Delivery(uuid(
+                    initiator
+                        .strip_prefix("delivery:")
+                        .ok_or(OutboxError::Invalid)?,
+                )?)
+            },
+        },
+        _ => return Err(OutboxError::Invalid),
+    };
+    Ok(StopObservation::new(reason, at_ms))
 }
-impl Stopped {
-    fn new(reason: StopReason, at_ms: u64) -> Result<Self, OutboxError> {
-        integer(at_ms)?;
-        Ok(Self { reason, at_ms })
-    }
-    pub fn reason(&self) -> &StopReason {
-        &self.reason
-    }
-    pub fn restore(cause: &str, initiator: &str, at_ms: u64) -> Result<Self, OutboxError> {
-        let reason = match cause {
-            "credential_revoked" => StopReason::Revoked {
-                initiator: PrincipalId::new(initiator).map_err(invalid)?,
-            },
-            "credential_expired" => StopReason::Expired {
-                observed_by: if initiator == "lifecycle" {
-                    ExpiryObserver::Lifecycle
-                } else {
-                    ExpiryObserver::Delivery(uuid(
-                        initiator
-                            .strip_prefix("delivery:")
-                            .ok_or(OutboxError::Invalid)?,
-                    )?)
-                },
-            },
-            _ => return Err(OutboxError::Invalid),
-        };
-        Self::new(reason, at_ms)
-    }
 
-    pub fn cause(&self) -> &'static str {
-        match self.reason {
-            StopReason::Revoked { .. } => "credential_revoked",
-            StopReason::Expired { .. } => "credential_expired",
-        }
+pub(super) fn stop_reason(stop: &StopObservation) -> &'static str {
+    match stop.reason() {
+        StopReason::Revoked { .. } => "credential_revoked",
+        StopReason::Expired { .. } => "credential_expired",
     }
-
-    pub fn initiator(&self) -> String {
-        match &self.reason {
-            StopReason::Revoked { initiator } => initiator.as_str().to_owned(),
-            StopReason::Expired { observed_by } => match observed_by {
-                ExpiryObserver::Delivery(id) => format!("delivery:{id}"),
-                ExpiryObserver::Lifecycle => "lifecycle".into(),
-            },
-        }
+}
+pub(super) fn stop_actor(stop: &StopObservation) -> String {
+    match stop.reason() {
+        StopReason::Revoked { initiator } => initiator.as_str().to_owned(),
+        StopReason::Expired { observed_by } => match observed_by {
+            ExpiryObserver::Owner(owner) => format!("owner:{}", owner.as_str()),
+            ExpiryObserver::Delivery(id) => format!("delivery:{id}"),
+            ExpiryObserver::Restart => "restart".into(),
+        },
     }
 }
 impl StoredRegistration {
@@ -170,15 +245,23 @@ impl StoredRegistration {
         })
     }
     pub fn checked(self) -> Result<CheckedRegistration, OutboxError> {
-        let stop = match (self.active, self.cause, self.initiator, self.at_ms) {
-            (1, None, None, None) => None,
-            (0, Some(cause), Some(initiator), Some(at_ms)) => Some(Stopped::restore(
-                &cause,
-                &initiator,
-                u64::try_from(at_ms).map_err(invalid)?,
-            )?),
+        let (phase, observation) = match (self.active, self.cause, self.initiator, self.at_ms) {
+            (1, None, None, None) => (RegistrationPhase::Active, None),
+            (active @ (0 | 1), Some(cause), Some(initiator), Some(at_ms)) => (
+                if active == 0 {
+                    RegistrationPhase::Stopped
+                } else {
+                    RegistrationPhase::ExpiryObserved
+                },
+                Some(restore_stop(
+                    &cause,
+                    &initiator,
+                    u64::try_from(at_ms).map_err(invalid)?,
+                )?),
+            ),
             _ => return Err(OutboxError::Invalid),
         };
+        let lifecycle = RegistrationLifecycle::restore(phase, observation).map_err(invalid)?;
         Ok(CheckedRegistration {
             issued_at_ms: u64::try_from(self.issued_at).map_err(invalid)?,
             registration: Registration {
@@ -192,7 +275,7 @@ impl StoredRegistration {
                 destination: Destination::parse(&self.destination).map_err(invalid)?,
                 key: Arc::new(MacKey::new(self.key.try_into().map_err(invalid)?)),
             },
-            stop,
+            lifecycle,
         })
     }
 }

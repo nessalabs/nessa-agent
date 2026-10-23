@@ -1,6 +1,7 @@
 //! Secret-free original facts retained through an unacknowledged retirement.
-use super::{audit, integer, invalid, registry::Stopped, unavailable, uuid};
+use super::{audit, integer, invalid, registry, unavailable, uuid};
 use crate::webhooks::application::{OutboxError, Registration, Target, MAX_REGISTRATIONS};
+use crate::webhooks::domain::StopObservation;
 use nessa_local_database::rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use uuid::Uuid;
 
@@ -8,21 +9,21 @@ pub(super) struct Retirement {
     pub audit: Uuid,
     pub target: Target,
     pub issued_at_ms: u64,
-    pub stop: Stopped,
+    pub stop: StopObservation,
     pub at_ms: u64,
 }
 
 pub(super) fn retain(
     transaction: &Transaction<'_>,
     registration: &Registration,
-    stop: &Stopped,
+    stop: &StopObservation,
     at_ms: u64,
     audit: Uuid,
     issued_at_ms: u64,
 ) -> Result<(), OutboxError> {
-    let cause = stop.cause();
+    let cause = registry::stop_reason(stop);
     let target = &registration.target;
-    transaction.execute("INSERT INTO retirements(id,credential,principal,organization,owner,stop_cause,stop_initiator,stop_at,retired_at,audit,issued_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![registration.id.to_string(),target.credential.as_str(),target.principal.as_str(),target.organization.as_str(),target.owner.as_str(),cause,stop.initiator(),integer(stop.at_ms)?,integer(at_ms)?,audit.to_string(),integer(issued_at_ms)?]).map_err(unavailable)?;
+    transaction.execute("INSERT INTO retirements(id,credential,principal,organization,owner,stop_cause,stop_initiator,stop_at,retired_at,audit,issued_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![registration.id.to_string(),target.credential.as_str(),target.principal.as_str(),target.organization.as_str(),target.owner.as_str(),cause,registry::stop_actor(stop),integer(stop.at_ms())?,integer(at_ms)?,audit.to_string(),integer(issued_at_ms)?]).map_err(unavailable)?;
     Ok(())
 }
 
@@ -63,7 +64,7 @@ impl SavedRetirement {
                 &self.organization,
                 &self.owner,
             )?,
-            stop: Stopped::restore(
+            stop: registry::restore_stop(
                 &self.cause,
                 &self.initiator,
                 u64::try_from(self.at).map_err(invalid)?,

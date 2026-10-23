@@ -14,6 +14,7 @@ CREATE TABLE registrations (
     stop_initiator TEXT,
     stop_at INTEGER,
     CHECK((active=1 AND stop_cause IS NULL AND stop_initiator IS NULL AND stop_at IS NULL)
+       OR (active=1 AND stop_cause='credential_expired' AND stop_initiator IS NOT NULL AND stop_at IS NOT NULL AND stop_at>=0)
        OR (active=0 AND stop_cause IS NOT NULL AND stop_at IS NOT NULL AND stop_cause IN ('credential_revoked','credential_expired') AND stop_initiator IS NOT NULL AND stop_at>=0))
 );
 CREATE UNIQUE INDEX active_principal ON registrations(principal) WHERE active = 1;

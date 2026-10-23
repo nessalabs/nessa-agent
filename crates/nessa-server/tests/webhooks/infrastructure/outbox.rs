@@ -1245,14 +1245,14 @@ async fn restored_registration_facts_are_checked_before_effects() {
         let reopened = SqlOutbox::open(&f.path, f.audit.clone(), f.clock.clone()).unwrap();
         let connection = reopened.owner.connection.lock().unwrap();
         let saved = registry::by_id(&connection, f.registration.id).unwrap();
-        let stopped = saved.stop.unwrap();
+        let stopped = saved.lifecycle.stopped().unwrap();
         assert!(matches!(
             (cause, stopped.reason()),
             ("credential_revoked", StopReason::Revoked { .. })
                 | ("credential_expired", StopReason::Expired { .. })
         ));
-        assert_eq!(stopped.initiator(), initiator);
-        assert_eq!(stopped.at_ms, i64::MAX as u64);
+        assert_eq!(registry::stop_actor(stopped), initiator);
+        assert_eq!(stopped.at_ms(), i64::MAX as u64);
     }
 }
 
