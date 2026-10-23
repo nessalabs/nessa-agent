@@ -1,5 +1,6 @@
 //! Immutable bounded configuration intents. They carry no bearer secret and
 //! grant no authority; the application correlates the actual auth result.
+use super::codec::check_row_bytes;
 use super::journal::commit;
 use super::publication::publish;
 use super::{integer, invalid, registry, unavailable, uuid, SqlOutbox};
@@ -11,11 +12,9 @@ use crate::webhooks::domain::{Destination, MAX_DESTINATION_BYTES};
 use async_trait::async_trait;
 use nessa_auth::application::credential_admin::{CredentialIssuePurpose, IssueCredentialRequest};
 use nessa_local_database::rusqlite::{
-    params,
-    types::{Type, ValueRef},
-    Connection, Error, OptionalExtension, Row,
+    params, Connection, OptionalExtension, Result as SqlResult, Row,
 };
-use std::{error::Error as StdError, fmt, sync::Arc};
+use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
@@ -34,20 +33,10 @@ struct Saved {
     at_ms: i64,
 }
 impl Saved {
-    fn row(row: &Row<'_>) -> nessa_local_database::rusqlite::Result<Self> {
+    fn row(row: &Row<'_>) -> SqlResult<Self> {
         // Borrow SQLite values first: the byte cap precedes owned strings or
         // key allocation. Format/domain validation follows in checked().
-        let mut bytes = 0usize;
-        for column in 0..6 {
-            let length = match row.get_ref(column)? {
-                ValueRef::Text(bytes) | ValueRef::Blob(bytes) => bytes.len(),
-                _ => 0,
-            };
-            bytes = bytes.checked_add(length).ok_or_else(oversized_row)?;
-            if bytes > ROW_BYTES {
-                return Err(oversized_row());
-            }
-        }
+        check_row_bytes(row, 6, ROW_BYTES)?;
         Ok(Self {
             id: row.get(0)?,
             issuer: row.get(1)?,
@@ -82,19 +71,6 @@ impl Saved {
         Ok(intent)
     }
 }
-
-fn oversized_row() -> Error {
-    Error::FromSqlConversionFailure(0, Type::Blob, Box::new(IntentRowTooLarge))
-}
-
-#[derive(Debug)]
-struct IntentRowTooLarge;
-impl fmt::Display for IntentRowTooLarge {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("intent row exceeds byte budget")
-    }
-}
-impl StdError for IntentRowTooLarge {}
 
 fn read(connection: &Connection, id: Uuid) -> Result<Option<RegistrationIntent>, OutboxError> {
     connection

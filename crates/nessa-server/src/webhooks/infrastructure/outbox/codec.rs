@@ -1,10 +1,44 @@
 use crate::webhooks::application::{OutboxError, QueueInitiator};
 use crate::webhooks::domain::{Delivery, Outcome, Phase};
+use nessa_local_database::rusqlite::{
+    types::{Type, ValueRef},
+    Error, Result as SqlResult, Row,
+};
 use nessa_sync::replication::domain::{Id, Scope};
 use serde::{Deserialize, Serialize};
+use std::{error::Error as StdError, fmt};
 use uuid::Uuid;
 
 pub(super) const STATE_BYTES: usize = 512;
+
+/// Borrow SQLite values before allocating their owned representation.
+pub(super) fn check_row_bytes(row: &Row<'_>, columns: usize, budget: usize) -> SqlResult<()> {
+    let mut bytes = 0usize;
+    for column in 0..columns {
+        let length = match row.get_ref(column)? {
+            ValueRef::Text(bytes) | ValueRef::Blob(bytes) => bytes.len(),
+            ValueRef::Null | ValueRef::Integer(_) | ValueRef::Real(_) => 0,
+        };
+        bytes = bytes.checked_add(length).ok_or_else(oversized_row)?;
+        if bytes > budget {
+            return Err(oversized_row());
+        }
+    }
+    Ok(())
+}
+
+fn oversized_row() -> Error {
+    Error::FromSqlConversionFailure(0, Type::Text, Box::new(RowTooLarge))
+}
+
+#[derive(Debug)]
+pub(super) struct RowTooLarge;
+impl fmt::Display for RowTooLarge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("row exceeds byte budget")
+    }
+}
+impl StdError for RowTooLarge {}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

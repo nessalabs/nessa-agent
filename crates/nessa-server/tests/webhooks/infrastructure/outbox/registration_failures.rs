@@ -4,19 +4,23 @@ use nessa_auth::application::{
     dto::{CredentialMetadataDto, CredentialTransitionDto, IssuanceCauseDto, TransitionCauseDto},
     ports::{AccessAdmission, AccessError, AccessHold, PortFuture},
 };
-use nessa_auth::domain::{Membership, MembershipId};
+use nessa_auth::domain::{Membership, MembershipId, MembershipStatus};
 
 type Alter = fn(&mut CredentialMetadataDto, &mut Vec<CredentialTransitionDto>);
 struct ChangedIssue<'a> {
     auth: &'a LocalCredentialStore,
     alter: Alter,
+    rewrite: Option<fn(&mut IssueCredentialRequest)>,
 }
 impl CredentialAdmin for ChangedIssue<'_> {
     fn issue<'a>(
         &'a self,
-        request: IssueCredentialRequest,
+        mut request: IssueCredentialRequest,
     ) -> PortFuture<'a, IssueCredentialOutcome, CredentialAdminError> {
         Box::pin(async move {
+            if let Some(rewrite) = self.rewrite {
+                rewrite(&mut request);
+            }
             let mut outcome = self.auth.issue(request).await?;
             match &mut outcome {
                 IssueCredentialOutcome::Issued {
@@ -92,6 +96,7 @@ async fn contradictory_auth_reply_installs_nothing_and_preserves_original_retry(
         let changed = ChangedIssue {
             auth: &f.auth,
             alter,
+            rewrite: None,
         };
         let mut command = f.command(&f.store);
         command.credentials = &changed;
@@ -131,6 +136,7 @@ async fn contradictory_existing_receipt_does_not_discard_the_known_issued_intent
     let changed = ChangedIssue {
         auth: &f.auth,
         alter: |metadata, _| metadata.id = "invented-replay".into(),
+        rewrite: None,
     };
     let mut command = f.command(&f.store);
     command.credentials = &changed;
@@ -242,18 +248,26 @@ impl AccessAdmission for FailedHold {
         Box::pin(async move { Err(self.0) })
     }
 }
-struct ChangedMembership<'a>(&'a LocalCredentialStore);
+struct ChangedMembership<'a>(&'a LocalCredentialStore, bool);
 impl AccessAdmission for ChangedMembership<'_> {
     fn hold<'a>(&'a self, id: &'a CredentialId) -> PortFuture<'a, AccessHold> {
         Box::pin(async move {
             let mut hold = self.0.hold(id).await?;
             let current = &hold.snapshot.membership;
             hold.snapshot.membership = Membership::new(
-                MembershipId::new("different-membership").unwrap(),
+                if self.1 {
+                    current.id().clone()
+                } else {
+                    MembershipId::new("different-membership").unwrap()
+                },
                 current.principal_id().clone(),
                 current.organization_id().clone(),
                 current.role(),
-                current.status(),
+                if self.1 {
+                    MembershipStatus::Disabled
+                } else {
+                    current.status()
+                },
             );
             Ok(hold)
         })
@@ -282,18 +296,45 @@ async fn unavailable_or_substituted_current_authority_cannot_install_or_erase_in
             Ok(IssueCredentialOutcome::ExistingSecretUnavailable { .. })
         ));
     }
+    for inactive in [false, true] {
+        let f = Registered::new();
+        let changed = ChangedMembership(&f.auth, inactive);
+        let mut command = f.command(&f.store);
+        command.admission = &changed;
+        assert!(matches!(
+            command.execute(f.proposed()).await,
+            Err(failure) if failure == if inactive {RegistrationFailure::Stopped} else {RegistrationFailure::Inconsistent}
+        ));
+        assert_eq!(f.count("registrations"), 0);
+        assert_eq!(f.count("registration_intents"), 1);
+        assert!(matches!(
+            f.command(&f.store).execute(f.proposed()).await,
+            Ok(IssueCredentialOutcome::ExistingSecretUnavailable { .. })
+        ));
+    }
+}
+
+#[tokio::test]
+async fn coherent_auth_result_for_a_substituted_command_cannot_install_original_intent() {
     let f = Registered::new();
-    let changed = ChangedMembership(&f.auth);
+    let changed = ChangedIssue {
+        auth: &f.auth,
+        alter: |_, _| {},
+        rewrite: Some(|request| {
+            request.grants.push(request.grants[0].clone());
+        }),
+    };
     let mut command = f.command(&f.store);
-    command.admission = &changed;
+    command.credentials = &changed;
     assert!(matches!(
         command.execute(f.proposed()).await,
         Err(RegistrationFailure::Inconsistent)
     ));
-    assert_eq!(f.count("registrations"), 0);
     assert_eq!(f.count("registration_intents"), 1);
+    assert_eq!(f.count("registrations"), 0);
     assert!(matches!(
         f.command(&f.store).execute(f.proposed()).await,
-        Ok(IssueCredentialOutcome::ExistingSecretUnavailable { .. })
+        Err(RegistrationFailure::Auth(CredentialAdminError::Conflict))
     ));
+    assert_eq!(f.count("registration_intents"), 0);
 }

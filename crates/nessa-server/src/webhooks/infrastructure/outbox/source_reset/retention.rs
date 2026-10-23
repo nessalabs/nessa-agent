@@ -1,6 +1,6 @@
 //! Indexed reference accounting and restoration of its canonical schema.
 use super::{
-    super::{invalid, unavailable, uuid, SCHEMA},
+    super::{invalid, unavailable, uuid},
     read,
 };
 use crate::webhooks::application::{
@@ -8,40 +8,6 @@ use crate::webhooks::application::{
     SOURCE_RESET_BYTES,
 };
 use nessa_local_database::rusqlite::{Connection, OptionalExtension};
-
-#[derive(PartialEq, Eq)]
-struct SchemaEntry {
-    kind: String,
-    name: String,
-    table: String,
-    sql: Option<String>,
-}
-
-pub(in super::super) fn validate_schema(connection: &Connection) -> Result<(), OutboxError> {
-    // Compare against SQLite's own normalized representation of the ONE schema,
-    // including immutable-member/fact guards and reference accounting triggers.
-    let expected = Connection::open_in_memory().map_err(unavailable)?;
-    expected.execute_batch(SCHEMA).map_err(unavailable)?;
-    let definitions = |c: &Connection, limit: i64| -> Result<Vec<SchemaEntry>, OutboxError> {
-        let mut q=c.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name GLOB 'source_reset_*' OR name IN ('cursors','deliveries','audit') ORDER BY type,name LIMIT ?1").map_err(unavailable)?;
-        let rows = q
-            .query_map([limit], |r| {
-                Ok(SchemaEntry {
-                    kind: r.get(0)?,
-                    name: r.get(1)?,
-                    table: r.get(2)?,
-                    sql: r.get(3)?,
-                })
-            })
-            .map_err(unavailable)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(unavailable)
-    };
-    let expected = definitions(&expected, -1)?;
-    if definitions(connection, expected.len() as i64 + 1)? != expected {
-        return Err(OutboxError::Invalid);
-    }
-    Ok(())
-}
 
 pub(in super::super) fn check_capacity(
     connection: &Connection,

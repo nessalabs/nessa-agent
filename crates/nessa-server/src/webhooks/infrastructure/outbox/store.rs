@@ -63,7 +63,7 @@ impl SqlOutbox {
                 | nessa_local_database::OpenError::Version { .. } => OutboxError::Invalid,
                 _ => OutboxError::Unavailable,
             })?;
-        source_reset::validate_schema(&connection)?;
+        super::schema::validate(&connection)?;
         super::intents::validate(&connection)?;
         source_reset::validate_all(&connection)?;
         stored::validate(&connection)?;

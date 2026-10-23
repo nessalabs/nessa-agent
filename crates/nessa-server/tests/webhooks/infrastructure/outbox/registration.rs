@@ -158,7 +158,9 @@ mod failure_tests;
 #[tokio::test]
 async fn registration_commits_real_auth_and_replays_original_config_after_restart() {
     let mut f = Registered::new();
-    let proposal = f.proposed();
+    let mut proposal = f.proposed();
+    proposal.issue.purpose = CredentialIssuePurpose::Product;
+    proposal.issue.issued_at = 999;
     let id = proposal.id;
     let credential = proposal.issue.credential_id.clone();
     let IssueCredentialOutcome::Issued {
@@ -179,6 +181,18 @@ async fn registration_commits_real_auth_and_replays_original_config_after_restar
         .unwrap();
     assert_eq!(saved.id, id);
     assert_eq!(saved.key.expose_bytes(), &[29; 32]);
+    assert!(f
+        .store
+        .owner
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE registration_intents SET request='substituted-request'",
+            []
+        )
+        .is_err());
+    assert_eq!(f.store.discard(id).await, Err(OutboxError::Conflict));
     let logs = std::fs::read_dir(&f.audit)
         .unwrap()
         .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
@@ -526,4 +540,30 @@ async fn registration_retirement_removes_private_intent_even_when_audit_ack_is_l
         f.command(&f.store).execute(next).await,
         Ok(IssueCredentialOutcome::Issued { .. })
     ));
+}
+
+#[tokio::test]
+async fn installation_requires_the_retained_original_intent_before_any_effect() {
+    let f = Registered::new();
+    let original = f.store.reserve(f.proposed()).await.unwrap();
+    for field in ["key", "principal", "observation"] {
+        let mut changed = original.clone();
+        match field {
+            "key" => changed.config.key = Arc::new(MacKey::new([31; 32])),
+            "principal" => changed.issue.principal.id = "different-hook".into(),
+            "observation" => changed.observed_at_ms += 1,
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            RegistrationIntents::install(&f.store, changed).await,
+            Err(OutboxError::Conflict),
+            "{field}"
+        );
+        assert_eq!(f.count("registrations"), 0);
+        assert_eq!(f.count("registration_intents"), 1);
+    }
+    RegistrationIntents::install(&f.store, original)
+        .await
+        .unwrap();
+    assert_eq!(f.count("registrations"), 1);
 }

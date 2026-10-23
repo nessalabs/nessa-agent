@@ -8,10 +8,13 @@ use nessa_auth::application::{
         CredentialAdmin, CredentialAdminError, CredentialIssuePurpose, IssueCredentialOutcome,
         IssueCredentialRequest, ListCredentialsRequest,
     },
-    dto::{CredentialMetadataDto, InitiatorDto, IssuanceCauseDto, TransitionCauseDto},
+    dto::CredentialMetadataDto,
     ports::{AccessAdmission, AccessError, Clock},
 };
-use nessa_auth::domain::{Credential, CredentialId, Membership, OrganizationId, PrincipalId};
+use nessa_auth::domain::{
+    Credential, CredentialId, CredentialLifecycle, CredentialTransition, Initiator, IssuanceCause,
+    Membership, OrganizationId, PrincipalId, TransitionCause,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -157,23 +160,27 @@ impl RegisterWebhook<'_> {
                 return Err(RegistrationFailure::Auth(CredentialAdminError::Conflict));
             }
         }
+        let expected = CredentialTransition::new(
+            CredentialId::new(&intent.issue.credential_id)
+                .map_err(|_| RegistrationFailure::Inconsistent)?,
+            None,
+            CredentialLifecycle {
+                issued_at: intent.issue.issued_at,
+                expires_at: intent.issue.expires_at,
+                revoked_at: None,
+            },
+            TransitionCause::Issued(IssuanceCause::AdminIssue),
+            Initiator::Principal(
+                PrincipalId::new(&intent.issue.issuer_principal_id)
+                    .map_err(|_| RegistrationFailure::Inconsistent)?,
+            ),
+            intent.issue.issued_at,
+        )
+        .map_err(|_| RegistrationFailure::Inconsistent)?;
         if !matches_request(&intent.issue, metadata)
             || transitions.len() != 1
-            || transitions[0].credential_id != intent.issue.credential_id
             || transitions[0].correlation.as_deref() != Some(&intent.issue.request_id)
-            || transitions[0].initiator
-                != (InitiatorDto::Principal {
-                    id: intent.issue.issuer_principal_id.clone(),
-                })
-            || transitions[0].cause
-                != (TransitionCauseDto::Issued {
-                    cause: IssuanceCauseDto::AdminIssue,
-                })
-            || transitions[0].before.is_some()
-            || transitions[0].at != intent.issue.issued_at
-            || transitions[0].after.issued_at != metadata.issued_at
-            || transitions[0].after.expires_at != metadata.expires_at
-            || transitions[0].after.revoked_at.is_some()
+            || CredentialTransition::try_from(transitions[0].clone()).as_ref() != Ok(&expected)
         {
             return Err(RegistrationFailure::Inconsistent);
         }
