@@ -1,6 +1,6 @@
 # Canonical credential-stop correction
 
-Source: `c2bbb2705fe03ec77efc727460893cbadd264639`, based on published
+Current source: `d742cf55ef740716a7a8dfebe5eaea427819138c`, based on published
 `c7fe656af15346a21c293eb9a5bb5d5cf27c54b0`. This is the inner stop adapter and
 use case, not runtime mounting or completed issue #896.
 
@@ -11,7 +11,11 @@ observation milliseconds remain separate from command/effective seconds. The
 actual-source use case keeps the existing snapshot hold through its storage call.
 It supplies no delivery authority.
 
-## Author checks
+## Author checks at preceding source c2
+
+These checks establish the preceding implementation, not the final M1 repair.
+
+
 
 - Full actual Auth suite: 214 unit and 68 integration tests passed on Linux,
   Rust 1.99.1, `umask 022`. Ordinary credential behavior remains in that suite.
@@ -36,9 +40,33 @@ check. The actual seven-package run found an oversized audit enum and a test loc
 scope. The optional delivery stop is now boxed without changing serialized bytes;
 the test guard now has a lexical scope. Neither lint was suppressed.
 
+## Independent review and retirement identity correction
+
+[Round ONE](review-1/report.md) reviewed frozen `0aa1a479ad6a81ad088fb5b368b9c013d3812ab7`
+and required changes: Major M1, test import Nit N1, and composition wording Nit N2.
+The report is preserved unchanged. M1 exposed an inherited restoration read that
+cloned a malformed retirement ID before checking its UUID. The selected correction
+includes the ID in the single borrowed-budgeted `SavedRetirement` projection used
+by restoration, lookup and credential selection; restoration no longer has a
+separate unbudgeted identity read or rereads the same retirement. Limits, indexed
+`LIMIT 2`, original fact semantics and acknowledgement ordering are unchanged.
+
+The desired allocation probe [fails before](review-1/outer-id-before.txt): a
+malformed 1 MiB identity caused a 1,048,576-byte Rust allocation before `Invalid`.
+Against the correction it [passes](review-1/outer-id-after.txt), with largest
+allocation 196 bytes and the same typed refusal. This measures Rust allocations
+around the validator, not SQLite page/storage allocations. The committed
+`retirement_identity_is_bounded_in_every_shared_row_read` test checks borrowed
+refusal and a valid adjacent identity; the maximum stop-size control also decodes
+a valid complete retirement. Omitting the ID from that budget [fails the
+regression](review-1/outer-id-mutation.txt). Private source was restored afterward.
+N1 groups the new test imports at module scope; N2 states that future composition
+**must** retain the inner observer, rather than claiming a supervisor exists.
+Fresh round TWO must review these dispositions and the complete correction.
+
 ## Remaining gates
 
-Fresh independent exact-head review and publication are pending. Windows, macOS, MSRV, exact-head CI, canonical scripted Chromium/WebKit,
+Fresh round TWO exact-head review and publication are pending. Windows, macOS, MSRV, exact-head CI, canonical scripted Chromium/WebKit,
 default/raised stress and chaos, and the unfinished runtime/recipient E2E are not
 qualified by these Linux checks. The prior Windows enrollment assertion and
 cancelled jobs remain distinct evidence; there is no demonstrated Windows fix.

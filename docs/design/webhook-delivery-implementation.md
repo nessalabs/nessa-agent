@@ -730,3 +730,13 @@ and millisecond read time. Repeated stops preserve the original retained value.
 The retained physical-operation owner performs this data-correlation preflight
 before its existing owed-publication step. It is not an authorization decision;
 Cedar/current credential/grant admission remain required at the runtime boundary.
+
+
+Retirement restoration, direct lookup and indexed credential selection now consume
+one shared bounded row projection including the registration ID. Borrowed byte
+validation precedes every owned field; the existing canonical UUID decoder remains
+responsible for identity shape. This removes the separate outer ID allocation and
+second read without changing retention bounds, audit correlation or retirement
+semantics. The malformed 1 MiB ID allocation probe, maximum valid stop-size control,
+indexed-limit control and ID-budget omission mutation are retained in the
+[general-stop review evidence](../reviews/evidence/webhook-runtime/general-stop/README.md).

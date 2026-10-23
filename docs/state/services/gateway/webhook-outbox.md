@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "c2bbb2705fe03ec77efc727460893cbadd264639"
+sourceRevision: "d742cf55ef740716a7a8dfebe5eaea427819138c"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
@@ -279,7 +279,12 @@ reset facts of at most 16 KiB each (48 MiB of fact text), plus one capture snaps
 of at most 512 bytes per retained delivery. Cursor and reset creation refuse
 Capacity before a partial write. Fact and member reads apply SQL byte bounds
 before materializing text. At most 64 secret-free retirements can await audit
-cleanup. Startup checks these counts before collecting bulk
+cleanup. Retirement restoration, identity lookup and indexed credential selection
+share one borrowed-budgeted row projection including its registration ID. Malformed
+oversized IDs reject before an owned identity is allocated; there is no separate
+outer ID read. The [round ONE finding and correction evidence](../../../reviews/evidence/webhook-runtime/general-stop/README.md#independent-review-and-retirement-identity-correction)
+preserve the failing-before allocation probe and valid nearby controls. Startup
+checks these counts before collecting bulk
 work; bounded scans take at most the owner limit plus one sentinel. Existing
 schema bounds include a 128-KiB body and 16-KiB audit record. Terminal SQL
 projections may be removed only after audit publication; immutable audit files
