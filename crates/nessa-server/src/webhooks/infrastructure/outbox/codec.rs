@@ -1,8 +1,8 @@
-use super::uuid;
 use crate::webhooks::application::{OutboxError, QueueInitiator};
 use crate::webhooks::domain::{Delivery, Outcome, Phase};
 use nessa_sync::replication::domain::{Id, Scope};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 pub(super) const STATE_BYTES: usize = 512;
 
@@ -141,4 +141,21 @@ pub(super) fn same_source(left: &Scope, right: &Scope) -> bool {
         && left.stream() == right.stream()
         && left.incarnation() == right.incarnation()
         && left.schema() == right.schema()
+}
+
+pub(super) fn integer(value: u64) -> Result<i64, OutboxError> {
+    i64::try_from(value).map_err(invalid)
+}
+pub(super) fn uuid(value: &str) -> Result<Uuid, OutboxError> {
+    let parsed = Uuid::parse_str(value).map_err(invalid)?;
+    if parsed.to_string() != value {
+        return Err(OutboxError::Invalid);
+    }
+    Ok(parsed)
+}
+pub(super) fn unavailable(_: impl Sized) -> OutboxError {
+    OutboxError::Unavailable
+}
+pub(super) fn invalid(_: impl Sized) -> OutboxError {
+    OutboxError::Invalid
 }

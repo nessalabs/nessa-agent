@@ -1640,7 +1640,8 @@ effect holds, principal grant revision holds, checked conversation metadata and
 the existing conversation Cedar evaluator. Credential mutation fences live in
 the auth registry; principal/resource fences remain in the grant store.
 `application/outbox.rs` publishes the persistence port and limits.
-`infrastructure/outbox` owns the private database: `stored` validates restored
+`infrastructure/outbox` owns the private database: `store` owns the lifetime lock
+and bounded physical operations; `schema` publishes its one SQL schema; `stored` validates restored
 identity and scope; `cursor` decodes complete cursor values for startup and live
 reads; `audit` owns closed typed historical records and validates transitions
 through the domain owner; `codec` owns the current serialized values; `capacity` owns
