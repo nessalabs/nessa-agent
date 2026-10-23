@@ -66,6 +66,12 @@ preserves that record JSON; it does not decode or reconstruct the payload. The
 `{text:...}` signing golden is a synthetic framing fixture, not a declaration of
 the record schema. A separate regression constructs the actual owner DTO.
 
+Isolated HTTPS tests generate an in-memory test CA and an eight-day server leaf
+with server-auth EKU and a recipient.test SAN. They retain the production
+platform verifier; untrusted-root and wrong-hostname controls must fail with a
+certificate error before any HTTP bytes. This replaces a fixed 100-year leaf
+that macOS rejected, without changing production trust or destination policy.
+
 Destinations are HTTPS DNS names on port 443, bounded to 2048 bytes, with no
 userinfo, query, fragment or control bytes. This deliberately permits a subset
 of HTTPS URLs. Endpoint paths can contain secrets and diagnostic output hides

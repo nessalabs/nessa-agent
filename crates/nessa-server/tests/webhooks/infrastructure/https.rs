@@ -2,30 +2,42 @@ use super::*;
 use crate::webhooks::application::observation;
 use crate::webhooks::domain::{Delivery, Observation, Phase};
 use crate::webhooks::infrastructure::record_message;
-use std::io::{Read, Write};
+use std::error::Error;
+use std::io::{Error as IoError, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use rustls::{ServerConfig, ServerConnection, StreamOwned};
+use rustls::{Error as TlsError, ServerConnection, StreamOwned};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-const CERT: &[u8] = include_bytes!("fixtures/recipient.der");
-const KEY: &[u8] = include_bytes!("fixtures/recipient-key.der");
+#[path = "fixtures/tls.rs"]
+mod tls;
+use tls::RecipientTls;
 
 struct Recipient {
     address: SocketAddr,
     request: mpsc::Receiver<Vec<u8>>,
     release: std::sync::mpsc::Sender<()>,
     task: thread::JoinHandle<()>,
+    root: Vec<u8>,
 }
 
 impl Recipient {
     fn start(response: Vec<u8>, hold_response: bool) -> Self {
+        Self::start_with_rejection(response, hold_response, false)
+    }
+
+    fn start_with_rejection(
+        response: Vec<u8>,
+        hold_response: bool,
+        expect_rejection: bool,
+    ) -> Self {
         install_tls_backend();
+        let tls = RecipientTls::generate();
+        let root = tls.root.to_vec();
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = listener.local_addr().unwrap();
         let (tx, rx) = mpsc::channel(1);
@@ -40,19 +52,19 @@ impl Recipient {
             stream
                 .set_write_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
-            let config = ServerConfig::builder()
-                .with_no_client_auth()
-                .with_single_cert(
-                    vec![CertificateDer::from(CERT.to_vec())],
-                    PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(KEY.to_vec())),
-                )
-                .unwrap();
             let mut stream =
-                StreamOwned::new(ServerConnection::new(Arc::new(config)).unwrap(), stream);
+                StreamOwned::new(ServerConnection::new(Arc::new(tls.config)).unwrap(), stream);
             let mut bytes = Vec::new();
             loop {
                 let mut buf = [0; 1024];
-                let len = stream.read(&mut buf).unwrap();
+                let len = match stream.read(&mut buf) {
+                    Err(_) if expect_rejection => return,
+                    result => result.unwrap(),
+                };
+                assert!(
+                    !expect_rejection,
+                    "a rejected TLS peer must receive no HTTP bytes"
+                );
                 assert!(len > 0, "request ended early");
                 bytes.extend_from_slice(&buf[..len]);
                 assert!(bytes.len() <= crate::webhooks::application::MAX_BODY_BYTES + 8192);
@@ -83,12 +95,13 @@ impl Recipient {
             request: rx,
             release,
             task,
+            root,
         }
     }
 
     fn client(&self) -> reqwest::Client {
         client_builder("recipient.test", &[self.address])
-            .add_root_certificate(reqwest::Certificate::from_der(CERT).unwrap())
+            .add_root_certificate(reqwest::Certificate::from_der(&self.root).unwrap())
             .build()
             .unwrap()
     }
@@ -146,6 +159,55 @@ async fn isolated_tls_recipient_verifies_exact_signed_bytes() {
     assert!(headers.contains("nessa-webhook-signature: v1=3ba781a84e593504463f3df9cba8d39cb6993768321265a4048b710e60b5ff04\r\n"));
     assert_eq!(&request[split + 4..], message.body());
     recipient.finish();
+}
+
+#[tokio::test]
+async fn isolated_tls_recipient_rejects_untrusted_ca_and_wrong_hostname() {
+    for (host, trust_root) in [("recipient.test", false), ("wrong.test", true)] {
+        let mut recipient = Recipient::start_with_rejection(Vec::new(), false, true);
+        let builder = client_builder(host, &[recipient.address]);
+        let builder = if trust_root {
+            builder.add_root_certificate(reqwest::Certificate::from_der(&recipient.root).unwrap())
+        } else {
+            builder
+        };
+        let client = builder.build().unwrap();
+        let mut url = recipient.url();
+        url.set_host(Some(host)).unwrap();
+        let error = client
+            .post(url)
+            .body("test-only body")
+            .send()
+            .await
+            .unwrap_err();
+        let mut cause: Option<&(dyn Error + 'static)> = Some(&error);
+        let mut rejected_certificate = false;
+        while let Some(error) = cause {
+            if matches!(
+                error.downcast_ref::<TlsError>(),
+                Some(TlsError::InvalidCertificate(_))
+            ) {
+                rejected_certificate = true;
+            }
+            // io::Error::source skips its contained error and asks that
+            // error for its source. Inspect get_ref to retain rustls's
+            // concrete certificate error rather than accepting a TCP error.
+            cause = error
+                .downcast_ref::<IoError>()
+                .and_then(IoError::get_ref)
+                .map(|inner| inner as &(dyn Error + 'static))
+                .or_else(|| error.source());
+        }
+        assert!(
+            rejected_certificate,
+            "the failure must be certificate verification: {error}"
+        );
+        assert!(
+            recipient.request.recv().await.is_none(),
+            "TLS rejection precedes HTTP bytes"
+        );
+        recipient.finish();
+    }
 }
 
 #[tokio::test]
@@ -268,7 +330,7 @@ async fn a_hung_response_is_bounded() {
         true,
     );
     let client = client_builder("recipient.test", &[recipient.address])
-        .add_root_certificate(reqwest::Certificate::from_der(CERT).unwrap())
+        .add_root_certificate(reqwest::Certificate::from_der(&recipient.root).unwrap())
         .timeout(Duration::from_millis(150))
         .build()
         .unwrap();
