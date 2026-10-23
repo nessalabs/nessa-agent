@@ -1,0 +1,180 @@
+{
+  "sourceRevision": "efa4020c75347c42c3896f2d77363498aebb0eb6",
+  "files": [
+    {
+      "path": "crates/nessa-server/src/webhooks/mod.rs",
+      "sha256": "522dcc06279fba39f12f8a2d06a33e5d11dd8339cbb1bec449f9e0aa4981d69b",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/mod.rs",
+      "sha256": "d314531c70798f86bc058dcfcf6a8b97db39c5f23a34c40eb383fca47dc1a48a",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/message.rs",
+      "sha256": "c15595db01a97bafe6a601d804edae8b6867d6740fb71dab27c5f1c4554d8bd3",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/signature.rs",
+      "sha256": "b129ace428a57b8381208946540603d2c4e7696c442938551ee4a55fa9985fd4",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/https.rs",
+      "sha256": "3646928e76080158b16825b1053715a3fb7b36406d4e24003c663123eb7257cf",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/domain/mod.rs",
+      "sha256": "84e94eb8ef83cab4d7e6e6c6017cd111d45f614596ad4a6b5b5ad9bf2b6f1089",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/application/mod.rs",
+      "sha256": "70b0a132a0afe23eac831de7589aae1c379514026a887577ff1e6513495a159f",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/application/message.rs",
+      "sha256": "f1b80672dba961b37f68933cb0b8399d50c9354629a494c72494e65f3adc57dd",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/application/ports.rs",
+      "sha256": "d28eb5ecf8efb4aa5ddcc491259f4e18e3a8af953604ba873a54a3ef958be100",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/application/admission.rs",
+      "sha256": "7c066cd52995f04b4491c949632447accc9c0a0a4630ffe5e48b2d5fce05aa02",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/application/registration.rs",
+      "sha256": "8c7cdacc74df624f7a6ea4283bb7dceea9cf8a77484f33be9bfce8887aca41c0",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/application/outbox.rs",
+      "sha256": "d01736c3db1cac3046e38a4b0fa45fb5de508eac8606c82c4985b1ac06149fe1",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/restoration.rs",
+      "sha256": "414539bc2d69209ae414ae483c1309b26a6893763b3cc3e51205882f7d3f24fa",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/cursor.rs",
+      "sha256": "14ee232d9c4705376c17bf7e1d7d5071ebfb86c7e9937569d351dd644aa02292",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/mod.rs",
+      "sha256": "5ae3ee1d54c91df606edfa2b99502c16b1c98e222145d87755d4e408c61a6176",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/intents.rs",
+      "sha256": "fbaad464e1350c0f2e0117f5b0aa385ab9853172443e9e23663a51d85144a258",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/registry.rs",
+      "sha256": "88db67037e489e392cd391728b30bc3458f1863693cb82d80ecdd5ded6022672",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/publication.rs",
+      "sha256": "c18324f9837e0b13d7a57525965c165e0b7d2a06b1e913e31d0ac2c0dca2d536",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/journal.rs",
+      "sha256": "416e63b12c9e22047b130ab9e293af746e50454edd1e94bad52aef88fb82c5ed",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/codec.rs",
+      "sha256": "f58dec0893ec2a93a7ba5b16a620225e6a73a1e0a48773fc63858a49f6e649f8",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/schema.rs",
+      "sha256": "bea472e6dfa04d43d1ef434c4f5c5aeb82356d01ea242b9faf1faac7c8dae87e",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/retirement.rs",
+      "sha256": "6fc80f3654da0dced213d8463f3600d0a9f336149e0a416c504d79bb9bf23cc5",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/stored.rs",
+      "sha256": "46f64bfc2730c428e7628ec5bdf8f65265733fcfbcd6d806b16af0072b958054",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/audit.rs",
+      "sha256": "d383e591f7352c2dd3b958df8e0ab1fcc9bc4efb11344c00616b3cef9e7ec28e",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/capacity.rs",
+      "sha256": "6c6ef39949e49ae7542b51c1b3c5aa9c5a88c9251ad6e429e519d06d12a71714",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/queue.rs",
+      "sha256": "2b274137a26efc55a4248c3e7d02644558c1ad0341196de344e87c02cc69aac1",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/store.rs",
+      "sha256": "8b9af7af07e241fa28f3a9c4b0e7ecab3fc9e7d2fc472e3709b5f7f6e77d7dc3",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/mod.rs",
+      "sha256": "20a5565564e599dc03184c7a2822e8d2aa81b97b00f08664f79b11e403ba3b74",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/retention.rs",
+      "sha256": "7f6c34397d2034653a07a1b40ea5af570112522c3bae18a11a26f8028b6e1aea",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/fact.rs",
+      "sha256": "34f2bbec43387c9e3198f236c0fa9db7f6a5cec18d1f0c02411301b552a5b2e9",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/store.rs",
+      "sha256": "f340ec4f5329390195e4d01a37e3b42aa32fb66ac367a5b734987deb69ea4798",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/domain/value_objects/destination.rs",
+      "sha256": "224b9f67c41e717441dddfb19d8c3037c6fcba0ada7330b2022edb6380a841a9",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/domain/value_objects/mod.rs",
+      "sha256": "afcdcaeb0a0d2e6a03cfd139a3575af3289a87515219ba6c88570021182f9ca5",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/domain/value_objects/delivery.rs",
+      "sha256": "70855df31fc5264871346d8275bc112e067dda8f976ff99aa217904d16464548",
+      "privateRestoredByteIdentical": true
+    },
+    {
+      "path": "crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs",
+      "sha256": "556b147588f1630d7e38aa279df5fb20e94bd2a7c546f7831abfbfa8352aeef2",
+      "privateRestoredByteIdentical": true
+    }
+  ]
+}

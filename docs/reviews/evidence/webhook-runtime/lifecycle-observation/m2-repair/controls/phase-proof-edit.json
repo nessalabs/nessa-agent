@@ -1,0 +1,6 @@
+{
+  "before": "!matches!(&live, Some(live) if live.lifecycle.phase() == RegistrationPhase::Active)",
+  "after": "false",
+  "originalSHA256": "414539bc2d69209ae414ae483c1309b26a6893763b3cc3e51205882f7d3f24fa",
+  "mutatedSHA256": "f4f5686080fbcfe3aabe0aac683f2d8f81c9e4fb364b39392df4150de5386005"
+}

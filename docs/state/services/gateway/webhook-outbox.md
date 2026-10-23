@@ -4,12 +4,15 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "f75b954e6f324a94150cd63dd95f1cd89e1ea646"
+sourceRevision: "efa4020c75347c42c3896f2d77363498aebb0eb6"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
   - crates/nessa-server/tests/webhooks/domain/registration_lifecycle.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/lifecycle_context.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/issuance_context.rs
+  - crates/nessa-auth/src/application/ports.rs
+  - crates/nessa-auth/src/application/revocation.rs
   - crates/nessa-server/src/webhooks/application/outbox.rs
   - crates/nessa-server/src/webhooks/application/registration.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/intents.rs
@@ -310,9 +313,35 @@ stateDiagram-v2
     Stopped --> Retired: Outcomes drained / remove private configuration and retain owed audit facts
 ```
 
-The current revocation input covers a known principal. Offline and supersession provenance still require the existing auth journal to expose its original revocation fact under the same authority hold; the coordinator must not invent an actor. This remains pending composition.
+The current outbox revocation input covers a known principal. Auth now exposes its actual original revocation fact under the existing held snapshot, including offline and supersession provenance. The general outbox/runtime mapping remains pending; the coordinator must not invent an actor. The combined test below exercises actual explicit owner revocation without claiming that general mapping is composed.
 
-The immutable registration lifecycle value owns legal replacements and its decoder checks local phase/fact combinations. However, [fresh independent review M1](../../../reviews/evidence/webhook-runtime/lifecycle-observation/review-1/report.md) found missing contextual phase/acknowledgement/work relationships: a substituted Stopped phase can publish an owed observation or silently clean genuine Queued work, and a retired fact can accept a reintroduced owed observation. The [f75 correction](../../../reviews/evidence/webhook-runtime/lifecycle-observation/m1-repair/README.md) adds complete retained phase/ack/work validation before both restoration and publication. It reuses one domain Queued compatibility predicate for queue admission, and checks distinct Queued registration IDs through the existing ready index without scanning terminal history. It rejects all three demonstrated contradictions, preserves valid lateSending-to-Retry recovery, and leaves indistinguishable missing history unclaimed. Its147canonical tests andsix controls pass; fresh independent round2 remains pending and W24 stays unpublished. One observation per already-bounded registration adds no unbounded history.
+The immutable registration lifecycle value owns legal replacements and its decoder checks local phase/fact combinations. However, [fresh independent review M1](../../../reviews/evidence/webhook-runtime/lifecycle-observation/review-1/report.md) found missing contextual phase/acknowledgement/work relationships: a substituted Stopped phase can publish an owed observation or silently clean genuine Queued work, and a retired fact can accept a reintroduced owed observation. The [f75 correction](../../../reviews/evidence/webhook-runtime/lifecycle-observation/m1-repair/README.md) adds complete retained phase/ack/work validation before both restoration and publication. It reuses one domain Queued compatibility predicate for queue admission, and checks distinct Queued registration IDs through the existing ready index without scanning terminal history. It rejects all three demonstrated contradictions, preserves valid lateSending-to-Retry recovery, and leaves indistinguishable missing history unclaimed. Its147canonical tests andsix controls passed at that source. [Round2](../../../reviews/evidence/webhook-runtime/lifecycle-observation/review-2/report.md) independently confirms M1 fixed, but reports the adjacent owed-Issue prerequisite contradiction M2. That original report and failing required-rejection probe remain preserved. W24 stays unpublished pending correction qualification. One observation per already-bounded registration adds no unbounded history.
+
+## Issuance acknowledgement before later work
+
+Initial issuance must acknowledge before another outbox operation commits later
+work. If an owed original Issue is retained alongside ExpiryObserved, Stopped or
+retirement, restoration refuses it before publication or cleanup. The same is
+true for an Active registration with retained cursor or delivery work: those
+facts prove that the initial obligation had to complete. The query uses the
+existing registration-leading cursor and delivery keys; it does not scan terminal
+history or allocate a second acknowledgement log.
+
+A genuinely pending initial Issue on an Active registration with no such work
+can recover. Its exact file may already exist if only local acknowledgement was
+lost. Other registrations' work does not block it. Published original history
+remains valid through later phases and retirement. Missing historical evidence
+alone does not prove an impossible state or justify inventing prior events.
+
+[The M2 correction evidence](../../../reviews/evidence/webhook-runtime/lifecycle-observation/m2-repair/README.md)
+records fifteen live/cold refusal-and-repair histories, adjacent published-history
+recovery, both initial failure modes and full-capacity query controls. A combined
+actual-registry test preserves the first Owner or Restart expiry observation
+through later actual auth revocation and retirement, then cold-restores the
+original independent auth fact. These are inner owner tests, not a running
+command coordinator or recipient E2E. This page's source review compared the
+outbox changes since f75, traced the current restoration/publication/registry
+owners and checked the new joint auth boundary. Fresh exact-head review is pending.
 
 This is an unpublished inner lifecycle checkpoint. The retained command supervisor, startup reader, credential/grant admission and sender still require composition; this chart does not claim that they run. [Private evidence](../../../reviews/evidence/webhook-runtime/lifecycle-observation/README.md) distinguishes completed isolated tests from pending canonical checks and independent review.
 
