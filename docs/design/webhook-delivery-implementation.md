@@ -298,3 +298,24 @@ under `docs/reviews/evidence/webhook-outbox/typed-state/review-1/`.
 | observation has settled Sending | Latest audit source-stop context equals the enclosing delivery's complete context, including None/Some, actor and time | terminal source context null/actor/time mutations refuse before publication |
 | credential stop commits but audit publication fails | Each authority-stop delivery record retains typed original stop cause, actor and time; its top-level cause/actor agree, and restore correlates them with the immutable owning registration stop | original actor mutation, coordinated actor/context and time mutation, active-registration false stop refusal |
 | registration retirement has deleted current facts | Historical retirement evidence validates its own saved stop facts and never substitutes a current owner or actor | existing lost-ack retired historical actor regression |
+
+
+### Second fresh typed-state review: owning relationships remain incomplete
+
+Review head dc86bc2d, source26b2bd35, found two major defects. The complete report
+and exact demonstrations are in `docs/reviews/evidence/webhook-outbox/typed-state/review-2/`.
+Registration audit target/original stop actor can disagree with retained
+registration facts; cursor audit prior position can disagree with its retained
+reset checkpoint. Both survive reopen and publish. Typed record validation is
+complete locally, but aggregate correlation is implemented for Delivery only.
+No authorization bypass was demonstrated. The parent owns the next structural
+decision before another patch cycle; runtime remains uncomposed and unchanged.
+
+| Demonstrated contradiction | Required future relationship / positive control |
+| --- | --- |
+| owed registration stop names another valid revoker while original stop remains | correlation with original retained stop actor/cause/time; valid historical retirement after registration deletion remains accepted |
+| owed registration issue substitutes valid principal/owner and initiator | target correlation with retained registration; do not reconstruct historical target from unrelated current ownership |
+| owed source-change audit changes priorPosition 1 to 999 while reset cursor remains at 1 | correlate the transition with the checkpoint retained by its atomic write; define historical/retention behavior before implementing |
+
+These are open findings and proposed requirements, not implemented fixes or a
+new review-loop authorization. Existing passing source checks do not close them.

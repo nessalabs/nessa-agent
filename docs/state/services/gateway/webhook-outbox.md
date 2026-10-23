@@ -54,8 +54,12 @@ review handoff. The original [findings and reproductions](../../../reviews/evide
 remain historical evidence. This source replaces open audit JSON with one
 closed record type and routes every cursor read through a complete decoder.
 The first fresh review found two remaining context correlations, corrected in
-this checkpoint. The next fresh review is pending; this is not full feature
-acceptance.
+this checkpoint. The second fresh review found two major contextual-validation
+gaps. Registration
+audit attribution/target and cursor audit checkpoint can contradict their
+retained owning facts and still publish. The [review and exact probes](../../../reviews/evidence/webhook-outbox/typed-state/review-2/report.md)
+are preserved. Persistence is not approved, and runtime composition remains held
+for the parent’s structural design decision under the bounded review process.
 
 The same typed audit validator serves writing, restoration and publication.
 It rejects unknown fields, malformed identities and actors, negative timestamps,
@@ -88,7 +92,7 @@ durability; it says nothing about a recipient's effects.
 ```mermaid
 stateDiagram-v2
     [*] --> Restoring
-    Restoring --> Refused: Invalid identities, cursor, audit history or accounting
+    Restoring --> Refused: Malformed fields, delivery history or accounting
     Restoring --> Ready: Checked current schema and acquired lifetime owner lock
     Ready --> Writing: Queue, transition, stop or recovery
     Writing --> Refused: Validation, compare-and-swap or audit insertion fails
@@ -168,7 +172,7 @@ and transport policy remain owned by the linked delivery mechanics page.
 | SQL publication acknowledgement affects zero rows | Conflict; do not spin or report publication success. |
 | Sending observer disappears or process restarts | Startup recovery records Unknown; no automatic POST. |
 | Stop or source replacement reaches retention ceiling | Shared commit owner trims only eligible published rows in the same write. |
-| Invalid typed identity, cursor, lifecycle, audit history, encoding or capacity | Refuse before publication, cleanup or filtered ready scans. |
+| Invalid typed identity, cursor, record-local lifecycle, delivery history, encoding or capacity | Refuse before publication, cleanup or filtered ready scans. |
 | Caller stops awaiting a blocking operation | Physical worker retains its capacity permit and owner lock until completion. |
 
 ## Evidence and remaining gates
@@ -181,12 +185,13 @@ physical ownership after cancellation and retained-history limits.
 
 This source checkpoint passed 72 canonical webhook tests, including 42 outbox
 tests, required seven-package Clippy, architecture, formatting and diff checks.
-The next fresh independent review is pending.
+The second fresh review at dc86bc2d found two major open evidence-correlation
+defects, described above. These passing checks do not resolve them.
 This redesign adds malformed
 historical audit, transition/chain, complete cursor and lost-ack retirement
 recovery regressions. Twenty-nine new copied-source mutations were caught and
-the affected tests passed after restoration. Canonical checks and the pending fresh
-review checkpoint are recorded in [typed-state evidence](../../../reviews/evidence/webhook-outbox/typed-state/README.md).
+the affected tests passed after restoration. Canonical checks and the completed fresh
+review findings are recorded in [typed-state evidence](../../../reviews/evidence/webhook-outbox/typed-state/README.md).
 Historical earlier checks do not establish acceptance of newer source.
 
 Canonical Chromium/WebKit, stress and chaos evidence remains an applicable

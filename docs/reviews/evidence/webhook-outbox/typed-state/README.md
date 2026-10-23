@@ -86,7 +86,8 @@ required seven-package all-target Clippy passed. Ten new copied-source fail/rest
 all affected tests passed after byte-identical restoration. Final sealed-source canonical suite passed **72 webhook tests**, 0 failed, 3749
 filtered, 42.66 seconds; [log](correlation-cargo.txt), [Clippy](correlation-clippy.txt),
 [isolated](correlation-isolated.txt), [exact hashes](correlation-source-manifest.json).
-The next fresh independent review remains pending.
+The second fresh independent review completed at dc86bc2d with two major
+findings; see the current hold below. No clean persistence review is claimed.
 
 The corrected Nessa Docs page checkpoints exact source 26b2bd35: 122 documents,
 zero catalog issues, diagram rendered and visually inspected Chromium 151 with
@@ -95,3 +96,46 @@ Earlier pre-seal invocations/logs under /tmp remain diagnostic history; final
 sealed runs include the last added cause/context regression case. No source
 bytes changed during sealed validation. Docs rendering does not waive browser
 or feature stress gates.
+
+## Second fresh review: structural decision required
+
+Frozen review head `dc86bc2d2cc4ee406b6bca8e73cdc721777177e5`, source unchanged
+at `26b2bd355f8d3d203b0db76b94f9f78a2da41ffe`. [Full report](review-2/report.md),
+[registration probes](review-2/add-probes.py), [cursor probe](review-2/add-cursor-probe.py),
+[demonstration output](review-2/probes.txt) and [combined output](review-2/all-tests.txt)
+preserve the exact reproductions. **Two major findings; blocker/minor/nit empty.**
+Independent copied actual source passed 42 existing cases plus three bug
+demonstrations, 45 total in 44.26 seconds. Those three passing demonstrations
+confirm defects; they are not fixed regression evidence.
+
+An owed registration-stop record can substitute its original revoker, or an
+issue record can substitute its target, while the unchanged owning registration
+is retained. An owed cursor source-change record can claim prior position 999
+while its retained reset checkpoint remains at 1. Both reopen and publish.
+Record-local typing covers every variant, but owning-state correlation currently
+covers delivery evidence only. No POST authorization bypass was demonstrated.
+
+The [bounded review process](../../../../../CODING_STANDARDS.md#the-review-loop)
+requires revisiting the design with its owner after consecutive findings in the
+same component. This second fresh round follows the parent-adopted redesign,
+which itself followed the earlier bounded handoff. No further patch or extra
+review cycle is started. The parent owns the structural decision; runtime
+composition remains unchanged as explicitly required until persistence is clean.
+This is a review hold, distinct from the denied foundation CI retry.
+
+Suggested next design: make contextual validation a total responsibility across
+all closed audit variants at restoration/publication admission. Define which
+owning facts must survive each owed transition and how retained evidence can
+legitimately precede a later state; do not force historical retirement to join
+deleted registrations or reconstruct historical actors. Specify registration
+Issue/Stop target and original-stop correlation, Cursor reset checkpoint
+correlation, and existing Delivery history correlation together before changing
+code. Turn these demonstrations into refusal regressions and retain positive
+historical-retirement/Sending-capture controls. This proposal is not an approved
+implementation or a reset of review bounds.
+
+Source checks remain 72 canonical/42 isolated, required Clippy/architecture/fmt;
+they do not resolve the findings. Full source/sender/registration composition,
+capability/revoke E2E and canonical browser/stress/chaos gates remain outstanding.
+Main d029d1cf includes merged inbound #1088 and #1095; runtime worktree stays at
+bb561e55 with no edits. No shared auth/grant changes were made in this round.
