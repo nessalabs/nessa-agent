@@ -80,7 +80,7 @@ No assertion or fixture is weakened. Canonical Chromium/WebKit, stress/chaos and
 recipient capability/revoke E2E remain required. Documentation rendering does not
 qualify them.
 
-Earlier failures remain preserved: server fixture partial-move compilation;
+Copied text logs normalize trailing whitespace only. Earlier failures remain preserved: server fixture partial-move compilation;
 policy test using private AuthContext construction (moved into adapter tests);
 architecture refusal of application tests constructing Cedar (replaced with an
 injected policy double). An early isolated harness linked the older server-feature

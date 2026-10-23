@@ -3994,7 +3994,7 @@ assertion `left == right` failed: {"type":"res","id":"auth","ok":false,"error":{
 ---- product::socket::tests::catalogue_receiver::two_owned_receiver_processes_finish_fixed_pass_across_loss_restart_writes_deletion_and_reset stdout ----
 
 thread 'product::socket::tests::catalogue_receiver::two_owned_receiver_processes_finish_fixed_pass_across_loss_restart_writes_deletion_and_reset' (108040) panicked at crates/nessa-server/src/product/../../tests/conversation/catalogue_receiver/product.rs:1004:9:
-receiver alice reject-evidence: 
+receiver alice reject-evidence:
 thread 'product::socket::tests::catalogue_receiver::receiver_child' (108109) panicked at crates/nessa-server/src/product/../../tests/conversation/catalogue_receiver/product.rs:560:9:
 assertion `left == right` failed: {"type":"res","id":"auth","ok":false,"error":{"code":"unauthorized","message":"unauthorized"}}
   left: Bool(false)
