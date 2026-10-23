@@ -107,6 +107,15 @@ impl RegistrationLifecycle {
     pub fn observation(&self) -> Option<&StopObservation> {
         self.observation.as_ref()
     }
+    /// A queued delivery has not begun. Stopping refuses it atomically; a late
+    /// Sending outcome may still retain Retry and is a different relationship.
+    /// This is lifecycle consistency, not permission to capture or send.
+    pub fn retains_queued(&self) -> bool {
+        match self.phase {
+            RegistrationPhase::Active | RegistrationPhase::ExpiryObserved => true,
+            RegistrationPhase::Stopped => false,
+        }
+    }
     pub fn stopped(&self) -> Option<&StopObservation> {
         match self.phase {
             RegistrationPhase::Active | RegistrationPhase::ExpiryObserved => None,

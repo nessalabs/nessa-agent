@@ -137,3 +137,13 @@ fn actual_revocation_stops_directly_and_does_not_replace_an_earlier_expiry_fact(
     assert_eq!(evidence.observation(), &original);
     assert_eq!(stopped.stopped(), Some(&original));
 }
+
+#[test]
+fn queued_compatibility_is_shared_by_admission_and_restoration() {
+    let active = RegistrationLifecycle::active();
+    let (observed, _) = active.observe_expiry(ExpiryObserver::Restart, 10_000);
+    let (stopped, _) = observed.stop_observed().unwrap();
+    assert!(active.retains_queued());
+    assert!(observed.retains_queued());
+    assert!(!stopped.retains_queued());
+}

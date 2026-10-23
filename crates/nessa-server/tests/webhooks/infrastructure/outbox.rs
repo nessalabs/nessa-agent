@@ -2435,3 +2435,6 @@ mod registration_tests;
 
 #[path = "outbox/cleanup.rs"]
 mod cleanup_tests;
+
+#[path = "outbox/lifecycle_context.rs"]
+mod lifecycle_context_tests;

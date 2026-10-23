@@ -7,11 +7,15 @@ use super::{
     stored::{self, StoredDelivery},
     unavailable, uuid,
 };
-use crate::webhooks::{application::OutboxError, domain::Phase};
+use crate::webhooks::{
+    application::{OutboxError, MAX_REGISTRATIONS},
+    domain::{Phase, RegistrationPhase},
+};
 use nessa_local_database::rusqlite::{Connection, OptionalExtension};
 
 pub(super) fn validate_owed(connection: &Connection) -> Result<(), OutboxError> {
     super::intents::validate(connection)?;
+    validate_queued(connection)?;
     super::source_reset::validate_owed(connection)?;
     validate_records(connection, true)?;
     validate_histories(connection, true)
@@ -84,6 +88,11 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
                     }
                 }
                 audit::Cause::CredentialExpiryObserved => {
+                    if owed
+                        && !matches!(&live, Some(live) if live.lifecycle.phase() == RegistrationPhase::ExpiryObserved)
+                    {
+                        return Err(OutboxError::Invalid);
+                    }
                     let observed = match (&live, &retired) {
                         (Some(live), None) => live.lifecycle.observation(),
                         (None, Some(retired)) => Some(&retired.stop),
@@ -211,6 +220,7 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
 }
 
 pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
+    validate_queued(connection)?;
     if connection.prepare("SELECT 1 FROM audit a WHERE a.delivery IS NOT NULL AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.id=a.delivery) LIMIT 1").map_err(unavailable)?.exists([]).map_err(unavailable)? { return Err(OutboxError::Invalid); }
     validate_records(connection, false)?;
     validate_histories(connection, false)
@@ -280,4 +290,29 @@ pub(super) fn audit_selection(owed: bool) -> &'static str {
     } else {
         "SELECT id,registration,delivery,record,published,source_reset FROM audit"
     }
+}
+
+/// Only current unstarted work participates. Late Sending outcomes can leave
+/// valid Retry rows, and retained terminal histories do not need another scan.
+pub(super) const QUEUED_REGISTRATIONS: &str =
+    "SELECT DISTINCT registration FROM deliveries INDEXED BY ready_deliveries WHERE phase='queued' LIMIT ?1";
+pub(super) fn validate_queued(connection: &Connection) -> Result<(), OutboxError> {
+    let mut statement = connection
+        .prepare(QUEUED_REGISTRATIONS)
+        .map_err(unavailable)?;
+    let rows = statement
+        .query_map([(MAX_REGISTRATIONS + 1) as i64], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(unavailable)?;
+    for (index, id) in rows.enumerate() {
+        if index == MAX_REGISTRATIONS {
+            return Err(OutboxError::Invalid);
+        }
+        let id = uuid(&id.map_err(unavailable)?)?;
+        if !registry::by_id(connection, id)?.lifecycle.retains_queued() {
+            return Err(OutboxError::Invalid);
+        }
+    }
+    Ok(())
 }

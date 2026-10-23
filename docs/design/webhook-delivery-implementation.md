@@ -560,3 +560,17 @@ allowed exact-head run; local profile numbers alone do not prove Windows fixed.
 The current held access snapshot exposes actual original issuance plus current credential lifecycle, membership and revision. It does not expose the actual original revocation transition. Auth already supports Explicit and Superseded revocations with Principal or offline LocalOperator initiators; the private outbox's current Revoked input accepts a PrincipalId. That restriction is not permission to synthesize a principal for an offline action or to rewrite a supersession as an explicit command.
 
 Before composing revoke/startup/replacement, consume the existing auth journal's immutable revocation fact from the same held snapshot. Re-reading a separate transition list under a held authority may introduce ordering or lock-wait problems and does not establish snapshot agreement. The actual auth owner must publish the coherent fact; a returned command DTO cannot invent it. This is a pending structural boundary, not implemented by the expiry-observation adapter or covered by its principal-only positive revoke test. Parent coordination precedes this auth correction. Generic application-principal admission remains #1052.
+
+## W24 M1 retained-context correction
+
+Fresh review at4953b288 reproduced three phase/ack/work contradictions. The correction uses the existing retained-proof contract, rather than adding a second transition/ack history. It does not pretend to distinguish coherently rewritten Stopped+Sending after all registration projections have trimmed.
+
+| Retained relationship | Contextual owner before restoration/publication | Required counterpart |
+| --- | --- | --- |
+| Owed expiry Observation with live registration | Require ExpiryObserved and exact original fact; Stopped cannot owe its prerequisite acknowledgement | Lost observation ack in ExpiryObserved recovers with all three reader kinds |
+| Owed expiry Observation with retired fact | Refuse: original observation must acknowledge before stop and retirement | Genuine Stop/Drained owed retirement recovers |
+| Current Queued with registration | Ask domain lifecycle's queued compatibility, also used by queue admission; Stopped cannot retain Queued because stop refuses it atomically | Active/ExpiryObserved queued remains valid |
+| Current Sending or late Retry with Stopped | Preserve valid prior admission and late known outcome; do not replace first cause or reject all pending work | Late Sending→Retry with lost response ack restores and cleans up |
+| Current work scan | Stream distinct Queued registration IDs through existing ready index, capped atMAX_REGISTRATIONS+1; no terminal/history scan or new acknowledgement flag | Query work stays independent of terminal history |
+
+The same contextual owner runs before cold recovery and before the first owed publication. Canonical regressions must turn the three preserved acceptance demonstrations into explicit rejection expectations, with no new files, acknowledgements or retirement before refusal, and successful original-byte recovery. Existing domain/SQL failure controls remain retained.

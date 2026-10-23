@@ -221,3 +221,54 @@ async fn deleting_nonterminal_metadata_does_not_erase_its_acknowledged_history()
         Err(OutboxError::Invalid)
     );
 }
+
+#[tokio::test]
+async fn queued_lifecycle_selection_does_not_walk_terminal_history() {
+    use crate::webhooks::infrastructure::outbox::restoration::QUEUED_REGISTRATIONS;
+    let mut baseline = None;
+    for count in [1, RETAINED_LIMIT] {
+        let f = terminal_metadata(count).await;
+        let c = f.store.owner.connection.lock().unwrap();
+        let source: String = c
+            .query_row("SELECT id FROM deliveries LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        let id = Uuid::new_v4().to_string();
+        c.execute("INSERT INTO deliveries(id,registration,conversation,incarnation,position,scope,body,state) SELECT ?1,registration,conversation,incarnation,?2,scope,body,json_set(state,'$.id',?1,'$.phase','queued') FROM deliveries WHERE id=?3", params![id, (count + 1) as i64, source]).unwrap();
+        let mut q = c.prepare(QUEUED_REGISTRATIONS).unwrap();
+        let ids = q
+            .query_map(
+                [(crate::webhooks::application::MAX_REGISTRATIONS + 1) as i64],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(ids, [f.registration.id.to_string()]);
+        let steps = q.get_status(StatementStatus::VmStep);
+        if let Some(before) = baseline {
+            assert_eq!(steps, before);
+        } else {
+            baseline = Some(steps);
+        }
+        assert!(steps < 128, "steps={steps}");
+    }
+}
+
+#[tokio::test]
+async fn queued_lifecycle_selection_refuses_excess_distinct_registration_work() {
+    // Metadata-only work-bound fixture, not authenticated/restorable history.
+    let f = terminal_metadata(1).await;
+    let c = f.store.owner.connection.lock().unwrap();
+    let original = f.registration.id.to_string();
+    let source: String = c
+        .query_row("SELECT id FROM deliveries LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    for _ in 0..=crate::webhooks::application::MAX_REGISTRATIONS {
+        let registration = Uuid::new_v4().to_string();
+        let delivery = Uuid::new_v4().to_string();
+        c.execute("INSERT INTO registration_intents(id,issuer,request,issue,destination,mac_key,observed_at) SELECT ?1,issuer,?1,issue,destination,mac_key,observed_at FROM registration_intents WHERE id=?2", params![registration, original]).unwrap();
+        c.execute("INSERT INTO registrations(id,credential,principal,organization,owner,issued_at,destination,mac_key,active) SELECT ?1,?1,?1,organization,owner,issued_at,destination,mac_key,1 FROM registrations WHERE id=?2", params![registration,original]).unwrap();
+        c.execute("INSERT INTO deliveries(id,registration,conversation,incarnation,position,scope,body,state) SELECT ?1,?2,conversation,incarnation,1,scope,body,json_set(state,'$.id',?1,'$.phase','queued') FROM deliveries WHERE id=?3", params![delivery,registration,source]).unwrap();
+    }
+    assert_eq!(restoration::validate_queued(&c), Err(OutboxError::Invalid));
+}

@@ -28,15 +28,17 @@ pub(super) fn queue(
     let scope = codec::scope_text(&record.scope)?;
     let position = integer(record.position)?;
     let transaction = connection.transaction().map_err(unavailable)?;
-    let active: Option<i64> = transaction
+    let current_registration = transaction
         .query_row(
-            "SELECT active FROM registrations WHERE id=?1",
+            &format!("{} FROM registrations WHERE id=?1", super::registry::SELECT),
             [&registration],
-            |r| r.get(0),
+            |row| super::registry::StoredRegistration::row(row, 0),
         )
         .optional()
-        .map_err(unavailable)?;
-    if active != Some(1) {
+        .map_err(super::cursor::row_error)?
+        .map(super::registry::StoredRegistration::checked)
+        .transpose()?;
+    if !current_registration.is_some_and(|saved| saved.lifecycle.retains_queued()) {
         return Err(OutboxError::Conflict);
     }
     let current = cursor::read(&transaction, record.registration, &record.conversation)?;
