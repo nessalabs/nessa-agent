@@ -22,6 +22,11 @@
  *                    list, or the panes) and the pane's composer — its left
  *                    edge and its centre — move over several frames, one way,
  *                    to where they rest; with reduced motion they land at once.
+ *   split-motion     ⌘D splits the chat in front and ⌘W closes the new pane:
+ *                    each pane's edges and the first composer's centre move
+ *                    over several frames, one way, to where they rest; the
+ *                    new pane slides in at its size; with reduced motion
+ *                    each change lands at once.
  *   titlebar-steady  every frame of a rail toggle draws the titlebar's controls
  *                    between where they were and where they land.
  *   titlebar-row     the titlebar's controls are centred 24px below the window's
@@ -49,6 +54,7 @@ import {
 
 const checks = [
   "sidebar-motion",
+  "split-motion",
   "window-tabs",
   "shell-chrome",
   "no-overlap",
@@ -409,9 +415,13 @@ const body = {
           (state.toggle.x !== 10 || state.toggle.bottom !== size.height - 10)
         )
           failures.push(`${label}: rail toggle left its bottom-left control slot`)
+        // The identity's own inset from the sidebar's content edge
+        // (`ui/identity.css`), or, with the rail folded into the footer,
+        // past the rail's toggle.
+        const identityInset = 16
         const expectedInset =
           state.drawnRail || !state.sidebar
-            ? state.controlInset
+            ? identityInset
             : state.toggle.right - state.sidebarContent + state.controlInset
         if (state.sidebar && state.footerInset !== expectedInset)
           failures.push(
@@ -627,6 +637,124 @@ const body = {
     return { runs, failures }
   },
 
+  "split-motion": async ({ page }) => {
+    const failures = []
+    const runs = []
+    // Each pane's edges, and the composer's centre in the pane that was there.
+    const sample = () => {
+      const boxes = {}
+      for (const pane of document.querySelectorAll("[data-pane-key]")) {
+        if (pane.closest(".split-panes-ghost")) continue
+        const b = pane.getBoundingClientRect()
+        boxes[`pane ${pane.dataset.paneKey} left`] = b.left
+        boxes[`pane ${pane.dataset.paneKey} right`] = b.right
+      }
+      const field = document.querySelector('[data-pane-key="1"] textarea')
+      if (field) {
+        const b = field.getBoundingClientRect()
+        boxes["composer centre"] = b.left + b.width / 2
+      }
+      return boxes
+    }
+    // Every step starts at rest: the last one's flights have landed.
+    const atRest = () =>
+      page.waitForFunction(
+        () =>
+          !document
+            .getAnimations()
+            .some(
+              (a) =>
+                (a.playState === "running" || a.pending) &&
+                a.effect?.getTiming?.().iterations !== Infinity,
+            ),
+        null,
+        { timeout: 3000, polling: "raf" },
+      )
+    const run = async (step, key, reduced) => {
+      await atRest()
+      const before = await page.evaluate(sample)
+      await page.evaluate((source) => {
+        const measure = new Function(`return (${source})()`)
+        window.__splitFrames = []
+        window.__splitOn = true
+        const tick = () => {
+          window.__splitFrames.push(measure())
+          if (window.__splitOn) requestAnimationFrame(tick)
+        }
+        requestAnimationFrame(tick)
+      }, sample.toString())
+      const panes = await page.locator(css.pane).count()
+      await page.keyboard.press(key)
+      // The grid draws the new arrangement a few frames on; then it moves.
+      await page
+        .waitForFunction(
+          ([sel, count]) => document.querySelectorAll(sel).length !== count,
+          [css.pane, panes],
+          { timeout: 2000 },
+        )
+        .catch(() => {})
+      await settled(page)
+      await frames(page, 2)
+      await atRest()
+      await frames(page, 4)
+      const seen = await page.evaluate(() => {
+        window.__splitOn = false
+        return window.__splitFrames
+      })
+      if (step.startsWith("⌘D") && (await page.locator(css.pane).count()) === panes)
+        throw new CannotRun("no room for a pane beside at this size")
+      const rest = await page.evaluate(sample)
+      const name = `${step}${reduced ? " (reduced)" : ""}`
+      let moved = 0
+      for (const part of Object.keys(rest)) {
+        const values = seen
+          .map((frame) => frame[part])
+          .filter((x) => typeof x === "number")
+        // A new pane is judged from its first frame; what was there, from before.
+        const from = before[part] ?? values[0]
+        const to = rest[part]
+        if (typeof from !== "number" || Math.abs(from - to) < 2) continue
+        moved++
+        const between = new Set(
+          values
+            .filter((x) => x > Math.min(from, to) + 1 && x < Math.max(from, to) - 1)
+            .map(Math.round),
+        )
+        runs.push({ step, reduced, part, from, to, between: between.size })
+        if (Math.abs((values.at(-1) ?? to) - to) > 1)
+          failures.push(`${name}: ${part} ended at ${values.at(-1)}, rests at ${to}`)
+        if (!reduced && between.size < 3)
+          failures.push(`${name}: ${part} moved in ${between.size} in-between frames`)
+        // With reduced motion nothing travels. A close that gives a folded side
+        // column its room back puts it back the frame before the grid draws its
+        // new boxes (`paint-with-panes.ts`): one staged frame, not motion.
+        if (reduced && between.size > 1)
+          failures.push(
+            `${name}: ${part} drew ${between.size} in-between frames, not at once`,
+          )
+        const back = values.slice(1).filter((x, i) => {
+          const previous = values[i]
+          return to > from ? x < previous - 1 : x > previous + 1
+        })
+        if (back.length)
+          failures.push(
+            `${name}: ${part} moved back ${back.length} times: ${values.map(Math.round).join(" ")}`,
+          )
+      }
+      if (moved === 0) failures.push(`${name}: nothing moved`)
+    }
+    for (const reduced of [false, true]) {
+      await page.emulateMedia({ reducedMotion: reduced ? "reduce" : "no-preference" })
+      await frames(page, 4)
+      // ⌘D splits the chat the caret is in.
+      await page.locator(css.composer).first().click()
+      await run("⌘D split", keys.splitRight, reduced)
+      await run("⌘W close", keys.closePane, reduced)
+    }
+    await page.emulateMedia({ reducedMotion: "no-preference" })
+    return { runs, failures }
+  },
+
   "titlebar-steady": async ({ page, size }) => {
     await arrange(page, size, { rail: true, sidebar: true })
     const railDrawn = await page.evaluate(
@@ -838,14 +966,20 @@ const body = {
                   if (opacity !== 1)
                     result.failures.push("mounted pane body or header is dimmed")
                 }
+                // It may slide in from the edge it lands against, never be
+                // scaled: its content is drawn at its own size throughout.
                 for (const target of [element, element.querySelector(header)]) {
                   if (!target) continue
                   const transform = getComputedStyle(target).transform
+                  if (transform === "none") continue
+                  const m = new DOMMatrixReadOnly(transform)
                   if (
-                    transform !== "none" &&
-                    !new DOMMatrixReadOnly(transform).isIdentity
+                    Math.abs(m.a - 1) > 0.001 ||
+                    Math.abs(m.d - 1) > 0.001 ||
+                    Math.abs(m.b) > 0.001 ||
+                    Math.abs(m.c) > 0.001
                   )
-                    result.failures.push("mounted pane root or header is transformed")
+                    result.failures.push("mounted pane root or header is scaled")
                 }
               }
             requestAnimationFrame(sample)
@@ -893,15 +1027,13 @@ const body = {
         if (mounting && (result.mounted.length !== 1 || result.mountedFrames < 2))
           failures.push("split did not mount and sample one new filled pane")
         if (result.frames < 2) failures.push(`${key}: no transition frames sampled`)
-        // A column toggle is a drawer: the panes follow it on its curve, their
-        // content painted throughout (above). A split lands at once (#914):
-        // no flight owns its intermediate frames.
+        // A column toggle and a split each move the panes on the drawer's
+        // curve, their content painted throughout (above): never dimmed,
+        // hidden or rescaled, as #914 asked.
         if (!mounting && result.before === result.after)
           failures.push(`${key}: the toggle changed nothing`)
         else if (!mounting && result.positions < 2)
           failures.push(`${key}: the pane bounds changed nothing`)
-        if (mounting && result.flights > 0)
-          failures.push(`${key}: a split started a FLIP rather than landing at once`)
         failures.push(
           ...[...new Set(result.failures)].map((message) => `${key}: ${message}`),
         )

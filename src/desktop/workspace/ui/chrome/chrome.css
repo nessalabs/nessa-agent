@@ -82,7 +82,7 @@
 
 /* The fold is only an attribute while the spare hold lasts. The bar stays
    painted until the sidebar leaves the row with the new boxes. */
-.workspace[data-spare-held][data-sidebar="closed"]
+.workspace[data-spare-held][data-folding][data-sidebar="closed"]
   .workspace-sidebar
   .desktop-column-bar {
   visibility: visible;

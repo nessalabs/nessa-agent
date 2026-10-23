@@ -8,12 +8,18 @@
 .desktop-identity {
   display: flex;
   min-width: 200px;
-  height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
   flex: none;
   align-items: center;
-  padding: 0 10px 0 var(--desktop-control-inset);
+  /* One place in every sidebar, from its content edge: the mark 16px in, the
+     pill's foot 13px above the edge, the row 52px tall with it. */
+  padding: 11px 10px 13px 16px;
   font-size: var(--desktop-text-body);
   letter-spacing: -0.01em;
+}
+
+.desktop-identity-trailing {
+  display: flex;
+  margin-left: auto;
 }
 
 .desktop-identity-button {

@@ -149,11 +149,25 @@ function play(root: HTMLElement, from: Rects, motion: Motion) {
     ...root.querySelectorAll<HTMLElement>('[data-flip="slide"][data-flip-id]'),
   ].map((element) => ({ element, after: element.getBoundingClientRect() }))
   const panes: { landed: Landed; before: DOMRect }[] = []
+  // A pane that was not there before enters from the grid's edge it lands
+  // against — by translation alone, painted and at its size throughout.
+  const entering: { pane: HTMLElement; dx: number; dy: number }[] = []
+  const grid = root
+    .querySelector<HTMLElement>(".split-panes-grid")
+    ?.getBoundingClientRect()
   for (const pane of root.querySelectorAll<HTMLElement>(
     '[data-flip="pane"][data-flip-id]',
   )) {
     const to = pane.getBoundingClientRect()
     const before = from.panes.get(pane.dataset.flipId ?? "")
+    if (!before && grid && from.panes.size > 0) {
+      const near = (a: number, b: number) => Math.abs(a - b) <= 1
+      const dx = near(to.right, grid.right) && to.left > grid.left + 1 ? to.width : 0
+      const dy =
+        dx === 0 && near(to.bottom, grid.bottom) && to.top > grid.top + 1 ? to.height : 0
+      if (dx || dy) entering.push({ pane, dx, dy })
+      continue
+    }
     // A settled drop has already previewed where these panes land. Its
     // stationary contents need no counter-scale offsets (flip.test.tsx).
     if (!before || !moved(before, to)) continue
@@ -184,8 +198,12 @@ function play(root: HTMLElement, from: Rects, motion: Motion) {
   })
   // A settled preview can leave nothing to animate. Resolving root styles
   // then does work for no flight (flip.test.tsx holds this no-flight path).
-  const moving = panes.map(({ landed }) => landed.pane)
-  if (slides.length === 0 && panes.length === 0) return { flying, moving }
+  const moving = [
+    ...panes.map(({ landed }) => landed.pane),
+    ...entering.map((e) => e.pane),
+  ]
+  if (slides.length === 0 && panes.length === 0 && entering.length === 0)
+    return { flying, moving }
   const ease = motionToken(root, "--desktop-ease") ?? "linear"
   // A drawer moves everything on its one duration; a layout change slides
   // the columns on the slow one and flies the panes on the flight's.
@@ -203,10 +221,18 @@ function play(root: HTMLElement, from: Rects, motion: Motion) {
       }),
     )
   })
-  // A drawer's panes keep the columns' curve, frame for frame.
-  const curve = motion === "drawer" ? curveOf(ease) : undefined
+  // Every pane keeps the columns' curve, frame for frame.
+  const curve = curveOf(ease)
   panes.forEach(({ landed, before }) => {
     flying.push(...flyPane(landed, before, flight, curve))
+  })
+  entering.forEach(({ pane, dx, dy }) => {
+    flying.push(
+      pane.animate(
+        [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }],
+        { duration: flight, easing: ease },
+      ),
+    )
   })
   return { flying, moving }
 }
@@ -254,6 +280,11 @@ export class FlipScope extends Component<{
     const columnsChanged = previous.columns !== this.props.columns
     if ((!panesChanged && !columnsChanged) || !root) return null
     if (previous.cut !== this.props.cut) return null
+    // A side column folded for a split's room, while the grid holds it in
+    // the row until the new boxes paint (`data-spare-held`): one change,
+    // flown once with the boxes, from where everything stood — never a
+    // drawer first and the boxes after it.
+    if (!panesChanged && root.hasAttribute("data-spare-held")) return null
     const motion: Motion = panesChanged ? "layout" : "drawer"
     // Zero for this kind — reduced motion, or a layout's instant landing
     // (#914): nothing to measure for.

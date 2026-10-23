@@ -45,7 +45,9 @@
  * measure one frame more (`data-list-held`), so the fold does not restyle
  * the list. The list takes the gutter on the frame after the boxes.
  */
-.workspace[data-sidebar="closed"]:not([data-spare-held]):not([data-list-held])
+.workspace[data-sidebar="closed"]:not([data-spare-held][data-folding]):not(
+    [data-list-held]
+  )
   .workspace-list-inner {
   padding-left: var(--desktop-gutter);
 }

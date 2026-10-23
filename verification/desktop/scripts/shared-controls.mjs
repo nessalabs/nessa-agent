@@ -189,9 +189,16 @@ async function hovered(page, selector) {
  * words and its row, against the corner controls' scale. In the page.
  */
 function measureIdentity([selector, sel]) {
-  const button = [...document.querySelectorAll(selector)].find(
-    (candidate) => candidate.getClientRects().length > 0 && candidate.checkVisibility(),
-  )
+  // On screen: the classic shell keeps a second sidebar off it, for its edge reveal.
+  const button = [...document.querySelectorAll(selector)].find((candidate) => {
+    const box = candidate.getBoundingClientRect()
+    return (
+      candidate.getClientRects().length > 0 &&
+      candidate.checkVisibility() &&
+      box.right > 0 &&
+      box.left < innerWidth
+    )
+  })
   if (!button) return null
   const probe = document.createElement("div")
   document.querySelector("[data-surface]").append(probe)
@@ -436,7 +443,13 @@ const checks = {
           await identityHover(page, scale, `${css.settings} ${css.identityButton}`)
         ).map((f) => `"${inSettings.text}": ${f}`),
       )
-      // Where "nessa Studio" opened Settings, the way back stands in the same row.
+      // Where "nessa Studio" opened Settings, the way back is the same pill in
+      // the same place: switching between them moves nothing.
+      for (const side of ["x", "y", "height"])
+        if (Math.abs(inSettings.box[side] - inWindow.box[side]) > 0.5)
+          failures.push(
+            `Settings' pill is at ${side} ${inSettings.box[side]}, the window's at ${inWindow.box[side]}`,
+          )
       if (!inSettings.row || !inWindow.row) failures.push("an identity outside its row")
       else
         for (const side of ["y", "height"])

@@ -160,7 +160,7 @@ export const css = {
   titlebar: ".workspace-titlebar", // class: the window's titlebar row, 48px tall
   titlebarSidebarToggle: '.workspace-titlebar [aria-controls="workspace-sidebar"]', // the titlebar's Show/Hide Sidebar
   sideRailToggle: ".side-rail-toggle", // class: shows or hides the rail; aria-expanded
-  studio: ".workspace-identity .desktop-identity-button", // class: "nessa Studio", which opens Settings
+  studio: '.desktop-identity-button[aria-label="nessa Studio Settings"]', // "nessa Studio", which opens Settings, in every layout
   peekEdge: ".desktop-peek-edge", // class: the strip at the folded sidebar's edge a hover reveals it from
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller

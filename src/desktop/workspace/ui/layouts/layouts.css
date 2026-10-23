@@ -29,7 +29,8 @@
 
 /* While the spare hold keeps the sidebar in the row, the layer keeps the
    place it had, so the fold's attribute does not move it. */
-.workspace[data-spare-held][data-sidebar="closed"] .workspace-overview-layer {
+.workspace[data-spare-held][data-folding][data-sidebar="closed"]
+  .workspace-overview-layer {
   left: calc(2 * var(--desktop-gutter) + var(--workspace-sidebar-width));
   padding-left: 0;
 }

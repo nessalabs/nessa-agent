@@ -23,7 +23,7 @@ it("glides without overshoot: the composer lands, and never passes its place", (
   )
 })
 
-it("lands workspace bounds immediately while preserving independent surface and arrival motion", () => {
+it("moves panes and side columns on one drawer motion, instant with reduced motion", () => {
   const token = (sheet: string, name: string) =>
     new RegExp(`${name}:\\s*(\\d+)ms`).exec(sheet)?.[1]
   const full = styles.slice(
@@ -33,8 +33,12 @@ it("lands workspace bounds immediately while preserving independent surface and 
   const reduced = /:root\[data-motion="reduced"\] \[data-surface\] \{([^}]*)\}/.exec(
     styles,
   )?.[1]
-  expect(token(full, "--desktop-flight")).toBe("0")
+  // Panes travel as a side column does: the same duration (the classic
+  // split view's), and none at all with reduced motion.
+  expect(token(full, "--desktop-flight")).toBe(token(full, "--desktop-drawer"))
+  expect(Number(token(full, "--desktop-drawer"))).toBe(340)
   expect(token(reduced ?? "", "--desktop-flight")).toBe("0")
+  expect(token(reduced ?? "", "--desktop-drawer")).toBe("0")
   const slow = Number(token(full, "--desktop-slow"))
   expect(slow).toBeGreaterThanOrEqual(200)
   expect(slow).toBeLessThan(300)

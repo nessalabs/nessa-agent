@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react"
 import { EmptyState } from "@nessa-ui/react/empty-state"
-import { IdentityButton } from "./identity"
+import { IdentityButton, IdentityRow } from "./identity"
 import { AppShell, AppShellBody, AppShellMain } from "@nessa-ui/react/app-shell"
 import {
   Sidebar,
@@ -348,14 +348,17 @@ function NavigationBody({
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="desktop-sidebar-footer">
-        <span aria-hidden="true" className="desktop-mark" />
-        <IdentityButton
-          product="Studio"
-          label="nessa Studio Settings"
-          shortcut={chordLabel(settingsChord, isMac)}
-          onClick={() => openSettings()}
-        />
-        <ThemeMenu theme={theme} onThemeChange={onThemeChange} />
+        <IdentityRow
+          as="div"
+          trailing={<ThemeMenu theme={theme} onThemeChange={onThemeChange} />}
+        >
+          <IdentityButton
+            product="Studio"
+            label="nessa Studio Settings"
+            shortcut={chordLabel(settingsChord, isMac)}
+            onClick={() => openSettings()}
+          />
+        </IdentityRow>
       </SidebarFooter>
     </>
   )

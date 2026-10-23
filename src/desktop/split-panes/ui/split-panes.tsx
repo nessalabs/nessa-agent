@@ -134,9 +134,11 @@ export const SplitPanes = memo(function SplitPanes({
       frames = []
     }
     const hold = (on: boolean) => {
-      gridRef.current
-        ?.closest<HTMLElement>("[data-workspace]")
-        ?.toggleAttribute("data-spare-held", on)
+      const workspace = gridRef.current?.closest<HTMLElement>("[data-workspace]")
+      workspace?.toggleAttribute("data-spare-held", on)
+      // The host's mark for a column this change folds goes with the hold,
+      // in the same step: what is measured next never sees one without the other.
+      if (!on) workspace?.removeAttribute("data-folding")
     }
     const draw = (columns: Columns) => {
       pending = { columns }
@@ -239,8 +241,13 @@ export const SplitPanes = memo(function SplitPanes({
     const workspace = gridRef.current?.closest<HTMLElement>("[data-workspace]")
     if (!workspace) return
     const live = source.layout()?.columns ?? null
-    workspace.toggleAttribute("data-spare-held", drawn !== live)
-    return () => workspace.removeAttribute("data-spare-held")
+    const held = drawn !== live
+    workspace.toggleAttribute("data-spare-held", held)
+    if (!held) workspace.removeAttribute("data-folding")
+    return () => {
+      workspace.removeAttribute("data-spare-held")
+      workspace.removeAttribute("data-folding")
+    }
   }, [drawn, source])
   const multi = panes.length > 1
   // In the order the panes were opened, not where they sit: a pane is placed

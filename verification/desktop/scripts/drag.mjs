@@ -444,14 +444,16 @@ async function stationaryThrough(page, { focus, count, change }) {
   )
     failures.push("the action changed no pane geometry")
   if (samples.length < 2) failures.push("no layout change frames were sampled")
-  if (samples.some((sample) => sample.flight))
-    failures.push("workspace bounds started a FLIP")
+  // Panes that move travel to their new boxes (`--desktop-flight`); one that
+  // keeps its box is never flown, hidden or held (below).
   for (const sample of samples) {
     if (sample.measuring) failures.push("the temporary measurement hold reached paint")
     for (const pane of sample.panes) {
       if (!stationary.includes(pane.key)) continue
       if (pane.quiet === "hidden" || pane.flying || pane.restoring)
-        failures.push(`stationary pane ${pane.key} was suppressed`)
+        failures.push(
+          `stationary pane ${pane.key} was suppressed (${pane.quiet === "hidden" ? "hidden" : pane.flying ? "flying" : "restoring"})`,
+        )
       if (pane.fill !== colors.find((old) => old.key === pane.key)?.fill)
         failures.push(`stationary pane ${pane.key} changed its material`)
     }
