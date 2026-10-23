@@ -1,0 +1,71 @@
+{
+  "check": "user-flow-ordering",
+  "ok": true,
+  "started": "2026-10-23T14:35:19.949Z",
+  "finished": "2026-10-23T14:35:54.420Z",
+  "target": {
+    "url": "http://127.0.0.1:1443/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "name": "uncertain-install-busy",
+      "installDispatches": 1,
+      "staleDownloadButtons": 0,
+      "freshDownloadButtons": 1,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "uncertain-install-not-confirmed",
+      "installDispatches": 1,
+      "staleDownloadButtons": 0,
+      "freshDownloadButtons": 1,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "cross-tab-clear",
+      "tab": "B",
+      "expanded": true,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "old-refusal-new-send",
+      "tab": "B",
+      "expanded": false,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "permission-revoke-focus",
+      "revokesBeforeOutcome": 1,
+      "pendingDisabled": true,
+      "recoveryEnabled": true,
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "console",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1443/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

@@ -32,6 +32,10 @@ cover owners that were previously buried in implementation or design tables.
 
 Before opening the documentation PR, the atlas was reconciled with main revision `11b622d8e5c07f6a40cdec4fd172e3f26e3eab4b`. This bounded pass retains later flow-map updates for desktop connection modes, gateway app integration, native reader authority, paired protected reads and forwarded tool results. Source links follow the protocol/client-core extraction. It is not a new exhaustive runtime audit; other flow evidence retains the inspection limits above.
 
+## User-flow regression inventory
+
+The [user journey coverage inventory](user-flow-coverage.md) records this bounded current-main lifecycle pass, ordering cases, existing conversation evidence and unrun gates. It does not replace the historical sweep or claim a fresh backend audit.
+
 ## Ownership coverage
 
 | Source area | Principal state or operation | Browse | Authority and interpretation |
