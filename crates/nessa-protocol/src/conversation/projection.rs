@@ -1674,14 +1674,20 @@ impl Projection {
                                 let before =
                                     old.map(|old| clipped(old, MAX_TOOL_CHANGE_SIDE_BYTES));
                                 let after = clipped(new, MAX_TOOL_CHANGE_SIDE_BYTES);
+                                let cut = before
+                                    .as_ref()
+                                    .is_some_and(|before| before.len() < old.map_or(0, str::len))
+                                    || after.len() < new.len();
                                 // Only while the details have room, and no
-                                // more of the path than they could hold.
+                                // more of the path than they could hold. A
+                                // clipped side says so in the text too.
                                 let text = (!details_full).then(|| {
                                     format!(
-                                        "File: {}\nBefore:\n{}\nAfter:\n{}",
+                                        "File: {}\nBefore:\n{}\nAfter:\n{}{}",
                                         clipped(path.as_str(), 16384),
                                         before.as_deref().unwrap_or("(not provided)"),
-                                        after
+                                        after,
+                                        if cut { "\n[Output truncated]" } else { "" }
                                     )
                                 });
                                 // A path past its bound is not listed rather
@@ -1693,9 +1699,7 @@ impl Projection {
                                 } else {
                                     tool.changes.push(ConversationToolChange {
                                         path: path.as_str().to_owned(),
-                                        cut: before.as_ref().is_some_and(|before| {
-                                            before.len() < old.map_or(0, str::len)
-                                        }) || after.len() < new.len(),
+                                        cut,
                                         before,
                                         after,
                                     });

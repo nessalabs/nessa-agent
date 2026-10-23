@@ -800,8 +800,13 @@ fn a_tool_lists_the_files_it_changed_and_says_when_a_side_was_cut() {
             },
         ]
     );
-    // The details still say the same in text, for readers that print them.
+    // The details still say the same in text, for readers that print them,
+    // and mark the side that was clipped.
     assert!(view.tools[0].details.contains("File: new.ts"));
+    assert_eq!(
+        view.tools[0].details.matches("[Output truncated]").count(),
+        1
+    );
     let json = serde_json::to_value(&view.tools[0]).unwrap();
     assert_eq!(json["changes"][0]["path"], "new.ts");
     assert!(json["changes"][0].get("before").is_none());
