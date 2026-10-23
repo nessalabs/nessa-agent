@@ -70,6 +70,13 @@
  *               sent with the rail open is answered; closed, opened again,
  *               and turned off while open, the titlebar's controls go back to
  *               starting where the lights end
+ *   onboarding  setup is replayed from Settings › Advanced › Setup: the host
+ *               is asked once; in the setup window that ask opens, welcome
+ *               has no Back button and Close sits in the top-right corner;
+ *               past it the picker has Back in the top-left corner, which
+ *               returns to welcome; Close then leaves setup, handing over
+ *               as left, not finished, and the message sent in the window
+ *               after it is answered
  *   notice      a review waits in another conversation, which the window does
  *               not show: the host's system notice names its tool and the
  *               conversation's title, opening it brings that conversation
@@ -1456,6 +1463,79 @@ const steps = {
     })
   },
 
+  async onboarding(run, step, failures) {
+    await run.exclusive(async () => {
+      const asked = await replayOnboarding(run.page, run.evidence)
+      if (asked !== 1) {
+        failures.push(`Replay asked the host ${asked} times, not once`)
+        return
+      }
+      // The host opens the setup window for that ask; this page is that
+      // window, over the same gateway, as the real host builds it.
+      const page = await run.page.context().newPage()
+      try {
+        await page.addInitScript(gatewayHost, {
+          endpoint: run.stack.endpoint,
+          credential: run.stack.credential,
+          setup: true,
+        })
+        await page.goto(`${new URL(run.page.url()).origin}/index.html?surface=setup`)
+        const heading = (name) => page.getByRole("heading", { name, exact: true })
+        const button = (name) => page.getByRole("button", { name, exact: true })
+        await heading(names.setup.welcome).waitFor({ timeout: 15_000 })
+        // Welcome has nothing before it: no Back, and Close in its corner.
+        await button(names.setup.close).waitFor()
+        let corners = await setupCorners(page)
+        if (corners.back) failures.push("welcome shows a Back button")
+        if (!inCorner(corners.close, "right"))
+          failures.push(
+            `Close is not round in the top-right corner: ${JSON.stringify(corners.close)}`,
+          )
+        // Forward and back twice: each time the picker has Back in the
+        // top-left corner, and it returns to welcome.
+        for (let round = 0; round < 2; round += 1) {
+          await button(names.setup.getStarted).click()
+          await heading(names.setup.chooseAgent).waitFor({ timeout: 10_000 })
+          await button(names.setup.back).waitFor()
+          corners = await setupCorners(page)
+          if (!inCorner(corners.back, "left"))
+            failures.push(
+              `Back is not round in the top-left corner: ${JSON.stringify(corners.back)}`,
+            )
+          if (!inCorner(corners.close, "right"))
+            failures.push(
+              `on the picker Close left its corner: ${JSON.stringify(corners.close)}`,
+            )
+          await button(names.setup.back).click()
+          await heading(names.setup.welcome).waitFor({ timeout: 10_000 })
+          if (await button(names.setup.back).count())
+            failures.push("back on welcome, the Back button is still shown")
+        }
+        // Close leaves setup from the picker: one handoff, as left.
+        await button(names.setup.getStarted).click()
+        await heading(names.setup.chooseAgent).waitFor({ timeout: 10_000 })
+        await button(names.setup.close).click()
+        const handed = await waitFor(
+          async () =>
+            (await page.evaluate(() => window.__fakeHostSetupFinishes.length)) > 0,
+          10_000,
+        )
+        const finishes = await page.evaluate(() => window.__fakeHostSetupFinishes)
+        if (!handed) failures.push("Close did not hand setup back to the host")
+        else if (finishes.length !== 1 || finishes[0].completed !== false)
+          failures.push(
+            `Close handed over ${JSON.stringify(finishes)}, not one left setup`,
+          )
+        if (await page.locator(".nessa-setup-window").count())
+          failures.push("setup is still on screen after Close")
+      } finally {
+        await page.close()
+      }
+    })
+    // The window is still the window it was: a message sent there is answered.
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
   async pool(run, step, failures) {
     // Workers dial the gateway's native listener, which is off in this run
     // until a step turns it on: a person does it in Settings, here as in
@@ -2768,6 +2848,62 @@ async function openLinkedDevices(page) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
   await page.locator(css.settingsCategory, { hasText: names.connections }).click()
   await page.locator(css.settingsTab, { hasText: names.linkedDevices }).click()
+}
+
+/**
+ * Asks for setup again where a person does: Settings › Advanced › Setup, its
+ * Replay button. Resolves how many times the host was asked. Leaves Settings.
+ */
+async function replayOnboarding(page, evidence) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.advanced }).click()
+  await page.locator(css.settingsTab, { hasText: names.setupTab }).click()
+  if (evidence)
+    await page
+      .screenshot({ path: join(evidence, "onboarding-settings.png") })
+      .catch(() => {})
+  const before = await page.evaluate(() => window.__fakeHostReplays)
+  await page
+    .locator(selectorFor.settingRow("replay-onboarding"))
+    .getByRole("button", { name: names.replayOnboarding, exact: true })
+    .click()
+  await waitFor(
+    async () => (await page.evaluate(() => window.__fakeHostReplays)) > before,
+    5_000,
+  )
+  const asked = (await page.evaluate(() => window.__fakeHostReplays)) - before
+  await closeSettings(page)
+  return asked
+}
+
+/**
+ * Where setup's corner buttons are, against its window: which buttons are
+ * drawn, and for each its centre as fractions of the window's width and
+ * height, and whether it is round.
+ */
+function setupCorners(page) {
+  return page.evaluate((labels) => {
+    const frame = document.querySelector(".nessa-setup-window")?.getBoundingClientRect()
+    const at = (label) => {
+      const button = document.querySelector(`button[aria-label="${label}"]`)
+      if (!frame || !button) return null
+      const box = button.getBoundingClientRect()
+      return {
+        x: (box.left + box.width / 2 - frame.left) / frame.width,
+        y: (box.top + box.height / 2 - frame.top) / frame.height,
+        round:
+          Math.abs(box.width - box.height) < 0.5 &&
+          parseFloat(getComputedStyle(button).borderRadius) >= box.width / 2 - 0.5,
+      }
+    }
+    return { back: at(labels.back), close: at(labels.close) }
+  }, names.setup)
+}
+
+/** Whether a corner button sits in the window's top-left or top-right corner. */
+function inCorner(place, side) {
+  if (!place || !place.round || place.y > 0.15) return false
+  return side === "left" ? place.x < 0.15 : place.x > 0.85
 }
 
 /** Leaves Settings: Esc does not close it; its back control returns to the app. */

@@ -93,6 +93,10 @@ export const KNOBS = {
     default: 1,
     what: "times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off",
   },
+  onboardings: {
+    default: 1,
+    what: "times setup is replayed from Settings and walked forward, back with its Back button, and left with its Close button",
+  },
   linkings: {
     default: 1,
     what: "times native linking is turned on and off again from Settings, each restarting the gateway",
@@ -194,6 +198,7 @@ export function plan(knobs) {
   add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
   add(knobs.rails, () => ({ kind: "rail" }))
+  add(knobs.onboardings, () => ({ kind: "onboarding" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   add(knobs.tables, () => ({ kind: "table" }))
   add(knobs.traces, () => ({ kind: "trace" }))

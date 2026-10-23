@@ -543,6 +543,17 @@ export const names = {
   /** Settings' category and tab holding the previews, the side rail's switch among them. */
   advanced: "Advanced",
   experimental: "Experimental",
+  /** Settings › Advanced's tab holding first-run setup, and its row's button. */
+  setupTab: "Setup",
+  replayOnboarding: "Replay",
+  /** First-run setup (`onboarding/ui`): its steps' headings, the way on, and its corner buttons. */
+  setup: {
+    welcome: "Welcome to Nessa",
+    getStarted: "Get started",
+    chooseAgent: "Choose an agent",
+    back: "Back",
+    close: "Close setup",
+  },
   /** A session's menu item that opens the share dialog. */
   share: "Share…",
   /** What Integrations says (`sentences` in src/desktop/settings/model/mcp-servers.ts). */
