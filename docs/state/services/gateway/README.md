@@ -52,3 +52,4 @@ flowchart TB
 - [Conversation identity and deletion](conversation.md)
 - [Bounded physical history reads](record-reads.md)
 - [Outbound webhook foundation and remaining integration](webhook-foundation.md)
+- [Outbound webhook credential and principal admission](webhook-admission.md)
