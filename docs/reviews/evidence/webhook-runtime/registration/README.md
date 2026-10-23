@@ -3,7 +3,13 @@
 Source: `460a1c85935973f367cfd5fd033bcb81dd181469`. Base: `501a81dca92d0af7f7d8fa457bd1ec409cdf3b89`.
 This checkpoint adds bounded private intents and the inner registration use case;
 it does not compose a product route, W1 supervisor, source reader or sender.
-Independent registration review is pending.
+[Independent review round1](review-1/report.md) is **not clean** at
+`7041ac656528c88776ebb0931500a8667f52a1df`: MajorR1 is reserve-output original
+configuration/request correlation; MinorR2 is row-step interruption wrongly
+classified Invalid. Both remain open at this checkpoint. The known immutable
+purpose/kind gap K1 is separately reproduced; no send authority was demonstrated.
+The 84-test independent baseline and three passing defect demonstrations are
+historical evidence, not fixed regression passes.
 The [render result](render.json) records four rendered diagrams with no browser
 page errors; all four screenshots were visually inspected. This uses system
 Chromium151 for documentation only, not canonical gateway/browser qualification. Earlier auth issuance review remains
