@@ -3913,7 +3913,11 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .clone();
-            assert_eq!(asked, vec![grant.to_owned()], "{method}");
+            assert_eq!(
+                asked,
+                vec!["session.enter".to_owned(), grant.to_owned()],
+                "{method}"
+            );
         }
     }
 
@@ -4115,6 +4119,23 @@ mod tests {
         }
     }
 
+    /// Original issuance of a newly constructed synthetic product credential.
+    fn test_product_origin(
+        credential: &Credential,
+    ) -> nessa_auth::application::origin::CredentialOrigin {
+        let original = credential
+            .issued(
+                nessa_auth::domain::IssuanceCause::AdminIssue,
+                nessa_auth::domain::Initiator::LocalOperator,
+            )
+            .unwrap();
+        nessa_auth::application::origin::CredentialOrigin::restore(
+            nessa_auth::application::dto::CredentialTransitionDto::record(&original, 1, 1, None),
+            credential,
+        )
+        .unwrap()
+    }
+
     fn snapshot(role: MembershipRole, status: MembershipStatus) -> AccessSnapshot {
         snapshot_with(role, status, &["server.read", "credential.manage"])
     }
@@ -4151,29 +4172,7 @@ mod tests {
                 status,
             );
             let revision = 1;
-            // This fixture explicitly creates its own original product issuance.
-            let original = nessa_auth::domain::CredentialTransition::new(
-                credential.id().clone(),
-                None,
-                nessa_auth::domain::CredentialLifecycle {
-                    issued_at: credential.issued_at(),
-                    expires_at: credential.expires_at(),
-                    revoked_at: None,
-                },
-                nessa_auth::domain::TransitionCause::Issued(
-                    nessa_auth::domain::IssuanceCause::AdminIssue,
-                ),
-                nessa_auth::domain::Initiator::LocalOperator,
-                credential.issued_at(),
-            )
-            .unwrap();
-            let origin = nessa_auth::application::origin::CredentialOrigin::restore(
-                nessa_auth::application::dto::CredentialTransitionDto::record(
-                    &original, 1, 1, None,
-                ),
-                &credential,
-            )
-            .unwrap();
+            let origin = test_product_origin(&credential);
             AccessSnapshot {
                 credential,
                 membership,
@@ -5461,15 +5460,18 @@ mod tests {
     impl PolicyEvaluator for RecordingGrantPolicy {
         fn evaluate(
             &self,
-            _: &AuthContext,
+            context: &AuthContext,
             action: &Action,
-            _: &Resource,
-            _: &AccessSnapshot,
+            resource: &Resource,
+            snapshot: &AccessSnapshot,
         ) -> Result<Decision, AccessError> {
             self.asked
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .push(action.as_str().to_owned());
+            if action.as_str() == "session.enter" {
+                return CedarPolicyEvaluator::new()?.evaluate(context, action, resource, snapshot);
+            }
             Ok(Decision::Deny)
         }
     }

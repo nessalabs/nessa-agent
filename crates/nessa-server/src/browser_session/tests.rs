@@ -841,6 +841,10 @@ async fn timed_out_check_finishes_the_exact_renewal_transition() {
         vec![],
     )
     .unwrap();
+    {
+        let mut snapshot = authority.snapshot.lock().unwrap();
+        snapshot.origin = test_product_origin(&snapshot.credential);
+    }
     authority.snapshot.lock().unwrap().membership = membership;
     let credential_id = authenticate(&state).await.context().credential_id().clone();
     store
@@ -1173,6 +1177,10 @@ async fn check_uses_one_time_sample_for_expected_and_persisted_renewal() {
         vec![],
     )
     .unwrap();
+    {
+        let mut snapshot = authority.snapshot.lock().unwrap();
+        snapshot.origin = test_product_origin(&snapshot.credential);
+    }
     authority.snapshot.lock().unwrap().membership = context;
     let credential_id = authenticate(&state).await.context().credential_id().clone();
     let store = Arc::new(RenewingStore {
@@ -1364,6 +1372,10 @@ async fn hostile_store_cannot_restore_an_expired_domain_session() {
         vec![],
     )
     .unwrap();
+    {
+        let mut snapshot = clock.snapshot.lock().unwrap();
+        snapshot.origin = test_product_origin(&snapshot.credential);
+    }
     let identity = authenticate(&state).await;
     let expired = BrowserSessionState::restore(
         identity.context().credential_id().clone(),

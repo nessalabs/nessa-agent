@@ -145,7 +145,6 @@ async fn bearer_never_enters_registration_result_database_or_audit_and_replay_is
     command.credentials = &reply;
     let initial = command.execute(f.proposed()).await.unwrap();
     assert!(!format!("{initial:?}").contains("isolated-unneeded-bearer-marker"));
-    drop(command);
     f.reopen();
     let retry = f.command(&f.store).execute(f.proposed()).await.unwrap();
     assert_eq!(initial, retry);
