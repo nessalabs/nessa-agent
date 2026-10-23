@@ -576,3 +576,46 @@ async fn actual_original_actor_cannot_be_replaced_by_a_claimed_reply_actor() {
     assert_eq!(f.count("registrations"), 0);
     assert_eq!(f.count("registration_intents"), 1);
 }
+
+struct FutureOrigin<'a>(&'a LocalCredentialStore);
+impl AccessAdmission for FutureOrigin<'_> {
+    fn hold<'a>(&'a self, id: &'a CredentialId) -> PortFuture<'a, AccessHold> {
+        Box::pin(async move {
+            let mut hold = self.0.hold(id).await?;
+            let original = &hold.snapshot.origin;
+            let record = CredentialTransitionDto::record(
+                original.transition(),
+                original.sequence(),
+                original.revision() + 10,
+                original.correlation().map(str::to_owned),
+            );
+            hold.snapshot.origin = nessa_auth::application::origin::CredentialOrigin::restore(
+                record,
+                &hold.snapshot.credential,
+            )?;
+            Ok(hold)
+        })
+    }
+}
+
+#[tokio::test]
+async fn matching_reply_cannot_turn_a_future_origin_into_current_committed_authority() {
+    let f = Registered::new();
+    let reply = ChangedIssue {
+        auth: &f.auth,
+        alter: |_, transitions| transitions[0].revision += 10,
+        rewrite: None,
+    };
+    let future = FutureOrigin(&f.auth);
+    let mut command = f.command(&f.store);
+    command.credentials = &reply;
+    command.admission = &future;
+    assert_eq!(
+        command.execute(f.proposed()).await,
+        Err(RegistrationFailure::Inconsistent)
+    );
+    assert_eq!(f.count("registrations"), 0);
+    assert_eq!(f.count("registration_intents"), 1);
+    // The genuine committed proof is still recoverable without another issue.
+    assert!(f.command(&f.store).execute(f.proposed()).await.is_ok());
+}
