@@ -149,3 +149,22 @@ keyboard activation of the composite control opened the correct section. The
 published chart binds that section to the acknowledgement leaf instead, so its
 clickable + has an unambiguous target. [Diagnostic](detail-hit-target.json).
 The final published bindings were opened individually in the 35-binding pass.
+
+## Gateway-backed Chromium checks after toolchain installation
+
+At source `7f434845423686cdd01a17300c47d10d46911f50`, the real gateway
+built successfully with Rust 1.99.1 (one existing constant-evaluation warning).
+The signed-out scripted command then ran with installed Chromium through the
+same launch-only preload used above. It changed no application source or test
+assertions and used no live provider account.
+
+**All four Chromium groups passed:** resize-observers, mcp-apps-gateway,
+gateway-window and scripted-scenarios (permission, failed-turn and cancellation
+paths). Each WebKit launch could not run because its executable is absent.
+The command's aggregate remains **could-not-run, exit 2**, not a full two-engine
+pass. Default/raised conversation stress, chaos, native macOS and full desktop
+run-all remain unrun.
+
+[Runner summary](scripted-e2e-summary.md) · [Compact per-engine counts](scripted-e2e.json).
+This supersedes the missing-Cargo limitation for the Chromium scripted gate,
+without changing the earlier failed attempt or implying WebKit coverage.
