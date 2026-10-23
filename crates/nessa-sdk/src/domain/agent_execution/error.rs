@@ -33,6 +33,9 @@ pub enum ExecutionError {
     InvalidStructuredContent,
     /// Arguments of an MCP tool call are not the JSON text of one object.
     InvalidMcpCallArguments,
+    /// The input an agent reported for a tool call is not the JSON text of
+    /// one object.
+    InvalidToolInput,
     /// An update names a different MCP server or tool than the one already
     /// observed for this tool call. The first identity stands.
     DifferentMcpTool,

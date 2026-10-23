@@ -49,7 +49,6 @@ import type {
   Message,
   MessageApp,
   Part,
-  StepKind,
   Transcript,
   TranscriptQuestion,
   TurnMessage,
@@ -62,6 +61,7 @@ import {
   type Section,
   type SessionSummary,
 } from "../../model/workspace-index"
+import { toolStep } from "./gateway-steps"
 import { gatewayToolWidget } from "./tool-widget"
 
 /** The one section the gateway's conversations are listed under. */
@@ -271,23 +271,6 @@ function publishedPart(artifact: ConversationView["artifacts"][number]): Part {
   }
 }
 
-/** What a tool call did, in the window's four kinds; the provider's other kinds read as run. */
-function stepKind(kind: ConversationTool["kind"]): StepKind {
-  switch (kind) {
-    case "read":
-      return "read"
-    case "edit":
-    case "delete":
-    case "move":
-      return "edit"
-    case "search":
-    case "fetch":
-      return "search"
-    default:
-      return "run"
-  }
-}
-
 /**
  * The MCP App that wrote a turn of the person's, by its server and tool, as
  * the view names it (#390); nothing for the person's own.
@@ -454,6 +437,7 @@ export function transcriptFrom(
   let activity: Transcript["activity"] = null
   for (const turn of view.messages) {
     const input = inputId(turn.executionId)
+    const working = turn.status === "running" || turn.status === "queued"
     const user: TurnMessage = {
       id: input,
       role: "user",
@@ -484,14 +468,19 @@ export function transcriptFrom(
         // A tool the bounded view left out is not guessed at.
         if (!tool) continue
         lastTool = tool
-        parts.push({ kind: "step", step: stepKind(tool.kind), label: tool.title })
+        parts.push(
+          toolStep(tool, {
+            turnEnded: !working,
+            serverNowMs: view.serverNowMs,
+            receivedAtMs,
+          }),
+        )
         const widget = gatewayToolWidget(view.conversationId, tool)
         if (widget) parts.push(widget)
       }
     }
     parts.push(...(published.byExecution.get(turn.executionId) ?? []).map(publishedPart))
     const terminal = turnTerminal(turn)
-    const working = turn.status === "running" || turn.status === "queued"
     const usageLimit =
       turn.usageLimit === undefined
         ? undefined

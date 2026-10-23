@@ -11,6 +11,7 @@ use super::super::{
         forwarded::{attach_arguments, attach_forwarded},
         thought_level, AcpConfig,
     },
+    tools::wire as tool_wire,
 };
 #[cfg(all(test, unix))]
 use super::failure::MAX_RETAINED_CATEGORY_FACTS;
@@ -2891,7 +2892,10 @@ impl<P: AcpProfile> Worker<P> {
             }
             let forwarded = self.config.stand_ins.forwarded();
             let tool = attach_arguments(
-                attach_forwarded(self.profile.tool_call(update)?, forwarded),
+                attach_forwarded(
+                    tool_wire::attach_input(self.profile.tool_call(update)?, update),
+                    forwarded,
+                ),
                 forwarded,
             );
             let name = self.profile.traced_tool_name(tool.id().as_str());

@@ -141,7 +141,20 @@ export const Message = memo(function Message({
         {groups.map((group, index) => {
           if (Array.isArray(group))
             return (
-              <ToolSteps key={index} steps={group} settled={message.working !== true} />
+              <ToolSteps
+                key={index}
+                steps={group}
+                // A run is over once its turn is, or once the agent has
+                // written past it with none of its calls still at work — a
+                // call can run on in the background while the agent writes.
+                settled={
+                  message.working !== true ||
+                  (index < groups.length - 1 &&
+                    group.every(
+                      (step) => step.status !== "pending" && step.status !== "running",
+                    ))
+                }
+              />
             )
           // What the agent said is Markdown, whitespace and all: its line
           // breaks and blank lines are structure, so it is parsed, not set in

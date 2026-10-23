@@ -300,102 +300,12 @@
   font-size: inherit;
 }
 
-/* ——— Steps: what the agent did, one quiet line each, on a hairline ——— */
-
-.workspace-steps {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0 0 0 12px;
-  list-style: none;
-  border-left: 1px solid color-mix(in oklab, var(--foreground) 9%, transparent);
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-.workspace-steps li {
-  display: flex;
-  min-width: 0;
-  height: 24px;
-  align-items: center;
-  gap: 8px;
-  color: var(--desktop-faint);
-  font-size: var(--desktop-text-footnote);
-}
-
-.workspace-steps svg {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  stroke-width: 1.8;
-}
+/* ——— Steps: what the agent did, as the kit's waterfall (`ToolTrace`) ——— */
 
 /* A web step's site icon sits where the kind's icon would (`tool-steps.tsx`). */
 .workspace-step-favicon {
   width: 14px;
   height: 14px;
-}
-
-.workspace-step-label {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-.workspace-step-detail {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--desktop-muted);
-  font-family: var(--nessa-font-mono);
-  font-size: var(--desktop-text-footnote);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-diff {
-  display: inline-flex;
-  flex-shrink: 0;
-  gap: 4px;
-  font-family: var(--nessa-font-mono);
-  font-size: var(--desktop-text-caption);
-}
-
-.workspace-diff ins,
-.workspace-diff del {
-  text-decoration: none;
-}
-
-.workspace-diff ins {
-  color: oklch(0.74 0.13 152);
-}
-
-.workspace-diff del {
-  color: oklch(0.7 0.15 25);
-}
-
-html:not(.dark) .workspace-diff ins {
-  color: oklch(0.55 0.14 152);
-}
-
-html:not(.dark) .workspace-diff del {
-  color: oklch(0.56 0.17 25);
-}
-
-/*
- * A settled run of steps: one line that opens to them. The kit draws the line
- * (`AgentActivityTrigger`); its chevron turns to say the steps are open.
- */
-.workspace-work {
-  gap: 4px;
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-.workspace-work [data-slot="agent-activity-trigger"] {
-  margin-left: -4px;
-}
-
-.workspace-work > .workspace-steps {
-  animation: workspace-fade-in var(--desktop-base) ease both;
 }
 
 /* ——— What the agent is doing now ——— */
