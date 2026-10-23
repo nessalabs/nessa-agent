@@ -89,26 +89,27 @@ export function toolStep(
   const diff = stepDiff(changes)
   // Lines added and removed, across every file; unknown once a side was cut
   // or the list leaves out files the call changed.
-  const delta = tool.changesCut || changes.some((change) => change.cut)
-    ? {}
-    : changes
-        .map((change) =>
-          lineDelta({
-            filename: change.path,
-            from: change.before ?? "",
-            to: change.after,
-          }),
-        )
-        .reduce(
-          (sum, each) => ({
-            added: sum.added + each.added,
-            removed: sum.removed + each.removed,
-          }),
-          {
-            added: 0,
-            removed: 0,
-          },
-        )
+  const delta =
+    tool.changesCut || changes.some((change) => change.cut)
+      ? {}
+      : changes
+          .map((change) =>
+            lineDelta({
+              filename: change.path,
+              from: change.before ?? "",
+              to: change.after,
+            }),
+          )
+          .reduce(
+            (sum, each) => ({
+              added: sum.added + each.added,
+              removed: sum.removed + each.removed,
+            }),
+            {
+              added: 0,
+              removed: 0,
+            },
+          )
   return {
     kind: "step",
     step: stepKind(tool.kind),
