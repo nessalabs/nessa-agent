@@ -14,13 +14,30 @@ import "./chat-pill.css"
  * so and goes nowhere. One pill for every place: a thread's report line, an
  * id an agent wrote, a tool that named a chat.
  */
-export const ChatPill = memo(function ChatPill({ sessionId }: { sessionId: string }) {
+export const ChatPill = memo(function ChatPill({
+  sessionId,
+  still = false,
+}: {
+  sessionId: string
+  /**
+   * Drawn, not pressed: inside a control of its own — a tool step's row —
+   * the pill names the chat with the same look, and the row keeps the press.
+   */
+  still?: boolean
+}) {
   const store = useOptionalStore()
   const session = useChats()[sessionId] as SessionSummary | undefined
   if (!session)
     return (
       <span className="workspace-chat-pill" data-gone title="This chat is no longer here">
         <span className="workspace-chat-pill-title">A chat that’s gone</span>
+      </span>
+    )
+  if (still)
+    return (
+      <span className="workspace-chat-pill" data-chat-pill={sessionId} data-still>
+        <AgentTile model={session.model} size={14} />
+        <span className="workspace-chat-pill-title">{session.title}</span>
       </span>
     )
   return (
@@ -62,10 +79,10 @@ const chatId = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
 /**
  * A line of the window's own — a tool step's title or what it acted on —
- * with each chat id the window knows drawn as that chat's pill. An id it
- * does not know stays as text.
+ * with each chat id the window knows drawn as that chat's pill (`still`
+ * inside a control of its own). An id it does not know stays as text.
  */
-export function WithChats({ text }: { text: string }) {
+export function WithChats({ text, still = false }: { text: string; still?: boolean }) {
   const sessions = useChats()
   const parts: ReactNode[] = []
   let at = 0
@@ -74,7 +91,7 @@ export function WithChats({ text }: { text: string }) {
     if (!Object.hasOwn(sessions, id)) continue
     const index = match.index ?? 0
     if (index > at) parts.push(text.slice(at, index))
-    parts.push(<ChatPill key={index} sessionId={id} />)
+    parts.push(<ChatPill key={index} sessionId={id} still={still} />)
     at = index + id.length
   }
   if (parts.length === 0) return <>{text}</>

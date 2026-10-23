@@ -9,6 +9,7 @@ import type { Message as MessageValue } from "../../model/transcript"
 import { fakeSource, settle, summary, testIndex, testStore } from "../../testing"
 import { AgentProse } from "./rich-text"
 import { Message } from "./message"
+import { ToolSteps } from "./tool-steps"
 
 let root: Root
 let host: HTMLDivElement
@@ -115,4 +116,44 @@ it("draws a known chat's id in plain prose as its pill; other ids, code and link
   expect(host.textContent).toContain(`not ${unknown}.`)
   expect(host.querySelector("a")?.textContent).toBe(known)
   // One pill: the copies in the link and the code block stay as written.
+})
+
+it("names a chat a tool step acted on as its pill, drawn still inside the step's row", async () => {
+  const known = "fcd9bdb0-1111-4222-8333-444455556666"
+  const index = testIndex()
+  const s = testStore(
+    fakeSource({
+      ...index,
+      sessions: [...index.sessions, summary(known, "desktop", 50)],
+    }),
+  )
+  await s.dispatch(loadWorkspace())
+  await settle()
+  await act(async () =>
+    root.render(
+      <Provider store={s}>
+        <ToolSteps
+          steps={[
+            { kind: "step", step: "run", label: "Messaged", detail: `thread ${known}` },
+          ]}
+        />
+      </Provider>,
+    ),
+  )
+  // Opened, the trace draws its rows.
+  await act(async () =>
+    host
+      .querySelector<HTMLButtonElement>(
+        "[data-slot=tool-trace] > button, [data-slot=tool-trace-line]",
+      )
+      ?.click(),
+  )
+  const pill = host.querySelector<HTMLElement>(`[data-chat-pill="${known}"]`)
+  expect(pill?.textContent).toBe(`Session ${known}`)
+  expect(pill?.hasAttribute("data-still")).toBe(true)
+  expect(pill?.tagName).toBe("SPAN")
+  // The row keeps the press: no control inside it.
+  expect(
+    pill?.closest("[data-slot=tool-trace-step]")?.querySelectorAll("button"),
+  ).toHaveLength(0)
 })

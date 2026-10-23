@@ -72,3 +72,12 @@
 :root[data-motion="reduced"] .workspace-message[data-new] > .workspace-thread-report {
   animation: none;
 }
+
+/* Drawn inside a control of its own: the pill's look, the control's press. */
+.workspace-chat-pill[data-still] {
+  cursor: inherit;
+}
+
+.workspace-chat-pill[data-still]:hover {
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
