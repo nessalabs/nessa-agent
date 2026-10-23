@@ -74,6 +74,7 @@ import {
   panes,
   recordFrames,
   recordZones,
+  sweepZoneEvidence,
   residueFailures,
   settled,
   state,
@@ -539,19 +540,9 @@ const checks = {
       await page.mouse.move(middle.x + middle.w * 0.45, middle.y + dy, { steps: 30 })
       await frames(page, 2)
       const recorded = await zones.take()
-      observations.push({ dy, recorded })
-      // A sweep's direction is judged while moving. A late rendering frame
-      // may arrive after the model's legitimate rest transition at the edge.
-      // These timestamps attribute observation, not the model's decision.
-      const said = recorded
-        .filter((entry) => entry.at - entry.lastMoveAt < restAfter)
-        .map((entry) => entry.said)
-      if (!said.length)
-        failures.push(`sweeping left at top+${dy}px announced no zone at all`)
-      if (said.some((z) => zoneSaid.vertical.test(z)))
-        failures.push(
-          `sweeping left at top+${dy}px picked a vertical zone: ${said.join(" → ")}`,
-        )
+      const evidence = sweepZoneEvidence(recorded, restAfter, zoneSaid.vertical)
+      observations.push({ dy, recorded, ...evidence })
+      failures.push(...evidence.failures.map((failure) => `top+${dy}px: ${failure}`))
       await letGo(page, { escape: true })
     }
     return { failures, observations }
