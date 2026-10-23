@@ -10,7 +10,7 @@ use std::{
     io::{ErrorKind, Read, Write},
     path::Path,
 };
-use uuid::Uuid;
+use uuid::{fmt::Hyphenated, Uuid};
 
 pub(super) fn append(transaction: &Transaction<'_>, record: Record) -> Result<(), OutboxError> {
     let (id, registration, delivery) = record.keys()?;
@@ -85,7 +85,7 @@ pub(super) struct SavedAudit {
 }
 impl SavedAudit {
     pub(super) fn row(row: &Row<'_>) -> SqlResult<Self> {
-        super::codec::check_row_bytes(row, 0..6, AUDIT_BYTES + 4 * uuid::fmt::Hyphenated::LENGTH)?;
+        super::codec::check_row_bytes(row, 0..6, AUDIT_BYTES + 4 * Hyphenated::LENGTH)?;
         Ok(Self {
             id: row.get(0)?,
             registration: row.get(1)?,

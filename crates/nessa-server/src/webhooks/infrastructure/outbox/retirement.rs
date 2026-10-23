@@ -4,7 +4,9 @@ use crate::webhooks::application::{
     OutboxError, Registration, RegistrationStop, Target, MAX_REGISTRATIONS,
 };
 use nessa_auth::domain::CredentialId;
-use nessa_local_database::rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
+use nessa_local_database::rusqlite::{
+    params, Connection, OptionalExtension, Result as SqlResult, Row, Transaction,
+};
 use uuid::Uuid;
 
 pub(super) struct Retirement {
@@ -40,7 +42,7 @@ struct SavedRetirement {
     retired: i64,
 }
 impl SavedRetirement {
-    fn row(row: &Row<'_>) -> nessa_local_database::rusqlite::Result<Self> {
+    fn row(row: &Row<'_>) -> SqlResult<Self> {
         super::codec::check_row_bytes(
             row,
             0..8,

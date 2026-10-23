@@ -4,8 +4,8 @@ use super::journal::{commit, finish, refuse_pending};
 use super::publication::append;
 use super::{integer, invalid, unavailable, uuid, SqlOutbox};
 use crate::webhooks::application::{
-    DeliveryCause, ExpiryObserver, MacKey, OutboxError, Registration, RegistrationStop, StopReason,
-    Target,
+    DeliveryCause, ExpiryObserver, MacKey, OutboxError, Registration, RegistrationStop,
+    RegistrationStops, StopFact, StopReason, Target,
 };
 use crate::webhooks::domain::{
     Destination, LifecycleChange, RegistrationLifecycle, RegistrationPhase,
@@ -145,7 +145,6 @@ fn check_original_stop(
     prior: &RegistrationStop,
     input: &RegistrationStop,
 ) -> Result<(), OutboxError> {
-    use crate::webhooks::application::StopFact;
     if let (StopFact::Revoked(original), StopFact::Revoked(current)) = (prior.fact(), input.fact())
     {
         if original != current {
@@ -335,7 +334,7 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
 }
 
 #[async_trait::async_trait]
-impl crate::webhooks::application::RegistrationStops for SqlOutbox {
+impl RegistrationStops for SqlOutbox {
     async fn stop_credential(
         &self,
         credential: CredentialId,
