@@ -32,3 +32,11 @@ Only terminal blank lines in copied text logs were normalized; result lines and
 original mutation failures are preserved. The initial local evidence commit
 failed the explicit committed-range EOF check; this correction closes it before
 publication or independent review.
+
+Fresh independent round two is clean at `911bdf74e4abf7526d50b8a53c858c950be8c677`,
+with all four priority buckets empty. [Full report](review-2/report.md): independent
+baseline212, two new probes, combined214 passed; all53 reviewed paths matched
+that exact head, and three committed ranges passed. The first round and its
+original harness corrections remain [preserved](review-1/report.md). N1 owner
+comments were corrected only after that report was saved. Source8e9f8c93 changed
+only in those comments. Later registration work is outside this reviewed slice.
