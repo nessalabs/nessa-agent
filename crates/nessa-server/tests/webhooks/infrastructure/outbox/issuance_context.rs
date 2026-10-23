@@ -191,15 +191,16 @@ async fn genuine_initial_issue_lost_publication_ack_recovers_before_work() {
             })
         );
         f.registration = registration;
-        let c = f.store.owner.connection.lock().unwrap();
-        assert_eq!(restoration::validate(&c), Ok(()));
-        assert_eq!(
-            c.query_row("SELECT count(*) FROM audit WHERE published=0", [], |r| r
-                .get::<_, i64>(0))
-                .unwrap(),
-            1
-        );
-        drop(c);
+        {
+            let c = f.store.owner.connection.lock().unwrap();
+            assert_eq!(restoration::validate(&c), Ok(()));
+            assert_eq!(
+                c.query_row("SELECT count(*) FROM audit WHERE published=0", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+        }
         if file_written {
             assert!(f
                 .audits()
