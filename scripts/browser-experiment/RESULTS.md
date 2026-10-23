@@ -170,7 +170,11 @@ sandbox. A future integration still needs authenticated full-browser display,
 resource/load qualification, host lifecycle security and provider-permitted auth
 flows. The page-only viewer does not include extension popups or browser chrome.
 
-## Review scope and dispositions
+## Historical review scope and dispositions
+
+The notes below describe findings and verification limits at the time of the
+earlier reviews, before supported-runner qualification. The later successful run
+at the top of this report is the current browser verification result.
 
 Independent reviews inspected the HTTP credential/origin/host boundaries, ordered
 commands, close fencing, partial startup cleanup, verifier assertions and claims.
@@ -179,14 +183,16 @@ were fixed before handoff:
 
 - Use current Chromium `Layer 1 Sandbox` table rows and positive evaluation rather
   than obsolete labels. A pure fixture test covers namespace/SUID, absent rows,
-  disabled seccomp and a negative evaluation. The rendered page remains unverified.
+  disabled seccomp and a negative evaluation. At that review, the rendered page
+  was unverified; the later qualification passed its rendered sandbox check.
 - Close an already constructed browser if viewer startup fails, retaining the
   primary failure and any cleanup failure. Startup and idempotent shutdown tests
   cover the failure order and later cleanup attempts.
 - Require a string command discriminator before property lookup. Authenticated
   malformed JSON now receives `invalid_command`, covered by the real HTTP test.
 - Retain and close an unexpectedly successful competing context before failing
-  the ownership test. That real-browser scenario remains blocked.
+  the ownership test. At that review, the real-browser scenario was blocked;
+  the later qualification passed the competing-profile ownership check.
 
 The second review found an adjacent cleanup gap: a failed context close could erase
 the original initialization error, and verifier teardown could delete the profile
