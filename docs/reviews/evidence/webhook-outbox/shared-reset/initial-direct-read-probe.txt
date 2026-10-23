@@ -1,0 +1,10 @@
+8 capacity.rs caught/restored
+9 source_reset/mod.rs caught/restored
+10 source_reset/fact.rs caught/restored
+11 source_reset/fact.rs caught/restored
+12 source_reset/fact.rs caught/restored
+Traceback (most recent call last):
+  File "/tmp/nessa-shared-reset-mutations.py", line 43, in <module>
+    if run.returncode==0:raise RuntimeError(f'uncaught mutation {index}: {file} {old}')
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: uncaught mutation 13: source_reset/mod.rs fact.id != id
