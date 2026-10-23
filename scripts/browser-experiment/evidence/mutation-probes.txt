@@ -1,63 +1,77 @@
 Mutation probes run in a disposable copy. No live Chromium, real credentials or main checkout mutations.
-secondary context retention: changed 'if (hasUnconfirmedResources())' -> 'if (false)'
+new document identity: changed 'Boolean(id && id !== initial.loaderId)' -> 'Boolean(id)'
 exit=1; expected nonzero
-✖ unconfirmed secondary context prevents deletion after ordinary resources close (0.479128ms)
-ℹ fail 1
-✖ failing tests:
-✖ unconfirmed secondary context prevents deletion after ordinary resources close (0.479128ms)
-malformed navigation target: changed 'typeof target !== "string" ||' -> 'false ||'
-exit=1; expected nonzero
-✖ invalid inputs cannot dispatch and prototype names are rejected (1.795327ms)
-ℹ fail 1
-✖ failing tests:
-✖ invalid inputs cannot dispatch and prototype names are rejected (1.795327ms)
-retained profile after uncertain close: changed 'await close()' -> 'await Promise.resolve()'
-exit=1; expected nonzero
-✖ unconfirmed browser cleanup preserves test tree and writes primary plus cleanup failures (7.860785ms)
-✖ confirmed close removes profile before writing result; removal failure is reported (2.618942ms)
+✖ queued recovery waits for correlated new document and DOM event; DOM first=false (7.781476ms)
+✖ queued recovery waits for correlated new document and DOM event; DOM first=true (2.36183ms)
 ℹ fail 2
 ✖ failing tests:
-✖ unconfirmed browser cleanup preserves test tree and writes primary plus cleanup failures (7.860785ms)
+✖ queued recovery waits for correlated new document and DOM event; DOM first=false (7.781476ms)
+matched DOM readiness: changed 'loader && readyLoaders.has(loader)' -> 'loader'
+exit=1; expected nonzero
+✖ queued recovery waits for correlated new document and DOM event; DOM first=false (10.990716ms)
+✖ unconfirmed error commit or DOM readiness preserves failure and fences queued work (1.988249ms)
+ℹ fail 2
+✖ failing tests:
+✖ queued recovery waits for correlated new document and DOM event; DOM first=false (10.990716ms)
+secondary context retention: changed 'if (hasUnconfirmedResources())' -> 'if (false)'
+exit=1; expected nonzero
+✖ unconfirmed secondary context prevents deletion after ordinary resources close (0.569058ms)
+ℹ fail 1
+✖ failing tests:
+✖ unconfirmed secondary context prevents deletion after ordinary resources close (0.569058ms)
+malformed navigation target: changed 'typeof target !== "string" ||' -> 'false ||'
+exit=1; expected nonzero
+✖ invalid inputs cannot dispatch and prototype names are rejected (2.011223ms)
+ℹ fail 1
+✖ failing tests:
+✖ invalid inputs cannot dispatch and prototype names are rejected (2.011223ms)
+retained profile after uncertain close: changed 'await close()' -> 'await Promise.resolve()'
+exit=1; expected nonzero
+✖ unconfirmed browser cleanup preserves test tree and writes primary plus cleanup failures (6.929338ms)
+✖ confirmed close removes profile before writing result; removal failure is reported (2.474111ms)
+ℹ fail 2
+✖ failing tests:
+✖ unconfirmed browser cleanup preserves test tree and writes primary plus cleanup failures (6.929338ms)
 nested cleanup ownership: changed 'localCleanupError || cause?.cleanupOwner' -> 'localCleanupError'
 exit=1; expected nonzero
-✖ nested uncertain browser initialization retains cleanup owner without implicit retry (2.75101ms)
+✖ nested uncertain browser initialization retains cleanup owner without implicit retry (2.61761ms)
 ℹ fail 1
 ✖ failing tests:
-✖ nested uncertain browser initialization retains cleanup owner without implicit retry (2.75101ms)
+✖ nested uncertain browser initialization retains cleanup owner without implicit retry (2.61761ms)
 primary failure preservation: changed 'new ExperimentFailure(code, cause)' -> 'new ExperimentFailure(code)'
 exit=1; expected nonzero
-✖ browser initialization retains primary failure, cleanup error and recovery owner (2.142549ms)
+✖ browser initialization retains primary failure, cleanup error and recovery owner (3.897551ms)
 ℹ fail 1
 ✖ failing tests:
-✖ browser initialization retains primary failure, cleanup error and recovery owner (2.142549ms)
+✖ browser initialization retains primary failure, cleanup error and recovery owner (3.897551ms)
 malformed discriminator: changed 'typeof command.type !== "string" ||' -> 'false ||'
 exit=1; expected nonzero
-✖ loopback API requires capability, exact origin/host, bounded JSON; no traversal or evaluation (67.351746ms)
+✖ loopback API requires capability, exact origin/host, bounded JSON; no traversal or evaluation (65.961733ms)
 ℹ fail 1
 ✖ failing tests:
-✖ loopback API requires capability, exact origin/host, bounded JSON; no traversal or evaluation (67.351746ms)
+✖ loopback API requires capability, exact origin/host, bounded JSON; no traversal or evaluation (65.961733ms)
 queue capacity: changed 'pending >= 16' -> 'pending >= 17'
 exit=1; expected nonzero
-✖ commands serialize, queue is bounded, close fences queued and new work (2000.764647ms)
+✖ commands serialize, queue is bounded, close fences queued and new work (2000.455232ms)
 ℹ fail 0
 ✖ failing tests:
-✖ commands serialize, queue is bounded, close fences queued and new work (2000.764647ms)
+✖ commands serialize, queue is bounded, close fences queued and new work (2000.455232ms)
 queued close fence: changed 'if (state !== "ready") throw new ExperimentFailure("session_closed")' -> 'if (false) throw new ExperimentFailure("session_closed")'
 exit=1; expected nonzero
-✖ commands serialize, queue is bounded, close fences queued and new work (2.755579ms)
+✖ commands serialize, queue is bounded, close fences queued and new work (2.827604ms)
 ℹ fail 1
 ✖ failing tests:
-✖ commands serialize, queue is bounded, close fences queued and new work (2.755579ms)
+✖ commands serialize, queue is bounded, close fences queued and new work (2.827604ms)
 origin boundary: changed 'req.headers.origin && req.headers.origin !== origin' -> 'false && req.headers.origin !== origin'
 exit=1; expected nonzero
-✖ loopback API requires capability, exact origin/host, bounded JSON; no traversal or evaluation (39.203736ms)
+✖ loopback API requires capability, exact origin/host, bounded JSON; no traversal or evaluation (37.896972ms)
 ℹ fail 1
 ✖ failing tests:
-✖ loopback API requires capability, exact origin/host, bounded JSON; no traversal or evaluation (39.203736ms)
+✖ loopback API requires capability, exact origin/host, bounded JSON; no traversal or evaluation (37.896972ms)
 credential format: changed 'Buffer.from(`Bearer ${token}`)' -> 'Buffer.from(`Invalid ${token}`)'
 exit=1; expected nonzero
-✖ loopback API requires capability, exact origin/host, bounded JSON; no traversal or evaluation (37.390046ms)
+✖ loopback API requires capability, exact origin/host, bounded JSON; no traversal or evaluation (41.544083ms)
 ℹ fail 1
 ✖ failing tests:
-✖ loopback API requires capability, exact origin/host, bounded JSON; no traversal or evaluation (37.390046ms)
+✖ loopback API requires capability, exact origin/host, bounded JSON; no traversal or evaluation (41.544083ms)
 Restored disposable copy: npm test exit=0

@@ -1,5 +1,50 @@
 # Measured outcome · 2026-10-23
 
+## Supported-runner qualification, first run
+
+[Run 39920161218](https://github.com/nessalabs/nessa-agent/actions/runs/39920161218)
+executed at exact source `5a3f9f6d9d354929aba4fd35587d17d815560fb7`.
+Ubuntu 22.04.5, non-root uid 1001, Node 24.21.0, Playwright 1.64.1 and bundled
+Chromium 156.0.8078.4 ran headful under Xvfb with `chromiumSandbox:true`.
+No host security setting was changed. Four browser checks passed:
+
+- Rendered sandbox status, including the verifier's positive evaluation and
+  namespace/SUID plus seccomp checks.
+- Toy MV3 content script, runtime messaging, service worker and storage behavior.
+- Agent API and viewer pointer controls changing the same page.
+- Navigation, test-download bytes and popup context sharing.
+
+Startup measured **1465.04 ms**. The run failed after **2659.95 ms**: after the
+intended unavailable navigation rejected, its delayed `chrome-error://chromewebdata/`
+commit interrupted recovery to the local fixture. The verifier retained that
+original error and reported test-profile cleanup confirmed. All 14 then-existing
+Node tests passed on the runner. Remaining browser checks did not run: repeated
+failure recovery, competing profile ownership, frame measurements, persistence
+across restart, second-profile separation and disconnect fencing.
+
+[Job-log-derived result JSON](evidence/run39920161218-results.from-job-log.json)
+preserves the exact emitted browser report and provenance. The
+[artifact](https://github.com/nessalabs/nessa-agent/actions/runs/39920161218/artifacts/12487056900)
+contains four files (183666 compressed bytes), including results, rendered sandbox
+text and a real viewer screenshot. Its GitHub download tool succeeded, but the
+execution environment's attempt to fetch the returned artifact bytes failed with
+`Tunnel connection failed: 403 Forbidden`. Byte retrieval is **denied**, not
+completed; no alternate route was attempted. The screenshot has not been visually
+inspected here.
+
+The repair observes Chromium's new-document and lifecycle events through the existing
+private Playwright pipe before navigation. If goto fails, it waits for a new root
+loader matching the requested/error URL and that same loader's DOM readiness before
+releasing queued commands. Same-document hash changes, child frames, the previous
+loader and unrelated readiness events do not satisfy the barrier.
+If settlement fails, it preserves both errors and closes local command admission;
+it does not retry navigation. A controlled ordering regression proves recovery
+cannot start before either barrier. The browser scenario now repeats error/recovery
+five times and checks the original fixture URL and storage afterward. **18 local
+Node tests pass**; the repair still requires supported-runner qualification.
+
+## Original local environment failure (preserved)
+
 Base: `0b8019cf45f99b285f10c41199875d474492c6d1` (main checkout before experiment).
 Branch: `codex/1089-exp-browser`. Prototype files are under
 `scripts/browser-experiment/`; the isolated qualification workflow is
@@ -10,7 +55,7 @@ Branch: `codex/1089-exp-browser`. Prototype files are under
 | Non-root identity | uid 1000, user agent |
 | Node / Playwright | v24.19.0 / 1.64.1 |
 | System Chromium | 151.0.7922.173, Debian 13 |
-| Unit + real HTTP tests | 14 tests passed, 0 failed; see node-tests.txt for duration |
+| Current unit + real HTTP tests | 18 tests passed, 0 failed; see node-tests.txt for duration |
 | Real headful launch | Blocked, `chromiumSandbox:true`, `DISPLAY=:89` |
 | Failure measurement | 102.10 ms until launch refusal; this is not successful startup latency |
 | Sandbox helper | `/usr/lib/chromium/chrome-sandbox`, mode 4755, owned by nobody, not root |
@@ -42,7 +87,7 @@ GraphQL access denial was not retried using another route.
   represented as actual Chromium.
 - [Mutation probe output](evidence/mutation-probes.txt): changing queue capacity,
   queued-close fencing, origin rejection, credential format, typed input or failure
-  and profile-retention rules made tests fail in ten disposable-copy probes; the
+  profile-retention and navigation-settlement rules made tests fail in twelve disposable-copy probes; the
   restored copy passed. No live browser sandbox setting was changed.
 - [README](README.md): runnable demo instructions, architecture, engine comparison,
   lifecycle contract, security/auth boundaries and next measurements.
@@ -60,22 +105,22 @@ The X display was a temporary diagnostic Xorg using the preinstalled dummy drive
 not a newly installed service. It has been stopped. Unit tests are reproducible
 without a display; browser verification needs a host with a functioning sandbox.
 
-## Explicitly not measured
+## Local limitations and checks not reached in the first runner run
 
-All browser persistence, profile separation, viewer same-context, extension,
-navigation/download and browser cleanup assertions are implemented in the verifier
-but **did not run past launch**. No browser screenshot or video was produced. No
-browser startup success time, frame/input latency, browser RSS/CPU, bandwidth,
-WebKit/macOS/Windows, cloud deployment, real OAuth or passkey behavior was measured.
+The local run did not pass launch. The runner independently established the four
+checks listed above and produced its own screenshot, while restart persistence,
+profile separation and later assertions remain unverified. No video, frame/input
+latency, browser RSS/CPU, bandwidth, WebKit/macOS/Windows, cloud deployment, real
+OAuth or passkey behavior was measured.
 The harness records successful startup time and 20 authenticated JPEG request
 latencies/sizes on a supported host; that does not yet measure human input-to-paint
 or production frame budgets. Browser-suite failures are release blockers for any
 claim of a working browser integration.
 
-Next action: provision an ordinary non-root sandbox-capable test desktop/worker,
-then run `npm run verify` with the matching Playwright Chromium and retain its
-rendered sandbox status, screenshot and measurements. No privilege escalation was
-requested to alter this environment's browser sandbox.
+Next action: push the recovery repair to the experimental branch for the same
+supported-runner workflow, then retain that run's results separately from the
+original failure. No privilege escalation was requested to alter this local
+environment's browser sandbox.
 
 ## Review scope and dispositions
 

@@ -5,10 +5,14 @@ human and agent input reaching the same page. Keep its test profile on that work
 Treat local/cloud portability as reconnecting to the worker, not copying a logged-in
 profile between operating systems.
 
-**Current outcome: incomplete browser validation.** The isolated prototype and its
-HTTP/lifecycle tests are implemented. This environment cannot launch sandboxed
-Chromium. Browser behavior, visual quality, extensions, latency and persistence are
-therefore **unverified**, not successful. Nothing is integrated into Nessa or deployed.
+**Current outcome: partial browser qualification.** The first supported-runner
+execution passed rendered sandbox status, the toy extension, shared viewer/agent
+controls and navigation/download/popup checks. It then exposed a failed-navigation
+recovery race. The repair waits for error-document settlement before releasing the
+queue; its new regressions pass locally and await another real-browser run.
+Persistence/restart, profile separation and performance qualification remain
+unverified. This local environment still cannot launch sandboxed Chromium.
+Nothing is integrated into Nessa or deployed.
 See [RESULTS.md](RESULTS.md) for the actual run and remaining blockers.
 
 ## Ownership and scope
@@ -26,6 +30,7 @@ runtime/experiment.mjs ordered resource cleanup, including partial startup failu
 runtime/cleanup.mjs    combined failure preservation and explicit cleanup recovery
 runtime/browser.mjs    Playwright persistent headful context, downloads
 runtime/session.mjs    single ordered page command stream, input limits, close fence
+runtime/navigation.mjs Chromium loader-identity and DOM barrier after failed navigation
 runtime/server.mjs     loopback HTTP transport and capability credential
 viewer/               page-frame viewer and pointer/text/keyboard forwarding
 fixtures/site.mjs      self-authored loopback site, storage and download fixture
@@ -57,7 +62,8 @@ desktop. No agent-evaluation endpoint or externally reachable CDP port is added.
 | Launch | Non-root, `headless:false`, `chromiumSandbox:true`; no fallback | Launch-options unit test; real launch blocked |
 | Ready, command | Shared page, ordered dispatch; at most 16 pending commands | Queue/close regression |
 | Invalid command/input | Typed refusal before browser operation | Input/transport regressions |
-| Navigation fails | Typed operation failure; later navigation may recover | Unit regression; browser scenario not reached |
+| Navigation fails, error document still committing | Hold the command queue until a new root-document loader matching the requested/error URL has its own DOM-ready event; then publish the original typed failure | Controlled commit/load regression, including hash and stale-document events; first CI run exposed this ordering |
+| Error-document settlement cannot be confirmed | Publish original and settlement failures, fence further commands; no automatic navigation retry | Settlement-failure regression |
 | Close starts | Fence arrivals and queued commands; await active operation | Queue/close regression |
 | Context disconnects | Fence further commands | Unit regression; browser scenario not reached |
 | Shutdown | Close viewer, session/context, downloads, then fixture | Implemented; successful browser shutdown unverified |
@@ -109,6 +115,11 @@ only after the actual viewer has received a real frame. Exit 0 means checks pass
 1 means a test failed, and 2 means browser startup/capability validation was blocked.
 Inspect the error as well as the exit code. No screenshot is supplied for this
 environment because it never reached the first rendered frame.
+The first runner did generate a screenshot in its
+[retained artifact](https://github.com/nessalabs/nessa-agent/actions/runs/39920161218/artifacts/12487056900).
+The connector returned an artifact download reference, but downloading its bytes
+from this environment was denied by the proxy with `403 Forbidden`; no alternate
+download route was attempted and the screenshot has not been inspected here.
 
 The qualification workflow uses a standard `ubuntu-22.04` GitHub-hosted runner,
 Node 24 and Xvfb. It installs the locked Playwright/browser pair and ordinary

@@ -1,4 +1,6 @@
 // One page and one ordered command stream are shared by the viewer and agent.
+import { navigatePage } from "./navigation.mjs"
+
 export class ExperimentFailure extends Error {
   constructor(code, cause) {
     super(code, { cause })
@@ -19,7 +21,15 @@ export function createSession(page, home) {
     navigate: async ({ target }) => {
       if (typeof target !== "string" || !Object.hasOwn(targets, target))
         throw new ExperimentFailure("invalid_target")
-      await page.goto(targets[target], { waitUntil: "domcontentloaded", timeout: 5000 })
+      const outcome = await navigatePage(page, targets[target])
+      if (outcome.kind === "unsettled") {
+        state = "closed"
+        const failure = new ExperimentFailure("navigation_unsettled", outcome.cause)
+        failure.settlementError = outcome.settlementError
+        throw failure
+      }
+      if (outcome.kind === "failed")
+        throw new ExperimentFailure("browser_operation_failed", outcome.cause)
     },
     click: async ({ x, y }) => {
       if (![x, y].every(Number.isFinite) || x < 0 || y < 0 || x >= 1000 || y >= 700)

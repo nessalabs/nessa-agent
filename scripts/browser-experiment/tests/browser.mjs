@@ -131,11 +131,15 @@ try {
     await popup.close()
   })
   await check("failed navigation recovers; invalid commands are refused", async () => {
-    await assert.rejects(
-      browser.session.run({ type: "navigate", target: "unavailable" }),
-      { code: "browser_operation_failed" },
-    )
-    await browser.session.run({ type: "navigate", target: "home" })
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await assert.rejects(
+        browser.session.run({ type: "navigate", target: "unavailable" }),
+        { code: "browser_operation_failed" },
+      )
+      await browser.session.run({ type: "navigate", target: "home" })
+      assert.equal(browser.page.url(), site.home)
+      assert.equal(await browser.page.evaluate(() => localStorage.getItem("count")), "2")
+    }
     await assert.rejects(browser.session.run({ type: "evaluate" }), {
       code: "invalid_command",
     })

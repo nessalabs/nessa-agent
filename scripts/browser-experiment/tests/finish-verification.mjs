@@ -10,6 +10,7 @@ export function failureDetails(error, depth = 0) {
         ? [...error.errors].slice(0, 8).map((item) => failureDetails(item, depth + 1))
         : undefined,
     cleanupError: failureDetails(error.cleanupError, depth + 1),
+    settlementError: failureDetails(error.settlementError, depth + 1),
   }
 }
 

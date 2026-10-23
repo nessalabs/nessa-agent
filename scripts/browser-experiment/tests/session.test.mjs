@@ -2,6 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { createSession } from "../runtime/session.mjs"
 import { launchOptions } from "../runtime/browser.mjs"
+import { navigationPage } from "./support/navigation-page.mjs"
 
 test("launch requires headful sandboxed Chromium and exposes no debugging TCP port", () => {
   const options = launchOptions()
@@ -74,12 +75,10 @@ test("invalid inputs cannot dispatch and prototype names are rejected", async ()
 test("navigation failure is typed, next command recovers, disconnect refuses work", async () => {
   const targets = []
   const session = createSession(
-    {
-      goto: async (url) => {
-        targets.push(url)
-        if (url.endsWith(":1/")) throw new Error("transport detail")
-      },
-    },
+    navigationPage(async (url) => {
+      targets.push(url)
+      if (url.endsWith(":1/")) throw new Error("transport detail")
+    }),
     "http://127.0.0.1:1234/",
   )
   await assert.rejects(session.run({ type: "navigate", target: "unavailable" }), {

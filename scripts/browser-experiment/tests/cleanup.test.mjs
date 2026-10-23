@@ -6,15 +6,16 @@ import { join } from "node:path"
 import { initializeBrowser } from "../runtime/browser.mjs"
 import { finishVerification } from "./finish-verification.mjs"
 import { ExperimentFailure } from "../runtime/session.mjs"
+import { navigationPage } from "./support/navigation-page.mjs"
 
 test("browser initialization retains primary failure, cleanup error and recovery owner", async () => {
   const primary = new Error("navigation failed")
   let closes = 0
   const page = {
     on() {},
-    goto: async () => {
+    ...navigationPage(async () => {
       throw primary
-    },
+    }),
   }
   const context = {
     pages: () => [page],

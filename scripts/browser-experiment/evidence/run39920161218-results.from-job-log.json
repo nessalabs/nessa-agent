@@ -1,0 +1,52 @@
+{
+  "provenance": {
+    "source": "GitHub job log (artifact bytes denied by execution-environment proxy)",
+    "runId": 39920161218,
+    "jobId": 120303183907,
+    "sourceRevision": "5a3f9f6d9d354929aba4fd35587d17d815560fb7",
+    "artifactId": 12487056900,
+    "artifactUrl": "https://github.com/nessalabs/nessa-agent/actions/runs/39920161218/artifacts/12487056900"
+  },
+  "report": {
+    "timestamp": "2026-10-23T07:48:37.006Z",
+    "platform": "linux",
+    "node": "v24.21.0",
+    "uid": 1001,
+    "chromiumSandbox": true,
+    "headless": false,
+    "tests": [
+      {
+        "name": "sandbox renderer status",
+        "result": "passed"
+      },
+      {
+        "name": "minimal MV3 content script, messaging, service worker, storage",
+        "result": "passed"
+      },
+      {
+        "name": "agent API and viewer pointer control affect the same page",
+        "result": "passed"
+      },
+      {
+        "name": "navigation, download bytes, popup shares context",
+        "result": "passed"
+      }
+    ],
+    "measurements": {
+      "startupMs": 1465.0396090000002,
+      "failureAfterMs": 2659.9530299999997
+    },
+    "browserVersion": "156.0.8078.4",
+    "result": "failed",
+    "error": {
+      "name": "Error",
+      "code": "browser_operation_failed",
+      "message": "browser_operation_failed",
+      "cause": {
+        "name": "Error",
+        "message": "page.goto: Navigation to \"http://127.0.0.1:36907/\" is interrupted by another navigation to \"chrome-error://chromewebdata/\"\nCall log:\n  - navigating to \"http://127.0.0.1:36907/\", waiting until \"domcontentloaded\"\n"
+      }
+    },
+    "cleanedTestProfiles": true
+  }
+}
