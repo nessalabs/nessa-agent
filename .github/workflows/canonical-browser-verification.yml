@@ -60,6 +60,13 @@ jobs:
             --out "$BROWSER_EVIDENCE/user-flow-ordering.json" \
             --shots "$BROWSER_EVIDENCE/user-flow-ordering-shots"
         timeout-minutes: 5
+      - name: Verify settings action owners in both engines
+        run: |
+          node verification/desktop/scripts/settings-action-owners.mjs \
+            --engine chromium,webkit --channel bundled \
+            --out "$BROWSER_EVIDENCE/settings-action-owners.json" \
+            --shots "$BROWSER_EVIDENCE/settings-action-owner-shots"
+        timeout-minutes: 5
       - name: Run the canonical signed-out suite in both engines
         run: pnpm test:e2e:scripted -- --channel bundled --evidence "$BROWSER_EVIDENCE" 2>&1 | tee "$BROWSER_EVIDENCE/canonical.log"
         timeout-minutes: 35
