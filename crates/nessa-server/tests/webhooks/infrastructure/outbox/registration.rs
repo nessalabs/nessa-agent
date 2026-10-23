@@ -567,3 +567,6 @@ async fn installation_requires_the_retained_original_intent_before_any_effect() 
         .unwrap();
     assert_eq!(f.count("registrations"), 1);
 }
+
+#[path = "lifecycle.rs"]
+mod lifecycle_tests;

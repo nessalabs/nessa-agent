@@ -8,8 +8,8 @@ mod registration;
 
 pub use admission::{AdmissionFailure, AdmitDelivery, DeliveryHold, Target};
 pub use outbox::{
-    DeliveryCause, Outbox, OutboxError, PendingDelivery, QueueInitiator, QueuedRecord,
-    Registration, StopReason, MAX_CURSORS, MAX_OUTBOX_WORKERS, MAX_REGISTRATIONS,
+    DeliveryCause, ExpiryObserver, Outbox, OutboxError, PendingDelivery, QueueInitiator,
+    QueuedRecord, Registration, StopReason, MAX_CURSORS, MAX_OUTBOX_WORKERS, MAX_REGISTRATIONS,
     MAX_SOURCE_RESETS, PENDING_LIMIT, RETAINED_LIMIT, SOURCE_RESET_BYTES,
 };
 pub use registration::{

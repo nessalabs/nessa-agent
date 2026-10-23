@@ -4,7 +4,7 @@ use super::journal::{commit, finish, refuse_pending};
 use super::publication::append;
 use super::{integer, invalid, unavailable, uuid, SqlOutbox};
 use crate::webhooks::application::{
-    DeliveryCause, MacKey, OutboxError, Registration, StopReason, Target,
+    DeliveryCause, ExpiryObserver, MacKey, OutboxError, Registration, StopReason, Target,
 };
 use crate::webhooks::domain::Destination;
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
@@ -31,10 +31,10 @@ impl SqlOutbox {
             if saved.stop.is_some() { return Ok(()); }
             let id=saved.registration.id;
             let registration=id.to_string();
-            let (cause,initiator)=match reason { StopReason::Revoked{initiator} => ("credential_revoked",initiator.as_str().to_owned()), StopReason::Expired{observed_by} => ("credential_expired",format!("delivery:{observed_by}")) };
+            let stopped=Stopped::new(reason,at_ms)?;
+            let (cause,initiator)=(stopped.cause(),stopped.initiator());
             transaction.execute("UPDATE registrations SET active=0,stop_cause=?1,stop_initiator=?2,stop_at=?4 WHERE id=?3",params![cause,initiator,registration,integer(at_ms)?]).map_err(unavailable)?;
             refuse_pending(&transaction,id,None,DeliveryCause::AuthorityStopped,at_ms)?;
-            let stopped=Stopped::restore(cause,&initiator,at_ms)?;
             append(&transaction,Record::registration(&saved.registration,RegistrationChange::Stop(&stopped),at_ms))?;
             commit(transaction,Some(id),at_ms)?;
             finish(connection,audit,clock.unix_milliseconds())
@@ -107,25 +107,32 @@ pub(super) struct Stopped {
     pub at_ms: u64,
 }
 impl Stopped {
+    fn new(reason: StopReason, at_ms: u64) -> Result<Self, OutboxError> {
+        integer(at_ms)?;
+        Ok(Self { reason, at_ms })
+    }
     pub fn reason(&self) -> &StopReason {
         &self.reason
     }
     pub fn restore(cause: &str, initiator: &str, at_ms: u64) -> Result<Self, OutboxError> {
-        integer(at_ms)?;
         let reason = match cause {
             "credential_revoked" => StopReason::Revoked {
                 initiator: PrincipalId::new(initiator).map_err(invalid)?,
             },
             "credential_expired" => StopReason::Expired {
-                observed_by: uuid(
-                    initiator
-                        .strip_prefix("delivery:")
-                        .ok_or(OutboxError::Invalid)?,
-                )?,
+                observed_by: if initiator == "lifecycle" {
+                    ExpiryObserver::Lifecycle
+                } else {
+                    ExpiryObserver::Delivery(uuid(
+                        initiator
+                            .strip_prefix("delivery:")
+                            .ok_or(OutboxError::Invalid)?,
+                    )?)
+                },
             },
             _ => return Err(OutboxError::Invalid),
         };
-        Ok(Self { reason, at_ms })
+        Self::new(reason, at_ms)
     }
 
     pub fn cause(&self) -> &'static str {
@@ -138,7 +145,10 @@ impl Stopped {
     pub fn initiator(&self) -> String {
         match &self.reason {
             StopReason::Revoked { initiator } => initiator.as_str().to_owned(),
-            StopReason::Expired { observed_by } => format!("delivery:{observed_by}"),
+            StopReason::Expired { observed_by } => match observed_by {
+                ExpiryObserver::Delivery(id) => format!("delivery:{id}"),
+                ExpiryObserver::Lifecycle => "lifecycle".into(),
+            },
         }
     }
 }

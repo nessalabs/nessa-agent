@@ -1,6 +1,7 @@
 use super::*;
 use crate::webhooks::application::{
-    MacKey, QueueInitiator, Registration, StopReason, Target, PENDING_LIMIT, RETAINED_LIMIT,
+    ExpiryObserver, MacKey, QueueInitiator, Registration, StopReason, Target, PENDING_LIMIT,
+    RETAINED_LIMIT,
 };
 use crate::webhooks::domain::{Destination, Observation, Outcome};
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
@@ -294,7 +295,7 @@ async fn stop_preserves_inflight_observation_and_cause() {
         .stop(
             credential.clone(),
             StopReason::Expired {
-                observed_by: Uuid::new_v4(),
+                observed_by: ExpiryObserver::Delivery(Uuid::new_v4()),
             },
             2002,
         )
