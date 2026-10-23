@@ -53,6 +53,7 @@ verification/
     evidence/
       conversation-unread/  screenshots the pull request shows for that check
     fixtures/
+      settings-action-owners/ production native-hook/notice rows with controlled pending sources
       sandbox-probes/      labelled host for visible isolation and navigation probes
       attachments-races/    real panel with controlled attachment host and scenario gateway effects
       onboarding-readiness/ real setup with stalled HTTP response and retry cases
@@ -61,6 +62,7 @@ verification/
       app-review/           real window over a typed fake gateway whose app's call asks for a review
       clock-snapshots/      public ClockProvider/useNow with injected time crossing a bucket between React reads
     scripts/
+      settings-action-owners.mjs pending settings admission, rereads and source retirement
       page-load-regression/ synthetic host diagnostic reproduction; see its README (#916)
       provider-sign-in.mjs compact login recovery geometry, keyboard launch and replacement
       attachments-races.mjs pending image admission and concurrent URL-drop refusals

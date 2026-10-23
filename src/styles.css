@@ -1314,7 +1314,8 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
   .nessa-setup-window[data-step="welcome"] .nessa-setup-arrive,
   .nessa-setup-window[data-step="welcome"] .nessa-setup-word,
   .nessa-setup-chrome,
-  .nessa-setup-control {
+  .nessa-setup-control,
+  .nessa-setup-back {
     animation: none;
     /* The promotion was for the duration of an animation that is not running. */
     will-change: auto;
@@ -1322,55 +1323,87 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
 }
 
 /*
- * Setup's chrome: the way out, and the way to make it be quiet.
+ * Setup's chrome: the way back and the way out.
  *
  * It arrives once the light has filled the window, not before. Shown over the
- * floating glow, two buttons hanging in empty space gave away the shape before
+ * floating glow, buttons hanging in empty space gave away the shape before
  * the light did and read as a window waiting to load. The opening is short
  * enough to wait out, Escape leaves it from the first frame, and under a
  * reduced-motion preference there is no opening and these are simply there.
  *
  * It belongs to the window rather than to the wash, so it keeps its own timing
- * and is not re-mounted by every step.
+ * and is not re-mounted by every step. It spans the window's top edge, inset,
+ * with Back in the top-left corner and Close in the top-right, and takes no
+ * pointer itself: only the buttons in it do, so the space between them never
+ * covers the step underneath.
  */
 .nessa-setup-chrome {
   position: absolute;
-  top: 0.75rem;
-  right: 0.75rem;
+  inset: 0.875rem 0.875rem auto;
   z-index: 10;
   display: flex;
-  align-items: center;
-  gap: 0.25rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  pointer-events: none;
   animation: nessa-setup-settled 320ms var(--nessa-motion-easing-standard)
     calc(var(--nessa-reveal-seed) + var(--nessa-reveal-bloom)) both;
 }
 
+.nessa-setup-corner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 /*
- * Quiet, but not invisible.
+ * A round pane of glass with a white glyph in it.
  *
- * At 55% white over a wash whose lighter stops are near-white this measured
- * about 1.1:1 — decorative rather than legible. The mark now carries its own
- * dark backing so its contrast does not depend on which pigment happens to be
- * travelling underneath it.
+ * The backing is dark and translucent rather than white: at 55% white over a
+ * wash whose lighter stops are near-white the mark measured about 1.1:1, so
+ * the dark tint is what keeps it legible whichever pigment is travelling
+ * underneath, and the blur is what makes it read as glass over the wash
+ * rather than a hole in it. A hairline rim catches the light at its edge.
  */
 .nessa-setup-control {
+  pointer-events: auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 2rem;
+  height: 2rem;
   border-radius: 50%;
-  background: rgb(10 8 14 / 0.55);
-  color: rgb(255 255 255 / 0.92);
+  background: rgb(24 24 30 / 0.4);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.16),
+    0 4px 14px -6px rgb(0 0 0 / 0.45);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+  backdrop-filter: blur(16px) saturate(120%);
+  color: rgb(255 255 255 / 0.94);
   outline: none;
   transition:
     color 120ms ease-out,
-    background-color 120ms ease-out;
+    background-color 120ms ease-out,
+    transform 120ms ease-out;
+}
+
+.nessa-setup-glyph {
+  width: 1rem;
+  height: 1rem;
+  stroke-width: 2.25;
+}
+
+/* The chevron's point sits left of its box; a nudge puts its weight in the middle. */
+.nessa-setup-back .nessa-setup-glyph {
+  transform: translateX(-1px);
 }
 
 .nessa-setup-control:hover {
-  background: rgb(10 8 14 / 0.78);
+  background: rgb(24 24 30 / 0.6);
   color: #fff;
+}
+
+.nessa-setup-control:active {
+  transform: scale(0.94);
 }
 
 /*
@@ -1383,6 +1416,20 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
   box-shadow:
     0 0 0 2px rgb(8 6 12 / 0.9),
     0 0 0 4px rgb(255 255 255 / 0.95);
+}
+
+/* Back comes and goes with the step; it fades in rather than popping. */
+.nessa-setup-back {
+  animation: nessa-setup-back-in 160ms var(--nessa-motion-easing-standard) both;
+}
+
+@keyframes nessa-setup-back-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /*
@@ -1811,7 +1858,8 @@ html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
   .nessa-setup-word,
   .nessa-setup-arrive,
   .nessa-setup-chrome,
-  .nessa-setup-control {
+  .nessa-setup-control,
+  .nessa-setup-back {
     animation: none;
   }
   /* The final composition, with none of the movement that arrives at it. */

@@ -210,3 +210,49 @@ it("still reaches sendDraft, with the draft's own prose, when the editor is betw
     expect.objectContaining({ text: "typed before the remount" }),
   )
 })
+
+it("keeps B expanded after A submit and tab switch in the same task with the real store", async () => {
+  const { setDraft, setActive, openConversation } =
+    await import("../../conversation/testing")
+  const store = makeStore(
+    createDependencies({
+      conversation: { ...scenarioEffects("echo"), create: () => new Promise(() => {}) },
+    }),
+  )
+  store.dispatch(
+    sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
+  )
+  store.dispatch(setDraft({ draft: [{ type: "text", text: "A" }] }))
+  const a = store.getState().conversation.activeId
+  store.dispatch(openConversation())
+  const b = store.getState().conversation.activeId
+  store.dispatch(setDraft({ draft: [{ type: "text", text: "B" }] }))
+  store.dispatch(setActive(a))
+  let hook!: ReturnType<typeof useComposer>
+  function PendingSurface() {
+    hook = useComposer(useConversation(), () => false, sent)
+    return null
+  }
+  await React.act(async () =>
+    root.render(
+      React.createElement(Provider, {
+        store,
+        children: React.createElement(PendingSurface),
+      }),
+    ),
+  )
+  // The qualified counterexample batches send and switch before the emptied
+  // A draft is observed. Separate human-click reachability is not established.
+  await React.act(async () => {
+    hook.submit({ preventDefault() {} } as React.FormEvent<HTMLFormElement>)
+    store.dispatch(setActive(b))
+  })
+  expect(
+    store
+      .getState()
+      .conversation.conversations.find((conversation) => conversation.id === a)?.draft,
+  ).toEqual([])
+  await React.act(async () => hook.changeExpanded(true, "control"))
+  await React.act(async () => hook.changeContent({ text: "", parts: [] }))
+  expect(hook.expanded).toBe(true)
+})

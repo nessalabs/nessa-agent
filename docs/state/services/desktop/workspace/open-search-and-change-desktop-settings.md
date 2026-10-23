@@ -21,7 +21,8 @@ sources:
   - "src/desktop/ui/desktop-window.test.tsx"
   - "src-tauri/src/settings.rs"
   - "src-tauri/src/tray.rs"
-diagramLinks: {}
+diagramLinks:
+  Settings: desktop-settings-action-owners
 ---
 
 # open, search, and change desktop settings
@@ -50,3 +51,9 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src/desktop/ui/desktop-window.tsx) · [Related source](../../../../../src/desktop/settings/ui/settings-view.tsx) · [Related tests](../../../../../src/desktop/settings/ui/settings-view.test.tsx)
+
+## Pending settings actions
+
+[Native-hook saves and notification permission requests](settings-action-owners.md)
+have their own synchronous admission and source/view lifetime owners. Disabled
+controls alone do not establish request coalescing or safe late settlement.

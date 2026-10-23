@@ -1,4 +1,5 @@
-import type { ComponentType } from "react"
+import { useState, type ComponentType } from "react"
+import { hasNativeHost, replayOnboarding } from "../../../host"
 import { AgentMark } from "../../../onboarding/ui/agent-mark"
 import { useIconFamilyPreference } from "../../adapters/icon-family-preference"
 import { useTintFromPicture } from "../../adapters/header-image"
@@ -42,6 +43,7 @@ import {
   ItemRow,
   PendingAction,
   Row,
+  RowAction,
   Segmented,
   SettingGroup,
   Toggle,
@@ -87,6 +89,7 @@ export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   "native-hooks": NativeHooksRows,
   data: DataTab,
   experimental: ExperimentalTab,
+  setup: SetupTab,
   about: AboutTab,
 }
 
@@ -550,6 +553,40 @@ function ExperimentalTab() {
       </Row>
       <Row id="side-rail">
         <Toggle checked={rail === "on"} onChange={(on) => setRail(on ? "on" : "off")} />
+      </Row>
+    </Group>
+  )
+}
+
+/**
+ * First-run setup, to see again. Only the desktop app has a setup window to
+ * open, so elsewhere the page says that instead of offering a button that
+ * could do nothing.
+ */
+function SetupTab() {
+  const [state, setState] = useState<"idle" | "opening" | "failed">("idle")
+  if (!hasNativeHost())
+    return (
+      <div className="settings-empty">
+        <DesktopIcon name="advanced" />
+        <p>Setup can be replayed in the Nessa app.</p>
+      </div>
+    )
+  const replay = () => {
+    setState("opening")
+    replayOnboarding().then(
+      () => setState("idle"),
+      () => setState("failed"),
+    )
+  }
+  return (
+    <Group
+      note={state === "failed" ? "Setup did not open. Try again in a moment." : undefined}
+    >
+      <Row id="replay-onboarding">
+        <RowAction disabled={state === "opening"} onClick={replay}>
+          Replay
+        </RowAction>
       </Row>
     </Group>
   )

@@ -546,6 +546,17 @@ export const names = {
   /** Settings' category and tab holding the previews, the side rail's switch among them. */
   advanced: "Advanced",
   experimental: "Experimental",
+  /** Settings › Advanced's tab holding first-run setup, and its row's button. */
+  setupTab: "Setup",
+  replayOnboarding: "Replay",
+  /** First-run setup (`onboarding/ui`): its steps' headings, the way on, and its corner buttons. */
+  setup: {
+    welcome: "Welcome to Nessa",
+    getStarted: "Get started",
+    chooseAgent: "Choose an agent",
+    back: "Back",
+    close: "Close setup",
+  },
   /** A session's menu item that opens the share dialog. */
   share: "Share…",
   /** What Integrations says (`sentences` in src/desktop/settings/model/mcp-servers.ts). */
@@ -990,4 +1001,35 @@ export const composerControls = {
   /** The shield's value for each access mode. */
   accessValue: { ask: "ask-approval", auto: "auto-approval", full: "full-access" },
   notice: ".desktop-composer-notice", // class: what the composer says of a held or refused access change
+}
+
+/** Deterministic production-hook/component ordering fixture for #1087. */
+export const userFlowOrdering = {
+  page: "/verification/conversation/user-flow-ordering.html",
+  ready: "[data-user-flow-ordering]",
+  download: 'button[aria-label^="Download Claude"]',
+  permissionSection: 'section[aria-label="Permission revoke ordering fixture"]',
+  revokeRequests: 'output[aria-label="Revoke requests"]',
+  installRequests: 'output[aria-label="Installation requests"]',
+  expanded: 'output[aria-label="Expanded editor"]',
+}
+
+/** Controlled native-hook/notification permission owners, #1087 follow-up. */
+export const settingsActionOwners = {
+  page: "/verification/desktop/fixtures/settings-action-owners/index.html",
+  ready: "[data-settings-action-owners]",
+  native: 'section[aria-label="Native hook ownership"]',
+  notices: 'section[aria-label="Notification permission ownership"]',
+  claude: '[data-setting="claude-native-hooks"] [role="switch"]',
+  codex: '[data-setting="codex-native-hooks"] [role="switch"]',
+  nativeCounts: 'output[aria-label="Native request counts"]',
+  noticeCounts: 'output[aria-label="Notice request counts"]',
+  allow: 'button:has-text("Allow")',
+  acknowledgeA: "A acknowledges save",
+  rereadA: "A finishes reread",
+  replaceNative: "Replace native source",
+  refuseB: "B refuses save",
+  grantA: "A grants notification access",
+  grantB: "B grants notification access",
+  replaceNotice: "Replace notification source",
 }

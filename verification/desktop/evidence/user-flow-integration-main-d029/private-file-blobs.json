@@ -1,0 +1,32 @@
+[
+  {
+    "path": "packages/nessa-client/src/transport/local-credential-source.test.ts",
+    "baselineBlob": "040c5f2b64b1078a855591fac506678c9e38a249",
+    "candidateBlob": "040c5f2b64b1078a855591fac506678c9e38a249",
+    "identical": true
+  },
+  {
+    "path": "packages/nessa-client/src/transport/local-gateway-endpoint.test.ts",
+    "baselineBlob": "1be1f93e3491fb0f4ccaf4370e8c0b40f55164eb",
+    "candidateBlob": "1be1f93e3491fb0f4ccaf4370e8c0b40f55164eb",
+    "identical": true
+  },
+  {
+    "path": "packages/nessa-client/src/transport/node-private-file.ts",
+    "baselineBlob": "a291e66dbf079b09495d0947ee64f9af7f2e233e",
+    "candidateBlob": "a291e66dbf079b09495d0947ee64f9af7f2e233e",
+    "identical": true
+  },
+  {
+    "path": "packages/nessa-client/src/transport/local-credential-source.ts",
+    "baselineBlob": "f80e8eb52a73de4616042f9651bf9ede2298638e",
+    "candidateBlob": "f80e8eb52a73de4616042f9651bf9ede2298638e",
+    "identical": true
+  },
+  {
+    "path": "packages/nessa-client/src/transport/local-gateway-endpoint.ts",
+    "baselineBlob": "315b06f4dd6575571a507558bc13aca5d7aa891a",
+    "candidateBlob": "315b06f4dd6575571a507558bc13aca5d7aa891a",
+    "identical": true
+  }
+]

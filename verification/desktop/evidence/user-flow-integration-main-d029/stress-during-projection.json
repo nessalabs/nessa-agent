@@ -1,0 +1,463 @@
+{
+  "check": "conversation-stress",
+  "ok": false,
+  "started": "2026-10-23T14:43:23.833Z",
+  "finished": "2026-10-23T14:46:08.488Z",
+  "target": {
+    "url": "http://127.0.0.1:39567/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "name": "001 notice",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 9330,
+      "seen": {
+        "index": 1,
+        "kind": "notice"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "002 aside",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 2952,
+      "seen": {
+        "index": 2,
+        "kind": "aside"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "003 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 4115,
+      "seen": {
+        "index": 3,
+        "kind": "switch",
+        "from": "ask",
+        "to": "full",
+        "during": true
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "004 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1408,
+      "seen": {
+        "index": 4,
+        "kind": "permission",
+        "answer": "deny",
+        "mode": "full",
+        "after": "switch"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "005 pool",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 28271,
+      "seen": {
+        "index": 5,
+        "kind": "pool"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "006 aside",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3208,
+      "seen": {
+        "index": 6,
+        "kind": "aside"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "007 park",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 10805,
+      "seen": {
+        "index": 7,
+        "kind": "park"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "008 await",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 5014,
+      "seen": {
+        "index": 8,
+        "kind": "await"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "009 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 1525,
+      "seen": {
+        "index": 9,
+        "kind": "switch",
+        "from": "full",
+        "to": "ask",
+        "during": false
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "010 large",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 3458,
+      "seen": {
+        "index": 10,
+        "kind": "large",
+        "answer": "deny",
+        "mode": "ask"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "011 trace",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 8186,
+      "seen": {
+        "index": 11,
+        "kind": "trace"
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "012 long",
+      "engine": "chromium",
+      "layout": "columns",
+      "ms": 28147,
+      "seen": {
+        "index": 12,
+        "kind": "long",
+        "turns": 30
+      },
+      "failures": ["reopening 30 turns took 1472 ms, one turn 67 ms: over 1100 ms more"],
+      "ok": false
+    },
+    {
+      "name": "013 usageLimit",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "014 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "015 window",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "016 delegate",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "017 stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "018 fresh",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "019 reviews",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "020 restart",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "021 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "022 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "023 fail",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "024 reply",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "025 rail",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "026 table",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "027 linking",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "028 switch",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "029 permission",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "030 delete",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "031 launch",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "032 watch",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "033 drift",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "034 upgrade",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "035 rename",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "036 stop",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "037 fresh",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "038 model",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "039 handoff",
+      "engine": "chromium",
+      "layout": "columns",
+      "cannotRun": true,
+      "error": "not run: 012 long did not hold",
+      "failures": [],
+      "ok": false
+    },
+    {
+      "name": "background",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": {
+        "conversations": 2,
+        "turns": 3
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "at rest",
+      "engine": "chromium",
+      "layout": "columns",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "name": "followers",
+      "engine": "chromium",
+      "layout": "columns",
+      "seen": [
+        {
+          "conversations": 7,
+          "churned": 112,
+          "resumed": 14,
+          "lagging": 0,
+          "refusedAsExpected": 19
+        },
+        {
+          "conversations": 7,
+          "churned": 110,
+          "resumed": 15,
+          "lagging": 0,
+          "refusedAsExpected": 19
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:39567/favicon.ico)",
+        "console.error: WebSocket connection to 'ws://127.0.0.1:46385/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED (http://127.0.0.1:39567/packages/nessa-client/src/composition/root.ts) [owned gateway restart; session reconnected]"
+      ],
+      "failures": [],
+      "ok": true
+    }
+  ]
+}
