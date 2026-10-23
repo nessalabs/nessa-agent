@@ -40,7 +40,7 @@ impl SigningKey {
 struct Ingress {
     binding: EventBinding,
     key: SigningKey,
-    slots: Semaphore,
+    slots: Arc<Semaphore>,
 }
 /// Construct an unmounted router for one stable binding, using a distinct key.
 /// No production listener or provider registration is created.
@@ -50,7 +50,7 @@ pub fn router(binding: EventBinding, key: SigningKey) -> Router {
         .with_state(Arc::new(Ingress {
             binding,
             key,
-            slots: Semaphore::new(8),
+            slots: Arc::new(Semaphore::new(8)),
         }))
 }
 #[derive(Deserialize)]
@@ -63,7 +63,7 @@ fn failure(status: StatusCode, code: &str) -> Response {
     (status, Json(json!({"error": code}))).into_response()
 }
 async fn receive(State(state): State<Arc<Ingress>>, request: Request<Body>) -> Response {
-    let Ok(_slot) = state.slots.try_acquire() else {
+    let Ok(slot) = state.slots.clone().try_acquire_owned() else {
         return failure(StatusCode::SERVICE_UNAVAILABLE, "busy");
     };
     let (parts, body) = request.into_parts();
@@ -141,7 +141,25 @@ async fn receive(State(state): State<Arc<Ingress>>, request: Request<Body>) -> R
         return failure(StatusCode::BAD_REQUEST, "invalid_event");
     };
     let text = json!({"eventId": event.as_str(), "payload": envelope.payload}).to_string();
-    match state.binding.admit(&event, text).await {
+    // The command owner can outlive this HTTP response future. Transfer the
+    // slot before awaiting it, so caller loss does not create uncounted work.
+    let admission = tokio::spawn(async move {
+        let _slot = slot;
+        state.binding.admit(&event, text).await
+    })
+    .await;
+    let result = match admission {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::error!(
+                task_panicked = error.is_panic(),
+                task_cancelled = error.is_cancelled(),
+                "external event admission task failed"
+            );
+            return failure(StatusCode::SERVICE_UNAVAILABLE, "dispatch_unconfirmed");
+        }
+    };
+    match result {
         Ok(receipt) => (
             StatusCode::ACCEPTED,
             Json(json!({"executionId": receipt.execution_id, "status": "dispatched"})),

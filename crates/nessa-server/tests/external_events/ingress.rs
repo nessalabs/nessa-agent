@@ -52,6 +52,7 @@ struct Authority {
     now: AtomicU64,
     unavailable: AtomicBool,
     clock_reads: AtomicU64,
+    panic_read: AtomicBool,
 }
 impl CredentialVerifier for Authority {
     fn verify<'a>(
@@ -73,6 +74,10 @@ impl CredentialVerifier for Authority {
 impl AccessReader for Authority {
     fn read<'a>(&'a self, _: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
         Box::pin(async {
+            assert!(
+                !self.panic_read.load(Ordering::SeqCst),
+                "local authority fixture panic"
+            );
             if self.unavailable.load(Ordering::SeqCst) {
                 Err(AccessError::Unavailable)
             } else {
@@ -121,6 +126,7 @@ async fn authority() -> (Arc<Authority>, AuthenticatedSession) {
         now: AtomicU64::new(100_000),
         unavailable: AtomicBool::new(false),
         clock_reads: AtomicU64::new(0),
+        panic_read: AtomicBool::new(false),
     });
     let session = AuthenticateSession {
         verifier: authority.as_ref(),
@@ -143,10 +149,15 @@ fn caller(action: &str) -> ConversationCaller {
         action_id: action.into(),
     }
 }
+struct CommandGate {
+    entered: AtomicU64,
+    released: tokio::sync::watch::Sender<bool>,
+}
 struct Store {
     inner: Arc<RecordStorage>,
     fail: AtomicBool,
     fail_terminal: Arc<AtomicBool>,
+    gate: Mutex<Option<Arc<CommandGate>>>,
 }
 impl CreationStorage for Store {
     fn open_creation(
@@ -158,6 +169,12 @@ impl CreationStorage for Store {
         Box::pin(async move {
             if self.fail.load(Ordering::SeqCst) {
                 return Err(CreationStorageError::Storage(StorageError::Closed));
+            }
+            let gate = self.gate.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                let mut released = gate.released.subscribe();
+                gate.entered.fetch_add(1, Ordering::SeqCst);
+                released.wait_for(|released| *released).await.unwrap();
             }
             Ok(self
                 .inner
@@ -270,6 +287,7 @@ impl Fixture {
             inner: records.clone(),
             fail: AtomicBool::new(false),
             fail_terminal: Arc::new(AtomicBool::new(false)),
+            gate: Mutex::new(None),
         });
         Self {
             service,
@@ -281,7 +299,7 @@ impl Fixture {
             session,
         }
     }
-    async fn server(&self) -> HttpServer {
+    fn routes(&self) -> axum::Router {
         let binding = EventBinding {
             id: EventId::new("ci".into()).unwrap(),
             conversation: self.target.clone(),
@@ -293,15 +311,14 @@ impl Fixture {
             service: self.service.clone(),
             commands: self.commands.clone(),
         };
+        router(binding, SigningKey::new(KEY.to_vec()).unwrap())
+    }
+    async fn server(&self) -> HttpServer {
+        let routes = self.routes();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {
-            axum::serve(
-                listener,
-                router(binding, SigningKey::new(KEY.to_vec()).unwrap()),
-            )
-            .await
-            .unwrap();
+            axum::serve(listener, routes).await.unwrap();
         });
         HttpServer { address, task }
     }
@@ -724,6 +741,186 @@ async fn queued_event_can_be_stopped_with_existing_exact_turn_command_and_replay
         )
         .await;
     assert_eq!(fixture.provider.executions.lock().unwrap().len(), 1);
+    drop(server);
+    fixture.shutdown().await;
+}
+
+fn signed_request(id: &str) -> axum::http::Request<axum::body::Body> {
+    let body = json!({"id":id,"payload":{"conclusion":"success"}}).to_string();
+    let mut mac = Hmac::<Sha256>::new_from_slice(&KEY).unwrap();
+    mac.update(b"nessa-event\nci\n100\n");
+    mac.update(body.as_bytes());
+    axum::http::Request::builder()
+        .method("POST")
+        .uri("/events")
+        .header("content-type", "application/json")
+        .header("x-nessa-timestamp", "100")
+        .header(
+            "x-nessa-signature",
+            STANDARD.encode(mac.finalize().into_bytes()),
+        )
+        .body(axum::body::Body::from(body))
+        .unwrap()
+}
+#[tokio::test]
+async fn cancelled_http_responses_keep_command_capacity_until_detached_admission_settles() {
+    use tower::ServiceExt;
+    let root = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(root.path(), id()).await;
+    let routes = fixture.routes();
+    let gate = Arc::new(CommandGate {
+        entered: AtomicU64::new(0),
+        released: tokio::sync::watch::channel(false).0,
+    });
+    *fixture.commands.gate.lock().unwrap() = Some(gate.clone());
+    let mut responses = Vec::new();
+    for index in 0..8 {
+        let routes = routes.clone();
+        responses.push(tokio::spawn(async move {
+            routes
+                .oneshot(signed_request(&format!("cancelled-{index}")))
+                .await
+                .unwrap()
+        }));
+    }
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while gate.entered.load(Ordering::SeqCst) != 8 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    for response in &responses {
+        response.abort();
+    }
+    for response in responses {
+        assert!(response.await.unwrap_err().is_cancelled());
+    }
+    let refused = tokio::time::timeout(
+        Duration::from_secs(1),
+        routes.clone().oneshot(signed_request("ninth")),
+    )
+    .await
+    .expect("cancelled response futures must not release unfinished command capacity")
+    .unwrap();
+    assert_eq!(
+        refused.status(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(gate.entered.load(Ordering::SeqCst), 8);
+    gate.released.send(true).unwrap();
+    let admitted = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let response = routes
+                .clone()
+                .oneshot(signed_request("after-release"))
+                .await
+                .unwrap();
+            if response.status() == axum::http::StatusCode::ACCEPTED {
+                break response;
+            }
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::SERVICE_UNAVAILABLE
+            );
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let bytes = axum::body::to_bytes(admitted.into_body(), 1024)
+        .await
+        .unwrap();
+    let receipt: Value = serde_json::from_slice(&bytes).unwrap();
+    fixture
+        .completed(receipt["executionId"].as_str().unwrap())
+        .await;
+    for index in 0..8 {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let response = routes
+                    .clone()
+                    .oneshot(signed_request(&format!("cancelled-{index}")))
+                    .await
+                    .unwrap();
+                if response.status() == axum::http::StatusCode::ACCEPTED {
+                    break;
+                }
+                assert_eq!(
+                    response.status(),
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE
+                );
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    assert_eq!(fixture.provider.executions.lock().unwrap().len(), 9);
+    fixture.shutdown().await;
+}
+#[tokio::test]
+async fn cancelled_http_body_reads_release_capacity_before_command_handoff() {
+    use tower::ServiceExt;
+    let root = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(root.path(), id()).await;
+    let routes = fixture.routes();
+    let polled = Arc::new(AtomicU64::new(0));
+    let mut responses = Vec::new();
+    for _ in 0..8 {
+        let mut request = signed_request("not-admitted");
+        let polled = polled.clone();
+        let mut first = true;
+        *request.body_mut() =
+            axum::body::Body::from_stream(futures_util::stream::poll_fn(move |_| {
+                if first {
+                    first = false;
+                    polled.fetch_add(1, Ordering::SeqCst);
+                }
+                std::task::Poll::<Option<Result<axum::body::Bytes, std::io::Error>>>::Pending
+            }));
+        let routes = routes.clone();
+        responses.push(tokio::spawn(async move {
+            routes.oneshot(request).await.unwrap()
+        }));
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while polled.load(Ordering::SeqCst) != 8 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    for response in &responses {
+        response.abort();
+    }
+    for response in responses {
+        assert!(response.await.unwrap_err().is_cancelled());
+    }
+    assert!(fixture.provider.executions.lock().unwrap().is_empty());
+    let response = routes
+        .oneshot(signed_request("after-body-drop"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::ACCEPTED);
+    fixture.shutdown().await;
+}
+#[tokio::test]
+async fn admission_task_failure_is_visible_and_recovers_its_slot() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(root.path(), id()).await;
+    let server = fixture.server().await;
+    fixture.authority.panic_read.store(true, Ordering::SeqCst);
+    let (status, body) = server.event("task-panic").await;
+    assert_eq!(status, 503);
+    assert_eq!(body["error"], "dispatch_unconfirmed");
+    assert!(fixture.provider.executions.lock().unwrap().is_empty());
+    fixture.authority.panic_read.store(false, Ordering::SeqCst);
+    let (status, receipt) = server.event("task-panic").await;
+    assert_eq!(status, 202);
+    fixture
+        .completed(receipt["executionId"].as_str().unwrap())
+        .await;
     drop(server);
     fixture.shutdown().await;
 }

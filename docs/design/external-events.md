@@ -26,7 +26,7 @@ are not GitHub's or Linear's native signature format.
 
 JSON is `{ "id": "provider-delivery-id", "payload": ... }`. Event identities use
 1–128 ASCII letters, digits, `_`, `-`, `.` or `:`. Bodies are at most 16 KiB;
-requests have a five-second body deadline and eight concurrent handler slots.
+requests have a five-second body deadline and eight owned admission slots.
 A timestamp more than five minutes away from the local clock, in either direction, is refused. Exact retries
 can be re-signed with a fresh timestamp. Deduplication uses the stable trigger and
 event identities, independent of timestamp and key rotation. Payload changes under
@@ -45,7 +45,7 @@ the same event ID conflict through the existing command fingerprint.
 | E7 | Storage fails before durable admission | 503, sender retries same ID | recovery test |
 | E8 | Crash/error after Attempted, no saved terminal receipt | 409 interrupted, no automatic redispatch | existing mutation recovery tests |
 | E9 | Execution fails or requires permission after enqueue | Dispatch receipt remains dispatch; existing turn view reports result/review | execution tests |
-| E10 | Caller disconnects after command handoff | Existing supervised submit owns command; retry same ID | existing mutation caller-loss tests |
+| E10 | Caller drops the HTTP response future after handoff | A bounded admission task retains its owned slot through command settlement; retry same ID | cancellation/capacity ingress regression |
 | E11 | Explicit cancellation / execution retry | Existing exact-turn stop; retry execution requires an explicit new event ID | `queued_event_can_be_stopped_with_existing_exact_turn_command_and_replay_does_not_revive_it` |
 
 202 means durable dispatch receipt, not workflow completion. It is returned only
@@ -62,8 +62,10 @@ The body bound is applied to received bytes without decompression. JSON parsing
 uses serde's default nesting limit. Envelope fields are strict; payloads are
 opaque JSON data, not trusted instructions or tool authority. Header/read limits,
 TLS, connection rate limits, and shutdown belong to the listener that eventually
-mounts this optional router. The eight-slot bound covers active handlers, not
-workflow execution count; the existing conversation service bounds detached work.
+mounts this optional router. Eight owned slots cover body reads and pending
+command admission. A supervised admission task retains its slot until the command
+result, including after response-future cancellation. SDK execution runs beyond
+that admission slot under its existing owner.
 
 ## Composition and remaining integration boundary
 
@@ -103,3 +105,26 @@ than an enforced cross-principal deduplication guarantee.
 The existing conversation stress scenarios `stop`, `fail` and `restart` exercise
 the shared execution owner. This slice changes no conversational command or UI;
 the new, unmounted HTTP boundary is exercised by the isolated ingress suite.
+
+## Admission ownership correction
+
+A fresh review found that a handler-borrowed slot was insufficient: the command
+coordinator can outlive that handler, while conversation retirement guards and
+storage reservation sets are not a total admission-count limit. The corrected
+owner is a per-admission task, not an extra queue. The handler acquires an owned
+slot before reading the body and transfers it with the verified event into that
+task before awaiting its result. The task retains the slot through command
+settlement even if the HTTP response future is dropped.
+
+| Ordering | Slot owner | Result / test |
+| --- | --- | --- |
+| Handler cancelled before handoff | HTTP future drops owned slot; no admission task exists | Before-handoff cancellation recovers capacity |
+| Handoff occurs before cancellation | Admission task retains owned slot until command result | Eight gated commands plus cancelled responses keep ninth busy |
+| Command result arrives after caller loss | Admission task releases slot; durable receipt stays in existing store | Release gate, replay original IDs, then admit another event |
+| Admission task panics/cancels while caller remains | Join failure returns visible 503; no success inferred | Task-failure mapping; command uncertainty remains its existing owner |
+
+The per-admission task performs no provider work itself. It awaits the existing
+command owner. There is no autonomous redelivery worker. Listener shutdown and
+conversation shutdown retain their existing responsibilities; a stalled injected
+authority/storage dependency can retain bounded admission capacity until it
+settles or the runtime ends.
