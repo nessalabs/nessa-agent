@@ -1,24 +1,24 @@
-Source: 0c320bd82744247a771773562510d0e5c0b8b479
-Command: cargo test -p nessa-server --lib external_events::
-Exit: 0
+Source: ebc5212723366e707256eed51a051d6c61bd3b5b
+UID: 1000; shell umask 022
 
-running 16 tests
+running 17 tests
 test external_events::entrypoint::http::tests::a_key_discards_the_supplied_spare_capacity ... ok
 test external_events::domain::value_objects::identity::tests::an_identity_discards_the_supplied_spare_capacity ... ok
 test external_events::domain::value_objects::identity::tests::delivery_identity_is_bounded_and_has_an_allowed_alphabet ... ok
 test external_events::tests::cancelled_http_body_reads_release_capacity_before_command_handoff ... ok
 test external_events::tests::admission_task_failure_is_visible_and_recovers_its_slot ... ok
-test external_events::tests::current_authority_denies_replay_revocation_expiry_and_unavailability ... ok
 test external_events::tests::concurrent_duplicates_share_a_turn_and_changed_payload_conflicts ... ok
-test external_events::tests::execution_failure_is_separate_from_dispatch_and_an_explicit_new_event_can_run ... ok
+test external_events::tests::current_authority_denies_replay_revocation_expiry_and_unavailability ... ok
 test external_events::tests::failed_storage_can_recover_with_same_delivery_without_fake_acceptance ... ok
+test external_events::tests::execution_failure_is_separate_from_dispatch_and_an_explicit_new_event_can_run ... ok
+test external_events::tests::fixture_creates_private_storage_without_repairing_its_temp_container ... ok
 test external_events::tests::rejects_invalid_signatures_freshness_shapes_and_oversized_payloads_before_execution ... ok
 test external_events::tests::lost_terminal_acknowledgement_is_interrupted_after_restart_and_does_not_redispatch ... ok
 test external_events::tests::signing_key_is_bounded ... ok
-test external_events::tests::cancelled_http_responses_keep_command_capacity_until_detached_admission_settles ... ok
 test external_events::tests::queued_event_can_be_stopped_with_existing_exact_turn_command_and_replay_does_not_revive_it ... ok
 test external_events::tests::signed_http_event_runs_deterministically_and_replays_after_reopen ... ok
+test external_events::tests::cancelled_http_responses_keep_command_capacity_until_detached_admission_settles ... ok
 test external_events::tests::slow_bodies_have_bounded_concurrency_and_a_deadline_then_release_capacity ... ok
 
-test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 3748 filtered out; finished in 5.38s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 3748 filtered out; finished in 5.40s
 

@@ -1,7 +1,8 @@
 # Independent review record (#1088)
 
 Base: `0b8019cf45f99b285f10c41199875d474492c6d1`.
-Final source checkpoint: `0c320bd82744247a771773562510d0e5c0b8b479`.
+Current source checkpoint: `ebc5212723366e707256eed51a051d6c61bd3b5b`.
+The earlier clean review below covered `0c320bd8…`; the CI follow-up is separate.
 Draft: [#1092](https://github.com/nessalabs/nessa-agent/pull/1092).
 Each round used a fresh reviewer under `AGENTS.md` / `CODING_STANDARDS.md`.
 CodeRabbit explicitly declined automatic review because this PR is draft. Its
@@ -88,3 +89,34 @@ effects, cross-platform behavior or TCP-reset handling. Deterministic HTTP
 service-future cancellation is the tested boundary. Browser-rendered docs and the
 optional router are distinct from a desktop UI feature; shared stop/fail/restart
 stress coverage remains with the existing conversation owner.
+
+## CI fixture follow-up
+
+Hosted Ubuntu run 39925277268 exposed twelve integration fixture failures at
+`Fixture::new` line 246, `PermissionDenied(UnsafeFile)`. The temporary container
+was created by TempDir with ambient permissions. Local umask 077 had hidden the
+incorrect private-root assumption; the unmodified binary reproduces all twelve
+failures under umask 022 as UID 1000. This was a new regression, not the process
+cleanup baseline failure.
+
+The scoped correction at `ebc5212723366e707256eed51a051d6c61bd3b5b` creates a
+`private` child using `nessa_local_storage::create_directory`; no production
+storage check or permissions are relaxed. The regression verifies the new storage
+through the safe API, preserves the container's original mode, and executes a real
+signed HTTP event through completion. Both 022 and 077 focused runs pass 17 tests.
+A fresh independent reviewer checked source `ebc5212723366e707256eed51a051d6c61bd3b5b`
+and the dirty docs/evidence. **No findings at any priority; review stop rule
+satisfied.** Independent UID 1000 runs passed all 17 feature tests under umask 022
+(5.50 s) and 077 (5.47 s); `git diff --check` passed. The review covered safe
+ownership validation, Unix/Windows creation paths, reopen persistence, regression
+portability and evidence claims. No files were changed by the reviewer.
+
+The reviewer inspected supplied broad-suite, Clippy and browser evidence without
+repeating them. The old candidate's browser pass does not qualify a later head;
+the exact stress failure remains open, and local CleanupUnconfirmed remains
+separately preserved.
+
+The separate stress upgrade candidate-baseline ordering investigation does not
+clear the failed browser stress gate. Existing helper suites and the client probe
+were reviewed independently; their precise limits are in the hosted CI record and
+verification README. No unrelated frontend/settings implementation changed.

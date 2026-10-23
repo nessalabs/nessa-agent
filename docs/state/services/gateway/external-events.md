@@ -5,7 +5,7 @@ kind: flow
 status: implemented
 summary: Signed HTTP events can queue one turn in a configured conversation.
 parent: gateway
-sourceRevision: "0c320bd82744247a771773562510d0e5c0b8b479"
+sourceRevision: "ebc5212723366e707256eed51a051d6c61bd3b5b"
 sources:
   - crates/nessa-server/src/external_events/entrypoint/http.rs
   - crates/nessa-server/src/external_events/application/admission.rs
@@ -131,9 +131,15 @@ checks capacity before and after command handoff; this does not simulate a TCP r
 An admission-task failure returns uncertainty and recovers capacity. The design
 table links inherited command recovery
 and cancellation behavior. No production provider registration or external workflow
-effects are exercised. The 16 feature tests passed on Linux. The affected package test run passed its
+effects are exercised. The 17 feature tests passed on Linux. The affected package test run passed its
 other targets but retains one failing, unchanged Codex process-cleanup test;
 see [verification evidence](../../../../verification/external-events/README.md).
 The full seven-package CI Clippy selection passed with `-D warnings`.
+The fixture creates private storage beneath its temporary container, independent
+of ambient Unix umask. The old fixture reproduced twelve UnsafeFile failures at
+umask 022; the corrected suite passes at 022 and 077 without repairing container
+permissions. Hosted canonical Chromium/WebKit checks passed for the earlier merge
+candidate; the separate stress upgrade failure remains an open gate, and a later
+head needs its own hosted qualification.
 This page reviews the source commit named above. The gateway index change is
 navigation only; unrelated state pages were not re-audited.

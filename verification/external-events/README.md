@@ -1,24 +1,30 @@
 # External event primitive verification (#1088)
 
-The reviewed source is `0c320bd82744247a771773562510d0e5c0b8b479`, based on
+The reviewed source is `ebc5212723366e707256eed51a051d6c61bd3b5b`, based on
 `0b8019cf45f99b285f10c41199875d474492c6d1`. The primitive is an explicitly composed,
 unmounted HTTP router that dispatches one authorized existing conversation turn.
 It does not create a general workflow engine or a public listener.
 
 ## Executed checks
 
-Linux x86_64, Rust stable 1.99.1, Node 24.19.0. Cargo builds used two jobs.
+Linux x86_64, UID 1000 (non-root), Rust stable 1.99.1, Node 24.19.0.
+Cargo builds used two jobs. The final affected suite runs with shell umask 022;
+focused tests also pass with 077. Earlier local checks used 077, masking the
+fixture's incorrect assumption that TempDir was already private. The fixture now
+creates a `private` child using the existing storage API, and verifies its safety
+without changing the container's existing permissions. The unmodified published
+binary reproduces twelve failures at 022: [before-fix evidence](fixture-before-umask022.txt).
 [Exact check summaries](checks.json) and the [feature test output](feature-tests.txt)
 retain the source checkpoint and outcomes.
 
-- All 16 `external_events::` unit/loopback E2E tests passed. Real HTTP, Cedar,
+- All 17 `external_events::` unit/loopback E2E tests passed. Real HTTP, Cedar,
   SQLite request receipts and the SDK runner are used; only credentials, clock
   and provider are local fixtures. Cancellation tests additionally drop actual
   Axum service futures deterministically before and after command handoff; they
   do not claim to simulate TCP resets. All eight command slots remain occupied
   after post-handoff caller loss until the gated storage calls settle.
 - `cargo test -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client --no-fail-fast`
-  ran all selected targets. The server library had **3,753 passed, one failed,
+  ran all selected targets. The server library had **3,754 passed, one failed,
   ten ignored**. Its integration targets and the other package targets passed.
   Ignored fixture helpers retain their existing annotations. The sole failure
   is the unchanged cleanup test described below.
@@ -34,9 +40,13 @@ retain the source checkpoint and outcomes.
 
 The existing desktop stress `stop`, `fail` and `restart` scenarios own the shared
 conversation runner. No UI or conversational command is changed here; this
-unmounted HTTP boundary has its separate isolated suite. Desktop UI verification,
-live provider registration, real external tools and cross-platform execution were
-not run for this backend-only slice.
+unmounted HTTP boundary has its separate isolated suite. Desktop stress/chaos and the canonical gateway browser suite were not run locally.
+The gateway clause in the standards still requires the canonical scripted suite;
+no backend-only exemption is claimed. [Hosted CI evidence](hosted-ci-39925277268.md)
+records the actual Chromium/WebKit pass on merge candidate `75f5b0bf…`, followed by
+a separate stress failure and the fixture regression. That old candidate does not
+qualify the corrected head. Live provider registration, real external tools and
+cross-platform execution were not run.
 
 ## Baseline cleanup blocker
 
@@ -116,3 +126,25 @@ GitHub's read of issue #1088 returned `Forbidden`; `gh auth status` reports an
 invalid supplied token. No denied GraphQL issue operation or alternative issue
 access path was attempted. Draft publication status is recorded in the final
 handoff; parent owns any exact-head merge after hosted gates qualify the blocker.
+
+## Stress upgrade investigation
+
+The hosted stress failure remains open. Existing upgrade/restart helper tests pass
+54/54 on the clean base and published head. The upgrade step waits for gateway
+health and its Node client, then sends through the browser without an explicit
+browser replacement-socket frame barrier. A copied-source client probe reproduces
+this baseline contract on both checkouts: command during gated reconnect throws
+`NessaSessionUnavailableError`, dispatches zero RPCs and is not replayed; an explicit
+command after reconnect succeeds. See [results](baseline-reconnect-probe.json),
+[base helper tests](baseline-stress-helper-tests.txt) and
+[head helper tests](changed-stress-helper-tests.txt).
+
+```sh
+python3 verification/external-events/probes/reconnect-order.py <base-checkout> <head-checkout>
+```
+
+This is a candidate baseline ordering explanation, not reproduction or attribution
+of CI's exact browser failure. The copied send-error diagnostic or a controlled
+browser reproduction is still needed. No frontend/settings behavior or console
+classification was changed. The artifact materialization denial and the absence
+of a dispatch/rerun are recorded with the hosted evidence.
