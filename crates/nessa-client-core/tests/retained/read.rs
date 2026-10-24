@@ -596,11 +596,7 @@ fn a_relayed_connect_ends_when_the_injected_budget_is_spent() {
     // A relay that takes the connection and never answers it.
     let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let clock = Arc::new(Moved(std::sync::atomic::AtomicU64::new(0)));
-    let ending = Arc::new(Stopping {
-        stop: ReadStop::new(),
-        clock: clock.clone(),
-        until: 1_000,
-    });
+    let ending = Arc::new(Stopping::new(ReadStop::new(), clock.clone(), 1_000));
     let connector = StoppableConnector {
         ending,
         relay: Some(RelayRoute {
@@ -677,11 +673,7 @@ fn answering_relay(answer: RelayFrame) -> (RelayAddress, std::thread::JoinHandle
 fn the_connector_notes_a_relay_offline_and_a_connect_clears_it() {
     let refused = SocketAddr::from(([127, 0, 0, 1], 0));
     let connector = |address: RelayAddress, offline: &Arc<AtomicBool>| StoppableConnector {
-        ending: Arc::new(Stopping {
-            stop: ReadStop::new(),
-            clock: Arc::new(Still),
-            until: u64::MAX,
-        }),
+        ending: Arc::new(Stopping::new(ReadStop::new(), Arc::new(Still), u64::MAX)),
         relay: Some(RelayRoute {
             address,
             key: [9; 32],

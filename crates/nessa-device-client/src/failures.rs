@@ -358,6 +358,30 @@ pub enum NativeSessionFailureKind {
     Product,
     /// Original recovery or later actual owner selection refused.
     Owner,
+    /// The publication stamp does not name the bound receiver.
+    Fenced,
+}
+/// Why a phone publication stamp cannot read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum NativePhoneFence {
+    /// No receiver is bound.
+    Unbound,
+    /// The session is closed.
+    Closed,
+    /// A newer receiver replaced this stamp.
+    Replaced,
+    /// The receiver has a successful purge receipt.
+    Purged,
+}
+impl From<nessa_client_core::retained::PhoneFence> for NativePhoneFence {
+    fn from(value: nessa_client_core::retained::PhoneFence) -> Self {
+        match value {
+            nessa_client_core::retained::PhoneFence::Unbound => Self::Unbound,
+            nessa_client_core::retained::PhoneFence::Closed => Self::Closed,
+            nessa_client_core::retained::PhoneFence::Replaced => Self::Replaced,
+            nessa_client_core::retained::PhoneFence::Purged => Self::Purged,
+        }
+    }
 }
 /// Immutable original session failure, safe to retain after session deallocation.
 #[derive(Debug, uniffi::Object)]
@@ -382,6 +406,14 @@ impl NativeSessionFailure {
             SessionFailure::Owner(_) | SessionFailure::OwnerSelection { .. } => {
                 NativeSessionFailureKind::Owner
             }
+            SessionFailure::Fenced(_) => NativeSessionFailureKind::Fenced,
+        }
+    }
+    /// Why a publication stamp was refused. Empty for every other failure.
+    pub fn fence(&self) -> Option<NativePhoneFence> {
+        match self.value {
+            SessionFailure::Fenced(value) => Some(value.into()),
+            _ => None,
         }
     }
     /// Original private-state failure.

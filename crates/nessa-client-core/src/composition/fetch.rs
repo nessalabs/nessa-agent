@@ -68,7 +68,7 @@ pub(super) fn fetch(
 ) -> Result<(), CommandError> {
     let result = DiskFiles::new(out, file)
         .map_err(refused)
-        .and_then(|mut files| fetch_held_file(source, pause, &mut files, file));
+        .and_then(|mut files| fetch_held_file(source, pause, &mut files, file, &|| false));
     let recheck = match &result {
         Err(FetchFailure {
             cause: FetchCause::Gateway(failure),

@@ -5,6 +5,7 @@ use nessa_auth::domain::{
     pairing::{AttemptId, ConsentIntentId, DisclosedConsent, InvitationId},
     AudienceId, CredentialId, OrganizationId, Resource, ResourceId,
 };
+use nessa_client_core::retained::{ArtifactFault, PhoneLease};
 use nessa_local_storage::create_directory_beneath;
 use nessa_sync::replication::domain::MAX_ID_BYTES;
 use std::{io::ErrorKind, net::TcpListener, path::Path, sync::Arc};
@@ -194,4 +195,153 @@ fn follow_rejects_a_cursor_outside_the_published_contract_before_it_dials() {
         Some("99999999999999999999".to_owned())
     )
     .is_err());
+}
+
+#[test]
+fn a_catalogue_presence_id_that_is_not_a_conversation_dials_nothing() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let root = PrivateFixture::new();
+    create_directory_beneath(root.path(), Path::new("private")).unwrap();
+    let session = NativeDeviceSession::open(
+        root.path().to_str().unwrap().to_owned(),
+        "private".to_owned(),
+        address.to_string(),
+    )
+    .unwrap();
+    let stamp = Arc::new(NativePhoneStamp {
+        value: PhoneLease::new(uuid::Uuid::nil(), uuid::Uuid::from_u128(1))
+            .bind("receiver-a")
+            .unwrap(),
+    });
+    assert!(matches!(
+        session.catalogue_presence(stamp.clone(), "receiver".to_owned()),
+        Err(NativeCallError::InvalidArgument)
+    ));
+    assert!(matches!(
+        session.catalogue_presence(stamp, "00000000-0000-4000-8000-000000000001".to_owned()),
+        Err(NativeCallError::Session { .. })
+    ));
+    assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
+}
+
+#[test]
+fn a_faulted_fetch_reports_the_bytes_it_resumed_from() {
+    let fetch = NativeArtifactFetch {
+        value: ArtifactFetch::decided(
+            Err(ArtifactFault::progress(
+                ArtifactFaultKind::Integrity {
+                    cleanup: ArtifactPartCleanup::Removed,
+                },
+                9,
+                4,
+            )),
+            3,
+        ),
+    };
+    assert_eq!(fetch.reached(), Some(9));
+    assert_eq!(fetch.resumed_from(), Some(4));
+    assert_eq!(fetch.gateway_resumed_from(), None);
+    assert_eq!(fetch.elapsed_ms(), 3);
+    assert_eq!(
+        fetch.part_cleanup(),
+        Some(NativeArtifactPartCleanup::Removed)
+    );
+    assert_eq!(fetch.cleanup_remove(), None);
+    assert_eq!(fetch.cleanup_restart(), None);
+}
+
+#[test]
+fn an_integrity_fault_reports_the_cleanup_that_failed() {
+    let fetch = NativeArtifactFetch {
+        value: ArtifactFetch::decided(
+            Err(ArtifactFault::progress(
+                ArtifactFaultKind::Integrity {
+                    cleanup: ArtifactPartCleanup::Left {
+                        remove: ArtifactFileStep::Remove,
+                        restart: ArtifactFileStep::Restart,
+                    },
+                },
+                0,
+                4,
+            )),
+            1,
+        ),
+    };
+    assert_eq!(fetch.fault(), Some(NativeArtifactFaultKind::Integrity));
+    assert_eq!(fetch.part_cleanup(), Some(NativeArtifactPartCleanup::Left));
+    assert_eq!(fetch.cleanup_remove(), Some(NativeArtifactFileStep::Remove));
+    assert_eq!(
+        fetch.cleanup_restart(),
+        Some(NativeArtifactFileStep::Restart)
+    );
+    assert_eq!(fetch.file_step(), None);
+}
+
+#[test]
+fn a_linked_fault_reports_the_output_cleanup_step() {
+    let fetch = NativeArtifactFetch {
+        value: ArtifactFetch::decided(
+            Err(ArtifactFault::progress(
+                ArtifactFaultKind::Linked {
+                    step: ArtifactFileStep::Remove,
+                },
+                2,
+                0,
+            )),
+            1,
+        ),
+    };
+    assert_eq!(fetch.fault(), Some(NativeArtifactFaultKind::Linked));
+    assert_eq!(fetch.linked_step(), Some(NativeArtifactFileStep::Remove));
+    assert_eq!(fetch.file_step(), None);
+    assert_eq!(fetch.reached(), Some(2));
+}
+
+#[test]
+fn a_malformed_artifact_name_is_an_invalid_argument_and_dials_nothing() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let root = PrivateFixture::new();
+    create_directory_beneath(root.path(), Path::new("private")).unwrap();
+    let session = NativeDeviceSession::open(
+        root.path().to_str().unwrap().to_owned(),
+        "private".to_owned(),
+        address.to_string(),
+    )
+    .unwrap();
+    let stamp = Arc::new(NativePhoneStamp {
+        value: PhoneLease::new(uuid::Uuid::nil(), uuid::Uuid::from_u128(1))
+            .bind("receiver-a")
+            .unwrap(),
+    });
+    let stop = Arc::new(NativeReadStop::new());
+    let digest = "sha256:fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603";
+    let media = "application/octet-stream";
+    let output = root.path().join("held.bin");
+    let request = |digest: &str, media: &str, size: u64| NativeArtifactRequest {
+        conversation: "00000000-0000-4000-8000-000000000001".into(),
+        digest: digest.into(),
+        media_type: media.into(),
+        size,
+        output: output.display().to_string(),
+    };
+    for bad in [
+        request("sha256:nope", media, 2),
+        request(digest, "Application/octet-stream", 2),
+        request(digest, media, 0),
+        request(digest, media, 64 * 1024 * 1024 + 1),
+    ] {
+        assert!(matches!(
+            session.fetch_artifact(stamp.clone(), bad, stop.clone()),
+            Err(NativeCallError::InvalidArgument)
+        ));
+    }
+    assert!(matches!(
+        session.fetch_artifact(stamp, request(digest, media, 64 * 1024 * 1024), stop),
+        Err(NativeCallError::Session { .. })
+    ));
+    assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
 }
