@@ -159,6 +159,9 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                     data-desktop-theme={theme}
                     data-peek={(peek.shown && !peek.handedOff) || undefined}
                     data-sidebar={sidebarOpen ? "open" : "closed"}
+                    // FoldMark records the fold one frame before these boxes.
+                    // A hold retains only the row that was actually painted.
+                    data-sidebar-row={sidebarOpen ? "open" : "closed"}
                     data-list={
                       region.sessionList ? (listOpen ? "open" : "closed") : undefined
                     }

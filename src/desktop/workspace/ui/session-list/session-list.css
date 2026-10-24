@@ -33,7 +33,9 @@
  * measure one frame more (`data-list-held`), so the fold does not restyle
  * the list. The list takes the gutter on the frame after the boxes.
  */
-.workspace[data-sidebar="closed"]:not([data-spare-held]):not([data-list-held])
+.workspace[data-sidebar="closed"]:not([data-spare-held][data-sidebar-row="open"]):not(
+    [data-list-held]
+  )
   .workspace-list-inner {
   padding-left: var(--desktop-gutter);
 }
@@ -59,13 +61,15 @@
 /*
  * The list's head (`ui/column-header.tsx`). An inline title starts where the
  * list's content does; with the sidebar away the list begins at the window's
- * edge, under the window's controls, so it starts after them.
+ * edge, under the window's controls, so it starts after them. This header
+ * inset follows the painted sidebar position, independently of the body
+ * measure hold: a held list at the window edge still meets those controls.
  */
 .workspace-list .desktop-column-bar {
   padding-left: 12px;
 }
 
-.workspace[data-sidebar="closed"]:not([data-spare-held]):not([data-list-held])
+.workspace[data-sidebar="closed"]:not([data-spare-held][data-sidebar-row="open"])
   .workspace-list
   .desktop-column-bar {
   padding-left: var(--desktop-titlebar-safe-start);

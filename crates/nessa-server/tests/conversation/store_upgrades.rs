@@ -6,7 +6,7 @@
 //! it (docs/adr/todo/202-versioned-local-datasets.md, "Migrations").
 use super::store::LocalConversationStore;
 use crate::conversation::application::{
-    ConversationListing, ConversationRepository, UnfinishedTurns,
+    ConversationListing, ConversationRepository, Reader, UnfinishedTurns,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_local_database::rusqlite::{params, Connection};
@@ -89,7 +89,7 @@ async fn assert_kept(store: &LocalConversationStore) {
     let id = ConversationId::new(CONVERSATION).unwrap();
     let organization = OrganizationId::new("org").unwrap();
     let alice = PrincipalId::new("alice").unwrap();
-    let listed = ConversationListing::list(store, &organization, &alice, false, 10)
+    let listed = ConversationListing::list(store, &organization, &alice, false, 10, &Reader::Owner)
         .await
         .unwrap();
     assert_eq!(listed.unreadable, 0);

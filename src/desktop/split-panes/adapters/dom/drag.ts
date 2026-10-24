@@ -582,6 +582,9 @@ export function useSplitPanesDrag(
         reflectMark(scope, marks.blur, false)
         return
       }
+      // A compact card never held the glass; do not pulse its restoration.
+      // Cancel/drop in both motion modes are covered in drag.test.tsx.
+      if (!options.previewPanes) return
       // Three frames after this one the grain comes back. The composer's blur
       // waits one more, so neither shares the frame that paints the new boxes
       // (`styles.test.ts`).

@@ -200,6 +200,10 @@ import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
 import {
+  pairedCatalogue,
+  preparePairedCatalogue,
+} from "./lib/stress-paired-catalogue.mjs"
+import {
   openStressConversation,
   selectedStressConversation,
 } from "./lib/stress-conversation.mjs"
@@ -942,6 +946,14 @@ function providerName(provider) {
 }
 
 const steps = {
+  async pairedCatalogue(run, step) {
+    const result = await pairedCatalogue(step.cycles)
+    if (run.evidence)
+      writeFileSync(
+        join(run.evidence, `paired-catalogue-${run.engine}-${step.index}.json`),
+        JSON.stringify(result, null, 2),
+      )
+  },
   async model(run, step, failures) {
     const picker = dock(run.page).locator(css.modelChip)
     // A mode switch just before this step can still be settling. The picker
@@ -3561,6 +3573,7 @@ async function atRest(run, ids) {
 
 async function startStack(options) {
   const knobs = knobsFrom(options)
+  if (knobs.pairedCatalogues > 0) await preparePairedCatalogue()
   const nativeAddress = `127.0.0.1:${await freePort()}`
   const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
   const scenario = join(directory, "stress.json")

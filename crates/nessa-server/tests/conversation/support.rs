@@ -11,7 +11,7 @@ use crate::conversation::application::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
     ConversationRepository, ConversationService, ConversationSummaries, ListedConversation,
     ListedConversations, ObservationCursor, ObservedConversations, ProviderSessionEraser,
-    ProviderSessionErasers, PublishedArtifact, ReviewNoticeAudit, ReviewNoticeAuditFailure,
+    ProviderSessionErasers, PublishedArtifact, Reader, ReviewNoticeAudit, ReviewNoticeAuditFailure,
     ReviewNoticeAuditRecord, UnfinishedDeletions,
 };
 use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
@@ -957,6 +957,7 @@ impl ConversationListing for MemoryListing {
         owner: &PrincipalId,
         archived: bool,
         limit: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         let records: Vec<Conversation> = self
             .repository
@@ -973,6 +974,7 @@ impl ConversationListing for MemoryListing {
                 match self.summaries.load(conversation.id()).await {
                     Ok(Some(summary)) if summary.archived() == archived => {
                         listed.conversations.push(ListedConversation {
+                            held: None,
                             conversation,
                             summary,
                         });
@@ -1022,6 +1024,7 @@ impl ConversationListing for MemoryListing {
         owner: &PrincipalId,
         archived: bool,
         _: Option<ObservationCursor>,
+        _: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
         let records: Vec<Conversation> = self
             .repository
@@ -1042,6 +1045,7 @@ impl ConversationListing for MemoryListing {
                 match self.summaries.load(conversation.id()).await {
                     Ok(Some(summary)) if summary.archived() == archived => {
                         observed.conversations.push(ListedConversation {
+                            held: None,
                             conversation,
                             summary,
                         });
@@ -1076,6 +1080,7 @@ impl ConversationListing for Unlisted {
         _: &PrincipalId,
         _: bool,
         _: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         Box::pin(async { Err(ConversationError::Metadata) })
     }
@@ -1085,6 +1090,7 @@ impl ConversationListing for Unlisted {
         _: &PrincipalId,
         _: bool,
         _: Option<ObservationCursor>,
+        _: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
         Box::pin(async { Err(ConversationError::Metadata) })
     }

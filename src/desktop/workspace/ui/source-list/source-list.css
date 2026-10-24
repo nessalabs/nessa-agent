@@ -50,7 +50,8 @@
  * frame widens the one pane. It stays in the row, hidden, until the boxes
  * paint, and the two changes share one layout.
  */
-.workspace[data-spare-held][data-sidebar="closed"] .workspace-sidebar {
+.workspace[data-spare-held][data-sidebar-row="open"][data-sidebar="closed"]
+  .workspace-sidebar {
   position: relative;
   top: auto;
   right: auto;

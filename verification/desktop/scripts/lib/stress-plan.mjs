@@ -12,6 +12,10 @@
 
 /** Every number the check takes: its default, and what it counts. */
 export const KNOBS = {
+  pairedCatalogues: {
+    default: 1,
+    what: "real native paired catalogue cycles through the protected product child",
+  },
   modelSwitches: {
     default: 1,
     what: "same-provider model choices through the actual composer picker, applied by the next send",
@@ -216,6 +220,8 @@ export function plan(knobs) {
     const j = Math.floor(next() * (i + 1))
     ;[steps[i], steps[j]] = [steps[j], steps[i]]
   }
+  if (knobs.pairedCatalogues > 0)
+    steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes follow
   // that work, using Ask before their review; chaos keeps concurrent coverage.
   // Handoffs come last of all: a switch stays in the metadata, and no older
