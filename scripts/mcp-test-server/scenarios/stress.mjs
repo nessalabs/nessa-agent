@@ -23,6 +23,8 @@ export const STRESS = {
   fail: "stress fail",
   limit: "stress usage limit",
   delegate: "stress delegate",
+  parentStop: "stress parent stop",
+  ownedChild: "stress owned child",
   await: "stress await",
   watch: "stress watch",
   long: "stress long",
@@ -62,6 +64,7 @@ export const SAYS = {
   delegated: "Delegated to ",
   awaited: "Awaited ",
   report: "Report received.",
+  owned: "Owned execution: ",
   watched: "Watched: ",
   long: "Long answer: ",
   window: "Window: ",
@@ -312,14 +315,36 @@ export function stressScenario({
           { do: "fail", message: SAYS.failure },
         ],
       },
-      {
-        when: STRESS.limit,
+      ...[STRESS.parentStop, STRESS.ownedChild].map((when) => ({
+        when,
         steps: [
           {
-            do: "fail",
-            message: "You've hit your weekly limit",
+            do: "tool",
+            server: "nessa-agents",
+            tool: "create_thread",
+            arguments: {},
+            save: "thread",
           },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "send_message",
+            arguments: {
+              threadId: "${thread.threadId}",
+              message: when === STRESS.parentStop ? STRESS.ownedChild : STRESS.wait,
+            },
+            save: "sent",
+          },
+          {
+            do: "text",
+            chunks: [SAYS.owned, "${thread.threadId}", " ", "${sent.executionId}"],
+          },
+          { do: "wait-cancel" },
         ],
+      })),
+      {
+        when: STRESS.limit,
+        steps: [{ do: "usage-limit" }],
       },
       {
         when: STRESS.delegate,

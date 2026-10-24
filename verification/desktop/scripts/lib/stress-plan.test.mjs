@@ -16,6 +16,7 @@ test("every required step appears as often as its number says", () => {
   const count = (kind) => steps.filter((step) => step.kind === kind).length
   assert.equal(count("model"), knobs.modelSwitches)
   assert.equal(count("stop"), knobs.stops)
+  assert.equal(count("parent-stop"), knobs.parentstops)
   assert.equal(count("fail"), knobs.fails)
   assert.equal(count("usageLimit"), knobs.usageLimits)
   assert.equal(count("restart"), knobs.restarts)
@@ -83,6 +84,15 @@ test("numbers come from flags, then NESSA_STRESS_*, then defaults, and a bad one
   assert.match(describe(plan(knobsFrom({}, {}))), /^1\. /)
 })
 
+test("parent Stop appears once by default and at the raised flag or environment count", () => {
+  const count = (knobs) =>
+    plan(knobs).filter((step) => step.kind === "parent-stop").length
+  assert.equal(count(knobsFrom({}, {})), 1)
+  assert.equal(count(knobsFrom({ parentstops: "3" }, {})), 3)
+  assert.equal(count(knobsFrom({}, { NESSA_STRESS_PARENTSTOPS: "4" })), 4)
+  assert.equal(count(knobsFrom({ parentstops: "0" }, {})), 0)
+})
+
 test("handoffs run last of all, after every upgrade, whatever the seed", () => {
   for (let seed = 0; seed < 50; seed += 1) {
     const steps = plan(knobsFrom({ seed: String(seed), handoffs: "2" }, {}))
@@ -123,6 +133,8 @@ test("the legacy seed preserves the existing non-model work's relative order", (
   const steps = plan(
     knobsFrom(
       {
+        parentstops: "0",
+        handoffs: "0",
         windows: "0",
         linkings: "0",
         rails: "0",
@@ -139,7 +151,6 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         renames: "0",
         deletes: "0",
         usageLimits: "0",
-        handoffs: "0",
       },
       {},
     ),

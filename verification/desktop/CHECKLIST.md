@@ -174,6 +174,9 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   (`sweep-across-zones`, one-way).
 - [ ] **Zones are direction-aware**: a sideways sweep near a tall, narrow
   pane's top reaches its side, never above or below. _Check:_ `drag.mjs` (`sideways-top`).
+  The receipt separates pointer event time, delivery time and DOM observation.
+  Missing observations inside the model's 150 ms rest window fail the check;
+  late announcements do not prove a decision made while moving.
 - [ ] **A zone holds at its boundary** (another must win by 12px): ±6px
   jitter does not flicker it. _Check:_ `drag.mjs` (`boundary-jitter`).
 - [ ] **The zone settles at rest**: approached fast, then still for 300 ms, a
@@ -220,6 +223,13 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   lifts cancels nothing). _Check:_ unit tests `split-panes/model/drag.test.ts`,
   `split-panes/adapters/dom/drag.test.tsx`,
   `workspace/adapters/dom/split-panes-drag.test.tsx`.
+- [ ] **A compact card never acquires pane-preview glass.** Cancel and drop,
+  with full or reduced motion, neither set the pressing marker nor pulse the
+  blur-restoration marker, including the four deferred release frames. The
+  displayed swap commits on drop; cancel preserves order; both remove drag
+  residue. _Check:_ `drag.mjs` (`compact-glass-release`, Chromium and WebKit),
+  `split-panes/adapters/dom/drag.test.tsx`; resource ownership in
+  [`pane frame budget`](../../docs/design/pane-frame-budget.md).
 - [ ] **Only the primary button carries**: the right button joining the left
   mid-drag ends the drag; nothing is carried after it and its release drops
   nothing. _Check:_ `drag.mjs` (`chord-right-button`).
@@ -273,7 +283,7 @@ _ADR 238 › One fit rule for every change of layout_.
   field and a row's highlight are as far from what is on their left — the
   sidebar's card, or with the sidebar away the window's edge — as from the
   panes on their right. _Check:_ `responsive.mjs --only list-gutter`
-  (Chromium and WebKit, sidebar open and closed).
+  (Chromium and WebKit, sidebar open and closed, including reserved scrollbars).
 - [ ] **Side columns fold first for room, and come back when there is room.**
   _ADR 238 › Side columns_ table. _Check:_ `safe-area.mjs --only resize-breakpoints`
   exercises it; watch with `--headed`.
@@ -357,10 +367,14 @@ _ADR 238 › Focus follows the focused pane_; keys in
 
 - [ ] **The caret lands in the focused pane's composer** after ⌘N, ⇧⌘N,
   ⌘\\ and a pick, ⇧⌘\\, ⌘1–4, ⇧⌘] and ⇧⌘[, and ⌘W. _Check:_ `focus.mjs` (`focus-panes`).
+  Wait for the command's expected pane membership, destination, focus mark and
+  composer together, with finite motion finished, within the existing 3 s
+  settlement budget. The old pane's caret cannot complete a new-pane command.
 - [ ] **Closing ⌘K without a pick, or Settings, gives focus back** to what
   opened it. _Check:_ `focus.mjs` (`focus-panes`).
 - [ ] **Replacing a workspace layout retires queued focus settlement**: deliver
-  held callbacks after the old workspace unmounts; they enqueue zero new frame
+  all held callbacks after the old workspace unmounts (at least one must have
+  been queued); they enqueue zero new frame
   work, and the current layout still focuses its composer. _Check:_ `focus.mjs`
   (`focus-retired-layout`); [frame lifetime](../../docs/design/ui-workspace-load.md#focus-frame-lifetime-730), #730.
 - [ ] **Keys during incremental overview rendering use the mounted prefix.**
@@ -370,7 +384,8 @@ _ADR 238 › Focus follows the focused pane_; keys in
 - [ ] **Bound workspace keys stay consumed while their actions are unavailable.**
   With the quick switcher open, ⌘N and ⌘W prevent the native default, leave the
   panes unchanged, and retain the switcher. An unbound key remains unconsumed;
-  closing the switcher restores ordinary split commands.
+  closing the switcher restores ordinary split commands, observed by the exact
+  additional pane within the existing 3 s pane-count budget.
   _Check:_ `focus.mjs` (`focus-bound-keys`), [workspace shortcuts](../../docs/design/workspace-shortcuts.md).
 - [ ] **A burst of keys leaves a working window**: no error, a focused pane.
   _Check:_ `focus.mjs` (`focus-mash`).
@@ -390,6 +405,11 @@ Header and group measurements wait for the published `data-overview-listed`
 marker, including a reopened list; finite motion finishing does not mean its
 deferred rows have all mounted. The sampling order is in
 [UI workspace load](../../docs/design/ui-workspace-load.md#verification-sampling-order).
+
+- [ ] **Complete-list drawing has its own result**, independent of focus on a
+  mounted prefix: `focus.mjs` (`focus-overview-complete-list`) still requires the
+  published marker within 2,000 ms. Focus/navigation waits for a focused mounted
+  row (and a mounted successor before Down), without requiring later rows.
 
 _ADR 238 › What fills the content region_ (the overview is workspace state).
 
@@ -765,6 +785,9 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   higher than the wait: the card counts down from the gateway's `serverNowMs`,
   not the window's clock (ADR 141 › What a person sees). Chromium
   and WebKit. The fixture is `fixtures/approval-deadline/`, dev server only.
+  The fixture's expired view carries the deadline notice source and the same
+  permission identity, as the gateway projection does; an untyped notice is
+  refused by the actual client (`lib/approval-deadline-state.test.mjs`).
   _Check:_ `approval-deadline.mjs`. The card's own widths stay
   `responsive.mjs --only approval-card` at 280 and 340 px.
 - [ ] **A clock snapshot is stable across React's consecutive reads even when
@@ -893,7 +916,9 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   session that is not the last pane drops the draft and its composer text
   at once and keeps the box. On the next frame that box still shows the
   home, labelled New session, with the unsent text. After the box goes,
-  the pane count is what it was before the split.
+  the pane count is what it was before the split. The check makes room for the
+  second readable pane before splitting; in columns layout it hides the session
+  list. Refusal of a split with no room remains the command's contract.
   _Check:_ `columns.mjs --only draft-held`.
 - [ ] **A removed session keeps its unsent reply until the box goes.** The
   source taking an established session out of two panes drops its composer
@@ -1000,11 +1025,12 @@ phone's scanner is not this screen.
   _Check:_ by hand.
 - [ ] **Advanced › Experimental is the home of previews**: Advanced sits just
   before About with its flask in both icon families; one line under its
-  title says what it is for, and with one tab there is no tab strip; it
+  title says what it is for. Its tab strip follows the catalogue's visibility
+  and order, including Experimental and Setup; a single-tab category has no strip. It
   offers each preview as one switch — the subagents preview (on unless
   turned off) and the side rail (off until turned on); General has no Experimental tab; search finds it as "advanced",
   "experimental", "labs" or "preview". _Check:_ `smoke.mjs` (`settings`);
-  unit tests `settings-view.test.tsx`, `settings-catalogue.test.ts`,
+  helper `settings-tabs.test.mjs`; unit tests `settings-view.test.tsx`, `settings-catalogue.test.ts`,
   `icon-provider.test.tsx`; the flask by eye in both families.
 - [ ] **A page's title stands clear of the window's controls**: at 1440 × 900,
   1000 × 700, 760 × 700 and 600 × 700 (sidebar folded) every category's
@@ -1308,7 +1334,9 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
   system's), and script motion follows. _Check:_ `safe-area.mjs --reduced-motion`
   and by hand; with less motion, a drag moves only the copy: `drag.mjs`
   (`reduced-motion`), and `drag.mjs --reduced-motion` for every drag check
-  with the system's reduced motion on.
+  with the system's reduced motion on. The reduced-motion landing recorder
+  retains every frame through the expected committed order, within the existing
+  3 s settlement budget; intermediate geometry and final residue still fail.
 
 ## Themes, zoom and sizes
 
@@ -2051,7 +2079,7 @@ row.
   _Check:_ `hover`. Away from the row its time shows and no button does;
   under it the two show at 26 px and the time does not.
 - [ ] **More holds what the row can do, less the ways to open it; Rename
-  edits the title where it stood.** _Check:_ `more`. Rename, Pin to Sidebar,
+  edits the title where it stood.** _Check:_ `more`. Rename, Pin to Sidebar, Fork,
   (Share…,) Archive, Delete…; the row keeps its buttons while the menu is
   open; the field takes focus and ↩ keeps "Rain plan".
 - [ ] **Delete asks first.** _Check:_ `delete`. Cancel deletes nothing, and
@@ -2152,6 +2180,45 @@ logical attribution and the mapped provider wire option. Service tests keep a
 second review pending and require live publication after success or consumption
 with a typed failure.
 
+- [ ] **Stopping a parent cancels owned child and grandchild turns by default** (#329).
+  `parent-stop.mjs` creates them through the actual source-bound `nessa-agents`
+  tools and clicks the window composer's ordinary Stop button. Chromium and
+  WebKit assert one cancelled parent turn, cancelled descendants, an unrelated
+  turn still running with its queued report-watch turn preserved, and no new parent turn during a 1500 ms report-delivery
+  observation, then a later person command releases the retained child report.
+  A second isolated gateway sets
+  `subagents.stopChildrenOnParentStop:false` and asserts the descendants remain
+  running. This runs in `pnpm test:e2e:scripted`; the Rust Stop/report tests own
+  controlled races and restart coverage.
+  The repeated `conversation-stress.mjs` step also observes the selected native
+  session's ACP prompts: withdrawing an older queued report can publish empty
+  cancelled history, but a further provider prompt fails even if it produces
+  no output. Missing or damaged recording evidence fails the check.
+
+- [ ] **Stress review answers keep their exact command ACK.** The window sends
+  the intended conversation/execution/review/permission/option, and its matching
+  command receives `applied: true`. Expiry or a lost ACK cannot become success
+  merely because the card disappears. Provider completion remains checked by
+  the existing final transcript and at-rest checks. _Check:_
+  `lib/stress-review-answers.test.mjs` and `conversation-stress.mjs` in Chromium
+  and WebKit; [ordering controls](../../docs/design/stress-review-answers.md).
+
+- [ ] **Stress fixtures match their named access scenario.** `full` keeps the
+  original successful access-change assertions on a model advertising all three
+  modes. `ask-only` clicks Full and requires its exact unavailable refusal,
+  retained Ask selection and shield, no new turn or elevated provider command,
+  and a real review on the following permission turn. Incompatible model/scenario
+  pairs fail setup without fallback. Run defaults and raised counts for each
+  applicable profile; label the model and scenario in the evidence.
+
+- [ ] **Layout observations follow actual geometry.** A swipe settles only after
+  its finite geometry animations finish, within the original three-second bound;
+  repeated pixels during a paused width transition are not settlement. Filled
+  conversation slivers remain in 220–520 px panes; the short-home cutoff does not
+  hide them. Removal checks reveal and reacquire the visible session row after a
+  fold, then retain their next-frame reply and Stop assertions. _Check:_
+  `session-rows.mjs`, `responsive.mjs --only list-gutter`, and
+  `columns.mjs --only content-visible,reply-held,stop-held --sizes 760x700`.
 ### Pending action ownership (#1087)
 
 `user-flow-ordering.mjs` drives production AgentDownloads and useComposer against controlled ports in Chromium and WebKit: Busy and Not confirmed both keep Download absent after an older offers response (0 stale buttons, 1 dispatch), while a newer check restores it (1 button). Sending in A and clearing B leaves B expanded; refusing A while B sends cannot suppress B's own collapse. This is frontend dispatch/presentation evidence, not a claim about physical backend installation. The fixture needs dev mode and no gateway credentials.

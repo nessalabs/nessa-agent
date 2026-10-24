@@ -55,12 +55,14 @@ struct WorkflowProvider(Arc<WorkflowBackend>);
 struct WorkflowAudit {
     records: Mutex<Vec<ExecutionAuditRecord>>,
     reject: AtomicBool,
+    reject_decline: AtomicBool,
     panic: AtomicBool,
     pause: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
 }
 impl ExecutionAudit for WorkflowAudit {
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         Box::pin(async move {
+            let declined = matches!(&record, ExecutionAuditRecord::TurnResumed(record) if record.resumption() == &nessa_sdk::application::agent_execution::executions::TurnResumption::Declined);
             self.records.lock().unwrap().push(record);
             if self.panic.load(Ordering::SeqCst) {
                 panic!("audit acknowledgement panicked");
@@ -70,7 +72,9 @@ impl ExecutionAudit for WorkflowAudit {
                 let _ = entered.send(());
                 let _ = release.await;
             }
-            if self.reject.load(Ordering::SeqCst) {
+            if self.reject.load(Ordering::SeqCst)
+                || (declined && self.reject_decline.load(Ordering::SeqCst))
+            {
                 Err(AgentError::AuditFailure)
             } else {
                 Ok(())
@@ -94,6 +98,8 @@ struct WorkflowBackend {
     steering_gate: Mutex<Option<oneshot::Receiver<()>>>,
     closed: watch::Sender<bool>,
     cleanup: Mutex<CleanupReport>,
+    cleanup_gate: Mutex<Option<oneshot::Receiver<()>>>,
+    cleanup_entered: Notify,
     execution_fault: Mutex<Option<ProviderOperationFailure>>,
     execution_report: Mutex<Option<ExecutionReport>>,
     report_polled: watch::Sender<bool>,
@@ -305,6 +311,12 @@ impl ProviderSessionBackend for WorkflowBackend {
     fn close(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
         Box::pin(async move {
             self.shutdowns.lock().unwrap().push(request);
+            let gate = self.cleanup_gate.lock().unwrap().take();
+            if let Some(held) = gate {
+                self.cleanup_entered.notify_one();
+                held.await
+                    .expect("the cleanup owner receives its actual receipt");
+            }
             let report = self.cleanup.lock().unwrap().clone();
             if report.is_confirmed() {
                 self.closed.send_replace(true);
@@ -381,6 +393,8 @@ fn workflow_backend() -> Arc<WorkflowBackend> {
         steering_gate: Mutex::new(None),
         closed: watch::channel(false).0,
         cleanup: Mutex::new(CleanupReport::confirmed(CloseOutcome { forced: false })),
+        cleanup_gate: Mutex::new(None),
+        cleanup_entered: Notify::new(),
         execution_fault: Mutex::new(None),
         execution_report: Mutex::new(None),
         report_polled: watch::channel(false).0,
@@ -635,3 +649,6 @@ mod queue_order;
 mod permission_authority;
 
 mod resumption;
+
+#[path = "conformance/close_reports.rs"]
+mod close_reports;

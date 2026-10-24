@@ -68,7 +68,13 @@ import {
   recording,
   setOption,
 } from "./scripted-frames.mjs"
-import { promptText, runSteps, turnFor, parseScenario } from "./scripted-scenario.mjs"
+import {
+  promptText,
+  runSteps,
+  turnFor,
+  parseScenario,
+  ScriptedUsageLimitError,
+} from "./scripted-scenario.mjs"
 import { SERVER } from "./local-gateway.mjs"
 
 /** How long an MCP request waits for its stand-in's answer. */
@@ -119,7 +125,8 @@ if (scenarioPath) {
 
 const send = (message) =>
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`)
-const failure = (id, code, message) => send({ id, error: { code, message } })
+const failure = (id, code, message, data) =>
+  send({ id, error: { code, message, ...(data ? { data } : {}) } })
 
 /** How long a stopped stand-in has to exit before it is killed. */
 const STOP_GRACE_MS = 2_000
@@ -522,7 +529,12 @@ createInterface({ input: process.stdin })
     try {
       send({ id: message.id, result: await handler(message.params ?? {}) })
     } catch (error) {
-      failure(message.id, -32603, error.message)
+      failure(
+        message.id,
+        -32603,
+        error.message,
+        error instanceof ScriptedUsageLimitError ? error.data : undefined,
+      )
     }
   })
   .on("close", stop)

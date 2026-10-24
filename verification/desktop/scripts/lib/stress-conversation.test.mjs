@@ -137,3 +137,65 @@ test("missing, ambiguous or differently titled Home selection supplies no identi
   ])
     assert.equal(await selectedStressConversation(listedWindow(rows), title), null)
 })
+
+function modelPicker(groups, selected = 0) {
+  let opened = false,
+    chosen
+  const visited = []
+  const page = {
+    locator(selector) {
+      if (selector === css.modelProviderTab)
+        return {
+          count: async () => groups.length,
+          nth: (i) => ({
+            click: async () => {
+              selected = i
+              visited.push(i)
+            },
+          }),
+        }
+      assert.equal(selector, css.modelOption)
+      return {
+        first: () => ({ waitFor: async () => assert.equal(opened, true) }),
+        filter: ({ hasText }) => ({
+          count: async () =>
+            groups[selected].filter((name) => name.includes(hasText)).length,
+          click: async () => {
+            chosen = groups[selected].find((name) => name.includes(hasText))
+          },
+        }),
+      }
+    },
+  }
+  return {
+    page,
+    trigger: {
+      click: async () => {
+        opened = true
+      },
+    },
+    visited,
+    chosen: () => chosen,
+  }
+}
+test("Home selects the exact fixture across provider tabs, never the initial provider default", async () => {
+  const { selectStressModel } = await import("./stress-conversation.mjs")
+  const picker = modelPicker([["Claude Opus 5"], ["GPT-6 Astra", "GPT-5.6 Terra"]])
+  await selectStressModel(picker.page, picker.trigger, "GPT-5.6 Terra")
+  assert.equal(picker.chosen(), "GPT-5.6 Terra")
+  assert.deepEqual(picker.visited, [0, 1])
+})
+test("Home missing or ambiguous fixture models cannot fall back to another selection", async () => {
+  const { selectStressModel } = await import("./stress-conversation.mjs")
+  for (const groups of [
+    [["Claude Opus 5"], ["GPT-6 Astra"]],
+    [["GPT-5.6 Terra", "GPT-5.6 Terra duplicate"]],
+  ]) {
+    const picker = modelPicker(groups)
+    await assert.rejects(
+      selectStressModel(picker.page, picker.trigger, "GPT-5.6 Terra"),
+      /not uniquely offered/,
+    )
+    assert.equal(picker.chosen(), undefined)
+  }
+})

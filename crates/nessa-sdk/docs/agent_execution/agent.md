@@ -92,12 +92,30 @@ cleanup confirmation is a separate result.
 An agent that participates in a parent/child ownership tree installs one
 `OwnedLifetime` before attachment. `Agent::close` still stops only this
 attachment and can reopen. `Agent::end_owned_lifetime` seals descendant admission,
-stops this attachment, and joins the descendant drain. Dropping the last session
-handles selects the same owned ending. Explicit close, execution failure, session
+stops this attachment, and joins the descendant drain. The host retains the
+coordinator and ends the lifetime explicitly. Explicit close, execution failure, session
 failure, deadline, and a dropped event consumer stay attachment-only. A second
 install is refused. The coordinator keeps the gate; the agent does not keep the
 coordinator. A child whose lifetime closes during preparation does not receive
 its initial task, and that refusal is not reported as the parent closing.
+
+`OwnershipCoordinator::prepare_child(command, session)` reserves and prepares an
+owned child on a fixed session without calling `InitialSubmit`. Its `Ready`
+receipt and SQLite state record acknowledged preparation, not task admission.
+The command's description/configuration fingerprint, fixed session and operation
+kind participate in retry identity. A later task uses ordinary Agent submission.
+The coordinator rechecks parent/child admission after Ready publication, retains
+cleanup on publication failure, and keeps admitted preparation supervised when
+its caller disconnects. Gateway Stop-cascade policy and settings remain outside
+this primitive; preparing a child changes no approval decision.
+
+`OwnershipCoordinator::child_lifetime_for_session` reads retained child ancestry,
+including closed history. It grants no admission authority; host policy can use
+it to refuse turning a sealed child session into a new root. Closed
+reservations with validated absence are excluded: they never acquired
+the session and cannot seal an unrelated ordinary conversation. The gateway's
+`deleting_a_cold_owned_tree_reconciles_confirmed_leases_and_cannot_reparent_children`
+regression verifies that distinction across an actual SQLite restart.
 
 ## Model capabilities and provider operations
 
@@ -637,3 +655,38 @@ combined evidence. Confirmed release cannot be undone by a competing uncertain
 result, and independent confirmation cannot erase failed audit delivery. Close
 callers use the final combined report. A real cleanup retry on resources still
 owned can acknowledge an earlier failed attempt.
+
+## Exact execution observation for host orchestration
+
+`Agent::unsettled_execution_ids()` reads admitted queued/running identities under
+one scheduler lock, including a dequeued invocation awaiting provider dispatch.
+It is observation, not a cancellation capability: hosts still authorize and use
+the ordinary exact execution Stop controls. Completed work may disappear before
+the host acts. The conformance regression
+`unsettled_selection_includes_dequeued_work_before_active_provider_dispatch`
+holds the actual before-invocation boundary to verify that handoff.
+
+`resumed_turn_id(history, original)` requires the SDK resumption owner's
+`resumed_from` source identity, saved atomically with the successor input.
+Ordinary enqueue/invoke cannot set it, even with an exact continuation request
+and derived execution ID after a real owed stop. The fact survives restoration
+and remains independent of the later `TurnResumed` audit, including
+`ContinuedUnaudited`. A record without it supplies no resumption provenance.
+The same decision checks forward queued admission, a recorded owed stop,
+identity, actor, initiation and request. That one SDK relationship also decides whether
+the original's work moved to a successor. A caller-created matching ID before
+the source, behind an unstopped source, or submitted as immediate input cannot
+carry that work. If such an unrelated ID occupies a resumption's next identity,
+`resume_turn` returns `SubmissionConflict` before changing the source; the host
+can still decline it. Actual public-admission and restoration regressions live
+in `conformance/resumption/canonical_admission.rs`.
+Later person work cannot erase an admitted relationship. `owed_turn_ids(history)`
+reads historical
+owed work using the same `OwedHistory` decision as `Agent::owed_turns` and its
+admission recheck. It includes exhausted chains awaiting a host decline; it
+never grants permission to resume. Runtime unfinished identities, canonical
+successor links and future resumption eligibility remain separate facts.
+Gateway Stop consumes unfinished identities plus historically owed work;
+reports follow a canonical successor before asking whether work remains owed.
+The conformance and gateway regressions cover final permitted resumes, failed
+successors superseded by a queued person message, and report dequeue handoff.

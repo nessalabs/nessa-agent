@@ -1280,6 +1280,9 @@ mod tests {
         }];
         for index in 0..8 {
             let record = InvocationRecord {
+                decline: None,
+                cancellation_delivery: None,
+                resumed_from: None,
                 target_event_offset: None,
                 submission: SubmissionMode::Immediate,
                 request: ExecutionRequest {
@@ -3624,6 +3627,9 @@ mod tests {
                 .clone();
             let initial_charge = entry.retained_bytes.load(Ordering::Acquire);
             let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
+                decline: None,
+                cancellation_delivery: None,
+                resumed_from: None,
                 target_event_offset: None,
                 submission: SubmissionMode::Immediate,
                 request: ExecutionRequest {

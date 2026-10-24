@@ -34,6 +34,23 @@ focus taken during target search.
 | Effect mounted | Return from overview | Two settlement frames precede target search; the overview leave's own frame does not search the panes. |
 | Mounted search waiting to land | Person focuses a list or dialog | That focus remains the person's. |
 | Browser layout owner replaced while pane movement is queued | Replace the workspace layout, then deliver retired callbacks | Retired callbacks enqueue zero new work; current layout's focus remains usable. |
+| Mounted sliver already moving | Replace its store with one focused elsewhere | Before paint the replacement reflects its own focus; its later focus change still waits for its requested frame. |
+| Pane focus or sliver owner replaced while its paint is queued | Replace the store or layout with the same pane key, then deliver the cancelled paint | The replacement's focus and sliver are unchanged; its own later focus change still applies. `pane-focus-mark.test.tsx` covers both replacements. |
+
+## Sidebar action during a fold
+
+The pane arrangement may keep the sidebar's space until its new boxes paint.
+That hold does not keep the sidebar's action painted: a closed sidebar's bar
+hides immediately, including while a previously started slide is still running.
+`chrome.test.ts` checks the actual stylesheet cascade; `drag.mjs`'s
+`command-mid-drag` checks the painted reserved corner throughout Cmd+W.
+
+| State | Event ordering | Required observation |
+| --- | --- | --- |
+| Open sidebar | A pane closes during a drag; sidebar closes while spare space is held | The sidebar may remain painted, but its bar, New Session button and icon are hidden immediately. |
+| Closed sidebar, space held | The hold ends while the slide continues | The bar remains hidden; no action crosses the reserved corner. |
+| Closed sidebar | Person reveals the edge peek | The existing reveal delay governs the bar; the fold rule does not suppress the peek. |
+| Closed sidebar | Sidebar opens again | The open bar remains available after its existing reveal ordering. |
 
 ## What load coverage exists
 
@@ -99,7 +116,14 @@ dispatch policy. Existing published readiness and shared waits are the owners.
 
 | State | Event | Measurement or next action | Enforcer |
 | --- | --- | --- | --- |
+| A pane command has committed its model change but its arrangement or caret is still pending | The fixture observes the command | Within the existing 3-second settlement budget require the expected pane membership and destination, its mark and its composer caret, with finite motion finished. An old pane/old caret match cannot complete an added-pane command. | `pane-settlement.mjs`; actual-shell ordering probe and delayed/wrong-target/stalled controls |
+| A bound ordinary split was pressed | No finite animation exists before the grid draws its new arrangement | Wait for exactly one additional pane under the existing pane-count budget; timeout remains a failure even if a later read matches. | `paneCountIs`; `focus-bound-keys` |
+| Pane movement queues work for several effects | The layout is replaced and all captured callbacks are delivered despite cancellation | At least one callback was queued; every captured callback was cancelled, creates zero new work, and cannot prevent the replacement's own focus. Callback count is not an ownership identity. | `requirePendingMovement`; `focus-retired-layout` |
+| A reduced-motion drop has released but the grid has not painted its committed arrangement | The landing recorder is still sampling every frame | Within the existing 3-second settlement budget require the recorder's expected pane order and no finite motion. Retain every intermediate geometry and the final live-order/residue checks; a timeout remains failed even if a later sample is correct. | `recordedDropReady`; delayed, missing, wrong-order and timed-out controls |
 | A control has received hover | Its finite CSS transition is still running | Wait for finite animations before reading the exact hover fill | `waitUntilSettled` in `lib/browser.mjs`; `shared-controls.mjs` identity check |
+| A row query excludes focused or selected rows | Focus or layout changes after input | Read the pinned input/measurement elements; record actual pointer containment and animation state, without accepting another query result | `sampleHover` in `lib/hover-state.mjs`; `shared-controls.mjs` rows |
+| A sampled row has lost the pointer or still has finite animation | Its color happens to match the expected ink | Fail the sample; keep exact color comparison and retain the settled/away measurements | `hoverFailures` and `hover-state.test.mjs` |
+| Complete overview rows are mounted | The sidebar's quiet metadata still follows its post-paint publication | Wait for Agents to be its sole current page before measuring selected/quiet rows; this shares the existing two-second overview bound | `shared-controls.mjs` overview readiness; `OverviewQuietProvider` |
 | The overview shell is mounted, with only a prefix of its rows | Header height, scroll room, group baseline or command row is requested | Wait for the published complete-list marker; reopening uses the same marker. Command checks report unavailable publication rather than accepting an existing prefix | `data-overview-listed` in `overview.tsx`; `responsive.mjs` and `command-order.mjs` |
 | The compact drag card is visible before the recorder's next frame | Its size, pointer position or title is requested | Wait for the current recording to publish a ghost before reading that sample | `recordShapeFrames` in `lib/shape-sampler.mjs`; `compact-drag-card` in `drag.mjs` |
 | The viewport has resized before the window's resize subscriber commits | The rail's fold and focus are requested | Cross the existing page-frame commit fence before sampling the rail | `useWindowWidth` in `adapters/window-width.ts`; `frames` in `lib/workspace.mjs`; `rail-fold-focus` in `columns.mjs` |

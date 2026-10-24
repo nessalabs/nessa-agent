@@ -1,6 +1,347 @@
 # 329. Subagents use ordinary Agents with parent ownership
 
+## Parent turn Stop implementation — 17 October 2026
+
+The confirmed contract is recursive child Stop by default, with an explicit user
+settings override. Stop targets exact executions; it does not end an ownership
+lifetime, inherit approvals, delete conversations or turn cancellation into owed
+work. Issue [#329](https://github.com/nessalabs/nessa-agent/issues/329), tracking
+[#325](https://github.com/nessalabs/nessa-agent/issues/325), and extension seam
+[#337](https://github.com/nessalabs/nessa-agent/issues/337) own those decisions.
+
+The gateway now composes the existing SDK ownership coordinator and SQLite graph.
+`create_thread` prepares an ordinary empty child through that coordinator without
+a placeholder model turn. Report watches and sends do not create ownership edges.
+Ordinary creation keeps Ask approval and the existing Cedar checks still decide
+source and each target access.
+
+### Settings
+
+The existing namespace `config.json` accepts one optional strict block:
+
+```json
+{ "subagents": { "stopChildrenOnParentStop": false } }
+```
+
+Omitted block/field means true. False stops the exact parent only. Null, wrong
+types and unknown keys are refused at startup. This uses the existing settings
+owner; there is no YAML parser, dynamic reload or permission override.
+
+### Capacity owners and recovery
+
+The existing conversation service bounds its live and opening conversation map.
+Roots and children both pass that admission check. The SDK coordinator separately
+bounds retained child lifetimes through its injected `LiveRoom`; production uses
+`LiveCapacity` with the same configured limit. A new child must pass both bounds.
+A retained child quota reservation does not reserve a conversation-map entry.
+Cold roots and children follow the same ordinary admission rule and can return
+`Capacity` when that map is full. This slice adds no cold-child priority or unified
+persistent global resource reservation.
+
+Quiescent recovery restores the SDK child reservations before installing runnable
+history. Repeated recovery does not charge the same lifetime twice. Validated
+physical release, including absence, frees that reservation despite audit debt;
+uncertain cleanup retains it. Insufficient room refuses recovery and attempts to
+return only reservations whose acquisition was acknowledged in that attempt.
+Unacknowledged capacity effects remain uncertain; an extra release must not be
+invented to compensate them. Refused history cannot authorize a quota release.
+Available conversation-map space does not prove an earlier physical owner stopped.
+
+### Admission, persistence and cancellation
+
+Current-main request isolation keeps each creation/mutation lease scoped to one
+principal and request. Orchestration reads the principal's existing immutable
+mutation receipts through the storage owner, ordered by the Accepted record's
+physical publication. This observational read creates no request or second
+ledger. Child Stop acceptances use their own request leases; the complete root
+digest is published last. A partial selection remains unconfirmed.
+
+Gateway `owned_threads.rs` and `parent_stop.rs` serialize owned creation, agent
+send, report submission and Stop selection at one application admission boundary.
+The SDK graph remains the only ownership authority. Stop traverses descendants,
+including idle intermediates, and captures each unsettled execution identity.
+The SDK's atomic `unsettled_execution_ids` read includes dispatch handoff work.
+No lifetime seal or new scheduler is involved. Later explicit person input can
+run on the same open lifetime.
+
+Child preparation uses the existing creation coordinator with a distinct
+fingerprint derived from the ownership graph's retained preparation digest.
+Ordinary creation still reopens existing conversations; child initialization
+requires a new target under the same creation mutex and repository outcome.
+An ordinary Ready receipt cannot stand in for child preparation. Cleanup binding
+requires the matching original child receipt and metadata origin, including after
+restart. A closed reservation with validated absence never acquired the session
+and does not prevent that unrelated conversation from opening later.
+
+Startup can also prove that the original child initializer was never authorized.
+The command store observes creation receipts within the retained parent owner's
+principal. Observation is discovery only: the gateway correlates the receipt's
+actual actor, child session, spawn request and preparation fingerprint, then
+reopens that exact original request and requires its current stage still be
+Accepted. Its lease excludes a later Attempted publication until the SDK has
+recorded the rejection. Missing child metadata alone is never an absence proof.
+The graph's existing preparation-rejection absence, seal, first close owner,
+audit and capacity authorities do the reconciliation; no factory/provider effect
+or synthetic provider acknowledgement is introduced. Recovery of a failed
+preparation does not change ordinary Stop or conversation Close policy.
+
+| Original creation evidence | Recovery meaning and ordering | Enforcer |
+| --- | --- | --- |
+| Accepted before Attempted, no child metadata | Hold the original command lease; verify all bindings; seal the retained child, record preparation-rejection absence, release quota once and follow existing Draining/Ended and close audit | `accepted_child_without_metadata_releases_its_original_reservation_after_restart`; `verified_unstarted_preparation_releases_once_and_survives_retry_and_restart` |
+| Attempted without metadata, including a stale Accepted observation | Original request load wins; retain uncertainty and quota without initializing or closing a target | `child_recovery_does_not_promote_uncertain_or_mismatched_creation_evidence` |
+| Foreign principal, request, child target or preparation fingerprint | Refuse that observation as authority; do not infer an owner or absence | Same gateway matrix; `unstarted_recovery_refuses_foreign_identity_later_progress_and_bound_resources` |
+| A live factory flight or later preparation milestone | No pre-initialization absence can be asserted; preserve the actual owner | `unstarted_recovery_refuses_an_actual_live_factory_flight`; later-progress refusal above |
+| Audit/store rejection or lost acknowledgement after verified absence | Keep the first operation/cause/initiator and proof; physical absence may free quota independently of acknowledgement; retry without another release or factory effect | `unstarted_recovery_retries_original_absence_after_audit_or_store_failure` |
+| An ancestor already owns a held close | Record this child's absence under that original operation; do not join or replace the held ancestor during startup | `unstarted_recovery_does_not_join_or_replace_an_ancestors_held_close` |
+| Completed absence is restored again | Existing graph proof needs no new receipt observation; the never-acquired target can open as a distinct ordinary root | Gateway Accepted crash regression above |
+| Refused restored history contains a formerly valid absence | Refuse reconciliation before any quota release or rewrite | `refused_restored_absence_cannot_release_a_previously_retained_reservation` |
+
+```mermaid
+sequenceDiagram
+  participant Gateway as Gateway startup
+  participant Commands as Original creation owner
+  participant SDK as Ownership coordinator
+  participant Graph as Existing graph/store/audit
+  Gateway->>Commands: Observe parent principal's retained creations
+  Commands-->>Gateway: Candidate original receipt
+  Gateway->>Commands: Reopen exact request, retain exclusion
+  Commands-->>Gateway: Current Accepted + exact binding
+  Gateway->>SDK: Confirm unstarted original preparation
+  SDK->>Graph: Seal child, retain first owner and absence
+  SDK->>SDK: Release retained quota once
+  SDK->>Graph: Draining/Ended and owned close audit
+  SDK-->>Gateway: Confirmed or typed retained failure
+  Gateway->>Commands: Release original request exclusion
+  Note over Gateway,SDK: Attempted or mismatched evidence grants no absence
+```
+
+Existing mutation receipts persist each exact child Stop before the root complete
+selection marker. The marker fingerprints that immutable selection. Retry and
+startup recovery use those original targets even after settings change; an
+incomplete publication refuses recapture. Each target is checked independently,
+remaining targets are attempted after failures, and aggregate lookup does not
+claim completion while a child receipt remains unresolved. Supervised admission
+survives caller disconnect. A lost acknowledgement remains uncertain until the
+original receipt/history confirms the effect. Physical release and audit facts
+remain separate.
+
+### Reports and suspension
+
+After merged #982 released the report paths, report delivery was integrated with
+the same admission boundary. The existing durable waiting row remains through
+parent settlement. Stop first withdraws already queued report work belonging to
+that report, without cancelling unrelated user submissions, then cancels parent
+and descendants. Child cancellation cannot immediately enqueue a parent model
+turn. A later person Submit admitted after the Stop marker releases delivery;
+agent messages and earlier queued person submissions do not. Transcript identity
+and the existing waiting row reconcile delivery/restart; there is no new ledger.
+
+SDK continuation reads follow the exact saved original-to-successor relationship
+for legitimate suspended work. A person's Stop stays final and is declined rather
+than resumed if recovered as owed work. The coordinator's existing lifetime
+cleanup still owns physical process teardown; ordinary Stop does not permanently
+close those resources.
+
+Lock order is application admission, then the per-conversation mode lock.
+Automatic resume holds that same order through successor admission, so an owed
+turn cannot gain a successor between Stop capture and its exact cancellation.
+
+An unreadable descendant history refuses selection before any effect; it is not
+a claimed partial success. Known targets whose access or provider effect fails
+remain independent attempts after admission. An unknown-target durable partial
+selection would require a further command-owner representation and is outside
+this draft's completion claim.
+
+Owed-work decline is an ordinary StopTarget effect, after the existing mutation
+owner has durably recorded Accepted and Attempted. Selection reads it as work;
+its exact root actor is retained. Automatic resumption waits for the admitted command owner instead of declining
+work itself or admitting a successor.
+
+Cold cleanup observes the existing environment/lease owner's exact confirmation.
+It does not claim to end or rewrite that owner's lower lease history. `NotHeld`
+remains unknown for physical release, because an earlier process may outlive an
+environment connection.
+
+The runtime draft has focused tests for default/override, descendants, stale ids,
+caller loss, spawn fencing, queued reports, unrelated work, authorization,
+partial target failures, lost acknowledgements and restart with changed settings.
+Browser acceptance, exact-head review and current-main CI remain release gates;
+a draft implementation is not evidence that those gates passed.
+
+### Focused correction orderings — 18 October 2026
+
+#### Report provenance and Stop receipt boundary
+
+The report owner identifies a delivery by its durable row and validated original
+request, then follows only the SDK's canonical saved successor relationship.
+The SDK owns live, queued, owed and resumed execution facts; the mutation owner
+owns whether an exact Stop withdrew/cancelled work or found it already final.
+An acknowledged provider failure remains a failure after host decline: that
+result alone cannot prove the report's delivery obligation was paid. Neither
+report ID prefixes nor continuation notice text create provenance.
+
+| Report state at Stop/delivery | Authoritative facts | Required report-owner behavior |
+| --- | --- | --- |
+| Queued original or later delivery | Durable row, validated request/actor, SDK queue | Capture exact ID and withdraw before root cancellation |
+| Dequeue handoff or active | Same provenance, SDK unfinished IDs | Capture exact ID through handoff; cancel that identity |
+| Canonical resumed successor, queued/active | Validated original plus the full admitted SDK successor chain | Carry provenance through the chain; preserve unrelated commands |
+| Person Submit acknowledges any admitted delivery/successor, then that turn resumes again | Existing Submit receipt at any identity in that SDK-validated chain | Exclude the entire delivery from report-only cancellation, including later queued/active successors |
+| Failed result still owed | SDK owed work, retained provider result | Capture and decline through mutation owner; preserve result and row |
+| Declined report with retained failed result | Exact Stop receipt Withdrawn/Cancelled; provider result remains distinct | Retain obligation; do not treat failed result as paid delivery |
+| Accepted/Attempted Stop before acknowledgement | Existing captured binding and unresolved receipt | Retain uncertainty and row; do not infer delivery from result |
+| Command receipt evidence is unavailable | Existing command read refuses; provider result remains known | Retain and retry; never acknowledge delivery from missing Stop facts |
+| Parent reports paused | Durable Stop marker, no later person admission | Do not settle or enqueue report work |
+| Later person admitted | Existing person command ordering | Redeliver withdrawn report under that person turn's delivery ID |
+| Ordinary person input has a resume-shaped ID | Exact later Dispatched person Submit receipt | Release the pause; execution-ID spelling supplies no origin or intervention authority |
+| Genuine SDK successor has no person command | SDK admission alone, no matching later person Submit receipt | Keep reports paused |
+| Genuine SDK successor is explicitly submitted by a person later | Exact later Dispatched person Submit receipt for that saved input | Release the pause; SDK origin does not veto a separate person intervention |
+| A conflicting public Submit targets an existing report or successor | Attempted receipt, no successful person admission, saved report unchanged | Do not exempt that report chain from Stop; capture consumes the same exact successful person-admission decision as pause release |
+| Admission acknowledgement is uncertain | Existing mutation owner retains uncertainty | Do not relabel Attempted as either successful person admission or definite refusal; exact retries reconcile through that owner |
+| Restored origin names a missing, later, self or incompatible source | Existing SDK resumption owner validates the retained admission relationship | Reject contradictory snapshot evidence before restoration can classify owed work or dispatch it |
+| Valid origin remains after later settlement or checkpoint | Earlier recorded resumable stop plus exact admitted request, caller, initiation and queued identity | Preserve the admission fact independently of current retry eligibility and later audit acknowledgement |
+| Restarted pending row | Same durable row, transcript, canonical links and receipts | Reconcile original identities without replay or recapture |
+| Completed report with no effective Stop | SDK final result and no withdrawal/cancellation receipt | Settle existing obligation without duplicate delivery |
+
+Regressions exercise canonical successor capture through the real gateway Stop,
+and an explicit delivery poll after owed-report decline. The latter must retain
+the row before and after reopening and deliver only after later person input.
+An explicit person command at any admitted execution excludes that delivery
+and its canonical chain from report-only cancellation. The report owner keeps
+the original and every SDK-validated successor together until the cancellation
+consumer checks the existing Submit receipts; reducing the chain to its endpoint
+before that check loses an intervening person command. Canonical identity stays
+owned by the SDK, and the existing gateway mutation receipts alone establish
+the person-command boundary. A controlled delivery poll also proves that
+unavailable receipt evidence cannot call the SQLite report settlement port.
+
+The SDK owns three distinct facts: exact locally unfinished executions, canonical
+saved successor links, and work eligible for another resume. Stop consumes the
+first and the shared historical owed-work decision; report following consumes
+canonical links before asking whether another resume is owed and the existing
+`Resumption::successor` value permits another attempt. Exhausted unfinished work
+still waits for its own result; exhausted final failures report their result
+without depending on a later host-decline wake-up. An exhausted retry
+budget does not make a locally unfinished execution final. No new selection or
+retry ledger is introduced: existing immutable Stop bindings remain the recovery
+contract.
+
+| Ordering | Required result | Regression |
+| --- | --- | --- |
+| Last permitted successor is running when its parent stops | Capture and stop that exact successor; keep lifetime open | `parent_stop_captures_the_last_permitted_running_successor` |
+| Root settles after classification and a correlated report leaves its queue | Capture report in dequeue handoff or active phase; retain durable report, keep unrelated work | `parent_stop_captures_correlated_report_after_dequeue` |
+| Correlated report fails and becomes owed after root classification but before capture | Capture and decline that exact report; preserve its durable delivery until later person input | `parent_stop_captures_correlated_report_owed_after_dequeue` |
+| Later person input supersedes a failed successor without finishing | Shared historical and live owed decisions agree; report publishes final failure | SDK resumption conformance |
+| Unrelated conversation history grows while commands stay fixed | Command observation finds physical admission only within each matched command stream through the existing record index; no global history aggregation or new index | `command_observation_work_excludes_unrelated_history_records`: one/eight history streams, fixed stream count, unchanged bytes/order, read-only observer and bounded SQLite VM work |
+| Mutation observation encounters oversized SQLite fields | Persistence bounds reject before extraction or copy, including foreign principal rows | Session storage mutation observation bounds |
+| Same ownership evidence is retried at a later clock reading | Same durable identity and first observation time survive | Ownership audit retry regression |
+
+### Review orderings added during runtime validation
+
+| Ordering | Owner and decision | Regression |
+| --- | --- | --- |
+| A failed original already has a canonical successor, then later person work arrives | SDK continuation follows the admitted successor; later work only suppresses a new retry | `a_saved_failed_turn_successor_is_still_followed_after_later_person_work` |
+| A caller pre-creates a matching successor before its source, or while that source has no recorded owed stop | The SDK rejects the relationship for both observation and owed-work supersession. Exact ID/request equality cannot replace forward queued admission after a recorded owed stop | SDK canonical-admission conformance |
+| A source is owed but its derived successor ID belongs to an unrelated saved input | Resumption returns `SubmissionConflict` before changing the source. Host decline can still end the source; the unrelated input is preserved | SDK canonical-admission conformance |
+| Ordinary queued input exactly matches a continuation after a recorded owed stop | Only the SDK resumption owner's `resumed_from` fact, saved atomically with successor input admission, can establish the relationship. Caller fields do not create it; collision refuses before source effects | `an_exact_queued_caller_input_after_a_recorded_stop_is_not_a_resume` |
+| Ordinary enqueue wins the scheduler after the source stop is saved but before resume admits input | Scheduler-held retry recovery refuses its missing owner fact rather than claiming Continued | `ordinary_enqueue_winning_after_resume_settlement_keeps_its_origin` |
+| Ordinary person input uses a resume-shaped ID | Within SDK owed-work eligibility, its saved origin, not its spelling, distinguishes ordinary intervention from a retry; the gateway's separate person-command boundary is owned by exact Submit receipts | Ordinary-origin resumption conformance and person report-pause release conformance |
+| Legitimate resume admission survives restart, audit failure or an identical input retry | Its saved source identity remains authoritative independently of the later TurnResumed audit; canonical validation still checks identity/request/order/stop and retry joins exact work | Real-resume restoration and ContinuedUnaudited conformance |
+| A matching successor was admitted as immediate input | It cannot carry a queued resumption's work; the original stays owed | SDK canonical-admission conformance |
+| Automatic resume races Stop capture | Both hold application admission before mode changes through successor admission | Parent Stop recovery plus existing resume conformance |
+| Report polling races ordinary person submit | Person command retains the same supervised admission scope as report delivery | `queued_child_report_is_retained_across_stop_restart_and_only_person_work_releases_it` and actual browser continuation |
+| Owned child is successfully deleted before parent Stop | Durable erasure proves its attachment was stopped; existing ownership drain ends that lifetime and returns capacity. Selection still traverses graph descendants before ignoring erased work | `deleting_an_owned_child_releases_ownership_and_does_not_block_parent_stop` |
+| Descendant access is refused before capture | Existing Cedar admission runs before committed invocation history is read; the selection refuses before effects | Existing authorization fixtures and exact-head access-path review |
+| Deleted ancestor has cold descendants after restart | Reuse saved lease cleanup or exact environment accounting; Confirmed can settle ownership, NotHeld/unavailable stay unconfirmed | `deleting_a_cold_owned_tree_reconciles_confirmed_leases_and_cannot_reparent_children` |
+| A closed historical child is opened again | SDK publishes retained child identity; gateway refuses converting it into a fresh root | Same cold-tree regression |
+| Runner failure leaves a queued report target owed | Report waits for exact continuation or explicit host Stop/decline instead of publishing premature cancellation | `a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender` |
+| Partial Stop lookup returns a child's unresolved receipt | Root access is checked before any aggregate receipt evidence is returned | Parent Stop partial-settlement regression with a foreign caller |
+| An injected report's host suspends and resumes | Follow the host through the SDK's exact continuation before publishing the injected report outcome | `an_injected_report_waits_for_its_suspended_hosts_exact_successor` |
+| Stop targets owed parent work and Attempted persistence fails | The mutation owner retains the owed turn until its effect is durably admitted; independent child targets still run | `stopping_owed_parent_work_cascades_only_after_command_attempt_is_durable` |
+| A newer opening has a hold but no published lease | Retained pending/error slots stay unresolved; the cold path only observes a session with no current slot. Opening checks the existing lifetime seal before environment effects | `an_opening_owner_prevents_historical_cleanup_from_closing_its_lifetime` |
+| One principal has admitted Stop selections in multiple organizations | Principal identity selects its control stream; each binding's target metadata supplies its organization to existing Cedar authorization | `accepted_parent_stops_recover_each_targets_organization_for_one_principal` |
+| An exact creation retry follows child lifetime closure | SDK preparation progress and current lifetime state jointly authorize a Ready creation response; cached Ready does not reopen a sealed child | `owned_creation_retry_cannot_report_a_sealed_child_as_ready` |
+| A queued report's Stop fails before its effect or confirmation | Same-parent report withdrawal is a root cancellation prerequisite. Leave the root Accepted for retry on failure; continue independent descendant attempts | `failed_queued_report_withdrawal_keeps_root_active_and_retries_before_root_stop` |
+| Captured descendant queued work dispatches during active cancellation | Withdraw a still-queued identity or cancel that same identity after dispatch; preserve Open lifetimes and later explicit work. The override preserves descendant active and queued inputs | `parent_stop_cancels_owned_active_and_queued_turns_and_keeps_threads_reusable` |
+| A person directly Stops an unfinished automatic report turn | The requested root binding owns its cancellation or withdrawal and resulting receipt. Exclude only that exact requested target/turn from prerequisite report bindings; other report work and owned descendant targets retain their existing selection | `explicit_report_turn_stop_owns_queued_withdrawal`; `explicit_report_turn_stop_owns_active_cancellation` |
+| A saved selection includes its own root target/turn as a prerequisite | Reject the invalid selection with typed Conflict before any effects; retain its original bindings and digest rather than rewriting acknowledged authority | `parent_stop_rejects_a_saved_selection_that_repeats_its_root_turn` |
+| Captured report remains held between dequeue and provider dispatch | Delegate exact-identity handoff waiting to the existing mutation target. Its bounded typed refusal releases service admission, leaves the original Accepted selection/report obligation, permits independent remaining targets and retries only that same selection after late preparation | `parent_stop_bounds_a_captured_reports_stalled_handoff_and_retries_its_selection`; existing partial-selection failure regressions |
+| Upstream #1007 moves a turn from selected queue work into provider preparation, or tears its attachment down | Keep its existing moving-turn retry owner; check owed work in the same classification/effect loops so captured Stop withdraws an owed identity rather than resuming it | Upstream `a_stop_that_meets_a_turn_leaving_the_queue_stops_it`, `a_stop_whose_cancel_meets_the_agent_ending_is_answered_by_the_turns_end`, `parent_stop_during_its_queue_handoff_still_captures_the_owned_child`, and existing parent Stop active/queued/owed regressions |
+| Seeded chaos interleaves owned parent creation with Stop, Close and restart | `parentStop` sends use the shared owned-child/grandchild scenario; normal Stop actions and final settlement stop captured identities, and all discovered descendants must reach rest | `chaos-plan.test.mjs` seeded-plan contract plus actual `conversation-chaos.mjs` run and deterministic parent-Stop browser/stress checks |
+| Child preparation names an existing ordinary conversation, including one created concurrently | The existing creation owner refuses adoption before reopening or binding cleanup. Exact saved Ready retries remain valid; Attempted is not re-executed. Parent Stop/deletion cannot affect the unrelated target | `owned_preparation_cannot_adopt_an_existing_unowned_conversation` and creation-owner collision regression |
+| Restart reads an original Attempted child creation | Keep that lifetime unconfirmed without binding cleanup or replaying initialization; continue starting the gateway and unrelated work | `startup_retains_attempted_child_creation_without_binding_or_replaying_it` |
+| Child creation audit fails after metadata but before a slot is acquired | Transfer no cleanup owner; definite absence releases the reservation and capacity. Slot acquisition follows audit/admission checks | `child_creation_audit_failure_cannot_strand_unacquired_cleanup` |
+| Restored nondeletion Closing drain finishes before cleanup adapters are rebound | Rejoin the original Closing owners after acknowledged resource rebinding, preserving the original cause, initiator and operation. Pending/failed cleanup retains ownership and quota; later recovery retries that same owner | `tests/conversation/owned_recovery.rs`: real SQLite nondeletion Closing, lost acknowledgement, repeated recovery and quota checks |
+| Separate request histories are admitted or progressed in a different order | The storage observation orders by first Accepted publication, not stream creation or later progress; request exclusion remains independent | `mutation_enumeration_is_principal_scoped_read_only_and_keeps_latest_progress` |
+| A capacity probe awaits view admission while the person deletes that exact target | The stress run's existing exact deleted-target set identifies the typed `conversation_deleted` refusal. End this probe round and close prior views; a later round must still measure capacity. Another target's deletion grants no exception; other refusals retain the existing capacity/restart rules | `stress-followers.test.mjs`: gated deletion, foreign/late markers, other refusal codes, later capacity probe and excess admission |
+
+
+
+### Empty-child preparation integration seam
+
+The coordinator gains `prepare_child(command, session)`: it uses the existing
+reservation, factory, publication, capacity and cleanup authorities, acknowledges
+`Ready`, and does not call `InitialSubmit` or invent a task receipt. The ordinary
+`SpawnCommand.task` supplies the retained description/configuration fingerprint
+for this operation. Preparation identity includes the fixed session and operation
+kind; using the same request for spawn or another session conflicts. `Ready`
+restores as acknowledged preparation; interrupted Reserved/Prepared/Attached
+progress retains its existing unconfirmed recovery. This primitive selects no
+gateway Stop or approval policy.
+
+| Ordering | Decision | Regression |
+| --- | --- | --- |
+| Prepared-only child reaches Attached | Publish Ready; no initial turn | `preparation_attaches_the_named_child_without_submitting_a_turn` |
+| Exact prepare retry or operation/session changes | Return original child, or typed conflict | Same regression |
+| Caller leaves during factory preparation | Original supervisor owns completion | `preparation_survives_its_callers_disconnect_without_dispatching` |
+| Parent lifetime closes after preparation | Existing lifetime drain retains child cleanup | `preparation_remains_owned_during_parent_close` |
+| Another request names an active session | Refuse before factory handoff | `preparation_refuses_reusing_an_active_session_before_the_factory` |
+| Restart after acknowledged Ready | Recover relationship/gate without dispatch | `preparation_readiness_round_trips_through_the_real_sqlite_owner` |
+| Ordinary task bytes imitate the preparation description encoding | Operation preimages remain disjoint through an invalid-UTF-8 preparation tag; preserve existing ordinary task digests | `preparation_and_spawn_have_disjoint_bindings_for_crafted_utf8_tasks` |
+| Ready audit rejects/is uncertain, or Ready write rejects/is uncertain | No initial turn; retain sealed cleanup ownership and original failure | `failed_ready_audit_or_store_keeps_cleanup_and_never_submits` |
+| Parent closes while Ready audit waits | Recheck the graph after publication; no runnable preparation returned | `parent_close_during_ready_publication_keeps_the_child_nonrunnable` |
+| Parent lifetime closes a prepared process | Existing process-group cleanup kills and reaps it | `parent_close_kills_the_prepared_child_process_group` |
+
+### Ordering and regression acceptance
+
+Each row requires actual public-primitives evidence before runtime acceptance;
+portable provider fixtures and document checks cannot establish these guarantees.
+
+| Case | Required decision/effect | Owning regression boundary |
+| --- | --- | --- |
+| Missing settings/block/field; explicit true | Capture recursive default | Runtime parser and gateway Stop |
+| Explicit false | Stop exact parent; children and grandchildren continue | Runtime parser and gateway Stop |
+| Null, wrong type, misspelled field | Refuse configuration, no silent default | Runtime parser |
+| Owned child and grandchild; idle intermediate | Capture and cancel running/queued descendants | Gateway + real coordinator |
+| Unrelated thread or report/send-only target | Exclude from cascade | Ownership + thread tools |
+| Already final/stale parent id | No new cascade; never substitute current execution | Stop command receipts |
+| Child finishes during capture | Retain final outcome; no successor cancellation | Stop + execution history |
+| Spawn reserves before Stop | Reconcile returned child before stop completion | Coordinator/factory barriers |
+| Stop fences before spawn reservation | Refuse spawn from stopped execution before dispatch | Coordinator admission |
+| Factory/initial submit acknowledgement lost | Retain original child and uncertainty; no duplicate dispatch | Ownership recovery + creation receipts |
+| Queued child starts while Stop captures it | Cancel that same id or withdraw before dispatch | Scheduling + exact Stop |
+| Caller disconnects after admission | Supervised operation continues; retry reads same selection | Command admission barriers |
+| Target acknowledgement lost; identical retry | Reconcile exact receipts, preserve actor and cause | Mutation persistence |
+| Restart with unfinished cascade | Resume captured obligations; do not recapture newer work | Actual SQLite restart |
+| Settings changed before retry/restart | Use admitted setting and selection | Actual configuration + restart |
+| One child fails or refuses authorization | Other admitted targets attempted; partial outcome visible | Cedar + Stop supervisor |
+| Parent/child access revoked during admission | Existing access checks remain authoritative | Current Cedar integration |
+| Child settles before/after parent cancellation | Durable report retained; no report-driven parent restart | Report owner + Stop barriers |
+| Report queued before Stop, or delivery waits on submission admission | Identify and withdraw/suppress only correlated report work; no stopped-parent wake and no unrelated user-turn cancellation | Report owner + submission/Stop barriers |
+| Report delivery loses acknowledgement then restarts | One retained/delivered report; no stopped-parent wake | Report owner persistence |
+| Legitimate suspension has a resumed successor | Report follows saved successor; Stop cancellation stays final | Resumption + reports |
+| Later explicit user turn | Same conversation can run; old Stop cannot target it | Public submit/Stop APIs |
+| Cleanup pending/fails; audit unavailable | Preserve separate physical/audit evidence, retain recovery ownership | Real provider and audit adapters |
+
+Runtime completion also requires supported Rust/Clippy/doc checks, current-main CI,
+exact-head independent review, and the scripted Chromium/WebKit gateway run.
+No live settings, security policy, credential or provider approval changes are
+needed to develop or verify this integration.
+
 ## Purpose
+
+The sections below retain the broader proposed design. The implementation contract
+above governs this Stop slice; proposed policy and capacity integration below are
+not runtime completion claims.
 
 A conversation can delegate work to other agents. Each child uses the ordinary SDK
 `Agent`, has its own conversation and history, and records which parent created
@@ -1248,13 +1589,42 @@ terminal results. Runtime shutdown and process abort are outside unwind recovery
 | Saved absence/mixed outstanding debts, resume | Validate exact correlation, retry retained records without factory/physical replay. Malformed or empty Resource proof with Completion retains its original history but refuses dispatch; derived readiness remains total while inspecting refused history. Structural refusal precedes ancestry-dependent proof/Completion validation, so cyclic history returns its first typed refusal without traversal or repair. Repair of an interrupted cascade occurs only after every retained relationship is accepted. The SQLite codec rejects undecodable shapes but returns decoded refused history for sealed, read-only coordinator inspection; refused resume never audits or persists recovery. Acknowledged Completion requires every lifetime sharing that first close owner to be Closed; a partly Closing group is contradictory, unlike a genuinely independent close owner. `mixed_close_debt_and_later_release_witness_survive_sqlite_reopen`, `restored_completion_cannot_borrow_authority_from_a_nonresource_observation`, `restored_completion_with_empty_resource_proof_is_refused_without_repair`, `cyclic_restored_ancestry_keeps_its_first_refusal_and_returns_with_completion`, `acknowledged_completion_refuses_a_partly_reopened_owned_group_without_repair`, `public_sqlite_refuses_a_partly_closed_completed_cascade_without_rewrite`, `refused_proof_keeps_interrupted_cascade_original_rows_and_no_recovery`, `refused_sqlite_history_remains_readable_without_recovery_writes`; recovery anchor above. |
 | Independent child audit held/rejected while parent joins; ancestor closes before descendant end or gate join | Derive the first close owner for generation registration and lookup. Independent child keeps its own operation; cascaded descendant joins the ancestor result and explicitly retries that original operation after failure. The requested descendant’s external-attachment choice cannot skip the ancestor’s physical cleanup. `parent_joins_failed_independent_child_and_preserves_its_first_close_owner`, `cascaded_child_gate_joins_first_owner_failed_generation`, `cascaded_child_close_retries_first_owner_completion_without_physical_replay`, `cascaded_child_external_close_does_not_skip_first_owner_physical_cleanup`. |
 | Parent overtakes factory/submit output | No reopening/dispatch; Ready owner/receipt survives before future Drop. Definite startup failure hands installed proof/owner to the registered first-owner drain and removes only its completed preparation flight before joining; there is no local parallel reconciliation or post-terminal startup writer. |
+| Owned opening waits for current-main placement, or a draining worker causes another lease attempt, while its lifetime seals | Resolve placement, then ask the same lifetime gate before each lease acquisition. A seal that arrives during placement refuses before any new environment lease; preserve pool selection and refusal audits. `an_owned_opening_sealed_during_placement_does_not_acquire_a_lease` holds the pending-placement ordering. |
+| Evidence preparation repeats after a failed record save | Flush retained decisions through the existing save owner before reloading either preparation intent. A still failing or panicking save refuses preparation through the existing storage supervision owner without discarding the observed record; a later retry commits it under its original binding and actor before loading. `evidence_preparation_preserves_retained_refusal_across_failed_save_and_reload` covers both failure and recovery. |
+| A refused worker has no runnable provider context | The existing SessionManager preparation owner validates and loads evidence for recording, preserving its saved provider identity and queue. Provider identity transitions, context restoration checks and queue restoration remain on ordinary Agent preparation. Both intents use the same checked storage load, continuation validation and initialization save owner; no alternate loader. |
+| Draining-worker refusal precedes another placement wait, seal or preparation failure | Record and acknowledge that refusal through the already opened SessionManager before trying another worker. Retry a retained failed save through the existing session contract; failure is explicit and stops placement. Fallback returns the already recorded refusal without recording it twice. |
+| Draining-worker refusal save fails | Retry the retained record through SessionManager before further placement; a still unavailable sink returns Storage and no worker is opened. The actual record store and original actor/worker are checked before a paused next placement is released. |
+| Factory claim transferred the exact opening, then that opening confirms failure with holds=false | Preserve that immutable opening identity through the existing preparation transfer. Return rejected startup with the original opening cleanup owner, which joins any acquired environment hold before reporting release; pending or holds=true remains uncertain. The witness consumes the existing opening owner's fact, never an error variant, missing slot, or historical lease. Close retry must preserve first actor/cause, reach durable Closed and release the reserved child capacity. |
+| Root resources bind before initial placement; close seals while placement waits; opening completes without acquisition | The root resource owner retains the exact opening's lightweight completion fact. Pending and held completion remain uncertain. No-hold completion can confirm release only after a complete current read through the existing committed lease owner establishes that no lease history exists. Retry preserves the first close actor/cause and durably closes; a later ordinary opening uses a new root. A missing slot or cold read failure alone never confirms release. |
+| Root retries after prior acquisition, or a later failed/reopened attempt | Inspect the current opening first and the committed held lease next. An earlier no-hold receipt cannot supersede a newer pending/held opening or any persisted lease history. Refused history also stays uncertain rather than erasing an older attachment. Successful openings do not retain their live Slot through the resource adapter. After acknowledged resource observation, restart consumes the coordinator's persisted release; before that observation absent live evidence stays uncertain. |
+| Root has a no-hold receipt, but committed read fails, is partial, or is stale | Keep Closing/Incomplete; only a later complete current read may combine with that exact receipt. `a_root_nonacquisition_receipt_cannot_replace_a_failed_history_read` crosses all three and preserves the first actor on recovery. |
+| Environment grants before SDK preparation; initialization save rejects before commit or commits with a lost acknowledgement | The opening retains the actual environment lease cleanup owner before preparation. Provider non-ownership is a separate fact; it cannot release the environment grant. Root and child cleanup join that same owner's bounded End and consume its actual acknowledgement. The original preparation failure remains the operation result. |
+| End remains pending or its wait expires | Retain the actual hold and lease identity for retry; keep ownership Closing and child capacity reserved. Drop/abandonment, an empty stream, and `holds:false` from SDK provider preparation prove no environment release. Do not duplicate End delivery or weaken the existing cleanup bound. |
+| An earlier root opening proved no acquisition, then a later opening fails after a remote grant | Keep the later failed Slot until its actual environment release is acknowledged. Root and child use the same resource adapter; close consumes the current opening owner before historical absence. Retire only that exact failed Slot after confirmed release. The earlier receipt cannot hide the newer unrecorded hold. |
+| Environment End construction or polling panics during failed preparation | Preserve the original preparation error and retain cleanup ownership as unanswered; bounded later cleanup may join/retry the same hold. Publish completion without inventing physical release. |
+| Ordinary stop/retirement reaches an unanswered environment release | LiveLease reports typed cleanup uncertainty alongside independent operation/storage errors. A failed preparation joins its retained environment owner; no stop retires that Slot or reports no remaining resources from the SDK provider fact alone. |
+| End acknowledges after failed preparation | Publish the actual physical release through the existing resource owner; preserve the first close cause/actor and independent storage/audit failures. Retry may close durably and reuse capacity; successful live preparation transfers the hold to the existing live-lease owner without retaining the Slot. |
+| SDK attachment callback precedes the registered resource owner's close result | The registered owner alone publishes lifetime-wide physical release. SDK attachment completion is a nonblocking handoff, not a second resource report; the owner's close consumes the SDK result plus environment acknowledgement and independent failures. |
+| SDK close/disposal started an external root drain | Attachment-phase completion relinquishes only that first owner's external-root exclusion and wakes its existing drain. Never await the resource close from its own callback or clear an ancestor's external phase from a descendant callback. |
+| Factory still owns preparation/transfer when an attachment callback arrives | The gate is resource-owned before the factory receives it. The existing flight exclusion remains until the actual returned owner or typed absence is installed; no callback can release capacity before that transfer. |
+| A new bare SDK root, later resource binding, and restored missing owners | A new bare root starts attachment-owned. Successful resource binding changes that existing gate to resource-owned under the same admission scope as callback publication. Child and restored gates start resource-owned; a missing restored capability is uncertainty, not attachment-only authority. |
+| Delayed callback from a replaced gate or an earlier attachment | A replaced gate has no observation authority. An earlier attachment on a resource-owned lifetime cannot publish physical release or replace the actual current resource owner; it only notifies the same first-close drain. |
+| Live provider close succeeds while its environment End is unanswered | The existing live-lease owner publishes its combined physical observation separately from the close result. Successful provider cleanup cannot acknowledge remote physical release. Retry joins the same hold and preserves first cause/actor; `a_live_root_waits_for_its_environment_release` covers this ordering. |
+| Physical release is confirmed but the registered resource owner still reports failed or pending evidence | Keep the physical fact monotone and retry that same owner once in a later explicit drain generation. Its retained release receipt prevents duplicate physical effects. Coordinator-only observation audit debt retries its audit writer without calling the resource owner again; an attachment callback cannot acknowledge either owner on its behalf. |
+| Real Agent host end or disposal seals a live root or child while remote End is withheld | Its attachment callback hands off only that lifetime's external phase. The gateway's actual lease owner keeps Closing until End acknowledgement, with first cause/actor and once-only provider/End effects; child capacity remains reserved. |
+| SDK cleanup audit fails or gateway lease-close save rejects, including commit with lost ACK | Remote release and attachment callbacks cannot acknowledge independent evidence. Keep physical Released and the first close; retry an available retained writer through its actual owner without another End. Unacknowledged SDK audit stays incomplete across restart until that owner supplies acknowledgement. |
+| Automatic End, parking, desktop or pending-mode close confirms physical release while an owned close record save fails | The current Slot retains the exact Agent/SessionManager until its whole close acknowledges evidence; physical release cannot substitute a cold owner. Both immediate and upload-handoff retirement consult this same rule. A resource close that actually acknowledges all evidence retires that exact Slot. Unowned attachment release/reopen keeps its established contract. |
+| A durable deletion intent hands cleanup into history erasure after physical confirmation but unsaved history | Only that explicit erasure handoff may relinquish the history writer before its records save. Ownership remains incomplete while the tombstone is not erased; actual erasure acknowledgement, not intent or a missing Slot, lets the deletion resource owner acknowledge release. |
+| Public stop waits on unanswered preparation End under the same original per-owner stop budget | Its inner owner may answer CleanupUncertain, or the outer public wait may answer Deadline while supervised cleanup continues. Both are uncertain responses: assert the actual remote hold and retained Slot, then actual End acknowledgement and eventual exact Slot retirement. Neither error establishes release, and neither budget is extended. |
+| Concurrent End joiners | The caller's existing cleanup budget includes waiting for the shared release owner. Only a confirmed answer is cached; unanswered waits retain the hold and identity, and the SSH owner retains once-only End delivery. |
+| Process loss before an unrecorded grant's release observation is durable | Restored missing cleanup capabilities stay uncertain and reserve capacity. No receipt is reconstructed from missing lease history. After an acknowledged resource observation is persisted, existing coordinator restoration owns completion without a physical replay. |
 | Initial publication fails before factory with concurrent bind | Live flight and same graph scope validate/install exclusion; persist the newly installed proof in Closing before returning the immutable failure; no restored inference. `eligible_store_rejection_keeps_live_flight_until_durable_absence_excludes_binding` checks concurrent live and restored bind exclusion; `row_38_publication_error_matrix_seals_actual_gate_preserves_owner_receipt_and_restore` checks retained actual exclusion. |
 | Constructor/poll panic; Ready then Drop panic; recovery faults | Captured Ready Err preserves its primary failure; absent output or Ready Ok plus Drop fault gives cached typed uncertainty; retain observed owner/receipt/report, no inferred release. `ready_factory_outputs_survive_effect_future_drop`, `ready_submit_rejection_survives_future_drop_and_is_cached`, `ready_audit_rejection_survives_future_drop`, `ready_store_rejection_survives_future_drop`, submit/resource transfer tests, `audit_constructor_poll_and_ready_drop_preserve_exact_observation_authority`, `store_constructor_poll_and_ready_drop_keep_completion_and_writer_only_retry`, `recovery_audit_fault_does_not_strand_original_publication_failure`, `escaping_ready_handle_drop_and_recovery_fault_still_publish_cached_terminal_result`. |
 | Two close waiters/caller loss/waker or payload faults | All existing waiters settle same immutable result; later explicit retry differs without rewriting. `joined_close_waiters_keep_failed_generation_after_successful_retry_and_caller_loss`; `released_ready_drop_preserves_failed_old_waiter_after_successful_retry`; `panicking_caller_waker_and_payload_do_not_strand_other_close_waiters`; `panicking_caller_waker_drop_does_not_strand_registered_close_waiters` observes destruction in the SDK publisher task and prevents secondary payload destruction. |
 | NoRoom then capacity available; identical/conflicting admitted retry | Nonadmitted retry can run; admitted retry returns cached result; changed binding conflicts. `no_room_request_can_admit_after_another_child_releases_capacity`; `dropped_spawn_caller_and_two_joiners_receive_one_cached_factory_failure`. |
 | Concurrent intent publication and terminal store rejection | Registered generation owns intent persistence before cleanup; no later independent intent writer publishes Closed after that generation's final refusal. |
 | End/host/root/disposal intent audit/store fault | Seal and owned drain precede fault; cleanup still executes under supervision. |
-| Owned physical close calls real Agent close, which reports attachment progress | Report callback installs the actual fact and registers/notifies its owner without waiting for that same generation; explicit public/gate joins retain typed results. `row_34_factory_gate_installs_on_real_agent_and_shared_close_refuses_attachment`, `row_35_failed_factory_revokes_stale_real_agent_attachment_authority`. |
+| Owned physical close calls real Agent close, which reports attachment progress | A bare attachment owner publishes its actual fact; a resource-owned gate hands back its external phase and notifies the registered owner without waiting for that same generation; explicit public/gate joins retain typed results. `row_34_factory_gate_installs_on_real_agent_and_shared_close_refuses_attachment`, `row_35_failed_factory_revokes_stale_real_agent_attachment_authority`. |
 | SDK-issued participation gate joins a pending owned generation with a faulting caller waker | `join_descendants` registers notification through the common caller-waker owner; observation and Completion publication retain their outcomes when the caller's last waker destructor faults. The SDK forgets that destructor's fault payload; retrying the faulty wake is not promised. `panicking_gate_join_waker_drop_is_contained_in_owned_publisher`. |
 
 Current ownership JSON requires typed settlement proof and explicit Completion.
@@ -1334,3 +1704,357 @@ limits are selected and published by the runtime slice.
 
 A sample panel is a valid UI slice; it does not complete runtime subagents. This
 proposed design and named regression cases are not implementation evidence.
+
+
+### Cycle 5: the close transaction retains its report
+
+Explicit owner direction continues the bounded cleanup correction after the
+cycle4 review; it does not reset prior review history. The supervised Agent
+close transaction owns both its actual CleanupReport and pending-scheduling
+save/audit result. AgentCloseReport publishes those immutable facts from the
+same transaction for Final and Suspend; existing close/suspend project its
+result. No second cleanup or last-generation lookup is introduced.
+
+| Ordering/fact | Required behavior and owning regression |
+| --- | --- |
+| ByAgentClose confirms physical release but audit fails | LiveLease consumes actual typed resources, records release and retains audit failure; unchanged `data_missing_needs_released_resources_as_well_as_missing_data`. |
+| ByAgentClose returns Deadline or CleanupUncertain | Preserve that one original failure; there is no independent environment uncertainty. Existing deletion/desktop-close regressions retain exact error assertions. |
+| SDK reports ReleasePending | Preserve the complete report, executable-use retry owner and independent fields. Physical outcome alone does not establish whole release; close-report matrix exercises both modes. `remote_ack_cannot_release_the_sdk_executable_use_owner` reproduces false graph Released at10991ad3 and requires original Slot/SDK owner retention until its real retry acknowledges. |
+| Remote End goes unanswered | Retain actual owner and Interrupted cause/order under the original bound; observe committed history without taking its writer. Revocation/expiry/lost controls then supply real ACK and verify once-only retirement. |
+| Actual remote End confirms cleanup | Its physical answer is recorded independently; cycle6 below requires the actual SDK owner to reconcile whole release. ReleasePending and audit/scheduling/completion failures remain independent obligations. No diagnostic-based physical exemption. |
+| Concurrent callers, cancellation or replacement attachment | Each report comes from its supervised transaction and lifecycle attempt; never read a previous generation's report or start another cleanup owner. |
+| A direct root lifetime close meets earlier owed history | The real SQLite/SIGKILL probe `direct_root_close_declines_preexisting_owed_history_and_its_unfinished_mark` reproduces missed decline at10991ad3. Resource cleanup joins existing stopping with HoldSlot, preserving first actor, historical decline and unfinished-mark acknowledgement before exact retirement. |
+
+### Cycle 6: acknowledge each existing owner
+
+Explicit owner direction continues the bounded correction after cycle5's two
+P2 findings; all prior review caps and failure receipts remain recorded. Both
+failures were reproduced against unchanged production at a6fbbb68: a rejected
+historical Declined audit still returned successful root close, and a real
+hosted ACP executable-use guard remained admitted after remote End while the
+graph-facing close returned success.
+
+The SDK's existing session writer now retains the original decline preparation
+before applying NotResumed. That preparation is acknowledged first; its terminal
+edge and audit then keep the existing independent failure contract. No new
+scheduler, cleanup registry or execution owner is added. The SDK rejoins pending
+receipts even when no work is owed. The durable audit adapter uses create-only
+publication and exact canonical semantic input comparison for the stable
+(session, execution, Declined) identity. Retrying reuses the original metadata
+and syncs the winning file and directory; uncertainty is never inferred away
+from matching visible bytes alone. An older NotResumed record without this
+preparation does not prove audit delivery; this change claims no historical
+namespace migration or repair of previously untracked evidence.
+
+| Ordering | Required result and owner |
+| --- | --- |
+| Preparation rejects or loses its ACK | Retain original actor locally; do not apply the terminal edge or publish an orphan audit. Retry the same session writer; restored committed preparation owns the same decision. |
+| Prepared intent acknowledged, terminal save fails | Keep NotResumed locally and attempt its audit independently as before. The original actor is already durable; a later actual writer ACK can repair scheduling debt. |
+| Audit rejects, times out, or commits then loses ACK | Physical cleanup continues, evidence remains incomplete and the exact Slot/writer stays available. Empty owed history cannot acknowledge the decision. Idempotent delivery rejoins the same original record. |
+| Audit succeeds, acknowledgement save fails | Keep audit and storage status distinct; a later flush persists the receipt without another decision or reattribution. |
+| Caller loss or concurrent different callers | The supervised decision and the existing writer keep the first preparation; later callers join it. An audit identity conflict cannot overwrite original evidence. |
+| Restart after preparation, terminal edge, or audit | Reconstruct the original input/actor/cause from validated history and preparation, retry its audit receipt, and persist acknowledgement before clearing the unfinished mark. No turn or tool is replayed. |
+| Remote Stop lacks ACK; actual End confirms physical release | Record true remote physical release, then rejoin the same SDK close owner within End's remaining deadline. Unconfirmed may still contain a real executable-use guard; a derived report is not its release authority. |
+| End/account is acknowledged and the old SSH connection disappears | This lease shares its actual audited physical receipt with its existing harness controls. SDK cleanup can join it without another network reply, then explicitly release its own executable-use guard. There is no global receipt cache or second cleanup owner. |
+| SDK guard release rejects after remote End | Preserve ReleasePending and independent evidence failures; retain exact Slot/writer and graph uncertainty until that SDK owner acknowledges. Remote End remains once-only. |
+| Reconciliation sees later independent failures | Preserve initial and new audit/scheduling/completion failures, without duplicating identical cached diagnostics. Final/Suspend retain their original intent and actor. |
+| Unfinished mark clear rejects or loses ACK | Return its failure and retain the owner; a completed physical close does not acknowledge a failed metadata write. |
+
+
+Cycle6 cold recovery controls extend the restart row: the original `Resources`
+adapter retains a prepared SDK history writer without starting an attachment.
+It joins the durable unfinished-mark owner directly; the startup retry index is
+only a live hint and may not yet contain the restored mark. A released physical
+observation with pending resource evidence remains a graph cleanup target, so a
+vacant restored adapter may rebind for that obligation. Fully acknowledged
+release, absence, Closed, existing ownership and factory flights keep their
+transfer refusals. The process-loss regression covers preparation, audit
+rejection and committed/lost ACK; independent rejected/lost mark-clear ACKs;
+and an unconfirmed old lease that stays Closing despite acknowledged decline.
+A positive whole-close case requires an actual pre-crash End receipt. Process
+loss or `NotHeld` is insufficient.
+
+Restoration uses `OwnershipCoordinator::restore_closing_resources`, explicitly
+scoped to graph-selected Closing cleanup targets and the existing resource slot.
+Ordinary `bind_resources` and `participation` continue refusing physical release;
+the two original refusal regressions stay unchanged. The explicit route grants
+no attachment authority or capacity reservation and refuses an occupied owner.
+`restored_evidence_owner_uses_existing_slot_without_reopening_admission_or_capacity`
+checks that boundary and acknowledged close, alongside the native crash matrix.
+
+## Explicit cycle7: independent cold evidence
+
+Historical design: cycle8 qualification below replaces the close-operation scope
+and acquired-only guard after the unchanged native tests falsified those rules.
+Cycle7 source and failure receipts remain preserved with their original meaning.
+
+The owner approved the correction after f70aaa80's unchanged native regression
+restored an independent SDK audit failure as Closed. Prior caps and source-specific
+failures remain recorded. Physical End and a successful decline are insufficient
+acknowledgements of the SDK's separate cleanup/cancellation obligations.
+
+The actual SDK close owner now publishes `SdkCleanupAcknowledged` through its
+existing session/lease writer, scoped to the exact current lease, target lifetime
+and first `CloseOperationId`. The current gate supplies that immutable scope;
+actors and process-local generation counters are not identities. A newly prepared
+unattached Agent cannot produce this fact: only actual acquired cleanup ownership,
+confirmed resources, acknowledged cleanup audit/completion, and retained cancelled
+input audit acknowledgements qualify. The proof and pending cancellation history
+publish through the same atomic writer; rejected or lost write ACK stays owned.
+Cold recovery consumes only certified committed proof for its exact scope.
+
+| Ordering | Required result |
+| --- | --- |
+| SDK audit/completion/cancelled-input audit fails | No SDK proof; retained real report remains observable even when pending work is empty. |
+| SDK proof write rejects or commits/lost ACK | Retain the fact under the same writer; only actual publication ACK/certified committed read establishes it. |
+| SDK ACK succeeds, decline blocks or rejects | SDK phase stays independent; retain original decline preparation/audit actor. |
+| Decline ACK succeeds, SDK ACK is absent | Remain Closing, including after restart; do not clear its unfinished mark. |
+| Wrong lease/target/operation or stale gate | No matching SDK acknowledgement. |
+| Both evidence ACKs exist, physical End is unknown | Remain Closing. |
+| Missing Slot or definitively failed opening | Use the same cold evidence join; physical release alone cannot retire a pending evidence owner. |
+
+Gateway stopping captures owed identities before SDK cleanup, joins SDK cleanup,
+then declines those exact identities even after an SDK error. SDK close publishes
+its actual non-decline proof before joining prepared declines. This avoids a
+terminal-save pause holding the writer needed by an earlier independent proof.
+`AgentCloseReport` retains decline evidence separately from scheduling and cleanup;
+its public result preserves the combined failures. The native process-loss matrix
+adds the independent SDK-audit-plus-decline case and real lost-End-ACK control.
+
+## Explicit cycle8: acknowledged cancellation delivery
+
+Parent explicitly approved the cancellation acknowledged/idempotent receipt contract correction after the cdcc0c38 regression. This is owner direction, not a review-cap reset; all cycle1-7 findings and source-specific evidence remain. No push, merge, upload or denied browser retry.
+
+Existing SDK session/history writer owns prepared cancellation delivery and its ACK; existing execution audit owns idempotent publication. No independent cleanup owner or blanket replay. The original successor audit-failure final close success assertion remains unchanged. Only cancellation receipts explicitly prepared in current history may be retried; legacy arbitrary audit events are not replayed. Audit identities use local session plus accepted execution identity, and exact semantic payload equality; new attempts acknowledge the existing winner and preserve its first metadata.
+
+| Event/order | Authority and result | Required control |
+| --- | --- | --- |
+| First queued cancellation | Save exact original event before audit; necessary cancellation/receipt cleanup still proceeds on failed preparation | preparation reject, no early audit |
+| Preparation saved; sink rejects | Receipt remains unacknowledged after Pending removal; independent physical cleanup continues | rejected cancellation then close |
+| Sink commits; ACK lost | Same prepared input retries idempotently; ACK only after winner sync | late ACK and exact payload |
+| Audit ACK, ACK-history save rejects | Same manager retains ACK; flush retry does not redeliver | writer failure and retry |
+| Process loss after preparation or publication | Restore same session/execution decision and original initiator; only existing owner publishes/ACKs | cold restart |
+| New close after earlier failure | Explicit receipt join attempts original input; success discharges that obligation; failure remains visible | unchanged successor test; repeated rejection |
+| Unprepared historical event or conflicting payload | No replay or overwrite; fail typed validation | conflict/unknown control |
+| SDK resource cleanup ACK, cancellation audit missing | Persist resource owner's real proof; whole close still requires independent cancellation ACK and decline ACK | combined failure/restart |
+| Cancellation ACK succeeds, SDK cleanup proof missing | Whole close remains Closing | original SDK audit-failure assertion |
+| Physical unknown, all evidence ACKs | Whole close remains Closing | native lost-End-ACK matrix |
+
+Retain real provider cleanup proof independently of cancellation proof so a cold receipt join cannot fabricate SDK resource release or permanently lose a genuine resource ACK. Whole-close consumers require both. Preparation/application/ACK validation and exact roundtrip/atomic rollback belong to session records; orchestration consumes those facts and the audit port, never recreates a policy.
+
+### Cycle8 qualification orderings
+
+The 38584f0c run preserved fourteen cycle7 proof-gating regressions and found
+three first-close audit-deadline regressions. The four earlier external/disposal
+pre-End ordering regressions passed. The same approved bounded scope continues;
+no assertion, deadline, concurrency or review cap is relaxed.
+
+| Ordering | Existing owner and required result |
+| --- | --- |
+| Close overlaps the first cancellation audit | Capture retries only at an idle scheduler boundary. Join the original unanswered receipt, reporting its failure without another audit attempt in that close. A later explicit command can retry the exact prepared input. |
+| SDK cleanup completes before graph close begins | Resource proof names the minted lifetime and current lease; it is independent of a later graph close operation. It cannot acknowledge another lease or lifetime. |
+| SDK was prepared but no provider was opened | The actual installed lifetime gate may publish confirmed no-resource cleanup. A newly prepared cold history writer has no installed gate and cannot fabricate this proof. |
+| Opening completes without ever starting SDK attachment | Exact opening owner plus its actual environment release and correlated current lease establish non-acquisition. Failed history reads or a later different lease cannot use that receipt. |
+| SDK cleanup audit fails | No SDK resource proof, including after successful environment End or cancellation/decline audit repair. |
+
+| SDK proof and lease-finalization writes both fail | The existing typed cleanup-result projection follows nested StorageDuringClose wrappers to their actual cleanup outcome. Both original errors stay returned. Audit, deadline, and pending-resource failures do not become confirmed cleanup. Normal owned close retains the writer; explicit deletion hands it to erasure and waits for its acknowledgement. |
+
+The opening records attachment ownership before SDK authorization can produce
+an independent audit obligation, including when provider startup is delayed.
+
+### Actual cleanup receipt required at diagnostic projections
+
+The unchanged-production counterfactual at dc40e7f8 returned confirmed cleanup
+from a StorageDuringClose diagnostic stored inside ReleasePending or Unconfirmed.
+The SDK report itself correctly retained ownership. The gateway projection must
+therefore consume the exact Slot/LiveLease owner's independent resource receipt.
+Neither an inner Ok diagnostic nor several storage wrappers can provide it.
+Normal owned close still retains evidence writers, and explicit erasure still
+waits for its own acknowledgement. All original error objects remain returned.
+
+| Ordering | Required result |
+| --- | --- |
+| Actual SDK/environment resources confirmed; only record writes failed | Preserve nested storage errors and their ordinary typed result; permit only the existing handoff rules. |
+| ReleasePending/Unconfirmed carries a storage-close diagnostic with an inner Ok | No resource confirmation, upload handoff or mode/deletion release from that diagnostic. |
+| Slot replaced while a close waits | Read only the captured original Slot's lease receipt. |
+
+### Cycle9: acquisition proof retirement and joined decline observations
+
+Explicit owner direction continues the bounded correction after cycle8's completed
+review; prior caps, failures and source-specific receipts remain retained. The
+85697c4f production code reproduced both failures with test-only additions. This
+is not evidence of a stock gateway false-Closed command sequence.
+
+The session lease fold owns durable SDK proof ordering. Before a later provider
+acquisition or its Started audit effect, the actual attachment owner saves a
+retirement of any prior lifetime proof and joins that write's acknowledgement.
+Missing proof already means unknown. Rejected or lost save acknowledgement
+prevents those effects and remains under the same writer. The lifecycle's
+existing resource-transition lock orders this retirement against proof publication;
+publication also checks the original close ticket's provider generation. Thus an
+old close cannot certify a replacement acquisition. These process-local ticket
+generations fence live publication only; they are not durable identities. The
+durable ordering is in the existing lease stream, under the exact lease/lifetime.
+The fold alone validates lease identity; consumers use that published invariant.
+
+The prepared-decline owner retains one in-flight result per execution decision.
+Concurrent callers join that supervised result, including its original deadline,
+actor, rejected write and failed audit. Completion retires the in-flight join;
+only a later explicit call may retry a terminal failure. Durable preparation and
+its real audit/history acknowledgements remain separate. No second cleanup owner
+or replay exemption is introduced.
+
+| Ordering | Required result / regression |
+| --- | --- |
+| Successful SDK close then same-lease actual reattachment | Earlier proof retired before effects; original reopening remains allowed; next actual cleanup can certify again |
+| Proof retirement save rejects or reply is lost | No provider open or Started audit; retain writer debt; restart cannot accept stale proof after a new acquisition |
+| First close publishes while new start races | Resource-transition ordering plus original ticket generation prevents a late old ACK from certifying replacement |
+| Process loss after acknowledged retirement, before/after provider open | Cold proof is unknown until actual new cleanup ACK |
+| Concurrent decline while first audit is held | Join first observation/result; no second sink entry or new deadline |
+| First decline audit or ACK save fails | All current joiners observe the same failure; later explicit retry keeps original preparation/actor |
+| Decline caller is lost, or joined task panics | Existing supervised owner retains progress; join registration is retired on owner drop without leaking an entry |
+
+The original cycle8 failed assertions are retained unchanged. Positive controls,
+ordering/storage-fault controls, mutation evidence and a fresh scoped independent
+review qualify the resulting source; unavailable Windows/WebKit/browser gates
+remain open and are not substituted by Linux focused passes.
+
+Cycle9's first expanded library selection retained an original restore/close
+failure: using the provider-preparation pause for the earlier proof-retirement
+transition moved the controlled close before rearming. The lifecycle now has one
+shared generation/resource fence, with the original provider-preparation pause
+still at the actual provider I/O boundary. `close_during_restore_cleans_the_rearmed_attachment`
+keeps its original close-count, cause, uncertainty and two-second assertions.
+Close between acknowledged proof retirement and provider preparation may refuse
+startup; close after preparation's admitted boundary joins its actual rearmed owner.
+
+### Cycle9 CI follower retry ordering
+
+The unchanged follower reproduced subscription_duplicate for views, lists and
+committed events after a transient first admission failure, then a successful
+retry: catch marked the handle lost, but success did not retire that flag. The
+next loop asked for the same still-live target again. This is a confirmed harness
+bookkeeping defect matching CI's signature, not proof it is the sole stress cause.
+
+| Ordering | Required result |
+| --- | --- |
+| Transient refusal then current successful open | Publish the actual handle and clear lost together; no duplicate next-loop admission |
+| End before subscribe answer | Preserve end classification and close returned stale handle; no success flag overwrites its end |
+| Stale end after replacement | Original attempt token cannot retire the replacement or its applied cursor |
+
+The existing Follower.open owns this classification for all three stream kinds;
+no refusal exemption, retry budget or server capacity change is introduced. The
+CI audit fixtures separately construct private parents through the existing
+local-storage owner; production directory checks and canonical umask022 stay.
+
+`cycle9_cleanup_proof_writer_precedes_replacement_retirement` holds an admitted
+proof write, starts the actual replacement and directly polls the current
+resource transition before releasing the first writer. Both owners settle before
+the captured pending result is asserted. It enforces the resource-fence ordering
+independently of the stale-ticket generation check, without scheduling sleeps.
+
+Cycle9 retained a surviving removal of the SDK audit-ACK condition: the historical
+gateway restart test stayed Closing and therefore did not distinguish that
+producer condition from other independent obligations in its path. It is not
+mutation credit and is not a clean qualification. The SDK same-lease control now
+also observes the actual durable SDK fact directly after a real confirmed
+provider cleanup with a failed audit ACK. The original gateway assertions remain
+unchanged; no stock gateway false-Closed execution is inferred from the survivor.
+
+
+### Cycle10: mandatory attachment evidence retires earlier SDK proof
+
+Explicit owner direction authorizes this bounded correction after cycle9's fresh
+review reproduced the authorization-abandonment P2. It does not reset prior caps.
+The original cec42484 failing probe, two-versus-one provider-close full-suite
+receipt and isolated pass remain retained. No stock gateway false-close is proven.
+
+Lifecycle keeps the same SessionManager behind a shared reference: it retains the
+existing writer, not a second cleanup owner. Its resource-transition fence orders
+proof retirement and old proof publication. Every new mandatory pre-acquisition
+attachment audit (Started, AuthorizationAbandoned, Authorized-close) joins the
+same writer's retirement before audit/provider effects. The fence is released
+before waiting for audit acknowledgement, so physical cleanup can progress while
+its independent audit is unanswered. Close tickets capture attachment as well as
+provider generation; a no-acquisition obligation advances attachment generation
+and fences an older ticket even though provider generation is unchanged.
+
+| Ordering | Required existing-owner result | Regression |
+| --- | --- | --- |
+| Prior SDK ACK, authorization abandoned, audit succeeds | Join retirement before audit; actual later close can certify the new acknowledged evidence | abandonment positive counterpart |
+| Prior SDK ACK, abandonment audit rejects | Live report retains audit failure and committed SDK predicate remains false | unchanged review probe |
+| Prior SDK ACK, close consumes Authorized token | Same retirement-before-audit rule, original actor, no provider acquisition | Authorized-close positive/rejection controls |
+| Old proof already writing when no-acquisition evidence begins | Same fence lets original writer finish, then retirement wins before new audit | held writer/evidence boundary |
+| Old ticket publishes after abandonment or Authorized-close began | Attachment generation mismatch refuses before writer callback | late old-ticket control |
+| Retirement write rejects or ACK is lost | No audit/provider effect before retirement ACK; retain the original writer result for actual close/retry | storage-fault controls |
+| Abandonment/Authorized-close audit waits | Physical cleanup remains independent; whole proof waits for the real audit receipt | paused audit control |
+| Full suite observes extra provider close after late End ACK and new public close | Trace original/new provider and lease identity; preserve one-close guarantee for original owner; no classification from isolated pass | concurrent identity/order reproduction |
+
+The provider-close failure is a separate unresolved causal result. No assertion,
+deadline, concurrency, policy, physical-release fact or audit error is waived.
+
+
+Cycle10's first fresh review was executed against unchanged ed7acd56: fifteen
+construction/poll/drop retirement-save probes failed. Five Started probes also
+failed against pre-cycle10 cec42484. Abandonment remained Waiting; Started
+remained Starting; Authorized-close reported the audit failure but lost its
+attributed evidence failure. This is one confirmed containment P2, with the
+Started exposure pre-existing and the two no-acquisition routes newly exposed.
+The same bounded correction continues; previous caps and failed receipts remain.
+
+| Additional ordering | Existing owner and required result | Regression |
+| --- | --- | --- |
+| Retirement save construction/poll/drop panics, before commit | SessionManager's existing catch_storage_operation contains the same save under its retained Evidence lock/binding; lifecycle publishes terminal failure and retains the actual evidence failure | cleanup_proof_panics construction/before-commit matrix |
+| Retirement save poll/drop panics after commit | Keep the committed retirement fact distinct from the missing ACK; retain the writer plan and actual failure; no fabricated success or replacement cleanup owner | cleanup_proof_panics after-commit matrix |
+
+Contain only the retirement transaction through the already shared storage
+operation helper; do not rewrite every save or introduce a second supervisor.
+
+
+The bounded two-binary/two-thread diagnostic reproduced the shared expiry
+helper's aggregate two-versus-one failure in its first round on ed7acd56. The
+actual backend UUIDs prove two distinct instances, each closed once: the original
+by environment_expired, the replacement by repeat-after-ack. The provider session
+ID was restored and equal, so it cannot identify the resource instance. Original
+lease Ends remain unanswered then ACK; the replacement lease has its own End.
+The original historical revocation receipt lacked backend IDs; this does not
+establish historical equivalence. Both raw failures and isolated/full passes stay.
+
+| Fixture ordering | Required assertion and enforcer |
+| --- | --- |
+| Late End ACK before replacement opening | Keep the original aggregate close_calls == 1 assertion and original lease/actor/End identity checks |
+| Later public close cancels before provider acquisition | The original backend is present and closed exactly once; no replacement backend is invented |
+| Later public close acquires a replacement backend | Original and replacement backend UUIDs are distinct and each has exactly one cleanup acknowledgement |
+| Duplicate original close, missing replacement close, or unrelated close | The same per-instance oracle rejects it even when the aggregate total is two |
+
+Only the test oracle changes: use the UUID minted at each actual backend open,
+verify the original remains represented, IDs are unique, every acquired backend
+is closed exactly once, and the global call trace agrees. No production close,
+errors, capacity, concurrency or deadlines change.
+
+### Owner-directed bare SDK root release correction
+
+The unchanged-production public SDK probe on20c394ae reproduced a bare root
+reaching Closed while ReleasePending retained its executable-use owner. This
+mapping also exists in integrated main202251f2; no historical gateway or child
+capacity failure is inferred. Explicit owner direction authorizes this separate
+bounded local correction/review cycle, preserving all earlier rounds and receipts.
+Frozen29688b46 is retained independently; its original failure probe is unchanged.
+
+The existing lifecycle producer supplies whole-resource confirmation to the same
+gate, independently of audit acknowledgement. Presence of a physical process
+outcome is a weaker fact and cannot stand for executable-use release. No second
+cleanup owner, diagnostic exemption, new state or retry budget is introduced.
+
+| Ordering | Required result and enforcer |
+| --- | --- |
+| Bare sealed root reports physical process exit but ReleasePending | Keep Closing, the exact scope and actual provider owner; the original public regression preserves its captured-state assertion |
+| Same backend retry waits for its actual release receipt | No graph release while held; ACK then confirms whole cleanup in Final/Suspend, forced/unforced matrix |
+| Resource ACK succeeds while audit remains failed | Keep the independent audit failure and root Closing; the eight-case receipt matrix checks both facts |
+| Unconfirmed diagnostic embeds a successful close outcome | No whole release from diagnostic text or inner result; typed diagnostic control |
+| Ordinary unsealed suspend | Root remains Open until explicitly sealed; ordinary-suspend control |
+| Registered resource owner, disposal or descendants | Existing owner and nonblocking phase handoff remain unchanged; existing authority and real-Agent disposal/descendant controls remain required |
+
+The enforcers above live in conformance/close_reports/owned_root.rs. All original
+two-second workflow bounds remain unchanged. The frozen source and all failed
+receipts remain preserved; this is not a review-cap reset or a merge-readiness claim.

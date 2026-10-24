@@ -38,3 +38,6 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../../tests/conversation/ssh_artifacts.rs"]
 mod artifact_tests;
+
+#[cfg(test)]
+pub(crate) use tests::preparation_environment;

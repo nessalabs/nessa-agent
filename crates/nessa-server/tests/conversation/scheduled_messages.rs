@@ -57,9 +57,9 @@ use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use super::{
     renew_while_held, schedule_caller, HistoryGeneration, PlanToken, PreferenceCommandOutcome,
     PreferenceCommandReceipt, PreferenceReading, PreferenceUpdate, RecordedPreference,
-    ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledMessage, ScheduledMessageStore,
-    SelectionChange, SelectionRequest, FENCE_LEASE_MS, FENCE_RENEW_EVERY_MS, FENCE_RENEW_RETRY_MS,
-    SCHEDULE_RETRY_MS,
+    ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledCommandEvidence, ScheduledMessage,
+    ScheduledMessageStore, SelectionChange, SelectionRequest, FENCE_LEASE_MS, FENCE_RENEW_EVERY_MS,
+    FENCE_RENEW_RETRY_MS, SCHEDULE_RETRY_MS,
 };
 use crate::conversation::application::{
     ConversationCaller, ConversationDependencies, ConversationFuture, ConversationLimits,
@@ -286,6 +286,24 @@ fn refused<T: Send + 'static>() -> ConversationFuture<'static, T> {
 }
 
 impl ScheduledMessageStore for RecordingStore {
+    fn command_evidence(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<ScheduledCommandEvidence>> {
+        let row = self.due_row.lock().unwrap().clone();
+        let result = match row
+            .filter(|row| row.conversation == conversation && row.execution_id == execution)
+        {
+            Some(row) => row
+                .command_evidence
+                .map(Some)
+                .ok_or(ConversationError::Unavailable),
+            None => Ok(None),
+        };
+        Box::pin(async move { result })
+    }
+
     fn invalidated_selection(&self, _: &str) -> ConversationFuture<'_, Option<SelectionChange>> {
         Box::pin(async { Ok(None) })
     }
@@ -798,6 +816,15 @@ struct NotifyOnDue {
 }
 
 impl ScheduledMessageStore for NotifyOnDue {
+    fn command_evidence(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<ScheduledCommandEvidence>> {
+        let _ = (conversation, execution);
+        refused()
+    }
+
     fn invalidated_selection(&self, _: &str) -> ConversationFuture<'_, Option<SelectionChange>> {
         Box::pin(async { Ok(None) })
     }
@@ -1217,6 +1244,7 @@ async fn the_outcome_clock_is_read_after_submission() {
             &row,
             u64::MAX,
             Arc::new(SubmissionPermit {
+                _threads: service.inner.thread_admission.clone().lock_owned().await,
                 _admission: service.inner.admission.clone().read_owned().await,
                 _selection: service
                     .inner
@@ -1309,6 +1337,7 @@ async fn a_failed_execution_read_does_not_settle_the_submission() {
             &row,
             1_700_000_000_123 + 60_000,
             Arc::new(SubmissionPermit {
+                _threads: service.inner.thread_admission.clone().lock_owned().await,
                 _admission: service.inner.admission.clone().read_owned().await,
                 _selection: service
                     .inner
@@ -2398,6 +2427,15 @@ fn store_error() -> ConversationFuture<'static, bool> {
 }
 
 impl ScheduledMessageStore for ScriptedSchedule {
+    fn command_evidence(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<ScheduledCommandEvidence>> {
+        let _ = (conversation, execution);
+        Box::pin(async { Err(ConversationError::Metadata) })
+    }
+
     fn invalidated_selection(&self, _: &str) -> ConversationFuture<'_, Option<SelectionChange>> {
         Box::pin(async { Ok(None) })
     }
@@ -3266,6 +3304,7 @@ async fn a_retryable_submit_whose_retry_does_not_commit_still_waits() {
 /// schedule fence, including a restarted delivery owner.
 async fn disabled_recovery_fixture(
     directory: &Path,
+    model: &str,
 ) -> (
     ConversationService,
     Arc<LocalScheduledMessages>,
@@ -3292,7 +3331,8 @@ async fn disabled_recovery_fixture(
         .set_preference(true, ScheduleActor::system(), 1)
         .await
         .unwrap();
-    let row = submitting_row("11111111-1111-4111-8111-111111111111");
+    let mut row = submitting_row("11111111-1111-4111-8111-111111111111");
+    row.model = model.into();
     schedule
         .accept(
             recovery_draft(&row, schedule.preference().await.unwrap().revision),
@@ -3369,7 +3409,7 @@ async fn preference_off_recovers_command_evidence_before_cancellation() {
     ] {
         let directory = tempfile::tempdir().unwrap();
         let (service, schedule, commands, clock, row) =
-            disabled_recovery_fixture(directory.path()).await;
+            disabled_recovery_fixture(directory.path(), "opus").await;
         let id = ConversationId::new(&row.conversation).unwrap();
         if stage.is_none() || stage == Some(MutationStage::Accepted) {
             service
@@ -3542,7 +3582,7 @@ async fn preference_off_recovers_command_evidence_before_cancellation() {
 async fn preference_off_recovers_a_saved_turn_after_its_delivery_audit_failed() {
     let directory = tempfile::tempdir().unwrap();
     let (service, schedule, commands, clock, row) =
-        disabled_recovery_fixture(directory.path()).await;
+        disabled_recovery_fixture(directory.path(), "opus").await;
     let id = ConversationId::new(&row.conversation).unwrap();
     let caller = schedule_caller(&row).unwrap();
     service
@@ -3606,7 +3646,7 @@ async fn a_scrubbed_live_submission_is_unconfirmed_when_adopted_after_restart() 
         for accepted_only in [false, true] {
             let directory = tempfile::tempdir().unwrap();
             let (service, schedule, commands, clock, row) =
-                disabled_recovery_fixture(directory.path()).await;
+                disabled_recovery_fixture(directory.path(), "opus").await;
             if accepted_only {
                 let id = ConversationId::new(&row.conversation).unwrap();
                 let binding = super::scheduled_submit_binding(&id, &row).unwrap();
@@ -3756,7 +3796,7 @@ async fn deletion_recovers_original_command_outcomes_after_failed_audit_and_rest
             ] {
                 let directory = tempfile::tempdir().unwrap();
                 let (service, schedule, commands, clock, row) =
-                    disabled_recovery_fixture(directory.path()).await;
+                    disabled_recovery_fixture(directory.path(), "opus").await;
                 let id = ConversationId::new(&row.conversation).unwrap();
                 let binding = ConversationService::submit_lookup(
                     &id,
@@ -3889,7 +3929,7 @@ async fn deletion_recovers_original_command_outcomes_after_failed_audit_and_rest
 async fn deleted_command_evidence_retries_a_busy_journal_without_guessing_an_outcome() {
     let directory = tempfile::tempdir().unwrap();
     let (service, schedule, commands, clock, row) =
-        disabled_recovery_fixture(directory.path()).await;
+        disabled_recovery_fixture(directory.path(), "opus").await;
     let id = ConversationId::new(&row.conversation).unwrap();
     let binding = ConversationService::submit_lookup(
         &id,
@@ -3947,6 +3987,31 @@ async fn deleted_command_evidence_retries_a_busy_journal_without_guessing_an_out
 }
 
 #[tokio::test]
+async fn a_thread_admission_precedes_the_scheduled_selection_permit() {
+    let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
+    let store = Arc::new(RecordingStore::new(true));
+    let service = delivering(&clock, &store, "owner");
+    let row = store.due_row.lock().unwrap().clone().unwrap();
+    let id = ConversationId::new(&row.conversation).unwrap();
+    let threads = service.inner.thread_admission.clone().lock_owned().await;
+    let delivery = service.deliver_due_scheduled();
+    tokio::pin!(delivery);
+    assert!(futures_util::poll!(&mut delivery).is_pending());
+    assert_eq!(store.submits.load(Ordering::SeqCst), 0);
+    let selection = service
+        .inner
+        .mode_changes
+        .try_lock(&id)
+        .expect("a delivery waiting for thread admission must not hold selection");
+    drop(selection);
+    drop(threads);
+    tokio::time::timeout(Duration::from_secs(5), delivery)
+        .await
+        .unwrap();
+    assert_eq!(store.submits.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn a_selection_lock_blocks_the_durable_submit_claim() {
     let clock = Arc::new(ShiftClock(AtomicU64::new(5_000)));
     let store = Arc::new(RecordingStore::new(true));
@@ -3993,6 +4058,7 @@ async fn a_detached_scheduled_command_keeps_its_submission_permit() {
     );
     let id = ConversationId::new("11111111-1111-4111-8111-111111111111").unwrap();
     let permit = Arc::new(SubmissionPermit {
+        _threads: service.inner.thread_admission.clone().lock_owned().await,
         _admission: service.inner.admission.clone().read_owned().await,
         _selection: service.inner.mode_changes.lock(&id).await,
     });
@@ -4012,6 +4078,7 @@ async fn a_detached_scheduled_command_keeps_its_submission_permit() {
             ..Default::default()
         },
         SubmissionMode::Queue,
+        false,
         Some(permit),
     );
     let mut waiting = Box::pin(waiting);
@@ -4020,10 +4087,221 @@ async fn a_detached_scheduled_command_keeps_its_submission_permit() {
     drop(waiting);
     assert!(service.inner.mode_changes.try_lock(&id).is_none());
     assert!(service.inner.admission.try_write().is_err());
+    assert!(service.inner.thread_admission.try_lock().is_err());
     commands.release.notify_one();
     let _released =
         tokio::time::timeout(Duration::from_secs(5), service.inner.mode_changes.lock(&id))
             .await
             .unwrap();
     assert!(service.inner.admission.try_write().is_ok());
+    assert!(service.inner.thread_admission.try_lock().is_ok());
+}
+
+#[tokio::test]
+async fn a_retained_schedule_intent_does_not_relabel_a_distinct_person_command() {
+    let directory = tempfile::tempdir().unwrap();
+    let (service, schedule, commands, _clock, row) =
+        disabled_recovery_fixture(directory.path(), "test").await;
+    let id = ConversationId::new(&row.conversation).unwrap();
+    service
+        .create(
+            id.clone(),
+            caller_as("create-distinct-person"),
+            RequestedConversation {
+                model: Some(row.model.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(schedule
+        .command_evidence(&row.conversation, &row.execution_id)
+        .await
+        .unwrap()
+        .is_some());
+    // The schedule crossed its original begin_submit but its process died
+    // before SDK admission. This is a different real person action, not an
+    // exact retry of the automatic command's original request identity.
+    let person = caller_as("distinct-person-request");
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        service.submit_command(
+            commands.clone(),
+            id.clone(),
+            person.clone(),
+            Initiation::owner(),
+            false,
+            row.execution_id.clone(),
+            SubmittedMessage {
+                text: row.prompt.clone(),
+                ..Default::default()
+            },
+            SubmissionMode::Queue,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let committed = commands
+        .read_committed(super::super::conversation_session(&id))
+        .await
+        .unwrap()
+        .unwrap();
+    let history = committed.snapshot().unwrap().invocations.clone();
+    let people = service.person_turns(&id, &person, &history).await.unwrap();
+    service.shutdown().await.unwrap();
+    drop(service);
+    commands.shutdown().await.unwrap();
+    assert_eq!(
+        people
+            .iter()
+            .map(|(_, execution)| execution.as_str())
+            .collect::<Vec<_>>(),
+        [row.execution_id.as_str()]
+    );
+}
+
+#[tokio::test]
+async fn an_admitted_scheduled_continuation_is_not_an_explicit_person_turn() {
+    let directory = tempfile::tempdir().unwrap();
+    // Real SQLite schedule accept -> claim_due -> begin_submit -> close/reopen;
+    // real RecordStorage command + session store. No fabricated receipt/evidence.
+    let (service, schedule, commands, clock, draft_row) =
+        disabled_recovery_fixture(directory.path(), "test").await;
+    let id = ConversationId::new(&draft_row.conversation).unwrap();
+    let automatic_caller = schedule_caller(&draft_row).unwrap();
+    service
+        .create(
+            id.clone(),
+            caller_as("create-provenance-conversation"),
+            RequestedConversation {
+                model: Some(draft_row.model.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // The reopened store must adopt the expired ORIGINAL fence. Obtain the
+    // actual row as decoded from SQLite, including its retained non-content
+    // command evidence; do not set command_evidence on a struct in the test.
+    let adopted_at = 5_000 + FENCE_LEASE_MS;
+    clock.0.store(adopted_at, Ordering::SeqCst);
+    let rows = schedule.claim_due(adopted_at, 8).await.unwrap();
+    let stored = rows
+        .into_iter()
+        .find(|row| row.execution_id == draft_row.execution_id)
+        .expect("the durable submitting row is recoverable");
+    assert!(stored.command_evidence.is_some());
+    assert_eq!(
+        schedule
+            .status(&stored.execution_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("submitting")
+    );
+    let original_binding = super::scheduled_submit_binding(&id, &stored).unwrap();
+
+    // Invoke the real scheduler recovery/effect owner, not submit_command with
+    // a caller-supplied boolean claiming to be scheduled. It acquires the real
+    // thread/admission/selection permit and performs begin_submit adoption.
+    tokio::time::timeout(Duration::from_secs(5), service.deliver_due_scheduled())
+        .await
+        .expect("automatic delivery completes within the existing five-second fixture bound");
+    assert_eq!(
+        schedule
+            .status(&stored.execution_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("delivered"),
+        "the proposed regression must exercise a genuinely admitted automatic command"
+    );
+    let receipts = commands.mutations("person".into()).await.unwrap();
+    let dispatched = receipts
+        .iter()
+        .find(|receipt| receipt.binding() == &original_binding)
+        .expect("the original retained canonical binding has a real receipt");
+    assert_eq!(dispatched.stage(), MutationStage::Settled);
+    assert_eq!(dispatched.outcome(), Some(MutationOutcome::Dispatched));
+
+    let committed = commands
+        .read_committed(super::super::conversation_session(&id))
+        .await
+        .unwrap()
+        .unwrap();
+    let history = committed.snapshot().unwrap().invocations.clone();
+    let automatic = history
+        .iter()
+        .find(|record| record.request.execution_id.as_str() == stored.execution_id)
+        .expect("the scheduled command was actually saved in the SDK history");
+    assert_eq!(
+        automatic.request.user_message.sender(),
+        &nessa_sdk::domain::agent_execution::prompts::MessageSender::Person
+    );
+    let classified_after_automatic = service
+        .person_turns(&id, &automatic_caller, &history)
+        .await
+        .unwrap();
+    schedule.fail_next_command_evidence_read();
+    let failed_evidence_read = service.person_turns(&id, &automatic_caller, &history).await;
+
+    // Both positives use genuine public person admission. Identical prompt,
+    // surface, and a scheduling-looking execution spelling must not substitute
+    // for durable origin evidence. A prefix filter would fail this positive.
+    let genuine = "explicit-person-after-automatic".to_owned();
+    let lookalike = format!("{}-person-lookalike", stored.execution_id);
+    for execution in [&genuine, &lookalike] {
+        service
+            .submit_command(
+                commands.clone(),
+                id.clone(),
+                caller_as(execution),
+                Initiation::owner(),
+                false,
+                execution.clone(),
+                SubmittedMessage {
+                    text: stored.prompt.clone(),
+                    ..Default::default()
+                },
+                SubmissionMode::Queue,
+            )
+            .await
+            .unwrap();
+    }
+    let committed = commands
+        .read_committed(super::super::conversation_session(&id))
+        .await
+        .unwrap()
+        .unwrap();
+    let history = committed.snapshot().unwrap().invocations.clone();
+    let classified_after_people = service
+        .person_turns(&id, &automatic_caller, &history)
+        .await
+        .unwrap();
+
+    // Cleanup precedes the intended failing regression assertion, so the
+    // negative control does not leave the real process/storage fixture running.
+    service.shutdown().await.unwrap();
+    drop(service);
+    commands.shutdown().await.unwrap();
+
+    assert!(
+        classified_after_automatic.is_empty(),
+        "an admitted automatic continuation is not an explicit person turn: {classified_after_automatic:?}"
+    );
+    assert!(matches!(
+        failed_evidence_read,
+        Err(ConversationError::Metadata)
+    ));
+    let people: Vec<_> = classified_after_people
+        .iter()
+        .map(|(_, execution)| execution.as_str())
+        .collect();
+    assert_eq!(
+        people,
+        vec![genuine.as_str(), lookalike.as_str()],
+        "only real person receipts reauthorize report delivery; spelling and text confer no origin"
+    );
 }

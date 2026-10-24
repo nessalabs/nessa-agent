@@ -11,6 +11,7 @@
 //! decode is corrupt: a later build that changes a body's shape writes a new
 //! kind instead.
 use super::{permissions::Actor, tools::corrupt};
+use crate::domain::agent_execution::subagents::AgentLifetimeId;
 use crate::{
     application::agent_execution::sessions::{
         CurrentLease, EnvironmentFetchRefusal, EnvironmentPath, FetchOutcome, FetchRefusalReason,
@@ -122,6 +123,12 @@ struct Issuance {
     actor: Actor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     refusal: Option<Refusal>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SdkCleanupEvidence {
+    lease: String,
+    lifetime: String,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -774,6 +781,20 @@ impl From<&LeaseRecord> for WireLease {
                     actor: actor.as_ref().map(Actor::from),
                 },
             ),
+            LeaseRecord::SdkCleanupRetired { lease, lifetime } => text(
+                "sdk_cleanup_retired",
+                &SdkCleanupEvidence {
+                    lease: lease.as_str().into(),
+                    lifetime: lifetime.as_str().into(),
+                },
+            ),
+            LeaseRecord::SdkCleanupAcknowledged { lease, lifetime } => text(
+                "sdk_cleanup_acknowledged",
+                &SdkCleanupEvidence {
+                    lease: lease.as_str().into(),
+                    lifetime: lifetime.as_str().into(),
+                },
+            ),
             LeaseRecord::Ended { lease, cleanup } => text(
                 ENDED,
                 &Cleaned {
@@ -928,6 +949,20 @@ impl WireLease {
                         actor,
                     },
                     _ => return Err(corrupt("a lease issuance and its refusal disagree")),
+                }
+            }
+            "sdk_cleanup_retired" => {
+                let saved: SdkCleanupEvidence = body(&self.body)?;
+                LeaseRecord::SdkCleanupRetired {
+                    lease: lease(saved.lease)?,
+                    lifetime: AgentLifetimeId::new(saved.lifetime).map_err(corrupt)?,
+                }
+            }
+            "sdk_cleanup_acknowledged" => {
+                let saved: SdkCleanupEvidence = body(&self.body)?;
+                LeaseRecord::SdkCleanupAcknowledged {
+                    lease: lease(saved.lease)?,
+                    lifetime: AgentLifetimeId::new(saved.lifetime).map_err(corrupt)?,
                 }
             }
             ENDING => {

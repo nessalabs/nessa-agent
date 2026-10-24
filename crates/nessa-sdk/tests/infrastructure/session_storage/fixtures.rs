@@ -27,6 +27,9 @@ use std::path::Path;
 
 pub(super) fn input_record(name: &str, bytes: usize) -> InvocationRecord {
     InvocationRecord {
+        decline: None,
+        cancellation_delivery: None,
+        resumed_from: None,
         target_event_offset: None,
         submission: SubmissionMode::Immediate,
         request: ExecutionRequest {

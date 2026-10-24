@@ -120,9 +120,9 @@ it("starts an inline column title after the window's controls wherever they stan
   const rules = [
     [
       read("./workspace/ui/session-list/session-list.css"),
-      // The fold holds the sidebar and the list's measure, so this gutter
-      // waits until both holds are gone.
-      `.workspace[data-sidebar="closed"]:not([data-spare-held]):not([data-list-held])
+      // The header takes its safe inset once the sidebar leaves the row,
+      // even while the list body's measurement is still held.
+      `.workspace[data-sidebar="closed"]:not([data-spare-held][data-sidebar-row="open"])
   .workspace-list
   .desktop-column-bar {`,
     ],
@@ -519,6 +519,10 @@ it("keeps a conversation's sliver of the header still, beneath the text, and out
   // The night scene's rain and steam hold still in it: no per-frame work.
   expect(styles).toMatch(
     /\.desktop-night-scene\[data-still\] \.desktop-night-scene-rain > span,\s*\.desktop-night-scene\[data-still\] \.desktop-night-scene-steam > span \{\s*animation:\s*none/,
+  )
+  // The general short-home rule must not hide this sliver at 520px.
+  expect(styles).toMatch(
+    /@container \(max-height: 520px\) \{\s*\.desktop-header:not\(\[data-sliver\]\) \{\s*display:\s*none/,
   )
   // Gone from a pane shorter than 220px.
   expect(styles).toMatch(

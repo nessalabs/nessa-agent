@@ -28,6 +28,28 @@ does not change the environment or settings of another server.
 
 These tests prove cache isolation, not the cause of an earlier browser error.
 
+The conversation stress review-answer observer and its request/ACK ordering
+controls are mapped in [stress review answer evidence](../docs/design/stress-review-answers.md).
+A review disappearing does not confirm an answer, and a control ACK does not
+confirm provider tool completion.
+
+Stress access scenarios name their fixture requirements explicitly. `full`
+(the default) requires the selected model to advertise Ask, Auto and Full;
+its existing success assertions are unchanged. `ask-only` requires only Ask
+and replaces the counted access switches with Full-refusal checks, followed
+by real permission turns that still require a review. It is separate evidence,
+not Full-success evidence for that model. The published gateway catalog and
+initial conversation must both match the exact requested model and scenario;
+an incompatible fixture fails setup without selecting a fallback.
+
+For example, on Linux run `conversation-stress.mjs --agent codex --model
+gpt-6-astra --accessScenario full` for the Full-capable profile, and `--agent
+codex --model gpt-5.6-terra --accessScenario ask-only` for the Ask-only profile.
+Raise the same scenario with `--rounds 66 --reviews 30 --switches 9
+--parentstops 3 --followers 4 --restarts 2`. The evidence keeps the exact
+profile, requirements, review ACKs and typed access refusals. Availability
+comes from the product; these examples do not enable additional presets.
+
 A large-workspace measurement is specified in
 [UI workspace load](../docs/design/ui-workspace-load.md). The seeded page is
 opt-in (`workspace-load.mjs`). Startup, the pane cap, and one long transcript
@@ -114,6 +136,8 @@ verification/
         stress-conversation.test.mjs duplicate titles, delayed selection and missing identities cannot redirect selection
         stress-restart.mjs   scope intentional restart console lines to exact socket evidence and verified recovery (#1024)
         stress-restart.test.mjs temporal, endpoint, occurrence, failed-recovery and cleanup boundaries
+        stress-followers.mjs subscription churn and capacity probes, correlated with exact run-owned deletions
+        stress-followers.test.mjs end/open ordering, cursor resume, real held counts and deletion/capacity controls
         page-lines.mjs      report each collected page event through its step or close owner
         page-lines.test.mjs queue-free page API, classification, once-only reporting and concurrent attribution
         workspace.mjs       open panes and completed tool work, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
@@ -125,10 +149,14 @@ verification/
         apps.mjs            an MCP App's documents, read through Playwright's frames; the window's card for an app's review, by its whole head
         apps.test.mjs       apps.mjs's rules, no browser: one inline mount, the one locator for an app's review card, and the wait for it to go
         settings.mjs        Settings › Integrations reached, and its fit measured at a width (responsive.mjs, mcp-servers-gateway.mjs)
+        settings-tabs.mjs   smoke's visible tab strip compared with the Settings catalogue's own visibility and order; settings-tabs.test.mjs rejects missing, reordered and unexpected tabs
         review-notices.mjs  Settings notification permission and accessible Allow-button evidence
         review-notices.test.mjs default/denied/granted/unsupported row contracts, without a browser
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
         gateway-stack.mjs   a real gateway, the dev server or a production preview before it, and a client on it, for the real-gateway checks, or the scripted agent signed out; the panel's credential; an agent turn sent and waited out
+        stress-profile.mjs  explicit stress scenario/model requirements and refusal provider-effect checks; stress-profile.test.mjs covers incompatible fixtures and counted Ask-only work
+        acp-recording.mjs   complete JSONL and JSON-RPC envelope validation shared by parent Stop and access-refusal evidence
+        stress-access-refusals.test.mjs exact window Full-request refusal correlation, sharing the review command observer
         scripted-evidence.mjs the scripted command's verdict line and the pull-request summary; page lines are read from the checks' own results
         fake-host.mjs       the desktop app's host over IPC, faked: its gateway endpoint and credential answers
         gateway-view.mjs    a real gateway's view, for mcp-apps-gateway.mjs and gateway-window.mjs: setup's one admitted call, the review a step opened and how long that step waits for it (#474), what a text-only turn said
@@ -217,6 +245,26 @@ ends each step once its motion has, not after a fixed wait.
 
 ## Scenario results and preview ownership
 
+### Focus and drag observation order
+
+The focus and sideways-drag probes keep readiness and timing evidence separate
+(`lib/workspace.test.mjs`). No production deadline is changed by these probes.
+
+| Observed ordering | Result |
+| --- | --- |
+| Selected overview row focused, later rows pending | Focus is ready; Down waits for a mounted successor within 2,000 ms. |
+| List complete but focus missing, outside the list, or no successor for Down | Focus/navigation is not ready. |
+| Complete-list marker absent after 2,000 ms | Independent `focus-overview-complete-list` result fails, even if focus held. |
+| Pointer delivered and zone observed before the event's 150 ms rest boundary | The moving-sweep assertion checks the announced zone. |
+| Pointer delivery or DOM observation reaches the rest boundary first | No proof of moving intent; missing timely evidence fails and records both gaps. |
+| No announcement, or announcement before any recorded changed-position move | No proof of moving intent; the sweep fails. |
+
+`recordZones` retains event time, event delivery time and DOM observation time.
+The last is after a scheduled preview, not the model's decision time. A later
+legitimate rest announcement stays in the receipt without replacing a timely
+moving observation. Historical late announcements alone cannot identify whether
+input delivery, rendering, host scheduling or another cause was responsible.
+
 A scenario owns its result; a missing optional assertion list cannot replace the
 scenario's original error. `report.add` normalizes `failures` after accepting the
 result fields, then derives `ok` and the existing process verdict. Page diagnostic
@@ -247,6 +295,34 @@ Bare-Node reporter/routing tests cover V1–V4 and the full-run argument decisio
 V5–V9's actual fixture and server lifetime also require production browser
 qualification; helper tests alone do not establish that the built fixture renders.
 No frame budget, RPC deadline or browser readiness wait changes with this routing.
+
+## Stress follower end/open ordering (#1038)
+
+The follower owns desired targets separately from live subscription handles.
+The generated `ConversationSubscriptionEndReason` contract owns recoverability:
+`source_closed` and `lagging` subscribe again, as does the client's
+`disconnected`. A view resumes from its applied frame cursor, events from their
+applied batch cursor, and a list receives a replacement snapshot. End callbacks
+retire ownership even when they report an unexpected failure. Opening identity
+is shared across all three stream kinds; data and end callbacks from a retired
+opening cannot change its successor. `stress-followers.test.mjs` exercises these
+orderings and the existing exact deletion/capacity controls.
+
+| State/event | Ownership and next action |
+| --- | --- |
+| Opening receives its handle | Retain it only while that opening is current |
+| Recoverable end before or after the open answer | Retire the opening and handle, preserve applied data/cursor, request reopening; close a late handle |
+| Unexpected end | Retire identically, retain the failure, and request reopening without erasing that failure |
+| Retired opening delivers data/end | Ignore it; its successor owns application progress |
+| Intentional churn | Retire before awaiting close, then reopen from the applied cursor |
+| Run-owned deletion during events admission | Retire and close any late handle; remove the desired target |
+| Missing or opening list/view/events | Defer capacity probes; desired targets still reserve their room for reopening |
+| An owned stream ends while a probe awaits admission | End that measurement and close probe handles; a later stable round measures capacity |
+| Settlement after churn ends | Reopen list, view and events before comparing final state |
+
+`held()` counts live conversation handles, while desired targets reserve room
+independently. Lists have their separate published allowance. These rules do not
+change server capacity, approval policy, concurrency or deadlines.
 
 ## Output
 

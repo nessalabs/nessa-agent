@@ -20,10 +20,7 @@ use nessa_sdk::application::agent_execution::{
         NoteState,
     },
 };
-use nessa_sdk::domain::agent_execution::{
-    executions::{Initiation, Initiator},
-    sessions::SessionId,
-};
+use nessa_sdk::domain::agent_execution::{executions::Initiator, sessions::SessionId};
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -380,12 +377,10 @@ async fn run(
                 )
                 .await
                 .map_err(code)?;
-            let storage = service.commands().ok_or("command_unavailable")?;
             let receipt = service
-                .create_command(
-                    storage,
+                .create_owned_thread(
+                    source,
                     target.clone(),
-                    source.caller(),
                     RequestedConversation {
                         agent: args.agent.map(RequestedAgent::Known),
                         model: args.model,
@@ -467,13 +462,12 @@ async fn run(
             let registration = service
                 .report_thread_turn(target.clone(), execution.clone(), answer.clone())
                 .await;
+            let sending_caller = source.caller();
             let submitted = match service
-                .submit_command(
+                .submit_agent_command(
                     storage,
                     target.clone(),
-                    source.caller(),
-                    Initiation::owner(),
-                    false,
+                    source,
                     execution.clone(),
                     SubmittedMessage {
                         text: args.message,
@@ -493,7 +487,7 @@ async fn run(
                                 target.clone(),
                                 &execution,
                                 &report,
-                                &source.caller(),
+                                &sending_caller,
                             )
                             .await;
                     }
@@ -604,11 +598,10 @@ async fn run(
             // it, a report would only repeat it. Until then the report stays
             // held, and an answer the caller never gets lets it go.
             if let (true, Some((execution, held))) = (whole, awaited) {
-                let parent = source.conversation().clone();
                 *delivered = Some(Box::new(move || {
                     tokio::spawn(async move {
                         service
-                            .claim_thread_report(&target, &execution, &parent)
+                            .claim_thread_report(&target, &execution, &source)
                             .await;
                         drop(held);
                     });

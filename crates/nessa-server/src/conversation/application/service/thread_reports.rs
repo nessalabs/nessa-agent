@@ -10,9 +10,10 @@
 //! saved, is finished, and its report is queued into the parent as an owner
 //! turn under the caller the parent's own send was admitted with. Each look
 //! checks every waiting caller may still view the thread; one refused, or a
-//! thread gone, drops that caller's reports. A report leaves the store once
-//! its parent has it, so a restart part way through delivers it again, and
-//! its fixed execution identity answers that from the first receipt.
+//! thread gone, drops that caller's reports. With ownership composed, a report
+//! stays durable through its parent turn's settlement. Stop can therefore
+//! withdraw an already queued report and retain it until later person input.
+//! Delivery identities and the existing transcript reconcile lost acknowledgements.
 //!
 //! ```text
 //! send_message ─▶ save + register(child, execution, parent) ─▶ submit to child
@@ -22,23 +23,24 @@
 //! look(child) ─▶ child's history ─▶ finished watches ─▶ submit to parent ─▶ settle
 //! ```
 //!
-//! After a restart no turn left unfinished by the earlier run is run again,
-//! so a report saved by that run whose turn has not finished says it was
-//! interrupted: [`restored_unfinished`] owns that one decision.
+//! Suspended work follows the SDK's exact original-to-successor continuation.
+//! It stays pending until that successor settles. An unfinished restored turn
+//! without a continuation uses [`restored_unfinished`]. Explicit Stop remains final.
 use super::{
     ConversationCaller, ConversationError, ConversationService, Inner, SubmissionMode,
     SubmittedMessage, Writer,
 };
-use crate::conversation::application::ConversationFuture;
+use crate::conversation::application::{AgentToolSource, ConversationFuture};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
+    agents::{owed_turn_ids, resumed_turn_id},
     executions::ExecutionUpdate,
     hooks::{HookError, InvocationContext, InvocationHook},
     sessions::InvocationRecord,
 };
 use nessa_sdk::domain::agent_execution::executions::{
-    ExecutionOutcome, Initiation, InvocationStage, MessageKind,
+    ExecutionOutcome, InvocationStage, MessageKind, Resumption,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -148,7 +150,7 @@ pub(crate) struct ThreadReports {
     /// Held while a report registers, so a second registration of the same
     /// report sees the first one's watch, never its half-made state.
     registering: tokio::sync::Mutex<()>,
-    store: OnceLock<Arc<dyn ThreadReportStore>>,
+    pub(super) store: OnceLock<Arc<dyn ThreadReportStore>>,
     /// Reports being queued, by report: so a sender that read the reply in
     /// its own turn meanwhile can still call one off before it is submitted.
     queuing: Arc<Mutex<HashMap<String, Queuing>>>,
@@ -175,11 +177,20 @@ enum Watched {
 /// Counts one report being queued, and holds its place in `queuing`, until
 /// dropped.
 struct Delivering {
-    count: Arc<AtomicUsize>,
+    count: Option<Arc<AtomicUsize>>,
     queuing: Arc<Mutex<HashMap<String, Queuing>>>,
     report: String,
 }
 impl Delivering {
+    /// Release live delivery admission while retaining the queued report's
+    /// claim until this guard is dropped. The registry test covers a claim
+    /// after this release and repeated releases.
+    fn release(&mut self) {
+        if let Some(count) = self.count.take() {
+            count.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
     fn claimed(&self) -> bool {
         self.queuing
             .lock()
@@ -194,7 +205,7 @@ impl Drop for Delivering {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&self.report);
-        self.count.fetch_sub(1, Ordering::SeqCst);
+        self.release();
     }
 }
 
@@ -425,7 +436,7 @@ impl ThreadReports {
                 report: watch.report.clone(),
                 text,
                 delivering: Delivering {
-                    count: self.delivering.clone(),
+                    count: Some(self.delivering.clone()),
                     queuing: self.queuing.clone(),
                     report: watch.report.execution.clone(),
                 },
@@ -647,7 +658,7 @@ impl ConversationService {
                 let (outcome, reply) = saved.unwrap_or(("interrupted", None));
                 ThreadTurn::Ended(outcome, reply)
             }
-            Found::Settling(_) | Found::Waiting(_) => ThreadTurn::Unfinished,
+            Found::Settling(_) | Found::Waiting(_) | Found::Continuing => ThreadTurn::Unfinished,
         }
     }
 
@@ -673,14 +684,43 @@ impl ConversationService {
     }
 
     /// The sender already has `execution`'s reply, read in its own turn:
-    /// its report would only say it again, so it is let go.
+    /// its report would only say it again, so it is let go. Stop of the source
+    /// or its SDK-validated continuation retains it, as does missing evidence.
     pub async fn claim_thread_report(
         &self,
         child: &ConversationId,
         execution: &str,
-        parent: &ConversationId,
+        source: &AgentToolSource,
     ) {
-        for report in self.inner.thread_reports.claim(child, execution, parent) {
+        let stopped = match self
+            .stopped_report_executions(source.conversation(), &source.caller())
+            .await
+        {
+            Ok(stopped) => stopped,
+            Err(error) => {
+                tracing::warn!(conversation_id = %source.conversation(), execution = source.execution(), %error, "reply claim retains its report until source Stop receipts can be read");
+                return;
+            }
+        };
+        if !stopped.is_empty() {
+            // Read after receipts: the source and selected Stop admissions must
+            // be present before the SDK can establish an unstopped source chain.
+            let history = self
+                .report_history(source.conversation(), &source.caller())
+                .await;
+            if !super::thread_report_admission::source_chain_is_unstopped(
+                source.execution(),
+                history.as_deref(),
+                &stopped,
+            ) {
+                return;
+            }
+        }
+        for report in self
+            .inner
+            .thread_reports
+            .claim(child, execution, source.conversation())
+        {
             self.settle_saved(child, &report).await;
         }
     }
@@ -914,46 +954,131 @@ impl ConversationService {
     /// its configuration or placement, is not tried again in it: the report
     /// stays saved for the next start. One the parent refuses for good is let
     /// go.
-    async fn deliver_report(&self, taken: Taken) {
-        let Taken { report, text, .. } = &taken;
+    async fn deliver_report(&self, mut taken: Taken) {
+        let report = taken.report.clone();
+        let text = taken.text.clone();
+        let retain_for_stop =
+            self.inner.ownership.get().is_some() && self.inner.thread_reports.store.get().is_some();
         let mut delay = DELIVERY_RETRY_FIRST;
         loop {
             if self.inner.retirement.get().is_some() {
                 return;
             }
-            let delivered = self
-                .report_history(&report.parent, &report.caller)
+            let admission = Arc::new(self.inner.thread_admission.clone().lock_owned().await);
+            let history = self.report_history(&report.parent, &report.caller).await;
+            let stopped = self
+                .stopped_report_executions(&report.parent, &report.caller)
                 .await
-                .map(|history| invocation(&history, &report.execution).is_some());
-            if delivered == Some(true) {
+                .ok();
+            // Pause guards settlement as well as dispatch. A retained provider
+            // failure cannot let delivery bypass the person's durable Stop.
+            let paused = match &history {
+                Some(history) if stopped.is_some() => self
+                    .reports_paused(&report.parent, &report.caller, history)
+                    .await
+                    .unwrap_or(true),
+                _ => true,
+            };
+            let mut delivered = false;
+            let mut waiting = false;
+            let mut previously_cancelled = false;
+            if let Some(history) = &history {
+                let ids: HashSet<_> = super::thread_report_admission::report_deliveries(
+                    &report.execution,
+                    history,
+                    |record| {
+                        let matches = report
+                            .caller
+                            .actor()
+                            .is_ok_and(|actor| actor == record.actor)
+                            && record.request.user_message.text_str() == text
+                            && record.request.user_message.images().is_empty()
+                            && record.request.user_message.files().is_empty();
+                        if !matches {
+                            previously_cancelled = true;
+                        }
+                        matches
+                    },
+                )
+                .into_iter()
+                .map(|delivery| delivery.current().clone())
+                .collect();
+                for record in history
+                    .iter()
+                    .filter(|record| ids.contains(&record.request.execution_id))
+                {
+                    if stopped
+                        .as_ref()
+                        .is_some_and(|ids| ids.contains(record.request.execution_id.as_str()))
+                    {
+                        previously_cancelled = true;
+                        continue;
+                    }
+                    taken.delivering.release();
+                    if !retain_for_stop {
+                        delivered = true;
+                    }
+                    match in_record(history, record, false) {
+                        Found::Finished("cancelled", _) => previously_cancelled = true,
+                        Found::Finished(_, _) => delivered = true,
+                        _ => waiting = true,
+                    }
+                }
+            }
+            if !paused
+                && (delivered || (waiting && self.inner.thread_reports.store.get().is_none()))
+            {
                 break;
             }
-            // The sender read the reply in its own turn meanwhile.
+            // The sender received the whole reply through its own call.
+            // The claim remains visible after live delivery admission ends.
             if taken.delivering.claimed() {
                 break;
             }
-            if delivered == Some(false) {
+            let execution = if previously_cancelled {
+                match &history {
+                    Some(history) => self
+                        .next_report_delivery(
+                            &report.parent,
+                            &report.caller,
+                            &report.execution,
+                            history,
+                        )
+                        .await
+                        .ok()
+                        .flatten(),
+                    None => None,
+                }
+            } else {
+                Some(report.execution.clone())
+            };
+            if let Some(execution) = execution.filter(|_| history.is_some() && !waiting && !paused)
+            {
                 let answer = self
                     .submit_as(
                         report.parent.clone(),
                         report.caller.clone(),
-                        report.execution.clone(),
+                        execution,
                         SubmittedMessage {
                             text: text.clone(),
                             ..Default::default()
                         },
                         SubmissionMode::Queue,
-                        Writer::Person(Initiation::owner(), false),
+                        Writer::ThreadReport {
+                            _admission: admission.clone(),
+                        },
                     )
                     .await;
                 match answer.map_err(super::SubmitFailure::into_error) {
-                    Ok(_) => break,
+                    Ok(_) if !retain_for_stop => break,
+                    Ok(_) => {
+                        taken.delivering.release();
+                    }
                     Err(_) if self.inner.retirement.get().is_some() => return,
                     Err(
                         error @ (ConversationError::NotFound
                         | ConversationError::Deleted
                         | ConversationError::InvalidInput
-                        | ConversationError::RequestConflict
                         | ConversationError::AgentUnsupported),
                     ) => {
                         let parent = &report.parent;
@@ -979,6 +1104,7 @@ impl ConversationService {
                     }
                 }
             }
+            drop(admission);
             tokio::time::sleep(delay).await;
             delay = (delay * 2).min(DELIVERY_RETRY_MOST);
         }
@@ -1014,14 +1140,13 @@ fn watched(
             restored_unfinished(child, execution, saved, limit)
         }
         Found::Settling(_) => Watched::Settling,
-        Found::Waiting(_) => Watched::Waiting,
+        Found::Waiting(_) | Found::Continuing => Watched::Waiting,
     }
 }
 
-/// A report an earlier run saved, whose turn that run left unfinished. No
-/// turn is run again after a restart, so one that saved no result is reported
-/// interrupted. One that saved its result, but not its settlement, did end:
-/// it is reported with that result and reply.
+/// A restored unfinished report with no SDK continuation. A saved result is
+/// retained; absence of a result is reported as interrupted. Owed/resumed turns
+/// are filtered before this decision and remain pending for their exact successor.
 fn restored_unfinished(
     child: &ConversationId,
     execution: &str,
@@ -1036,6 +1161,7 @@ fn restored_unfinished(
 type Ended = (&'static str, Option<String>);
 
 enum Found {
+    Continuing,
     Finished(&'static str, Option<String>),
     /// Settling, with the result already saved, if one is.
     Settling(Option<Ended>),
@@ -1043,6 +1169,21 @@ enum Found {
 }
 
 fn in_record(history: &[InvocationRecord], record: &InvocationRecord, failure: bool) -> Found {
+    if let Some(next) = resumed_turn_id(history, &record.request.execution_id) {
+        return invocation(history, next.as_str())
+            .map(|next| in_record(history, next, failure))
+            .unwrap_or(Found::Continuing);
+    }
+    // Owed work at the exhausted limit still requires a host decline, but
+    // cannot gain another successor. The existing domain value owns that limit;
+    // unfinished last attempts continue through the ordinary Waiting path below.
+    if Resumption::of(&record.request.execution_id)
+        .successor()
+        .is_some()
+        && owed_turn_ids(history).contains(&record.request.execution_id)
+    {
+        return Found::Continuing;
+    }
     let last = record.scheduling.last();
     if settled(record) {
         return match &record.result {
@@ -1060,12 +1201,7 @@ fn in_record(history: &[InvocationRecord], record: &InvocationRecord, failure: b
             let Some(host) = host else {
                 return Found::Waiting(None);
             };
-            match (settled(host), &host.result) {
-                (true, Some(result)) => Found::Finished(outcome(result), reply(host)),
-                (true, None) => Found::Finished("cancelled", None),
-                (false, Some(result)) => Found::Settling(Some((outcome(result), reply(host)))),
-                (false, None) => Found::Waiting(None),
-            }
+            in_record(history, host, failure)
         }
         _ => match &record.result {
             Some(result) => Found::Settling(Some((outcome(result), reply(record)))),

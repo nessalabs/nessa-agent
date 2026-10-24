@@ -261,6 +261,9 @@ export async function startLocalGateway(o) {
     writeFileSync(
       configPath,
       JSON.stringify({
+        ...(o.stopChildrenOnParentStop === undefined
+          ? {}
+          : { subagents: { stopChildrenOnParentStop: o.stopChildrenOnParentStop } }),
         agents: {
           catalog: join(repoRoot, "crates/nessa-sdk/data/models.json"),
           workspace,

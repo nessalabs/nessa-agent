@@ -122,6 +122,9 @@ pub enum ConversationError {
     /// The binding has not verified this approval preset for the model.
     ApprovalModeUnavailable,
     RequestConflict,
+    /// The new-child creation owner refused before acquiring the target.
+    /// Retains the original cause without claiming another slot as cleanup.
+    ChildCreationRefused(Box<ConversationError>),
     TurnRunning,
     ModelChangeNotApplied,
     ModelChangeUncertain,

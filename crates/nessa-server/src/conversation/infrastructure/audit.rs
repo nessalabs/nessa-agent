@@ -3,15 +3,16 @@
 use super::audit_mapping::record_value;
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{
-    create_directory, physical_operation::Worker, sync_directory, PrivateTempFile,
+    create_directory, open, physical_operation::Worker, sync_directory, OpenMode, PrivateTempFile,
 };
 use nessa_sdk::application::agent_execution::{
     agents::{AgentError, AgentFuture},
-    executions::{ExecutionAudit, ExecutionAuditRecord},
+    executions::{ExecutionAudit, ExecutionAuditRecord, TurnResumption},
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{
-    io::{Result as IoResult, Write},
+    io::{ErrorKind, Read, Result as IoResult, Write},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -28,11 +29,80 @@ use uuid::Uuid;
 pub trait ExecutionAuditFileWriter: Send + Sync {
     /// Publish one record. Failure may follow a physical effect; it is not rollback.
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), AgentError>;
+
+    /// Publish a stable prepared decision identity exactly once, or acknowledge its exact
+    /// existing semantic payload after syncing the winner. Never replace an
+    /// existing record. Unsupported injected writers fail conservatively.
+    fn write_once(&self, _path: &Path, _bytes: &[u8]) -> Result<(), AgentError> {
+        Err(AgentError::AuditFailure)
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PreparedDecisionReceipt {
+    record_id: String,
+    writer_id: String,
+    #[serde(rename = "sequence")]
+    _sequence: u64,
+    #[serde(rename = "observedAtMs")]
+    _observed_at_ms: u64,
+    record: Box<serde_json::value::RawValue>,
 }
 
 struct PrivateExecutionAuditFileWriter;
 
 impl ExecutionAuditFileWriter for PrivateExecutionAuditFileWriter {
+    fn write_once(&self, path: &Path, bytes: &[u8]) -> Result<(), AgentError> {
+        let directory = path.parent().ok_or(AgentError::AuditFailure)?;
+        let expected: PreparedDecisionReceipt =
+            serde_json::from_slice(bytes).map_err(|_| AgentError::AuditFailure)?;
+        let acknowledge = || -> Result<(), AgentError> {
+            let mut file = open(path, OpenMode::ReadWrite).map_err(|_| AgentError::AuditFailure)?;
+            let bound = bytes.len().saturating_add(4096);
+            if file.metadata().map_err(|_| AgentError::AuditFailure)?.len() > bound as u64 {
+                return Err(AgentError::AuditFailure);
+            }
+            let mut stored = Vec::new();
+            (&mut file)
+                .take(bound as u64 + 1)
+                .read_to_end(&mut stored)
+                .map_err(|_| AgentError::AuditFailure)?;
+            let value: PreparedDecisionReceipt =
+                serde_json::from_slice(&stored).map_err(|_| AgentError::AuditFailure)?;
+            // Our writer uses one canonical encoding for semantic payloads.
+            // Comparing its raw payload also rejects duplicate nested keys.
+            if value.record.get() != expected.record.get()
+                || value.record_id != expected.record_id
+                || Uuid::parse_str(&value.writer_id).is_err()
+            {
+                return Err(AgentError::AuditFailure);
+            }
+            // Visible matching bytes alone cannot acknowledge a lost sync reply.
+            file.sync_all().map_err(|_| AgentError::AuditFailure)?;
+            sync_directory(directory).map_err(|_| AgentError::AuditFailure)
+        };
+        match open(path, OpenMode::ReadNonblocking) {
+            Ok(_) => return acknowledge(),
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(_) => return Err(AgentError::AuditFailure),
+        }
+        let mut file = PrivateTempFile::new_in(directory).map_err(|_| AgentError::AuditFailure)?;
+        file.as_file_mut()
+            .write_all(bytes)
+            .map_err(|_| AgentError::AuditFailure)?;
+        file.as_file_mut()
+            .write_all(b"\n")
+            .map_err(|_| AgentError::AuditFailure)?;
+        file.as_file()
+            .sync_all()
+            .map_err(|_| AgentError::AuditFailure)?;
+        match file.publish(path) {
+            Ok(()) => sync_directory(directory).map_err(|_| AgentError::AuditFailure),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => acknowledge(),
+            Err(_) => Err(AgentError::AuditFailure),
+        }
+    }
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), AgentError> {
         let directory = path.parent().ok_or(AgentError::AuditFailure)?;
         let commit = || -> IoResult<()> {
@@ -109,7 +179,27 @@ impl ExecutionAudit for DurableExecutionAudit {
             let state = self.state.clone();
             admission
                 .submit(move || {
-                    let id = Uuid::new_v4().to_string();
+                    let stable = match &record {
+                        ExecutionAuditRecord::TurnResumed(record)
+                            if record.resumption() == &TurnResumption::Declined =>
+                        {
+                            let key = serde_json::to_vec(&(
+                                record.session_id().as_str(),
+                                record.execution_id().as_str(),
+                            ))
+                            .map_err(|_| AgentError::AuditFailure)?;
+                            Some(format!("decline-{:x}", Sha256::digest(key)))
+                        }
+                        ExecutionAuditRecord::QueueSettled(record)
+                            if record.after() == nessa_sdk::domain::agent_execution::executions::InvocationStage::Cancelled =>
+                        {
+                            let key = serde_json::to_vec(&(record.session_id().as_str(), record.execution_id().as_str()))
+                                .map_err(|_| AgentError::AuditFailure)?;
+                            Some(format!("cancellation-{:x}", Sha256::digest(key)))
+                        }
+                        _ => None,
+                    };
+                    let id = stable.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
                     let value = json!({
                         "recordId": id,
                         "writerId": state.writer_id,
@@ -118,10 +208,12 @@ impl ExecutionAudit for DurableExecutionAudit {
                         "record": record_value(&record),
                     });
                     let bytes = serde_json::to_vec(&value).map_err(|_| AgentError::AuditFailure)?;
-                    state
-                        .writer
-                        .write(&state.directory.join(format!("{id}.json")), &bytes)
-                        .map_err(|_| AgentError::AuditFailure)
+                    let path = state.directory.join(format!("{id}.json"));
+                    match stable {
+                        Some(_) => state.writer.write_once(&path, &bytes),
+                        None => state.writer.write(&path, &bytes),
+                    }
+                    .map_err(|_| AgentError::AuditFailure)
                 })
                 .await
                 .map_err(|_| AgentError::AuditFailure)?

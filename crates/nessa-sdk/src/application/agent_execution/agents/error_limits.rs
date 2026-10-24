@@ -16,6 +16,19 @@ const MAX_NODES: usize = DiagnosticTreeLimits::NODES;
 const MAX_DEPTH: usize = DiagnosticTreeLimits::DEPTH;
 
 impl AgentError {
+    /// Retain a distinct independent failure alongside this one within the
+    /// published diagnostic bounds. Equal diagnostics can belong to different
+    /// obligations and are both retained. Resource and acknowledgement facts
+    /// remain with their owning reports.
+    pub fn with_independent_failure(self, other: Self) -> Self {
+        let first = self.bounded();
+        let other = other.bounded();
+        Self::MultipleOperationFailures {
+            first_error: Box::new(first),
+            subsequent_error: Box::new(other),
+        }
+        .bounded()
+    }
     /// Borrowed preflight includes spare allocations, nested errors and hook failures.
     pub(crate) fn validate_retained_size(&self) -> Result<(), StorageError> {
         self.retained_size().map(|_| ())

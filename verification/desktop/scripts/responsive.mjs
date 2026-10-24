@@ -2435,6 +2435,7 @@ checks["overview-edge"] = async ({ page, engine, options }) => {
           shadow: style.boxShadow,
           border: style.borderLeftWidth + style.borderRightWidth,
           glow: Number(glow.opacity),
+          hovered: e.matches(":hover"),
           valuenow: Number(e.getAttribute("aria-valuenow")),
           valuemin: Number(e.getAttribute("aria-valuemin")),
           valuemax: Number(e.getAttribute("aria-valuemax")),
@@ -2467,9 +2468,12 @@ checks["overview-edge"] = async ({ page, engine, options }) => {
   const y = box.y + box.height / 2
   // Hovered: the glow.
   await page.mouse.move(x, y)
-  await page.waitForTimeout(250)
+  // Observe completion, as for the other geometry checks; a wall-clock sleep
+  // does not advance a throttled compositor by the same number of milliseconds.
+  await settled(page)
   const hovered = await read()
   await shot(options, page, `overview-edge-hover-${engine}`)
+  if (!hovered.hovered) failures.push("the edge is not under the pointer")
   if (hovered.glow < 0.99) failures.push(`hovered, the edge's glow is ${hovered.glow}`)
   // Dragged 120px right: the boundary follows.
   await page.mouse.down()

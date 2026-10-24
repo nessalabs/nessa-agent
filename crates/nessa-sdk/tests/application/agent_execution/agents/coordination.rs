@@ -75,6 +75,187 @@ impl ExecutionAudit for CountingAudit {
         Box::pin(async { Ok(()) })
     }
 }
+
+#[derive(Default)]
+struct RecordingStartAudit {
+    records: StateMutex<Vec<ExecutionAuditRecord>>,
+    reject_started: bool,
+    entered: StateMutex<Option<oneshot::Sender<()>>>,
+    release: StateMutex<Option<oneshot::Receiver<()>>>,
+}
+impl ExecutionAudit for RecordingStartAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        let starting = matches!(&record, ExecutionAuditRecord::Attachment(record)
+            if record.after() == AttachmentAuditStage::Starting);
+        self.records.lock().unwrap().push(record);
+        let entered = starting
+            .then(|| self.entered.lock().unwrap().take())
+            .flatten();
+        let release = starting
+            .then(|| self.release.lock().unwrap().take())
+            .flatten();
+        let rejected = starting && self.reject_started;
+        Box::pin(async move {
+            if let Some(entered) = entered {
+                entered.send(()).unwrap();
+            }
+            if let Some(release) = release {
+                release.await.unwrap();
+            }
+            if rejected {
+                Err(AgentError::AuditFailure)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+async fn prepared_with_start_audit(audit: Arc<RecordingStartAudit>) -> (Agent, Arc<Backend>) {
+    let backend = Arc::new(Backend::default());
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = Agent::prepare(Arc::new(Provider(backend.clone())), manager, audit.clone())
+        .await
+        .unwrap();
+    (agent, backend)
+}
+
+#[tokio::test]
+async fn close_before_the_attachment_worker_joins_its_actual_started_audit() {
+    let audit = Arc::new(RecordingStartAudit::default());
+    let (agent, backend) = prepared_with_start_audit(audit.clone()).await;
+    let original = actor();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(original.clone()))
+        .unwrap();
+    let attachment = agent.start_attachment(authorization).unwrap();
+    let generation = attachment.generation;
+    let closer = ActionContext::new("person", "panel", "close-before-worker").unwrap();
+    // Current-thread scheduling: neither the attachment nor shutdown worker
+    // can run between these synchronous lifecycle decisions.
+    let _shutdown = agent.start_shutdown(SessionCloseRequest::Explicit(closer.clone()));
+    let closed = timeout(Duration::from_secs(5), agent.close(closer.clone()))
+        .await
+        .unwrap();
+    assert_eq!(closed, Ok(CloseOutcome { forced: false }));
+    assert_eq!(attachment.wait().await, Err(AgentError::Closed));
+    assert_eq!(backend.opens.load(Ordering::SeqCst), 0);
+    assert!(backend.closes.lock().unwrap().is_empty());
+    let records = audit.records.lock().unwrap();
+    let started: Vec<_> = records
+        .iter()
+        .filter_map(|record| match record {
+            ExecutionAuditRecord::Attachment(record)
+                if record.after() == AttachmentAuditStage::Starting =>
+            {
+                Some(record)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0].before(), AttachmentAuditStage::Waiting);
+    assert_eq!(started[0].generation(), generation);
+    assert_eq!(started[0].actor(), Some(&original));
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| matches!(record,
+            ExecutionAuditRecord::Attachment(record)
+                if record.after() == AttachmentAuditStage::Absent
+                    && record.actor() == Some(&closer)))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn close_before_the_attachment_worker_keeps_real_started_rejection_and_late_ack() {
+    for rejected in [true, false] {
+        let audit = Arc::new(RecordingStartAudit {
+            reject_started: rejected,
+            ..RecordingStartAudit::default()
+        });
+        let (entered, seen) = oneshot::channel();
+        let (release, held) = oneshot::channel();
+        if !rejected {
+            *audit.entered.lock().unwrap() = Some(entered);
+            *audit.release.lock().unwrap() = Some(held);
+        }
+        let (agent, backend) = prepared_with_start_audit(audit.clone()).await;
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
+        let attachment = agent.start_attachment(authorization).unwrap();
+        // Seal synchronously before either installed worker can first poll.
+        let shutdown = agent.start_shutdown(SessionCloseRequest::Explicit(actor()));
+        let closing = tokio::spawn({
+            let agent = agent.clone();
+            async move { agent.close(actor()).await }
+        });
+        if !rejected {
+            timeout(Duration::from_secs(5), seen)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(timeout(Duration::from_secs(5), shutdown.wait_physical())
+                .await
+                .unwrap()
+                .is_confirmed());
+            tokio::task::yield_now().await;
+            assert!(
+                !closing.is_finished(),
+                "physical absence does not acknowledge Started"
+            );
+            assert!(agent
+                .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+                .is_err());
+            release.send(()).unwrap();
+        }
+        let closed = timeout(Duration::from_secs(5), closing)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            closed,
+            if rejected {
+                Err(AgentError::AuditFailure)
+            } else {
+                Ok(CloseOutcome { forced: false })
+            }
+        );
+        assert_eq!(
+            timeout(Duration::from_secs(5), attachment.wait())
+                .await
+                .unwrap(),
+            Err(if rejected {
+                AgentError::AuditFailure
+            } else {
+                AgentError::Closed
+            })
+        );
+        assert_eq!(backend.opens.load(Ordering::SeqCst), 0);
+        assert!(backend.closes.lock().unwrap().is_empty());
+        assert_eq!(
+            audit
+                .records
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|record| matches!(record,
+            ExecutionAuditRecord::Attachment(record)
+                if record.after() == AttachmentAuditStage::Starting))
+                .count(),
+            1
+        );
+    }
+}
 fn capabilities_ref() -> &'static EffectiveCapabilities {
     static CAPABILITIES: std::sync::OnceLock<EffectiveCapabilities> = std::sync::OnceLock::new();
     CAPABILITIES.get_or_init(|| {
@@ -390,9 +571,12 @@ async fn agent() -> Agent {
     agent_with_backend().await.0
 }
 async fn agent_with_backend() -> (Agent, Arc<Backend>) {
+    agent_with_backend_for_session(None).await
+}
+async fn agent_with_backend_for_session(session: Option<SessionId>) -> (Agent, Arc<Backend>) {
     let backend = Arc::new(Backend::default());
     let manager = SessionManager::open(
-        None,
+        session,
         Arc::new(InMemoryStorage::new()),
         std::sync::Arc::new(
             nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),

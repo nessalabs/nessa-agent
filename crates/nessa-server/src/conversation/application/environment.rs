@@ -45,9 +45,9 @@ use nessa_sdk::application::agent_execution::{
     agents::{Agent, AgentError},
     permissions::ActionContext,
     providers::{
-        AgentProvider, ApprovalMode, CloseOutcome, ExecutionEventStream, HarnessHostIdentity,
-        OpenedProviderSession, ProviderIdentity, ProviderObservationFuture, ProviderOpenError,
-        ProviderOpenFuture, ProviderOpenRequest,
+        AgentProvider, ApprovalMode, CleanupReport, CloseOutcome, ExecutionEventStream,
+        HarnessHostIdentity, OpenedProviderSession, ProviderIdentity, ProviderObservationFuture,
+        ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest, ResourceCleanup,
     },
     sessions::{
         CurrentLease, CurrentLeaseState, LeaseCommit, LeaseRecord, LeaseRecordError, PublishedFile,
@@ -808,6 +808,20 @@ pub(crate) enum LeaseIssueError {
     OverUnreadable,
 }
 
+impl From<LeaseIssueError> for super::ConversationError {
+    fn from(error: LeaseIssueError) -> Self {
+        match error {
+            LeaseIssueError::OverUnreadable => Self::LeaseUnreadable,
+            LeaseIssueError::Record(
+                LeaseRecordError::Refused(error) | LeaseRecordError::Storage(error),
+            ) => Self::Storage(error),
+            LeaseIssueError::Record(LeaseRecordError::NotLoaded | LeaseRecordError::Unreadable) => {
+                Self::Unavailable
+            }
+        }
+    }
+}
+
 impl std::fmt::Display for LeaseIssueError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -887,57 +901,36 @@ fn next_revision(current: Option<&CurrentLease>, accounting: &[LeaseRecord]) -> 
     Lease::next_revision(phase, known).unwrap_or_else(|_| known.unwrap_or(LeaseRevision::FIRST))
 }
 
-/// What a close confirmed releasing, if it did: its outcome, or the outcome
-/// it observed when only saving the history's evidence of it failed — the
-/// cleanup happened, so the lease ends rather than being interrupted.
-fn confirmed_cleanup(result: &Result<CloseOutcome, AgentError>) -> Option<CloseOutcome> {
-    match result {
-        Ok(outcome) => Some(*outcome),
-        Err(error) => confirmed_despite(error),
+/// Whole SDK resource release from the actual close transaction, independent
+/// of audit diagnostics. ReleasePending still owns executable-use release.
+fn confirmed_cleanup(report: &CleanupReport) -> Option<CloseOutcome> {
+    match report.resources() {
+        ResourceCleanup::Confirmed(outcome) => Some(*outcome),
+        ResourceCleanup::ReleasePending { .. } | ResourceCleanup::Unconfirmed(_) => None,
     }
 }
 
 /// The cleanup a close that failed with `error` still confirmed: only saving
-/// the evidence of it failed. Its agent holds nothing then, whatever the
-/// close answers.
-pub(crate) fn confirmed_despite(error: &AgentError) -> Option<CloseOutcome> {
-    match error {
-        AgentError::StorageDuringClose { cleanup_result, .. } => {
-            cleanup_result.as_ref().as_ref().ok().copied()
+/// the evidence of it failed. The exact lease owner must independently confirm
+/// whole SDK/environment resource release; a diagnostic cannot provide that fact.
+pub(crate) fn confirmed_despite(
+    error: &AgentError,
+    resources: Option<LeaseCleanup>,
+) -> Option<CloseOutcome> {
+    let Some(LeaseCleanup::Confirmed { forced }) = resources else {
+        return None;
+    };
+    // Each storage wrapper retains the independently observed cleanup result.
+    // Following that typed result acknowledges no write and discards no error;
+    // SDK proof and lease-finalization writes can both fail around one cleanup.
+    let mut current = error;
+    while let AgentError::StorageDuringClose { cleanup_result, .. } = current {
+        match cleanup_result.as_ref() {
+            Ok(_) => return Some(CloseOutcome { forced }),
+            Err(error) => current = error,
         }
-        _ => None,
     }
-}
-
-/// What is left of a close's `error` once its environment confirmed the
-/// cleanup as `confirmed`: every failure except the doubt about what the
-/// agent still held, or `None` when that doubt was the whole error.
-fn beyond_cleanup(error: AgentError, confirmed: CloseOutcome) -> Option<AgentError> {
-    match error {
-        AgentError::CleanupUncertain => None,
-        AgentError::AuditAndCleanupFailure => Some(AgentError::AuditFailure),
-        AgentError::OperationAndCleanupFailure {
-            operation_error,
-            cleanup_error,
-        } => Some(match beyond_cleanup(*cleanup_error, confirmed) {
-            None => *operation_error,
-            Some(cleanup_error) => AgentError::OperationAndCleanupFailure {
-                operation_error,
-                cleanup_error: Box::new(cleanup_error),
-            },
-        }),
-        AgentError::StorageDuringClose {
-            error,
-            cleanup_result,
-        } => Some(AgentError::StorageDuringClose {
-            error,
-            cleanup_result: Box::new(match *cleanup_result {
-                Ok(outcome) => Ok(outcome),
-                Err(failure) => beyond_cleanup(failure, confirmed).map_or(Ok(confirmed), Err),
-            }),
-        }),
-        error => Some(error),
-    }
+    None
 }
 
 /// What a close does with the agent's unfinished work. [`Self::Close`] ends
@@ -956,6 +949,8 @@ pub(crate) struct LiveLease {
     lease: LeaseId,
     fence: Arc<LeaseFence>,
     hold: Option<Arc<dyn LeaseHold>>,
+    release: tokio::sync::Mutex<Option<LeaseRelease>>,
+    cleanup: Mutex<Option<LeaseCleanup>>,
 }
 impl LiveLease {
     pub(crate) fn new(opening: &LeaseOpening) -> Self {
@@ -963,7 +958,63 @@ impl LiveLease {
             lease: opening.lease.clone(),
             fence: opening.fence.clone(),
             hold: opening.hold.clone(),
+            release: tokio::sync::Mutex::new(None),
+            cleanup: Mutex::new(None),
         }
+    }
+
+    /// Join this hold's release owner. Unanswered attempts retain that owner;
+    /// confirmed answers are reused without another physical End.
+    async fn release(&self, cause: LeaseEndCause, deadline: Duration) -> LeaseRelease {
+        let release = std::panic::AssertUnwindSafe(tokio::time::timeout(deadline, async {
+            let mut retained = self.release.lock().await;
+            if let Some(release) = *retained {
+                return release;
+            }
+            let release = match &self.hold {
+                None => LeaseRelease::ByAgentClose,
+                Some(hold) => hold.end(cause).await,
+            };
+            if release != LeaseRelease::Unanswered {
+                *retained = Some(release);
+            }
+            release
+        }))
+        .catch_unwind()
+        .await;
+        match release {
+            Ok(result) => result.unwrap_or(LeaseRelease::Unanswered),
+            Err(payload) => {
+                std::mem::forget(payload);
+                tracing::error!(
+                    lease = self.lease.as_str(),
+                    "environment release panicked; cleanup remains unanswered"
+                );
+                LeaseRelease::Unanswered
+            }
+        }
+    }
+    pub(crate) fn release_answered(&self) -> bool {
+        self.release
+            .try_lock()
+            .is_ok_and(|release| release.is_some())
+    }
+    /// Called only after SDK preparation established no provider hold. The
+    /// surrounding environment may still own resources before LeaseIssued.
+    pub(crate) async fn release_preparation(&self, deadline: Duration) -> bool {
+        self.fence.ending();
+        let released =
+            self.release(LeaseEndCause::Closed, deadline).await != LeaseRelease::Unanswered;
+        if released {
+            self.fence.close();
+        }
+        released
+    }
+    /// The environment/agent resource owners acknowledged release. Pending SDK
+    /// executable-use release remains a hold despite process cleanup; independent
+    /// audit/storage failures do not erase an actual resource acknowledgement.
+    pub(crate) fn cleanup(&self) -> Option<LeaseCleanup> {
+        *self.cleanup.lock().unwrap()
     }
 
     /// A target factory fenced by this exact lease. The SDK still compares
@@ -1083,9 +1134,10 @@ impl LiveLease {
     /// or without any, it is Interrupted, and evidence that arrives later
     /// accounts for it (row L8).
     ///
-    /// What this answers is whether anything may still be held: the close's
-    /// confirmation, or the environment's own confirmation that the lease's
-    /// process tree is gone, which holds whatever the close reported.
+    /// The environment's receipt describes its physical process tree. Whole
+    /// SDK release is acknowledged only by its actual cleanup owner, including
+    /// any executable-use guard. Reconciliation after End shares its remaining
+    /// budget. Independent scheduling, audit and storage failures stay visible.
     ///
     /// The caller runs this on a task of its own, so a caller that stops
     /// waiting does not stop the lease from being accounted for.
@@ -1124,28 +1176,50 @@ impl LiveLease {
             .await;
         self.fence.ending();
         let close = match end {
-            AgentEnd::Close => agent.close(actor),
-            AgentEnd::Suspend => agent.suspend(actor),
+            AgentEnd::Close => agent.close_report(actor.clone()),
+            AgentEnd::Suspend => agent.suspend_report(actor.clone()),
         };
         tokio::pin!(close);
         let within = tokio::select! {
             result = &mut close => Some(result),
             () = tokio::time::sleep(cleanup_deadline) => None,
         };
-        let result = match within {
+        let mut result = match within {
             Some(result) => result,
             None => {
                 self.interrupt(manager).await;
                 close.await
             }
         };
-        let release = match &self.hold {
-            None => LeaseRelease::ByAgentClose,
-            Some(hold) => tokio::time::timeout(cleanup_deadline, hold.end(cause))
-                .await
-                .unwrap_or(LeaseRelease::Unanswered),
-        };
-        let confirmed = confirmed_cleanup(&result);
+        // Reconciliation shares End's original budget; it cannot extend it.
+        let release_deadline = tokio::time::Instant::now() + cleanup_deadline;
+        let release = self.release(cause, cleanup_deadline).await;
+        if matches!(
+            release,
+            LeaseRelease::Released(LeaseCleanup::Confirmed { .. })
+        ) && result
+            .as_ref()
+            .is_ok_and(|report| !report.cleanup().is_confirmed())
+        {
+            let retry = match end {
+                AgentEnd::Close => agent.close_report(actor),
+                AgentEnd::Suspend => agent.suspend_report(actor),
+            };
+            if let Ok(retried) = tokio::time::timeout_at(release_deadline, retry).await {
+                result = match (result, retried) {
+                    (Ok(first), Ok(retry)) => Ok(first.after_retry(retry)),
+                    (Ok(first), Err(error)) => Err(match first.into_result() {
+                        Ok(_) => error,
+                        Err(first) => first.with_independent_failure(error),
+                    }),
+                    (Err(first), _) => Err(first),
+                };
+            }
+        }
+        let confirmed = result
+            .as_ref()
+            .ok()
+            .and_then(|report| confirmed_cleanup(report.cleanup()));
         let evidence = match release {
             LeaseRelease::ByAgentClose => confirmed.map(|outcome| LeaseCleanup::Confirmed {
                 forced: outcome.forced,
@@ -1163,25 +1237,31 @@ impl LiveLease {
             }),
             LeaseRelease::Unanswered => None,
         };
+        // The environment acknowledges its process tree. An SDK executable-use
+        // release is a separate retained owner, even with that physical answer.
+        let sdk_released = result
+            .as_ref()
+            .is_ok_and(|report| report.cleanup().is_confirmed());
+        *self.cleanup.lock().unwrap() = if sdk_released { evidence } else { None };
         match evidence {
             Some(cleanup) => self.cleaned(manager, cleanup).await,
             None => self.interrupt(manager).await,
         }
-        // The environment confirmed its process tree gone: that answers the
-        // close's doubt about what it still holds, and nothing else. A failed
-        // audit, a failed save or any other failure of the close is its own
-        // fact and stays in the answer.
-        let result = match (result, evidence, release) {
-            (Err(error), Some(LeaseCleanup::Confirmed { forced }), LeaseRelease::Released(_))
-                if confirmed_despite(&error).is_none() =>
-            {
-                tracing::warn!(lease = self.lease.as_str(), %error, "the agent's close failed; its environment confirmed the lease released");
-                match beyond_cleanup(error, CloseOutcome { forced }) {
-                    Some(error) => Err(error),
-                    None => Ok(CloseOutcome { forced }),
-                }
-            }
-            (result, _, _) => result,
+        // Remote physical cleanup does not acknowledge the SDK's executable-use
+        // guard. Only the actual retry above can supply whole-resource evidence.
+        let result = result
+            .and_then(|report| report.into_result())
+            .map(|outcome| CloseOutcome {
+                forced: outcome.forced
+                    || matches!(evidence, Some(LeaseCleanup::Confirmed { forced: true })),
+            });
+        let result = match (result, release) {
+            (Ok(_), LeaseRelease::Unanswered) => Err(AgentError::CleanupUncertain),
+            (Err(error), LeaseRelease::Unanswered) => Err(AgentError::MultipleOperationFailures {
+                first_error: Box::new(error),
+                subsequent_error: Box::new(AgentError::CleanupUncertain),
+            }),
+            (result, _) => result,
         };
         // Only now: until its close returns, the Agent is still stopping the
         // turn and is its one authority, and it settles that turn from these

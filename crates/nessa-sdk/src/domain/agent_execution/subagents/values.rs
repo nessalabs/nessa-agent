@@ -414,6 +414,8 @@ pub enum SpawnProgress {
     Prepared,
     /// Ownership attachment acknowledged.
     Attached,
+    /// Preparation acknowledged without an initial task submission.
+    Ready,
     /// Initial task admitted once.
     TaskAdmitted {
         /// Submission receipt.
@@ -448,7 +450,7 @@ impl SpawnProgress {
         match self {
             Self::Reserved => KnownMilestone::Reserved,
             Self::Prepared => KnownMilestone::Prepared,
-            Self::Attached => KnownMilestone::Attached,
+            Self::Attached | Self::Ready => KnownMilestone::Attached,
             Self::TaskAdmitted { receipt } => KnownMilestone::TaskAdmitted {
                 receipt: receipt.clone(),
             },
@@ -517,6 +519,8 @@ pub enum OwnershipMeaning {
     Prepared,
     /// Spawn attached.
     Attached,
+    /// Preparation acknowledged, without an initial task.
+    Ready,
     /// Initial task admitted.
     TaskAdmitted,
     /// Progress uncertain.
@@ -647,12 +651,14 @@ pub struct OwnershipSnapshot {
     pub reports: Vec<ReportRow>,
 }
 
-/// Actual absence observed by the live transaction, never inferred during restoration.
+/// Actual absence established by the preparation owner, never inferred merely
+/// from restoration or missing resource metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AbsenceProof {
     /// A root that has never transferred resources or a gate.
     NeverTransferredRoot,
-    /// Actual Ready preparation rejection promised no outstanding cleanup owner.
+    /// Preparation rejection promised no outstanding cleanup owner, including
+    /// recovery under the original command's verified pre-initialization exclusion.
     PreparationRejectedWithoutOwner(SpawnRequestId),
     /// This admitted invocation failed publication before its factory handoff.
     AdmissionFailedBeforeFactory(SpawnRequestId),

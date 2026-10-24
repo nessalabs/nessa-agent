@@ -14,7 +14,9 @@
 //! [`CurrentLeaseState::Unreadable`] until the next lease is issued: a reader
 //! says it cannot show that lease rather than refusing the whole history.
 use super::{EnvironmentPath, FetchOutcome, PublishedFile, StorageError};
+use crate::application::agent_execution::agents::OwnedCleanupScope;
 use crate::application::agent_execution::permissions::ActionContext;
+use crate::domain::agent_execution::subagents::AgentLifetimeId;
 use crate::domain::agent_execution::{
     executions::ExecutionId,
     leases::{
@@ -62,6 +64,21 @@ pub enum LeaseRecord {
         cause: LeaseEndCause,
         /// Who asked, when somebody did.
         actor: Option<ActionContext>,
+    },
+    /// A later SDK acquisition retires prior cleanup proof before effects.
+    SdkCleanupRetired {
+        /// The exact current lease whose SDK acquisition is starting.
+        lease: LeaseId,
+        /// Lifetime whose previous proof is retired.
+        lifetime: AgentLifetimeId,
+    },
+    /// The actual SDK resource owner acknowledged its cleanup evidence for
+    /// this exact lifetime and lease. Physical End and decline audit stay separate.
+    SdkCleanupAcknowledged {
+        /// The exact current lease whose SDK resources were owned.
+        lease: LeaseId,
+        /// Target lifetime publishing this acknowledgement.
+        lifetime: AgentLifetimeId,
     },
     /// The environment reported its cleanup within the deadline (row L7).
     Ended {
@@ -236,6 +253,25 @@ impl CurrentLease {
             _ => None,
         }
     }
+    /// Whether the actual SDK owner acknowledged this exact lease/target scope.
+    pub fn sdk_cleanup_acknowledged(&self, scope: &OwnedCleanupScope) -> bool {
+        self.held().is_some() && self.sdk_cleanup_for(scope.lifetime())
+    }
+    fn sdk_cleanup_for(&self, target: &AgentLifetimeId) -> bool {
+        self.records
+            .iter()
+            .rev()
+            .find_map(|record| match record {
+                LeaseRecord::SdkCleanupAcknowledged { lifetime, .. } if lifetime == target => {
+                    Some(true)
+                }
+                LeaseRecord::SdkCleanupRetired { lifetime, .. } if lifetime == target => {
+                    Some(false)
+                }
+                _ => None,
+            })
+            .unwrap_or(false)
+    }
     /// The newest revision known to have been issued or refused.
     pub fn revision(&self) -> Option<LeaseRevision> {
         self.revision
@@ -324,6 +360,14 @@ impl CurrentLease {
     /// else is corrupt.
     fn keep(&mut self, record: &LeaseRecord) -> Result<(), StorageError> {
         match record {
+            LeaseRecord::SdkCleanupRetired { lifetime, .. } if !self.sdk_cleanup_for(lifetime) => {
+                Err(corrupt("SDK close proof retirement has no acknowledgement"))
+            }
+            LeaseRecord::SdkCleanupAcknowledged { lifetime, .. }
+                if self.sdk_cleanup_for(lifetime) =>
+            {
+                Err(corrupt("SDK close acknowledgement is repeated"))
+            }
             LeaseRecord::CommandRefused { .. } => Ok(()),
             LeaseRecord::CommandEnded { lease: ended, .. } => {
                 self.records.retain(|kept| {
@@ -453,6 +497,8 @@ impl CurrentLease {
     fn transition(lease: &mut Lease, record: &LeaseRecord) -> Result<(), StorageError> {
         let named = match record {
             LeaseRecord::Ending { lease, .. }
+            | LeaseRecord::SdkCleanupRetired { lease, .. }
+            | LeaseRecord::SdkCleanupAcknowledged { lease, .. }
             | LeaseRecord::Ended { lease, .. }
             | LeaseRecord::Interrupted { lease }
             | LeaseRecord::CleanupReported { lease, .. }
@@ -472,6 +518,9 @@ impl CurrentLease {
             return Err(corrupt("a lease record names another lease"));
         }
         match record {
+            LeaseRecord::SdkCleanupAcknowledged { .. } | LeaseRecord::SdkCleanupRetired { .. } => {
+                Ok(())
+            }
             LeaseRecord::Ending { cause, .. } => match lease.end(*cause) {
                 EndDecision::Began => Ok(()),
                 EndDecision::Joined { .. } => Err(corrupt("a lease records a second end")),

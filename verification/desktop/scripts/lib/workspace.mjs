@@ -105,6 +105,34 @@ export const frames = (page, n = 2) =>
 export const overviewListed = (page, timeout = 2000) =>
   until(page, (sel) => document.querySelector(sel) !== null, css.overviewListed, timeout)
 
+/** Focus can land on a mounted prefix; Down additionally needs a mounted successor. */
+export const overviewRowReady = (page, next = false) =>
+  until(
+    page,
+    ([columnSelector, itemSelector, needsNext]) => {
+      const column = document.querySelector(columnSelector)
+      const focused = document.activeElement?.closest(itemSelector)
+      if (!column || !focused) return false
+      const rows = [...column.querySelectorAll(itemSelector)]
+      const index = rows.indexOf(focused)
+      return index >= 0 && (!needsNext || index < rows.length - 1)
+    },
+    [css.overviewColumn, css.overviewItem, next],
+    2000,
+  )
+
+/** Full-list timing remains a separate assertion from mounted-prefix focus. */
+export async function overviewCompleteList(page) {
+  const started = performance.now()
+  const complete = await overviewListed(page)
+  return {
+    complete,
+    elapsedMs: performance.now() - started,
+    budgetMs: 2000,
+    failures: complete ? [] : ["the overview list did not finish drawing within 2000ms"],
+  }
+}
+
 /** How many requests the Agents overview lists (it must be open). */
 export const requestCount = (page) => page.locator(css.overviewRequest).count()
 
@@ -193,17 +221,24 @@ export async function recordZones(page) {
     const status = document.querySelector(sel)
     if (!status) return null
     const records = []
-    let lastMoveAt = performance.now()
+    let lastMoveAt = null
+    let lastMoveDeliveredAt = null
     let position
     const moved = (event) => {
       if (position?.x === event.clientX && position?.y === event.clientY) return
       position = { x: event.clientX, y: event.clientY }
       lastMoveAt = event.timeStamp
+      lastMoveDeliveredAt = performance.now()
     }
     document.addEventListener("pointermove", moved, true)
     const observer = new MutationObserver(() => {
       if (status.textContent)
-        records.push({ said: status.textContent, at: performance.now(), lastMoveAt })
+        records.push({
+          said: status.textContent,
+          at: performance.now(),
+          lastMoveAt,
+          lastMoveDeliveredAt,
+        })
     })
     observer.observe(status, { childList: true, characterData: true, subtree: true })
     return {
@@ -227,6 +262,40 @@ export async function recordZones(page) {
       }
     },
   }
+}
+
+/**
+ * DOM observation proves a moving sweep only inside the event's rest window.
+ * Delivery and observation gaps explain missing evidence, not model decisions
+ * (`workspace.test.mjs`). A later rest announcement remains in the receipt.
+ */
+export function sweepZoneEvidence(recorded, restAfter, vertical) {
+  const timing = recorded.map((entry) => ({
+    ...entry,
+    deliveryLagMs:
+      entry.lastMoveAt === null ? null : entry.lastMoveDeliveredAt - entry.lastMoveAt,
+    observationLagMs:
+      entry.lastMoveDeliveredAt === null ? null : entry.at - entry.lastMoveDeliveredAt,
+    sinceEventMs: entry.lastMoveAt === null ? null : entry.at - entry.lastMoveAt,
+  }))
+  const moving = timing.filter(
+    (entry) =>
+      entry.sinceEventMs !== null &&
+      entry.deliveryLagMs >= 0 &&
+      entry.observationLagMs >= 0 &&
+      entry.sinceEventMs < restAfter,
+  )
+  const failures = []
+  if (!timing.length) failures.push("no drop-zone announcement was observed")
+  else if (!moving.length)
+    failures.push(
+      `no drop-zone observation inside the ${restAfter}ms event rest window; ${timing.filter((entry) => entry.deliveryLagMs >= restAfter).length} delayed deliveries, ${timing.filter((entry) => entry.observationLagMs >= restAfter).length} delayed observations (model decision time unobserved)`,
+    )
+  if (moving.some((entry) => vertical.test(entry.said)))
+    failures.push(
+      `moving sweep picked a vertical zone: ${moving.map((e) => e.said).join(" → ")}`,
+    )
+  return { timing, moving, failures }
 }
 
 /**
@@ -586,7 +655,41 @@ export function flatSurfaceFailures(page) {
         )
           failures.push(`a column hairline at ${l.middle} is not mid-gutter`)
       }
+      const rowGutters = panes.flatMap((above) => {
+        const below = panes
+          .filter(
+            (p) =>
+              near(p.left, above.left) &&
+              near(p.right, above.right) &&
+              p.top >= above.bottom,
+          )
+          .sort((a, b) => a.top - b.top)[0]
+        return below
+          ? [
+              {
+                middle: (above.bottom + below.top) / 2,
+                start: Math.max(
+                  s.left,
+                  ...columns.map((c) => c.middle).filter((x) => x < above.left),
+                ),
+                end: Math.min(
+                  s.right,
+                  ...columns.map((c) => c.middle).filter((x) => x > above.right),
+                ),
+              },
+            ]
+          : []
+      })
       for (const l of lines.filter((l) => l.axis === "y")) {
+        if (
+          !rowGutters.some(
+            (g) =>
+              near(l.middle, g.middle) && near(l.start, g.start) && near(l.end, g.end),
+          )
+        )
+          failures.push(
+            `a row hairline at ${l.middle} is not mid-gutter between adjoining panes`,
+          )
         const meets = (x, sides) =>
           sides.some((side) => near(x, side)) || columns.some((c) => near(x, c.middle))
         if (!meets(l.start, [s.left]) || !meets(l.end, [s.right]))

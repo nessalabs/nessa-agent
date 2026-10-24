@@ -80,14 +80,6 @@
   transition: none;
 }
 
-/* The fold is only an attribute while the spare hold lasts. The bar stays
-   painted until the sidebar leaves the row with the new boxes. */
-.workspace[data-spare-held][data-sidebar="closed"]
-  .workspace-sidebar
-  .desktop-column-bar {
-  visibility: visible;
-}
-
 /* ——— Titlebar and icon buttons ——— */
 
 /* Above the sidebar even when it is revealed from the edge, so its toggle is always where it was. */
