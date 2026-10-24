@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   AGENT_CHOICES,
+  SETUP_AGENTS,
   agentChoice,
   agentReadiness,
   isChoosable,
@@ -195,19 +196,29 @@ describe("first-run setup", () => {
     expect(AGENT_CHOICES.every((choice) => choice.supported)).toBe(true)
   })
 
-  it("treats readiness as authoritative for every listed agent", () => {
-    // OpenCode is choosable because the current gateway observation said
-    // `ready`, by the same rule as the other two. The picker does not infer a
-    // credential or a provider entitlement of its own.
+  it("treats readiness as authoritative for every agent setup lists", () => {
+    // Codex is choosable because the current gateway observation said
+    // `ready`. The picker does not infer a credential or a provider
+    // entitlement of its own.
+    const picking = recordReadiness(startAgentChoice(beginOnboarding()), {
+      codex: "ready",
+    })
+    expect(agentReadiness(picking, "codex")).toBe("ready")
+    expect(chooseAgent(picking, "codex").agent).toBe("codex")
+    // A prior ready answer does not make an absent runtime pickable.
+    const missing = recordReadiness(picking, { codex: "not-installed" })
+    expect(chooseAgent(missing, "codex").agent).toBeUndefined()
+  })
+
+  it("does not take an agent setup does not offer, however ready it is", () => {
+    // OpenCode still runs here, so a machine set up on it keeps its name;
+    // new setups are not offered it.
     const picking = recordReadiness(startAgentChoice(beginOnboarding()), {
       opencode: "ready",
     })
     expect(agentChoice("opencode")?.supported).toBe(true)
-    expect(agentReadiness(picking, "opencode")).toBe("ready")
-    expect(chooseAgent(picking, "opencode").agent).toBe("opencode")
-    // A prior ready answer does not make an absent runtime pickable.
-    const missing = recordReadiness(picking, { opencode: "not-installed" })
-    expect(chooseAgent(missing, "opencode").agent).toBeUndefined()
+    expect(SETUP_AGENTS.map((choice) => choice.id)).toEqual(["claude", "codex"])
+    expect(chooseAgent(picking, "opencode").agent).toBeUndefined()
   })
 })
 

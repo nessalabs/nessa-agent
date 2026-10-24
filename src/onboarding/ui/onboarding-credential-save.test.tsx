@@ -46,8 +46,9 @@ afterEach(async () => {
 })
 
 describe("onboarding credential-save outcomes", () => {
-  it("offers the OpenCode key only through a usable gateway and discloses metered use", async () => {
+  it("offers a key only through a usable gateway, and none for an agent setup does not list", async () => {
     const state = recordReadiness(startAgentChoice(beginOnboarding()), {
+      claude: "needs-authentication",
       opencode: "needs-authentication",
     })
     const save = vi.fn(async () => ({ status: "saved" as const }))
@@ -72,31 +73,29 @@ describe("onboarding credential-save outcomes", () => {
     )
 
     await React.act(async () => root.render(view({ revision: 1, state: "ready" })))
-    expect(container.textContent).toContain(
-      "OpenCode connects through Zen using your API key. Depending on the configured model, messages may be metered.",
-    )
+    // OpenCode is not offered at setup, so neither is a key form for it.
+    expect(container.textContent).not.toContain("OpenCode")
+    expect(container.querySelectorAll("input")).toHaveLength(1)
     const input = container.querySelector("input") as HTMLInputElement
     const setter = Object.getOwnPropertyDescriptor(
       HTMLInputElement.prototype,
       "value",
     )?.set
     await React.act(async () => {
-      setter?.call(input, "opencode-private-value")
+      setter?.call(input, "claude-private-value")
       input.dispatchEvent(new Event("input", { bubbles: true }))
       container
         .querySelector("form")
         ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
     })
-    expect(save).toHaveBeenCalledWith("opencode", "opencode-private-value")
+    expect(save).toHaveBeenCalledWith("claude", "claude-private-value")
     expect(onRecheck).toHaveBeenCalledOnce()
-    expect(container.textContent).not.toContain("opencode-private-value")
+    expect(container.textContent).not.toContain("claude-private-value")
 
     await React.act(async () =>
       root.render(view({ revision: 2, state: "starting", step: "preparing" })),
     )
     expect(container.querySelector("input")).toBeNull()
-    // The metering note belongs to the key form, so it goes when the form does.
-    expect(container.textContent).not.toContain("messages may be metered")
 
     await React.act(async () => root.render(view({ revision: 3, state: "unmanaged" })))
     expect(container.querySelector("input")).not.toBeNull()

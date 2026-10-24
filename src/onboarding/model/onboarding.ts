@@ -60,6 +60,9 @@ export interface AgentChoice {
    * installed. That is a different thing from an adapter that cannot run yet,
    * and it is the only one that will not change by signing in. */
   supported: boolean
+  /** Whether first-run setup offers it. An agent can run here and still not be
+   * one setup puts in front of somebody new. */
+  offeredAtSetup: boolean
 }
 
 /** The agents offered at first run, in presentation order.
@@ -71,26 +74,36 @@ export interface AgentChoice {
  * adapter exists it is the only honest thing to say about it.
  *
  * OpenCode comes last because the order is the order someone reads, and the two
- * agents ahead of it are the ones a person is most likely to already have.
- * Its saved-key and metered-model requirements are shown beside that choice.
+ * agents ahead of it are the ones a person is most likely to already have. It
+ * is not offered at setup for now: Nessa is not supporting it for new setups,
+ * and setup shows a Local AI that is coming in its place. It stays listed here
+ * so a machine already set up on it keeps its name everywhere else.
  */
 export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
   Object.freeze({
     id: "claude" as const,
     name: "Claude",
     supported: true,
+    offeredAtSetup: true,
   }),
   Object.freeze({
     id: "codex" as const,
     name: "Codex",
     supported: true,
+    offeredAtSetup: true,
   }),
   Object.freeze({
     id: "opencode" as const,
     name: "OpenCode",
     supported: true,
+    offeredAtSetup: false,
   }),
 ])
+
+/** The agents first-run setup lists, in the same order. */
+export const SETUP_AGENTS: readonly AgentChoice[] = Object.freeze(
+  AGENT_CHOICES.filter((choice) => choice.offeredAtSetup),
+)
 
 /** Ordered first-run steps. `done` means the panel shows the conversation.
  *
@@ -249,11 +262,11 @@ export function startAgentChoice(state: OnboardingState): OnboardingState {
   return state.step === "welcome" ? { ...state, step: "agent" } : state
 }
 
-/** Record a selected agent. An unavailable or unknown agent is not selectable,
- * so the state is returned unchanged rather than storing a choice the runtime
- * cannot honour. */
+/** Record a selected agent. An unavailable or unknown agent, or one setup does
+ * not offer, is not selectable, so the state is returned unchanged rather than
+ * storing a choice the runtime cannot honour. */
 export function chooseAgent(state: OnboardingState, id: AgentId): OnboardingState {
-  if (state.step !== "agent") return state
+  if (state.step !== "agent" || !agentChoice(id)?.offeredAtSetup) return state
   return isChoosable(state, id) ? { ...state, agent: id } : state
 }
 

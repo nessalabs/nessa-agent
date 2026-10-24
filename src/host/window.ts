@@ -1050,6 +1050,25 @@ export async function finishSetupWindow(
 }
 
 /**
+ * Where the menu bar icon is, in this page's CSS pixels.
+ *
+ * The finished setup window flies into it. Undefined when there is nothing to
+ * aim at: no native host, no tray, or a system that does not say where its tray
+ * items are. The caller then picks a corner, so a failed ask is never an error.
+ */
+export async function setupTrayPoint(): Promise<{ x: number; y: number } | undefined> {
+  if (!inTauri) return undefined
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    return (
+      (await invoke<{ x: number; y: number } | null>("setup_tray_point")) ?? undefined
+    )
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Write setup off again, after a handoff whose write the host refused.
  *
  * The panel is already up, so this asks for the write and the close alone.

@@ -2,7 +2,7 @@ import type {
   AgentInstallations,
   InstallationOutcome,
 } from "../application/agent-installations"
-import { AGENT_CHOICES } from "../model/onboarding"
+import { AGENT_CHOICES, type AgentId } from "../model/onboarding"
 import { useAgentDownloads } from "./use-agent-downloads"
 import { AgentDownloadProgress } from "./agent-download-progress"
 
@@ -34,40 +34,46 @@ export function installationOutcomeText(
 
 export function AgentDownloadsView({
   offers,
+  agents,
   pending,
   outcome,
   unavailable,
   refresh,
   install,
-}: ReturnType<typeof useAgentDownloads>) {
+}: ReturnType<typeof useAgentDownloads> & {
+  /** Only these agents' downloads, when the surface lists fewer agents. */
+  agents?: readonly AgentId[]
+}) {
   return (
     <section aria-label="Agent downloads" className="flex flex-col gap-2">
       <p className="nessa-text-2 text-muted-foreground">
         Download only the agents you use. Your own account is still required.
       </p>
-      {offers?.map((offer) => (
-        <div
-          key={offer.agent}
-          className="flex items-center justify-between gap-2 nessa-text-2"
-        >
-          <span>{AGENT_CHOICES.find((choice) => choice.id === offer.agent)?.name}</span>
-          {offer.installed ? (
-            <span>Installed</span>
-          ) : (
-            <button
-              type="button"
-              aria-label={`Download ${AGENT_CHOICES.find((choice) => choice.id === offer.agent)?.name} · ${Math.ceil(offer.archiveBytes / 1_000_000)} MB`}
-              disabled={pending !== undefined}
-              onClick={() => install(offer.agent)}
-              className="rounded-full border border-border px-3 py-2 focus-visible:outline focus-visible:outline-ring disabled:opacity-60"
-            >
-              {pending === offer.agent
-                ? "Downloading…"
-                : `Download · ${Math.ceil(offer.archiveBytes / 1_000_000)} MB`}
-            </button>
-          )}
-        </div>
-      ))}
+      {offers
+        ?.filter((offer) => agents === undefined || agents.includes(offer.agent))
+        .map((offer) => (
+          <div
+            key={offer.agent}
+            className="flex items-center justify-between gap-2 nessa-text-2"
+          >
+            <span>{AGENT_CHOICES.find((choice) => choice.id === offer.agent)?.name}</span>
+            {offer.installed ? (
+              <span>Installed</span>
+            ) : (
+              <button
+                type="button"
+                aria-label={`Download ${AGENT_CHOICES.find((choice) => choice.id === offer.agent)?.name} · ${Math.ceil(offer.archiveBytes / 1_000_000)} MB`}
+                disabled={pending !== undefined}
+                onClick={() => install(offer.agent)}
+                className="rounded-full border border-border px-3 py-2 focus-visible:outline focus-visible:outline-ring disabled:opacity-60"
+              >
+                {pending === offer.agent
+                  ? "Downloading…"
+                  : `Download · ${Math.ceil(offer.archiveBytes / 1_000_000)} MB`}
+              </button>
+            )}
+          </div>
+        ))}
       <p role="status" aria-live="polite" className="nessa-text-2 text-muted-foreground">
         {pending ? (
           <AgentDownloadProgress
@@ -95,11 +101,14 @@ export function AgentDownloadsView({
 
 export function AgentDownloads({
   source,
+  agents,
   onChanged,
 }: {
   source: AgentInstallations
+  /** Only these agents' downloads, when the surface lists fewer agents. */
+  agents?: readonly AgentId[]
   onChanged?: () => void
 }) {
   const state = useAgentDownloads(source, onChanged)
-  return <AgentDownloadsView {...state} />
+  return <AgentDownloadsView {...state} agents={agents} />
 }
