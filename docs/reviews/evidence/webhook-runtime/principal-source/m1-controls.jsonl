@@ -1,0 +1,3 @@
+{"name": "original_permit", "test": "replaced_reply_lease_cannot_release_original_result_capacity", "exit": 101, "caught": true, "source_sha256": "cdc5d1d9439725577dddbdaafc97ca975eafdfad78c8e258f813fb37698dce78"}
+{"name": "physical_ownership", "test": "cancelled_principal_read_retains_actual_fences", "exit": 101, "caught": true, "source_sha256": "cdc5d1d9439725577dddbdaafc97ca975eafdfad78c8e258f813fb37698dce78"}
+{"name": "absolute_expiry", "test": "expiry_during_a_real_physical_read", "exit": 101, "caught": true, "source_sha256": "cdc5d1d9439725577dddbdaafc97ca975eafdfad78c8e258f813fb37698dce78"}

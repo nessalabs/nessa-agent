@@ -504,3 +504,13 @@ The loops are finite and the tests hold no connection guard across an await.
 These observations establish Linux completion, not Windows progress or absence
 of a Windows-specific I/O stall. Windows remains an open qualification blocker;
 no timeout, retention limit, assertion or durability flush was weakened.
+
+## Later published-head Windows failure
+
+Published cancellation head `d947da064be72322f4a8514bc5017eba865b84a6`, run40181752735,
+failed two explicit complete-retired-history cancellation tests before its Windows
+server job timed out. Bulk-reset and terminal retention later completed; only
+stop-retention was still unfinished at timeout. The [source evidence](../../../reviews/evidence/webhook-runtime/principal-source/README.md)
+retains exact names/times and the original log hash. The earlier timeout-only
+receipts above remain historical; they do not describe this later run. Windows
+qualification is still blocked, with an independent read-only diagnosis pending.

@@ -4,7 +4,7 @@ title: "Bounded physical history reads"
 kind: "operation"
 status: "mixed"
 summary: "An authorized reader can page through saved conversation records without starting an agent."
-sourceRevision: "ebe4f93e8dae4bbbdda9f571e8db57a03c0a8e59"
+sourceRevision: "85277a20a24ca5a0bb1bf8dcdb59593de3ec8577"
 parent: "gateway"
 sources:
   - "crates/nessa-server/src/product/socket.rs"
@@ -70,9 +70,11 @@ use paired-reader authority. Both entries use the existing tracked SDK worker,
 physical identity checks, discovery limits and source join. The receiver entry
 continues through its original opened-source validator.
 
-The actual credential and grant fences travel with the physical read lease.
+The actual credential and grant fences and original global permit share one
+application/physical owner. A reply that substitutes a different valid lease
+cannot replace or release that original ownership.
 Cancelling the waiter leaves those fences and capacity with the worker until
-physical cleanup completes. A normal bounded result retains the same fences;
+physical cleanup completes. A normal bounded result retains the same fences and original global permit;
 access checks absolute expiry again. No mutex guard crosses an await, and the
 worker does not acquire the result's inspection mutex. The application validates
 requested and returned selectors and uses the canonical sync page validator
@@ -89,19 +91,24 @@ these tests. A sender still requires independent current admission before POST.
 
 ## Source review checkpoint
 
-Reviewed source `ebe4f93e8dae4bbbdda9f571e8db57a03c0a8e59` against this page's
+Reviewed source `85277a20a24ca5a0bb1bf8dcdb59593de3ec8577` against this page's
 prior checkpoint and published cancellation head `d947da064`. The receiver
 record-read application/dispatch and client deadline fixture are unchanged;
 the shared physical operation now selects the original receiver validator or
 the explicit principal validator. The product socket's unrelated Auth-origin
 changes retain fresh session/Cedar admission and do not create a webhook session.
 
-Author checks passed204 webhook tests,12 canonical physical-reader tests, the
+Author checks passed205 webhook tests,12 canonical physical-reader tests, the
 receiver scope test, seven-package Clippy,108 architecture tests/check, formatting
 and diff checks. [Scoped evidence](../../../reviews/evidence/webhook-runtime/principal-source/README.md)
 distinguishes ten restored mutation controls before the consumer-ID correction,
 the failing/passing real outbox compatibility case, and initial fixture failures.
-Fresh independent ownership review is pending. Runtime mounting, share resolution,
+[Independent round one](../../../reviews/evidence/webhook-runtime/principal-source/review-1.md)
+found early capacity release when an adapter replaced its returned lease. The
+original global permit now shares the same owner as the fences; its regression
+failed before correction and passes afterward. Three affected controls catch
+substituted original permits, lost physical ownership and missing expiry checks.
+Fresh review of that correction is pending. Runtime mounting, share resolution,
 supervised source/sender ownership, recipient E2E and platform/browser qualification
 of this source remain open. The existing chart was not visually re-rendered; no
 Nessa Docs renderer checkout is available here. Unrelated state pages retain
