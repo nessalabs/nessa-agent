@@ -6,6 +6,7 @@
 import { act, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { ClockProvider } from "../../../clock"
 import type {
   LinkedDevicesConnection,
   LinkedDevicesGateway,
@@ -15,6 +16,9 @@ import { LinkedDevicesProvider, LinkedDevicesTab } from "./linked-devices-tab"
 
 let root: Root
 let host: HTMLDivElement
+// The window's injected clock, as composition gives it; a test moves it.
+let clockOffset = 0
+const now = () => Date.now() + clockOffset
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -29,6 +33,7 @@ beforeEach(() => {
       removeEventListener: () => {},
       dispatchEvent: () => false,
     })) as typeof window.matchMedia
+  clockOffset = 0
   host = document.createElement("div")
   document.body.append(host)
   root = createRoot(host)
@@ -113,7 +118,11 @@ function gateway(read: () => Promise<Outcome<ReadValue>>): LinkedDevicesGateway 
 
 async function mount(node: React.ReactNode) {
   await act(async () => {
-    root.render(<StrictMode>{node}</StrictMode>)
+    root.render(
+      <StrictMode>
+        <ClockProvider now={now}>{node}</ClockProvider>
+      </StrictMode>,
+    )
   })
 }
 
@@ -364,6 +373,48 @@ describe("Linked devices", () => {
     expect(document.activeElement?.hasAttribute("data-pairing-row")).toBe(true)
     await act(async () => answerRead?.())
     expect(document.activeElement?.getAttribute("data-linked-action")).toBe("pair")
+  })
+
+  it("a live code whose deadline the injected clock passes drops its orb", async () => {
+    let reads = 0
+    const gate = gateway(async () => {
+      reads += 1
+      return {
+        ok: true,
+        value: {
+          kind: "on",
+          enrollments:
+            reads === 1
+              ? []
+              : [
+                  {
+                    invitationId: "00112233445566778899aabbccddeeff",
+                    phase: "available",
+                    expiresAtMs: Date.now() + 60_000,
+                  },
+                ],
+          devices: [],
+        },
+      }
+    })
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
+    )
+    const dialog = () => document.querySelector("[data-slot='dialog']")
+    expect(dialog()?.querySelectorAll("[data-slot='signal-orb']")).toHaveLength(1)
+    // Only the window's clock moves past the 60 s deadline; the next second's
+    // tick reads it and the orb goes, with the code still drawn.
+    clockOffset = 61_000
+    await act(async () => new Promise((done) => setTimeout(done, 1_100)))
+    expect(dialog()?.querySelector("[data-slot='signal-orb']")).toBeNull()
+    expect(dialog()?.querySelector("[data-slot='pairing-code-value']")?.textContent).toBe(
+      "ABCD2345",
+    )
   })
 
   it("a failed New code is said in the modal, and an expired code draws no orb", async () => {

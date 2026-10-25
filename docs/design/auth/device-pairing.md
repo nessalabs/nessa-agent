@@ -2254,9 +2254,9 @@ already saved either way.
 | L2 | Read answers linking off | Switch off and enabled, no config hint, no pair | `linked-devices.test.ts`; `linked-devices-gateway.test.ts`; `linked-devices.mjs` `off` |
 | L3 | Read answers refused | Recover-owner sentence, no devices, no pair | `linked-devices.test.ts`; `linked-devices.mjs` `refused` |
 | L4 | Linking on, nothing open | Pair a device | `linked-devices.test.ts` |
-| L5 | Create answers with a code | Code once, both orbs, Cancel focused once it can be used | `linked-devices.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `pair` |
+| L5 | Create answers with a code | The code opens in a modal inside Settings: the code once, one live signal orb (no QR orb), New code and Cancel; the page's row no longer offers Pair a device and draws no code | `linked-devices.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `pair` |
 | L6 | Create answers slot occupied | No new code; the open one can be cancelled | `linked-devices.test.ts` |
-| L7 | Cancel answers | Code cleared | `linked-devices.test.ts`; `linked-devices.mjs` `pair` |
+| L7 | Cancel answers | Code cleared; the modal closes and focus goes to Pair a device once it can be used (on the row while the read is out) | `linked-devices.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `pair` |
 | L8 | Refresh | Cancel then create; a failed cancel does not create; a failed create clears the code | `linked-devices.test.ts`; `linked-devices-gateway.test.ts` |
 | L9 | Create is not answered, then an available invitation is read | No code; the open invitation says the code was not shown | `linked-devices.test.ts` |
 | L10 | A device has claimed | Fingerprint, Approve, Deny | `linked-devices.test.ts` |
@@ -2275,3 +2275,6 @@ already saved either way.
 | L23 | The switch is flipped and `pairing.setLinking` answers restarting | The switch holds the new value, polls stop, and the "cannot reach" sentence is not shown, until a read after the connection drops says where linking stands | `linked-devices.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `toggle`; `conversation-stress.mjs` `linking` |
 | L24 | The answer is lost to the restart, or the gateway is not back within the switch's wait | A lost answer holds the switch as restarting does; past the wait the switch shows the gateway's last state and says the change is saved (or, for a lost answer, only that the gateway has not answered), until the gateway answers again. A wait ending while the returned gateway's read is out leaves that read to answer | `linked-devices.test.ts`; `linked-devices-tab.test.tsx` |
 | L25 | `pairing.setLinking` is refused (address in use, busy, unavailable, audit) or answers unchanged | A refusal is said under the switch; either way the switch shows the gateway's state, read again | `linked-devices.test.ts` |
+| L26 | The modal is closed (Escape or its close button) with the code still open | The code stays open; the row says so and offers Show code, which takes focus and reopens the same code. Closing is view state only and sends nothing | `linked-devices-tab.test.tsx`; `linked-devices.mjs` `pair`; `conversation-stress.mjs` `linking` |
+| L27 | The window's injected clock passes an open code's deadline, or a code is shown already past it | No orb is drawn; the code says expired | `linked-devices-tab.test.tsx`; `linked-devices.mjs` `expired` |
+| L28 | A device uses the code while the modal is up | Its fingerprint, Approve and Deny are in the modal, not again on the page; a notice is said in the modal while it is up | `linked-devices-tab.test.tsx` |

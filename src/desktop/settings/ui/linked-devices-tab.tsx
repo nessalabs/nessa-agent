@@ -24,6 +24,7 @@ import { PairingCode } from "@nessa-ui/react/pairing-code"
 import { SettingsGroup, SettingsRow } from "@nessa-ui/react/settings-group"
 import { SignalOrb } from "@nessa-ui/react/signal-orb"
 import { Switch } from "@nessa-ui/react/switch"
+import { useNow } from "../../../clock"
 import { linkedOn } from "../../model/linked-device"
 import type { LinkedDevicesGateway } from "../adapters/linked-devices-gateway"
 import {
@@ -443,11 +444,15 @@ function PairingDialog({
   // The code whose clock ran out here. Until the gateway records it the
   // reducer still calls it open, but a spent code draws no orb to scan.
   const [expired, setExpired] = useState<string | null>(null)
+  // The window's injected clock, read again each second while the modal is
+  // up, so a code that crosses its deadline drops its orb at the deadline
+  // tick even when the kit's own countdown has not reported it yet.
+  const now = useNow(1_000)
   const symbols = shown ? pairingSymbols(shown.code) : ""
   const live =
     shown !== null &&
     shown.state === "open" &&
-    shown.expiresAtMs > Date.now() &&
+    shown.expiresAtMs > now &&
     expired !== shown.invitationId
   const waiting = shown
     ? state.waiting.filter((device) => device.invitationId === shown.invitationId)
