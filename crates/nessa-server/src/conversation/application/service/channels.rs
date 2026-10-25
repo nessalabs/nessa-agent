@@ -438,7 +438,7 @@ impl ConversationService {
     }
 
     /// The stored channel `id` is in; `None` is the default one.
-    pub(super) async fn channel_id_of(
+    pub(crate) async fn channel_id_of(
         &self,
         id: &ConversationId,
     ) -> Result<Option<ChannelId>, ConversationError> {

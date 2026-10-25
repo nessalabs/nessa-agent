@@ -30,6 +30,8 @@ export {
   type IssueCredentialResult,
   type ServerApi,
   type WorkspaceApi,
+  type ChannelApi,
+  channelRefusal,
   type AgentsApi,
   type RecordReadApi,
   type AgentsSubscriptionHandlers,
@@ -434,6 +436,12 @@ export type {
   ConversationEvents,
   ConversationMessageReceipt,
 } from "./generated/product.js"
+export type {
+  Channel,
+  ChannelCreateParams,
+  ChannelListResult,
+} from "./generated/product.js"
+export { ChannelErrorCode } from "./generated/product.js"
 export type {
   WorkspaceArrangement,
   WorkspaceColumn,

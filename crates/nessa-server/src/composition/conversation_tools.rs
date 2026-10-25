@@ -381,6 +381,15 @@ async fn run(
                 .await
                 .map_err(code)?;
             let storage = service.commands().ok_or("command_unavailable")?;
+            // A thread an agent starts here works where its own conversation
+            // does: in the same channel, unless it runs on another host.
+            let channel = match args.environment {
+                Some(_) => None,
+                None => service
+                    .channel_id_of(source.conversation())
+                    .await
+                    .map_err(code)?,
+            };
             let receipt = service
                 .create_command(
                     storage,
@@ -391,7 +400,7 @@ async fn run(
                         model: args.model,
                         approval_mode: None,
                         environment: args.environment,
-                        channel: None,
+                        channel,
                     },
                 )
                 .await

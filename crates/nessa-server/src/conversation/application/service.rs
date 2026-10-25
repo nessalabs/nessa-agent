@@ -5961,8 +5961,18 @@ impl ConversationService {
         // other: the tombstone is written, so the delete happened and is
         // answered unfinished (`conversation_erasure_incomplete`), not as
         // the command failing (`a_slot_freed_by_an_ask_that_panicked_still_wakes_those_waiting`).
+        // A conversation in a channel kept its session where its agent
+        // worked: the channel's folder.
+        let place = self
+            .agent_place(record.id())
+            .await
+            .map_err(AskFailure::Failed)?;
         let asked = async {
-            match AssertUnwindSafe(eraser.erase(session)).catch_unwind().await {
+            let erasing = match place {
+                Some(place) => eraser.erase_in(session, place),
+                None => eraser.erase(session),
+            };
+            match AssertUnwindSafe(erasing).catch_unwind().await {
                 Ok(erased) => erased,
                 Err(payload) => {
                     mem::forget(payload);

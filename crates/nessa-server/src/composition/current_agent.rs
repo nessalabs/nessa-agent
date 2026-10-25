@@ -793,6 +793,41 @@ impl CurrentAgentEraser {
             launched: crate::conversation::infrastructure::LaunchedDeletions::default(),
         }
     }
+
+    /// Build the current binding of this agent, as `resolver` builds it, and
+    /// ask it to delete `session`.
+    async fn erase_with(
+        &self,
+        resolver: Arc<CurrentAgentResolver>,
+        session: nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId,
+    ) -> Result<ProviderSessionErasure, ConversationError> {
+        let agent = self.agent;
+        let permit = resolver
+            .slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| ConversationError::Unavailable)?;
+        let eraser = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            if agent == AgentId::Opencode {
+                resolver.opencode_session_eraser()
+            } else {
+                let runtime = resolver
+                    .config
+                    .runtime(agent)
+                    .ok_or(ConversationError::AgentNotConfigured)?;
+                resolver
+                    .managed_provider(agent, &runtime.model, ApprovalMode::Ask)
+                    .map(|built| built.map(|value| value.session_eraser))
+            }
+        })
+        .await
+        .map_err(|_| ConversationError::Unavailable)??
+        .ok_or(ConversationError::AgentNotConfigured)?;
+        self.launched.push(eraser.clone());
+        eraser.erase(session).await
+    }
 }
 
 impl ProviderSessionEraser for CurrentAgentEraser {
@@ -800,35 +835,15 @@ impl ProviderSessionEraser for CurrentAgentEraser {
         &self,
         session: nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId,
     ) -> ConversationFuture<'_, ProviderSessionErasure> {
-        Box::pin(async move {
-            let agent = self.agent;
-            let resolver = self.resolver.clone();
-            let permit = resolver
-                .slots
-                .clone()
-                .acquire_owned()
-                .await
-                .map_err(|_| ConversationError::Unavailable)?;
-            let eraser = tokio::task::spawn_blocking(move || {
-                let _permit = permit;
-                if agent == AgentId::Opencode {
-                    resolver.opencode_session_eraser()
-                } else {
-                    let runtime = resolver
-                        .config
-                        .runtime(agent)
-                        .ok_or(ConversationError::AgentNotConfigured)?;
-                    resolver
-                        .managed_provider(agent, &runtime.model, ApprovalMode::Ask)
-                        .map(|built| built.map(|value| value.session_eraser))
-                }
-            })
-            .await
-            .map_err(|_| ConversationError::Unavailable)??
-            .ok_or(ConversationError::AgentNotConfigured)?;
-            self.launched.push(eraser.clone());
-            eraser.erase(session).await
-        })
+        Box::pin(self.erase_with(self.resolver.clone(), session))
+    }
+    fn erase_in(
+        &self,
+        session: nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId,
+        place: AgentPlace,
+    ) -> ConversationFuture<'_, ProviderSessionErasure> {
+        let placed = Arc::new(self.resolver.placed(&place));
+        Box::pin(self.erase_with(placed, session))
     }
     fn settled(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
         Box::pin(self.launched.settled())
