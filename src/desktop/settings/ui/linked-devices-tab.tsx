@@ -210,15 +210,25 @@ function ManagedDevices({
   // While the read after a cancel is out, the row's buttons rest disabled
   // and cannot take focus: it waits on the row itself, then moves to the
   // control once one can be used.
+  const parked = useRef(false)
   const returnFocus = () => {
     const row = page.current?.querySelector<HTMLElement>("[data-pairing-row]")
     const control = row?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+    parked.current = !control
     ;(control ?? row)?.focus()
   }
   useEffect(() => {
+    if (!parked.current) return
     const row = page.current?.querySelector<HTMLElement>("[data-pairing-row]")
-    if (!row || row.ownerDocument.activeElement !== row) return
-    row.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus()
+    // Focus that has moved on since is the person's; leave it.
+    if (!row || row.ownerDocument.activeElement !== row) {
+      parked.current = false
+      return
+    }
+    const control = row.querySelector<HTMLButtonElement>("button:not(:disabled)")
+    if (!control) return
+    parked.current = false
+    control.focus()
   })
   const phase =
     state.connection === "unreachable" && state.linking === "unknown"
