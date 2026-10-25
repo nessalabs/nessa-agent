@@ -83,6 +83,37 @@ it("names each state the gateway answers", async () => {
   })
 })
 
+it("says when a sign-out, or a failed one, is not on record", async () => {
+  const kept = over(() =>
+    Promise.resolve({
+      state: "connected",
+      account: { id: 7, login: "octo" },
+      unrecorded: true,
+      installUrl,
+    }),
+  )
+  expect(await kept.read()).toEqual({
+    ok: true,
+    view: {
+      kind: "connected",
+      login: "octo",
+      unrecorded: "Nessa couldn't record this in its audit log.",
+      installUrl,
+    },
+  })
+  const gone = over(() =>
+    Promise.resolve({ state: "signed_out", unrecorded: true, installUrl }),
+  )
+  expect(await gone.read()).toEqual({
+    ok: true,
+    view: {
+      kind: "signedOut",
+      ended: "Nessa couldn't record this in its audit log.",
+      installUrl,
+    },
+  })
+})
+
 it("gives a refusal its sentence, and a lost answer one of its own", async () => {
   const refused = over(() =>
     Promise.reject(

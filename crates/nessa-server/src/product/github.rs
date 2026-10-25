@@ -106,7 +106,11 @@ pub(super) fn connection(status: GithubStatus, install_url: &str) -> GithubConne
                 expires_in_seconds,
             });
         }
-        GithubStatus::Connected { account } => {
+        GithubStatus::Connected {
+            account,
+            unrecorded,
+        } => {
+            wire.unrecorded = unrecorded.then_some(true);
             wire.state = GithubConnectState::Connected;
             wire.account = Some(GithubAccount {
                 id: account.id,

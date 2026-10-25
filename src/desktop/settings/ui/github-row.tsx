@@ -217,7 +217,12 @@ export function GithubRow() {
           setting="github"
           found={found}
           label={entry.label}
-          detail={failed ?? `Signed in as @${view.login}. ${revocation}`}
+          detail={
+            failed ??
+            [`Signed in as @${view.login}.`, view.unrecorded, revocation]
+              .filter(Boolean)
+              .join(" ")
+          }
           data-github-state="connected"
           control={
             <span className="linked-actions">

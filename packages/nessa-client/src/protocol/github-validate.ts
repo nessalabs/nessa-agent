@@ -77,8 +77,11 @@ export function githubConnection(value: unknown): GithubConnection {
   if (present("last") && state !== GithubConnectState.SignedOut) invalid("last")
   const last = present("last") ? member(GithubConnectEnd, own(item, "last")) : undefined
   if (present("last") && !last) invalid("last")
-  // Only ever `true`, and only beside the end it is about.
-  if (present("unrecorded") && (own(item, "unrecorded") !== true || !last))
+  // Only ever `true`, and never while a code is showing.
+  if (
+    present("unrecorded") &&
+    (own(item, "unrecorded") !== true || state === GithubConnectState.Connecting)
+  )
     invalid("unrecorded")
   return {
     state,

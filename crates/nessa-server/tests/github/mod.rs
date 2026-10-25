@@ -267,7 +267,10 @@ fn unrecorded(end: ConnectEnd) -> GithubStatus {
 }
 
 fn connected() -> GithubStatus {
-    GithubStatus::Connected { account: octo() }
+    GithubStatus::Connected {
+        account: octo(),
+        unrecorded: false,
+    }
 }
 
 #[tokio::test]
@@ -733,6 +736,48 @@ async fn a_disconnect_that_cannot_be_recorded_or_deleted_keeps_the_sign_in() {
             GithubAuditEvent::DisconnectFailed
         ]
     );
+}
+
+#[tokio::test]
+async fn a_failed_disconnect_the_audit_refuses_keeps_the_sign_in_and_says_so() {
+    let fixture = Fixture::new();
+    let connections = signed_in(&fixture).await;
+    *fixture.audit.refuse.lock().unwrap() =
+        Some(|event| matches!(event, GithubAuditEvent::DisconnectFailed));
+    *fixture.store.unwritable.lock().unwrap() = true;
+    assert_eq!(
+        connections.disconnect(caller("panel")).await,
+        Err(GithubError::StoreUnavailable)
+    );
+    assert_eq!(
+        connections.status(),
+        GithubStatus::Connected {
+            account: octo(),
+            unrecorded: true,
+        }
+    );
+    assert_eq!(connections.token(), Some(token("ghu_kept")));
+}
+
+#[tokio::test]
+async fn a_disconnect_the_audit_refuses_still_signs_out_and_says_so() {
+    let fixture = Fixture::new();
+    let connections = signed_in(&fixture).await;
+    *fixture.audit.refuse.lock().unwrap() =
+        Some(|event| matches!(event, GithubAuditEvent::Disconnected));
+    assert_eq!(
+        connections.disconnect(caller("panel")).await,
+        Err(GithubError::AuditUnavailable)
+    );
+    assert_eq!(
+        connections.status(),
+        GithubStatus::SignedOut {
+            last: None,
+            unrecorded: true,
+        }
+    );
+    assert_eq!(connections.token(), None);
+    assert_eq!(fixture.store.held.lock().unwrap().clone(), None);
 }
 
 #[tokio::test]

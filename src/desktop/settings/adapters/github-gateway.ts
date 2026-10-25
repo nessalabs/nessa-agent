@@ -77,6 +77,7 @@ export function viewOf(connection: GithubConnection): GithubView {
       return {
         kind: "connected",
         login: connection.account?.login ?? "",
+        ...(connection.unrecorded ? { unrecorded } : {}),
         installUrl: connection.installUrl,
       }
     case "connecting":
@@ -90,11 +91,13 @@ export function viewOf(connection: GithubConnection): GithubView {
     case "signed_out":
       return {
         kind: "signedOut",
-        ended: connection.last
-          ? connection.unrecorded
-            ? `${endedBecause[connection.last]} ${unrecorded}`
-            : endedBecause[connection.last]
-          : undefined,
+        ended:
+          [
+            connection.last ? endedBecause[connection.last] : undefined,
+            connection.unrecorded ? unrecorded : undefined,
+          ]
+            .filter(Boolean)
+            .join(" ") || undefined,
         installUrl: connection.installUrl,
       }
   }

@@ -14,7 +14,13 @@ export type GithubView =
       readonly expiresInSeconds: number
       readonly installUrl: string
     }
-  | { readonly kind: "connected"; readonly login: string; readonly installUrl: string }
+  | {
+      readonly kind: "connected"
+      readonly login: string
+      /** Said when a failed sign-out is not on the gateway's record. */
+      readonly unrecorded?: string
+      readonly installUrl: string
+    }
 
 /** One answer, or the sentence for why there was none. */
 export type GithubOutcome =

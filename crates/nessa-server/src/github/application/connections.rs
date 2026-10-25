@@ -55,7 +55,11 @@ enum State {
         unrecorded: bool,
     },
     Connecting(Attempt),
-    Connected(GithubSignIn),
+    Connected {
+        sign_in: GithubSignIn,
+        /// A failed sign-out of it is not in the audit.
+        unrecorded: bool,
+    },
 }
 
 impl State {
@@ -89,7 +93,10 @@ impl GithubConnections {
         timer: Arc<dyn Timer>,
     ) -> Self {
         let state = match store.load().await {
-            Ok(Some(sign_in)) => State::Connected(sign_in),
+            Ok(Some(sign_in)) => State::Connected {
+                sign_in,
+                unrecorded: false,
+            },
             Ok(None) => State::signed_out(None),
             Err(_) => {
                 tracing::error!("the GitHub sign-in could not be read; signed out this run");
@@ -116,7 +123,7 @@ impl GithubConnections {
     /// The token agents are given now, when signed in.
     pub fn token(&self) -> Option<AccessToken> {
         match &*self.inner.state.lock().unwrap() {
-            State::Connected(sign_in) => Some(sign_in.token.clone()),
+            State::Connected { sign_in, .. } => Some(sign_in.token.clone()),
             _ => None,
         }
     }
@@ -204,7 +211,7 @@ impl GithubConnections {
         let _change = inner.changes.lock().await;
         // Read, then let go of the state before answering from it.
         let held = match &*inner.state.lock().unwrap() {
-            State::Connected(sign_in) => Held::SignedIn(sign_in.account.clone()),
+            State::Connected { sign_in, .. } => Held::SignedIn(sign_in.account.clone()),
             State::Connecting(_) => Held::Waiting,
             State::SignedOut { .. } => Held::Nothing,
         };
@@ -235,6 +242,8 @@ impl GithubConnections {
             .await
             .map_err(|_| GithubError::AuditUnavailable)?;
         if inner.store.delete().await.is_err() {
+            // Still signed in, and refused for that; a failure the audit
+            // will not keep either is said by the status too.
             if inner
                 .audit
                 .record(&record(GithubAuditEvent::DisconnectFailed))
@@ -242,15 +251,26 @@ impl GithubConnections {
                 .is_err()
             {
                 tracing::error!("a failed GitHub sign-out could not be recorded");
+                if let State::Connected { unrecorded, .. } = &mut *inner.state.lock().unwrap() {
+                    *unrecorded = true;
+                }
             }
             return Err(GithubError::StoreUnavailable);
         }
         *inner.state.lock().unwrap() = State::signed_out(None);
-        inner
+        if inner
             .audit
             .record(&record(GithubAuditEvent::Disconnected))
             .await
-            .map_err(|_| GithubError::AuditUnavailable)?;
+            .is_err()
+        {
+            // Signed out all the same: the token is gone.
+            *inner.state.lock().unwrap() = State::SignedOut {
+                last: None,
+                unrecorded: true,
+            };
+            return Err(GithubError::AuditUnavailable);
+        }
         Ok(inner.status())
     }
 }
@@ -274,8 +294,12 @@ impl Inner {
                 verification_uri: attempt.verification_uri.clone(),
                 expires_in_seconds: attempt.expires_at.since(self.timer.now()).as_secs(),
             },
-            State::Connected(sign_in) => GithubStatus::Connected {
+            State::Connected {
+                sign_in,
+                unrecorded,
+            } => GithubStatus::Connected {
                 account: sign_in.account.clone(),
+                unrecorded: *unrecorded,
             },
         }
     }
@@ -401,7 +425,10 @@ impl Inner {
             };
             return;
         }
-        *self.state.lock().unwrap() = State::Connected(sign_in);
+        *self.state.lock().unwrap() = State::Connected {
+            sign_in,
+            unrecorded: false,
+        };
     }
 }
 

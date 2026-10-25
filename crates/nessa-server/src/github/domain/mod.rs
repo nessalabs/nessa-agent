@@ -63,8 +63,8 @@ pub enum ConnectEnd {
 pub enum GithubStatus {
     /// Not signed in. `last` is why the latest attempt ended, until another
     /// starts; `None` when there was none or it was disconnected.
-    /// `unrecorded` when that end could not be kept in the audit: the cause
-    /// stands, and the missing record is said beside it.
+    /// `unrecorded` when that end (or a sign-out) could not be kept in the
+    /// audit: what happened stands, and the missing record is said beside it.
     SignedOut {
         last: Option<ConnectEnd>,
         unrecorded: bool,
@@ -77,5 +77,10 @@ pub enum GithubStatus {
         expires_in_seconds: u64,
     },
     /// Signed in as `account`.
-    Connected { account: GithubAccount },
+    /// Signed in. `unrecorded` when a sign-out failed and that failure could
+    /// not be kept in the audit either.
+    Connected {
+        account: GithubAccount,
+        unrecorded: bool,
+    },
 }

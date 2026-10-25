@@ -2499,7 +2499,7 @@ export interface GithubConnection {
   code?: GithubCode
   /** When signed out: why the latest sign-in ended, until another starts. Absent when there was none, or after a disconnect. */
   last?: GithubConnectEnd
-  /** Present only with last: the gateway could not keep that end in its audit. The end still stands. Absent when it is on record, and with last audit_unavailable, which already says so. */
+  /** The gateway could not keep the last change in its audit, and that change still stands. With last: how the attempt ended. Connected: a sign-out that failed. Signed out with no last: the sign-out. Absent when it is on record, and with last audit_unavailable, which already says so. */
   unrecorded?: true
   /** Where the person chooses the repositories the Nessa app may use. A token reaches only those. */
   installUrl: string

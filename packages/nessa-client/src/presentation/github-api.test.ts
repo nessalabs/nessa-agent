@@ -46,6 +46,18 @@ describe("client.github", () => {
       last: "cancelled",
       unrecorded: true,
     })
+    // A sign-out, or a failed one, the audit could not keep.
+    for (const shape of [
+      { state: "signed_out", installUrl, unrecorded: true },
+      {
+        state: "connected",
+        installUrl,
+        account: { id: 7, login: "octo" },
+        unrecorded: true,
+      },
+    ]) {
+      expect(await session(() => shape).api.status()).toEqual(shape)
+    }
     expect(calls).toEqual([
       { method: "github.connect", params: {} },
       { method: "github.status", params: {} },
@@ -61,7 +73,16 @@ describe("client.github", () => {
       { state: "signed_out", installUrl, account: { id: 1, login: "x" } },
       { state: "connected", installUrl, account: { id: 1, login: "x" }, last: "denied" },
       { state: "signed_out", installUrl, last: "later" },
-      { state: "signed_out", installUrl, unrecorded: true },
+      {
+        state: "connecting",
+        installUrl,
+        code: {
+          userCode: "A",
+          verificationUri: "https://github.com/login/device",
+          expiresInSeconds: 1,
+        },
+        unrecorded: true,
+      },
       { state: "signed_out", installUrl, last: "denied", unrecorded: false },
       { state: "waiting", installUrl },
       { state: "signed_out" },
