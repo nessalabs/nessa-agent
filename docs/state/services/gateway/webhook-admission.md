@@ -4,7 +4,7 @@ title: Outbound webhook admission
 kind: feature
 status: mixed
 summary: Inner registered-principal shares and credential/grant fences use current authority; product command and delivery-worker mounting remain uncomposed.
-sourceRevision: "36edb8e300f5ec8c29923dfd619d310c1ee43e41"
+sourceRevision: "f990b7dfb547974c739891e2c48f9c2ac4c66a66"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/ports.rs
@@ -127,10 +127,17 @@ conversation ownership again, and its original request/revision semantics remain
 | physical grant policy panics | joined Metadata failure, rollback/no grant, actual Auth released after unwind |
 | later unshare, expiry or revocation | subsequent source/send admission checks current authority and epoch again |
 
-The credential-owning grant operation fails closed on unsupported adapters. Its
+The grant-only operation fails closed on unsupported adapters. It accepts the
+resource, access, revision and actor/time plus the actual Auth hold; native code
+derives the credential/principal and constructs a receiver-absent Grant. Its
 native path retains Auth before the principal gate and metadata connection,
 without acquiring the ownership wrapper's mutex. Each physical retry owns the
 same original Auth fence. Ordinary receiver changes keep their existing path.
+The actual transaction refuses a receiver-bearing live row before any replay
+acknowledgement or fresh write. Receiver-bearing original journal evidence is
+also refused after unshare. A valid receiver-absent original receipt still
+replays after unshare without recreating the grant. Ordinary paired omission
+continues to mean keep/lost reply. Refusal preserves the original row/journal.
 Holding a mutation fence does not freeze expiry: lifetime is rechecked before
 grant handoff, and source/send admission independently refuses an expired
 credential even if historical grant metadata exists.
@@ -143,12 +150,16 @@ were traced together. This does not re-audit unrelated issuance/session behavior
 or advance their state pages. The admission diagram bytes are unchanged; no new
 renderer or browser qualification is claimed.
 
-Final author checks at36edb8e:217 webhook tests (eleven new share cases),94
+Final author checks atf990b7df:220 webhook tests (fourteen new share cases),98
 share-selected adjacent tests, the unchanged paired-grant cancellation case,
-seven-package Clippy, formatting and architecture passed. [Seven caught and
-restored controls](../../../reviews/evidence/webhook-runtime/principal-source/share-controls.jsonl)
-cover permission, identity, expiry and actual physical Auth ownership. The
+seven-package Clippy, formatting and architecture passed. [Initial caught and restored controls](../../../reviews/evidence/webhook-runtime/principal-source/share-controls.jsonl)
+cover the unchanged application permission/expiry prefix.
+[Seven fresh M1 controls](../../../reviews/evidence/webhook-runtime/principal-source/share-m1-controls.jsonl)
+cover current/historical receiver evidence, exact grant construction and actual
+physical Auth ownership. Round1
+[reported the false receiver acknowledgement](../../../reviews/evidence/webhook-runtime/principal-source/share-review-1.md);
+the native regression failed before this correction and passed afterward. The
 positive share reads a genuine synthetic SDK source. [Evidence](../../../reviews/evidence/webhook-runtime/principal-source/README.md)
 keeps failed fixture attempts, original CI failures and remaining gates.
 This inner share path is not mounted command ownership, source-feed supervision,
-sending, or recipient E2E. Independent review and exact-head CI remain required.
+sending, or recipient E2E. Fresh round2 and exact-head CI remain required.
