@@ -107,6 +107,8 @@ struct MemoryStore {
     held: Mutex<Option<GithubSignIn>>,
     unreadable: Mutex<bool>,
     unwritable: Mutex<bool>,
+    /// A save writes the file, then fails (its directory not synced).
+    fails_after_writing: Mutex<bool>,
 }
 
 #[async_trait]
@@ -122,6 +124,9 @@ impl GithubTokenStore for MemoryStore {
             return Err(StoreUnavailable);
         }
         *self.held.lock().unwrap() = Some(sign_in.clone());
+        if *self.fails_after_writing.lock().unwrap() {
+            return Err(StoreUnavailable);
+        }
         Ok(())
     }
     async fn delete(&self) -> Result<(), StoreUnavailable> {
@@ -247,7 +252,18 @@ impl Fixture {
 }
 
 fn signed_out(last: Option<ConnectEnd>) -> GithubStatus {
-    GithubStatus::SignedOut { last }
+    GithubStatus::SignedOut {
+        last,
+        unrecorded: false,
+    }
+}
+
+/// Signed out by `end`, which the audit refused to keep.
+fn unrecorded(end: ConnectEnd) -> GithubStatus {
+    GithubStatus::SignedOut {
+        last: Some(end),
+        unrecorded: true,
+    }
 }
 
 fn connected() -> GithubStatus {
@@ -397,6 +413,84 @@ async fn a_refusal_an_expiry_or_a_refused_app_ends_the_attempt_signed_out() {
 }
 
 #[tokio::test]
+async fn an_end_the_audit_refuses_still_ends_the_attempt_and_says_so() {
+    for (answer, end) in [
+        (Ok(PollAnswer::Denied), ConnectEnd::Denied),
+        (Err(ApiFailure::Rejected), ConnectEnd::Rejected),
+    ] {
+        let fixture = Fixture::new();
+        *fixture.audit.refuse.lock().unwrap() =
+            Some(|event| matches!(event, GithubAuditEvent::ConnectEnded(_)));
+        let connections = fixture.connections().await;
+        connections.connect(caller("panel")).await.unwrap();
+        fixture.github.answer([answer]);
+        fixture.next_poll().await;
+        // The cause stands, and the status says it is not on record.
+        fixture
+            .settled(&connections, |status| *status == unrecorded(end))
+            .await;
+        assert_eq!(connections.token(), None);
+    }
+    // A cancel the audit refuses still stops the code, refuses, and says so.
+    let fixture = Fixture::new();
+    *fixture.audit.refuse.lock().unwrap() =
+        Some(|event| matches!(event, GithubAuditEvent::ConnectCancelled { .. }));
+    let connections = fixture.connections().await;
+    connections.connect(caller("panel")).await.unwrap();
+    assert_eq!(
+        connections.cancel(caller("panel")).await,
+        Err(GithubError::AuditUnavailable)
+    );
+    assert_eq!(connections.status(), unrecorded(ConnectEnd::Cancelled));
+}
+
+#[tokio::test]
+async fn a_token_written_before_its_save_failed_is_deleted_and_never_held_again() {
+    let fixture = Fixture::new();
+    *fixture.store.fails_after_writing.lock().unwrap() = true;
+    let connections = fixture.connections().await;
+    connections.connect(caller("panel")).await.unwrap();
+    fixture
+        .github
+        .answer([Ok(PollAnswer::Granted(token("ghu_x")))]);
+    fixture.next_poll().await;
+    fixture
+        .settled(&connections, |status| {
+            *status == signed_out(Some(ConnectEnd::StoreUnavailable))
+        })
+        .await;
+    assert_eq!(fixture.store.held.lock().unwrap().clone(), None, "deleted");
+    // The next start does not find it.
+    assert_eq!(fixture.connections().await.token(), None);
+}
+
+#[tokio::test]
+async fn a_disconnect_while_signed_out_deletes_a_stray_token() {
+    let fixture = Fixture::new();
+    let connections = fixture.connections().await;
+    // A token the owner does not hold, left on disk by an earlier failure.
+    *fixture.store.held.lock().unwrap() = Some(GithubSignIn {
+        account: octo(),
+        token: token("ghu_stray"),
+    });
+    assert_eq!(
+        connections.disconnect(caller("panel")).await,
+        Ok(signed_out(None))
+    );
+    assert_eq!(fixture.store.held.lock().unwrap().clone(), None);
+    // One that cannot be deleted is refused, as a held one's would be.
+    *fixture.store.held.lock().unwrap() = Some(GithubSignIn {
+        account: octo(),
+        token: token("ghu_stray"),
+    });
+    *fixture.store.unwritable.lock().unwrap() = true;
+    assert_eq!(
+        connections.disconnect(caller("panel")).await,
+        Err(GithubError::StoreUnavailable)
+    );
+}
+
+#[tokio::test]
 async fn a_refused_token_on_the_account_read_is_a_refused_app() {
     let fixture = Fixture::new();
     let connections = fixture.connections().await;
@@ -532,7 +626,7 @@ async fn github_out_of_reach_or_refusing_the_app_starts_nothing() {
             Some(|event| matches!(event, GithubAuditEvent::ConnectEnded(_)));
         let connections = fixture.connections().await;
         assert_eq!(connections.connect(caller("panel")).await, Err(error));
-        assert_eq!(connections.status(), signed_out(Some(end)));
+        assert_eq!(connections.status(), unrecorded(end));
     }
 }
 

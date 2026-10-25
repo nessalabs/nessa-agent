@@ -196,3 +196,29 @@ it("keeps the code shown, and polling, when one read fails while it waits", asyn
   expect(state()).toBe("connected")
   expect(row()?.textContent).not.toContain("The gateway is busy.")
 })
+
+it("lets a read slower than the poll finish, rather than overtaking it", async () => {
+  vi.useFakeTimers()
+  const github = fake(connecting)
+  let answer: ((outcome: GithubOutcome) => void) | undefined
+  let slow = false
+  let reads = 0
+  const gateway: GithubGateway = {
+    ...github.gateway,
+    read: () => {
+      reads += 1
+      if (!slow) return github.gateway.read()
+      return new Promise<GithubOutcome>((resolve) => (answer = resolve))
+    },
+  }
+  await show(gateway)
+  slow = true
+  const before = reads
+  await act(async () => vi.advanceTimersByTime(2_000))
+  expect(reads).toBe(before + 1)
+  // Two more polls pass while that read is out: neither starts another.
+  await act(async () => vi.advanceTimersByTime(4_000))
+  expect(reads).toBe(before + 1)
+  await act(async () => answer?.({ ok: true, view: connected }))
+  expect(state()).toBe("connected")
+})

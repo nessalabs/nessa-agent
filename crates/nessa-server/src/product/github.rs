@@ -86,10 +86,14 @@ pub(super) fn connection(status: GithubStatus, install_url: &str) -> GithubConne
         account: None,
         code: None,
         last: None,
+        unrecorded: None,
         install_url: install_url.to_owned(),
     };
     match status {
-        GithubStatus::SignedOut { last } => wire.last = last.map(end),
+        GithubStatus::SignedOut { last, unrecorded } => {
+            wire.last = last.map(end);
+            wire.unrecorded = unrecorded.then_some(true);
+        }
         GithubStatus::Connecting {
             user_code,
             verification_uri,

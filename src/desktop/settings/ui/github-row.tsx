@@ -67,15 +67,21 @@ export function GithubRow() {
   // An action owns admission until it answers; a read that started before it
   // is dropped, so an older answer never replaces a newer one.
   const latest = useRef<Request>({ kind: "read" })
+  // One read at a time: a poll or focus while one is out waits for its
+  // answer rather than overtaking it, so a gateway slower than the poll
+  // still has its answers shown.
+  const reading = useRef(false)
   const read = useRef<() => void>(() => undefined)
   useEffect(() => {
     if (!gateway) return
     let current = true
     read.current = () => {
-      if (latest.current.kind === "act") return
+      if (latest.current.kind === "act" || reading.current) return
       const request: Request = { kind: "read" }
       latest.current = request
+      reading.current = true
       void gateway.read().then((outcome) => {
+        reading.current = false
         if (!current || request !== latest.current) return
         setPhase((previous) => settled(previous, outcome))
       })
@@ -90,6 +96,7 @@ export function GithubRow() {
     document.addEventListener("visibilitychange", onVisible)
     return () => {
       current = false
+      reading.current = false
       latest.current = { kind: "read" }
       read.current = () => undefined
       window.removeEventListener("focus", onFocus)

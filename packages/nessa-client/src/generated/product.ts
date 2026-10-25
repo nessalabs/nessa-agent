@@ -2499,10 +2499,12 @@ export interface GithubConnection {
   code?: GithubCode
   /** When signed out: why the latest sign-in ended, until another starts. Absent when there was none, or after a disconnect. */
   last?: GithubConnectEnd
+  /** Present only with last: the gateway could not keep that end in its audit. The end still stands. Absent when it is on record, and with last audit_unavailable, which already says so. */
+  unrecorded?: true
   /** Where the person chooses the repositories the Nessa app may use. A token reaches only those. */
   installUrl: string
 }
-/** Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: github.disconnect could not delete the token, which is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status). */
+/** Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: github.disconnect could not delete the token file; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status). */
 export const GithubErrorCode = {
   GithubNotConfigured: "github_not_configured",
   GithubUnreachable: "github_unreachable",

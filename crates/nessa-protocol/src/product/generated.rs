@@ -2580,6 +2580,8 @@ pub struct GithubConnection {
     pub code: Option<GithubCode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last: Option<GithubConnectEnd>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unrecorded: Option<bool>,
     pub install_url: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

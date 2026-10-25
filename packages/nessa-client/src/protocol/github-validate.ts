@@ -45,7 +45,7 @@ function whole(value: unknown, what: string): number {
   return value as number
 }
 
-const allowed = new Set(["state", "account", "code", "last", "installUrl"])
+const allowed = new Set(["state", "account", "code", "last", "unrecorded", "installUrl"])
 
 function account(value: unknown): GithubAccount {
   const item = record(value, "account")
@@ -77,11 +77,15 @@ export function githubConnection(value: unknown): GithubConnection {
   if (present("last") && state !== GithubConnectState.SignedOut) invalid("last")
   const last = present("last") ? member(GithubConnectEnd, own(item, "last")) : undefined
   if (present("last") && !last) invalid("last")
+  // Only ever `true`, and only beside the end it is about.
+  if (present("unrecorded") && (own(item, "unrecorded") !== true || !last))
+    invalid("unrecorded")
   return {
     state,
     installUrl,
     ...(present("account") ? { account: account(own(item, "account")) } : {}),
     ...(present("code") ? { code: code(own(item, "code")) } : {}),
     ...(last ? { last } : {}),
+    ...(present("unrecorded") ? { unrecorded: true as const } : {}),
   }
 }

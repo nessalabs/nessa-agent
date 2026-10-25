@@ -65,6 +65,9 @@ const endedBecause: Record<GithubConnectEnd, string> = {
     "The sign-in couldn't be recorded, so it wasn't kept. Connect again.",
 }
 
+/** Said after why it ended, when that end is not on the gateway's record. */
+const unrecorded = "Nessa couldn't record this in its audit log."
+
 const unanswered = "The gateway didn't answer. Try again."
 
 /** The model's view of one answer. */
@@ -87,7 +90,11 @@ export function viewOf(connection: GithubConnection): GithubView {
     case "signed_out":
       return {
         kind: "signedOut",
-        ended: connection.last ? endedBecause[connection.last] : undefined,
+        ended: connection.last
+          ? connection.unrecorded
+            ? `${endedBecause[connection.last]} ${unrecorded}`
+            : endedBecause[connection.last]
+          : undefined,
         installUrl: connection.installUrl,
       }
   }

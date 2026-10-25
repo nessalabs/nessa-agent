@@ -30,7 +30,7 @@ describe("client.github", () => {
           }
         : method === "github.status"
           ? { state: "connected", installUrl, account: { id: 7, login: "octo" } }
-          : { state: "signed_out", installUrl, last: "cancelled" },
+          : { state: "signed_out", installUrl, last: "cancelled", unrecorded: true },
     )
     expect((await api.connect()).code?.userCode).toBe("ABCD-1234")
     expect((await api.status()).account).toEqual({ id: 7, login: "octo" })
@@ -38,11 +38,13 @@ describe("client.github", () => {
       state: "signed_out",
       installUrl,
       last: "cancelled",
+      unrecorded: true,
     })
     expect(await api.disconnect()).toEqual({
       state: "signed_out",
       installUrl,
       last: "cancelled",
+      unrecorded: true,
     })
     expect(calls).toEqual([
       { method: "github.connect", params: {} },
@@ -59,6 +61,8 @@ describe("client.github", () => {
       { state: "signed_out", installUrl, account: { id: 1, login: "x" } },
       { state: "connected", installUrl, account: { id: 1, login: "x" }, last: "denied" },
       { state: "signed_out", installUrl, last: "later" },
+      { state: "signed_out", installUrl, unrecorded: true },
+      { state: "signed_out", installUrl, last: "denied", unrecorded: false },
       { state: "waiting", installUrl },
       { state: "signed_out" },
       { state: "signed_out", installUrl, token: "ghu_x" },

@@ -64,6 +64,23 @@ it("names each state the gateway answers", async () => {
     ok: true,
     view: { kind: "signedOut", ended: "The sign-in was declined on GitHub.", installUrl },
   })
+  const unrecorded = over(() =>
+    Promise.resolve({
+      state: "signed_out",
+      last: "denied",
+      unrecorded: true,
+      installUrl,
+    }),
+  )
+  expect(await unrecorded.read()).toEqual({
+    ok: true,
+    view: {
+      kind: "signedOut",
+      ended:
+        "The sign-in was declined on GitHub. Nessa couldn't record this in its audit log.",
+      installUrl,
+    },
+  })
 })
 
 it("gives a refusal its sentence, and a lost answer one of its own", async () => {

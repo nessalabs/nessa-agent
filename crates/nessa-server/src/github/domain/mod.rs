@@ -63,7 +63,12 @@ pub enum ConnectEnd {
 pub enum GithubStatus {
     /// Not signed in. `last` is why the latest attempt ended, until another
     /// starts; `None` when there was none or it was disconnected.
-    SignedOut { last: Option<ConnectEnd> },
+    /// `unrecorded` when that end could not be kept in the audit: the cause
+    /// stands, and the missing record is said beside it.
+    SignedOut {
+        last: Option<ConnectEnd>,
+        unrecorded: bool,
+    },
     /// Waiting for the person to enter `user_code` at `verification_uri`.
     Connecting {
         user_code: String,

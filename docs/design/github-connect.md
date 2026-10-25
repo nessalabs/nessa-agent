@@ -105,24 +105,25 @@ waiting.
 | # | State | Event | Result | Record |
 | --- | --- | --- | --- | --- |
 | G1 | signed out | connect | `connect-requested` recorded first; a record that cannot be kept refuses `github_audit_unavailable` and nothing changes | connect-requested |
-| G2 | signed out | connect, GitHub unreachable, rate-limited or answer unreadable | signed out, `last: unreachable`, refused `github_unreachable`, even when the end cannot be recorded (logged) | connect-ended |
-| G3 | signed out | connect, GitHub refuses the app | signed out, `last: rejected`, refused `github_rejected`, even when the end cannot be recorded (logged) | connect-ended |
+| G2 | signed out | connect, GitHub unreachable, rate-limited or answer unreadable | signed out, `last: unreachable`, refused `github_unreachable`; an end that cannot be recorded adds `unrecorded` | connect-ended |
+| G3 | signed out | connect, GitHub refuses the app | signed out, `last: rejected`, refused `github_rejected`; an end that cannot be recorded adds `unrecorded` | connect-ended |
 | G4 | signed out | connect, code given | connecting; poll starts at GitHub's interval (never under 1 s) | — |
 | G5 | connecting or connected | connect | answers the state as it is: asking again is safe | — |
 | G6 | connecting | poll: pending, a lost answer, or a rate limit (403, 429) | keeps waiting | — |
 | G7 | connecting | poll: slow_down | keeps waiting at the larger interval | — |
 | G8 | connecting | poll: expired, or the code's time passes | signed out, `last: expired` | connect-ended |
 | G9 | connecting | poll: denied | signed out, `last: denied` | connect-ended |
+| G9a | connecting | any end (G8, G9, G11, G12, G14) whose record cannot be kept | ends all the same, the cause kept in `last`, with `unrecorded` | — |
 | G10 | connecting | poll: token; account read | `connected` recorded, then the file saved, then connected | connected |
 | G11 | connecting | token; account read refused | signed out, `last: rejected`; the token is dropped | connect-ended |
 | G12 | connecting | token; account read never answers (or keeps failing) before the code would expire | signed out, `last: unreachable` | connect-ended |
 | G13 | connecting | token; the record cannot be kept | signed out, `last: audit_unavailable`; never saved, never given out | — |
-| G14 | connecting | token; the file cannot be saved | signed out, `last: store_unavailable`; never given out | connected, then connect-ended: the later record is what holds |
-| G15 | connecting | cancel, or disconnect | signed out, `last: cancelled`, poll stopped; stands even when its record cannot be kept | connect-cancelled |
+| G14 | connecting | token; the file cannot be saved | the file is deleted (a save can fail after writing it), then signed out, `last: store_unavailable`; never given out | connected, then connect-ended: the later record is what holds |
+| G15 | connecting | cancel, or disconnect | signed out, `last: cancelled`, poll stopped; stands even when its record cannot be kept, which is refused `github_audit_unavailable` and adds `unrecorded` | connect-cancelled |
 | G16 | signed out (after G15) | the cancelled attempt's late answer | dropped: not the attempt waiting (`a_cancelled_attempts_late_approval_is_dropped`) | — |
 | G17 | connected | disconnect | `disconnect-requested` recorded first, then the file deleted, then signed out | disconnect-requested, disconnected |
 | G18 | connected | disconnect, the file cannot be deleted | still connected, refused `github_storage_unavailable` | disconnect-failed |
-| G19 | signed out | cancel or disconnect | answers signed out | — |
+| G19 | signed out | cancel, or disconnect | answers signed out; disconnect first deletes any token file left by G14 (refused `github_storage_unavailable` if it cannot) | — |
 | G20 | (start) | the gateway starts | the saved sign-in, or signed out; a file that cannot be read is signed out with `last: store_unavailable` | — |
 | G21 | connecting | the gateway stops | the attempt is gone; next start is signed out | — |
 
