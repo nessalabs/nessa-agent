@@ -2,6 +2,7 @@
 //! the default channel first and never answers past one frame; each refusal
 //! has its own code.
 use super::*;
+use crate::conversation_test_support::absolute;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::protocol::ResponseFrame;
 use serde_json::json;
@@ -18,7 +19,7 @@ fn a_create_reads_into_a_channel_request_with_ask_by_default() {
         "agent": "codex",
         "model": "gpt-5.6-terra",
         "notes": "Check every export.",
-        "resources": ["/work/brand-kit", "/work/tokens.json"]
+        "resources": [absolute("/work/brand-kit"), absolute("/work/tokens.json")]
     })))
     .unwrap();
     assert_eq!(request.name.as_str(), "design-review");
@@ -28,10 +29,10 @@ fn a_create_reads_into_a_channel_request_with_ask_by_default() {
     assert_eq!(request.resources.paths().len(), 2);
     let chosen = channel_request(&params(json!({
         "requestId": "r1", "name": "x", "agent": "claude", "model": "m",
-        "folder": "/work/repo", "approvalMode": "full"
+        "folder": absolute("/work/repo"), "approvalMode": "full"
     })))
     .unwrap();
-    assert_eq!(chosen.folder.unwrap().as_str(), "/work/repo");
+    assert_eq!(chosen.folder.unwrap().as_str(), absolute("/work/repo"));
     assert_eq!(chosen.defaults.mode, ConversationApprovalMode::Full);
 }
 
@@ -41,7 +42,7 @@ fn a_create_that_is_not_a_channel_is_refused_before_the_service() {
         json!({"requestId": "r", "name": " ", "agent": "codex", "model": "m"}),
         json!({"requestId": "r", "name": "x", "agent": "nobody", "model": "m"}),
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "folder": "relative"}),
-        json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "resources": ["/a", "/a"]}),
+        json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "resources": [absolute("/a"), absolute("/a")]}),
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "notes": "bell\u{7}"}),
     ] {
         assert!(
@@ -59,7 +60,8 @@ fn stored(n: u8, notes: &str) -> Channel {
         crate::conversation::domain::ChannelParts {
             name: ChannelName::new(&format!("channel-{n}")).unwrap(),
             folder: crate::conversation::domain::ChannelFolder {
-                path: ChannelPath::new(PathBuf::from(format!("/data/channels/{n}"))).unwrap(),
+                path: ChannelPath::new(PathBuf::from(absolute(&format!("/data/channels/{n}"))))
+                    .unwrap(),
                 made: true,
             },
             defaults: ChannelDefaults {
@@ -80,7 +82,7 @@ fn stored(n: u8, notes: &str) -> Channel {
 fn a_list_starts_with_the_default_channel_and_lists_no_notes() {
     let list = listed(
         ChannelListing {
-            default_folder: Some("/work/default".into()),
+            default_folder: Some(absolute("/work/default")),
             channels: vec![stored(1, "private notes")],
         },
         None,
@@ -89,7 +91,7 @@ fn a_list_starts_with_the_default_channel_and_lists_no_notes() {
     assert_eq!(
         wire["channels"][0],
         json!({
-            "channelId": "default", "name": "Conversations", "folder": "/work/default",
+            "channelId": "default", "name": "Conversations", "folder": absolute("/work/default"),
             "folderMade": false, "agent": null, "model": null, "approvalMode": "ask",
             "createdAtMs": 0
         })
@@ -121,7 +123,8 @@ fn long(index: u16) -> Channel {
         crate::conversation::domain::ChannelParts {
             name: ChannelName::new(&format!("channel-{index}")).unwrap(),
             folder: crate::conversation::domain::ChannelFolder {
-                path: ChannelPath::new(PathBuf::from(format!("/{}", "f".repeat(4000)))).unwrap(),
+                path: ChannelPath::new(PathBuf::from(absolute(&format!("/{}", "f".repeat(4000)))))
+                    .unwrap(),
                 made: false,
             },
             defaults: ChannelDefaults {
@@ -142,7 +145,7 @@ fn long(index: u16) -> Channel {
 fn a_list_longer_than_a_frame_is_paged_and_every_channel_is_listed_once() {
     let channels: Vec<Channel> = (0..1000).map(long).collect();
     let listing = || ChannelListing {
-        default_folder: Some("/work/default".into()),
+        default_folder: Some(absolute("/work/default")),
         channels: channels.clone(),
     };
     let mut seen = Vec::new();

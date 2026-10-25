@@ -385,7 +385,7 @@ fn system_folders() -> Vec<PathBuf> {
         .into_iter()
         .filter_map(std::env::var_os)
         .map(PathBuf::from)
-        .filter_map(|folder| std::fs::canonicalize(folder).ok())
+        .filter_map(|folder| dunce::canonicalize(folder).ok())
         .collect()
     } else {
         [
@@ -424,24 +424,23 @@ impl LocalChannelFolders {
         home: Option<PathBuf>,
         system: Vec<PathBuf>,
     ) -> std::io::Result<Self> {
-        let data = std::fs::canonicalize(data)?;
+        let data = dunce::canonicalize(data)?;
         Ok(Self {
             channels: data.join("channels"),
             data,
-            home: home.and_then(|home| std::fs::canonicalize(home).ok()),
+            home: home.and_then(|home| dunce::canonicalize(home).ok()),
             system,
         })
     }
 
     fn resolve(path: &ChannelPath) -> Result<(PathBuf, std::fs::Metadata), FolderRefusal> {
-        let resolved =
-            std::fs::canonicalize(path.as_path()).map_err(|error| match error.kind() {
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => {
-                    FolderRefusal::NotFound
-                }
-                std::io::ErrorKind::PermissionDenied => FolderRefusal::Refused,
-                _ => FolderRefusal::Unavailable,
-            })?;
+        let resolved = dunce::canonicalize(path.as_path()).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => {
+                FolderRefusal::NotFound
+            }
+            std::io::ErrorKind::PermissionDenied => FolderRefusal::Refused,
+            _ => FolderRefusal::Unavailable,
+        })?;
         let metadata = std::fs::metadata(&resolved).map_err(|_| FolderRefusal::Unavailable)?;
         Ok((resolved, metadata))
     }
@@ -472,11 +471,12 @@ impl LocalChannelFolders {
     }
 }
 
-/// A resolved path as it is kept, shown and handed to an agent: on Windows
-/// without the `\\?\` prefix where that names the same place. Every check
-/// compares resolved paths in one form, before this.
+/// A resolved path as it is kept, shown and handed to an agent. Every path
+/// here is resolved with `dunce`, which on Windows leaves off the `\\?\`
+/// prefix where the plain form names the same place, so the checks, the
+/// storage calls and what is kept all see one form.
 fn kept(path: PathBuf) -> Result<ChannelPath, FolderRefusal> {
-    ChannelPath::new(dunce::simplified(&path).to_path_buf()).map_err(|_| FolderRefusal::Refused)
+    ChannelPath::new(path).map_err(|_| FolderRefusal::Refused)
 }
 
 impl ChannelFolders for LocalChannelFolders {

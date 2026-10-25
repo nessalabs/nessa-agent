@@ -2,6 +2,7 @@
 //! answers the kept channel; a conversation is in one channel for its life;
 //! and a folder is checked, resolved, before agents may work in it.
 use super::*;
+use crate::conversation_test_support::absolute;
 
 fn store(directory: &Path) -> LocalChannelStore {
     let private = directory.join("conversations");
@@ -28,7 +29,7 @@ fn made(request_id: &str, name: &str, at: u64) -> Channel {
         ChannelParts {
             name: ChannelName::new(name).unwrap(),
             folder: ChannelFolder {
-                path: path("/work/repo"),
+                path: path(&absolute("/work/repo")),
                 made: false,
             },
             defaults: ChannelDefaults {
@@ -37,8 +38,11 @@ fn made(request_id: &str, name: &str, at: u64) -> Channel {
                 mode: ConversationApprovalMode::Full,
             },
             notes: ChannelNotes::new("line one\nline two").unwrap(),
-            resources: ChannelResources::new(vec![path("/work/kit"), path("/work/a.json")])
-                .unwrap(),
+            resources: ChannelResources::new(vec![
+                path(&absolute("/work/kit")),
+                path(&absolute("/work/a.json")),
+            ])
+            .unwrap(),
         },
         request_id.into(),
         at,
@@ -137,7 +141,7 @@ fn folders(directory: &Path) -> (LocalChannelFolders, PathBuf, PathBuf) {
     let folders = LocalChannelFolders::with_system(
         &data,
         Some(home.clone()),
-        vec![std::fs::canonicalize(directory.join("outer").join("system")).unwrap()],
+        vec![dunce::canonicalize(directory.join("outer").join("system")).unwrap()],
     )
     .unwrap();
     (

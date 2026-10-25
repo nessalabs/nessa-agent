@@ -2697,3 +2697,22 @@ impl ConversationAccessPolicyEvaluator for ObservedPolicy {
 pub(crate) fn catalogue_entries(signed_in_as: &str) -> CatalogueEntryAccess {
     CatalogueEntryAccess::new(access_policy(), PrincipalId::new(signed_in_as).unwrap())
 }
+
+/// `text`, a path written from the root as on Unix (`/work/repo`), made
+/// absolute on this system: on Windows it is on drive `C:`.
+pub(crate) fn absolute(text: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{text}")
+    } else {
+        text.to_owned()
+    }
+}
+
+/// An [`absolute`] path as it was written, for a test double to match on.
+pub(crate) fn unrooted(text: &str) -> &str {
+    if cfg!(windows) {
+        text.strip_prefix("C:").unwrap_or(text)
+    } else {
+        text
+    }
+}

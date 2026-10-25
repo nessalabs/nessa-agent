@@ -2,6 +2,7 @@
 //! sidebar can show, absolute paths, and notes and resources within bounds.
 //! What its agents are told about it is one text, the same for every agent.
 use super::*;
+use crate::conversation_test_support::absolute;
 
 fn path(text: &str) -> ChannelPath {
     ChannelPath::new(PathBuf::from(text)).unwrap()
@@ -17,7 +18,7 @@ fn parts(folder: ChannelFolder) -> ChannelParts {
             mode: ConversationApprovalMode::Auto,
         },
         notes: ChannelNotes::new("Check every export.").unwrap(),
-        resources: ChannelResources::new(vec![path("/home/me/brand-kit")]).unwrap(),
+        resources: ChannelResources::new(vec![path(&absolute("/home/me/brand-kit"))]).unwrap(),
     }
 }
 
@@ -115,14 +116,19 @@ fn a_path_is_absolute() {
 #[test]
 fn resources_are_bounded_and_never_named_twice() {
     assert_eq!(
-        ChannelResources::new(vec![path("/a"), path("/a")]),
+        ChannelResources::new(vec![path(&absolute("/a")), path(&absolute("/a"))]),
         Err(ChannelRefusal::Resources)
     );
     let many = (0..=MAX_CHANNEL_RESOURCES)
-        .map(|n| path(&format!("/r{n}")))
+        .map(|n| path(&absolute(&format!("/r{n}"))))
         .collect();
     assert_eq!(ChannelResources::new(many), Err(ChannelRefusal::Resources));
-    let long = |n: usize| path(&format!("/{n}{}", "a".repeat(MAX_CHANNEL_PATH_BYTES - 8)));
+    let long = |n: usize| {
+        path(&absolute(&format!(
+            "/{n}{}",
+            "a".repeat(MAX_CHANNEL_PATH_BYTES - 8)
+        )))
+    };
     let past_bytes = (0..5).map(long).collect();
     assert_eq!(
         ChannelResources::new(past_bytes),
@@ -137,7 +143,7 @@ fn the_default_channel_is_never_stored() {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("person").unwrap(),
         parts(ChannelFolder {
-            path: path("/work"),
+            path: path(&absolute("/work")),
             made: false,
         }),
         "request-1".into(),
@@ -149,7 +155,7 @@ fn the_default_channel_is_never_stored() {
 #[test]
 fn a_retry_is_the_same_channel_only_when_it_asks_for_the_same_folder() {
     let made = channel(ChannelFolder {
-        path: path("/data/channels/x"),
+        path: path(&absolute("/data/channels/x")),
         made: true,
     });
     let mut asked = ChannelRequest {
@@ -166,14 +172,14 @@ fn a_retry_is_the_same_channel_only_when_it_asks_for_the_same_folder() {
         "another default mode is another channel"
     );
     asked.defaults.mode = ConversationApprovalMode::Auto;
-    asked.folder = Some(path("/data/channels/x"));
+    asked.folder = Some(path(&absolute("/data/channels/x")));
     assert!(!made.made_of(&asked), "a chosen folder is not the made one");
 
     let chosen = channel(ChannelFolder {
-        path: path("/repo"),
+        path: path(&absolute("/repo")),
         made: false,
     });
-    asked.folder = Some(path("/repo"));
+    asked.folder = Some(path(&absolute("/repo")));
     assert!(chosen.made_of(&asked));
     asked.folder = None;
     assert!(!chosen.made_of(&asked));
@@ -182,7 +188,7 @@ fn a_retry_is_the_same_channel_only_when_it_asks_for_the_same_folder() {
 #[test]
 fn agents_are_told_the_name_folder_notes_and_resources() {
     let made = channel(ChannelFolder {
-        path: path("/repo"),
+        path: path(&absolute("/repo")),
         made: false,
     });
     let text = made.instructions();

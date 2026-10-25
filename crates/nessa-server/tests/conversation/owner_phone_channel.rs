@@ -7,6 +7,7 @@ use crate::conversation::application::ConversationLimits;
 use crate::conversation::domain::{
     ChannelDefaults, ChannelName, ChannelNotes, ChannelPath, ChannelRequest, ChannelResources,
 };
+use crate::conversation_test_support::absolute;
 use crate::conversation_test_support::{self, EveryConversationGranted};
 use crate::product::{dispatch_conversation, ProductDependencies, ProductRouteState};
 use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
@@ -85,7 +86,10 @@ impl crate::conversation::application::ChannelFolders for AnyFolder {
         &self,
         id: &crate::conversation::domain::ChannelId,
     ) -> Result<ChannelPath, crate::conversation::application::FolderRefusal> {
-        Ok(ChannelPath::new(std::path::PathBuf::from(format!("/data/channels/{id}"))).unwrap())
+        Ok(ChannelPath::new(std::path::PathBuf::from(absolute(&format!(
+            "/data/channels/{id}"
+        ))))
+        .unwrap())
     }
 }
 

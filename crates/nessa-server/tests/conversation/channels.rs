@@ -11,6 +11,7 @@ use crate::conversation::domain::{
     ChannelDefaults, ChannelName, ChannelNotes, ChannelRefusal, ProviderSessionErasure,
 };
 use crate::conversation::infrastructure::{LocalChannelStore, LocalConversationStore};
+use crate::conversation_test_support::{absolute, unrooted};
 use crate::conversation_test_support::{
     AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, Provider, ProviderFactory,
     RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
@@ -124,12 +125,12 @@ impl ChannelFolders for TableFolders {
         if self.is_gone(chosen) {
             return Err(FolderRefusal::NotFound);
         }
-        match chosen.as_str() {
+        match unrooted(chosen.as_str()) {
             "/missing" => Err(FolderRefusal::NotFound),
             "/file" => Err(FolderRefusal::NotADirectory),
             "/refused" => Err(FolderRefusal::Refused),
             // A link, kept as where it leads.
-            "/link" => Ok(ChannelPath::new(PathBuf::from("/work/repo")).unwrap()),
+            "/link" => Ok(ChannelPath::new(PathBuf::from(absolute("/work/repo"))).unwrap()),
             _ => Ok(chosen.clone()),
         }
     }
@@ -137,13 +138,13 @@ impl ChannelFolders for TableFolders {
         if self.is_gone(path) {
             return Err(FolderRefusal::NotFound);
         }
-        match path.as_str() {
+        match unrooted(path.as_str()) {
             "/missing" => Err(FolderRefusal::NotFound),
             _ => Ok(path.clone()),
         }
     }
     fn make(&self, id: &ChannelId) -> Result<ChannelPath, FolderRefusal> {
-        Ok(ChannelPath::new(PathBuf::from(format!("/data/channels/{id}"))).unwrap())
+        Ok(ChannelPath::new(PathBuf::from(absolute(&format!("/data/channels/{id}")))).unwrap())
     }
 }
 
@@ -181,7 +182,7 @@ fn request(folder: Option<&str>) -> ChannelRequest {
             mode: ConversationApprovalMode::Auto,
         },
         notes: ChannelNotes::new("Check every export.").unwrap(),
-        resources: ChannelResources::new(vec![path("/work/brand-kit")]).unwrap(),
+        resources: ChannelResources::new(vec![path(&absolute("/work/brand-kit"))]).unwrap(),
     }
 }
 
@@ -230,7 +231,7 @@ impl Fixture {
                 environment: crate::conversation::infrastructure::in_process_environment().into(),
             },
             ConversationLimits::default(),
-            Some("/work/default".into()),
+            Some(absolute("/work/default")),
         )
         .unwrap();
         service.bind_commands(storage);
@@ -280,7 +281,7 @@ async fn a_channel_with_no_folder_gets_one_made_and_a_retry_answers_it() {
     assert!(made.folder().made);
     assert_eq!(
         made.folder().path.as_str(),
-        format!("/data/channels/{}", made.id())
+        absolute(&format!("/data/channels/{}", made.id()))
     );
     assert_eq!(fixture.channel("request-1", None).await, made);
     let mut other = request(None);
@@ -297,36 +298,45 @@ async fn a_channel_with_no_folder_gets_one_made_and_a_retry_answers_it() {
         .list_channels(&caller("person", "list"))
         .await
         .unwrap();
-    assert_eq!(listing.default_folder.as_deref(), Some("/work/default"));
+    assert_eq!(
+        listing.default_folder.as_deref(),
+        Some(absolute("/work/default").as_str())
+    );
     assert_eq!(listing.channels, vec![made]);
 }
 
 #[tokio::test]
 async fn a_chosen_folder_is_kept_resolved_and_a_refused_one_says_why() {
     let fixture = Fixture::new();
-    let linked = fixture.channel("request-1", Some("/link")).await;
+    let linked = fixture
+        .channel("request-1", Some(absolute("/link").as_str()))
+        .await;
     assert!(!linked.folder().made);
-    assert_eq!(linked.folder().path.as_str(), "/work/repo");
+    assert_eq!(linked.folder().path.as_str(), absolute("/work/repo"));
     // A retry naming the same place another way is the same request.
     assert_eq!(
-        fixture.channel("request-1", Some("/work/repo")).await,
+        fixture
+            .channel("request-1", Some(absolute("/work/repo").as_str()))
+            .await,
         linked
     );
     // Two channels may share a folder.
-    let shared = fixture.channel("request-2", Some("/work/repo")).await;
+    let shared = fixture
+        .channel("request-2", Some(absolute("/work/repo").as_str()))
+        .await;
     assert_ne!(shared.id(), linked.id());
     for (folder, refusal) in [
-        ("/missing", FolderRefusal::NotFound),
-        ("/file", FolderRefusal::NotADirectory),
-        ("/refused", FolderRefusal::Refused),
+        (absolute("/missing"), FolderRefusal::NotFound),
+        (absolute("/file"), FolderRefusal::NotADirectory),
+        (absolute("/refused"), FolderRefusal::Refused),
     ] {
         assert_eq!(
             fixture
                 .service
                 .create_channel(
-                    caller("person", folder),
-                    folder.into(),
-                    request(Some(folder))
+                    caller("person", &folder),
+                    folder.clone(),
+                    request(Some(&folder))
                 )
                 .await,
             Err(ChannelError::Folder(refusal)),
@@ -334,7 +344,7 @@ async fn a_chosen_folder_is_kept_resolved_and_a_refused_one_says_why() {
         );
     }
     let mut missing = request(None);
-    missing.resources = ChannelResources::new(vec![path("/missing")]).unwrap();
+    missing.resources = ChannelResources::new(vec![path(&absolute("/missing"))]).unwrap();
     assert_eq!(
         fixture
             .service
@@ -361,7 +371,9 @@ async fn a_channel_is_only_for_an_agent_this_gateway_has() {
 #[tokio::test]
 async fn a_conversation_in_a_channel_starts_with_its_defaults_in_its_folder() {
     let fixture = Fixture::new();
-    let channel = fixture.channel("request-1", Some("/work/repo")).await;
+    let channel = fixture
+        .channel("request-1", Some(absolute("/work/repo").as_str()))
+        .await;
     fixture.asked();
     let id = new_id();
     fixture
@@ -387,7 +399,7 @@ async fn a_conversation_in_a_channel_starts_with_its_defaults_in_its_folder() {
                 AgentId::Codex,
                 CODEX_MODEL.to_owned(),
                 ConversationApprovalMode::Auto,
-                Some(PathBuf::from("/work/repo"))
+                Some(PathBuf::from(absolute("/work/repo")))
             )
         );
     }
@@ -458,7 +470,7 @@ async fn a_conversation_in_a_channel_starts_with_its_defaults_in_its_folder() {
                 AgentId::Claude,
                 "claude-default".to_owned(),
                 ConversationApprovalMode::Ask,
-                Some(PathBuf::from("/work/repo"))
+                Some(PathBuf::from(absolute("/work/repo")))
             )
         );
     }
@@ -570,7 +582,9 @@ async fn a_creation_that_names_no_preset_is_judged_by_its_channels() {
 #[tokio::test]
 async fn a_thread_an_agent_starts_keeps_its_conversations_preset_not_the_channels() {
     let fixture = Fixture::new();
-    let channel = fixture.channel("request-1", Some("/work/repo")).await;
+    let channel = fixture
+        .channel("request-1", Some(absolute("/work/repo").as_str()))
+        .await;
     let id = new_id();
     fixture
         .service
@@ -606,7 +620,7 @@ async fn a_thread_an_agent_starts_keeps_its_conversations_preset_not_the_channel
     assert!(fixture
         .asked()
         .iter()
-        .all(|asked| asked.3.as_deref() == Some(std::path::Path::new("/work/repo"))));
+        .all(|asked| asked.3.as_deref() == Some(std::path::Path::new(&absolute("/work/repo")))));
     assert_eq!(
         fixture.service.thread_start(&id, false).await.unwrap(),
         (
@@ -641,14 +655,19 @@ async fn a_retry_is_answered_with_the_kept_channel_after_what_it_named_is_gone()
     // folder and the chosen one were removed: the channel was still made,
     // and the retry is told so rather than asked to change the request.
     let fixture = Fixture::new();
-    let made = fixture.channel("request-1", Some("/work/repo")).await;
-    fixture
-        .folders
-        .gone
-        .lock()
-        .unwrap()
-        .extend(["/work/brand-kit".to_owned(), "/work/repo".to_owned()]);
-    assert_eq!(fixture.channel("request-1", Some("/work/repo")).await, made);
+    let made = fixture
+        .channel("request-1", Some(absolute("/work/repo").as_str()))
+        .await;
+    fixture.folders.gone.lock().unwrap().extend([
+        absolute("/work/brand-kit").to_owned(),
+        absolute("/work/repo").to_owned(),
+    ]);
+    assert_eq!(
+        fixture
+            .channel("request-1", Some(absolute("/work/repo").as_str()))
+            .await,
+        made
+    );
     // A new request naming them is refused.
     assert_eq!(
         fixture
@@ -709,7 +728,9 @@ async fn a_deleted_conversation_is_erased_from_its_channels_folder_then_let_go()
     erasers.register(AgentId::Codex, eraser.clone());
     let fixture = Fixture::with_erasers(erasers);
     *eraser.channels.lock().unwrap() = Some(fixture.service.clone());
-    let channel = fixture.channel("request-1", Some("/work/repo")).await;
+    let channel = fixture
+        .channel("request-1", Some(absolute("/work/repo").as_str()))
+        .await;
     let id = new_id();
     *eraser.conversation.lock().unwrap() = Some(id.clone());
     fixture
@@ -764,7 +785,7 @@ async fn a_deleted_conversation_is_erased_from_its_channels_folder_then_let_go()
     // Asked from the channel's folder, while the conversation was still in it.
     assert_eq!(
         eraser.asked.lock().unwrap().clone(),
-        vec![(Some(PathBuf::from("/work/repo")), true)]
+        vec![(Some(PathBuf::from(absolute("/work/repo"))), true)]
     );
     assert_eq!(fixture.service.channel_id_of(&id).await.unwrap(), None);
 }
