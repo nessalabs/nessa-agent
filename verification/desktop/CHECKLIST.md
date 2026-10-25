@@ -1584,6 +1584,14 @@ says why where the conversations would be.
   pattern is installed. Recovery requires the current successor userText and its
   completion together in one existing60-second window poll. _Check:_ `lib/stress-restart.test.mjs` and the default
   and raised `conversation-stress.mjs` runs in Chromium and WebKit (#1024).
+  A metadata-upgrade Send first requires a successful workspace subscription
+  acknowledgement on this page's replacement live socket. Gateway health,
+  another Node client, a challenge or authentication alone cannot substitute.
+  Recovery and the click share the original10-second Send-click budget;
+  stalled recovery fails without submitting or retrying a message. This
+  readiness proof never grants a console exemption: later frames on the same
+  socket cannot erase a later console error. _Check:_ the same helper controls
+  and the controlled upgrade recovery regression.
   The current WebKit SIGKILL probe records the exact reset dialect
   "The network connection was lost." on both the owned socket and console
   inside this scope, followed by a distinct receiving connection. That exact

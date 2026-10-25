@@ -720,12 +720,22 @@ async function rowShown(page, conversationId, title, failures) {
  * that read, which opens the conversation's agent. `where` is the composer,
  * when more than one pane shows one.
  */
-async function send(run, conversationId, text, failures, known, where = dock(run.page)) {
+async function send(
+  run,
+  conversationId,
+  text,
+  failures,
+  known,
+  where = dock(run.page),
+  sendBy,
+) {
   const before = known ?? (await seenTurns(run, conversationId))
   const box = where.locator("textarea")
   await box.fill(text)
   const button = where.getByRole(...composerControls.send)
-  await button.click({ timeout: 10_000 })
+  const timeout = sendBy === undefined ? 10_000 : sendBy - Date.now()
+  if (timeout <= 0) throw new Error("the upgraded Send exhausted its click budget")
+  await button.click({ timeout })
   const taken = await waitFor(async () => (await box.inputValue()) === "", 10_000)
   if (!taken) failures.push(`the composer kept ${JSON.stringify(text)} after Send`)
   run.sent.set(conversationId, (run.sent.get(conversationId) ?? 0) + 1)
@@ -1330,9 +1340,17 @@ const steps = {
         ),
       )
   },
-  async reply(run, step, failures) {
+  async reply(run, step, failures, sendBy) {
     const text = prompt(run, STRESS.reply, step, step.extra ?? "")
-    const seen = await send(run, run.main.id, text, failures)
+    const seen = await send(
+      run,
+      run.main.id,
+      text,
+      failures,
+      undefined,
+      dock(run.page),
+      sendBy,
+    )
     const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
     // A reply carried on behind a failure echoes its notice first.
     const echoed = turn && turn.userText !== text ? turn.userText.slice(0, 40) : text
@@ -1804,7 +1822,16 @@ const steps = {
         // The upgraded gateway still answers the conversation, in the
         // window: that answer comes over the window's new connection, so
         // the refused connections while it was down are the restart's.
-        if (failures.length === count) await steps.reply(run, step, failures)
+        if (failures.length === count) {
+          // Spend the original Send-click budget on browser recovery and the
+          // click together. The Node client above is a different connection.
+          const sendBy = Date.now() + 10_000
+          if (!(await run.restartConsole.readable(sendBy - Date.now())))
+            failures.push(
+              "the browser workspace did not recover before the upgraded Send",
+            )
+          else await steps.reply(run, step, failures, sendBy)
+        }
         return failures.length === count
       })
     })
