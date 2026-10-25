@@ -6,7 +6,7 @@ use super::publication::publish;
 use super::{integer, invalid, registry, unavailable, uuid, SqlOutbox};
 use crate::webhooks::application::{
     MacKey, OutboxError, Registration, RegistrationConfig, RegistrationIntent, RegistrationIntents,
-    MAX_REGISTRATIONS,
+    RegistrationStop, UninstalledCancellation, MAX_REGISTRATIONS,
 };
 use crate::webhooks::domain::{Destination, MAX_DESTINATION_BYTES};
 use async_trait::async_trait;
@@ -72,7 +72,10 @@ impl Saved {
     }
 }
 
-fn read(connection: &Connection, id: Uuid) -> Result<Option<RegistrationIntent>, OutboxError> {
+pub(super) fn read(
+    connection: &Connection,
+    id: Uuid,
+) -> Result<Option<RegistrationIntent>, OutboxError> {
     connection
         .query_row(
             &format!("{SELECT} WHERE id=?1"),
@@ -85,7 +88,7 @@ fn read(connection: &Connection, id: Uuid) -> Result<Option<RegistrationIntent>,
         .transpose()
 }
 
-fn same_registration(left: &Registration, right: &Registration) -> bool {
+pub(super) fn same_registration(left: &Registration, right: &Registration) -> bool {
     left.id == right.id
         && left.target == right.target
         && left.destination == right.destination
@@ -175,6 +178,14 @@ impl RegistrationIntents for SqlOutbox {
         })
         .await
     }
+
+    async fn cancel_uninstalled(
+        &self,
+        intent: RegistrationIntent,
+        stop: RegistrationStop,
+    ) -> Result<UninstalledCancellation, OutboxError> {
+        super::cancellation::cancel(self, intent, stop).await
+    }
 }
 
 pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
@@ -194,6 +205,9 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
     let rows = statement.query_map([], Saved::row).map_err(unavailable)?;
     for row in rows {
         let intent = row.map_err(super::cursor::row_error)?.checked()?;
+        if super::retirement::read(connection, intent.id)?.is_some() {
+            return Err(OutboxError::Invalid);
+        }
         let registration = connection
             .query_row(
                 &format!("{} FROM registrations WHERE id=?1", registry::SELECT),

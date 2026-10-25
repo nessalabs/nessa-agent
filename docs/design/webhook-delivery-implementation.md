@@ -757,3 +757,29 @@ credential selection as command correlation.
 
 This is retained data correlation, not permission. It adds no durable state,
 acknowledgement flag, schema, credential authority or cancellation behavior.
+
+### Cancelling an issued but uninstalled reservation
+
+Recovery must not mint a credential merely to discover whether an earlier issue
+finished. A registration command that reads its actual original issuance and a
+current revocation or elapsed expiry can remove its uninstalled private intent.
+It must not install the destination temporarily or call that cleanup a drained
+registration. The following is the next implementation slice; runtime command
+supervision and startup enumeration remain separate composition work.
+
+| Before / ordering | Owning fact and effect | Regression required |
+| --- | --- | --- |
+| Reserved, actual original issue matches, credential revoked | Held original Auth revocation, including actual actor/cause/time, cancels the uninstalled intent and retains secret-free cancellation evidence atomically | Explicit and supersession facts, no installed destination or second credential |
+| Reserved, actual original issue matches, expiry elapsed | The actual command reader and local read time become the cancellation stop fact; no Auth expiry event is invented | Expiry and clock-boundary controls |
+| Matching identity with disabled current membership and a canonical stop | Cleanup consumes the actual stop despite lost installation authority. A current credential without a stop remains uninstalled; membership state alone creates no expiry or revocation. | Disabled expiry/revocation cleanup and current-credential no-install control |
+| Current credential, future issuance, missing/mismatched original issuance or revocation | No cancellation or installation based on missing proof | Typed refusal, no audit publication or replacement |
+| Installed registration | Cancellation refuses; the existing stop/drain lifecycle owns it | Live and stopped installed controls |
+| Cancellation commit, audit write or acknowledgement lost | Remove URL/key/intent in the same commit as a distinct Cancelled retirement kind and its exact audit identity; retry replays original bytes | File failure, lost acknowledgement, cold recovery and held Auth lifetime |
+| Cancelled versus Drained retained facts | The retained kind owns which terminal cause is possible. Cancelled accepts only its single matching cancellation audit; Drained cannot accept cancellation evidence | Both contradictory cause orders, duplicate identities, cross-kind history, duplicate credential and live/retired overlap |
+| Valid distinct credentials | One cancellation must not borrow another registration's facts or block its valid recovery | Positive live/drained/cancelled controls |
+| Retained acknowledged fragments | A drained history can retain initial issue, first expiry observation, first stop and drain. Read five indexed rows as the impossible fifth sentinel; retain initial UUID decisions in the existing progress owner, and reject duplicate lifecycle facts before publication or trim. | Four actual original acknowledged facts accepted; fifth published stop/observation duplicate refused, including cold open |
+
+The retirement kind is data correlation, independent of its audit projection.
+There is no new table, authority, acknowledgement flag or parallel stop codec.
+The existing bounded retirement projection and credential selector cover both
+kinds. The private schema remains one current contract and refuses old shapes.

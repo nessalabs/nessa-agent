@@ -83,7 +83,7 @@ impl SqlOutbox {
                 }
                 Ok(())
             },
-            move |connection, audit| {
+            move |connection, audit, ()| {
                 let transaction = connection.transaction().map_err(unavailable)?;
                 let Some(saved) = by_credential(&transaction, &credential)? else {
                     return Ok(());
@@ -142,7 +142,7 @@ impl SqlOutbox {
     }
 }
 
-fn check_original_stop(
+pub(super) fn check_original_stop(
     prior: &RegistrationStop,
     input: &RegistrationStop,
 ) -> Result<(), OutboxError> {

@@ -1,7 +1,7 @@
 //! Registration intent is durable before credential issuance. Composition must
 //! supervise this use case and serialize all issue modes for a principal.
-use super::{MacKey, OutboxError, Registration, Target};
-use crate::webhooks::domain::Destination;
+use super::{MacKey, OutboxError, Registration, RegistrationStop, RegistrationStops, Target};
+use crate::webhooks::domain::{Destination, ExpiryObserver};
 use async_trait::async_trait;
 use nessa_auth::application::{
     credential_admin::{
@@ -102,6 +102,22 @@ pub trait RegistrationIntents: Send + Sync {
     /// Only a proven unissued/conflicting intent may be discarded. An installed
     /// registration and its retained cause cannot be erased by this operation.
     async fn discard(&self, id: Uuid) -> Result<(), OutboxError>;
+    /// Cancel only a matching uninstalled intent using the actual held stop.
+    /// An installed registration remains owned by the ordinary stop lifecycle.
+    async fn cancel_uninstalled(
+        &self,
+        intent: RegistrationIntent,
+        stop: RegistrationStop,
+    ) -> Result<UninstalledCancellation, OutboxError>;
+}
+
+/// Storage selection after correlating the original reservation and stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UninstalledCancellation {
+    /// Private intent removal and cancellation audit acknowledged.
+    Cancelled,
+    /// Installation already owns this identity; cancellation removed nothing.
+    Installed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +126,8 @@ pub enum RegistrationFailure {
     Store(OutboxError),
     Inconsistent,
     Stopped,
+    /// The credential is stopped but registration cleanup did not acknowledge.
+    StoppedCleanup(OutboxError),
     /// Existing issuance lacks explicit webhook provenance; revoke and issue anew.
     OriginRecoveryRequired,
 }
@@ -125,6 +143,7 @@ pub struct RegisterWebhook<'a> {
     pub credentials: &'a dyn CredentialAdmin,
     pub admission: &'a dyn AccessAdmission,
     pub intents: &'a dyn RegistrationIntents,
+    pub stops: &'a dyn RegistrationStops,
     pub clock: &'a dyn Clock,
 }
 
@@ -251,15 +270,12 @@ impl RegisterWebhook<'_> {
                 | AccessError::InactiveMembership
                 | AccessError::IdentityMismatch => RegistrationFailure::Stopped,
             })?;
-        if !hold.snapshot.membership.is_active()
-            || !hold
-                .snapshot
-                .credential
-                .is_valid_at(self.clock.unix_seconds())
+        if hold.snapshot.credential != credential
+            || hold.snapshot.membership.id() != membership.id()
+            || hold.snapshot.membership.principal_id() != membership.principal_id()
+            || hold.snapshot.membership.organization_id() != membership.organization_id()
+            || hold.snapshot.membership.principal_id() != credential.principal_id()
         {
-            return Err(RegistrationFailure::Stopped);
-        }
-        if hold.snapshot.credential != credential || hold.snapshot.membership != membership {
             return Err(RegistrationFailure::Inconsistent);
         }
         let origin = &hold.snapshot.origin;
@@ -275,6 +291,50 @@ impl RegisterWebhook<'_> {
             || transitions[0].correlation.as_deref() != Some(intent.issue.request_id.as_str())
             || CredentialTransition::try_from(transitions[0].clone()).as_ref() != Ok(&expected)
         {
+            return Err(RegistrationFailure::Inconsistent);
+        }
+        let now_ms = self.clock.unix_milliseconds();
+        let stop = if let Some(fact) = hold
+            .snapshot
+            .revocation_fact()
+            .map_err(|_| RegistrationFailure::Inconsistent)?
+        {
+            Some(RegistrationStop::revoked(fact, now_ms))
+        } else if credential
+            .expires_at()
+            .is_some_and(|at| now_ms / 1000 >= at)
+        {
+            Some(RegistrationStop::expired(
+                ExpiryObserver::Owner(
+                    intent
+                        .registration()
+                        .map_err(RegistrationFailure::Store)?
+                        .target
+                        .owner,
+                ),
+                now_ms,
+            ))
+        } else {
+            None
+        };
+        if let Some(stop) = stop {
+            let cleanup = match self.intents.cancel_uninstalled(intent, stop.clone()).await {
+                Ok(UninstalledCancellation::Cancelled) => Ok(()),
+                Ok(UninstalledCancellation::Installed) => {
+                    self.stops
+                        .stop_credential(credential.id().clone(), stop)
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            drop(hold);
+            cleanup.map_err(RegistrationFailure::StoppedCleanup)?;
+            return Err(RegistrationFailure::Stopped);
+        }
+        if !hold.snapshot.membership.is_active() || !credential.is_valid_at(now_ms / 1000) {
+            return Err(RegistrationFailure::Stopped);
+        }
+        if hold.snapshot.membership != membership {
             return Err(RegistrationFailure::Inconsistent);
         }
         let registration_id = intent.id;

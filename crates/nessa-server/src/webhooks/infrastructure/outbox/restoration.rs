@@ -53,7 +53,11 @@ fn validate_records(connection: &Connection, owed: bool) -> Result<(), OutboxErr
 }
 
 /// No wildcard arm: adding an audit variant requires its owning relationship.
-fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<(), OutboxError> {
+pub(super) fn contextual(
+    connection: &Connection,
+    record: &Record,
+    owed: bool,
+) -> Result<(), OutboxError> {
     match record {
         Record::Registration {
             record_id,
@@ -98,6 +102,11 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
             if audit::checked_target(credential, principal, organization, owner)? != *target {
                 return Err(OutboxError::Invalid);
             }
+            if retired.as_ref().is_some_and(|facts| {
+                facts.kind == retirement::RetirementKind::Cancelled && *cause != facts.kind.cause()
+            }) {
+                return Err(OutboxError::Invalid);
+            }
             match cause {
                 audit::Cause::CredentialIssue => {
                     if *at_ms != issued_at {
@@ -138,9 +147,10 @@ fn contextual(connection: &Connection, record: &Record, owed: bool) -> Result<()
                         return Err(OutboxError::Invalid);
                     }
                 }
-                audit::Cause::Drained => {
+                audit::Cause::Drained | audit::Cause::RegistrationCancelled => {
                     let retired = retired.ok_or(OutboxError::Invalid)?;
                     if retired.audit != uuid(record_id)?
+                        || *cause != retired.kind.cause()
                         || live.is_some()
                         || retired.at_ms != *at_ms
                         || retired.stop

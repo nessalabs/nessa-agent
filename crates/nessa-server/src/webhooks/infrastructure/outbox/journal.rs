@@ -175,6 +175,7 @@ fn retire_drained(transaction: &Transaction<'_>, at_ms: u64) -> Result<(), Outbo
             at_ms,
             audit_id,
             saved.issued_at_ms,
+            super::retirement::RetirementKind::Drained,
         )?;
         transaction
             .execute("DELETE FROM cursors WHERE registration=?1", [&id])

@@ -17,6 +17,27 @@ pub(super) struct Retirement {
     pub issued_at_ms: u64,
     pub stop: RegistrationStop,
     pub at_ms: u64,
+    pub kind: RetirementKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RetirementKind {
+    Drained,
+    Cancelled,
+}
+impl RetirementKind {
+    pub(super) fn cause(self) -> audit::Cause {
+        match self {
+            Self::Drained => audit::Cause::Drained,
+            Self::Cancelled => audit::Cause::RegistrationCancelled,
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Drained => "drained",
+            Self::Cancelled => "cancelled",
+        }
+    }
 }
 
 pub(super) fn retain(
@@ -26,10 +47,11 @@ pub(super) fn retain(
     at_ms: u64,
     audit: Uuid,
     issued_at_ms: u64,
+    kind: RetirementKind,
 ) -> Result<(), OutboxError> {
     let stop = SavedStop::of(stop).encode()?;
     let target = &registration.target;
-    transaction.execute("INSERT INTO retirements(id,credential,principal,organization,owner,stop,retired_at,audit,issued_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![registration.id.to_string(),target.credential.as_str(),target.principal.as_str(),target.organization.as_str(),target.owner.as_str(),stop,integer(at_ms)?,audit.to_string(),integer(issued_at_ms)?]).map_err(unavailable)?;
+    transaction.execute("INSERT INTO retirements(id,credential,principal,organization,owner,stop,retired_at,audit,issued_at,kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![registration.id.to_string(),target.credential.as_str(),target.principal.as_str(),target.organization.as_str(),target.owner.as_str(),stop,integer(at_ms)?,audit.to_string(),integer(issued_at_ms)?,kind.label()]).map_err(unavailable)?;
     Ok(())
 }
 
@@ -43,12 +65,13 @@ struct SavedRetirement {
     owner: String,
     stop: String,
     retired: i64,
+    kind: String,
 }
 impl SavedRetirement {
     fn row(row: &Row<'_>) -> SqlResult<Self> {
         super::codec::check_row_bytes(
             row,
-            0..9,
+            0..10,
             super::audit::AUDIT_BYTES + 4 * nessa_auth::domain::MAX_IDENTIFIER_BYTES + 128,
         )?;
         Ok(Self {
@@ -61,6 +84,7 @@ impl SavedRetirement {
             owner: row.get(4)?,
             stop: row.get(5)?,
             retired: row.get(6)?,
+            kind: row.get(9)?,
         })
     }
     fn checked(self) -> Result<Retirement, OutboxError> {
@@ -82,6 +106,11 @@ impl SavedRetirement {
             issued_at_ms,
             stop,
             at_ms: u64::try_from(self.retired).map_err(invalid)?,
+            kind: match self.kind.as_str() {
+                "drained" => RetirementKind::Drained,
+                "cancelled" => RetirementKind::Cancelled,
+                _ => return Err(OutboxError::Invalid),
+            },
         })
     }
 }
@@ -133,7 +162,7 @@ pub(super) fn by_credential(
     Ok(first)
 }
 
-const SELECT: &str = "SELECT id,credential,principal,organization,owner,stop,retired_at,audit,issued_at FROM retirements";
+const SELECT: &str = "SELECT id,credential,principal,organization,owner,stop,retired_at,audit,issued_at,kind FROM retirements";
 
 fn credential_query() -> String {
     format!("{SELECT} WHERE credential=?1 LIMIT 2")
@@ -181,14 +210,68 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
         match audit::Record::decode(&text)? {
             audit::Record::Registration {
                 registration,
-                cause: audit::Cause::Drained,
+                cause,
                 ..
-            } if registration == id => {}
+            } if registration == id && cause == facts.kind.cause() => {}
             _ => return Err(OutboxError::Invalid),
         }
         if connection.query_row("SELECT EXISTS(SELECT 1 FROM registrations WHERE id=?1) OR NOT EXISTS(SELECT 1 FROM audit WHERE registration=?1)", [&id], |r| r.get::<_, bool>(0)).map_err(unavailable)? {
             return Err(OutboxError::Invalid);
         }
+        validate_history(connection, &facts)?;
+    }
+    Ok(())
+}
+
+/// A drained registration has at most its initial, first expiry observation,
+/// first stop and drain. A cancelled intent has only its cancellation. Published
+/// fragments still participate, so trimming cannot hide a cross-kind history.
+fn validate_history(connection: &Connection, facts: &Retirement) -> Result<(), OutboxError> {
+    let mut statement = connection.prepare("SELECT id,registration,delivery,record,published,source_reset FROM audit WHERE registration=?1 ORDER BY rowid LIMIT 5").map_err(unavailable)?;
+    let rows = statement
+        .query_map(
+            [facts.registration.to_string()],
+            super::publication::SavedAudit::row,
+        )
+        .map_err(unavailable)?;
+    let mut seen = 0u8;
+    let mut initial = false;
+    for row in rows {
+        let saved = row.map_err(super::cursor::row_error)?;
+        let owed = saved.published == 0;
+        let (_, text) = saved.checked()?;
+        let record = audit::Record::decode(&text)?;
+        super::restoration::contextual(connection, &record, owed)?;
+        let bit = match record {
+            audit::Record::Registration { cause, .. } => match cause {
+                audit::Cause::CredentialIssue => {
+                    initial = true;
+                    0
+                }
+                audit::Cause::CredentialExpiryObserved => 1,
+                audit::Cause::CredentialRevoked | audit::Cause::CredentialExpired => 2,
+                // The exact retirement audit identity was checked by contextual.
+                audit::Cause::Drained | audit::Cause::RegistrationCancelled => 0,
+                audit::Cause::Admission
+                | audit::Cause::Response
+                | audit::Cause::Deadline
+                | audit::Cause::AdmissionRefused
+                | audit::Cause::Restart
+                | audit::Cause::SourceChanged
+                | audit::Cause::SourceCheckpoint => return Err(OutboxError::Invalid),
+            },
+            audit::Record::Delivery { .. } | audit::Record::Cursor { .. } => {
+                return Err(OutboxError::Invalid);
+            }
+        };
+        if seen & bit != 0 {
+            return Err(OutboxError::Invalid);
+        }
+        seen |= bit;
+    }
+    if initial {
+        // Initial UUID uniqueness and acknowledgement ordering have one owner.
+        super::restoration::progress::validate(connection, facts.registration)?;
     }
     Ok(())
 }

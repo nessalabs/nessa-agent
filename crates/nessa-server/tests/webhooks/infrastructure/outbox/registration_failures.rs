@@ -368,6 +368,13 @@ impl RegistrationIntents for ChangedReservation<'_> {
     async fn discard(&self, id: Uuid) -> Result<(), OutboxError> {
         self.store.discard(id).await
     }
+    async fn cancel_uninstalled(
+        &self,
+        intent: RegistrationIntent,
+        stop: RegistrationStop,
+    ) -> Result<crate::webhooks::application::UninstalledCancellation, OutboxError> {
+        self.store.cancel_uninstalled(intent, stop).await
+    }
 }
 
 #[tokio::test]

@@ -113,6 +113,7 @@ impl Registered {
             credentials: &self.auth,
             admission: &self.auth,
             intents,
+            stops: &self.store,
             clock: self.clock.as_ref(),
         }
     }
@@ -226,6 +227,13 @@ impl RegistrationIntents for LostInstall<'_> {
     }
     async fn discard(&self, id: Uuid) -> Result<(), OutboxError> {
         self.store.discard(id).await
+    }
+    async fn cancel_uninstalled(
+        &self,
+        intent: RegistrationIntent,
+        stop: RegistrationStop,
+    ) -> Result<crate::webhooks::application::UninstalledCancellation, OutboxError> {
+        self.store.cancel_uninstalled(intent, stop).await
     }
 }
 
@@ -566,3 +574,6 @@ mod lifecycle_tests;
 
 #[path = "registration_stop.rs"]
 mod stop_tests;
+
+#[path = "registration_cancellation.rs"]
+mod cancellation_tests;

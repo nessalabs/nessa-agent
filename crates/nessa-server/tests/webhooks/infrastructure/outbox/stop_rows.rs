@@ -51,7 +51,7 @@ fn stop_rows_are_bounded_before_owned_allocation() {
     );
     assert!(row.is_ok());
     let row = connection.query_row(
-        "SELECT 'registration','credential','principal','organization','owner',?1,10001,'audit',10000",
+        "SELECT 'registration','credential','principal','organization','owner',?1,10001,'audit',10000,'drained'",
         [&oversized],
         SavedRetirement::row,
     );
@@ -59,14 +59,14 @@ fn stop_rows_are_bounded_before_owned_allocation() {
         matches!(row, Err(Error::FromSqlConversionFailure(_,_,source)) if source.downcast_ref::<RowTooLarge>().is_some())
     );
     let row = connection.query_row(
-        "SELECT 'registration','credential','principal','organization','owner',?1,10001,'audit',10000",
+        "SELECT 'registration','credential','principal','organization','owner',?1,10001,'audit',10000,'drained'",
         ["{}"],
         SavedRetirement::row,
     );
     assert!(row.is_ok());
     connection
         .query_row(
-            "SELECT ?1,'credential','principal','organization','owner',?2,10001,?3,10000",
+            "SELECT ?1,'credential','principal','organization','owner',?2,10001,?3,10000,'drained'",
             params![
                 Uuid::new_v4().to_string(),
                 largest_stop,
@@ -136,7 +136,8 @@ fn retirement_identity_is_bounded_in_every_shared_row_read() {
     let stop = SavedStop::of(&RegistrationStop::expired(ExpiryObserver::Restart, 10001))
         .encode()
         .unwrap();
-    let query = "SELECT ?1,'credential','principal','organization','owner',?2,10001,?3,10000";
+    let query =
+        "SELECT ?1,'credential','principal','organization','owner',?2,10001,?3,10000,'drained'";
     let audit = Uuid::new_v4().to_string();
     let row = connection.query_row(query, params![oversized, stop, audit], SavedRetirement::row);
     assert!(
@@ -154,4 +155,34 @@ fn retirement_identity_is_bounded_in_every_shared_row_read() {
         .unwrap();
     assert_eq!(facts.registration, id);
     assert_eq!(facts.audit.to_string(), audit);
+}
+
+#[test]
+fn retirement_kind_is_closed_and_bounded_before_owned_allocation() {
+    let connection = Connection::open_in_memory().unwrap();
+    let stop = SavedStop::of(&RegistrationStop::expired(ExpiryObserver::Restart, 10001))
+        .encode()
+        .unwrap();
+    let id = Uuid::new_v4().to_string();
+    let audit = Uuid::new_v4().to_string();
+    let query = "SELECT ?1,'credential','principal','organization','owner',?2,10001,?3,10000,?4";
+    for kind in ["drained", "cancelled", "unsupported"] {
+        let saved = connection
+            .query_row(query, params![id, stop, audit, kind], SavedRetirement::row)
+            .unwrap();
+        if kind == "unsupported" {
+            assert!(matches!(saved.checked(), Err(OutboxError::Invalid)));
+        } else {
+            saved.checked().unwrap();
+        }
+    }
+    let oversized = "x".repeat(1024 * 1024);
+    let row = connection.query_row(
+        query,
+        params![id, stop, audit, oversized],
+        SavedRetirement::row,
+    );
+    assert!(
+        matches!(row, Err(Error::FromSqlConversionFailure(_,_,source)) if source.downcast_ref::<RowTooLarge>().is_some())
+    );
 }

@@ -15,7 +15,7 @@ pub use outbox::{
 };
 pub use registration::{
     RegisterWebhook, RegisteredWebhook, RegistrationConfig, RegistrationFailure,
-    RegistrationIntent, RegistrationIntents,
+    RegistrationIntent, RegistrationIntents, UninstalledCancellation,
 };
 pub(crate) use registration_stop::StopFact;
 pub use registration_stop::{

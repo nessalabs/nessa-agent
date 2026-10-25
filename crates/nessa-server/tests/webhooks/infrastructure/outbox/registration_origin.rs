@@ -204,6 +204,7 @@ async fn ambiguous_historical_admin_origin_is_preserved_and_requires_recovery() 
             credentials: &auth,
             admission: &auth,
             intents: &f.store,
+            stops: &f.store,
             clock: f.clock.as_ref(),
         };
         for _ in 0..2 {

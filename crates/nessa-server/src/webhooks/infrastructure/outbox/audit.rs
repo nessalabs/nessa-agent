@@ -27,6 +27,7 @@ pub(super) enum Cause {
     CredentialExpired,
     CredentialExpiryObserved,
     Drained,
+    RegistrationCancelled,
     Admission,
     Response,
     Deadline,
@@ -112,6 +113,7 @@ pub(super) enum RegistrationChange<'a> {
         stop: &'a RegistrationStop,
     },
     Retire(&'a RegistrationStop),
+    Cancel(&'a RegistrationStop),
 }
 
 pub(super) struct DeliveryEvidence {
@@ -150,9 +152,9 @@ impl Record {
     ) -> Self {
         let credential_stop = match &change {
             RegistrationChange::Issue => None,
-            RegistrationChange::Lifecycle { stop, .. } | RegistrationChange::Retire(stop) => {
-                Some(SavedStop::of(stop))
-            }
+            RegistrationChange::Lifecycle { stop, .. }
+            | RegistrationChange::Retire(stop)
+            | RegistrationChange::Cancel(stop) => Some(SavedStop::of(stop)),
         };
         let (before, after, cause, initiator, stop_cause, stop_at_ms) = match change {
             RegistrationChange::Issue => (
@@ -185,6 +187,14 @@ impl Record {
                 "stopped",
                 "absent",
                 Cause::Drained,
+                registry::stop_actor(stop.observation()),
+                Some(stop_cause(stop.observation())),
+                Some(stop.observation().at_ms()),
+            ),
+            RegistrationChange::Cancel(stop) => (
+                "reserved",
+                "absent",
+                Cause::RegistrationCancelled,
                 registry::stop_actor(stop.observation()),
                 Some(stop_cause(stop.observation())),
                 Some(stop.observation().at_ms()),
@@ -430,7 +440,9 @@ impl Record {
                             credential_stop.as_ref(),
                         )?;
                     }
-                    ("stopped", "absent", Cause::Drained, Some(cause), Some(at)) => {
+                    ("stopped", "absent", Cause::Drained, Some(cause), Some(at))
+                    | ("reserved", "absent", Cause::RegistrationCancelled, Some(cause), Some(at)) =>
+                    {
                         check_stop(cause, initiator, *at, credential_stop.as_ref())?;
                     }
                     _ => return Err(OutboxError::Invalid),

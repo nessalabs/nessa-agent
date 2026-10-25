@@ -85,15 +85,19 @@ impl SqlOutbox {
         &self,
         work: impl FnOnce(&mut Connection, &Path) -> Result<T, OutboxError> + Send + 'static,
     ) -> Result<T, OutboxError> {
-        self.run_checked(|_| Ok(()), work).await
+        self.run_checked(
+            |_| Ok(()),
+            move |connection, audit, ()| work(connection, audit),
+        )
+        .await
     }
 
     /// Correlate supplied original facts before owed publication. This check
     /// grants no credential or conversation permission.
-    pub(super) async fn run_checked<T: Send + 'static>(
+    pub(super) async fn run_checked<T: Send + 'static, C: Send + 'static>(
         &self,
-        check: impl FnOnce(&Connection) -> Result<(), OutboxError> + Send + 'static,
-        work: impl FnOnce(&mut Connection, &Path) -> Result<T, OutboxError> + Send + 'static,
+        check: impl FnOnce(&Connection) -> Result<C, OutboxError> + Send + 'static,
+        work: impl FnOnce(&mut Connection, &Path, C) -> Result<T, OutboxError> + Send + 'static,
     ) -> Result<T, OutboxError> {
         let owner = self.owner.clone();
         let permit = owner
@@ -104,13 +108,13 @@ impl SqlOutbox {
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let mut connection = owner.connection.lock().map_err(unavailable)?;
-            check(&connection)?;
+            let checked = check(&connection)?;
             finish(
                 &mut connection,
                 &owner.audit,
                 owner.clock.unix_milliseconds(),
             )?;
-            work(&mut connection, &owner.audit)
+            work(&mut connection, &owner.audit, checked)
         })
         .await
         .map_err(unavailable)?

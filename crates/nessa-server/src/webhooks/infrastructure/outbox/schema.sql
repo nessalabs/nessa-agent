@@ -79,6 +79,7 @@ BEGIN DELETE FROM audit WHERE delivery=OLD.id AND published=1; END;
 -- until all its audit projections have been acknowledged and trimmed.
 CREATE TABLE retirements (
     id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL DEFAULT 'drained' CHECK(kind IN ('drained','cancelled')),
     audit TEXT NOT NULL UNIQUE REFERENCES audit(id) DEFERRABLE INITIALLY DEFERRED,
     credential TEXT NOT NULL,
     principal TEXT NOT NULL,

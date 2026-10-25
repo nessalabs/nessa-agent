@@ -18,6 +18,7 @@ pub(super) fn is_initial(record: &Record) -> bool {
             | Cause::CredentialExpired
             | Cause::CredentialExpiryObserved
             | Cause::Drained
+            | Cause::RegistrationCancelled
             | Cause::Admission
             | Cause::Response
             | Cause::Deadline
@@ -52,7 +53,10 @@ impl RetainedProgress {
     }
 }
 
-pub(super) fn validate(connection: &Connection, registration: Uuid) -> Result<(), OutboxError> {
+pub(in super::super) fn validate(
+    connection: &Connection,
+    registration: Uuid,
+) -> Result<(), OutboxError> {
     let key = registration.to_string();
     let mut progress = RetainedProgress::default();
     let mut statement = connection.prepare(AUDIT).map_err(unavailable)?;
