@@ -195,6 +195,8 @@ export async function exited(child, ms) {
  * @param {string} [o.evidence] task-owned output directory. Before private data
  *   cleanup, preserve gateway.log and gateway-status.json here, never credentials
  *   or audit record contents. A failed evidence write still removes private data.
+ * @param {Record<string, string>} [o.environment] more of the gateway's
+ *   environment, such as `NESSA_GITHUB_APP`
  * @returns the gateway: `{ directory, token, url, log, server, stop, restart }`.
  *   `token` is the owner token file's path; `log()` the gateway's output so
  *   far; `restart(signal, second)` kills it (a crash by default) and starts
@@ -267,6 +269,7 @@ export async function startLocalGateway(o) {
             ...process.env,
             ...(o.path ? { PATH: `${o.path}:${process.env.PATH}` } : {}),
           }),
+      ...o.environment,
       NESSA_STAGE: "ci",
       NESSA_PORT: String(o.port),
       NESSA_DATA_DIR: directory,

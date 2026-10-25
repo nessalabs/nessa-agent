@@ -508,6 +508,31 @@ export function RowAction({
   )
 }
 
+/**
+ * A link that leaves the window, drawn as its row's button and described by
+ * its row's line. Data attributes pass through for checks to find it.
+ */
+export function RowLink({
+  children,
+  href,
+  ...data
+}: {
+  children: ReactNode
+  href: string
+} & { readonly [attribute: `data-${string}`]: string | boolean | undefined }) {
+  const description = useContext(RowDescription)
+  return (
+    <a
+      className="settings-button settings-button-link"
+      href={href}
+      aria-describedby={description}
+      {...data}
+    >
+      {children}
+    </a>
+  )
+}
+
 /** Local, unsaved state for settings that only show their shape for now. */
 export function usePrototype<T>(initial: T) {
   return useState<T>(initial)

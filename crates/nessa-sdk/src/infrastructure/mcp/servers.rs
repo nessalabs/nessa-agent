@@ -11,7 +11,8 @@ use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri, UiVisibility};
 use crate::infrastructure::acp::sessions::{
-    ForwardedResults, McpServerProblem, StandInGrant, StdioMcpServer, MAX_MCP_SERVERS,
+    ForwardedResults, McpServerProblem, OpenCredentials, StandInGrant, StdioMcpServer,
+    MAX_MCP_SERVERS,
 };
 use crate::infrastructure::clock::{within, Clock};
 use serde_json::{json, Value};
@@ -154,6 +155,9 @@ pub(super) struct Inner {
     claims: Arc<SessionClaims>,
     clock: Arc<dyn Clock>,
     launcher: Arc<dyn Launcher>,
+    /// What a session of the named server is also started with, read at each
+    /// opening for a harness (`give_open_credentials`).
+    open_credentials: RwLock<BTreeMap<String, OpenCredentials>>,
     /// Set once, by `stop`; what an opening races.
     pub(super) stopping: watch::Sender<bool>,
     /// The sessions open now. A session is registered under this lock only
@@ -358,6 +362,7 @@ impl McpServers {
                 claims: Arc::new(SessionClaims::default()),
                 clock,
                 launcher,
+                open_credentials: RwLock::default(),
                 stopping: watch::channel(false).0,
                 live: Mutex::default(),
             }),
@@ -395,6 +400,51 @@ impl McpServers {
         }
         *self.inner.launches.write().expect("configured servers") = launches;
         Ok(())
+    }
+
+    /// Start every session of the stdio server `server` opened for a harness
+    /// from now on with `credentials`' variables beside its own, read as each
+    /// one opens, as a provider open reads them (`AcpConfig::open_credentials`):
+    /// a session already open keeps what it was started with. A server's own
+    /// variable of the same name wins and the credentials are left out whole,
+    /// logged, so two halves of one setting never mix. A look at a server
+    /// outside any conversation ([`Self::open_once`]) is never given them.
+    ///
+    /// # Panics
+    ///
+    /// When another thread panicked while holding the credentials' lock.
+    pub fn give_open_credentials(&self, server: &str, credentials: OpenCredentials) {
+        self.inner
+            .open_credentials
+            .write()
+            .expect("open credentials")
+            .insert(server.to_owned(), credentials);
+    }
+
+    /// `launch` as a harness's session of it starts now: with the open
+    /// credentials given for it, unless one of its own variables has a name
+    /// they use.
+    fn with_open_credentials(&self, launch: &McpServerLaunch) -> Option<McpServerLaunch> {
+        let variables = self
+            .inner
+            .open_credentials
+            .read()
+            .expect("open credentials")
+            .get(&launch.server.name)?
+            .current();
+        if variables.is_empty() {
+            return None;
+        }
+        if variables
+            .keys()
+            .any(|name| launch.environment.contains_key(name))
+        {
+            tracing::warn!(server = %launch.server.name, "an MCP server's own variable has the name of an open credential; the credentials are left out");
+            return None;
+        }
+        let mut given = launch.clone();
+        given.environment.extend(variables);
+        Some(given)
     }
 
     /// The exchange and authorization owner later remote openings use.
@@ -659,11 +709,15 @@ impl McpServers {
             return Err(McpError::Closed);
         }
         let deadline = inner.clock.now() + INITIALIZE_TIMEOUT;
+        let given = owner
+            .is_some()
+            .then(|| self.with_open_credentials(launch))
+            .flatten();
         let Launched {
             output,
             input,
             process,
-        } = inner.launcher.launch(launch)?;
+        } = inner.launcher.launch(given.as_ref().unwrap_or(launch))?;
         let connection = Arc::new(Connection::open(output, input, inner.clock.clone()));
         self.finish_open(connection, process, server.to_owned(), owner, deadline)
             .await

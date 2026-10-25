@@ -23,6 +23,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 
 import {
   MODELS,
+  SERVER,
   agentCommand,
   repoRoot,
   serverScript,
@@ -120,7 +121,7 @@ export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
  * `scenario`, it runs that file. With `evidence`, the run's logs are written
  * there. With `others`, agents besides `options.agent`, each is configured
  * as the scripted agent too, speaking its own profile, so a conversation can
- * be switched to it. `limits` and `native` are the gateway config's sections (`startLocalGateway`). `options.mode` `prod` previews a production build; the default is a
+ * be switched to it. `limits` and `native` are the gateway config's sections (`startLocalGateway`); `environment` is more of the gateway's environment, and `servers` more stored MCP servers beside `mcptest`. `options.mode` `prod` previews a production build; the default is a
  * dev server. Resolves with `{ url, mode, close, client, gateway, timings,
  * token }`: `url` the desktop page, `token()` the owner token, `close()`
  * stops all three. A gateway that does not start is "could not run", with
@@ -129,7 +130,17 @@ export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
 export async function startGatewayStack(
   options,
   instance,
-  { as = "owner", scripted, scenario, evidence, limits, native, others = [] } = {},
+  {
+    as = "owner",
+    scripted,
+    scenario,
+    evidence,
+    limits,
+    native,
+    environment,
+    servers = [],
+    others = [],
+  } = {},
 ) {
   const agent = options.agent
   if (!["claude", "codex"].includes(agent))
@@ -167,10 +178,17 @@ export async function startGatewayStack(
     semanticArgs: command.semanticArgs,
     model: command.model,
     path: command.path,
-    mcpServer: launch?.mcp ?? { command: process.execPath, args: [serverScript] },
+    mcpServers: [
+      {
+        name: SERVER,
+        ...(launch?.mcp ?? { command: process.execPath, args: [serverScript] }),
+      },
+      ...servers,
+    ],
     signedOut: launch?.signedOut ?? false,
     limits,
     native,
+    environment,
     runtimes,
     evidence,
   }).catch((error) => {

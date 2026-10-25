@@ -156,6 +156,8 @@ fn an_installation_that_only_knew_one_agent_keeps_starting_on_it() {
             #[cfg(unix)]
             stand_ins: Default::default(),
             #[cfg(unix)]
+            open_credentials: Default::default(),
+            #[cfg(unix)]
             mcp_stand_ins: Default::default(),
             channel_instructions: None,
             selected: None,
@@ -210,6 +212,8 @@ fn default_workspace_rejects_a_symlinked_ancestor() {
             mcp_servers: vec![],
             #[cfg(unix)]
             stand_ins: Default::default(),
+            #[cfg(unix)]
+            open_credentials: Default::default(),
             #[cfg(unix)]
             mcp_stand_ins: Default::default(),
             channel_instructions: None,
@@ -363,6 +367,8 @@ fn several_configured_agents_with_no_choice_between_them_is_not_the_desktops_to_
             mcp_servers: vec![],
             #[cfg(unix)]
             stand_ins: Default::default(),
+            #[cfg(unix)]
+            open_credentials: Default::default(),
             #[cfg(unix)]
             mcp_stand_ins: Default::default(),
             channel_instructions: None,

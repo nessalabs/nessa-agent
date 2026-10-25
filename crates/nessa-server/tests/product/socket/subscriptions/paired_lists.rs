@@ -206,8 +206,10 @@ async fn paired_lists_keep_channel_ids_without_widening_their_scope() {
         assert_eq!(rows[0]["conversationId"], shared.to_string());
         assert_eq!(rows[0]["channelId"], visible_channel.as_str());
     }
+    let baseline = fixture.storage.committed_watches();
     let mut client = fixture.connect();
     let (subscription, first) = open_list(&mut client).await;
+    wait_for_watches(&fixture, baseline + 1).await;
     assert_eq!(
         first["payload"]["list"]["conversations"][0]["channelId"],
         visible_channel.as_str()

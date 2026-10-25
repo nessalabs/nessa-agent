@@ -2517,6 +2517,105 @@ impl PairingErrorCode {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubAccount {
+    pub id: u64,
+    pub login: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum GithubConnectState {
+    #[serde(rename = "signed_out")]
+    SignedOut,
+    #[serde(rename = "connecting")]
+    Connecting,
+    #[serde(rename = "connected")]
+    Connected,
+}
+impl GithubConnectState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SignedOut => "signed_out",
+            Self::Connecting => "connecting",
+            Self::Connected => "connected",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum GithubConnectEnd {
+    #[serde(rename = "expired")]
+    Expired,
+    #[serde(rename = "denied")]
+    Denied,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+    #[serde(rename = "rejected")]
+    Rejected,
+    #[serde(rename = "unreachable")]
+    Unreachable,
+    #[serde(rename = "store_unavailable")]
+    StoreUnavailable,
+    #[serde(rename = "audit_unavailable")]
+    AuditUnavailable,
+}
+impl GithubConnectEnd {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Expired => "expired",
+            Self::Denied => "denied",
+            Self::Cancelled => "cancelled",
+            Self::Rejected => "rejected",
+            Self::Unreachable => "unreachable",
+            Self::StoreUnavailable => "store_unavailable",
+            Self::AuditUnavailable => "audit_unavailable",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubCode {
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in_seconds: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubConnection {
+    pub state: GithubConnectState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<GithubAccount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<GithubCode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<GithubConnectEnd>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unrecorded: Option<bool>,
+    pub install_url: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum GithubErrorCode {
+    #[serde(rename = "github_not_configured")]
+    GithubNotConfigured,
+    #[serde(rename = "github_unreachable")]
+    GithubUnreachable,
+    #[serde(rename = "github_rejected")]
+    GithubRejected,
+    #[serde(rename = "github_storage_unavailable")]
+    GithubStorageUnavailable,
+    #[serde(rename = "github_audit_unavailable")]
+    GithubAuditUnavailable,
+}
+impl GithubErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::GithubNotConfigured => "github_not_configured",
+            Self::GithubUnreachable => "github_unreachable",
+            Self::GithubRejected => "github_rejected",
+            Self::GithubStorageUnavailable => "github_storage_unavailable",
+            Self::GithubAuditUnavailable => "github_audit_unavailable",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PeerEnrollParams {
     pub address: String,
     pub code: String,
@@ -3434,6 +3533,10 @@ pub mod product_method {
     pub const PAIRING_DENY: &str = "pairing.deny";
     pub const PAIRING_CANCEL: &str = "pairing.cancel";
     pub const PAIRING_SET_LINKING: &str = "pairing.setLinking";
+    pub const GITHUB_STATUS: &str = "github.status";
+    pub const GITHUB_CONNECT: &str = "github.connect";
+    pub const GITHUB_CANCEL: &str = "github.cancel";
+    pub const GITHUB_DISCONNECT: &str = "github.disconnect";
     pub const PEER_ENROLL: &str = "peer.enroll";
     pub const PEER_LIST: &str = "peer.list";
     pub const PEER_FORGET: &str = "peer.forget";
@@ -3644,7 +3747,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 83
+                items.len() <= 87
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3732,6 +3835,10 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "pairing.deny",
     "pairing.cancel",
     "pairing.setLinking",
+    "github.status",
+    "github.connect",
+    "github.cancel",
+    "github.disconnect",
     "peer.enroll",
     "peer.list",
     "peer.forget",
@@ -3790,6 +3897,10 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "pairing.deny"
         | "pairing.cancel"
         | "pairing.setLinking"
+        | "github.status"
+        | "github.connect"
+        | "github.cancel"
+        | "github.disconnect"
         | "peer.enroll"
         | "peer.list"
         | "peer.forget"
