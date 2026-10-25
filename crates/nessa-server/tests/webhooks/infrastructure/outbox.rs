@@ -405,7 +405,9 @@ async fn owner_lock_and_physical_permit_survive_waiter_cancellation() {
 #[tokio::test]
 async fn terminal_retention_is_bounded() {
     let f = Fixture::new().await;
-    for position in 1..=RETAINED_LIMIT as u64 + 1 {
+    retention_fixture::acknowledged_prehistory(&f, RETAINED_LIMIT, 0, true).await;
+    {
+        let position = RETAINED_LIMIT as u64 + 1;
         f.store.queue(f.record(position)).await.unwrap();
         let queued = f.store.due(1000).await.unwrap().remove(0).delivery;
         let sending = queued.admit(7, 2000).unwrap();
@@ -729,18 +731,7 @@ async fn bulk_reset_keeps_one_reader_initiator() {
 #[tokio::test]
 async fn bulk_reset_retention_is_bounded_in_the_commit() {
     let f = Fixture::new().await;
-    for position in 1..=RETAINED_LIMIT as u64 {
-        f.store.queue(f.record(position)).await.unwrap();
-        let queued = f.store.due(1000).await.unwrap().remove(0).delivery;
-        let refused = queued.refused().unwrap();
-        f.store
-            .transition(&queued, &refused, DeliveryCause::Refused, 1001)
-            .await
-            .unwrap();
-    }
-    for position in RETAINED_LIMIT as u64 + 1..=(RETAINED_LIMIT + PENDING_LIMIT) as u64 {
-        f.store.queue(f.record(position)).await.unwrap();
-    }
+    retention_fixture::acknowledged_prehistory(&f, RETAINED_LIMIT, PENDING_LIMIT, false).await;
     let next = (RETAINED_LIMIT + PENDING_LIMIT) as u64 + 1;
     assert_eq!(
         f.store.queue(replaced_source(f.record(next))).await,
@@ -749,6 +740,27 @@ async fn bulk_reset_retention_is_bounded_in_the_commit() {
     // Read the committed DB directly, without a public operation's recovery
     // pass masking a transient retention violation.
     let connection = f.store.owner.connection.lock().unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM deliveries WHERE phase IN ('queued','sending','retry')",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM deliveries WHERE position<=?1",
+                [RETAINED_LIMIT as i64],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+
     assert_eq!(
         connection
             .query_row(
@@ -888,22 +900,7 @@ async fn restart_keeps_invalidated_sending_unknown() {
 #[tokio::test]
 async fn stop_retention_is_bounded_when_publication_fails() {
     let f = Fixture::new().await;
-    for position in 1..=RETAINED_LIMIT as u64 {
-        f.store.queue(f.record(position)).await.unwrap();
-        let queued = f.store.due(1000).await.unwrap().remove(0).delivery;
-        f.store
-            .transition(
-                &queued,
-                &queued.refused().unwrap(),
-                DeliveryCause::Refused,
-                1001,
-            )
-            .await
-            .unwrap();
-    }
-    for position in RETAINED_LIMIT as u64 + 1..=(RETAINED_LIMIT + PENDING_LIMIT) as u64 {
-        f.store.queue(f.record(position)).await.unwrap();
-    }
+    retention_fixture::acknowledged_prehistory(&f, RETAINED_LIMIT, PENDING_LIMIT, false).await;
     let held = f.audit.with_extension("held");
     std::fs::rename(&f.audit, &held).unwrap();
     assert_eq!(
@@ -2528,3 +2525,6 @@ async fn oversized_stop_is_invalid_in_public_registration_read() {
     ));
     assert_eq!(f.audits(), files);
 }
+
+#[path = "outbox/retention_fixture.rs"]
+mod retention_fixture;
