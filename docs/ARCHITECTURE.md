@@ -1099,3 +1099,12 @@ bootstraps first access, and local recovery/provisioning retain their exclusive
 registry lock. Cloud selection fails explicitly until its implementation exists.
 See the [CLI module map](../crates/nessa-server/src/cli/mod.rs) and
 [local auth guide](guides/local-auth.md).
+
+## Hosted GitHub webhook ingress
+
+`packages/github-webhooks` is a standalone Cloudflare Workers Free deployment,
+with D1 as its bounded durable inbox. Composition builds the HTTP, HMAC and SQL
+adapters; the application acknowledges a delivery only after the store's
+confirmed receipt. It does not import the desktop/gateway, expose retained
+events to users, or run agents. The package [module map and operations runbook](../packages/github-webhooks/README.md)
+and [ADR 1107](adr/todo/1107-github-webhook-receiver.md) own its lifecycle.

@@ -10,7 +10,7 @@
     "build": "pnpm ui:check && vite build",
     "preview": "vite preview",
     "typecheck": "pnpm ui:check && tsc --noEmit",
-    "test": "pnpm ui:check && vitest run --config vitest.config.ts",
+    "test": "pnpm ui:check && vitest run --config vitest.config.ts && pnpm --dir packages/github-webhooks test",
     "format": "prettier --write src scripts packages eslint.config.js prettier.config.js",
     "format:check": "prettier --check src scripts packages verification eslint.config.js prettier.config.js",
     "lint": "eslint src packages verification",

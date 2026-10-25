@@ -2576,3 +2576,16 @@ windows `product/workspace.rs` holds for each connection in
 `domain/value_objects/workspace_window.rs`), through
 `service/workspace_windows.rs`; see [the window an agent
 shares](design/agent-window.md).
+
+## GitHub webhook ingress
+
+`packages/github-webhooks/src/webhooks/` owns the hosted ingress context:
+`domain/delivery.ts` constrains delivery identity and inbox bounds;
+`application/receive.ts` coordinates acceptance through its storage port;
+`infrastructure/` implements HTTP, GitHub signature verification and D1.
+`src/composition/worker.ts` constructs the runtime, and `migrations/` owns
+SQLite tables and atomic accounting triggers. Domain/application tests sit
+beside their layers; `tests/worker.test.ts` drives the bundled Worker with
+real local D1. This package is deployed separately from the desktop. Its
+[module map](../packages/github-webhooks/README.md) describes operations and
+[ADR 1107](adr/todo/1107-github-webhook-receiver.md) records ordering and limits.
