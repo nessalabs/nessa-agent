@@ -207,10 +207,19 @@ function ManagedDevices({
   // The control that opened the modal is gone by the time it closes (Pair
   // becomes Show code, Show code becomes Pair after a cancel): focus returns
   // to whatever the row offers now.
-  const returnFocus = () =>
-    page.current
-      ?.querySelector<HTMLButtonElement>("[data-pairing-row] button:not(:disabled)")
-      ?.focus()
+  // While the read after a cancel is out, the row's buttons rest disabled
+  // and cannot take focus: it waits on the row itself, then moves to the
+  // control once one can be used.
+  const returnFocus = () => {
+    const row = page.current?.querySelector<HTMLElement>("[data-pairing-row]")
+    const control = row?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+    ;(control ?? row)?.focus()
+  }
+  useEffect(() => {
+    const row = page.current?.querySelector<HTMLElement>("[data-pairing-row]")
+    if (!row || row.ownerDocument.activeElement !== row) return
+    row.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus()
+  })
   const phase =
     state.connection === "unreachable" && state.linking === "unknown"
       ? "unreachable"
@@ -347,6 +356,7 @@ function PairingGroup({
                   : sentences.pairDetail
         }
         data-pairing-row
+        tabIndex={-1}
         control={
           open === null ? (
             <button

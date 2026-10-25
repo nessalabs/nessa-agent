@@ -63,7 +63,9 @@
   --settings-focus-offset: 2px;
 }
 
-:where(.settings) :focus-visible {
+/* A kit dialog's panel and body draw their own rings: the panel only after a keyboard open. */
+:where(.settings)
+  :focus-visible:not(:where([data-slot="dialog"], [data-slot="dialog-body"])) {
   outline: var(--settings-focus-outline);
   outline-offset: var(--settings-focus-offset);
 }

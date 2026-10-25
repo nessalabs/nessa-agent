@@ -329,6 +329,43 @@ describe("Linked devices", () => {
     expect(document.activeElement?.getAttribute("data-linked-action")).toBe("pair")
   })
 
+  it("focus waits on the row while the read after a cancel is out, then takes Pair", async () => {
+    let reads = 0
+    let answerRead: (() => void) | undefined
+    const available = {
+      invitationId: "00112233445566778899aabbccddeeff",
+      phase: "available" as const,
+      expiresAtMs: Date.now() + 60_000,
+    }
+    const gate = gateway(async () => {
+      reads += 1
+      if (reads === 3) await new Promise<void>((done) => (answerRead = done))
+      return reads === 2
+        ? { ok: true, value: { kind: "on", enrollments: [available], devices: [] } }
+        : { ok: true, value: { kind: "on", enrollments: [], devices: [] } }
+    })
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
+    )
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          "[data-slot='dialog'] [data-linked-action='cancel']",
+        )
+        ?.click(),
+    )
+    await act(async () => new Promise((done) => setTimeout(done, 0)))
+    expect(document.querySelector("[data-slot='dialog']")).toBeNull()
+    expect(document.activeElement?.hasAttribute("data-pairing-row")).toBe(true)
+    await act(async () => answerRead?.())
+    expect(document.activeElement?.getAttribute("data-linked-action")).toBe("pair")
+  })
+
   it("a failed New code is said in the modal, and an expired code draws no orb", async () => {
     let reads = 0
     const gate = gateway(async () => {
