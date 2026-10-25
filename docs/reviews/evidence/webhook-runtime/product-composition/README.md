@@ -55,7 +55,8 @@ rule has its separate original-failure/corrected actual-physical-write regressio
 
 Original fixture compile failures and all raw original/corrected/mutation logs
 remain preserved in the execution workspace. Review findings must be closed by
-a fresh full round before treating this slice as independently reviewed. Browser,
+a fresh full round before treating this slice as independently reviewed. That
+[third round](review-3.md) is now clean at every priority. Browser,
 stress and recipient source qualification remain separate outstanding gates.
 
 Round-two closure: [original report](review-2.md). The new public target
@@ -70,4 +71,5 @@ corrected red control uses the existing error mapping and still fails before
 the fix. All 12 product tests, server all-target Clippy, formatting, 108
 architecture tests and architecture check pass. Other previously qualified source
 is unchanged; no unchanged retention or mutation suite was repeated. A fresh
-full third review remains pending.
+full third review is clean at every priority; its independent four targeted
+tests each passed. Delivery and final assembled qualifications remain pending.
