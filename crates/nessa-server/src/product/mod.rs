@@ -50,13 +50,16 @@ pub(crate) use socket::{RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 pub(crate) use state::ConnectedEnvironments;
 pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, SessionSettings};
 
+mod channel;
 mod conversation;
+mod github;
 mod mcp_apps;
 pub(crate) mod mcp_servers;
 mod native;
 mod pairing;
 mod peers;
 
+pub use github::GithubRoutes;
 pub use native::{DeviceCredentials, NativeSessions};
 
 mod agent_install;

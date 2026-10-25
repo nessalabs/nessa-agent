@@ -4,6 +4,7 @@
 mod agent_credentials;
 mod app_sandbox;
 mod attachments;
+mod channel_paths;
 mod composition;
 mod desktop_window;
 mod diagnostics;
@@ -132,6 +133,9 @@ fn main() {
             updater::install_update,
             attachments::choose_attachment_files,
             attachments::read_attachment_bytes,
+            channel_paths::choose_channel_folder,
+            channel_paths::choose_channel_resources,
+            channel_paths::home_folder,
             saving::save_file_begin,
             saving::save_file_part,
             saving::save_file_finish,

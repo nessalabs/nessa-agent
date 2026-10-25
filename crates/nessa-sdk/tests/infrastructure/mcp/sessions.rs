@@ -931,3 +931,60 @@ async fn listing_tool_pages_stops_at_its_bound_and_says_there_was_more() {
         Err(McpError::TooLarge("tools/list"))
     );
 }
+
+/// A sign-in that changes between openings, as a gateway's does.
+struct SignIn(std::sync::Mutex<Option<&'static str>>);
+impl crate::infrastructure::acp::sessions::OpenCredentialSource for SignIn {
+    fn variables(&self) -> std::collections::BTreeMap<OsString, OsString> {
+        self.0
+            .lock()
+            .unwrap()
+            .map(|token| [("GH_TOKEN".into(), token.into())].into())
+            .unwrap_or_default()
+    }
+}
+
+#[tokio::test]
+async fn a_harness_session_starts_with_the_open_credentials_given_now_and_a_look_never() {
+    use crate::infrastructure::acp::sessions::OpenCredentials;
+    let (servers, launcher, _) = servers(Behaviour::default());
+    let sign_in = Arc::new(SignIn(std::sync::Mutex::new(Some("ghu_one"))));
+    servers.give_open_credentials("fixture", OpenCredentials::read_from(sign_in.clone()));
+    let token = |index: usize| {
+        launcher.environments.lock().unwrap()[index]
+            .get(&OsString::from("GH_TOKEN"))
+            .cloned()
+    };
+    let first = servers.open("fixture", super::owner()).await.unwrap();
+    *sign_in.0.lock().unwrap() = None;
+    let second = servers.open("fixture", super::owner()).await.unwrap();
+    let look = servers.open_once(&launch("fixture")).await.unwrap();
+    assert_eq!(
+        token(0),
+        Some("ghu_one".into()),
+        "read as the session opens"
+    );
+    assert_eq!(
+        token(1),
+        None,
+        "signed out since: the next session has none"
+    );
+    *sign_in.0.lock().unwrap() = Some("ghu_two");
+    let third = servers.open("fixture", super::owner()).await.unwrap();
+    assert_eq!(
+        token(2),
+        None,
+        "a look outside any conversation is never given them"
+    );
+    assert_eq!(token(3), Some("ghu_two".into()));
+    // A server's own variable of that name wins, and none of them is added.
+    let mut own = launch("fixture");
+    own.environment
+        .insert("GH_TOKEN".into(), "configured".into());
+    servers.replace(vec![own]).unwrap();
+    let fourth = servers.open("fixture", super::owner()).await.unwrap();
+    assert_eq!(token(4), Some("configured".into()));
+    for session in [first, second, look, third, fourth] {
+        session.close().await;
+    }
+}

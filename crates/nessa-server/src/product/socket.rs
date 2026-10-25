@@ -1955,6 +1955,7 @@ async fn dispatch_authorized(
         "conversation.share" | "conversation.unshare" | "conversation.shares" => {
             super::read_access::dispatch_share(state, session, frame).await
         }
+        "channel.create" | "channel.list" => super::channel::dispatch(state, session, frame).await,
         method if method.starts_with("conversation.") => {
             super::conversation::dispatch(state, session, frame, initiation).await
         }
@@ -1967,6 +1968,9 @@ async fn dispatch_authorized(
         }
         method if method.starts_with("mcpServers.") => {
             super::mcp_servers::dispatch(state, session, frame).await
+        }
+        method if method.starts_with("github.") => {
+            super::github::dispatch(state, session, frame).await
         }
         "pairing.setLinking" => super::pairing::set_linking(state, session, frame).await,
         method if method.starts_with("pairing.") => {

@@ -853,6 +853,8 @@ pub struct ConversationListEntry {
     pub running: bool,
     /// Somebody archived it, and nothing has been said in it since.
     pub archived: bool,
+    /// The stored channel it was created in; `None` is the default channel.
+    pub channel_id: Option<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

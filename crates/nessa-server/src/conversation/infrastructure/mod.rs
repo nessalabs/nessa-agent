@@ -114,6 +114,7 @@ mod catalogue_changes;
 mod receiver_authority;
 // Only the Unix gateway composes it, and only a Unix host serves it: it is
 // built, tests included, where both ends exist.
+mod channels;
 mod scheduled_messages;
 #[cfg(unix)]
 pub(crate) mod ssh_environment;
@@ -121,6 +122,7 @@ mod store;
 #[cfg(test)]
 pub(crate) use store::GrantWritePause;
 mod thread_reports;
+pub use channels::{LocalChannelFolders, LocalChannelStore};
 pub use receiver_authority::{
     export_receivers, ExportedReceiver, LocalReceiverAuthority, ReceiverChangeError,
     ReceiverSnapshot, ReceiverSnapshotError,

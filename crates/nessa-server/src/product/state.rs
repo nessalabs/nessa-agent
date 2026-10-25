@@ -181,6 +181,9 @@ pub struct ProductRouteState {
     /// whether or not it is on now. `None` — not Unix — answers
     /// `pairing_unavailable`.
     pub(crate) native_linking: Option<Arc<dyn NativeLinking>>,
+    /// The GitHub sign-in (`github.*`). `None` — no agents run here —
+    /// answers `github_not_configured`.
+    pub(crate) github: Option<Arc<super::GithubRoutes>>,
     /// This gateway's peer commands, composed with native pairing: a peer is
     /// enrolled with the native key. `None` answers every peer method
     /// `peer_not_configured`.
@@ -317,6 +320,7 @@ impl ProductRouteState {
             mcp_authorization: None,
             pairing: None,
             native_linking: None,
+            github: None,
             peers: None,
             conversations: None,
             permission_rules: None,
@@ -413,6 +417,12 @@ impl ProductRouteState {
     /// Register what turns native linking on or off from Settings.
     pub fn with_native_linking(mut self, linking: Arc<dyn NativeLinking>) -> Self {
         self.native_linking = Some(linking);
+        self
+    }
+
+    /// Register the GitHub sign-in the github methods answer for.
+    pub fn with_github(mut self, github: Arc<super::GithubRoutes>) -> Self {
+        self.github = Some(github);
         self
     }
 

@@ -124,12 +124,32 @@
  *               screen never covers it, and once the gateway is up the
  *               window lists the conversation and the message sent after
  *               it is answered
+ *   github      GitHub is connected in Settings › Connections › Accounts
+ *               against a fake GitHub on this machine: the row shows the
+ *               code GitHub handed out and where to enter it, and once the
+ *               fake approves it names the account; the sign-in is a private
+ *               file the gateway never logs; an agent started after it has
+ *               GH_TOKEN and a git credential helper for github.com, both the
+ *               token, and so do the commands it runs through Nessa's own
+ *               shell tool; Disconnect forgets it, and an agent started after
+ *               that has neither, nor do its commands; the audit holds each
+ *               step and no token
  *   upgrade     the gateway is stopped, its conversation metadata turned
  *               back into the file an older build wrote (version 6, or 7
  *               when a newer table holds rows), and started again: it
  *               upgrades the file to the current version, lists every
  *               conversation it listed before, and the message sent in the
  *               window after it is answered
+ *   channel     a channel is made from the sidebar's +, asked in the
+ *               transcript: named, a folder chosen in the host's picker that
+ *               agents may not work in (the root) refused at its question,
+ *               then one made for it; its model kept, notes typed, and a file
+ *               attached from the host's picker; Create opens a new
+ *               session's home in it, whose first message runs in the made
+ *               folder with the notes in the agent's system prompt (Claude).
+ *               A second channel works in a folder chosen in the picker, and
+ *               its first message runs there; the gateway lists both, with
+ *               their folders, and each conversation in its own
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
@@ -158,24 +178,26 @@
  *   NESSA_STRESS_ROUNDS=60 pnpm test:e2e:stress # the same, from the environment
  */
 import catalog from "../../../crates/nessa-sdk/data/models.json" with { type: "json" }
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import {
   chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
-import { basename, isAbsolute, join } from "node:path"
+import { basename, dirname, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
-import { MODELS } from "../../../scripts/mcp-test-server/local-gateway.mjs"
+import { MODELS, repoRoot } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
   SAYS,
@@ -206,6 +228,7 @@ import {
   offeredLabel,
   selectorFor,
 } from "./lib/selectors.mjs"
+import { FAKE_ACCOUNT, startFakeGithub } from "./lib/fake-github.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
@@ -1019,6 +1042,163 @@ function providerName(provider) {
   )
 }
 
+/**
+ * Makes a channel with the sidebar's + as a person does, answering each
+ * question as it is asked, and answers the gateway's listing of it; `null`
+ * when it was not made. With `refusedFolder`, that folder is chosen first and
+ * Create must be refused at the folder question, before a folder made for it
+ * is taken instead.
+ */
+async function makeChannel(
+  run,
+  failures,
+  { name, folder, refusedFolder, notes, resource },
+) {
+  const { page } = run
+  const pick = (kind, value) =>
+    page.evaluate(
+      ([kind, value]) => window.__fakeHostPicks[kind].push(value),
+      [kind, value],
+    )
+  const asking = (stepName) =>
+    page
+      .locator(`${css.newChannelAsked}[data-step="${stepName}"]`)
+      .waitFor({ timeout: 10_000 })
+      .then(() => true)
+      .catch(() => {
+        failures.push(`the new channel flow never asked its ${stepName}`)
+        return false
+      })
+  // With evidence asked for, each question is photographed as it is asked.
+  const photograph = (label) =>
+    run.evidence
+      ? page
+          .screenshot({ path: join(run.evidence, `channel-${run.engine}-${label}.png`) })
+          .catch(() => {})
+      : Promise.resolve()
+  const head = page.locator(`${css.sidebar} .workspace-section-head`).first()
+  await head.hover()
+  await head.locator(css.channelAdd).click({ timeout: 10_000 })
+  const flow = page.locator(css.newChannel)
+  if (!(await asking("name"))) return null
+  await page.locator(`${css.newChannelField}[data-step="name"]`).fill(name)
+  await photograph(`${name}-1-name`)
+  await page.keyboard.press(keys.enter)
+  if (!(await asking("folder"))) return null
+  const folderChoice = refusedFolder ?? folder
+  if (folderChoice) {
+    await pick("folders", folderChoice)
+    await flow.getByRole("button", { name: "Choose a folder…" }).click()
+    await flow
+      .getByRole("button", { name: "Use this folder" })
+      .waitFor({ timeout: 5_000 })
+    await photograph(`${name}-2-folder`)
+    await flow.getByRole("button", { name: "Use this folder" }).click()
+  } else {
+    await flow.getByRole("button", { name: "Make one for me" }).click()
+  }
+  if (!(await asking("model"))) return null
+  await photograph(`${name}-3-model`)
+  await page.keyboard.press(keys.enter)
+  if (!(await asking("notes"))) return null
+  if (notes) await page.locator(`${css.newChannelField}[data-step="notes"]`).fill(notes)
+  await photograph(`${name}-4-notes`)
+  await page.keyboard.press(keys.enter)
+  if (!(await asking("resources"))) return null
+  if (resource) {
+    await pick("resources", [resource])
+    await flow.getByRole("button", { name: "Add files…" }).click()
+    const row = flow.locator(css.newChannelResource, { hasText: basename(resource) })
+    if (
+      !(await row.waitFor({ timeout: 5_000 }).then(
+        () => true,
+        () => false,
+      ))
+    )
+      failures.push(`the attached ${basename(resource)} is not listed in the flow`)
+  }
+  await photograph(`${name}-5-resources`)
+  const create = flow.getByRole("button", { name: /^Create channel/ })
+  await create.click()
+  if (refusedFolder) {
+    if (!(await asking("folder"))) return null
+    const said = await flow
+      .locator(`${css.newChannelAsked}[data-step="folder"]`)
+      .getByText("Agents can’t work there", { exact: false })
+      .waitFor({ timeout: 10_000 })
+      .then(
+        () => true,
+        () => false,
+      )
+    if (!said)
+      failures.push(`choosing ${refusedFolder} was not refused at the folder question`)
+    await photograph(`${name}-6-refused`)
+    await flow.getByRole("button", { name: "Make one for me" }).click()
+    await create.click()
+  }
+  const gone = await flow.waitFor({ state: "detached", timeout: 15_000 }).then(
+    () => true,
+    () => false,
+  )
+  if (!gone) {
+    failures.push(
+      `the channel ${name} was not made: ${fold(await flow.innerText().catch(() => ""))}`,
+    )
+    await page.keyboard.press(keys.escape)
+    return null
+  }
+  const { channels } = await run.client.channels.list()
+  const listed = channels.find((channel) => channel.name === name)
+  if (!listed) failures.push(`the gateway does not list the channel ${name}`)
+  return listed ?? null
+}
+
+/**
+ * The first message of a new session in `channel`, from the home Create left
+ * open: it is listed in that channel, and its agent works in the channel's
+ * folder, told the channel's notes (Claude's system prompt, where it has one).
+ */
+async function talkInChannel(run, step, channel, failures, notes) {
+  const text = prompt(run, STRESS.channel, step, ` ${channel.name}`)
+  const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+  await home.locator(css.field).waitFor({ timeout: 15_000 })
+  await home.locator(css.field).fill(text)
+  await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+  const conversationId = await waitFor(
+    () => selectedStressConversation(run.page, text),
+    30_000,
+  )
+  if (!conversationId) {
+    failures.push(`the first message in ${channel.name} was never listed`)
+    return
+  }
+  run.checked.push(conversationId)
+  const { view } = await settled(
+    run,
+    conversationId,
+    new Set(),
+    text,
+    "completed",
+    failures,
+  )
+  const { conversations } = await run.client.conversation.list({})
+  const summary = conversations.find((each) => each.conversationId === conversationId)
+  if (summary?.channelId !== channel.channelId)
+    failures.push(
+      `the conversation started in ${channel.name} is in ${summary?.channelId ?? "no channel"}`,
+    )
+  const reply = (view?.messages.find((each) => each.userText === text)?.parts ?? [])
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("")
+  if (!reply.includes(`${SAYS.channel}${channel.folder}\n`))
+    failures.push(
+      `the agent in ${channel.name} did not work in ${channel.folder}: ${fold(reply.slice(0, 300))}`,
+    )
+  if (notes && run.stack.agent === "claude" && !reply.includes(notes))
+    failures.push(`the agent in ${channel.name} was not told the channel's notes`)
+}
+
 const steps = {
   async model(run, step, failures) {
     const picker = dock(run.page).locator(css.modelChip)
@@ -1463,6 +1643,121 @@ const steps = {
     })
     // The restarted gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async github(run, step, failures) {
+    const github = run.stack.github
+    if (!github) {
+      failures.push("the stack was started without the fake GitHub")
+      return
+    }
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
+    const signIn = join(namespace, "github", "sign-in.json")
+    const print = createHash("sha256").update(github.token).digest("hex").slice(0, 16)
+    const row = run.page.locator(css.github)
+    const state = () => row.getAttribute("data-github-state").catch(() => null)
+    // Each state the person sees, kept with the evidence.
+    const shot = (name) =>
+      run.evidence
+        ? run.page
+            .screenshot({ path: join(run.evidence, `github-${name}.png`) })
+            .catch(() => {})
+        : undefined
+    await run.exclusive(async () => {
+      await openAccounts(run.page)
+      if (!(await waitFor(async () => (await state()) === "signed-out", 30_000))) {
+        failures.push(`GitHub was ${await state()} before Connect`)
+        return
+      }
+      await shot("signed-out")
+      await row.getByRole("button", { name: names.githubConnect }).click()
+      const code = row.locator("[data-github-code]")
+      const shown = await waitFor(
+        async () =>
+          github.userCode() !== null &&
+          (await code.getAttribute("data-github-code").catch(() => null)) ===
+            github.userCode(),
+        30_000,
+      )
+      if (!shown) {
+        failures.push(
+          `the row did not show the code GitHub handed out (${github.userCode()})`,
+        )
+        return
+      }
+      await shot("connecting")
+      const open = await row.locator("[data-github-open]").getAttribute("href")
+      if (open !== github.verificationUri)
+        failures.push(`Open GitHub goes to ${open}, not ${github.verificationUri}`)
+      // The person enters the code on GitHub: the gateway's next poll takes it.
+      github.approve()
+      const connected = await waitFor(
+        async () =>
+          (await state()) === "connected" &&
+          (await row.textContent()).includes(`Signed in as @${FAKE_ACCOUNT.login}.`),
+        30_000,
+      )
+      if (!connected) {
+        failures.push(`the row is ${await state()} after GitHub approved the code`)
+        return
+      }
+      await shot("connected")
+      const repositories = await row
+        .locator("[data-github-repositories]")
+        .getAttribute("href")
+      if (repositories !== github.installUrl)
+        failures.push(
+          `Choose repositories goes to ${repositories}, not ${github.installUrl}`,
+        )
+      await closeSettings(run.page)
+    })
+    if (failures.length) return
+    if (!existsSync(signIn)) failures.push("the sign-in was not saved")
+    else if ((lstatSync(signIn).mode & 0o077) !== 0)
+      failures.push(
+        `the sign-in file is mode ${(lstatSync(signIn).mode & 0o777).toString(8)}`,
+      )
+    if (run.stack.gateway.log().includes(github.token))
+      failures.push("the gateway logged the GitHub token")
+    // An agent opened now is started with the sign-in, for gh and for git.
+    await githubAgent(run, step, " connected", `token=${print} git=${print}`, failures)
+    await githubAgent(
+      run,
+      step,
+      " connected",
+      `token=${print} git=${print}`,
+      failures,
+      true,
+    )
+    if (failures.length) return
+    await run.exclusive(async () => {
+      await openAccounts(run.page)
+      await row.getByRole("button", { name: names.githubDisconnect }).click()
+      if (!(await waitFor(async () => (await state()) === "signed-out", 30_000)))
+        failures.push(`the row is ${await state()} after Disconnect`)
+      await closeSettings(run.page)
+    })
+    if (failures.length) return
+    if (existsSync(signIn)) failures.push("Disconnect left the sign-in file")
+    await githubAgent(run, step, " disconnected", "token=none git=none", failures)
+    await githubAgent(run, step, " disconnected", "token=none git=none", failures, true)
+    // Each step of both is on record, and no record holds the token.
+    const audit = join(namespace, "conversations", "audit", "github")
+    const records = existsSync(audit) ? readdirSync(audit) : []
+    for (const event of [
+      "connect-requested",
+      "connected",
+      "disconnect-requested",
+      "disconnected",
+    ])
+      if (!records.some((name) => name.endsWith(`-${event}.json`)))
+        failures.push(`the audit has no ${event} record`)
+    if (
+      records.some((name) =>
+        readFileSync(join(audit, name), "utf8").includes(github.token),
+      )
+    )
+      failures.push("an audit record holds the GitHub token")
   },
 
   async upgrade(run, step, failures) {
@@ -2118,6 +2413,56 @@ const steps = {
     await settled(run, conversationId, seen, second, "completed", failures)
     await expectShown(run.page, `${SAYS.echo}${second}`, failures)
     await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
+  async channel(run, step, failures) {
+    const notes = `Answer as the stress channel s${run.knobs.seed}.`
+    // In the run's own folder, removed with it: the rest check reads these
+    // channels' conversations again at the end, and an agent cannot be built
+    // in a folder that is gone.
+    const attached = mkdtempSync(join(run.stack.scratch, "channel-"))
+    const resource = join(attached, "brief.md")
+    writeFileSync(resource, "# Brief\n")
+    const chosen = mkdtempSync(join(run.stack.scratch, "chosen-"))
+    try {
+      // Made in a folder of its own, after a folder agents may not use.
+      const made = await makeChannel(run, failures, {
+        name: `stress-made-r${step.index}-s${run.knobs.seed}`,
+        refusedFolder: "/",
+        notes,
+        resource,
+      })
+      if (made) {
+        if (!made.folderMade || !made.folder.includes(`/channels/${made.channelId}`))
+          failures.push(
+            `the channel made without a folder works in ${made.folder}, not one made for it`,
+          )
+        if (!existsSync(made.folder))
+          failures.push(`the made folder ${made.folder} is not there`)
+        await talkInChannel(run, step, made, failures, notes)
+      }
+      // Made in a folder chosen in the host's picker.
+      const there = await makeChannel(run, failures, {
+        name: `stress-chosen-r${step.index}-s${run.knobs.seed}`,
+        folder: chosen,
+      })
+      if (there) {
+        if (there.folderMade || there.folder !== realpathSync(chosen))
+          failures.push(
+            `the channel made in ${chosen} works in ${there.folder} (made: ${there.folderMade})`,
+          )
+        await talkInChannel(run, step, there, failures)
+      }
+    } finally {
+      // Back to the main conversation, in the default channel.
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText("Conversations", { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+        .catch(() => {})
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
   },
 
   async fresh(run, step, failures) {
@@ -3747,6 +4092,63 @@ function inCorner(place, side) {
   return side === "left" ? place.x < 0.15 : place.x > 0.85
 }
 
+/**
+ * Nessa's own shell tool as the gateway's managed `nessa` server: the
+ * `nessa-mcp` built beside the gateway, working in a directory of the run's.
+ */
+function shellServer(directory) {
+  const gateway = process.env.MCP_LIVE_NESSA ?? join(repoRoot, "target/debug/nessa")
+  const command = join(dirname(gateway), "nessa-mcp")
+  if (!existsSync(command))
+    throw new CannotRun(
+      `build the shell tool first (cargo build -p nessa-mcp): ${command}`,
+    )
+  const workspace = join(directory, "shell-workspace")
+  mkdirSync(workspace)
+  return {
+    name: "nessa",
+    command,
+    args: ["--workspace", workspace, "--audit-directory", join(directory, "shell-audit")],
+  }
+}
+
+/** Opens Settings › Connections › Accounts, where the GitHub row is. */
+async function openAccounts(page) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.connections }).click()
+  await page.locator(css.settingsTab, { hasText: names.accounts }).click()
+}
+
+/**
+ * A new conversation's agent, opened now, says what GitHub sign-in it was
+ * started with; `said` is what it must say. A sign-in is read when an agent
+ * opens, so only a new one shows a change.
+ */
+async function githubAgent(run, step, extra, said, failures, shell = false) {
+  const conversationId = randomUUID()
+  run.checked.push(conversationId)
+  const text = prompt(run, shell ? STRESS.githubShell : STRESS.github, step, extra)
+  await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+  await run.client.conversation.submit(
+    run.client.conversation.prepare(conversationId, text),
+  )
+  const { turn } = await settled(
+    run,
+    conversationId,
+    new Set(),
+    text,
+    "completed",
+    failures,
+  )
+  if (!turn) return
+  const answer = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+  const where = shell ? SAYS.githubShell : SAYS.github
+  if (answer !== `${where}${said}`)
+    failures.push(
+      `an agent started${extra} says ${JSON.stringify(answer)}${shell ? " from its shell tool" : ""}, not ${said}`,
+    )
+}
+
 /** Leaves Settings: Esc does not close it; its back control returns to the app. */
 async function closeSettings(page) {
   await page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
@@ -4152,9 +4554,24 @@ async function startStack(options) {
       `${JSON.stringify(knobs)}\n${describe(plan(knobs))}\n`,
     )
   }
+  // The `github` step's GitHub, on this machine, which the gateway reads its
+  // app from, and Nessa's own shell tool, where an agent's git and gh run.
+  let servers = []
+  try {
+    if (knobs.githubs > 0) servers = [shellServer(directory)]
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true })
+    throw error
+  }
+  const github = knobs.githubs > 0 ? await startFakeGithub() : null
+  const environment = github
+    ? { NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")) }
+    : {}
   let stack
   try {
     stack = await startGatewayStack(options, INSTANCE, {
+      environment,
+      servers,
       as: "panel",
       scenario,
       evidence: options.evidence,
@@ -4165,6 +4582,7 @@ async function startStack(options) {
       native: { enabled: false, listenAddress: nativeAddress },
     })
   } catch (error) {
+    await github?.close()
     rmSync(directory, { recursive: true, force: true })
     throw error
   }
@@ -4173,6 +4591,7 @@ async function startStack(options) {
     try {
       await close()
     } finally {
+      await github?.close()
       rmSync(directory, { recursive: true, force: true })
     }
   }
@@ -4180,7 +4599,10 @@ async function startStack(options) {
     knobs,
     agent: options.agent,
     nativeAddress,
+    github,
     scenario,
+    // Removed when the stack closes.
+    scratch: directory,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
   }))
 }

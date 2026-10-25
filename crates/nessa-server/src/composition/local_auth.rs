@@ -294,9 +294,23 @@ pub(super) async fn product_state(
     // for every command, passive read and share change (ADR 803 step 3).
     let access_policy: Arc<dyn ConversationAccessPolicyEvaluator> =
         Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
+    // The GitHub sign-in, composed where agents are: they are what it is for.
+    #[cfg(unix)]
+    let github = match &settings.agents {
+        Some(_) => super::github::compose(namespace).await,
+        None => None,
+    };
     let (conversations, agent_probe, warm_ups, mcp, environment_peers) =
         match (&settings.agents, receivers.clone()) {
             (Some(agents), Some(receivers)) => {
+                #[cfg(unix)]
+                let agents = &{
+                    let mut agents = agents.clone();
+                    if let Some(github) = &github {
+                        agents.open_credentials = github.credentials.clone();
+                    }
+                    agents
+                };
                 let mut built = conversations(
                     agents,
                     directory,
@@ -421,6 +435,10 @@ pub(super) async fn product_state(
             }));
     }
     product.browser_http_allowed = config.browser_http_allowed();
+    #[cfg(unix)]
+    if let Some(github) = github {
+        product = product.with_github(github.routes);
+    }
     #[cfg(unix)]
     let restart = Arc::new(crate::core::self_restart::SelfRestart::default());
     // Composed whether or not native pairing runs: turning it on is how it
@@ -1367,6 +1385,25 @@ async fn conversations(
                 )
             })?,
     ));
+    // Channels and which conversation is in which; a channel with no chosen
+    // folder works in `<data>/channels/<id>`.
+    let channels_path = root.join("channels.sqlite3");
+    service.bind_channels(
+        Arc::new(
+            crate::conversation::infrastructure::LocalChannelStore::open(&channels_path).map_err(
+                |cause| RunError::opening(crate::core::Dataset::Channels, &channels_path, cause),
+            )?,
+        ),
+        Arc::new(
+            crate::conversation::infrastructure::LocalChannelFolders::new(
+                directory
+                    .parent()
+                    .expect("conversation root already validated"),
+                crate::env::home_folder_from_system(),
+            )
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+        ),
+    );
     let scheduled_messages_path = root.join("scheduled-chat-messages.sqlite3");
     service.bind_scheduled_messages(Arc::new(
         crate::conversation::infrastructure::LocalScheduledMessages::open(&scheduled_messages_path)

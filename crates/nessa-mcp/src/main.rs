@@ -38,13 +38,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err("workspace and audit directory must be absolute; workspace must exist".into());
     }
     let supervisor = SupervisorBuilder::new().build();
-    // Credentials used by the provider are not implicitly inherited by shell commands.
-    let environment = [
-        "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL",
-    ]
-    .into_iter()
-    .filter_map(|key| std::env::var_os(key).map(|value| (key.into(), value)))
-    .collect();
+    let environment = command_environment(std::env::vars_os());
     let audit = Arc::new(PrivateAudit::new(directory)?);
     let service = Arc::new(ShellService::new(
         Arc::new(ShepherdRunner::new(supervisor.clone(), environment)),
@@ -64,7 +58,71 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
+/// What every command is started with, of this server's own environment.
+/// Credentials used by the provider are not implicitly inherited by shell
+/// commands; the GitHub sign-in the gateway gives this server for its agent
+/// (`GH_TOKEN` and git's `GIT_CONFIG_*` credential helper) is meant for them,
+/// so `git` and `gh` act as the person.
+#[cfg(any(unix, test))]
+fn command_environment(
+    variables: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    const KEPT: [&str; 8] = [
+        "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "GH_TOKEN",
+    ];
+    variables
+        .filter(|(key, _)| {
+            key.to_str().is_some_and(|key| {
+                KEPT.contains(&key)
+                    || key == "GIT_CONFIG_COUNT"
+                    || key.strip_prefix("GIT_CONFIG_KEY_").is_some_and(numbered)
+                    || key.strip_prefix("GIT_CONFIG_VALUE_").is_some_and(numbered)
+            })
+        })
+        .collect()
+}
+
+#[cfg(any(unix, test))]
+fn numbered(suffix: &str) -> bool {
+    !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 #[cfg(not(unix))]
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Err("nessa-mcp shell currently requires Unix".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_environment;
+
+    #[test]
+    fn commands_keep_the_github_sign_in_and_no_other_credential() {
+        let given = [
+            ("PATH", "/bin"),
+            ("GH_TOKEN", "ghu_x"),
+            ("GIT_CONFIG_COUNT", "2"),
+            ("GIT_CONFIG_KEY_0", "credential.https://github.com.helper"),
+            ("GIT_CONFIG_VALUE_1", "!f() { :; }; f"),
+            ("GIT_CONFIG_GLOBAL", "/tmp/x"),
+            ("GIT_CONFIG_KEY_", "x"),
+            ("ANTHROPIC_API_KEY", "sk"),
+            ("OPENAI_API_KEY", "sk"),
+        ]
+        .map(|(key, value)| (key.into(), value.into()));
+        let kept: Vec<String> = command_environment(given.into_iter())
+            .into_iter()
+            .map(|(key, _)| key.into_string().unwrap())
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                "PATH",
+                "GH_TOKEN",
+                "GIT_CONFIG_COUNT",
+                "GIT_CONFIG_KEY_0",
+                "GIT_CONFIG_VALUE_1"
+            ]
+        );
+    }
 }

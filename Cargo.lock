@@ -3503,6 +3503,7 @@ dependencies = [
  "cedar-policy",
  "core-foundation 0.10.1",
  "core-foundation-sys",
+ "dunce",
  "flate2",
  "fs2",
  "futures-util",
