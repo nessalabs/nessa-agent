@@ -85,8 +85,10 @@
  *               handing over as left, not finished; a second setup window,
  *               where Codex is not installed but can be downloaded, shows
  *               Codex as a download card with no row to pick, and no list
- *               of installed agents or Check downloads; its Download installs
- *               it and the card becomes Codex's row; setup is then finished
+ *               of installed agents or Check downloads; its Download, pressed
+ *               from the keyboard, fetches with the focus kept on the card,
+ *               installs it, and the card becomes Codex's row, which takes
+ *               the focus; setup is then finished
  *               on a ready agent: the window flies into the menu bar, asking
  *               the host where its icon is, and hands over finished on that
  *               agent; the message sent in the window after it is answered
@@ -3483,7 +3485,11 @@ async function codexInstaller(page) {
 async function downloadCard(page, installer, evidence, failures) {
   const group = page.getByRole("group", { name: "Agent" })
   const card = group.getByRole("group", { name: names.setup.codexCard })
-  const shown = await waitFor(async () => (await card.count()) === 1, 15_000)
+  const download = card.getByRole("button", {
+    name: names.setup.codexDownload,
+    exact: true,
+  })
+  const shown = await waitFor(async () => (await download.count()) === 1, 15_000)
   await page.screenshot({ path: join(evidence, "onboarding-download-card.png") })
   if (!shown) {
     failures.push("Codex, not installed but offered, is not shown as a download card")
@@ -3493,19 +3499,37 @@ async function downloadCard(page, installer, evidence, failures) {
     failures.push("Codex has both a download card and a row to pick")
   for (const text of [/Check downloads/, /Download only the agents/, /^Installed$/])
     if (await page.getByText(text).count()) failures.push(`the picker still says ${text}`)
-  await page.screenshot({ path: join(evidence, "onboarding-download-card.png") })
-  await card
-    .getByRole("button", {
-      name: names.setup.codexDownload,
-      exact: true,
-    })
-    .click()
+  // Pressed from the keyboard, so where the focus goes is part of the check.
+  await download.focus()
+  await page.keyboard.press("Enter")
+  // The installer holds its answer, so the card is seen fetching, with the
+  // focus still on its button.
+  const fetching = await waitFor(
+    () =>
+      card.evaluate(
+        (each) =>
+          each.dataset.downloadState === "fetching" &&
+          each.contains(document.activeElement),
+      ),
+    2_000,
+  )
+  if (!fetching) failures.push("Codex's card did not fetch with the focus kept on it")
   const row = group.locator("button[aria-pressed]:not([aria-disabled='true'])", {
     hasText: "Codex",
   })
   if (!(await waitFor(async () => (await row.count()) === 1, 15_000)))
     failures.push("the installed Codex did not become a row to pick")
-  else if (await card.count()) failures.push("Codex's download card stayed after install")
+  else {
+    if (await card.count()) failures.push("Codex's download card stayed after install")
+    // The focus the download held is handed to the row it became.
+    if (
+      !(await waitFor(
+        () => row.evaluate((each) => each === document.activeElement),
+        2_000,
+      ))
+    )
+      failures.push("the focus was not handed to Codex's row after install")
+  }
   if (installer.installs !== 1)
     failures.push(`Download asked the installer ${installer.installs} times, not once`)
 }

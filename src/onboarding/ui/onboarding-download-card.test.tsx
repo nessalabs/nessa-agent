@@ -40,12 +40,15 @@ async function picker(
   onRecheck = () => {},
 ) {
   const container = document.createElement("div")
+  // In the document, so the focus can be asked about.
+  document.body.append(container)
   const root = createRoot(container)
-  const render = (next: OnboardingState) =>
+  const render = (next: OnboardingState, checking = false) =>
     React.act(async () =>
       root.render(
         <Onboarding
           state={next}
+          checking={checking}
           installations={installations}
           gatewayStartup={{ revision: 0, state: "unmanaged" }}
           platform="apple"
@@ -59,7 +62,11 @@ async function picker(
       ),
     )
   await render(state)
-  return { container, render, unmount: () => React.act(async () => root.unmount()) }
+  const unmount = async () => {
+    await React.act(async () => root.unmount())
+    container.remove()
+  }
+  return { container, render, unmount }
 }
 
 const card = (container: HTMLElement) =>
@@ -88,6 +95,7 @@ it("downloads from the card, then rechecks so the card becomes the agent's row",
   const state = recordReadiness(asking, { claude: "ready", codex: "not-installed" })
   const { container, render, unmount } = await picker(state, pending.source, onRecheck)
   const download = card(container)?.querySelector("button")
+  download?.focus()
   expect(download?.getAttribute("aria-label")).toBe("Download Codex · 45 MB")
   await React.act(async () => {
     download?.click()
@@ -105,11 +113,45 @@ it("downloads from the card, then rechecks so the card becomes the agent's row",
     pending.finish({ status: "installed", cleanupPending: false }),
   )
   expect(onRecheck).toHaveBeenCalledTimes(1)
-  // Installed, and held as a card until the check says the agent is ready.
+  // Installed, and held as a card while the check that follows runs.
+  await render(state, true)
   expect(card(container)?.getAttribute("data-download-state")).toBe("installed")
   await render(recordReadiness(asking, { claude: "ready", codex: "ready" }))
   expect(card(container)).toBeNull()
   expect(codexRow(container)?.getAttribute("aria-disabled")).toBeNull()
+  // The focus the card's button held is the row's now.
+  expect(document.activeElement).toBe(codexRow(container))
+  await unmount()
+})
+
+it("gives the row back when the check after an install still cannot find the agent", async () => {
+  const pending = installer()
+  const state = recordReadiness(asking, { claude: "ready", codex: "not-installed" })
+  const { container, render, unmount } = await picker(state, pending.source)
+  await React.act(async () => card(container)?.querySelector("button")?.click())
+  pending.source.offers.mockResolvedValue([
+    { agent: "codex", archiveBytes: 44_200_000, installed: true },
+  ])
+  await React.act(async () =>
+    pending.finish({ status: "installed", cleanupPending: false }),
+  )
+  // Held while no check has run yet, and while it runs.
+  expect(card(container)?.getAttribute("data-download-state")).toBe("installed")
+  await render(state, true)
+  expect(card(container)?.getAttribute("data-download-state")).toBe("installed")
+  await render(state, false)
+  expect(card(container)).toBeNull()
+  expect(codexRow(container)?.getAttribute("aria-label")).toBe("Codex, not installed")
+  await unmount()
+})
+
+it("holds the agent's place as a card while downloads are still being read", async () => {
+  const { source } = installer()
+  source.offers.mockReturnValue(new Promise(() => {}))
+  const state = recordReadiness(asking, { claude: "ready", codex: "not-installed" })
+  const { container, unmount } = await picker(state, source)
+  expect(card(container)?.getAttribute("data-download-state")).toBe("reading")
+  expect(codexRow(container)).toBeUndefined()
   await unmount()
 })
 

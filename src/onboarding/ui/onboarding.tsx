@@ -210,6 +210,8 @@ function AgentOption({
   startup,
   selected,
   onSelect,
+  takesFocus,
+  onFocusTaken,
 }: {
   id: AgentId
   name: string
@@ -218,10 +220,21 @@ function AgentOption({
   startup: GatewayStartupStatus
   selected: boolean
   onSelect: (id: AgentId) => void
+  /** Take the focus when shown: this row has replaced the download card that
+   * held it. */
+  takesFocus?: boolean
+  onFocusTaken?: () => void
 }) {
   const note = readinessNote(readiness, failure, startup)
+  const row = React.useRef<HTMLButtonElement>(null)
+  React.useEffect(() => {
+    if (!takesFocus) return
+    row.current?.focus()
+    onFocusTaken?.()
+  }, [takesFocus, onFocusTaken])
   return (
     <button
+      ref={row}
       type="button"
       // Plain toggles rather than a radio group. The group announced the
       // arrow-key pattern a radio group promises and implemented none of it:
@@ -447,7 +460,11 @@ function usePlayOnChange<T>(value: T): boolean {
   return playing
 }
 
-type Downloads = ReturnType<typeof useAgentDownloads>
+type Downloads = ReturnType<typeof useAgentDownloads> & {
+  /** An install has finished and the readiness check that follows it has not
+   * yet come back, so the agent is held as an installed card until it does. */
+  installHeld: boolean
+}
 
 /** The picker's downloads, read only where this surface can install. A hook
  * cannot be called on one render and not the next, so the read lives in a
@@ -455,15 +472,17 @@ type Downloads = ReturnType<typeof useAgentDownloads>
 function WithDownloads({
   source,
   onChanged,
+  checking,
   children,
 }: {
   source: AgentInstallations | undefined
   onChanged: () => void
+  checking: boolean
   children: (downloads: Downloads | undefined) => React.ReactNode
 }) {
   if (!source) return <>{children(undefined)}</>
   return (
-    <ReadDownloads source={source} onChanged={onChanged}>
+    <ReadDownloads source={source} onChanged={onChanged} checking={checking}>
       {children}
     </ReadDownloads>
   )
@@ -472,13 +491,44 @@ function WithDownloads({
 function ReadDownloads({
   source,
   onChanged,
+  checking,
   children,
 }: {
   source: AgentInstallations
   onChanged: () => void
+  checking: boolean
   children: (downloads: Downloads) => React.ReactNode
 }) {
-  return <>{children(useAgentDownloads(source, onChanged))}</>
+  const downloads = useAgentDownloads(source, onChanged)
+  return (
+    <>
+      {children({
+        ...downloads,
+        installHeld: useInstallHeld(downloads.outcome, checking),
+      })}
+    </>
+  )
+}
+
+/**
+ * Whether an install is waiting on the readiness check it starts. The check
+ * is asked for once the downloads have been read again, a moment after the
+ * install reports, so "not checking" alone would let the row show through for
+ * that moment. Held until a check has been seen running and has come back.
+ */
+function useInstallHeld(outcome: Downloads["outcome"], checking: boolean): boolean {
+  const [seen, setSeen] = React.useState<{ outcome: Downloads["outcome"]; ran: boolean }>(
+    {
+      outcome: undefined,
+      ran: false,
+    },
+  )
+  const ran = seen.outcome === outcome && seen.ran
+  React.useEffect(() => {
+    if (outcome?.status === "installed" && checking && !ran)
+      setSeen({ outcome, ran: true })
+  }, [outcome, checking, ran])
+  return outcome?.status === "installed" && (checking || !ran)
 }
 
 /** What an agent's download card is doing, when its place in the picker is a
@@ -490,6 +540,9 @@ type CardState =
   | { kind: "fetching" }
   /** Installed, until the readiness check that follows turns it into the row. */
   | { kind: "installed" }
+  /** Downloads are still being read: the card holds the agent's place, so a
+   * row does not stand there only to turn into a card a moment later. */
+  | { kind: "reading" }
   /** Nothing can be offered until downloads are read again: they could not
    * be read, or an attempt was lost or met another one still running. */
   | { kind: "check" }
@@ -499,7 +552,9 @@ type CardState =
  * row, and what the card is doing. Only an agent this machine does not have
  * gets one. A fresh read of the downloads always wins over what the last
  * attempt said, so an agent that read can no longer offer goes back to its row
- * rather than standing behind a card for good.
+ * rather than standing behind a card for good. An install is held as a card
+ * only until the readiness check after it is done: an agent that check still
+ * cannot find goes back to its row and its reason.
  */
 function cardState(
   id: AgentId,
@@ -508,12 +563,13 @@ function cardState(
 ): CardState | undefined {
   if (readiness !== "not-installed" || !downloads) return undefined
   if (downloads.pending === id) return { kind: "fetching" }
-  if (downloads.attempted === id && downloads.outcome?.status === "installed")
-    return { kind: "installed" }
+  if (downloads.attempted === id && downloads.installHeld) return { kind: "installed" }
+  const offer = downloads.offers?.find((each) => each.agent === id)
   if (downloads.unavailable) return { kind: "check" }
   if (!downloads.offers)
-    return downloads.attempted === id && downloads.outcome ? { kind: "check" } : undefined
-  const offer = downloads.offers.find((each) => each.agent === id)
+    return downloads.attempted === id && downloads.outcome
+      ? { kind: "check" }
+      : { kind: "reading" }
   return offer && !offer.installed ? { kind: "offer", offer } : undefined
 }
 
@@ -546,18 +602,23 @@ function cardFailureText(downloads: Downloads, id: AgentId): string | undefined 
  *
  * The button stays the same element through a download, held with
  * `aria-disabled` rather than `disabled`, so the focus a key press put on it
- * stays there while it turns into the download's spinner.
+ * stays there while it turns into the download's spinner; when the card
+ * becomes the row, the row takes that focus.
  */
 function AgentDownloadCard({
   id,
   name,
   card,
   downloads,
+  onFocusChange,
 }: {
   id: AgentId
   name: string
   card: CardState
   downloads: Downloads
+  /** Told when the card's button takes or loses the focus, so the row the
+   * card becomes can take it over. */
+  onFocusChange: (id: AgentId | undefined) => void
 }) {
   const failed = cardFailureText(downloads, id)
   const busy = downloads.pending !== undefined
@@ -568,9 +629,11 @@ function AgentDownloadCard({
       ? `Downloading and verifying ${name}`
       : card.kind === "installed"
         ? `${name} is installed`
-        : card.kind === "offer"
-          ? `Download ${name} · ${megabytes} MB`
-          : "Check again"
+        : card.kind === "reading"
+          ? `Checking ${name} downloads`
+          : card.kind === "offer"
+            ? `Download ${name} · ${megabytes} MB`
+            : "Check again"
   return (
     <div
       role="group"
@@ -600,13 +663,19 @@ function AgentDownloadCard({
         aria-label={label}
         // Another agent's download holds this one too: the installer runs
         // one at a time.
-        aria-disabled={card.kind !== "check" && (busy || card.kind === "installed")}
+        aria-disabled={
+          card.kind === "installed" ||
+          card.kind === "reading" ||
+          (card.kind !== "check" && busy)
+        }
+        onFocus={() => onFocusChange(id)}
+        onBlur={() => onFocusChange(undefined)}
         onClick={() => {
           if (card.kind === "check") downloads.refresh()
           else if (card.kind === "offer" && !busy) downloads.install(card.offer.agent)
         }}
       >
-        {card.kind === "fetching" ? (
+        {card.kind === "fetching" || card.kind === "reading" ? (
           <LoaderCircle aria-hidden className="motion-safe:animate-spin" />
         ) : card.kind === "installed" ? (
           <Check aria-hidden />
@@ -725,6 +794,9 @@ export function Onboarding({
   // nothing at all. The new step takes the focus instead — once the window is
   // open, because a pane still hidden behind the glow cannot hold it.
   const step = React.useRef<HTMLDivElement>(null)
+  // Which download card's button holds the focus, so the row it becomes can
+  // take it: the button goes with the card, and the focus would go to the page.
+  const [focusedCard, setFocusedCard] = React.useState<AgentId>()
   React.useEffect(() => {
     if (open) step.current?.focus()
   }, [state.step, open])
@@ -862,7 +934,7 @@ export function Onboarding({
         Choose an agent
       </h1>
       <RuntimeCopyBar progress={runtimeCopy} />
-      <WithDownloads source={installations} onChanged={onRecheck}>
+      <WithDownloads source={installations} onChanged={onRecheck} checking={checking}>
         {(downloads) => (
           <div role="group" aria-label="Agent" className="flex flex-col gap-2">
             {SETUP_AGENTS.map((choice) => {
@@ -876,6 +948,7 @@ export function Onboarding({
                     name={choice.name}
                     card={card}
                     downloads={downloads}
+                    onFocusChange={setFocusedCard}
                   />
                 )
               const keyAgent = choice.id === "claude" ? choice.id : undefined
@@ -894,6 +967,8 @@ export function Onboarding({
                     startup={gatewayStartup}
                     selected={state.agent === choice.id}
                     onSelect={onChoose}
+                    takesFocus={focusedCard === choice.id}
+                    onFocusTaken={() => setFocusedCard(undefined)}
                   />
                   {canSaveApiKey ? (
                     <div className="flex flex-col gap-2">
