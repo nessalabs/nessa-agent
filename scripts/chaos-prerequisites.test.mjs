@@ -28,7 +28,10 @@ function admitted(cancelled, outcome) {
 }
 
 test("the readiness outcome belongs to the existing gateway build before stress", () => {
-  assert.match(job, /- id: gateway-build\n        run: cargo build -p nessa-server -p nessa-mcp\n/)
+  assert.match(
+    job,
+    /- id: gateway-build\n        run: cargo build -p nessa-server -p nessa-mcp\n/,
+  )
   assert(
     job.indexOf("- id: gateway-build") < job.indexOf("Run the conversation stress check"),
   )
