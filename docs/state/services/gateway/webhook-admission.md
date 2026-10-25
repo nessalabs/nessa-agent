@@ -4,11 +4,12 @@ title: Outbound webhook admission
 kind: feature
 status: mixed
 summary: Inner registered-principal shares and credential/grant fences use current authority; product command and delivery-worker mounting remain uncomposed.
-sourceRevision: "f990b7dfb547974c739891e2c48f9c2ac4c66a66"
+sourceRevision: "9bef5b428a6b987136544109f5bf8e286e29297f"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/ports.rs
   - crates/nessa-auth/src/adapters/local/registry.rs
+  - crates/nessa-auth/src/adapters/local/registry/pairing/tests.rs
   - crates/nessa-auth/src/adapters/local/registry/pairing/enrollment.rs
   - crates/nessa-auth/src/adapters/local/registry/pairing/owner_phone.rs
   - crates/nessa-server/src/composition/local_auth.rs
@@ -163,3 +164,30 @@ positive share reads a genuine synthetic SDK source. [Evidence](../../../reviews
 keeps failed fixture attempts, original CI failures and remaining gates.
 This inner share path is not mounted command ownership, source-feed supervision,
 sending, or recipient E2E. Fresh round2 and exact-head CI remain required.
+
+
+## Registry writer handoff checkpoint
+
+At source `9bef5b428a6b987136544109f5bf8e286e29297f`, ordinary physical
+registry writers serialize on the existing canonical mutex before trying the
+effect fence. A completed writer drops that fence before handing off the mutex.
+The fence attempt remains nonblocking: a live credential read hold still refuses
+a synchronous mutation. Async revocation awaits its fence without the registry
+mutex, then retains both through the same canonical revocation commit. Neither
+permission checks nor the pinned grant epoch are weakened.
+
+The [ordering table](../../../design/webhook-delivery-implementation.md#ordinary-registry-writer-handoff)
+describes the two acquisition orders and why no path waits for both. The new
+regression uses a real no-op expiry held inside its Clock and competing actual
+expiry/cancellation workers. It asserts both worker entries, the original held
+state and no early result, then checks the canonical results after release.
+The original source fails this regression with `Unavailable`; the corrected
+source serializes the operations. This identifies a contention mechanism, not
+the particular holder or cancellation site in historical platform CI.
+
+Every other linked source is byte-identical to this page's preceding `f990b7df`
+checkpoint. Only the registry writer change and its test are newly traced;
+unrelated Auth state pages are unchanged. The admission diagram is unchanged,
+because its states and permission decisions are unchanged. No new diagram render
+or browser result is claimed. Product runtime and recipient delivery remain
+unmounted in this scoped publication candidate.
