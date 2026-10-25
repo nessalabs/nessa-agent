@@ -41,26 +41,27 @@ pub(super) fn queue(
         return Err(OutboxError::Conflict);
     }
     let current = cursor::read(&transaction, record.registration, &record.conversation)?;
-    let existing:Option<(StoredDelivery,Vec<u8>)>=transaction.query_row(
-        &format!("{},body FROM deliveries WHERE registration=?1 AND conversation=?2 AND incarnation=?3 AND position=?4",stored::SELECT),
-        params![registration,conversation,record.scope.incarnation().as_str(),position],
-        |r|Ok((StoredDelivery::row(r)?,r.get(10)?)),
-    ).optional().map_err(unavailable)?;
-    if let Some((saved, body)) = existing {
-        let existing = saved.checked(&transaction)?;
-        if codec::scope_text(&existing.scope)? != scope
-            || body != record.body
-            || existing.delivery.epoch() != record.epoch
-        {
-            return Err(OutboxError::Conflict);
-        }
-        return Ok(existing.delivery.id());
+    if let Some(expected) = &record.expected_source {
+        cursor::check_identity(&registration, &conversation, expected)?;
     }
     if let Some(current) = &current {
-        let old = &current.scope;
         if current.reset_required {
             return Err(OutboxError::ResetRequired);
         }
+        if current.reset != record.capture
+            || (!codec::same_source(&current.scope, &record.scope)
+                && !record
+                    .expected_source
+                    .as_ref()
+                    .is_some_and(|expected| codec::same_source(&current.scope, expected)))
+        {
+            return Err(OutboxError::Conflict);
+        }
+    } else if record.capture.is_some() {
+        return Err(OutboxError::Conflict);
+    }
+    if let Some(current) = &current {
+        let old = &current.scope;
         if !codec::same_source(old, &record.scope) {
             super::source_reset::observe(
                 &transaction,
@@ -79,6 +80,23 @@ pub(super) fn queue(
             publish(connection, audit)?;
             return Err(OutboxError::ResetRequired);
         }
+    }
+    let existing:Option<(StoredDelivery,Vec<u8>)>=transaction.query_row(
+        &format!("{},body FROM deliveries WHERE registration=?1 AND conversation=?2 AND incarnation=?3 AND position=?4",stored::SELECT),
+        params![registration,conversation,record.scope.incarnation().as_str(),position],
+        |r|Ok((StoredDelivery::row(r)?,r.get(10)?)),
+    ).optional().map_err(unavailable)?;
+    if let Some((saved, body)) = existing {
+        let existing = saved.checked(&transaction)?;
+        if codec::scope_text(&existing.scope)? != scope
+            || body != record.body
+            || existing.delivery.epoch() != record.epoch
+        {
+            return Err(OutboxError::Conflict);
+        }
+        return Ok(existing.delivery.id());
+    }
+    if let Some(current) = &current {
         if current.position != record.expected_after {
             return Err(OutboxError::Conflict);
         }

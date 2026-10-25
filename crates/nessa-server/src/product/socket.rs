@@ -1952,6 +1952,9 @@ async fn dispatch_authorized(
         "agents.installOptions" | "agents.install" => {
             super::agent_install::dispatch(state, session, frame).await
         }
+        "conversation.webhook.cursor" | "conversation.webhook.reset" => {
+            super::webhook_reset::dispatch(state, session, frame).await
+        }
         "conversation.share" | "conversation.unshare" | "conversation.shares" => {
             super::read_access::dispatch_share(state, session, frame).await
         }
@@ -1985,8 +1988,12 @@ async fn dispatch_authorized(
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
-            health_check_message(&frame.id, state.uptime_clock.elapsed_ms())
-                .unwrap_or_else(|_| failure(&frame.id, "internal_error"))
+            health_check_message(
+                &frame.id,
+                state.uptime_clock.elapsed_ms(),
+                state.webhooks.as_ref().map(|runtime| runtime.status()),
+            )
+            .unwrap_or_else(|_| failure(&frame.id, "internal_error"))
         }
         "credential.issue" => {
             let Some(admin) = state.admin.as_ref() else {

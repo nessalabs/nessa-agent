@@ -21,13 +21,16 @@ use nessa_auth::application::{
     ports::{AccessError, AccessReader, Clock, PortFuture},
 };
 use nessa_auth::domain::{CredentialId, IssuanceCause, PrincipalId};
+use nessa_protocol::protocol::{
+    WebhookNativeMutations, WebhookPendingOutcome, WebhookRefusal, WebhookStatus,
+};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::{oneshot, Mutex as AsyncMutex, Notify, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 use uuid::Uuid;
@@ -77,6 +80,9 @@ struct Owner {
     controls: Arc<Semaphore>,
     wake: Notify,
     known: Mutex<Option<PendingSettlement>>,
+    next_registration: Mutex<Option<Uuid>>,
+    last_refusal: Mutex<Option<WebhookRefusal>>,
+    source: OnceLock<DeliveryDependencies>,
     #[cfg(test)]
     delivery_cycles: AtomicU64,
     #[cfg(test)]
@@ -127,6 +133,9 @@ impl WebhookRuntime {
                 controls: Arc::new(Semaphore::new(MAX_OUTBOX_WORKERS)),
                 wake: Notify::new(),
                 known: Mutex::new(None),
+                next_registration: Mutex::new(None),
+                last_refusal: Mutex::new(None),
+                source: OnceLock::new(),
                 #[cfg(test)]
                 delivery_cycles: AtomicU64::new(0),
                 #[cfg(test)]
@@ -153,6 +162,10 @@ impl WebhookRuntime {
         if !commands.accepting || commands.delivery.is_some() {
             return Err(CredentialAdminError::Unavailable);
         }
+        self.owner
+            .source
+            .set(dependencies.clone())
+            .map_err(|_| CredentialAdminError::Unavailable)?;
         let this = self.clone();
         commands.delivery = Some(tokio::spawn(async move {
             let result = AssertUnwindSafe(this.delivery_loop(dependencies))
@@ -168,6 +181,41 @@ impl WebhookRuntime {
             result
         }));
         Ok(())
+    }
+    /// Same canonical source and capacity as the supervised sender. The caller
+    /// supplies current owner authority, not a webhook or paired-reader grant.
+    pub(crate) async fn owner_head(
+        &self,
+        selected: crate::conversation::application::PrincipalRecordScope,
+        lease: crate::conversation::application::RecordReadLease,
+    ) -> Result<crate::conversation::application::RecordReadResponse, ConversationError> {
+        use crate::conversation::application::{
+            RecordReadLease, RecordReadOperation, RecordReadValue,
+        };
+        let dependencies = self.owner.source.get().ok_or(ConversationError::Metadata)?;
+        let permit = dependencies
+            .capacity
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| ConversationError::Metadata)?;
+        let ownership = Arc::new(Mutex::new((lease, permit)));
+        let mut response = dependencies
+            .source
+            .read_principal(
+                selected.clone(),
+                RecordReadOperation::Head,
+                RecordReadLease::new(ownership.clone()),
+            )
+            .await
+            .map_err(|_| ConversationError::Metadata)?;
+        let RecordReadValue::Head(head) = &response.value else {
+            return Err(ConversationError::Metadata);
+        };
+        selected
+            .validate(&head.scope)
+            .map_err(|_| ConversationError::Metadata)?;
+        response.lease = RecordReadLease::new((ownership, response.lease));
+        Ok(response)
     }
     #[cfg(test)]
     pub(crate) fn completed_delivery_cycles(&self) -> u64 {
@@ -193,6 +241,42 @@ impl WebhookRuntime {
     }
     pub(crate) fn store(&self) -> &SqlOutbox {
         &self.owner.store
+    }
+    /// Read-only process-local facts. No database work, publication, authority
+    /// decision or acknowledgement occurs while reporting this snapshot.
+    pub fn status(&self) -> WebhookStatus {
+        // No path holds known while acquiring commands. Keep these read-only
+        // guards through the pin sample so pending and admission are coherent.
+        let commands = self
+            .owner
+            .commands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let known = self
+            .owner
+            .known
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pending_outcome = known
+            .as_ref()
+            .map(PendingSettlement::status)
+            .unwrap_or(WebhookPendingOutcome::None);
+        let native_mutations = if !commands.accepting || commands.failed {
+            WebhookNativeMutations::Stopped
+        } else if self.owner.store.attempt_pending() {
+            WebhookNativeMutations::TemporarilyUnavailable
+        } else {
+            WebhookNativeMutations::Available
+        };
+        WebhookStatus {
+            pending_outcome,
+            native_mutations,
+            last_refusal: *self
+                .owner
+                .last_refusal
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        }
     }
     pub(crate) fn credentials(&self) -> &LocalCredentialStore {
         &self.owner.credentials

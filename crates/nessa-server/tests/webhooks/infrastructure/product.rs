@@ -308,6 +308,24 @@ impl Harness {
         pause: Option<Arc<IssuePause>>,
         runtime_clock: Option<Arc<dyn Clock>>,
     ) -> Self {
+        Self::with_configured(
+            pause,
+            runtime_clock,
+            vec![ConfiguredWebhook {
+                principal: PrincipalId::new("hook").unwrap(),
+                registration: RegistrationConfig {
+                    destination: Destination::parse("https://recipient.test/synthetic").unwrap(),
+                    key: Arc::new(MacKey::new([7; 32])),
+                },
+            }],
+        )
+        .await
+    }
+    async fn with_configured(
+        pause: Option<Arc<IssuePause>>,
+        runtime_clock: Option<Arc<dyn Clock>>,
+        configured: Vec<ConfiguredWebhook>,
+    ) -> Self {
         let root = Arc::new(tempfile::tempdir().unwrap());
         let private = root.path().join("private");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -392,14 +410,7 @@ impl Harness {
         });
         let runtime = Arc::new(
             WebhookRuntime::new(
-                vec![ConfiguredWebhook {
-                    principal: PrincipalId::new("hook").unwrap(),
-                    registration: RegistrationConfig {
-                        destination: Destination::parse("https://recipient.test/synthetic")
-                            .unwrap(),
-                        key: Arc::new(MacKey::new([7; 32])),
-                    },
-                }],
+                configured,
                 base,
                 credentials.clone(),
                 store.clone(),

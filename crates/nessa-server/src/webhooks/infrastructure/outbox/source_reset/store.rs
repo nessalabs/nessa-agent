@@ -115,7 +115,8 @@ fn compatible(
     position: u64,
     delivery: &Delivery,
 ) -> Result<(), OutboxError> {
-    if fact.registration != registration
+    if fact.selection.is_some()
+        || fact.registration != registration
         || &fact.conversation != conversation
         || !codec::same_source(&fact.prior_scope, scope)
         || position == 0
@@ -183,6 +184,7 @@ pub(in super::super) fn observe(
         prior_position: prior.position,
         observed_scope: observed.clone(),
         stop: codec::SourceStop { initiator, at_ms },
+        selection: None,
     };
     insert(transaction, &fact)?;
     let changed=transaction.execute("UPDATE cursors SET reset_required=1,source_reset=?3 WHERE registration=?1 AND conversation=?2 AND reset_required=0",params![registration.to_string(),conversation.to_string(),fact.id.to_string()]).map_err(unavailable)?;

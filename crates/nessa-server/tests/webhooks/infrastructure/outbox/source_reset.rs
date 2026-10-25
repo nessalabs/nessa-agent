@@ -178,6 +178,7 @@ async fn first_reset_survives_later_cursor_deletion_replacement_and_restart() {
         .unwrap();
     let mut new = f.record(1);
     new.scope = replaced_source(f.record(1)).scope;
+    let replacement_scope = new.scope.clone();
     f.store.queue(new).await.unwrap();
     let mut next = replaced_source(f.record(2));
     next.scope = Scope::new(
@@ -188,6 +189,9 @@ async fn first_reset_survives_later_cursor_deletion_replacement_and_restart() {
         next.scope.schema().clone(),
         next.scope.access_epoch().clone(),
     );
+    // This is a fresh observation after the synthetic cursor replacement,
+    // not a page retaining the first incarnation's preparation context.
+    next.expected_source = Some(replacement_scope);
     next.initiator = QueueInitiator::Restart;
     assert_eq!(f.store.queue(next).await, Err(OutboxError::ResetRequired));
     let second = current_reset(&f);
@@ -607,6 +611,7 @@ async fn reset_factory_count_capacity_does_not_insert_a_partial_fact() {
     // This intentionally does not claim an assembled queue/cleanup history.
     for _ in 0..MAX_SOURCE_RESETS {
         let fact = source_reset::Fact {
+            selection: None,
             id: Uuid::new_v4(),
             registration: f.registration.id,
             conversation: f.conversation.clone(),
@@ -622,6 +627,7 @@ async fn reset_factory_count_capacity_does_not_insert_a_partial_fact() {
         publication::append(&tx, audit::Record::cursor(&fact)).unwrap();
     }
     let fact = source_reset::Fact {
+        selection: None,
         id: Uuid::new_v4(),
         registration: f.registration.id,
         conversation: f.conversation.clone(),
@@ -814,6 +820,7 @@ async fn capture_storage_failure_remains_unavailable_instead_of_conflict() {
     let tx = c.transaction().unwrap();
     let saved = stored::by_id(&tx, delivery).unwrap().unwrap();
     let fact = source_reset::Fact {
+        selection: None,
         id: Uuid::new_v4(),
         registration: f.registration.id,
         conversation: f.conversation.clone(),

@@ -208,7 +208,7 @@ fn checked_request(bytes: &[u8], conversation: &ConversationId) -> (String, u64,
         body,
     )
 }
-async fn mount(f: &Harness, http: Arc<dyn WebhookHttp>) {
+async fn canonical_storage(f: &Harness) -> Arc<RecordStorage> {
     let storage = Arc::new(RecordStorage::new(f._root.path().join("sessions")).unwrap());
     storage.initialize().await.unwrap();
     for conversation in [&f.a, &f.b] {
@@ -227,8 +227,12 @@ async fn mount(f: &Harness, http: Arc<dyn WebhookHttp>) {
             .await
             .unwrap();
     }
+    storage
+}
+async fn mount(f: &Harness, http: Arc<dyn WebhookHttp>) -> Arc<RecordStorage> {
+    let storage = canonical_storage(f).await;
     let source = Arc::new(NessaRecordReadSource::new(
-        storage,
+        storage.clone(),
         Id::new("synthetic-source").unwrap(),
         tokio::runtime::Handle::current(),
     ));
@@ -242,6 +246,7 @@ async fn mount(f: &Harness, http: Arc<dyn WebhookHttp>) {
             http,
         })
         .unwrap();
+    storage
 }
 async fn issue_share(f: &Harness, client: &mut Client) -> String {
     let reply = client.call("credential.issue", issue_params()).await;
@@ -311,6 +316,9 @@ async fn public_revoke_expiry_and_regrant_refuse_the_old_due_epoch_without_post(
         let credential = issue_share(&f, &mut client).await;
         checked_request(&recipient.next().await, &f.a);
         checked_request(&recipient.next().await, &f.a);
+        // This case exercises mutation after consumed response ACK. The pinned
+        // publication-outage race is exercised separately below.
+        two_fresh_cycles(&f).await;
         match action {
             "revoke" => {
                 let reply = client
@@ -809,7 +817,7 @@ impl WebhookHttp for FailedSendingAck {
     }
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn missing_sending_ack_makes_no_post_and_cold_recovery_never_reposts_unknown() {
+async fn missing_sending_ack_commits_unposted_unknown_and_cold_recovery_never_reposts_it() {
     let f = Harness::new().await;
     let root = f._root.clone();
     let conversation = f.a.clone();
@@ -844,7 +852,7 @@ async fn missing_sending_ack_makes_no_post_and_cold_recovery_never_reposts_unkno
             .unwrap();
     let sending: String = connection
         .query_row(
-            "SELECT id FROM deliveries WHERE phase='sending'",
+            "SELECT id FROM deliveries WHERE phase='unknown'",
             [],
             |row| row.get(0),
         )
@@ -855,7 +863,7 @@ async fn missing_sending_ack_makes_no_post_and_cold_recovery_never_reposts_unkno
     let next = checked_request(&recipient.next().await, &conversation);
     assert_ne!(
         next.0, sending,
-        "cold Sending has no durable remote observation and is never automatically POSTed"
+        "a locally reconciled unposted Unknown is never automatically POSTed"
     );
     assert_eq!(
         serde_json::from_slice::<Value>(&next.3).unwrap()["position"],
@@ -1153,7 +1161,7 @@ async fn lost_sending_ack_reconciles_unknown_and_sends_next_record_in_the_same_l
     assert_eq!(list["ok"], true, "{list}");
     let connection = Connection::open(f._root.path().join("private/outbox.db")).unwrap();
     let sending: String = connection
-        .query_row("SELECT id FROM deliveries WHERE phase='sending'", [], |r| {
+        .query_row("SELECT id FROM deliveries WHERE phase='unknown'", [], |r| {
             r.get(0)
         })
         .unwrap();
@@ -1189,17 +1197,26 @@ async fn dispatch_deadline_releases_grant_while_native_sending_sql_stays_owned()
         let f = Harness::new().await;
         let mut recipient = Recipient::new(true);
         let pause = f.store.pause_admission(after_commit);
-        mount(&f, recipient.transport.clone()).await;
         let (mut client, _) = Client::open(f.address, &f.owner).await;
+        let mut health = health_reader(&f, &mut client).await;
+        mount(&f, recipient.transport.clone()).await;
         let credential = issue_share(&f, &mut client).await;
         tokio::time::timeout(WAIT, pause.entered()).await.unwrap();
         tokio::time::pause();
         tokio::time::advance(crate::webhooks::application::POST_DEADLINE).await;
+        // A paused blocking SQL worker prevents virtual auto-advance. Resume
+        // real time before observing the timer; keep the original one-second
+        // notification bound and release/join SQL before asserting failures.
+        tokio::time::resume();
         let released =
             tokio::time::timeout(Duration::from_secs(1), f.runtime.after_dispatch_deadline()).await;
-        tokio::time::resume();
         // Real product unshare performs actual metadata work after time resumes.
         // Always release/join the SQL worker before asserting a negative result.
+        let status = tokio::time::timeout(
+            WAIT,
+            AssertUnwindSafe(health.call("server.health", json!({}))).catch_unwind(),
+        )
+        .await;
         let conversation = f.a.clone();
         let mut unshare = tokio::spawn(async move {
             let reply = client.call("conversation.unshare",json!({"requestId":"unshare-at-dispatch-deadline","conversationId":conversation.to_string(),"credentialId":credential})).await;
@@ -1216,6 +1233,14 @@ async fn dispatch_deadline_releases_grant_while_native_sending_sql_stays_owned()
             Err(_) => unshare.await.unwrap(),
         };
         let drained = tokio::time::timeout(WAIT, shutdown).await.unwrap();
+        let status = status
+            .expect("health observer is bounded")
+            .expect("health observer did not panic");
+        assert_eq!(status["payload"]["webhook"]["pendingOutcome"], "unposted");
+        assert_eq!(
+            status["payload"]["webhook"]["nativeMutations"],
+            "temporarily-unavailable"
+        );
         assert!(
             released.is_ok(),
             "authority deadline must fire, stage={after_commit}"
@@ -1242,6 +1267,7 @@ async fn dispatch_deadline_releases_grant_while_native_sending_sql_stays_owned()
         );
         drop(connection);
         assert!(recipient.requests.try_recv().is_err());
+        drop(health);
         drop(client);
         f.close().await.unwrap();
     }
@@ -1476,3 +1502,343 @@ async fn dispatch_deadline_releases_partial_admission_before_joining_native_meta
     );
     assert_eq!(drained, Ok(()));
 }
+
+async fn health_reader(f: &Harness, owner: &mut Client) -> Client {
+    let mut params = ordinary_params();
+    params["requestId"] = json!("status-reader-issue");
+    params["grants"] =
+        json!([{"action":"server.read","resource":{"organizationId":"org","id":"gateway"}}]);
+    let issued = owner.call("credential.issue", params).await;
+    assert_eq!(issued["ok"], true, "{issued}");
+    let evidence = issued["payload"]["secret"].as_str().unwrap();
+    let (client, ready) = Client::open(f.address, evidence).await;
+    assert_eq!(ready["ok"], true, "{ready}");
+    client
+}
+
+struct RefusedPreparation {
+    inner: Arc<Transport>,
+    reason: PrepareFailure,
+    refused: AtomicBool,
+    entered: Notify,
+    released: AtomicBool,
+    wake: Notify,
+}
+#[async_trait]
+impl WebhookHttp for RefusedPreparation {
+    async fn prepare(
+        &self,
+        destination: &Destination,
+    ) -> Result<Box<dyn WebhookPost>, PrepareFailure> {
+        if !self.refused.swap(true, Ordering::SeqCst) {
+            self.entered.notify_one();
+            return Err(self.reason);
+        }
+        loop {
+            let changed = self.wake.notified();
+            if self.released.load(Ordering::SeqCst) {
+                break;
+            }
+            changed.await;
+        }
+        self.inner.prepare(destination).await
+    }
+}
+
+#[tokio::test]
+async fn each_preparation_refusal_keeps_queue_and_controls_then_recovers_with_fresh_validation() {
+    for reason in [
+        PrepareFailure::Busy,
+        PrepareFailure::Unavailable,
+        PrepareFailure::TimedOut,
+        PrepareFailure::Destination,
+    ] {
+        let f = Harness::new().await;
+        let mut recipient = Recipient::new(false);
+        let transport = Arc::new(RefusedPreparation {
+            inner: recipient.transport.clone(),
+            reason,
+            refused: AtomicBool::new(false),
+            entered: Notify::new(),
+            released: AtomicBool::new(false),
+            wake: Notify::new(),
+        });
+        let (mut client, _) = Client::open(f.address, &f.owner).await;
+        let mut health = health_reader(&f, &mut client).await;
+        mount(&f, transport.clone()).await;
+        issue_share(&f, &mut client).await;
+        tokio::time::timeout(WAIT, transport.entered.notified())
+            .await
+            .unwrap();
+        let c = Connection::open(f._root.path().join("private/outbox.db")).unwrap();
+        let attempts: i64 = c
+            .query_row(
+                "SELECT count(*) FROM audit WHERE json_extract(record,'$.cause')='admission'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let first: String = c
+            .query_row(
+                "SELECT id FROM deliveries ORDER BY position LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(attempts, 0, "{reason:?}");
+        assert_eq!(
+            c.query_row(
+                "SELECT count(*) FROM deliveries WHERE phase<>'queued'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        drop(c);
+        assert!(recipient.requests.try_recv().is_err());
+        // A refusal never pins native work or kills the shared product owner.
+        assert!(!f.store.due(2000).await.unwrap().is_empty());
+        let status = health.call("server.health", json!({})).await;
+        let refusal = match reason {
+            PrepareFailure::Busy => "preparation-busy",
+            PrepareFailure::Unavailable => "preparation-unavailable",
+            PrepareFailure::TimedOut => "preparation-timed-out",
+            PrepareFailure::Destination => "destination-refused",
+        };
+        assert_eq!(status["ok"], true, "{reason:?}: {status}");
+        assert_eq!(
+            status["payload"]["webhook"],
+            json!({"pendingOutcome":"none","nativeMutations":"available","lastRefusal":refusal})
+        );
+        let denied = client.call("server.health", json!({})).await;
+        assert_eq!(
+            denied["error"]["code"], "forbidden",
+            "status must retain server.read admission"
+        );
+        transport.released.store(true, Ordering::SeqCst);
+        transport.wake.notify_waiters();
+        let received = checked_request(&recipient.next().await, &f.a);
+        assert_eq!(
+            received.0.to_string(),
+            first,
+            "refusal must preserve delivery identity"
+        );
+        checked_request(&recipient.next().await, &f.a);
+        two_fresh_cycles(&f).await;
+        let status = health.call("server.health", json!({})).await;
+        assert_eq!(
+            status["payload"]["webhook"]["lastRefusal"], refusal,
+            "diagnostic survives healthy progress"
+        );
+        drop(health);
+        drop(client);
+        f.close().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pinned_response_refuses_native_cleanup_but_canonical_revoke_and_unshare_commit() {
+    for action in ["revoke", "unshare"] {
+        let f = Harness::new().await;
+        let entered = Arc::new(Notify::new());
+        let (release, wait) = std::sync::mpsc::channel();
+        let mut recipient = Recipient::with_response_pause(true, Some((entered.clone(), wait)));
+        let (mut client, _) = Client::open(f.address, &f.owner).await;
+        let mut health = health_reader(&f, &mut client).await;
+        mount(&f, recipient.transport.clone()).await;
+        let credential = issue_share(&f, &mut client).await;
+        tokio::time::timeout(WAIT, entered.notified())
+            .await
+            .unwrap();
+        let audit = f._root.path().join("private/audit");
+        let held = audit.with_extension("held");
+        std::fs::rename(&audit, &held).unwrap();
+        let before = f.runtime.completed_delivery_cycles();
+        release.send(()).unwrap();
+        checked_request(&recipient.next().await, &f.a);
+        tokio::time::timeout(WAIT, f.runtime.after_delivery_cycle(before))
+            .await
+            .unwrap();
+        assert_eq!(
+            f.store.due(2000).await.err(),
+            Some(crate::webhooks::application::OutboxError::Unavailable)
+        );
+        let c = Connection::open(f._root.path().join("private/outbox.db")).unwrap();
+        let audits: i64 = c
+            .query_row("SELECT count(*) FROM audit WHERE published=0", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        for _ in 0..2 {
+            let status = health.call("server.health", json!({})).await;
+            assert_eq!(
+                status["payload"]["webhook"],
+                json!({"pendingOutcome":"response","nativeMutations":"temporarily-unavailable"})
+            );
+        }
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM audit WHERE published=0", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            audits,
+            "status does not publish or consume settlement"
+        );
+        drop(c);
+        if action == "revoke" {
+            let reply = client
+                .call(
+                    "credential.revoke",
+                    json!({"requestId":"pinned-revoke","credentialId":credential}),
+                )
+                .await;
+            assert_eq!(
+                reply["error"]["code"], "credential_store_unavailable",
+                "native cleanup has no ACK: {reply}"
+            );
+            let snapshot = f
+                .runtime
+                .credentials()
+                .read(&CredentialId::new(&credential).unwrap())
+                .await
+                .unwrap();
+            assert!(
+                snapshot.credential.revoked_at().is_some(),
+                "canonical revocation must already be durable"
+            );
+        } else {
+            let reply = client.call("conversation.unshare", json!({"requestId":"pinned-unshare","conversationId":f.a.to_string(),"credentialId":credential})).await;
+            assert_eq!(reply["ok"], true, "{reply}");
+            assert!(f
+                .grants
+                .principal_grant(&f.a, &PrincipalId::new("hook").unwrap())
+                .await
+                .unwrap()
+                .is_none());
+        }
+        assert!(recipient.requests.try_recv().is_err());
+        std::fs::rename(&held, &audit).unwrap();
+        f.clock.0.store(4000, Ordering::SeqCst);
+        two_fresh_cycles(&f).await;
+        assert!(
+            recipient.requests.try_recv().is_err(),
+            "{action} must prevent subsequent dispatch"
+        );
+        let status = health.call("server.health", json!({})).await;
+        assert_eq!(status["payload"]["webhook"]["pendingOutcome"], "none");
+        assert_eq!(status["payload"]["webhook"]["nativeMutations"], "available");
+        drop(health);
+        drop(client);
+        f.close().await.unwrap();
+    }
+}
+
+struct PermanentlyRefusedDestination {
+    transport: Arc<Transport>,
+    refused: Destination,
+    healthy: Destination,
+}
+#[async_trait]
+impl WebhookHttp for PermanentlyRefusedDestination {
+    async fn prepare(
+        &self,
+        destination: &Destination,
+    ) -> Result<Box<dyn WebhookPost>, PrepareFailure> {
+        if destination == &self.refused {
+            return Err(PrepareFailure::Destination);
+        }
+        assert_eq!(destination, &self.healthy);
+        // Logical destinations are synthetic; this seam changes only socket/CA.
+        isolated_post(
+            self.transport.address,
+            &self.transport.root,
+            self.transport.capacity.clone(),
+        )
+    }
+}
+#[tokio::test]
+async fn permanently_refused_registration_does_not_starve_a_healthy_public_sibling() {
+    let config = |principal: &str, url: &str| ConfiguredWebhook {
+        principal: PrincipalId::new(principal).unwrap(),
+        registration: RegistrationConfig {
+            destination: Destination::parse(url).unwrap(),
+            key: Arc::new(MacKey::new([7; 32])),
+        },
+    };
+    let f = Harness::with_configured(
+        None,
+        None,
+        vec![
+            config("hook", "https://first.test/synthetic"),
+            config("healthy", "https://second.test/synthetic"),
+        ],
+    )
+    .await;
+    // Both public registrations/shares precede mounting: an owned healthy POST
+    // intentionally makes concurrent native issuance transiently unavailable.
+    let (mut client, _) = Client::open(f.address, &f.owner).await;
+    let first = issue_share(&f, &mut client).await;
+    let mut params = issue_params();
+    params["requestId"] = json!("healthy-sibling-issue");
+    params["principal"]["id"] = json!("healthy");
+    params["membership"]["principalId"] = json!("healthy");
+    params["membership"]["id"] = json!("healthy-member");
+    let issued = client.call("credential.issue", params).await;
+    assert_eq!(issued["ok"], true, "{issued}");
+    let second = issued["payload"]["credential"]["id"].as_str().unwrap();
+    let shared = client.call("conversation.share", json!({"requestId":"healthy-sibling-share","conversationId":f.b.to_string(),"credentialId":second,"capabilities":["read"]})).await;
+    assert_eq!(shared["ok"], true, "{shared}");
+    let a = f
+        .store
+        .registration(CredentialId::new(&first).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let b = f
+        .store
+        .registration(CredentialId::new(second).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    // Force the permanently refused registration to be the lexically first
+    // one. Removing fair progression must fail regardless of generated UUIDs.
+    let (refused, healthy, conversation) = if a.id < b.id {
+        (a, b, f.b.clone())
+    } else {
+        (b, a, f.a.clone())
+    };
+    let mut recipient = Recipient::new(false);
+    mount(
+        &f,
+        Arc::new(PermanentlyRefusedDestination {
+            transport: recipient.transport.clone(),
+            refused: refused.destination.clone(),
+            healthy: healthy.destination,
+        }),
+    )
+    .await;
+    checked_request(&recipient.next().await, &conversation);
+    checked_request(&recipient.next().await, &conversation);
+    two_fresh_cycles(&f).await;
+    let c = Connection::open(f._root.path().join("private/outbox.db")).unwrap();
+    let attempts: i64 = c.query_row("SELECT count(*) FROM audit WHERE registration=?1 AND json_extract(record,'$.cause')='admission'", [refused.id.to_string()], |r| r.get(0)).unwrap();
+    assert_eq!(attempts, 0, "permanent refusal is not a transport attempt");
+    let queued: i64 = c
+        .query_row(
+            "SELECT count(*) FROM deliveries WHERE registration=?1 AND phase='queued'",
+            [refused.id.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(queued, 2, "refused conversation keeps its actual queue");
+    drop(c);
+    assert!(recipient.requests.try_recv().is_err());
+    drop(client);
+    f.close().await.unwrap();
+}
+
+#[path = "product_delivery/owner_reset.rs"]
+mod owner_reset;
+
+#[path = "product_delivery/owner_query.rs"]
+mod owner_query;

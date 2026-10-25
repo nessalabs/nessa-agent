@@ -261,7 +261,8 @@ fn validate_history(connection: &Connection, facts: &Retirement) -> Result<(), O
                 | audit::Cause::AdmissionExpired
                 | audit::Cause::Restart
                 | audit::Cause::SourceChanged
-                | audit::Cause::SourceCheckpoint => return Err(OutboxError::Invalid),
+                | audit::Cause::SourceCheckpoint
+                | audit::Cause::OwnerReset => return Err(OutboxError::Invalid),
             },
             audit::Record::Delivery { .. } | audit::Record::Cursor { .. } => {
                 return Err(OutboxError::Invalid);

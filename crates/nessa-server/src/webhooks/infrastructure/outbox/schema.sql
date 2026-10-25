@@ -100,6 +100,8 @@ CREATE TABLE source_reset_facts (
     refs INTEGER NOT NULL DEFAULT 0 CHECK(refs>=0)
 );
 CREATE INDEX source_reset_registration ON source_reset_facts(registration);
+CREATE UNIQUE INDEX owner_reset_request ON source_reset_facts(json_extract(CASE WHEN json_valid(fact) THEN fact ELSE '{}' END,'$.selection.request'))
+WHERE json_extract(CASE WHEN json_valid(fact) THEN fact ELSE '{}' END,'$.selection.request') IS NOT NULL;
 CREATE TABLE source_reset_members (
     delivery TEXT PRIMARY KEY REFERENCES deliveries(id) ON DELETE CASCADE,
     reset TEXT NOT NULL REFERENCES source_reset_facts(id),

@@ -149,20 +149,12 @@ impl AdmitDelivery<'_> {
                 }
                 _ => AdmissionFailure::Refused,
             })?;
-        let snapshot = &credential.snapshot;
-        let named = &snapshot.credential;
-        if named.id() != &target.credential
-            || named.principal_id() != &target.principal
-            || named.organization_id() != &target.organization
-            || named.audience_id().as_str() != self.gateway.id().as_str()
-            || named.organization_id() != self.gateway.organization_id()
-            || snapshot.membership.principal_id() != &target.principal
-            || snapshot.membership.organization_id() != &target.organization
-            || !snapshot.membership.is_active()
-            || !named.is_valid_at(self.clock.unix_seconds())
-        {
-            return Err(AdmissionFailure::Refused);
-        }
+        validate_target_snapshot(
+            &credential.snapshot,
+            target,
+            self.gateway,
+            self.clock.unix_seconds(),
+        )?;
         Ok(credential)
     }
 
@@ -276,4 +268,28 @@ impl AdmitDelivery<'_> {
             }
         }
     }
+}
+
+/// Shared binding check for an already-held current Auth snapshot. This grants
+/// no resource permission and acquires no second credential admission fence.
+pub(crate) fn validate_target_snapshot(
+    snapshot: &AccessSnapshot,
+    target: &Target,
+    gateway: &Resource,
+    now_seconds: u64,
+) -> Result<(), AdmissionFailure> {
+    let named = &snapshot.credential;
+    if named.id() != &target.credential
+        || named.principal_id() != &target.principal
+        || named.organization_id() != &target.organization
+        || named.audience_id().as_str() != gateway.id().as_str()
+        || named.organization_id() != gateway.organization_id()
+        || snapshot.membership.principal_id() != &target.principal
+        || snapshot.membership.organization_id() != &target.organization
+        || !snapshot.membership.is_active()
+        || !named.is_valid_at(now_seconds)
+    {
+        return Err(AdmissionFailure::Refused);
+    }
+    Ok(())
 }

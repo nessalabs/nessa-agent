@@ -6,6 +6,7 @@ mod outbox;
 mod runtime;
 mod signature;
 pub use outbox::SqlOutbox;
+pub(crate) use outbox::{ResetCommand, ResetReceipt};
 pub(crate) use runtime::DeliveryDependencies;
 pub use runtime::{ConfiguredWebhook, WebhookRuntime};
 

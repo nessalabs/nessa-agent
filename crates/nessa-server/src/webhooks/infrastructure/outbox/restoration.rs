@@ -173,10 +173,12 @@ pub(super) fn contextual(
                 | audit::Cause::AdmissionExpired
                 | audit::Cause::Restart
                 | audit::Cause::SourceChanged
-                | audit::Cause::SourceCheckpoint => return Err(OutboxError::Invalid),
+                | audit::Cause::SourceCheckpoint
+                | audit::Cause::OwnerReset => return Err(OutboxError::Invalid),
             }
         }
         Record::Cursor {
+            selection,
             source_reset_id,
             registration,
             conversation_id,
@@ -194,15 +196,48 @@ pub(super) fn contextual(
                 || fact.prior_scope != prior_scope.checked()?
                 || fact.prior_position != *prior_position
                 || fact.observed_scope != observed_scope.checked()?
-                || fact.stop.initiator.label(fact.registration) != *initiator
-                || fact.stop.at_ms != *at_ms
+                || fact.selection != *selection
+                || fact
+                    .selection
+                    .as_ref()
+                    .map(|s| s.actor.clone())
+                    .unwrap_or_else(|| fact.stop.initiator.label(fact.registration))
+                    != *initiator
+                || fact.selection.as_ref().map_or(fact.stop.at_ms, |s| s.at_ms) != *at_ms
             {
                 return Err(OutboxError::Invalid);
+            }
+            if let Some(selection) = &fact.selection {
+                let saved = registry::by_id(connection, fact.registration)?;
+                if selection.credential != saved.registration.target.credential.as_str()
+                    || selection.issued_at_ms != saved.issued_at_ms
+                {
+                    return Err(OutboxError::Invalid);
+                }
+                if let Some(original) =
+                    super::source_reset::read(connection, uuid(&selection.request)?)?
+                {
+                    if original.selection.is_some()
+                        || original.registration != fact.registration
+                        || original.conversation != fact.conversation
+                        || original.prior_scope != fact.prior_scope
+                        || original.prior_position != fact.prior_position
+                        || original.observed_scope != fact.observed_scope
+                        || original.stop != fact.stop
+                    {
+                        return Err(OutboxError::Invalid);
+                    }
+                }
             }
             if owed {
                 let current = cursor::read(connection, fact.registration, &fact.conversation)?
                     .ok_or(OutboxError::Invalid)?;
-                if current.reset != Some(fact.id) {
+                if current.reset != Some(fact.id)
+                    || fact.selection.as_ref().is_some_and(|selection| {
+                        current.position != 0
+                            || selection.scope.checked().as_ref() != Ok(&current.scope)
+                    })
+                {
                     return Err(OutboxError::Invalid);
                 }
             }

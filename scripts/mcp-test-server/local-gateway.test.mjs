@@ -270,3 +270,28 @@ test("the several-tool prompt is exactly this wording, which forbids only other 
 test("a prompt for no tools is refused", () => {
   assert.throws(() => toolPrompt([]))
 })
+
+test("webhook seeds stay only in the disposable private gateway config", async (t) => {
+  t.after(() => delete process.env.MCP_LIVE_NESSA)
+  process.env.MCP_LIVE_NESSA = nessa
+  const webhooks = [
+    {
+      principalId: "stress-webhook",
+      url: "https://localhost/synthetic",
+      macKey: Buffer.alloc(32, 7).toString("base64"),
+    },
+  ]
+  const gateway = await start({ webhooks })
+  const directory = gateway.directory
+  try {
+    const file = join(directory, "ci", "instances", "local-gateway-test", "config.json")
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).webhooks, webhooks)
+    const { statSync } = await import("node:fs")
+    assert.equal(statSync(file).mode & 0o777, 0o600)
+    assert.equal(gateway.log().includes(webhooks[0].macKey), false)
+  } finally {
+    await gateway.stop()
+  }
+  const { existsSync } = await import("node:fs")
+  assert.equal(existsSync(directory), false)
+})

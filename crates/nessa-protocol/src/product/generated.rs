@@ -3393,6 +3393,41 @@ pub struct WorkspacePublishResult {
     pub revision: u64,
     pub applied: bool,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookCursorParams {
+    pub conversation_id: String,
+    pub credential_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_source_head: Option<bool>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookResetParams {
+    pub conversation_id: String,
+    pub credential_id: String,
+    pub request_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookCursorResult {
+    pub scope: RecordScope,
+    pub position: String,
+    pub reset_required: bool,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_source_head: Option<ConversationRecordsHeadResult>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationWebhookResetResult {
+    pub request_id: String,
+    pub receipt_id: String,
+    pub scope: RecordScope,
+    pub position: String,
+    pub applied_at_ms: u64,
+}
 pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
 pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 2;
@@ -3557,6 +3592,8 @@ pub mod product_method {
     pub const CONVERSATION_SET_MODEL: &str = "conversation.setModel";
     pub const CONVERSATION_SWITCH_AGENT: &str = "conversation.switchAgent";
     pub const CONVERSATION_FORK: &str = "conversation.fork";
+    pub const CONVERSATION_WEBHOOK_CURSOR: &str = "conversation.webhook.cursor";
+    pub const CONVERSATION_WEBHOOK_RESET: &str = "conversation.webhook.reset";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -3747,7 +3784,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 87
+                items.len() <= 89
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3859,6 +3896,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.setModel",
     "conversation.switchAgent",
     "conversation.fork",
+    "conversation.webhook.cursor",
+    "conversation.webhook.reset",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -3907,7 +3946,9 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "peer.relay"
         | "conversation.share"
         | "conversation.unshare"
-        | "conversation.shares" => Some("credential.manage"),
+        | "conversation.shares"
+        | "conversation.webhook.cursor"
+        | "conversation.webhook.reset" => Some("credential.manage"),
         "conversation.create"
         | "conversation.read"
         | "conversation.list"

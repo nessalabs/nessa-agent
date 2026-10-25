@@ -121,7 +121,7 @@ pub(super) fn decode(value: &str) -> Result<Delivery, OutboxError> {
     Ok(delivery)
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SavedScope {
     receiver: String,

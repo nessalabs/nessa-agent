@@ -18,7 +18,8 @@ struct StoredCursor {
     reset_required: i64,
     source_reset: Option<String>,
 }
-pub(super) struct Cursor {
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct Cursor {
     pub scope: Scope,
     pub position: u64,
     pub reset_required: bool,
@@ -46,11 +47,25 @@ impl StoredCursor {
         };
         let reset = match (reset_required, self.source_reset) {
             (false, None) => None,
+            (false, Some(id)) => {
+                let fact = super::source_reset::read(connection, uuid(&id)?)?
+                    .ok_or(OutboxError::Invalid)?;
+                super::source_reset::verify_receipt(connection, &fact)?;
+                let selection = fact.selection.as_ref().ok_or(OutboxError::Invalid)?;
+                if fact.registration.to_string() != self.registration
+                    || fact.conversation.to_string() != self.conversation
+                    || !codec::same_source(&selection.scope.checked()?, &scope)
+                {
+                    return Err(OutboxError::Invalid);
+                }
+                Some(fact.id)
+            }
             (true, Some(id)) => {
                 let fact = super::source_reset::read(connection, uuid(&id)?)?
                     .ok_or(OutboxError::Invalid)?;
                 if fact.registration.to_string() != self.registration
                     || fact.conversation.to_string() != self.conversation
+                    || fact.selection.is_some()
                     || fact.prior_scope != scope
                     || fact.prior_position != position
                 {
@@ -134,6 +149,17 @@ pub(super) fn check_replacement(
 }
 
 impl SqlOutbox {
+    /// Capture the native generation before starting physical Head work. A
+    /// prepared Head must not reinterpret a cursor another owner has replaced.
+    pub(crate) async fn source_checkpoint(
+        &self,
+        registration: Uuid,
+        conversation: ConversationId,
+    ) -> Result<Option<Cursor>, OutboxError> {
+        self.read(move |connection| read(connection, registration, &conversation))
+            .await
+    }
+
     /// Correlate the freshly authorized physical head with the durable cursor.
     /// Replacement freezes the original cursor and captures pending deliveries;
     /// it never rewinds history or invents a new access epoch.
@@ -141,6 +167,7 @@ impl SqlOutbox {
         &self,
         registration: Uuid,
         conversation: ConversationId,
+        expected: Option<Cursor>,
         observed: Scope,
         initiator: QueueInitiator,
         at_ms: u64,
@@ -156,7 +183,11 @@ impl SqlOutbox {
             if !saved.lifecycle.retains_queued() {
                 return Err(OutboxError::Conflict);
             }
-            let Some(prior) = read(&transaction, registration, &conversation)? else {
+            let current = read(&transaction, registration, &conversation)?;
+            if current != expected {
+                return Err(OutboxError::Conflict);
+            }
+            let Some(prior) = current else {
                 return Ok(0);
             };
             if prior.reset_required {

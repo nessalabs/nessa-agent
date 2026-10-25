@@ -353,6 +353,14 @@
     "conversation.fork": {
       "params": "ConversationForkParams",
       "grant": "conversation.write"
+    },
+    "conversation.webhook.cursor": {
+      "params": "ConversationWebhookCursorParams",
+      "grant": "credential.manage"
+    },
+    "conversation.webhook.reset": {
+      "params": "ConversationWebhookResetParams",
+      "grant": "credential.manage"
     }
   },
   "events": {

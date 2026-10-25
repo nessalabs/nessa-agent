@@ -3142,6 +3142,44 @@ export interface WorkspacePublishResult {
   /** False when a later revision was already held, so this one changed nothing. */
   applied: boolean
 }
+/** Read the owner-only registered webhook checkpoint. Performs no canonical record I/O or delivery control. */
+export interface ConversationWebhookCursorParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The paired device's credential, as credential.list names it. */
+  credentialId: string
+  /** Explicitly request a separately observed canonical Head under current owner read authority. Omitted/false performs no canonical admission or physical Head I/O. This does not reconcile or mutate the native checkpoint. */
+  includeSourceHead?: boolean
+}
+/** Reset only a frozen webhook checkpoint. requestId is its server-issued frozen capture UUID. Fresh owner authorization applies on replay; no caller-supplied scope or offset is accepted. */
+export interface ConversationWebhookResetParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The paired device's credential, as credential.list names it. */
+  credentialId: string
+  /** Server-issued frozen capture or immutable receipt UUID. */
+  requestId: string
+}
+/** Current native scoped checkpoint, without reconciliation or publication. An explicitly requested observedSourceHead is read afterward under current owner authority; compare complete scopes before positions. requestId is available only while reset-required. Neither observation grants receiver or send authority. */
+export interface ConversationWebhookCursorResult {
+  scope: RecordScope
+  position: string
+  resetRequired: boolean
+  /** Server-issued frozen capture or immutable receipt UUID. */
+  requestId: string | null
+  /** Present only when explicitly requested and successfully read. Observed after the native checkpoint; these are separate non-atomic observations. Not a delivery, reset, publication or current-at-commit acknowledgement. */
+  observedSourceHead?: ConversationRecordsHeadResult
+}
+/** Immutable result: reset applied for this explicitly observed scope at position zero. Does not promise current-at-commit, resumed delivery or current resetRequired status. Same request replays this result without another rewind. */
+export interface ConversationWebhookResetResult {
+  /** Server-issued frozen capture or immutable receipt UUID. */
+  requestId: string
+  /** Server-issued frozen capture or immutable receipt UUID. */
+  receiptId: string
+  scope: RecordScope
+  position: "0"
+  appliedAtMs: number
+}
 export const subscriptionLimits = {
   conversationTargets: 8,
   listTargets: 2,
@@ -3202,7 +3240,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 87,
+  maxReadyMethods: 89,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3507,6 +3545,8 @@ export const ProductMethod = {
   ConversationSetModel: "conversation.setModel",
   ConversationSwitchAgent: "conversation.switchAgent",
   ConversationFork: "conversation.fork",
+  ConversationWebhookCursor: "conversation.webhook.cursor",
+  ConversationWebhookReset: "conversation.webhook.reset",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -3607,6 +3647,8 @@ export const productReadyMethods = [
   "conversation.setModel",
   "conversation.switchAgent",
   "conversation.fork",
+  "conversation.webhook.cursor",
+  "conversation.webhook.reset",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -3698,6 +3740,8 @@ export const productMethodGrants = {
   "conversation.setModel": "conversation.write",
   "conversation.switchAgent": "conversation.write",
   "conversation.fork": "conversation.write",
+  "conversation.webhook.cursor": "credential.manage",
+  "conversation.webhook.reset": "credential.manage",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

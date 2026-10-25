@@ -141,6 +141,10 @@ export const KNOBS = {
     default: 1,
     what: "window reloads while the host is still starting the gateway: no startup screen, and the conversation listed as soon as it is up",
   },
+  webhooks: {
+    default: 1,
+    what: "window turns captured by a disposable webhook with production loopback refusal and no attempt; positive TLS delivery is qualified separately",
+  },
   channels: {
     default: 1,
     what: "times channels are made from the sidebar's + (a refused folder, then one made for it; then a chosen folder), each talked to in a new session",
@@ -227,6 +231,7 @@ export function plan(knobs) {
   add(knobs.launches, () => ({ kind: "launch" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.channels, () => ({ kind: "channel" }))
+  add(knobs.webhooks, () => ({ kind: "webhook" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

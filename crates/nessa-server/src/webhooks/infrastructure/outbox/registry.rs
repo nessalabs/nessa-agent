@@ -184,7 +184,7 @@ pub(super) fn check_original_stop(
     Ok(())
 }
 
-fn by_credential(
+pub(super) fn by_credential(
     connection: &Connection,
     credential: &CredentialId,
 ) -> Result<Option<CheckedRegistration>, OutboxError> {

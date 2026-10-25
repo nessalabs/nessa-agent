@@ -16,12 +16,13 @@ use crate::webhooks::{
         MAX_OUTBOX_WORKERS, POST_DEADLINE,
     },
     domain::{Delivery, Observation},
-    infrastructure::record_message,
+    infrastructure::{outbox::DeliveryAttempt, record_message},
 };
 use nessa_auth::{
     application::credential_admin::CredentialAdminError,
     domain::{CredentialId, Resource},
 };
+use nessa_protocol::protocol::{WebhookPendingOutcome, WebhookRefusal};
 use nessa_protocol::{
     conversation::domain::ConversationId,
     product::generated::{
@@ -40,6 +41,7 @@ use std::{
 use tokio::{sync::Semaphore, time::Instant};
 use uuid::Uuid;
 
+#[derive(Clone)]
 pub(crate) struct DeliveryDependencies {
     pub metadata: Arc<LocalConversationStore>,
     pub source: Arc<dyn PrincipalRecordReadSource>,
@@ -52,10 +54,18 @@ pub(crate) struct DeliveryDependencies {
 /// This is not a durable receipt and is never used to infer a missing ACK.
 #[derive(Clone)]
 pub(super) struct PendingSettlement {
-    registration: Uuid,
+    attempt: DeliveryAttempt,
     before: Delivery,
     outcome: PendingOutcome,
     at_ms: Option<u64>,
+}
+impl PendingSettlement {
+    pub(super) fn status(&self) -> WebhookPendingOutcome {
+        match self.outcome {
+            PendingOutcome::Response(_) => WebhookPendingOutcome::Response,
+            PendingOutcome::Unposted { .. } => WebhookPendingOutcome::Unposted,
+        }
+    }
 }
 #[derive(Clone)]
 enum PendingOutcome {
@@ -211,10 +221,15 @@ impl WebhookRuntime {
             }
             // A prior attempt can retire an entire registration and its queue.
             // Re-read bounded current work instead of reusing the old batch.
+            let after = *self
+                .owner
+                .next_registration
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             let Some(pending) = self
                 .owner
                 .store
-                .due(self.owner.clock.unix_milliseconds())
+                .due_after(self.owner.clock.unix_milliseconds(), after)
                 .await
                 .map_err(store_failure)?
                 .into_iter()
@@ -222,6 +237,11 @@ impl WebhookRuntime {
             else {
                 break;
             };
+            *self
+                .owner
+                .next_registration
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(pending.registration.id);
             self.send_pending(dependencies, pending).await?;
             if self
                 .owner
@@ -243,6 +263,18 @@ impl WebhookRuntime {
         epoch: u64,
         initiator: QueueInitiator,
     ) -> Result<(), CycleFailure> {
+        let checkpoint = self
+            .owner
+            .store
+            .source_checkpoint(registration.id, conversation.clone())
+            .await
+            .map_err(store_failure)?;
+        if checkpoint
+            .as_ref()
+            .is_some_and(|cursor| cursor.reset_required)
+        {
+            return Ok(());
+        }
         let reader = self.reader(dependencies);
         let head = match reader
             .execute(registration, conversation, epoch, RecordReadOperation::Head)
@@ -254,7 +286,7 @@ impl WebhookRuntime {
                     .await?;
                 return Ok(());
             }
-            Err(error) if transient_source(error) => return Ok(()),
+            Err(error) if self.transient_source(error) => return Ok(()),
             Err(_) => return Err(CycleFailure::Fatal),
         };
         let (scope, target) = match head.value() {
@@ -267,6 +299,7 @@ impl WebhookRuntime {
             .source_after(
                 registration.id,
                 conversation.clone(),
+                checkpoint.clone(),
                 scope.clone(),
                 initiator,
                 self.owner.clock.unix_milliseconds(),
@@ -275,9 +308,8 @@ impl WebhookRuntime {
         drop(head); // Never acquire a second Auth/grant hold while retaining this one.
         let after = match after {
             Ok(after) => after,
-            Err(OutboxError::ResetRequired | OutboxError::Capacity | OutboxError::Conflict) => {
-                return Ok(())
-            }
+            Err(OutboxError::ResetRequired) => return Ok(()),
+            Err(OutboxError::Capacity | OutboxError::Conflict) => return Err(CycleFailure::Retry),
             Err(error) => return Err(store_failure(error)),
         };
         if after == target {
@@ -305,7 +337,7 @@ impl WebhookRuntime {
         {
             Ok(page) => page,
             Err(WebhookReadFailure::Admission(AdmissionFailure::Refused)) => return Ok(()),
-            Err(error) if transient_source(error) => return Ok(()),
+            Err(error) if self.transient_source(error) => return Ok(()),
             Err(_) => return Err(CycleFailure::Fatal),
         };
         let value = match page.value() {
@@ -344,6 +376,8 @@ impl WebhookRuntime {
                     registration: registration.id,
                     conversation: conversation.clone(),
                     scope: request.scope.clone(),
+                    expected_source: checkpoint.as_ref().map(|cursor| cursor.scope.clone()),
+                    capture: checkpoint.as_ref().and_then(|cursor| cursor.reset),
                     expected_after: record.position - 1,
                     position: record.position,
                     epoch,
@@ -374,9 +408,39 @@ impl WebhookRuntime {
             .await
         {
             Ok(prepared) => prepared,
-            Err(PrepareFailure::Busy) => return Ok(()),
-            Err(_) => return Err(CycleFailure::Fatal),
+            Err(
+                reason @ (PrepareFailure::Busy
+                | PrepareFailure::Unavailable
+                | PrepareFailure::TimedOut
+                | PrepareFailure::Destination),
+            ) => {
+                *self
+                    .owner
+                    .last_refusal
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = Some(match reason {
+                    PrepareFailure::Busy => WebhookRefusal::PreparationBusy,
+                    PrepareFailure::Unavailable => WebhookRefusal::PreparationUnavailable,
+                    PrepareFailure::TimedOut => WebhookRefusal::PreparationTimedOut,
+                    PrepareFailure::Destination => WebhookRefusal::DestinationRefused,
+                });
+                tracing::warn!(registration = %pending.registration.id, ?reason,
+                    "webhook preparation refused; no attempt; fresh validation next cycle");
+                return Ok(());
+            }
         };
+        let checkpoint = self
+            .owner
+            .store
+            .source_checkpoint(pending.registration.id, pending.conversation.clone())
+            .await
+            .map_err(store_failure)?;
+        if checkpoint
+            .as_ref()
+            .is_some_and(|cursor| cursor.reset_required)
+        {
+            return Ok(());
+        }
         let reader = self.reader(dependencies);
         let head = match reader
             .execute(
@@ -416,7 +480,7 @@ impl WebhookRuntime {
                 .await?;
                 return Ok(());
             }
-            Err(error) if transient_source(error) => return Ok(()),
+            Err(error) if self.transient_source(error) => return Ok(()),
             Err(_) => return Err(CycleFailure::Fatal),
         };
         let (scope, source_head) = match head.value() {
@@ -430,6 +494,7 @@ impl WebhookRuntime {
             .source_after(
                 pending.registration.id,
                 pending.conversation.clone(),
+                checkpoint,
                 scope.clone(),
                 QueueInitiator::Live,
                 self.owner.clock.unix_milliseconds(),
@@ -437,7 +502,8 @@ impl WebhookRuntime {
             .await
         {
             Ok(_) => {}
-            Err(OutboxError::ResetRequired | OutboxError::Conflict) => return Ok(()),
+            Err(OutboxError::ResetRequired) => return Ok(()),
+            Err(OutboxError::Conflict | OutboxError::Capacity) => return Err(CycleFailure::Retry),
             Err(error) => return Err(store_failure(error)),
         }
         if scope != pending.scope || source_head < pending.position {
@@ -466,19 +532,32 @@ impl WebhookRuntime {
                 .await?;
                 return Ok(());
             }
-            Err(AdmissionFailure::Unavailable) => return Err(CycleFailure::Retry),
+            Err(AdmissionFailure::Unavailable) => {
+                *self
+                    .owner
+                    .last_refusal
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) =
+                    Some(WebhookRefusal::AdmissionUnavailable);
+                return Err(CycleFailure::Retry);
+            }
         };
         let at = self.owner.clock.unix_milliseconds();
         let sending = pending
             .delivery
             .admit(pending.delivery.epoch(), at)
             .map_err(|_| CredentialAdminError::Unavailable)?;
+        let attempt = self.owner.store.delivery_attempt(
+            pending.registration.id,
+            pending.delivery.clone(),
+            pending.capture,
+        );
         *self
             .owner
             .known
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(PendingSettlement {
-            registration: pending.registration.id,
+            attempt: attempt.clone(),
             before: pending.delivery.clone(),
             outcome: PendingOutcome::Unposted {
                 sending: sending.clone(),
@@ -489,7 +568,7 @@ impl WebhookRuntime {
         let write = self
             .owner
             .store
-            .admit_before(&pending.delivery, &sending, at, deadline);
+            .admit_before(&attempt, &sending, at, deadline);
         tokio::pin!(write);
         let receipt = tokio::select! {
             result = &mut write => Some(result),
@@ -574,7 +653,7 @@ impl WebhookRuntime {
             .known
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(PendingSettlement {
-            registration: pending.registration.id,
+            attempt: attempt.clone(),
             before: sending.clone(),
             outcome: PendingOutcome::Response(observed),
             at_ms: None,
@@ -673,19 +752,13 @@ impl WebhookRuntime {
                     .map_err(|_| CredentialAdminError::Unavailable)?;
                 self.owner
                     .store
-                    .settle_response(&selected.before, &after, at)
+                    .settle_response(&selected.attempt, &selected.before, &after, at)
                     .await
             }
             PendingOutcome::Unposted { sending, expired } => {
                 self.owner
                     .store
-                    .settle_unposted(
-                        selected.registration,
-                        &selected.before,
-                        &sending,
-                        expired,
-                        at,
-                    )
+                    .settle_unposted(&selected.attempt, &sending, expired, at)
                     .await
             }
         }
@@ -695,16 +768,33 @@ impl WebhookRuntime {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
+        self.owner
+            .store
+            .acknowledge_attempt(&selected.attempt)
+            .map_err(|_| CredentialAdminError::Unavailable)?;
         Ok(())
     }
 }
 
 // Canonical discovery reports bounded progress, not a failed supervisor.
-fn transient_source(error: WebhookReadFailure) -> bool {
-    matches!(
-        error,
-        WebhookReadFailure::Source(
-            RecordReadError::TemporarilyUnavailable | RecordReadError::SourcePreparing
-        )
-    )
+impl WebhookRuntime {
+    fn transient_source(&self, error: WebhookReadFailure) -> bool {
+        let reason = match error {
+            WebhookReadFailure::Admission(AdmissionFailure::Unavailable) => {
+                WebhookRefusal::AdmissionUnavailable
+            }
+            WebhookReadFailure::Source(
+                RecordReadError::TemporarilyUnavailable
+                | RecordReadError::SourcePreparing
+                | RecordReadError::IdentityChanged,
+            ) => WebhookRefusal::SourceUnavailable,
+            _ => return false,
+        };
+        *self
+            .owner
+            .last_refusal
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(reason);
+        true
+    }
 }

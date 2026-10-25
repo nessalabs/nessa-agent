@@ -101,7 +101,7 @@ DELETE FROM deliveries WHERE rowid IN (
 /// Published delivery history belongs to its delivery-delete trigger. This
 /// indexed cleanup visits only the separate registration projections.
 pub(super) const TRIM_REGISTRATION_AUDIT: &str =
-    "DELETE FROM audit INDEXED BY published_registration_audit WHERE published=1 AND delivery IS NULL";
+    "DELETE FROM audit INDEXED BY published_registration_audit WHERE published=1 AND delivery IS NULL AND json_extract(record,'$.cause')!='owner_reset'";
 
 /// A formerly queued row can be older than all retained terminals. Protect its
 /// owed response while reclaiming the oldest actually published alternative.
@@ -203,6 +203,7 @@ fn retire_drained(transaction: &Transaction<'_>, at_ms: u64) -> Result<(), Outbo
             saved.issued_at_ms,
             super::retirement::RetirementKind::Drained,
         )?;
+        transaction.execute("DELETE FROM audit WHERE registration=?1 AND published=1 AND json_extract(record,'$.cause')='owner_reset'", [&id]).map_err(unavailable)?;
         transaction
             .execute("DELETE FROM cursors WHERE registration=?1", [&id])
             .map_err(unavailable)?;
@@ -233,6 +234,25 @@ pub(super) fn commit_before(
     retire_drained(&transaction, at_ms)?;
     super::intents::validate(&transaction)?;
     capacity::check(&transaction, registration)?;
+    if deadline.is_some_and(|at| Instant::now() >= at) {
+        return Err(OutboxError::Conflict);
+    }
+    transaction.commit().map_err(unavailable)
+}
+
+/// A pinned attempt cannot run generic retirement or trim its published receipt.
+/// On its first terminal write the new, unpublished observation already protects
+/// that delivery; reuse the existing published-alternative bound enforcement.
+pub(super) fn commit_observation(
+    transaction: Transaction<'_>,
+    registration: Uuid,
+    deadline: Option<Instant>,
+) -> Result<(), OutboxError> {
+    transaction
+        .execute(TRIM_PROTECTED_TERMINALS, [RETAINED_LIMIT as i64])
+        .map_err(unavailable)?;
+    super::intents::validate(&transaction)?;
+    capacity::check(&transaction, Some(registration))?;
     if deadline.is_some_and(|at| Instant::now() >= at) {
         return Err(OutboxError::Conflict);
     }

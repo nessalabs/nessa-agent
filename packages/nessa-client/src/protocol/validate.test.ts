@@ -18,6 +18,30 @@ describe("protocol validate", () => {
     ).toThrow("invalid runtimeStatus")
   })
 
+  it("validates schema-owned webhook health facts without treating a refusal as an attempt", () => {
+    const health = { ok: true, runtimeStatus: "ready", uptimeMs: 1 }
+    const webhook = {
+      pendingOutcome: "response",
+      nativeMutations: "temporarily-unavailable",
+      lastRefusal: "destination-refused",
+    }
+    expect(assertHealthResult({ ...health, webhook }).webhook).toEqual(webhook)
+    expect(assertHealthResult(health).webhook).toBeUndefined()
+    for (const bad of [
+      null,
+      true,
+      {},
+      { ...webhook, pendingOutcome: "delivered" },
+      { ...webhook, nativeMutations: "ready" },
+      { ...webhook, lastRefusal: null },
+      { ...webhook, lastRefusal: "revoked" },
+    ]) {
+      expect(() => assertHealthResult({ ...health, webhook: bad })).toThrow(
+        "invalid webhook status",
+      )
+    }
+  })
+
   it("rejects contradictory response envelopes", () => {
     expect(
       parseResponseFrame({

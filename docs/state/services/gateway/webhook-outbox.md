@@ -47,6 +47,11 @@ sources:
   - crates/nessa-server/src/webhooks/infrastructure/outbox/retirement.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/mod.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/store.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/owner.rs
+  - crates/nessa-server/src/product/webhook_reset.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/owner_reset.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/product_delivery/owner_reset.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/product_delivery/owner_query.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/fact.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/retention.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/cleanup.rs
@@ -60,6 +65,12 @@ sources:
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/retention_fixture.rs
 diagramLinks: {}
 diagramDetails:
+  - diagram: 1
+    node: Frozen
+    section: Explicit owner reset
+  - diagram: 1
+    node: Selected
+    section: Explicit owner reset
   - diagram: 0
     node: Owed
     section: State committed and audit still owed
@@ -204,8 +215,9 @@ trim together. Recovery never reconstructs an actor from current ownership.
 
 The cursor decoder covers identity, scope, integer position, reset flag and
 shared reset reference at startup and before live duplicate acknowledgement.
-A reset requires its original fact; a following cursor carries
-none. This remains checked after the published cursor audit has been trimmed.
+A frozen cursor requires its original source-change fact. An initial following
+cursor carries no reset reference; after an owner reset it retains the immutable
+selection identity as its durable capture generation. This remains checked after the published cursor audit has been trimmed.
 SQLite corruption refusals map to Invalid; transient I/O remains Unavailable.
 
 ## Acknowledging one durable operation
@@ -250,6 +262,90 @@ That uncertain acknowledgement is not permission to POST again. The future
 sender must reconcile durable Sending and outcome records while retaining its
 known observation. A Sending row restored without a durable outcome becomes
 terminal Unknown. The storage recovery method performs no HTTP.
+
+## Explicit owner reset
+
+The reset, attempt pin and public status changes described here are an
+uncommitted implementation review. The recorded source checkpoint remains
+historical until that candidate is committed and checked.
+
+`conversation.webhook.cursor` reads the current scoped checkpoint for a registered
+webhook target. While frozen, it returns the server-issued capture UUID as
+`requestId`. `conversation.webhook.reset` accepts that request, conversation and
+target credential; it accepts no scope, epoch or offset from the caller. Both
+commands run under retained product ownership, fresh credential and Cedar checks.
+Reset uses existing owner and target-sharing policy with current target facts;
+no webhook credential gains paired-reader authority.
+
+The canonical SDK Head selects the complete observed scope J. Native reset
+atomically compares the registration/credential installation and exact frozen
+capture, retains the original before-image and actor/time, and binds J at position
+zero with a new immutable selection generation. Existing deliveries retain their
+original identity, payload, capture and outcome. A delayed old Head or Page cannot
+cross that generation, including when scope and position look identical again.
+
+J may cease to be current before the native reset commits. The result truthfully
+reports the observed selection and receipt, not resumed delivery or a
+current-at-commit guarantee. If the next read observes K, the existing source
+change transition freezes J again; K needs another explicit reset. Failed freeze
+publication stops the cycle. Already-Sending work retains its original outcome
+responsibility; current credential/grant revocation fences still govern dispatch.
+
+```mermaid
+stateDiagram-v2
+    Following --> Frozen: Fresh physical source differs / capture original facts
+    Frozen --> Selected: Owner selects observed J / CAS exact capture and registration
+    Selected --> Following: Fresh read still observes J / current admission permits progress
+    Selected --> Frozen: Fresh read observes K / no K queue or admission
+    Selected --> Selected: Replay original request / publish owed proof, return same receipt
+```
+
+Replay freshly authorizes and returns the original selected J, actor/time and
+receipt after later replacement, reset or restart, without another rewind. A
+retained choice alone is not an acknowledged response: owed audit publication
+must complete before success. Changed actor, target, conversation or registration
+generation refuses. Receipts share the existing bounded reset fact family and
+remain while their registration lives; drained registration retirement removes
+them with private configuration. Capacity refusal leaves the frozen cursor intact.
+
+## Optional observed source Head
+
+The default owner cursor response remains a native read without canonical-read
+admission, reader capacity or physical Head I/O. Explicit `includeSourceHead: true`
+first authorizes the owner, conversation and actual registration, snapshots the
+native checkpoint, then uses the same bounded principal reader as the supervised
+sender. `observedSourceHead` is a separate, later observation. Compare every scope
+field before comparing its Head with the native position; physical replacement
+between observations is allowed and does not cause this query to freeze or reset.
+
+A requested read failure, exhausted reader capacity or deadline returns an
+explicit refusal, never a missing Head presented as healthy. The existing passive
+read deadline limits the caller's wait; retained runtime ownership keeps physical
+work, its credential hold and reader permit until completion even after timeout
+or caller loss. No native connection or attempt-pin mutex spans physical I/O.
+The query performs no audit publication, cursor advancement, queue or transport.
+`server.health` remains a separate read without physical source work.
+
+The browser stress step captures one Head after its unique visible witness turn
+commits, then waits for the native cursor to reach that fixed checkpoint in the
+same complete scope. Independent read-only webhook-native delivery rows must also
+show queued, zero-attempt, unstamped state through that Head. The disposable
+localhost destination retains production address refusal. This is capture/no-send
+evidence; positive signed TLS delivery is exercised separately by recipient E2E.
+The seeded count defaults to one and the raised check uses three. Browser execution
+and source-matched platform qualification remain pending for this local candidate.
+
+## Pending outcomes and transient refusal
+
+An exact-delivery pin starts under the native connection mutex before Sending and
+remains through physical completion, response/unposted settlement and consumed
+acknowledgement. Ordinary native mutations promptly return Unavailable throughout
+this interval, including publication outage. Canonical credential revoke and grant
+unshare independently commit and prevent later unauthorized dispatch. Read-only
+`server.health` exposes namespace pending outcome, temporary native exclusion and
+the last operation-local refusal without database I/O or target/secret disclosure.
+Preparation refusal creates no pin, Sending, POST or attempt increment; paced
+registration rotation prevents a permanently refused target starving a sibling.
 
 ## Source replacement and stopping
 

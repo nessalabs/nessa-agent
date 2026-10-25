@@ -40,12 +40,15 @@ use uuid::Uuid;
 
 pub(super) struct Owner {
     connection: Mutex<Connection>,
+    attempt: Mutex<Option<Uuid>>,
     lock: File,
     audit: PathBuf,
     capacity: Arc<Semaphore>,
     pub(super) clock: Arc<dyn Clock>,
     #[cfg(test)]
     admission_pause: Mutex<Option<Arc<AdmissionPause>>>,
+    #[cfg(test)]
+    pin_pause: Mutex<Option<Arc<AdmissionPause>>>,
 }
 // Only disposable native adapter fixtures can pause this actual physical work.
 #[cfg(test)]
@@ -97,7 +100,61 @@ pub struct SqlOutbox {
     pub(super) owner: Arc<Owner>,
 }
 
+/// Retained by the physical sender before admission. Dropping an observer or a
+/// clone cannot release the native exclusion; only consumed settlement does.
+#[derive(Clone)]
+pub(crate) struct DeliveryAttempt {
+    owner: Arc<Owner>,
+    id: Uuid,
+    registration: Uuid,
+    before: Delivery,
+    capture: Option<Uuid>,
+}
+enum TransitionCommit {
+    Ordinary(Option<Instant>),
+    Attempt(Option<Instant>),
+}
+enum AttemptWork {
+    Admit,
+    Response,
+    Unposted,
+}
+
 impl SqlOutbox {
+    /// Read-only native metadata. It never publishes or reclaims owed evidence.
+    pub(super) async fn read<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Connection) -> Result<T, OutboxError> + Send + 'static,
+    ) -> Result<T, OutboxError> {
+        let owner = self.owner.clone();
+        if owner.attempt.lock().map_err(unavailable)?.is_some() {
+            return Err(OutboxError::Unavailable);
+        }
+        let permit = owner
+            .capacity
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| OutboxError::Capacity)?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let connection = owner.connection.lock().map_err(unavailable)?;
+            if owner.attempt.lock().map_err(unavailable)?.is_some() {
+                return Err(OutboxError::Unavailable);
+            }
+            work(&connection)
+        })
+        .await
+        .map_err(unavailable)?
+    }
+
+    pub(crate) fn attempt_pending(&self) -> bool {
+        self.owner
+            .attempt
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+    }
+
     pub fn open(path: &Path, audit: PathBuf, clock: Arc<dyn Clock>) -> Result<Self, OutboxError> {
         let lock = nessa_local_storage::open(&path.with_extension("lock"), OpenMode::OpenOrCreate)
             .map_err(unavailable)?;
@@ -120,12 +177,15 @@ impl SqlOutbox {
         Ok(Self {
             owner: Arc::new(Owner {
                 connection: Mutex::new(connection),
+                attempt: Mutex::new(None),
                 lock,
                 audit,
                 capacity: Arc::new(Semaphore::new(MAX_OUTBOX_WORKERS)),
                 clock,
                 #[cfg(test)]
                 admission_pause: Mutex::new(None),
+                #[cfg(test)]
+                pin_pause: Mutex::new(None),
             }),
         })
     }
@@ -149,6 +209,9 @@ impl SqlOutbox {
         work: impl FnOnce(&mut Connection, &Path, C) -> Result<T, OutboxError> + Send + 'static,
     ) -> Result<T, OutboxError> {
         let owner = self.owner.clone();
+        if owner.attempt.lock().map_err(unavailable)?.is_some() {
+            return Err(OutboxError::Unavailable);
+        }
         let permit = owner
             .capacity
             .clone()
@@ -157,6 +220,10 @@ impl SqlOutbox {
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let mut connection = owner.connection.lock().map_err(unavailable)?;
+            // An operation may already have been queued when admission pinned.
+            if owner.attempt.lock().map_err(unavailable)?.is_some() {
+                return Err(OutboxError::Unavailable);
+            }
             let checked = check(&connection)?;
             finish(
                 &mut connection,
@@ -168,6 +235,144 @@ impl SqlOutbox {
         .await
         .map_err(unavailable)?
     }
+
+    pub(crate) fn delivery_attempt(
+        &self,
+        registration: Uuid,
+        before: Delivery,
+        capture: Option<Uuid>,
+    ) -> DeliveryAttempt {
+        DeliveryAttempt {
+            owner: self.owner.clone(),
+            id: Uuid::new_v4(),
+            registration,
+            before,
+            capture,
+        }
+    }
+
+    /// No generic publication/cleanup precedes or follows matching attempt work.
+    /// The connection mutex orders pin installation against every ordinary job.
+    async fn run_attempt<T: Send + 'static>(
+        &self,
+        attempt: &DeliveryAttempt,
+        operation: AttemptWork,
+        work: impl FnOnce(&mut Connection, &Path) -> Result<T, OutboxError> + Send + 'static,
+    ) -> Result<T, OutboxError> {
+        if !Arc::ptr_eq(&self.owner, &attempt.owner) {
+            return Err(OutboxError::Invalid);
+        }
+        let attempt = attempt.clone();
+        let owner = self.owner.clone();
+        let permit = owner
+            .capacity
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| OutboxError::Capacity)?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let mut connection = owner.connection.lock().map_err(unavailable)?;
+            #[cfg(test)]
+            if matches!(operation, AttemptWork::Admit) {
+                if let Some(pause) = owner.pin_pause.lock().unwrap().take() {
+                    pause.wait(false);
+                }
+            }
+            let pinned = *owner.attempt.lock().map_err(unavailable)?;
+            match pinned {
+                Some(id) if id != attempt.id => return Err(OutboxError::Unavailable),
+                None if matches!(operation, AttemptWork::Response) => {
+                    return Err(OutboxError::Conflict);
+                }
+                None if matches!(operation, AttemptWork::Admit) => {
+                    let saved = stored::by_id(&connection, attempt.before.id())?
+                        .ok_or(OutboxError::Conflict)?;
+                    stored::check_current(&connection, &saved)?;
+                    let registration = super::registry::by_id(&connection, attempt.registration)?;
+                    let current = super::cursor::read(
+                        &connection,
+                        attempt.registration,
+                        &saved.conversation,
+                    )?
+                    .ok_or(OutboxError::Invalid)?;
+                    if saved.registration != attempt.registration
+                        || saved.delivery != attempt.before
+                        || !registration.lifecycle.retains_queued()
+                        || current.reset_required
+                        || current.reset != attempt.capture
+                        || saved.source_reset.is_some()
+                        || !codec::same_source(&current.scope, &saved.scope)
+                    {
+                        return Err(OutboxError::Conflict);
+                    }
+                    *owner.attempt.lock().map_err(unavailable)? = Some(attempt.id);
+                }
+                None if matches!(operation, AttemptWork::Unposted) => {
+                    // Capacity can refuse admission before pin installation.
+                    // Protect a new unposted observation before writing it too.
+                    if let Some(saved) = stored::by_id(&connection, attempt.before.id())? {
+                        if saved.registration != attempt.registration {
+                            return Err(OutboxError::Invalid);
+                        }
+                        if saved.delivery == attempt.before {
+                            *owner.attempt.lock().map_err(unavailable)? = Some(attempt.id);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            work(&mut connection, &owner.audit)
+        })
+        .await
+        .map_err(unavailable)?
+    }
+
+    /// Called synchronously after the runtime consumes the actual settlement
+    /// acknowledgement, with all physical work joined. No Drop path clears it.
+    pub(crate) fn acknowledge_attempt(&self, attempt: &DeliveryAttempt) -> Result<(), OutboxError> {
+        if !Arc::ptr_eq(&self.owner, &attempt.owner) {
+            return Err(OutboxError::Invalid);
+        }
+        let mut pinned = self.owner.attempt.lock().map_err(unavailable)?;
+        match *pinned {
+            Some(id) if id == attempt.id => {
+                *pinned = None;
+                Ok(())
+            }
+            None => Ok(()), // Admission lost before installation; no POST began.
+            Some(_) => Err(OutboxError::Conflict),
+        }
+    }
+}
+
+impl SqlOutbox {
+    pub(crate) async fn due_after(
+        &self,
+        now_ms: u64,
+        after: Option<Uuid>,
+    ) -> Result<Vec<PendingDelivery>, OutboxError> {
+        self.run(move |connection,_| {
+            let mut statement=connection.prepare(
+                "SELECT d.id,d.registration,d.conversation,d.incarnation,d.position,d.scope,d.state,d.phase,d.due_at,(SELECT reset FROM source_reset_members WHERE delivery=d.id),d.body,
+                    r.id,r.credential,r.principal,r.organization,r.owner,r.destination,r.mac_key,r.active,r.stop,r.issued_at
+                 FROM deliveries d JOIN registrations r ON d.registration=r.id
+                 WHERE d.phase='queued' OR (d.phase='retry' AND d.due_at<=?1)
+                 ORDER BY CASE WHEN ?2 IS NULL OR d.registration>?2 THEN 0 ELSE 1 END,d.registration,d.conversation,d.position LIMIT 4"
+            ).map_err(unavailable)?;
+            let mut rows=statement.query(params![integer(now_ms)?, after.map(|id| id.to_string())]).map_err(unavailable)?;
+            let mut result=Vec::new();
+            while let Some(row)=rows.next().map_err(unavailable)? {
+                let saved=StoredDelivery::row(row).map_err(unavailable)?.checked(connection)?;
+                stored::check_current(connection,&saved)?;
+                let registration=StoredRegistration::row(row,11).map_err(unavailable)?.checked()?.registration;
+                let body:Vec<u8>=row.get(10).map_err(unavailable)?;
+                if registration.id!=saved.registration || body.len()>MAX_BODY_BYTES {return Err(OutboxError::Invalid);}
+                let capture=super::cursor::read(connection,saved.registration,&saved.conversation)?.ok_or(OutboxError::Invalid)?.reset;
+                result.push(PendingDelivery {registration,conversation:saved.conversation,scope:saved.scope,capture,position:saved.position,delivery:saved.delivery,body});
+            }
+            Ok(result)
+        }).await
+    }
 }
 
 #[async_trait]
@@ -178,26 +383,7 @@ impl Outbox for SqlOutbox {
     }
 
     async fn due(&self, now_ms: u64) -> Result<Vec<PendingDelivery>, OutboxError> {
-        self.run(move |connection,_| {
-            let mut statement=connection.prepare(
-                "SELECT d.id,d.registration,d.conversation,d.incarnation,d.position,d.scope,d.state,d.phase,d.due_at,(SELECT reset FROM source_reset_members WHERE delivery=d.id),d.body,
-                    r.id,r.credential,r.principal,r.organization,r.owner,r.destination,r.mac_key,r.active,r.stop,r.issued_at
-                 FROM deliveries d JOIN registrations r ON d.registration=r.id
-                 WHERE d.phase='queued' OR (d.phase='retry' AND d.due_at<=?1)
-                 ORDER BY d.registration,d.conversation,d.position LIMIT 4"
-            ).map_err(unavailable)?;
-            let mut rows=statement.query([integer(now_ms)?]).map_err(unavailable)?;
-            let mut result=Vec::new();
-            while let Some(row)=rows.next().map_err(unavailable)? {
-                let saved=StoredDelivery::row(row).map_err(unavailable)?.checked(connection)?;
-                stored::check_current(connection,&saved)?;
-                let registration=StoredRegistration::row(row,11).map_err(unavailable)?.checked()?.registration;
-                let body:Vec<u8>=row.get(10).map_err(unavailable)?;
-                if registration.id!=saved.registration || body.len()>MAX_BODY_BYTES {return Err(OutboxError::Invalid);}
-                result.push(PendingDelivery {registration,conversation:saved.conversation,scope:saved.scope,position:saved.position,delivery:saved.delivery,body});
-            }
-            Ok(result)
-        }).await
+        self.due_after(now_ms, None).await
     }
 
     async fn transition(
@@ -248,6 +434,27 @@ fn write_transition_before(
     at_ms: u64,
     deadline: Option<Instant>,
 ) -> Result<(), OutboxError> {
+    write_transition_commit(
+        connection,
+        before,
+        after,
+        cause,
+        at_ms,
+        TransitionCommit::Ordinary(deadline),
+    )
+}
+
+fn write_transition_commit(
+    connection: &mut Connection,
+    before: &Delivery,
+    after: &Delivery,
+    cause: DeliveryCause,
+    at_ms: u64,
+    mode: TransitionCommit,
+) -> Result<(), OutboxError> {
+    let deadline = match mode {
+        TransitionCommit::Ordinary(deadline) | TransitionCommit::Attempt(deadline) => deadline,
+    };
     if deadline.is_some_and(|at| Instant::now() >= at) {
         return Err(OutboxError::Conflict);
     }
@@ -268,7 +475,11 @@ fn write_transition_before(
         return Err(OutboxError::Conflict);
     }
     delivery_audit(&transaction, after, Some(before), cause, at_ms)?;
-    super::journal::commit_before(transaction, Some(saved.registration), at_ms, deadline)?;
+    if matches!(mode, TransitionCommit::Attempt(_)) {
+        super::journal::commit_observation(transaction, saved.registration, deadline)?;
+    } else {
+        super::journal::commit_before(transaction, Some(saved.registration), at_ms, deadline)?;
+    }
     Ok(())
 }
 
@@ -335,6 +546,24 @@ impl SqlOutbox {
 
 impl SqlOutbox {
     #[cfg(test)]
+    pub(crate) fn pause_pin(&self) -> AdmissionControl {
+        let pause = Arc::new(AdmissionPause {
+            after_commit: false,
+            entered: Notify::new(),
+            released: Mutex::new(false),
+            wake: Condvar::new(),
+        });
+        assert!(self
+            .owner
+            .pin_pause
+            .lock()
+            .unwrap()
+            .replace(pause.clone())
+            .is_none());
+        AdmissionControl(pause)
+    }
+
+    #[cfg(test)]
     pub(crate) fn pause_admission(&self, after_commit: bool) -> AdmissionControl {
         let pause = Arc::new(AdmissionPause {
             after_commit,
@@ -356,16 +585,15 @@ impl SqlOutbox {
     /// deadline. Late success is a conditional commit, never permission to POST.
     pub(crate) async fn admit_before(
         &self,
-        before: &Delivery,
+        attempt: &DeliveryAttempt,
         after: &Delivery,
         at_ms: u64,
         deadline: Instant,
     ) -> Result<(), OutboxError> {
-        let (before, after) = (before.clone(), after.clone());
-        let clock = self.owner.clock.clone();
+        let (before, after) = (attempt.before.clone(), after.clone());
         #[cfg(test)]
         let pause = self.owner.admission_pause.lock().unwrap().take();
-        self.run(move |connection, audit| {
+        self.run_attempt(attempt, AttemptWork::Admit, move |connection, audit| {
             #[cfg(test)]
             if let Some(pause) = &pause {
                 pause.wait(false);
@@ -373,19 +601,19 @@ impl SqlOutbox {
             if !DeliveryCause::Admission.allows(&before, &after, at_ms) {
                 return Err(OutboxError::Invalid);
             }
-            write_transition_before(
+            write_transition_commit(
                 connection,
                 &before,
                 &after,
                 DeliveryCause::Admission,
                 at_ms,
-                Some(deadline),
+                TransitionCommit::Attempt(Some(deadline)),
             )?;
             #[cfg(test)]
             if let Some(pause) = &pause {
                 pause.wait(true);
             }
-            finish(connection, audit, clock.unix_milliseconds())
+            publish(connection, audit)
         })
         .await
     }
@@ -395,14 +623,14 @@ impl SqlOutbox {
     /// retirement can remove the guarded row; that is no current work, not ACK.
     pub(crate) async fn settle_unposted(
         &self,
-        registration: Uuid,
-        before: &Delivery,
+        attempt: &DeliveryAttempt,
         sending: &Delivery,
         expired: bool,
         at_ms: u64,
     ) -> Result<(), OutboxError> {
-        let (before, sending) = (before.clone(), sending.clone());
-        self.run(move |connection, audit| {
+        let (before, sending) = (attempt.before.clone(), sending.clone());
+        let registration = attempt.registration;
+        self.run_attempt(attempt, AttemptWork::Unposted, move |connection, audit| {
             restoration::validate(connection)?;
             let Some(saved) = stored::by_id(connection, before.id())? else {
                 return if super::retirement::read(connection, registration)?.is_some() {
@@ -435,7 +663,17 @@ impl SqlOutbox {
             } else {
                 return Err(OutboxError::Conflict);
             };
-            write_transition(connection, &saved.delivery, &after, cause, at_ms)?;
+            if !cause.allows(&saved.delivery, &after, at_ms) {
+                return Err(OutboxError::Invalid);
+            }
+            write_transition_commit(
+                connection,
+                &saved.delivery,
+                &after,
+                cause,
+                at_ms,
+                TransitionCommit::Attempt(None),
+            )?;
             publish(connection, audit)
         })
         .await
@@ -445,24 +683,33 @@ impl SqlOutbox {
     /// can prove a prior commit, but absent state/evidence never proves an ACK.
     pub(crate) async fn settle_response(
         &self,
+        attempt: &DeliveryAttempt,
         before: &Delivery,
         after: &Delivery,
         at_ms: u64,
     ) -> Result<(), OutboxError> {
         let (prior, observed) = (before.clone(), after.clone());
         let (before, after) = (before.clone(), after.clone());
-        self.run_checked(
-            move |connection| response_committed(connection, &prior, &observed, at_ms),
-            move |connection, audit, committed| {
-                if committed {
-                    return Ok(());
-                } // run_checked completed actual publication.
-                write_transition(connection, &before, &after, DeliveryCause::Response, at_ms)?;
-                // Do not reclaim this observation before its actual ACK returns.
-                // Later normal work still performs the existing bounded cleanup.
-                publish(connection, audit)
-            },
-        )
+        if before.id() != attempt.before.id() {
+            return Err(OutboxError::Invalid);
+        }
+        self.run_attempt(attempt, AttemptWork::Response, move |connection, audit| {
+            let committed = response_committed(connection, &prior, &observed, at_ms)?;
+            if committed {
+                return publish(connection, audit);
+            }
+            write_transition_commit(
+                connection,
+                &before,
+                &after,
+                DeliveryCause::Response,
+                at_ms,
+                TransitionCommit::Attempt(None),
+            )?;
+            // Do not reclaim this observation before its actual ACK returns.
+            // Later normal work still performs the existing bounded cleanup.
+            publish(connection, audit)
+        })
         .await
     }
 }

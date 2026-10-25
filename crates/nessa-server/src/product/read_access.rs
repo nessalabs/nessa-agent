@@ -817,16 +817,16 @@ fn recheck_review_visibility(state: &ProductRouteState) {
 /// conversation it names (`conversation.share`, `.unshare`, `.shares`).
 /// Refused `forbidden` whatever stopped it: the policy, or a request naming
 /// nothing it could be asked about.
-async fn paired_share(
+pub(super) async fn paired_share(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     binding: &ReceiverBinding,
     frame: &RequestFrame,
 ) -> Result<(), &'static str> {
     let action = match frame.method.as_str() {
-        "conversation.share" => AccessAction::Share,
+        "conversation.share" | "conversation.webhook.reset" => AccessAction::Share,
         "conversation.unshare" => AccessAction::Unshare,
-        "conversation.shares" => AccessAction::Shares,
+        "conversation.shares" | "conversation.webhook.cursor" => AccessAction::Shares,
         _ => return Err("forbidden"),
     };
     let (Some((_, conversations, grants)), Some(id)) = (

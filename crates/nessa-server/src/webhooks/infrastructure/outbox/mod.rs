@@ -23,4 +23,7 @@ mod stored;
 
 use codec::{integer, invalid, unavailable, uuid};
 use schema::SCHEMA;
+pub(crate) use store::DeliveryAttempt;
 pub use store::SqlOutbox;
+
+pub(crate) use source_reset::{ResetCommand, ResetReceipt};

@@ -3,6 +3,7 @@
  * stays the default, a scenario replaces it, and an evidence directory wraps
  * both processes with the recorder. No gateway is started.
  */
+import { DatabaseSync } from "node:sqlite"
 import { strict as assert } from "node:assert"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -10,7 +11,7 @@ import { join } from "node:path"
 import { test } from "node:test"
 
 import { TEXT_REPLY_SCENARIO } from "../../../../scripts/mcp-test-server/scenarios.mjs"
-import { panelTarget, scriptedLaunch } from "./gateway-stack.mjs"
+import { panelTarget, scriptedLaunch, webhookNoAttempt } from "./gateway-stack.mjs"
 
 test("a tool launch is the recorded agent, and a scenario launch is not", () => {
   const tool = scriptedLaunch("claude", { tool: "review_rows" })
@@ -99,4 +100,64 @@ test("a throw while building the target closes the stack", async () => {
   )
   assert.equal(closed(), true)
   rmSync(directory, { recursive: true, force: true })
+})
+
+test("native no-send proof requires queued zero-attempt rows in the fixed complete scope", () => {
+  const directory = mkdtempSync(join(tmpdir(), "webhook-native-proof-"))
+  const scope = {
+    receiver: "registration",
+    origin: "origin",
+    stream: "chat",
+    incarnation: "J",
+    schema: "records",
+    accessEpoch: "epoch",
+  }
+  const saved = { ...scope, access_epoch: scope.accessEpoch }
+  delete saved.accessEpoch
+  const path = join(directory, "ci", "instances", "test")
+  mkdirSync(path, { recursive: true })
+  const db = new DatabaseSync(join(path, "webhooks.sqlite"))
+  try {
+    db.exec(
+      "CREATE TABLE registrations(id TEXT,credential TEXT); CREATE TABLE deliveries(registration TEXT,conversation TEXT,position INTEGER,scope TEXT,state TEXT); INSERT INTO registrations VALUES('registration','credential')",
+    )
+    const insert = db.prepare(
+      "INSERT INTO deliveries VALUES('registration','chat',2,?,?)",
+    )
+    const checkpoint = { scope, head: "2" }
+    const probe = () => webhookNoAttempt({ directory }, "test", "credential", checkpoint)
+    assert.throws(probe, /missing/)
+    for (const state of [
+      { phase: "sending", attempts: 1, timestamp_ms: 100 },
+      { phase: "queued", attempts: "0", timestamp_ms: null },
+      { phase: "queued", attempts: 0 },
+    ]) {
+      insert.run(JSON.stringify(saved), JSON.stringify(state))
+      assert.throws(probe, /attempt admission/)
+      db.exec("DELETE FROM deliveries")
+    }
+    insert.run(
+      JSON.stringify({ ...saved, incarnation: "K" }),
+      JSON.stringify({ phase: "queued", attempts: 0, timestamp_ms: null }),
+    )
+    assert.throws(probe, /different source scope/)
+    db.exec("DELETE FROM deliveries")
+    insert.run(
+      JSON.stringify(saved),
+      JSON.stringify({ phase: "queued", attempts: 0, timestamp_ms: null }),
+    )
+    assert.deepEqual(probe(), { queued: 1, attempted: 0 })
+    assert.throws(
+      () => webhookNoAttempt({ directory }, "test", "foreign", checkpoint),
+      /missing/,
+    )
+    assert.throws(
+      () => webhookNoAttempt({ directory }, "test", "credential", { scope, head: "3" }),
+      /fixed Head/,
+    )
+    assert.equal(db.prepare("SELECT count(*) n FROM deliveries").get().n, 1)
+  } finally {
+    db.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
 })

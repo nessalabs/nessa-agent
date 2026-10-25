@@ -30,6 +30,9 @@ pub struct QueuedRecord {
     pub registration: Uuid,
     pub conversation: ConversationId,
     pub scope: Scope,
+    /// Native source context captured before physical preparation, not authority.
+    pub expected_source: Option<Scope>,
+    pub capture: Option<Uuid>,
     pub expected_after: u64,
     pub position: u64,
     pub epoch: u64,
@@ -43,6 +46,7 @@ pub struct PendingDelivery {
     pub registration: Registration,
     pub conversation: ConversationId,
     pub scope: Scope,
+    pub capture: Option<Uuid>,
     pub position: u64,
     pub delivery: Delivery,
     pub body: Vec<u8>,

@@ -63,17 +63,20 @@ impl Fixture {
     }
     fn record(&self, position: u64) -> QueuedRecord {
         let id = |s: String| Id::new(s).unwrap();
+        let scope = Scope::new(
+            id(self.registration.id.to_string()),
+            id("origin".into()),
+            id(self.conversation.to_string()),
+            id("incarnation-a".into()),
+            id("records-v1".into()),
+            id("epoch-7".into()),
+        );
         QueuedRecord {
             registration: self.registration.id,
             conversation: self.conversation.clone(),
-            scope: Scope::new(
-                id(self.registration.id.to_string()),
-                id("origin".into()),
-                id(self.conversation.to_string()),
-                id("incarnation-a".into()),
-                id("records-v1".into()),
-                id("epoch-7".into()),
-            ),
+            scope: scope.clone(),
+            expected_source: Some(scope),
+            capture: None,
             expected_after: position - 1,
             position,
             epoch: 7,
@@ -2531,3 +2534,11 @@ mod retention_fixture;
 
 #[path = "outbox/response.rs"]
 mod response;
+
+#[path = "outbox/attempt.rs"]
+mod attempt;
+
+#[path = "outbox/generation.rs"]
+mod generation;
+#[path = "outbox/owner_reset.rs"]
+mod owner_reset;

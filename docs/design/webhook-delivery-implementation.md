@@ -950,7 +950,7 @@ is qualified; this table is not an execution receipt.
 | queue pressure | retain the original checkpoint; continue draining existing bounded work rather than skipping source records |
 | due work | re-read current bounded work before each existing attempt slot; an earlier stop may retire the old batch; a pre-dispatch refusal CAS conflict is no current send work and establishes no acknowledgement |
 | transport preparation | reserve/validate the destination before fresh send authority; preparation transmits no key/body |
-| send authority | use one freshly admitted canonical head result and its actual retained credential/grant ownership across Sending, POST and settlement; never reacquire Auth while retaining the first hold |
+| send authority | drop the completed canonical Head hold; acquire fresh, deadline-bounded dispatch authority, release it after the POST future is destroyed and its actual observation is retained, before response settlement |
 | physical dispatch | acknowledge durable Sending before POST, recheck absolute expiry immediately before dispatch and do not confuse a proven pre-dispatch refusal with an unknown remote effect |
 | response | retain the actual complete/incomplete transport observation before later callbacks; stable delivery ID/body and first timestamp survive retries |
 | uncertain settlement | never repeat POST to learn its outcome; correlate the identical retained response transition (original before/after and observation time) through the existing history owner before owed publication/reclamation; only actual completed publication acknowledges it; missing state/evidence refuses and never proves an ACK |
@@ -958,6 +958,171 @@ is qualified; this table is not an execution receipt.
 | restart | reconcile original registrations and saved delivery states before source/send admission; Sending without a durable observation becomes Unknown and is not automatically resent |
 | stop | seal admission, stop new source/send work, retain admitted physical effects and join the delivery owner with credential/grant jobs; the process report keeps their actual failure/unknown evidence |
 
+### Retained attempt ownership
+
+The native owner excludes concurrent mutation during an admitted attempt. This
+does not extend authority or promise that prolonged publication failure leaves
+webhook controls available.
+
+| State/event or ordering | Owner and required transition/evidence lifetime |
+| --- | --- |
+| preparation refuses | no attempt pin, Sending, POST or attempt increment; retain the queue identity, record a non-attempt diagnostic and advance fairly to other registrations under the existing paced cycle |
+| stop wins before admission | native admission validates the exact queued/retry snapshot and registration under the connection mutex; changed or retired work refuses before pin installation or POST |
+| admission wins | install one exact-delivery pin under that same connection mutex before Sending; the existing retained attempt owns it, not the response observer |
+| an already-queued native operation crosses pin installation | recheck exclusion under the connection mutex and promptly return Unavailable before publication, mutation, trimming or retirement |
+| physical admission is late, caller disappears or result channel is lost | retain pin and actual pending outcome; join physical work; a late commit is not dispatch permission |
+| POST completes or times out | destroy the POST future, retain the observation in the same pinned attempt, then release Auth/grant holds; pin confers no read/send permission |
+| response or unposted reconciliation | matching native work validates original facts and publishes without generic finish/retirement; a newly owed terminal may use the existing unpublished-observation capacity rule to reclaim published alternatives, never its own acknowledgement proof |
+| publication or acknowledgement is delayed | retain the pin through retries and through successful publication until the runtime consumes the acknowledgement; siblings and the settlement itself cannot reclaim proof |
+| acknowledgement consumed | clear the retained outcome and explicitly release the pin without an intervening await; ordinary bounded cleanup may resume |
+| canonical revoke/unshare while pinned | canonical mutation independently commits and prevents subsequent unauthorized dispatch; webhook-native cleanup may promptly return Unavailable until the pinned outcome settles |
+| shutdown/panic | retain and join physical work; unresolved outcome is not successful cleanup; read-only status exposes the pending attempt; dropping volatile ownership never proves success |
+| clone or cold reopen | all live handles share the namespace owner and pin; the native lock excludes cold open until the last physical/attempt owner is gone; cold recovery uses durable facts, not vanished pin state |
+| owner reset | only reset-required may transition; freshly authorize even replay, condition on the exact frozen capture and registration generation, bind the explicitly observed scope at position zero and retain old deliveries; immutable bounded request identity binds owner, conversation, target credential and resolved registration generation |
+| reset replay after another source replacement | return the original selected incarnation after fresh authorization; changed request arguments refuse; replay must not rewind a later cursor |
+| temporary prepare/admission-read refusal | pause this operation with fresh validation on retry; do not label unavailability as revocation or fail the supervisor; invariant contradictions and panics remain fatal |
+
+The pin-state mutex is never held while waiting for the connection mutex or
+physical I/O. Matching settlement does not invoke generic trim/retire. Existing
+terminal and pending limits remain unchanged. Owner reset is the specified
+product operation, not a new Cedar permission or general cursor rewind.
+
 All recipient qualification uses disposable synthetic data and loopback TLS via
 an injected test transport. The production public-address, TLS, deadline and byte
 policies remain the existing transport owner's rules.
+
+
+### Read-only retained-attempt status
+
+`server.health` keeps its current Cedar `server.read` admission and adds a
+namespace-only `webhook` object when configured. It performs no outbox I/O,
+publication or cleanup. `pendingOutcome` distinguishes none, unposted and
+response; response is not durable publication acknowledgement. `nativeMutations`
+is temporarily unavailable throughout a pinned attempt, including prolonged audit
+publication outage, and stopped after supervisor admission closes. The entire
+webhook-native mutation namespace is excluded; this status does not promise that
+issuance or webhook cleanup remains available. Canonical Auth revocation and
+grant unshare remain independent effects, even when their webhook cleanup cannot
+be acknowledged. `lastRefusal` records the most recent process-local non-attempt
+refusal, can remain after later healthy progress, and is neither a grant nor a
+remote outcome. The snapshot discloses no target identifiers, URL, body or key.
+
+| Status ordering | Required observation |
+| --- | --- |
+| pinned unposted work | unposted plus temporarily-unavailable; health itself does not join, publish or release it |
+| captured response with publication failure | response plus temporarily-unavailable; native controls promptly refuse, canonical revoke/unshare still commit |
+| settlement ACK consumed and pin released | none plus available if supervisor admission remains open; last refusal may remain as historical diagnostic |
+| preparation or temporary admission-read refusal | typed lastRefusal, no Sending/POST/attempt increment; fresh validation and paced fair sibling progress remain required |
+| cancelled health observer | no change to pin, outcome, publication or cleanup ownership |
+
+
+### Explicit observed-incarnation owner reset
+
+Reset binds position zero to the complete server-observed scope J. It does not
+promise that J remains current at the later outbox commit. No SDK writer fence is
+added. Current cursor status is a separate observation from the immutable reset
+result; a successful result does not promise delivery resumed.
+
+| Ordering | Required native transition and authority |
+| --- | --- |
+| owner observes J, canonical source becomes K, owner commits reset for J | CAS the active registration UUID/generation and exact frozen capture identity; bind full J scope at position zero, never an unscoped cursor |
+| next authorized read observes K | existing incarnation-change transaction freezes J; queue/admission for K refuses until another explicit reset; failed freeze/audit publication stops the cycle |
+| a prepared old page arrives after freeze/reset | its bound capture generation no longer matches; reject before idempotent lookup, queue/cursor effects or a fabricated reverse source-change observation |
+| reset has returned and the source changes | use mandatory fresh source checks and real Auth/grant fences before new dispatch; this is not an immediate wall-clock no-POST promise for every source change |
+| already Sending precedes source-change observation | preserve its existing original payload and actual outcome; do not reinterpret it using a new incarnation |
+| frozen tuples look identical after intervening resets | use the durable captured reset identity, not scope/position equality, to refuse ABA |
+| exact reset request is replayed after later replacement/reset/restart | freshly authorize owner/Cedar, return original selected J and committed scoped receipt without another rewind; changed owner/target/conversation/generation refuses |
+
+The existing `source_reset::observe` mints a fresh UUID for each frozen capture.
+That identity, correlated with the immutable registration UUID and original
+credential installation, is the reset CAS boundary. Source preparation must carry
+its cursor capture generation through queueing; a stale page is not a new
+observation of the current canonical source. Reset receipts must stay in the
+existing bounded reset evidence with their original actor/time and before/after
+scope.
+
+
+Source preparation reads a native cursor snapshot before physical Head work.
+`source_after` compares that complete snapshot before treating Head as a new
+observation. Queueing carries the capture generation and prior physical-source
+context, checks them before duplicate lookup, and refuses a stale scope mismatch
+rather than fabricating a reverse freeze. Contiguous position CAS remains in the
+same transaction. Dispatch admission also compares the current capture and
+nonfrozen source before installing its pin. A Head/Page incarnation race is an
+operation-local identity change; borrowed selectors and malformed replies remain
+refusals. These guards preserve receiver-reader behavior.
+
+
+The public reset boundary uses the existing owner product and native storage
+contracts. The cursor query returns its server-issued frozen capture UUID F;
+reset takes F plus conversation and target credential, never a client-supplied
+scope, offset or epoch. Fresh owner/Cedar authorization applies both to selection
+and replay. Registration UUID and credential installation bind the target.
+
+| Receipt lifetime or transition | Required bounded evidence |
+| --- | --- |
+| apply frozen capture F after observing J | atomically create an immutable owner-selection fact R in the existing source-reset family, retain original F provenance and actor/time, CAS F and registration, and bind J at position zero with generation R |
+| later preparation | carry R through native Head correlation, queue and admission; an identical-looking scope/position with a different capture is not the same generation |
+| replay F after replacement, another reset or restart | resolve F to the original selection R and J; freshly authorize the same actor/target arguments and return its original receipt without another Head-dependent selection or rewind |
+| receipt or fact capacity is exhausted | refuse atomically at existing limits; never clear a cursor or discard replay evidence to make room |
+| registration remains live | preserve its owner-reset receipt projection and referenced selection fact; generic published registration-audit trimming cannot erase replay identity |
+| stopped registration is drained and retired | retire its bounded reset receipts with its private registration configuration; an absent old request refuses and cannot become a fresh reset token for another capture |
+
+Selection facts and their audit projection must validate one another on cold
+restoration. The selected J scope is separate from the original source-change
+observation; copying the original before-image into R does not make its old
+physical observation current. Source-change delivery membership remains owned by
+the original source-change fact, never an owner-reset receipt. Existing source
+reset count/byte limits and terminal/pending retention limits remain unchanged.
+
+
+Reset product admission first retains the caller's current Auth fence, then
+rechecks the published method grant, conversation read grant and actual owner
+resource. The existing target-sharing Cedar action receives the current target's
+organization, binding owner, credential grants and gateway; omitting that target
+is a refusal, not an alternate owner policy. A shared snapshot binding check is
+used by dispatch and reset without reacquiring a fair Auth read fence while a
+writer could wait. Target identity and original issuance milliseconds match the
+native registration. Native reset compares the frozen capture again after owed
+publication and rechecks absolute authority expiry before commit. Replay also
+checks expiry after owed publication before returning the original receipt.
+
+
+The indexed owner request selector treats malformed JSON as outside the index.
+It does not make malformed facts valid: the existing bounded canonical fact
+reader and cold restoration still refuse them. This preserves byte-budget
+qualification without allocating fact text before the owning decoder.
+
+An owed owner-reset audit requires its exact selected scope at position zero.
+Later native progress first publishes that obligation, so a different owed cursor
+is a contradiction before file effects. Published receipts remain historical and
+may coexist with later source/cursor generations.
+
+The owner selection UUID is also its exact audit receipt UUID. Both live replay
+and cold restoration require that immutable audit projection and correlate all
+its fields to the selection. Missing proof refuses; a surviving cursor or choice
+fact cannot stand in for an erased acknowledgement. Ordinary trimming retains
+this projection until registration retirement.
+
+
+### Explicit observed Head diagnostic
+
+The owner cursor query defaults to native checkpoint inspection. Omitted or false
+`includeSourceHead` skips canonical-read admission, capacity and physical I/O.
+Explicit true additionally admits a nondeleted owner resource and current read
+grant, then reuses the bounded principal Head reader. Authorization and native
+registration binding precede that I/O; no native connection/pin lock spans it.
+
+| Diagnostic ordering | Result/effects |
+| --- | --- |
+| omitted/false | existing checkpoint response; no physical Head or reader permit |
+| requested Head | read native checkpoint first, then a separately observed canonical Head; preserve their complete scopes, without claiming an atomic cross-store view |
+| source changes between observations | return the two observations as read; the query does not freeze, reset, advance or queue |
+| denied target, source failure or exhausted reader capacity | explicit refusal; never fabricate an absent/zero Head or healthy/caught-up status |
+| caller deadline or disappearance | existing passive read deadline explicitly refuses a timed-out requested Head; the ordinary runtime job and original lease retain/join physical work through completion; no query publication, reconciliation or POST |
+
+Browser capture/no-send qualification captures one fixed observed Head after the
+witness turn commits, then compares complete scope/incarnation before waiting for
+native progress to reach that fixed position. It does not chase later Heads.
+Independent native attempt evidence is required in addition to the observation;
+positive signed TLS delivery remains separate recipient E2E evidence.

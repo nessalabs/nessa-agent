@@ -43,6 +43,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("launch"), knobs.launches)
   assert.equal(count("github"), knobs.githubs)
   assert.equal(count("channel"), knobs.channels)
+  assert.equal(count("webhook"), knobs.webhooks)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
   assert.equal(steps.find((step) => step.kind === "long").turns, knobs.long)
@@ -144,6 +145,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         launches: "0",
         githubs: "0",
         channels: "0",
+        webhooks: "0",
         awaits: "0",
         fresh: "0",
         renames: "0",
@@ -185,4 +187,13 @@ test("the legacy seed preserves the existing non-model work's relative order", (
       "aside",
     ],
   )
+})
+
+test("webhook capture/no-send runs once by default and three times at the raised count", () => {
+  const count = (options) =>
+    plan(knobsFrom(options, {})).filter((step) => step.kind === "webhook").length
+  assert.equal(count({}), 1)
+  assert.equal(count({ webhooks: "3" }), 3)
+  assert.equal(count({ webhooks: "0" }), 0)
+  assert.equal(knobsFrom({}, { NESSA_STRESS_WEBHOOKS: "3" }).webhooks, 3)
 })

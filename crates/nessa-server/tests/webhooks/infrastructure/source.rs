@@ -766,14 +766,26 @@ async fn a_retained_page_selector_cannot_cross_unshare_regrant_or_changed_physic
             },
             s.access_epoch().clone(),
         );
-        assert!(
-            matches!(
-                read.execute(&registration, &f.a, f.epoch, request(changed, count))
-                    .await,
-                Err(WebhookReadFailure::Source(RecordReadError::Admission(_)))
-            ),
-            "{part}"
-        );
+        let result = read
+            .execute(&registration, &f.a, f.epoch, request(changed, count))
+            .await;
+        if part == "incarnation" {
+            assert!(
+                matches!(
+                    result,
+                    Err(WebhookReadFailure::Source(RecordReadError::IdentityChanged))
+                ),
+                "{part}"
+            );
+        } else {
+            assert!(
+                matches!(
+                    result,
+                    Err(WebhookReadFailure::Source(RecordReadError::Admission(_)))
+                ),
+                "{part}"
+            );
+        }
         assert_eq!(capacity.available_permits(), 1);
     }
     f.change(ShareGrantTransition::Revoke, "cursor-unshare")
@@ -889,6 +901,8 @@ async fn canonical_principal_page_uses_the_existing_durable_registration_scope_c
             registration: registration.id,
             conversation: f.a.clone(),
             scope: scope.clone(),
+            expected_source: Some(scope.clone()),
+            capture: None,
             expected_after: record.position - 1,
             position: record.position,
             epoch: f.epoch,

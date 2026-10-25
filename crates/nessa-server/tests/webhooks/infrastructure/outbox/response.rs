@@ -7,25 +7,39 @@ async fn response_reconciliation_requires_original_transition_and_time_before_ef
     f.store.queue(f.record(1)).await.unwrap();
     let queued = f.store.due(10_000).await.unwrap().pop().unwrap().delivery;
     let sending = queued.admit(7, 10_000).unwrap();
+    let attempt = f
+        .store
+        .delivery_attempt(f.registration.id, queued.clone(), None);
     f.store
-        .transition(&queued, &sending, DeliveryCause::Admission, 10_000)
+        .admit_before(
+            &attempt,
+            &sending,
+            10_000,
+            Instant::now() + std::time::Duration::from_secs(15),
+        )
         .await
         .unwrap();
     let observed = sending.observed(Observation::Success, 10_001).unwrap();
     let held = f.audit.with_extension("held");
     std::fs::rename(&f.audit, &held).unwrap();
     assert_eq!(
-        f.store.settle_response(&sending, &observed, 10_001).await,
+        f.store
+            .settle_response(&attempt, &sending, &observed, 10_001)
+            .await,
         Err(OutboxError::Unavailable)
     );
     let files = std::fs::read_dir(&held).unwrap().count();
     let rejected = sending.observed(Observation::Rejected, 10_001).unwrap();
     assert_eq!(
-        f.store.settle_response(&sending, &rejected, 10_001).await,
+        f.store
+            .settle_response(&attempt, &sending, &rejected, 10_001)
+            .await,
         Err(OutboxError::Conflict)
     );
     assert_eq!(
-        f.store.settle_response(&sending, &observed, 10_002).await,
+        f.store
+            .settle_response(&attempt, &sending, &observed, 10_002)
+            .await,
         Err(OutboxError::Conflict)
     );
     assert_eq!(std::fs::read_dir(&held).unwrap().count(), files);
@@ -35,13 +49,14 @@ async fn response_reconciliation_requires_original_transition_and_time_before_ef
     );
     std::fs::rename(&held, &f.audit).unwrap();
     f.store
-        .settle_response(&sending, &observed, 10_001)
+        .settle_response(&attempt, &sending, &observed, 10_001)
         .await
         .unwrap();
     f.store
-        .settle_response(&sending, &observed, 10_001)
+        .settle_response(&attempt, &sending, &observed, 10_001)
         .await
         .unwrap();
+    f.store.acknowledge_attempt(&attempt).unwrap();
     assert!(f.store.due(10_002).await.unwrap().is_empty());
     assert_eq!(
         f.audits()
@@ -66,21 +81,31 @@ async fn erased_delivery_or_response_evidence_never_establishes_acknowledgement(
         f.store.queue(f.record(1)).await.unwrap();
         let queued = f.store.due(10_000).await.unwrap().pop().unwrap().delivery;
         let sending = queued.admit(7, 10_000).unwrap();
+        let attempt = f
+            .store
+            .delivery_attempt(f.registration.id, queued.clone(), None);
         f.store
-            .transition(&queued, &sending, DeliveryCause::Admission, 10_000)
+            .admit_before(
+                &attempt,
+                &sending,
+                10_000,
+                Instant::now() + std::time::Duration::from_secs(15),
+            )
             .await
             .unwrap();
         let observed = sending.observed(Observation::Success, 10_001).unwrap();
         let held = f.audit.with_extension("held");
         std::fs::rename(&f.audit, &held).unwrap();
         assert_eq!(
-            f.store.settle_response(&sending, &observed, 10_001).await,
+            f.store
+                .settle_response(&attempt, &sending, &observed, 10_001)
+                .await,
             Err(OutboxError::Unavailable)
         );
         if missing == "published_owner" {
             std::fs::rename(&held, &f.audit).unwrap();
             f.store
-                .settle_response(&sending, &observed, 10_001)
+                .settle_response(&attempt, &sending, &observed, 10_001)
                 .await
                 .unwrap();
             std::fs::rename(&f.audit, &held).unwrap();
@@ -103,7 +128,7 @@ async fn erased_delivery_or_response_evidence_never_establishes_acknowledgement(
         let files = std::fs::read_dir(&held).unwrap().count();
         assert!(
             f.store
-                .settle_response(&sending, &observed, 10_001)
+                .settle_response(&attempt, &sending, &observed, 10_001)
                 .await
                 .is_err(),
             "{missing}"
@@ -155,18 +180,27 @@ async fn late_response_acknowledgement_keeps_the_actual_full_retention_boundary(
         Id::new("records-v1").unwrap(),
         Id::new("epoch-7").unwrap(),
     );
+    delayed.expected_source = Some(delayed.scope.clone());
     let original = f.store.queue(delayed).await.unwrap();
     super::retention_fixture::acknowledged_prehistory(&f, RETAINED_LIMIT, 0, true).await;
     let queued = f.store.due(4000).await.unwrap().pop().unwrap().delivery;
     assert_eq!(queued.id(), original);
     let sending = queued.admit(7, 4000).unwrap();
+    let attempt = f
+        .store
+        .delivery_attempt(f.registration.id, queued.clone(), None);
     f.store
-        .transition(&queued, &sending, DeliveryCause::Admission, 4000)
+        .admit_before(
+            &attempt,
+            &sending,
+            4000,
+            Instant::now() + std::time::Duration::from_secs(15),
+        )
         .await
         .unwrap();
     let observed = sending.observed(Observation::Success, 4001).unwrap();
     f.store
-        .settle_response(&sending, &observed, 4001)
+        .settle_response(&attempt, &sending, &observed, 4001)
         .await
         .unwrap();
     let connection = Connection::open(&f.path).unwrap();
@@ -182,5 +216,6 @@ async fn late_response_acknowledgement_keeps_the_actual_full_retention_boundary(
         "actual acknowledgement must also finish bounded reclamation"
     );
     drop(connection);
+    f.store.acknowledge_attempt(&attempt).unwrap();
     assert!(f.store.due(4001).await.unwrap().is_empty());
 }

@@ -28,7 +28,8 @@ pub(super) fn is_initial(record: &Record) -> bool {
             | Cause::AdmissionExpired
             | Cause::Restart
             | Cause::SourceChanged
-            | Cause::SourceCheckpoint => false,
+            | Cause::SourceCheckpoint
+            | Cause::OwnerReset => false,
         },
     }
 }

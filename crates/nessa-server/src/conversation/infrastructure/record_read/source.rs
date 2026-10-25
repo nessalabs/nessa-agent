@@ -257,6 +257,18 @@ impl NessaRecordReadSource {
                     .map_err(RecordReadError::Admission)?;
                 if let RecordReadOperation::Page(request) = &operation {
                     if request.scope != observed {
+                        // A valid principal selector can race a physical reset
+                        // between its Head and Page. Preserve receiver refusal
+                        // behavior and reject every other malformed cohort.
+                        if matches!(&admitted, ReadSelection::Principal(_))
+                            && request.scope.receiver() == observed.receiver()
+                            && request.scope.origin() == observed.origin()
+                            && request.scope.stream() == observed.stream()
+                            && request.scope.schema() == observed.schema()
+                            && request.scope.access_epoch() == observed.access_epoch()
+                        {
+                            return Err(RecordReadError::IdentityChanged);
+                        }
                         return Err(RecordReadError::Admission(ReadRefusal::Unverifiable));
                     }
                 }

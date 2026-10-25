@@ -38,6 +38,7 @@ pub(super) enum Cause {
     Restart,
     SourceChanged,
     SourceCheckpoint,
+    OwnerReset,
 }
 
 /// No open JSON fields or secret-bearing registration DTO can enter evidence.
@@ -94,6 +95,8 @@ pub(super) enum Record {
     },
     #[serde(rename = "webhook_cursor")]
     Cursor {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        selection: Option<super::source_reset::Selection>,
         source_reset_id: String,
         record_id: String,
         registration: String,
@@ -293,18 +296,42 @@ impl Record {
     }
     pub fn cursor(fact: &super::source_reset::Fact) -> Self {
         Self::Cursor {
+            selection: fact.selection.clone(),
             source_reset_id: fact.id.to_string(),
-            record_id: Uuid::new_v4().to_string(),
+            record_id: if fact.selection.is_some() {
+                fact.id
+            } else {
+                Uuid::new_v4()
+            }
+            .to_string(),
             registration: fact.registration.to_string(),
             conversation_id: fact.conversation.to_string(),
-            before: "following".into(),
-            after: "reset_required".into(),
+            before: if fact.selection.is_some() {
+                "reset_required"
+            } else {
+                "following"
+            }
+            .into(),
+            after: if fact.selection.is_some() {
+                "following"
+            } else {
+                "reset_required"
+            }
+            .into(),
             prior_scope: SavedScope::of(&fact.prior_scope),
             prior_position: fact.prior_position,
             observed_scope: SavedScope::of(&fact.observed_scope),
-            cause: Cause::SourceChanged,
-            initiator: fact.stop.initiator.label(fact.registration),
-            at_ms: fact.stop.at_ms,
+            cause: if fact.selection.is_some() {
+                Cause::OwnerReset
+            } else {
+                Cause::SourceChanged
+            },
+            initiator: fact
+                .selection
+                .as_ref()
+                .map(|s| s.actor.clone())
+                .unwrap_or_else(|| fact.stop.initiator.label(fact.registration)),
+            at_ms: fact.selection.as_ref().map_or(fact.stop.at_ms, |s| s.at_ms),
         }
     }
     pub fn reset_key(&self) -> Result<Option<Uuid>, OutboxError> {
@@ -543,6 +570,7 @@ impl Record {
                 }
             }
             Self::Cursor {
+                selection,
                 conversation_id,
                 before,
                 after,
@@ -561,14 +589,32 @@ impl Record {
                     &prior,
                     &observed,
                 )?;
-                if before != "following"
-                    || after != "reset_required"
-                    || !matches!(cause, Cause::SourceChanged)
-                    || *prior_position > i64::MAX as u64
-                {
+                if *prior_position > i64::MAX as u64 {
                     return Err(OutboxError::Invalid);
                 }
-                check_reader(initiator, registration)?;
+                match selection {
+                    None if before == "following"
+                        && after == "reset_required"
+                        && *cause == Cause::SourceChanged =>
+                    {
+                        check_reader(initiator, registration)?;
+                    }
+                    Some(selection)
+                        if before == "reset_required"
+                            && after == "following"
+                            && *cause == Cause::OwnerReset
+                            && *initiator == selection.actor =>
+                    {
+                        selection.validate(
+                            registration,
+                            &ConversationId::new(conversation_id).map_err(invalid)?,
+                        )?;
+                        if Some(self.keys()?.0) != reset_id {
+                            return Err(OutboxError::Invalid);
+                        }
+                    }
+                    _ => return Err(OutboxError::Invalid),
+                }
             }
         }
         Ok(())

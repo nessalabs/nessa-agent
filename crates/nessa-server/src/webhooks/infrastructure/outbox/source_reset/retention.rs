@@ -79,7 +79,8 @@ pub(in super::super) fn validate_all(connection: &Connection) -> Result<(), Outb
         if bytes < 0 || bytes > SOURCE_RESET_BYTES as i64 {
             return Err(OutboxError::Invalid);
         }
-        read(connection, uuid(&id)?)?.ok_or(OutboxError::Invalid)?;
+        let fact = read(connection, uuid(&id)?)?.ok_or(OutboxError::Invalid)?;
+        super::owner::verify_receipt(connection, &fact)?;
         check_references(connection, &id, refs)?;
     }
     Ok(())
@@ -99,7 +100,8 @@ pub(in super::super) fn validate_owed(connection: &Connection) -> Result<(), Out
             .optional()
             .map_err(super::super::cursor::row_error)?
             .ok_or(OutboxError::Invalid)?;
-        read(connection, uuid(&id)?)?.ok_or(OutboxError::Invalid)?;
+        let fact = read(connection, uuid(&id)?)?.ok_or(OutboxError::Invalid)?;
+        super::owner::verify_receipt(connection, &fact)?;
         check_references(connection, &id, refs)?;
     }
     Ok(())
