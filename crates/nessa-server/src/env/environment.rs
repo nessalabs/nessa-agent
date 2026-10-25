@@ -158,6 +158,13 @@ fn load_auth_directory(
     )
 }
 
+/// The person's home folder, from the OS variable this target keeps it in.
+pub fn home_folder_from_system() -> Option<PathBuf> {
+    std::env::var_os(home_variable())
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+}
+
 /// The OS variable holding the user's home directory on this target.
 fn home_variable() -> &'static str {
     if cfg!(windows) {

@@ -141,6 +141,10 @@ export const KNOBS = {
     default: 1,
     what: "window reloads while the host is still starting the gateway: no startup screen, and the conversation listed as soon as it is up",
   },
+  channels: {
+    default: 1,
+    what: "times channels are made from the sidebar's + (a refused folder, then one made for it; then a chosen folder), each talked to in a new session",
+  },
   long: {
     default: 30,
     what: "turns of long streamed answers one conversation takes before it is talked to in the window",
@@ -222,6 +226,7 @@ export function plan(knobs) {
   add(knobs.upgrades, () => ({ kind: "upgrade" }))
   add(knobs.launches, () => ({ kind: "launch" }))
   add(knobs.githubs, () => ({ kind: "github" }))
+  add(knobs.channels, () => ({ kind: "channel" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

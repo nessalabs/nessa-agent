@@ -50,6 +50,7 @@ pub(crate) use socket::{RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 pub(crate) use state::ConnectedEnvironments;
 pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, SessionSettings};
 
+mod channel;
 mod conversation;
 mod github;
 mod mcp_apps;

@@ -807,6 +807,8 @@ pub struct ConversationCreateParams {
     pub approval_mode: Option<ApprovalMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -843,6 +845,8 @@ pub struct ConversationSummary {
     pub updated_at_ms: u64,
     pub running: bool,
     pub archived: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1000,6 +1004,8 @@ pub struct ConversationReceiptParams {
     pub approval_mode: Option<ApprovalMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3282,6 +3288,97 @@ pub struct WorkspaceWindow {
     pub widget: Option<WorkspaceWidget>,
     pub columns: Vec<WorkspaceColumn>,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ChannelErrorCode {
+    #[serde(rename = "invalid_request")]
+    InvalidRequest,
+    #[serde(rename = "forbidden")]
+    Forbidden,
+    #[serde(rename = "conversations_not_configured")]
+    ConversationsNotConfigured,
+    #[serde(rename = "channel_folder_not_found")]
+    ChannelFolderNotFound,
+    #[serde(rename = "channel_folder_not_a_directory")]
+    ChannelFolderNotADirectory,
+    #[serde(rename = "channel_folder_refused")]
+    ChannelFolderRefused,
+    #[serde(rename = "channel_resource_not_found")]
+    ChannelResourceNotFound,
+    #[serde(rename = "channel_limit_reached")]
+    ChannelLimitReached,
+    #[serde(rename = "channel_request_conflict")]
+    ChannelRequestConflict,
+    #[serde(rename = "channel_storage_unavailable")]
+    ChannelStorageUnavailable,
+    #[serde(rename = "temporarily_unavailable")]
+    TemporarilyUnavailable,
+}
+impl ChannelErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "invalid_request",
+            Self::Forbidden => "forbidden",
+            Self::ConversationsNotConfigured => "conversations_not_configured",
+            Self::ChannelFolderNotFound => "channel_folder_not_found",
+            Self::ChannelFolderNotADirectory => "channel_folder_not_a_directory",
+            Self::ChannelFolderRefused => "channel_folder_refused",
+            Self::ChannelResourceNotFound => "channel_resource_not_found",
+            Self::ChannelLimitReached => "channel_limit_reached",
+            Self::ChannelRequestConflict => "channel_request_conflict",
+            Self::ChannelStorageUnavailable => "channel_storage_unavailable",
+            Self::TemporarilyUnavailable => "temporarily_unavailable",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Channel {
+    pub channel_id: String,
+    pub name: String,
+    pub folder: String,
+    pub folder_made: bool,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub agent: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub model: Option<String>,
+    pub approval_mode: ApprovalMode,
+    pub created_at_ms: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelCreateParams {
+    pub request_id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    pub agent: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_mode: Option<ApprovalMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<Vec<String>>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelCreateResult {
+    pub channel: Channel,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelListResult {
+    pub channels: Vec<Channel>,
+    pub complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspacePublishParams {
@@ -3453,6 +3550,8 @@ pub mod product_method {
     pub const CONVERSATION_PERMISSION_RULES: &str = "conversation.permissionRules";
     pub const CONVERSATION_REVOKE_PERMISSION_RULE: &str = "conversation.revokePermissionRule";
     pub const WORKSPACE_PUBLISH: &str = "workspace.publish";
+    pub const CHANNEL_CREATE: &str = "channel.create";
+    pub const CHANNEL_LIST: &str = "channel.list";
     pub const CONVERSATION_SUBSCRIBE_EVENTS: &str = "conversation.subscribeEvents";
     pub const CONVERSATION_PEEK: &str = "conversation.peek";
     pub const CONVERSATION_SET_MODEL: &str = "conversation.setModel";
@@ -3648,7 +3747,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 85
+                items.len() <= 87
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3753,6 +3852,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.permissionRules",
     "conversation.revokePermissionRule",
     "workspace.publish",
+    "channel.create",
+    "channel.list",
     "conversation.subscribeEvents",
     "conversation.peek",
     "conversation.setModel",
@@ -3843,6 +3944,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.permissionRules"
         | "conversation.revokePermissionRule"
         | "workspace.publish"
+        | "channel.create"
+        | "channel.list"
         | "conversation.subscribeEvents"
         | "conversation.peek"
         | "conversation.setModel"

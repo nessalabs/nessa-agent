@@ -132,6 +132,7 @@ pub(super) fn configure(
             mcp_stand_ins: Default::default(),
             selected: None,
             runtimes: HashMap::new(),
+            channel_instructions: None,
         });
     }
     let agents = settings.agents.as_mut().expect("agents configured above");

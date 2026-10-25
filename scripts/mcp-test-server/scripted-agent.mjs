@@ -290,7 +290,19 @@ async function openSession(params, sessionId) {
     for (const client of servers.values()) client.close()
     throw error
   }
-  sessions.set(sessionId, { values, servers, prompt: null, recorded: false })
+  sessions.set(sessionId, {
+    values,
+    servers,
+    prompt: null,
+    recorded: false,
+    // Where the harness was told to work, and the system prompt it was given
+    // (Claude's `_meta.systemPrompt`), for a turn to say back (`${session.*}`).
+    opened: {
+      cwd: typeof params.cwd === "string" ? params.cwd : "",
+      systemPrompt:
+        typeof params._meta?.systemPrompt === "string" ? params._meta.systemPrompt : "",
+    },
+  })
   return { sessionId, configOptions: configOptions(agent, values) }
 }
 
@@ -464,6 +476,7 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
         ...(JSON.stringify(matched.steps).includes("${credentials.")
           ? [["credentials", credentialFacts()]]
           : []),
+        ["session", session.opened],
       ]),
       cancelled: () => state.cancelled,
       untilCancelled: () =>

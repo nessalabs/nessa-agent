@@ -170,6 +170,8 @@ export type CommandFailure =
   | "approval-request-conflict"
   | "turn-running"
   | "conversations-not-configured"
+  /** The channel a new conversation named is not one of the person's. */
+  | "channel-not-found"
   | "agent-startup-deadline"
   /** No lease was granted: the sandbox the agent runs in could not be given. */
   | "sandbox-unavailable"

@@ -139,9 +139,10 @@ impl ConversationService {
         if record.agent() == Some(agent) {
             return Err(ConversationError::InvalidInput);
         }
+        let place = self.agent_place(id).await?;
         self.inner
             .agents
-            .resolve_model(agent, request.requested_model.as_str())
+            .resolve_model(agent, request.requested_model.as_str(), place.as_ref())
             .await?;
         // A turn running or waiting stays with the agent it was given to,
         // and so does one a restart or a failure left owed: it was saved
@@ -480,6 +481,7 @@ impl ConversationService {
                         .placement(&id)
                         .await
                         .map_err(target)?;
+                    let channel = self.channel_id_of(&id).await.map_err(target)?;
                     return self
                         .create_command(
                             storage,
@@ -490,6 +492,7 @@ impl ConversationService {
                                 model: Some(existing.model().as_str().into()),
                                 approval_mode: Some(existing.approval_mode()),
                                 environment,
+                                channel,
                             },
                         )
                         .await;
@@ -522,6 +525,8 @@ impl ConversationService {
             .placement(&source)
             .await
             .map_err(target)?;
+        // A fork stays in its source's channel, as it stays on its host.
+        let channel = self.channel_id_of(&source).await.map_err(target)?;
         let actor = caller.actor().map_err(target)?;
         let at_ms = self.inner.clock.unix_milliseconds();
         let request = caller.action_id.clone();
@@ -572,6 +577,7 @@ impl ConversationService {
                     model: Some(record.model().as_str().into()),
                     approval_mode: Some(record.approval_mode()),
                     environment,
+                    channel,
                 },
             )
             .await;

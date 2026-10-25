@@ -140,6 +140,16 @@
  *               upgrades the file to the current version, lists every
  *               conversation it listed before, and the message sent in the
  *               window after it is answered
+ *   channel     a channel is made from the sidebar's +, asked in the
+ *               transcript: named, a folder chosen in the host's picker that
+ *               agents may not work in (the root) refused at its question,
+ *               then one made for it; its model kept, notes typed, and a file
+ *               attached from the host's picker; Create opens a new
+ *               session's home in it, whose first message runs in the made
+ *               folder with the notes in the agent's system prompt (Claude).
+ *               A second channel works in a folder chosen in the picker, and
+ *               its first message runs there; the gateway lists both, with
+ *               their folders, and each conversation in its own
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
@@ -177,6 +187,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -1029,6 +1040,163 @@ function providerName(provider) {
     { anthropic: "Anthropic", openai: "OpenAI", opencode: "OpenCode" }[provider] ??
     provider
   )
+}
+
+/**
+ * Makes a channel with the sidebar's + as a person does, answering each
+ * question as it is asked, and answers the gateway's listing of it; `null`
+ * when it was not made. With `refusedFolder`, that folder is chosen first and
+ * Create must be refused at the folder question, before a folder made for it
+ * is taken instead.
+ */
+async function makeChannel(
+  run,
+  failures,
+  { name, folder, refusedFolder, notes, resource },
+) {
+  const { page } = run
+  const pick = (kind, value) =>
+    page.evaluate(
+      ([kind, value]) => window.__fakeHostPicks[kind].push(value),
+      [kind, value],
+    )
+  const asking = (stepName) =>
+    page
+      .locator(`${css.newChannelAsked}[data-step="${stepName}"]`)
+      .waitFor({ timeout: 10_000 })
+      .then(() => true)
+      .catch(() => {
+        failures.push(`the new channel flow never asked its ${stepName}`)
+        return false
+      })
+  // With evidence asked for, each question is photographed as it is asked.
+  const photograph = (label) =>
+    run.evidence
+      ? page
+          .screenshot({ path: join(run.evidence, `channel-${run.engine}-${label}.png`) })
+          .catch(() => {})
+      : Promise.resolve()
+  const head = page.locator(`${css.sidebar} .workspace-section-head`).first()
+  await head.hover()
+  await head.locator(css.channelAdd).click({ timeout: 10_000 })
+  const flow = page.locator(css.newChannel)
+  if (!(await asking("name"))) return null
+  await page.locator(`${css.newChannelField}[data-step="name"]`).fill(name)
+  await photograph(`${name}-1-name`)
+  await page.keyboard.press(keys.enter)
+  if (!(await asking("folder"))) return null
+  const folderChoice = refusedFolder ?? folder
+  if (folderChoice) {
+    await pick("folders", folderChoice)
+    await flow.getByRole("button", { name: "Choose a folder…" }).click()
+    await flow
+      .getByRole("button", { name: "Use this folder" })
+      .waitFor({ timeout: 5_000 })
+    await photograph(`${name}-2-folder`)
+    await flow.getByRole("button", { name: "Use this folder" }).click()
+  } else {
+    await flow.getByRole("button", { name: "Make one for me" }).click()
+  }
+  if (!(await asking("model"))) return null
+  await photograph(`${name}-3-model`)
+  await page.keyboard.press(keys.enter)
+  if (!(await asking("notes"))) return null
+  if (notes) await page.locator(`${css.newChannelField}[data-step="notes"]`).fill(notes)
+  await photograph(`${name}-4-notes`)
+  await page.keyboard.press(keys.enter)
+  if (!(await asking("resources"))) return null
+  if (resource) {
+    await pick("resources", [resource])
+    await flow.getByRole("button", { name: "Add files…" }).click()
+    const row = flow.locator(css.newChannelResource, { hasText: basename(resource) })
+    if (
+      !(await row.waitFor({ timeout: 5_000 }).then(
+        () => true,
+        () => false,
+      ))
+    )
+      failures.push(`the attached ${basename(resource)} is not listed in the flow`)
+  }
+  await photograph(`${name}-5-resources`)
+  const create = flow.getByRole("button", { name: /^Create channel/ })
+  await create.click()
+  if (refusedFolder) {
+    if (!(await asking("folder"))) return null
+    const said = await flow
+      .locator(`${css.newChannelAsked}[data-step="folder"]`)
+      .getByText("Agents can’t work there", { exact: false })
+      .waitFor({ timeout: 10_000 })
+      .then(
+        () => true,
+        () => false,
+      )
+    if (!said)
+      failures.push(`choosing ${refusedFolder} was not refused at the folder question`)
+    await photograph(`${name}-6-refused`)
+    await flow.getByRole("button", { name: "Make one for me" }).click()
+    await create.click()
+  }
+  const gone = await flow.waitFor({ state: "detached", timeout: 15_000 }).then(
+    () => true,
+    () => false,
+  )
+  if (!gone) {
+    failures.push(
+      `the channel ${name} was not made: ${fold(await flow.innerText().catch(() => ""))}`,
+    )
+    await page.keyboard.press(keys.escape)
+    return null
+  }
+  const { channels } = await run.client.channels.list()
+  const listed = channels.find((channel) => channel.name === name)
+  if (!listed) failures.push(`the gateway does not list the channel ${name}`)
+  return listed ?? null
+}
+
+/**
+ * The first message of a new session in `channel`, from the home Create left
+ * open: it is listed in that channel, and its agent works in the channel's
+ * folder, told the channel's notes (Claude's system prompt, where it has one).
+ */
+async function talkInChannel(run, step, channel, failures, notes) {
+  const text = prompt(run, STRESS.channel, step, ` ${channel.name}`)
+  const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+  await home.locator(css.field).waitFor({ timeout: 15_000 })
+  await home.locator(css.field).fill(text)
+  await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+  const conversationId = await waitFor(
+    () => selectedStressConversation(run.page, text),
+    30_000,
+  )
+  if (!conversationId) {
+    failures.push(`the first message in ${channel.name} was never listed`)
+    return
+  }
+  run.checked.push(conversationId)
+  const { view } = await settled(
+    run,
+    conversationId,
+    new Set(),
+    text,
+    "completed",
+    failures,
+  )
+  const { conversations } = await run.client.conversation.list({})
+  const summary = conversations.find((each) => each.conversationId === conversationId)
+  if (summary?.channelId !== channel.channelId)
+    failures.push(
+      `the conversation started in ${channel.name} is in ${summary?.channelId ?? "no channel"}`,
+    )
+  const reply = (view?.messages.find((each) => each.userText === text)?.parts ?? [])
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("")
+  if (!reply.includes(`${SAYS.channel}${channel.folder}\n`))
+    failures.push(
+      `the agent in ${channel.name} did not work in ${channel.folder}: ${fold(reply.slice(0, 300))}`,
+    )
+  if (notes && run.stack.agent === "claude" && !reply.includes(notes))
+    failures.push(`the agent in ${channel.name} was not told the channel's notes`)
 }
 
 const steps = {
@@ -2245,6 +2413,56 @@ const steps = {
     await settled(run, conversationId, seen, second, "completed", failures)
     await expectShown(run.page, `${SAYS.echo}${second}`, failures)
     await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
+  async channel(run, step, failures) {
+    const notes = `Answer as the stress channel s${run.knobs.seed}.`
+    // In the run's own folder, removed with it: the rest check reads these
+    // channels' conversations again at the end, and an agent cannot be built
+    // in a folder that is gone.
+    const attached = mkdtempSync(join(run.stack.scratch, "channel-"))
+    const resource = join(attached, "brief.md")
+    writeFileSync(resource, "# Brief\n")
+    const chosen = mkdtempSync(join(run.stack.scratch, "chosen-"))
+    try {
+      // Made in a folder of its own, after a folder agents may not use.
+      const made = await makeChannel(run, failures, {
+        name: `stress-made-r${step.index}-s${run.knobs.seed}`,
+        refusedFolder: "/",
+        notes,
+        resource,
+      })
+      if (made) {
+        if (!made.folderMade || !made.folder.includes(`/channels/${made.channelId}`))
+          failures.push(
+            `the channel made without a folder works in ${made.folder}, not one made for it`,
+          )
+        if (!existsSync(made.folder))
+          failures.push(`the made folder ${made.folder} is not there`)
+        await talkInChannel(run, step, made, failures, notes)
+      }
+      // Made in a folder chosen in the host's picker.
+      const there = await makeChannel(run, failures, {
+        name: `stress-chosen-r${step.index}-s${run.knobs.seed}`,
+        folder: chosen,
+      })
+      if (there) {
+        if (there.folderMade || there.folder !== realpathSync(chosen))
+          failures.push(
+            `the channel made in ${chosen} works in ${there.folder} (made: ${there.folderMade})`,
+          )
+        await talkInChannel(run, step, there, failures)
+      }
+    } finally {
+      // Back to the main conversation, in the default channel.
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText("Conversations", { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+        .catch(() => {})
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
   },
 
   async fresh(run, step, failures) {
@@ -4383,6 +4601,8 @@ async function startStack(options) {
     nativeAddress,
     github,
     scenario,
+    // Removed when the stack closes.
+    scratch: directory,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
   }))
 }

@@ -89,6 +89,11 @@ export {
   type GatewaySource,
 } from "./adapters/gateway/gateway-source"
 export { sharingGateway, type SharingClient } from "./adapters/gateway/sharing-gateway"
+export { channelGateway } from "./adapters/gateway/channel-gateway"
+export {
+  inMemoryChannels,
+  type InMemoryChannels,
+} from "./adapters/in-memory/in-memory-channels"
 export {
   windowPublisher,
   type WindowPublishClient,

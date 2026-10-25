@@ -326,6 +326,14 @@
       "params": "WorkspacePublishParams",
       "grant": "conversation.write"
     },
+    "channel.create": {
+      "params": "ChannelCreateParams",
+      "grant": "conversation.write"
+    },
+    "channel.list": {
+      "params": "ChannelListParams",
+      "grant": "conversation.write"
+    },
     "conversation.subscribeEvents": {
       "params": "ConversationSubscribeEventsParams",
       "grant": "conversation.write"

@@ -204,6 +204,8 @@ pub enum ConversationErrorCode {
     RevokedAfterSave,
     #[serde(rename = "unavailable_after_save")]
     UnavailableAfterSave,
+    #[serde(rename = "channel_not_found")]
+    ChannelNotFound,
 }
 impl ConversationErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -272,6 +274,7 @@ impl ConversationErrorCode {
             Self::Revoked => "revoked",
             Self::RevokedAfterSave => "revoked_after_save",
             Self::UnavailableAfterSave => "unavailable_after_save",
+            Self::ChannelNotFound => "channel_not_found",
         }
     }
 }

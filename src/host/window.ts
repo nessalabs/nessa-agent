@@ -544,6 +544,37 @@ export async function chooseAttachmentFiles(
 }
 
 /**
+ * The folder a new channel's agents work in, chosen in the system's picker;
+ * `null` when the person cancelled, or outside Tauri. Only a choice: the
+ * gateway checks the folder again when the channel is made.
+ */
+export async function chooseChannelFolder(): Promise<string | null> {
+  if (!inTauri) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<string | null>("choose_channel_folder")
+}
+
+/**
+ * Files, or folders, to attach to a new channel, chosen in the system's
+ * picker; empty when the person cancelled, or outside Tauri. One kind at a
+ * time: not every system's picker chooses both at once.
+ */
+export async function chooseChannelResources(
+  kind: "files" | "folders",
+): Promise<string[]> {
+  if (!inTauri) return []
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<string[]>("choose_channel_resources", { folders: kind === "folders" })
+}
+
+/** The person's home folder, to write paths under it from `~`; `null` outside Tauri. */
+export async function homeFolder(): Promise<string | null> {
+  if (!inTauri) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<string | null>("home_folder")
+}
+
+/**
  * What a drag put on the panel, as the host describes it.
  *
  * A drag carries one of the two: `files` for a drag of files, `text` for a

@@ -193,6 +193,8 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `peer.list` | `peers` | Ordinary | Requests | Manifest |
 | `peer.forget` | `peers` | Ordinary | Requests | Manifest |
 | `peer.relay` | `peers` | Ordinary | Requests | Manifest |
+| `channel.create` | `channel` | Ordinary | Requests | Request(CatalogueWrite) |
+| `channel.list` | `channel` | Ordinary | Requests | Request(CatalogueWrite) |
 | `conversation.subscribe` | `subscription` | Ordinary | ConnectionOwned | FollowConversation |
 | `conversation.subscribeList` | `subscription` | Ordinary | ConnectionOwned | FollowList |
 | `conversation.unsubscribe` | `subscription` | Ordinary | ConnectionOwned | UnsubscribeConversation |

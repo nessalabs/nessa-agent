@@ -360,6 +360,7 @@ function gatewayWithApp() {
         on: client.on,
         close: client.close,
         workspace: client.workspace,
+        channels: client.channels,
         mcpApps,
         ...settingsParts,
       })

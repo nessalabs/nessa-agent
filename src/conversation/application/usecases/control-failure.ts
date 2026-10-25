@@ -135,6 +135,8 @@ function nothingWasDone(
       return "Nessa cannot read this conversation's saved state, so nothing was done. Start a new conversation to carry on."
     case "conversation-deleted":
       return "This conversation was deleted, so nothing was done."
+    case "channel-not-found":
+      return "The gateway has no such channel, so nothing was done."
     case "conversation-capacity":
       return "The gateway has too many conversations open, so nothing was done. Close one and try again shortly."
     case "model-unavailable":

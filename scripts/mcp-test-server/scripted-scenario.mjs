@@ -41,7 +41,10 @@
  * first text block holds) is kept under that name for the rest of the turn, and a result that is an error fails the turn. A string anywhere
  * in a later step's arguments or text that is `${name.path}` is replaced by
  * that saved value's field, so one call can name what an earlier call made.
- * `${prompt.text}` is the prompt the turn answers. With `times`, the same
+ * `${prompt.text}` is the prompt the turn answers; `${session.cwd}` and
+ * `${session.systemPrompt}` are the folder the session was opened in and the
+ * system prompt it was given (Claude's `_meta.systemPrompt`; empty for a
+ * harness that takes none). With `times`, the same
  * call is made that many times at once, as a model's parallel calls are;
  * `save` then keeps every result in order, an error's `structuredContent`
  * included (a call the server refused outright is saved as

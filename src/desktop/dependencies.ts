@@ -97,6 +97,8 @@ import {
   rememberedFilter,
   inMemorySharing,
   sharingGateway,
+  channelGateway,
+  inMemoryChannels,
   windowPublisher,
   sampleAppSession,
   sampleWidgetSession,
@@ -176,6 +178,10 @@ export function createDesktopDependencies(
      * browser's notification, which only a browser preview has.
      */
     reviewNotices?: HostNotices
+    /** The system's pickers for a new channel's paths, where the host has them (`main.tsx`). */
+    paths?: WorkspaceDependencies["paths"]
+    /** Where channels are made, beside a given `workspace`; the gateway's own and the sample's are composed here. */
+    channels?: WorkspaceDependencies["channels"]
   } = {},
 ): DesktopDependencies {
   // The real clock and timers; tests pass their own. The clock is a steady
@@ -240,6 +246,14 @@ export function createDesktopDependencies(
       : samples
         ? inMemorySharing({ now })
         : options.sharing,
+    // Channels are made on the gateway's own client; the sample makes them in
+    // memory, and a window with neither offers no add button.
+    channels: source
+      ? channelGateway({ connected: () => source.connected() })
+      : samples
+        ? inMemoryChannels({ add: (channel) => samples.addChannel(channel) })
+        : options.channels,
+    paths: options.paths,
     // What the window shows, for the person's agents: only a gateway has any.
     windowPublisher: source
       ? windowPublisher({

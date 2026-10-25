@@ -31,6 +31,7 @@ export const STRESS = {
   trace: "stress trace",
   github: "stress github",
   githubShell: "stress shell github",
+  channel: "stress channel",
 }
 
 /**
@@ -72,6 +73,8 @@ export const SAYS = {
   github: "GitHub: ",
   githubShell: "GitHub in the shell: ",
   carried: "Carried on by ",
+  channel: "Working in: ",
+  channelPrompt: "System prompt: ",
 }
 
 /**
@@ -351,6 +354,21 @@ export function stressScenario({
             save: "window",
           },
           { do: "text", chunks: [SAYS.window + "${window}"] },
+          { do: "end" },
+        ],
+      },
+      {
+        // Where the session works and what it was told, said back: a turn in
+        // a channel is seen to run in the channel's folder, with its notes.
+        when: STRESS.channel,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.channel + "${session.cwd}\n\n",
+              SAYS.channelPrompt + "${session.systemPrompt}",
+            ],
+          },
           { do: "end" },
         ],
       },

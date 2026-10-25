@@ -13,7 +13,7 @@
  * a new value, and a value it has handed out stays as it was.
  */
 import { conversationTitle } from "@nessa/client"
-import type { SessionSummary } from "../../model/workspace-index"
+import type { Channel, SessionSummary } from "../../model/workspace-index"
 import {
   atWork,
   emptyTranscript,
@@ -149,6 +149,11 @@ export interface InMemorySource extends WorkspaceSource {
   audit(): readonly AuditEntry[]
   /** Stops every scripted reply and refuses every later call; nothing is emitted afterwards. */
   dispose(): void
+  /**
+   * Lists a channel made beside it (`in-memory-channels.ts`) in every later
+   * index, in the seed's first section; once per id. Answers it as listed.
+   */
+  addChannel(channel: Omit<Channel, "sectionId">): Channel
 }
 
 export function inMemorySource(
@@ -159,6 +164,8 @@ export function inMemorySource(
   const archived = new Set<string>()
   const sessions = new Map(seed.index.sessions.map((session) => [session.id, session]))
   const transcripts = new Map(seed.transcripts)
+  // The seed's channels, then each made since, in the order they were.
+  let channels: readonly Channel[] = seed.index.channels
   const listeners = new Set<(update: WorkspaceUpdate) => void>()
   // Each session's running script, so a new message or `dispose` can stop it.
   const scripts = new Map<string, Set<() => void>>()
@@ -397,7 +404,7 @@ export function inMemorySource(
 
   /** The channel a session is in — or, not begun yet, the one it starts in. */
   const channelName = (sessionId: string, starting?: string) =>
-    seed.index.channels.find(
+    channels.find(
       (channel) => channel.id === (sessions.get(sessionId)?.channelId ?? starting),
     )?.name ?? ""
 
@@ -523,10 +530,17 @@ export function inMemorySource(
   }
 
   return {
+    addChannel: (made) => {
+      const held = channels.find((channel) => channel.id === made.id)
+      if (held) return held
+      const channel = { ...made, sectionId: seed.index.sections[0]?.id ?? "" }
+      channels = [...channels, channel]
+      return channel
+    },
     index: () =>
       live(() => ({
         sections: seed.index.sections,
-        channels: seed.index.channels,
+        channels,
         sessions: [...sessions.values()],
       })),
     transcript: (sessionId) =>
