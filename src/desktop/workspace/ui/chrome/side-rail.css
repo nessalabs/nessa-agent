@@ -2,8 +2,13 @@
 .workspace-window {
   --rail-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
   --rail-gap: 6px;
-  /* Where the rail's controls stand from the window's edge. */
-  --rail-column: var(--desktop-control-edge);
+  /*
+   * Where the rail's controls stand from the window's edge: on the sidebar's
+   * icon column, so the toggle in the closed rail's corner stands under
+   * Agents' icon. That column's middle is the gutter, the list's 8px, a
+   * row's 8px and half its 16px icon slot in (`source-list.css`).
+   */
+  --rail-column: calc(var(--desktop-gutter) + 24px - var(--desktop-control-size) / 2);
   position: relative;
   isolation: isolate;
   display: flex;
@@ -221,11 +226,11 @@
 
 /*
  * Wherever the rail is offered, its toggle is nessa's mark at the footer, and
- * Studio's square steps aside. With the rail closed the footer is in the
- * corner with it: its mark slot moves onto the rail's column, so the toggle
- * stands in it, right before "nessa Studio", one logo. With the rail open the
- * footer is past the rail and the toggle stays in the rail, so the slot folds
- * away and "nessa Studio" starts at the footer's edge.
+ * Studio's square steps aside. The footer keeps one shape, rail open or
+ * closed, so toggling the rail only carries it with the sidebar: its mark
+ * slot on the icon column, "nessa Studio" on the labels' column, as Agents
+ * is above it. With the rail closed the toggle stands in that slot; with it
+ * open the toggle stays in the rail and the slot is left empty.
  */
 .workspace-window:is([data-rail="open"], [data-rail="closed"])
   .workspace-identity
@@ -233,12 +238,21 @@
   visibility: hidden;
 }
 
-.workspace-window[data-rail="closed"] .workspace-identity {
+.workspace-window:is([data-rail="open"], [data-rail="closed"]) .workspace-identity {
   padding-left: calc(var(--rail-column) - var(--desktop-gutter));
 }
 
+/* A row's label starts 16px past its icon's middle, the slot's end 14px past
+   it: the pill keeps 2px of its padding there, so it starts where the toggle
+   ends and "nessa" stands where "Agents" does. */
+.workspace-window:is([data-rail="open"], [data-rail="closed"])
+  .workspace-identity
+  .desktop-identity-button {
+  padding-left: 2px;
+}
+
 .workspace-window[data-rail="open"] .workspace-identity .desktop-identity-mark {
-  display: none;
+  visibility: hidden;
 }
 
 /* The toggle doubles as nessa's mark: its top-right tile is lit. */
