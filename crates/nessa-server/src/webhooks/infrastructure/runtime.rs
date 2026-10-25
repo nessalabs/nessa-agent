@@ -25,6 +25,8 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{oneshot, Mutex as AsyncMutex, Notify, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
@@ -76,7 +78,7 @@ struct Owner {
     wake: Notify,
     known: Mutex<Option<KnownObservation>>,
     #[cfg(test)]
-    delivery_cycles: std::sync::atomic::AtomicU64,
+    delivery_cycles: AtomicU64,
     #[cfg(test)]
     cycle_finished: Notify,
 }
@@ -124,7 +126,7 @@ impl WebhookRuntime {
                 wake: Notify::new(),
                 known: Mutex::new(None),
                 #[cfg(test)]
-                delivery_cycles: std::sync::atomic::AtomicU64::new(0),
+                delivery_cycles: AtomicU64::new(0),
                 #[cfg(test)]
                 cycle_finished: Notify::new(),
             }),
@@ -165,9 +167,7 @@ impl WebhookRuntime {
     }
     #[cfg(test)]
     pub(crate) fn completed_delivery_cycles(&self) -> u64 {
-        self.owner
-            .delivery_cycles
-            .load(std::sync::atomic::Ordering::SeqCst)
+        self.owner.delivery_cycles.load(Ordering::SeqCst)
     }
     #[cfg(test)]
     pub(crate) async fn after_delivery_cycle(&self, prior: u64) {
@@ -179,6 +179,7 @@ impl WebhookRuntime {
             changed.await;
         }
     }
+    #[cfg(test)]
     pub(crate) fn wake_delivery(&self) {
         self.owner.wake.notify_one();
     }

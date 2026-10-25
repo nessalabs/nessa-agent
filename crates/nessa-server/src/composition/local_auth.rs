@@ -53,6 +53,7 @@ use crate::{
     env::Environment,
     mcp_servers::infrastructure::ResourceTicketStore,
     product::{ProductDependencies, ProductRouteState},
+    webhooks::infrastructure::{DeliveryDependencies, HttpsWebhook, SystemResolver},
 };
 use nessa_agent_credentials::CredentialNamespace;
 use nessa_auth::{
@@ -123,6 +124,8 @@ impl Clock for SystemClock {
 /// cannot be started here.
 pub(super) struct LocalProduct {
     pub(super) routes: ProductRouteState,
+    /// Prepared only; the root starts delivery after fallible startup settles.
+    pub(super) webhook_delivery: Option<DeliveryDependencies>,
     pub(super) record_reader: Option<Arc<NessaRecordReadSource>>,
     pub(super) catalogue_reader: Option<Arc<NessaCatalogueReadSource>>,
     /// Startup preparations for fixed providers plus the current OpenCode
@@ -481,6 +484,7 @@ pub(super) async fn product_state(
         }
         None => None,
     };
+    let mut webhook_delivery = None;
     let mut record_reader = None;
     let mut catalogue_reader = None;
     if let Some((
@@ -507,21 +511,15 @@ pub(super) async fn product_state(
             Uuid::new_v4(),
         )
         .map_err(|error| RunError::Agent(format!("review-notice audit unavailable: {error:?}")))?;
-        if let Some(runtime) = &product.webhooks {
-            runtime
-                .start_delivery(crate::webhooks::infrastructure::DeliveryDependencies {
-                    metadata: metadata.clone(),
-                    source: reader.clone(),
-                    policy: access_policy.clone(),
-                    capacity: product.record_reads.clone(),
-                    gateway: product.gateway.clone(),
-                    http: Arc::new(crate::webhooks::infrastructure::HttpsWebhook::new(
-                        Arc::new(crate::webhooks::infrastructure::SystemResolver::new()),
-                    )),
-                })
-                .map_err(|error| {
-                    RunError::Agent(format!("webhook delivery unavailable: {error:?}"))
-                })?;
+        if product.webhooks.is_some() {
+            webhook_delivery = Some(DeliveryDependencies {
+                metadata: metadata.clone(),
+                source: reader.clone(),
+                policy: access_policy.clone(),
+                capacity: product.record_reads.clone(),
+                gateway: product.gateway.clone(),
+                http: Arc::new(HttpsWebhook::new(Arc::new(SystemResolver::new()))),
+            });
         }
         record_reader = Some(reader.clone());
         catalogue_reader = Some(catalogue.clone());
@@ -555,6 +553,7 @@ pub(super) async fn product_state(
     }
     Ok(LocalProduct {
         routes: product,
+        webhook_delivery,
         record_reader,
         catalogue_reader,
         warm_ups,

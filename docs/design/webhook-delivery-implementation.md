@@ -943,15 +943,18 @@ is qualified; this table is not an execution receipt.
 
 | Boundary | Required ordering/result |
 | --- | --- |
+| host startup | construction returns prepared dependencies and spawns no sender; after fallible listener/signal setup, the root starts delivery immediately before entering its existing retained serve/cleanup owner |
 | scheduling | enumerate bounded actual principal/credential conversation grants; those rows are candidates, never read authority |
-| source capture | freshly admit the exact registration/conversation/epoch, read actual canonical head/page under the shared record budget and encode through recordsPage before queueing |
+| source capture | freshly admit the exact registration/conversation/epoch, read actual canonical head/page under the shared record budget and encode through recordsPage before queueing; bounded source preparation/unavailability releases its holds and pauses until a fresh cycle, without failing the command owner or moving a cursor |
 | saved cursor | continue only the same physical source, without skipping a predecessor; an observed replacement captures the original reset fact and freezes the cursor, including an empty replacement head |
 | queue pressure | retain the original checkpoint; continue draining existing bounded work rather than skipping source records |
+| due work | re-read current bounded work before each existing attempt slot; an earlier stop may retire the old batch; a pre-dispatch refusal CAS conflict is no current send work and establishes no acknowledgement |
 | transport preparation | reserve/validate the destination before fresh send authority; preparation transmits no key/body |
 | send authority | use one freshly admitted canonical head result and its actual retained credential/grant ownership across Sending, POST and settlement; never reacquire Auth while retaining the first hold |
 | physical dispatch | acknowledge durable Sending before POST, recheck absolute expiry immediately before dispatch and do not confuse a proven pre-dispatch refusal with an unknown remote effect |
 | response | retain the actual complete/incomplete transport observation before later callbacks; stable delivery ID/body and first timestamp survive retries |
-| uncertain settlement | never repeat POST to learn its outcome; reconcile the original observation using positive durable evidence or report unresolved cleanup |
+| uncertain settlement | never repeat POST to learn its outcome; correlate the identical retained response transition (original before/after and observation time) through the existing history owner before owed publication/reclamation; only actual completed publication acknowledges it; missing state/evidence refuses and never proves an ACK |
+| retained response at capacity | protect the newly owed observation even when its queued row is old; after the indexed cutoff, reclaim only enough oldest published alternatives to meet the unchanged terminal limit; absence still proves no acknowledgement |
 | restart | reconcile original registrations and saved delivery states before source/send admission; Sending without a durable observation becomes Unknown and is not automatically resent |
 | stop | seal admission, stop new source/send work, retain admitted physical effects and join the delivery owner with credential/grant jobs; the process report keeps their actual failure/unknown evidence |
 

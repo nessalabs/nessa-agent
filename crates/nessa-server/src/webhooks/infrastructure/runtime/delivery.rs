@@ -2,8 +2,8 @@
 use super::WebhookRuntime;
 use crate::conversation::{
     application::{
-        ConversationAccessPolicyEvaluator, PrincipalRecordReadSource, RecordReadOperation,
-        RecordReadValue,
+        ConversationAccessPolicyEvaluator, PrincipalRecordReadSource, RecordReadError,
+        RecordReadOperation, RecordReadValue,
     },
     infrastructure::LocalConversationStore,
 };
@@ -12,7 +12,7 @@ use crate::webhooks::{
         observation, AdmissionFailure, AdmitDelivery, DeliveryCause, ExpiryObserver, Message,
         ObserveRegistrationStop, Outbox, OutboxError, PendingDelivery, PrepareFailure,
         QueueInitiator, QueuedRecord, ReadWebhookRecords, Registration, WebhookHttp,
-        WebhookReadFailure, MAX_CURSORS,
+        WebhookReadFailure, MAX_CURSORS, MAX_OUTBOX_WORKERS,
     },
     domain::{Delivery, Observation},
     infrastructure::record_message,
@@ -27,6 +27,8 @@ use nessa_protocol::{
 use nessa_sync::replication::domain::{Limits, PageRequest};
 use serde::Deserialize;
 use serde_json::value::RawValue;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::{
     sync::{Arc, PoisonError},
     time::Duration,
@@ -100,9 +102,7 @@ impl WebhookRuntime {
             initiator = QueueInitiator::Live;
             #[cfg(test)]
             {
-                self.owner
-                    .delivery_cycles
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.owner.delivery_cycles.fetch_add(1, Ordering::SeqCst);
                 self.owner.cycle_finished.notify_waiters();
             }
             tokio::select! {_=self.owner.wake.notified()=>{},_=interval.tick()=>{}}
@@ -113,16 +113,15 @@ impl WebhookRuntime {
         dependencies: &DeliveryDependencies,
         initiator: QueueInitiator,
     ) -> Result<(), CredentialAdminError> {
-        if self
+        // Drop the synchronous guard before any settlement await.
+        let pending = self
             .owner
             .known
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .is_some()
-        {
-            if self.settle_known().await.is_err() {
-                return Ok(());
-            }
+            .is_some();
+        if pending && self.settle_known().await.is_err() {
+            return Ok(());
         }
         let intents = self
             .owner
@@ -162,16 +161,23 @@ impl WebhookRuntime {
                     .await?;
             }
         }
-        let due = self
-            .owner
-            .store
-            .due(self.owner.clock.unix_milliseconds())
-            .await
-            .map_err(|_| CredentialAdminError::Unavailable)?;
-        for pending in due {
+        for _ in 0..MAX_OUTBOX_WORKERS {
             if !self.accepting_delivery() {
                 break;
             }
+            // A prior attempt can retire an entire registration and its queue.
+            // Re-read bounded current work instead of reusing the old batch.
+            let Some(pending) = self
+                .owner
+                .store
+                .due(self.owner.clock.unix_milliseconds())
+                .await
+                .map_err(|_| CredentialAdminError::Unavailable)?
+                .into_iter()
+                .next()
+            else {
+                break;
+            };
             self.send_pending(dependencies, pending).await?;
             if self
                 .owner
@@ -204,9 +210,7 @@ impl WebhookRuntime {
                     .await?;
                 return Ok(());
             }
-            Err(WebhookReadFailure::Source(
-                crate::conversation::application::RecordReadError::TemporarilyUnavailable,
-            )) => return Ok(()),
+            Err(error) if transient_source(error) => return Ok(()),
             Err(_) => return Err(CredentialAdminError::Unavailable),
         };
         let (scope, target) = match head.value() {
@@ -257,9 +261,7 @@ impl WebhookRuntime {
         {
             Ok(page) => page,
             Err(WebhookReadFailure::Admission(AdmissionFailure::Refused)) => return Ok(()),
-            Err(WebhookReadFailure::Source(
-                crate::conversation::application::RecordReadError::TemporarilyUnavailable,
-            )) => return Ok(()),
+            Err(error) if transient_source(error) => return Ok(()),
             Err(_) => return Err(CredentialAdminError::Unavailable),
         };
         let value = match page.value() {
@@ -347,7 +349,8 @@ impl WebhookRuntime {
                     .delivery
                     .refused()
                     .map_err(|_| CredentialAdminError::Unavailable)?;
-                self.owner
+                let refused = self
+                    .owner
                     .store
                     .transition(
                         &pending.delivery,
@@ -355,8 +358,13 @@ impl WebhookRuntime {
                         DeliveryCause::Refused,
                         self.owner.clock.unix_milliseconds(),
                     )
-                    .await
-                    .map_err(|_| CredentialAdminError::Unavailable)?;
+                    .await;
+                // No dispatch began. A concurrent stop can already have retired
+                // this queued snapshot; a conflict is not an acknowledgement.
+                match refused {
+                    Ok(()) | Err(OutboxError::Conflict) => {}
+                    Err(_) => return Err(CredentialAdminError::Unavailable),
+                }
                 self.observe_stop(
                     &pending.registration,
                     ExpiryObserver::Delivery(pending.delivery.id()),
@@ -364,9 +372,7 @@ impl WebhookRuntime {
                 .await?;
                 return Ok(());
             }
-            Err(WebhookReadFailure::Source(
-                crate::conversation::application::RecordReadError::TemporarilyUnavailable,
-            )) => return Ok(()),
+            Err(error) if transient_source(error) => return Ok(()),
             Err(_) => return Err(CredentialAdminError::Unavailable),
         };
         let value = match head.value() {
@@ -490,7 +496,7 @@ impl WebhookRuntime {
             .map_err(|_| CredentialAdminError::Unavailable)?;
         self.owner
             .store
-            .transition(&before, &after, DeliveryCause::Response, at)
+            .settle_response(&before, &after, at)
             .await
             .map_err(|_| CredentialAdminError::Unavailable)?;
         self.owner
@@ -500,4 +506,14 @@ impl WebhookRuntime {
             .take();
         Ok(())
     }
+}
+
+// Canonical discovery reports bounded progress, not a failed supervisor.
+fn transient_source(error: WebhookReadFailure) -> bool {
+    matches!(
+        error,
+        WebhookReadFailure::Source(
+            RecordReadError::TemporarilyUnavailable | RecordReadError::SourcePreparing
+        )
+    )
 }

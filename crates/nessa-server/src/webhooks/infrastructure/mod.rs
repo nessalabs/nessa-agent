@@ -27,3 +27,7 @@ mod product_tests;
 
 #[cfg(test)]
 pub(crate) use https::isolated_post;
+
+#[cfg(test)]
+#[path = "../../../tests/webhooks/infrastructure/fixtures/tls.rs"]
+mod tls_fixture;

@@ -2,8 +2,10 @@
 #[cfg(test)]
 use super::{audit, publication, registry};
 use super::{
+    audit::{Cause, Record},
     codec, integer,
     journal::{commit, delivery_audit, finish},
+    publication::{publish, SavedAudit},
     queue,
     registry::StoredRegistration,
     restoration, source_reset, stored,
@@ -161,27 +163,7 @@ impl Outbox for SqlOutbox {
         let (before, after) = (before.clone(), after.clone());
         let clock = self.owner.clock.clone();
         self.run(move |connection, audit| {
-            if !cause.allows(&before, &after, at_ms) {
-                return Err(OutboxError::Invalid);
-            }
-            let transaction = connection.transaction().map_err(unavailable)?;
-            let saved = stored::by_id(&transaction, before.id())?.ok_or(OutboxError::Conflict)?;
-            stored::check_current(&transaction, &saved)?;
-            let changed = transaction
-                .execute(
-                    "UPDATE deliveries SET state=?1 WHERE id=?2 AND state=?3",
-                    params![
-                        codec::encode(&after)?,
-                        after.id().to_string(),
-                        codec::encode(&before)?
-                    ],
-                )
-                .map_err(unavailable)?;
-            if changed != 1 {
-                return Err(OutboxError::Conflict);
-            }
-            delivery_audit(&transaction, &after, Some(&before), cause, at_ms)?;
-            commit(transaction, Some(saved.registration), at_ms)?;
+            write_transition(connection, &before, &after, cause, at_ms)?;
             finish(connection, audit, clock.unix_milliseconds())?;
             Ok(())
         })
@@ -245,3 +227,99 @@ impl Outbox for SqlOutbox {
 #[cfg(test)]
 #[path = "../../../../tests/webhooks/infrastructure/outbox.rs"]
 mod tests;
+
+/// Persist one checked replacement; publication and reclamation stay with the caller.
+fn write_transition(
+    connection: &mut Connection,
+    before: &Delivery,
+    after: &Delivery,
+    cause: DeliveryCause,
+    at_ms: u64,
+) -> Result<(), OutboxError> {
+    if !cause.allows(before, after, at_ms) {
+        return Err(OutboxError::Invalid);
+    }
+    let transaction = connection.transaction().map_err(unavailable)?;
+    let saved = stored::by_id(&transaction, before.id())?.ok_or(OutboxError::Conflict)?;
+    stored::check_current(&transaction, &saved)?;
+    let changed = transaction
+        .execute(
+            "UPDATE deliveries SET state=?1 WHERE id=?2 AND state=?3",
+            params![
+                codec::encode(after)?,
+                after.id().to_string(),
+                codec::encode(before)?
+            ],
+        )
+        .map_err(unavailable)?;
+    if changed != 1 {
+        return Err(OutboxError::Conflict);
+    }
+    delivery_audit(&transaction, after, Some(before), cause, at_ms)?;
+    commit(transaction, Some(saved.registration), at_ms)?;
+    Ok(())
+}
+
+impl SqlOutbox {
+    /// Settle the supervisor's actual observation. An identical retained audit
+    /// can prove a prior commit, but absent state/evidence never proves an ACK.
+    pub(crate) async fn settle_response(
+        &self,
+        before: &Delivery,
+        after: &Delivery,
+        at_ms: u64,
+    ) -> Result<(), OutboxError> {
+        let (prior, observed) = (before.clone(), after.clone());
+        let (before, after) = (before.clone(), after.clone());
+        self.run_checked(
+            move |connection| response_committed(connection, &prior, &observed, at_ms),
+            move |connection, audit, committed| {
+                if committed {
+                    return Ok(());
+                } // run_checked completed actual publication.
+                write_transition(connection, &before, &after, DeliveryCause::Response, at_ms)?;
+                // Do not reclaim this observation before its actual ACK returns.
+                // Later normal work still performs the existing bounded cleanup.
+                publish(connection, audit)
+            },
+        )
+        .await
+    }
+}
+fn response_committed(
+    connection: &Connection,
+    before: &Delivery,
+    after: &Delivery,
+    at_ms: u64,
+) -> Result<bool, OutboxError> {
+    if !DeliveryCause::Response.allows(before, after, at_ms) {
+        return Err(OutboxError::Invalid);
+    }
+    let current = stored::by_id(connection, before.id())?.ok_or(OutboxError::Conflict)?;
+    stored::check_current(connection, &current)?;
+    if current.delivery == *before {
+        return Ok(false);
+    }
+    if current.delivery != *after {
+        return Err(OutboxError::Conflict);
+    }
+    // Reuse the whole retained-history owner before any publication or trimming.
+    restoration::validate(connection)?;
+    let saved = connection.query_row(
+        "SELECT id,registration,delivery,record,published,source_reset FROM audit INDEXED BY delivery_audit WHERE delivery=?1 AND json_extract(record,'$.cause')='response' ORDER BY rowid DESC LIMIT 1",
+        [before.id().to_string()], SavedAudit::row,
+    ).optional().map_err(unavailable)?.ok_or(OutboxError::Conflict)?;
+    let (_, text) = saved.checked()?;
+    match Record::decode(&text)? {
+        Record::Delivery {
+            before_state: Some(prior),
+            after_state: observed,
+            cause: Cause::Response,
+            at_ms: actual,
+            ..
+        } if prior.checked()? == *before && observed.checked()? == *after && actual == at_ms => {
+            Ok(true)
+        }
+        _ => Err(OutboxError::Conflict),
+    }
+}

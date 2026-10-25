@@ -2528,3 +2528,6 @@ async fn oversized_stop_is_invalid_in_public_registration_read() {
 
 #[path = "outbox/retention_fixture.rs"]
 mod retention_fixture;
+
+#[path = "outbox/response.rs"]
+mod response;

@@ -102,9 +102,34 @@ DELETE FROM deliveries WHERE rowid IN (
 pub(super) const TRIM_REGISTRATION_AUDIT: &str =
     "DELETE FROM audit INDEXED BY published_registration_audit WHERE published=1 AND delivery IS NULL";
 
+/// A formerly queued row can be older than all retained terminals. Protect its
+/// owed response while reclaiming the oldest actually published alternative.
+/// The window visits only registrations still over budget after the normal
+/// indexed cutoff; it never makes an unpublished row eligible for deletion.
+pub(super) const TRIM_PROTECTED_TERMINALS: &str = "WITH protected AS MATERIALIZED (
+    SELECT DISTINCT d.registration FROM audit a INDEXED BY unpublished_audit
+    JOIN deliveries d ON d.id=a.delivery
+    WHERE a.published=0 AND d.phase NOT IN ('queued','sending','retry')
+), excess AS MATERIALIZED (
+    SELECT d.registration, count(*) - ?1 AS amount
+    FROM protected p CROSS JOIN deliveries d INDEXED BY terminal_deliveries ON d.registration=p.registration
+    WHERE d.phase NOT IN ('queued','sending','retry')
+    GROUP BY d.registration HAVING count(*) > ?1
+), eligible AS MATERIALIZED (
+    SELECT d.rowid AS target, e.amount,
+        row_number() OVER (PARTITION BY d.registration ORDER BY d.rowid) AS age
+    FROM excess e CROSS JOIN deliveries d INDEXED BY terminal_deliveries ON d.registration=e.registration
+    WHERE d.phase NOT IN ('queued','sending','retry')
+        AND NOT EXISTS (SELECT 1 FROM audit a WHERE a.delivery=d.id AND a.published=0)
+)
+DELETE FROM deliveries WHERE rowid IN (SELECT target FROM eligible WHERE age<=amount)";
+
 fn trim(connection: &Connection) -> Result<(), OutboxError> {
     connection
         .execute(TRIM_TERMINALS, [RETAINED_LIMIT as i64 - 1])
+        .map_err(unavailable)?;
+    connection
+        .execute(TRIM_PROTECTED_TERMINALS, [RETAINED_LIMIT as i64])
         .map_err(unavailable)?;
     connection.execute("DELETE FROM deliveries WHERE registration IN (SELECT id FROM registrations WHERE active=0) AND phase NOT IN ('queued','sending','retry') AND NOT EXISTS(SELECT 1 FROM audit a WHERE a.delivery=deliveries.id AND a.published=0)",[]).map_err(unavailable)?;
     connection

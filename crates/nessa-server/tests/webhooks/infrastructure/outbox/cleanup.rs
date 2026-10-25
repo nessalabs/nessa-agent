@@ -1,6 +1,8 @@
 //! SQL work and ownership checks; full-boundary lifecycle fixtures stay intact.
 use super::*;
-use crate::webhooks::infrastructure::outbox::journal::{TRIM_REGISTRATION_AUDIT, TRIM_TERMINALS};
+use crate::webhooks::infrastructure::outbox::journal::{
+    TRIM_PROTECTED_TERMINALS, TRIM_REGISTRATION_AUDIT, TRIM_TERMINALS,
+};
 use nessa_local_database::rusqlite::StatementStatus;
 
 // These are deliberately SQL metadata fixtures, not an authenticated replay or
@@ -271,4 +273,24 @@ async fn queued_lifecycle_selection_refuses_excess_distinct_registration_work() 
         c.execute("INSERT INTO deliveries(id,registration,conversation,incarnation,position,scope,body,state) SELECT ?1,?2,conversation,incarnation,1,scope,body,json_set(state,'$.id',?1,'$.phase','queued') FROM deliveries WHERE id=?3", params![delivery,registration,source]).unwrap();
     }
     assert_eq!(restoration::validate_queued(&c), Err(OutboxError::Invalid));
+}
+
+#[tokio::test]
+async fn protected_terminal_fallback_does_not_walk_unrelated_published_history() {
+    let mut measurements = Vec::new();
+    for count in [128, 512, RETAINED_LIMIT] {
+        let f = terminal_metadata(count).await;
+        let connection = f.store.owner.connection.lock().unwrap();
+        let mut query = connection.prepare(TRIM_PROTECTED_TERMINALS).unwrap();
+        assert_eq!(query.execute([RETAINED_LIMIT as i64]).unwrap(), 0);
+        let steps = query.get_status(StatementStatus::VmStep);
+        eprintln!("protected terminal no-owed count={count} steps={steps}");
+        measurements.push(steps);
+    }
+    let low = *measurements.iter().min().unwrap();
+    let high = *measurements.iter().max().unwrap();
+    assert!(
+        high - low <= 64,
+        "published-only growth must not add a fallback history walk: {measurements:?}"
+    );
 }

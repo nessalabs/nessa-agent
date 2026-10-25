@@ -13,9 +13,7 @@ use rustls::{Error as TlsError, ServerConnection, StreamOwned};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-#[path = "fixtures/tls.rs"]
-mod tls;
-use tls::RecipientTls;
+use crate::webhooks::infrastructure::tls_fixture::RecipientTls;
 
 const RECIPIENT_WATCHDOG: Duration = Duration::from_secs(3);
 

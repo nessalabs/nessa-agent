@@ -238,6 +238,7 @@ impl CompositionRoot {
         let dependencies = runtime_dependencies(&config);
         let super::local_auth::LocalProduct {
             routes: product,
+            webhook_delivery,
             record_reader,
             catalogue_reader,
             warm_ups,
@@ -529,6 +530,19 @@ impl CompositionRoot {
                 restart.stop_unless_restarting();
             }
         };
+        // Construction and every fallible bind/signal preparation have ended.
+        // Start immediately before entering the existing retained serve/cleanup
+        // owner, with no intervening await or fallible startup operation.
+        if let Some(delivery) = webhook_delivery {
+            shutdown_product
+                .webhooks
+                .as_ref()
+                .ok_or_else(|| RunError::Agent("missing webhook owner".into()))?
+                .start_delivery(delivery)
+                .map_err(|error| {
+                    RunError::Agent(format!("webhook delivery unavailable: {error:?}"))
+                })?;
+        }
         let (served, cleanup) = serve_with_cleanup(listener, router, stop, async move {
             // Native peers are woken before anything else is waited on;
             // their drain is joined last, into the same report (row S12).

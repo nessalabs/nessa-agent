@@ -39,6 +39,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, CredentialId, IssuanceCause, OrganizationId, PrincipalId, ResourceId},
 };
+use nessa_local_database::rusqlite::{Connection, OpenFlags};
 use nessa_protocol::{
     agents::AgentId,
     conversation::{
@@ -50,6 +51,7 @@ use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     future::{Future, Ready},
+    path::PathBuf,
     pin::Pin,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -65,9 +67,34 @@ use tokio::{
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 const WAIT: Duration = Duration::from_secs(10);
-struct Time(AtomicU64);
+struct Time(AtomicU64, Mutex<Option<PathBuf>>);
+impl Time {
+    fn new(now: u64) -> Self {
+        Self(AtomicU64::new(now), Mutex::new(None))
+    }
+}
+
 impl Clock for Time {
     fn unix_milliseconds(&self) -> u64 {
+        let mut boundary = self.1.lock().unwrap();
+        let sending = boundary.as_ref().is_some_and(|path| {
+            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .ok()
+                .is_some_and(|connection| {
+                    connection.busy_timeout(Duration::ZERO).unwrap();
+                    connection
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM deliveries WHERE phase='sending' LIMIT 1)",
+                            [],
+                            |row| row.get::<_, bool>(0),
+                        )
+                        .unwrap_or(false)
+                })
+        });
+        if sending {
+            self.0.store(100_000, Ordering::SeqCst);
+            *boundary = None;
+        }
         self.0.load(Ordering::SeqCst)
     }
 }
@@ -274,6 +301,12 @@ impl Harness {
         Self::with_issue_pause(None).await
     }
     async fn with_issue_pause(pause: Option<Arc<IssuePause>>) -> Self {
+        Self::with_runtime_clock(pause, None).await
+    }
+    async fn with_runtime_clock(
+        pause: Option<Arc<IssuePause>>,
+        runtime_clock: Option<Arc<dyn Clock>>,
+    ) -> Self {
         let root = Arc::new(tempfile::tempdir().unwrap());
         let private = root.path().join("private");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -314,7 +347,7 @@ impl Harness {
             })
             .unwrap();
         let owner = String::from_utf8(bootstrap.evidence.expose_bytes().to_vec()).unwrap();
-        let clock = Arc::new(Time(AtomicU64::new(2000)));
+        let clock = Arc::new(Time::new(2000));
         let access = Arc::new(CedarConversationAccessPolicy::new().unwrap());
         let grants = Arc::new(
             LocalConversationStore::open(&private.join("conversations.db"))
@@ -369,7 +402,7 @@ impl Harness {
                 base,
                 credentials.clone(),
                 store.clone(),
-                clock.clone(),
+                runtime_clock.unwrap_or_else(|| clock.clone()),
             )
             .unwrap(),
         );
@@ -623,7 +656,7 @@ async fn first_issue_worker_panic_seals_admission_and_does_not_confirm_cleanup()
         )
         .unwrap(),
     );
-    let clock = Arc::new(Time(AtomicU64::new(2000)));
+    let clock = Arc::new(Time::new(2000));
     let store = Arc::new(
         SqlOutbox::open(
             &private.join("outbox.db"),
