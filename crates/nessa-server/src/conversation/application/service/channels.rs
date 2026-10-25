@@ -495,6 +495,7 @@ impl ConversationService {
     /// conversation down to Ask has not let its agent start Full threads in
     /// the same folder. Outside a channel the thread starts as any creation
     /// that names no preset does.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) async fn thread_start(
         &self,
         source: &ConversationId,

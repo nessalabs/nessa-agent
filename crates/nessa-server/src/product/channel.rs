@@ -77,6 +77,15 @@ pub(super) async fn dispatch(
             };
             let caller = super::conversation::caller(session, frame.id.clone());
             match service.list_channels(&caller).await {
+                // A cursor names a channel an earlier page listed; one the
+                // caller has none under is no place to go on from.
+                Ok(listing)
+                    if after.as_ref().is_some_and(|after| {
+                        !listing.channels.iter().any(|channel| channel.id() == after)
+                    }) =>
+                {
+                    failure(&frame.id, ChannelErrorCode::InvalidRequest.as_str())
+                }
                 Ok(listing) => success(
                     &frame.id,
                     &fitted(listed(listing, after.as_ref()), &frame.id),

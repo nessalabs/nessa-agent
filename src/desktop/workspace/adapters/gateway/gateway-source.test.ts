@@ -263,6 +263,37 @@ describe("the index and the list subscription", () => {
     expect(kinds(updates)).toEqual(["session"])
   })
 
+  it("C1: a resync whose channel list fails asks again on the session's next frame", async () => {
+    const { gateway, source, updates, follow } = started()
+    follow()
+    await source.index()
+    await gateway.client.channels.create({
+      requestId: "elsewhere",
+      name: "design-review",
+      agent: "codex",
+      model: "gpt-5",
+    })
+    const channelId = gateway.channels[0].channel.channelId
+    gateway.rows.set(conversationA, { ...row(conversationA), channelId })
+    updates.length = 0
+    gateway.publishList()
+    await flush()
+    expect(kinds(updates)).toEqual(["session", "resync"])
+    gateway.once("listChannels", () => Promise.reject(new Error("lost")))
+    const warn = console.warn
+    console.warn = () => {}
+    try {
+      await source.index()
+    } finally {
+      console.warn = warn
+    }
+    updates.length = 0
+    gateway.rows.set(conversationA, { ...row(conversationA), channelId, title: "again" })
+    gateway.publishList()
+    await flush()
+    expect(kinds(updates)).toEqual(["session", "resync"])
+  })
+
   it("C1: a list of channels that fails keeps the channels last listed", async () => {
     const { gateway, source } = started()
     await gateway.client.channels.create({

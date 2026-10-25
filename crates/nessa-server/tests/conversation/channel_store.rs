@@ -131,13 +131,13 @@ fn folders(directory: &Path) -> (LocalChannelFolders, PathBuf, PathBuf) {
     let home = directory.join("home");
     nessa_local_storage::create_directory(&data).unwrap();
     std::fs::create_dir_all(home.join("repo")).unwrap();
-    std::fs::create_dir_all(directory.join("system").join("tools")).unwrap();
+    std::fs::create_dir_all(directory.join("outer").join("system").join("tools")).unwrap();
     std::fs::create_dir_all(directory.join("elsewhere")).unwrap();
     std::fs::write(home.join("notes.md"), "notes").unwrap();
     let folders = LocalChannelFolders::with_system(
         &data,
         Some(home.clone()),
-        vec![dunce::canonicalize(directory.join("system")).unwrap()],
+        vec![std::fs::canonicalize(directory.join("outer").join("system")).unwrap()],
     )
     .unwrap();
     (
@@ -177,8 +177,18 @@ fn a_chosen_folder_must_exist_be_a_directory_and_not_be_refused() {
         chosen(&parent.join("elsewhere"))
     );
     let root = parent.ancestors().last().unwrap().to_path_buf();
-    let system = parent.join("system");
-    for refused in [&root, &parent, &home, &data, &system, &system.join("tools")] {
+    // `outer` holds a system folder, as `/private` holds `/etc`.
+    let outer = parent.join("outer");
+    let system = outer.join("system");
+    for refused in [
+        &root,
+        &parent,
+        &home,
+        &data,
+        &outer,
+        &system,
+        &system.join("tools"),
+    ] {
         assert_eq!(
             folders.accept_folder(&chosen(refused)),
             Err(FolderRefusal::Refused),

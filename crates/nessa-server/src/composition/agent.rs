@@ -114,6 +114,7 @@ pub(super) struct AgentsConfig {
     /// configuration a channel's agent is built from, with [`Self::workspace`]
     /// set to the channel's folder. Never configured.
     #[serde(skip)]
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub channel_instructions: Option<String>,
 }
 

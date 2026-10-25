@@ -1053,6 +1053,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     } catch (error) {
       if (!live()) throw error
       console.warn("The gateway's channels were not read; the last ones are kept", error)
+      // A channel a session named is asked for again, by its next frame.
+      unknownChannels.clear()
       return channels
     }
   }

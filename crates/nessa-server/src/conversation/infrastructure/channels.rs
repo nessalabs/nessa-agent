@@ -385,7 +385,7 @@ fn system_folders() -> Vec<PathBuf> {
         .into_iter()
         .filter_map(std::env::var_os)
         .map(PathBuf::from)
-        .filter_map(|folder| dunce::canonicalize(folder).ok())
+        .filter_map(|folder| std::fs::canonicalize(folder).ok())
         .collect()
     } else {
         [
@@ -424,23 +424,24 @@ impl LocalChannelFolders {
         home: Option<PathBuf>,
         system: Vec<PathBuf>,
     ) -> std::io::Result<Self> {
-        let data = dunce::canonicalize(data)?;
+        let data = std::fs::canonicalize(data)?;
         Ok(Self {
             channels: data.join("channels"),
             data,
-            home: home.and_then(|home| dunce::canonicalize(home).ok()),
+            home: home.and_then(|home| std::fs::canonicalize(home).ok()),
             system,
         })
     }
 
     fn resolve(path: &ChannelPath) -> Result<(PathBuf, std::fs::Metadata), FolderRefusal> {
-        let resolved = dunce::canonicalize(path.as_path()).map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => {
-                FolderRefusal::NotFound
-            }
-            std::io::ErrorKind::PermissionDenied => FolderRefusal::Refused,
-            _ => FolderRefusal::Unavailable,
-        })?;
+        let resolved =
+            std::fs::canonicalize(path.as_path()).map_err(|error| match error.kind() {
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => {
+                    FolderRefusal::NotFound
+                }
+                std::io::ErrorKind::PermissionDenied => FolderRefusal::Refused,
+                _ => FolderRefusal::Unavailable,
+            })?;
         let metadata = std::fs::metadata(&resolved).map_err(|_| FolderRefusal::Unavailable)?;
         Ok((resolved, metadata))
     }
@@ -450,10 +451,14 @@ impl LocalChannelFolders {
         // person may well work in.
         let temporary =
             folder.starts_with("/private/var/folders") || folder.starts_with("/var/tmp");
-        let system = self.system.iter().any(|system| folder.starts_with(system)) && !temporary;
-        // A folder holding the home folder or the data folder, the home
-        // folder itself included.
+        // A folder holding `inner`, or `inner` itself.
         let holds = |inner: &Path| inner.starts_with(folder);
+        // In a system folder, or holding one (`/private` holds `/etc`).
+        let system = self
+            .system
+            .iter()
+            .any(|system| folder.starts_with(system) || holds(system))
+            && !temporary;
         let made_for_a_channel = folder.starts_with(&self.channels) && folder != self.channels;
         folder.parent().is_none()
             || system
@@ -463,8 +468,11 @@ impl LocalChannelFolders {
     }
 }
 
+/// A resolved path as it is kept, shown and handed to an agent: on Windows
+/// without the `\\?\` prefix where that names the same place. Every check
+/// compares resolved paths in one form, before this.
 fn kept(path: PathBuf) -> Result<ChannelPath, FolderRefusal> {
-    ChannelPath::new(path).map_err(|_| FolderRefusal::Refused)
+    ChannelPath::new(dunce::simplified(&path).to_path_buf()).map_err(|_| FolderRefusal::Refused)
 }
 
 impl ChannelFolders for LocalChannelFolders {

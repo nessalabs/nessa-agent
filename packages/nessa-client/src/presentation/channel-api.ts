@@ -1,6 +1,6 @@
 import { NessaRpcError } from "../application/rpc-error.js"
 import type { RpcRequester } from "../application/session-port.js"
-import { ChannelErrorCode, ProductMethod } from "../generated/product.js"
+import { ChannelErrorCode, ProductMethod, channelRules } from "../generated/product.js"
 import type {
   ApprovalMode,
   Channel,
@@ -63,7 +63,7 @@ export function createChannelApi(session: RpcRequester): ChannelApi {
 }
 
 /** One stored channel per page at least, after the default one. */
-const MAX_CHANNEL_PAGES = 1001
+const MAX_CHANNEL_PAGES = channelRules.maxChannels + 1
 
 function listPage(answer: unknown): ChannelListResult {
   if (

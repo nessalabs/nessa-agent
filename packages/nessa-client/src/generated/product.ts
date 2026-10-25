@@ -2996,7 +2996,7 @@ export interface WorkspaceWindow {
   /** The panes' columns, left to right. */
   columns: WorkspaceColumn[]
 }
-/** Why the gateway refused a channel method. invalid_request: a name, notes, path or model that is not one a channel holds (a relative path, or resources past x-channelRules.maxResourceBytes, among them), or an agent this gateway has no runtime for. forbidden: the access policy does not let the caller make or list channels; a paired device never may. conversations_not_configured: this gateway runs no conversations. channel_folder_not_found: the chosen folder does not exist. channel_folder_not_a_directory: the chosen folder is a file. channel_folder_refused: the chosen folder is one agents must not work in: the file system's root, the home folder itself, a system folder, or inside the gateway's own data folder other than its channels folder. channel_resource_not_found: a file or folder to attach does not exist. channel_limit_reached: the caller keeps the most channels a person may (x-channelRules.maxChannels). channel_request_conflict: the requestId already made another channel; nothing was made. channel_storage_unavailable: the channel or its folder could not be saved or made; nothing was kept. temporarily_unavailable: the gateway is busy or stopping; ask again. */
+/** Why the gateway refused a channel method. invalid_request: a name, notes, path or model that is not one a channel holds (a relative path, or resources past x-channelRules.maxResourceBytes, among them), or an agent this gateway has no runtime for. forbidden: the access policy does not let the caller make or list channels; a paired device never may. conversations_not_configured: this gateway runs no conversations. channel_folder_not_found: the chosen folder does not exist. channel_folder_not_a_directory: the chosen folder is a file. channel_folder_refused: the chosen folder is one agents must not work in: the root of a drive, a system folder or one that holds a system folder, the home folder or one that holds it, or the gateway's own data folder, one that holds it, or anything inside it other than a folder under its channels folder. channel_resource_not_found: a file or folder to attach does not exist. channel_limit_reached: the caller keeps the most channels a person may (x-channelRules.maxChannels). channel_request_conflict: the requestId already made another channel; nothing was made. channel_storage_unavailable: the channel or its folder could not be saved or made; nothing was kept. temporarily_unavailable: the gateway is busy or stopping; ask again. */
 export const ChannelErrorCode = {
   InvalidRequest: "invalid_request",
   Forbidden: "forbidden",
@@ -3055,7 +3055,7 @@ export interface ChannelCreateResult {
 }
 /** Which page of the caller's channels to list (channel.list). Empty for the first. */
 export interface ChannelListParams {
-  /** The cursor an earlier page returned: list the channels made after that one. An id the caller has no channel under lists nothing. */
+  /** The cursor an earlier page returned: list the channels made after that one. An id the caller has no channel under is refused invalid_request. */
   after?: string
 }
 /** One page of the caller's channels (channel.list): the default channel first on the first page, then the rest in the order they were made. */

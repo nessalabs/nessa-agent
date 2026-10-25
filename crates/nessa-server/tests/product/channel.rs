@@ -172,9 +172,9 @@ fn a_list_longer_than_a_frame_is_paged_and_every_channel_is_listed_once() {
         .chain(channels.iter().map(|c| c.id().as_str().to_owned()))
         .collect();
     assert_eq!(seen, expected);
-    // After a channel the caller has none under, nothing is listed.
-    let unknown = ChannelId::from_random([31; 10]);
-    let page = fitted(listed(listing(), Some(&unknown)), "request");
+    // After the last channel, nothing more.
+    let last = channels.last().unwrap().id().clone();
+    let page = fitted(listed(listing(), Some(&last)), "request");
     assert!(page.channels.is_empty() && page.complete);
 }
 

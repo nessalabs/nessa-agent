@@ -20,8 +20,10 @@ is the gateway's configured workspace. The default channel is never stored.
 
 `channel.create` is the only method that takes a path, and Cedar admits it
 only for the owner (`owner.channel_create`). The gateway resolves the folder,
-follows links, and refuses the root, the home folder itself, system folders and
-its own data other than its `channels/` folder. After that, `conversation.create`
+follows links, and refuses the root of a drive, a system folder or one that
+holds a system folder, the home folder or one that holds it, and its own data,
+a folder that holds it, or anything in it other than a folder under its
+`channels/` folder. After that, `conversation.create`
 names a `channelId`, and Cedar checks `channel.use` on that channel. What a
 request can select is therefore always a place its owner already made.
 
@@ -48,6 +50,12 @@ sequenceDiagram
     Service->>Store: place(conversation, channel)
     Service->>Service: resolve_in(agent, model, mode, AgentPlace{folder, instructions})
 ```
+
+`channel.list` answers a page per frame: the default channel first, then the
+made ones in the order they were made. A cut page names its last channel as
+`cursor`, and `channel.list {after}` goes on from there. The client reads every
+page. An owner phone's creation is checked against the preset the
+conversation will start in, its channel's when it names none.
 
 ## Ids and retries
 
@@ -138,3 +146,9 @@ channel. Renaming, moving and deleting channels are not built yet.
   starts its new sessions there, but the desktop composer shows Ask until the
   conversation says otherwise. The desktop flow does not ask for a preset.
 - Dropping files on the flow does not attach them yet; the pickers do.
+- A Windows folder named through a UNC path to a local drive
+  (`\\localhost\C$\…`) is not recognised as that drive's system folder.
+- Resources are only named to the agent, never checked against the folder
+  rule: a file in the home folder's hidden folders can be attached.
+- A retried `create_thread` whose source conversation changed its preset in
+  between is refused `request_conflict`, as a retried fork is.
