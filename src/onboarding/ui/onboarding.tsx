@@ -946,55 +946,69 @@ export function Onboarding({
       <RuntimeCopyBar progress={runtimeCopy} />
       <WithDownloads source={installations} onChanged={onRecheck} checking={checking}>
         {(downloads) => (
-          <div role="group" aria-label="Agent" className="flex flex-col gap-2">
-            {SETUP_AGENTS.map((choice) => {
-              const readiness = agentReadiness(state, choice.id)
-              const card = cardState(choice.id, readiness, downloads)
-              if (card && downloads)
+          <>
+            <div role="group" aria-label="Agent" className="flex flex-col gap-2">
+              {SETUP_AGENTS.map((choice) => {
+                const readiness = agentReadiness(state, choice.id)
+                const card = cardState(choice.id, readiness, downloads)
+                if (card && downloads)
+                  return (
+                    <AgentDownloadCard
+                      key={choice.id}
+                      id={choice.id}
+                      name={choice.name}
+                      card={card}
+                      downloads={downloads}
+                      onFocusChange={setFocusedCard}
+                    />
+                  )
+                const keyAgent = choice.id === "claude" ? choice.id : undefined
+                const canSaveApiKey =
+                  keyAgent !== undefined &&
+                  readiness === "needs-authentication" &&
+                  apiKeys !== undefined &&
+                  (gatewayStartup.state === "ready" ||
+                    gatewayStartup.state === "unmanaged")
                 return (
-                  <AgentDownloadCard
-                    key={choice.id}
-                    id={choice.id}
-                    name={choice.name}
-                    card={card}
-                    downloads={downloads}
-                    onFocusChange={setFocusedCard}
-                  />
+                  <React.Fragment key={choice.id}>
+                    <AgentOption
+                      id={choice.id}
+                      name={choice.name}
+                      readiness={readiness}
+                      failure={state.readinessFailure}
+                      startup={gatewayStartup}
+                      selected={state.agent === choice.id}
+                      onSelect={onChoose}
+                      takesFocus={focusedCard === choice.id}
+                      onFocusTaken={() => setFocusedCard(undefined)}
+                    />
+                    {canSaveApiKey ? (
+                      <div className="flex flex-col gap-2">
+                        <AgentApiKeyForm
+                          agent={keyAgent}
+                          agentName={choice.name}
+                          onSave={credentials.save}
+                          onSaved={onRecheck}
+                        />
+                      </div>
+                    ) : null}
+                  </React.Fragment>
                 )
-              const keyAgent = choice.id === "claude" ? choice.id : undefined
-              const canSaveApiKey =
-                keyAgent !== undefined &&
-                readiness === "needs-authentication" &&
-                apiKeys !== undefined &&
-                (gatewayStartup.state === "ready" || gatewayStartup.state === "unmanaged")
-              return (
-                <React.Fragment key={choice.id}>
-                  <AgentOption
-                    id={choice.id}
-                    name={choice.name}
-                    readiness={readiness}
-                    failure={state.readinessFailure}
-                    startup={gatewayStartup}
-                    selected={state.agent === choice.id}
-                    onSelect={onChoose}
-                    takesFocus={focusedCard === choice.id}
-                    onFocusTaken={() => setFocusedCard(undefined)}
-                  />
-                  {canSaveApiKey ? (
-                    <div className="flex flex-col gap-2">
-                      <AgentApiKeyForm
-                        agent={keyAgent}
-                        agentName={choice.name}
-                        onSave={credentials.save}
-                        onSaved={onRecheck}
-                      />
-                    </div>
-                  ) : null}
-                </React.Fragment>
-              )
-            })}
-            <LocalAiOption />
-          </div>
+              })}
+              <LocalAiOption />
+            </div>
+            {/* An install that left an older runtime behind still needs
+            somebody, after its card has become a row; said once, under the
+            list, for as long as that install is the last one. */}
+            {/* Only while there is something to say: an empty line would
+              still take the pane's gap. */}
+            {downloads?.outcome?.status === "installed" &&
+            downloads.outcome.cleanupPending ? (
+              <p role="status" className="nessa-text-2 text-muted-foreground">
+                Cleanup of an older runtime needs attention.
+              </p>
+            ) : null}
+          </>
         )}
       </WithDownloads>
       <AgentApiKeyAuditWarning failure={credentials.auditFailure} />

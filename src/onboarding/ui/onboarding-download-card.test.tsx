@@ -222,3 +222,17 @@ it("lets go of an installed card when no readiness check ever runs", async () =>
   }
   await unmount()
 })
+
+it("keeps an install's cleanup warning after its card has become the row", async () => {
+  const pending = installer()
+  const state = recordReadiness(asking, { claude: "ready", codex: "not-installed" })
+  const { container, render, unmount } = await picker(state, pending.source)
+  await React.act(async () => card(container)?.querySelector("button")?.click())
+  await React.act(async () =>
+    pending.finish({ status: "installed", cleanupPending: true }),
+  )
+  await render(recordReadiness(asking, { claude: "ready", codex: "ready" }))
+  expect(card(container)).toBeNull()
+  expect(container.textContent).toContain("Cleanup of an older runtime needs attention.")
+  await unmount()
+})
