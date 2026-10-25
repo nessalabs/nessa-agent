@@ -96,9 +96,7 @@
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
  *               message sent after it is answered. While it is on, Pair a
- *               device shows a code with the window's own sign-in, which
- *               began as an older install's panel (no `conversation.read`)
- *               and was brought up to date when the gateway started; the
+ *               device shows a code with the window's own sign-in; the
  *               code is cancelled, and leaving the tab and coming back
  *               still shows linking on
  *   drift       the gateway is stopped and started again with its staged
@@ -3638,12 +3636,6 @@ async function startStack(options) {
       others: knobs.handoffs > 0 ? [otherAgent(options.agent)] : [],
       // Off, at a port of its own: the `linking` step turns it on from Settings.
       native: { enabled: false, listenAddress: nativeAddress },
-      // An older install: its panel was given the owner set before
-      // `conversation.read` joined it. The desktop app serves with
-      // `--provision-local`, which brings it up to date before the window
-      // reads it; the `linking` step pairs with it.
-      panelGrants: "server.read,conversation.write,credential.manage",
-      provisionLocal: true,
     })
   } catch (error) {
     rmSync(directory, { recursive: true, force: true })

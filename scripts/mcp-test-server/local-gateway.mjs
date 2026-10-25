@@ -192,10 +192,6 @@ export async function exited(child, ms) {
  *   them (`{ agentIdleSeconds: 3 }`); the gateway's defaults when absent
  * @param {object} [o.native] the config's `native` section
  *   (`{ enabled: false, listenAddress: "127.0.0.1:0" }`); absent is none
- * @param {string} [o.panelGrants] the `nessa-panel` surface's grants at
- *   `auth init` (`--chat-grants`), as an older install was given them
- * @param {boolean} [o.provisionLocal] serve with `server --provision-local`,
- *   as the desktop app starts its gateway
  * @returns the gateway: `{ directory, token, url, log, server, stop, restart }`.
  *   `token` is the owner token file's path; `log()` the gateway's output so
  *   far; `restart(signal, second)` kills it (a crash by default) and starts
@@ -257,14 +253,7 @@ export async function startLocalGateway(o) {
     const token = join(directory, "owner.token")
     const init = spawnSync(
       nessa,
-      [
-        "auth",
-        "init",
-        "--local",
-        "--owner-token-file",
-        token,
-        ...(o.panelGrants ? ["--chat-grants", o.panelGrants] : []),
-      ],
+      ["auth", "init", "--local", "--owner-token-file", token],
       { env, encoding: "utf8" },
     )
     if (init.status !== 0) throw new Error(`provisioning failed: ${init.stderr}`)
@@ -296,14 +285,7 @@ export async function startLocalGateway(o) {
     chmodSync(configPath, 0o600)
     const log = () => output.join("")
     const launch = async () => {
-      server = spawn(
-        nessa,
-        ["server", ...(o.provisionLocal ? ["--provision-local"] : [])],
-        {
-          env,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      )
+      server = spawn(nessa, ["server"], { env, stdio: ["ignore", "pipe", "pipe"] })
       const running = server
       closed = new Promise((done) => running.once("close", done))
       for (const stream of [running.stdout, running.stderr])
