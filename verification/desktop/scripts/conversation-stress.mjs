@@ -96,7 +96,10 @@
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
- *               message sent after it is answered
+ *               message sent after it is answered. While it is on, Pair a
+ *               device shows a code with the window's own sign-in; the
+ *               code is cancelled, and leaving the tab and coming back
+ *               still shows linking on
  *   drift       the gateway is stopped and started again with its staged
  *               runtime directory moved and a different agent PATH and
  *               TMPDIR, the way an app update stages a new tree and
@@ -1456,8 +1459,12 @@ const steps = {
   async linking(run, step, failures) {
     await run.exclusive(async () => {
       await openLinkedDevices(run.page)
-      for (const enabled of [true, false])
-        if (!(await switchLinking(run, enabled, failures))) return
+      if (!(await switchLinking(run, true, failures))) return
+      if (!(await pairFromWindow(run.page, failures))) return
+      // Away and back: the tab reads linking again, and it is still on.
+      await closeSettings(run.page)
+      await openLinkedDevices(run.page)
+      if (!(await switchLinking(run, false, failures))) return
       await closeSettings(run.page)
     })
     // The restarted gateway still answers the conversation, in the window.
@@ -3590,6 +3597,43 @@ function inCorner(place, side) {
 async function closeSettings(page) {
   await page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
   await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
+}
+
+/**
+ * Pair a device on the Linked devices tab, with linking on: the window's own
+ * sign-in opens a code, shown as a person pairing a phone sees it, never the
+ * card that says this sign-in cannot manage credentials. The code is then
+ * cancelled. Resolves whether all of that held.
+ */
+async function pairFromWindow(page, failures) {
+  const before = failures.length
+  await page.locator(selectorFor.linkedAction("pair")).click()
+  const shown = await waitFor(
+    async () =>
+      (await page.locator(css.linkedRefused).count()) > 0
+        ? "refused"
+        : (await page.locator(css.pairingCode).count()) > 0
+          ? "code"
+          : null,
+    10_000,
+  )
+  if (shown !== "code") {
+    failures.push(
+      shown === "refused"
+        ? "Pair a device was refused: the window's sign-in cannot manage credentials"
+        : "Pair a device showed no code",
+    )
+    return false
+  }
+  const code = (
+    await page.locator('[data-slot="pairing-code-value"]').innerText()
+  ).replace(/\s+/g, "")
+  if (!code) failures.push("the pairing code shown was empty")
+  await page.locator(selectorFor.linkedAction("cancel")).click()
+  await page
+    .waitForSelector(css.pairingCode, { state: "detached", timeout: 10_000 })
+    .catch(() => failures.push("the cancelled code stayed on the tab"))
+  return failures.length === before
 }
 
 /**
