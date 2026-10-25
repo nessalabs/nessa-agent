@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use tokio::sync::Notify;
 
 use crate::github::application::{
-    ApiFailure, AuditUnavailable, DeviceAuthorization, DeviceCode, GithubApi, GithubAudit,
-    GithubAuditEvent, GithubAuditRecord, GithubCaller, GithubConnections, GithubError,
+    ApiFailure, AuditUnavailable, DeviceAuthorization, DeviceCode, EndCause, GithubApi,
+    GithubAudit, GithubAuditEvent, GithubAuditRecord, GithubCaller, GithubConnections, GithubError,
     GithubTokenStore, PollAnswer, StoreUnavailable,
 };
 use crate::github::domain::{AccessToken, ConnectEnd, GithubAccount, GithubSignIn, GithubStatus};
@@ -408,7 +408,10 @@ async fn a_refusal_an_expiry_or_a_refused_app_ends_the_attempt_signed_out() {
             fixture.audit.events(),
             [
                 GithubAuditEvent::ConnectRequested,
-                GithubAuditEvent::ConnectEnded(end)
+                GithubAuditEvent::ConnectEnded {
+                    end,
+                    cause: EndCause::GithubAnswered
+                }
             ]
         );
         assert_eq!(connections.token(), None);
@@ -423,7 +426,7 @@ async fn an_end_the_audit_refuses_still_ends_the_attempt_and_says_so() {
     ] {
         let fixture = Fixture::new();
         *fixture.audit.refuse.lock().unwrap() =
-            Some(|event| matches!(event, GithubAuditEvent::ConnectEnded(_)));
+            Some(|event| matches!(event, GithubAuditEvent::ConnectEnded { .. }));
         let connections = fixture.connections().await;
         connections.connect(caller("panel")).await.unwrap();
         fixture.github.answer([answer]);
@@ -463,6 +466,13 @@ async fn a_token_written_before_its_save_failed_is_deleted_and_never_held_again(
         })
         .await;
     assert_eq!(fixture.store.held.lock().unwrap().clone(), None, "deleted");
+    assert_eq!(
+        fixture.audit.events().last(),
+        Some(&GithubAuditEvent::ConnectEnded {
+            end: ConnectEnd::StoreUnavailable,
+            cause: EndCause::StoreFailed
+        })
+    );
     // The next start does not find it.
     assert_eq!(fixture.connections().await.token(), None);
 }
@@ -527,6 +537,14 @@ async fn the_code_running_out_ends_the_attempt_expired() {
             *status == signed_out(Some(ConnectEnd::Expired))
         })
         .await;
+    // The deadline here decided it, not an answer from GitHub.
+    assert_eq!(
+        fixture.audit.events().last(),
+        Some(&GithubAuditEvent::ConnectEnded {
+            end: ConnectEnd::Expired,
+            cause: EndCause::DeadlinePassed
+        })
+    );
 }
 
 /// G12: the person approved, but whose it is never came back before the
@@ -553,6 +571,13 @@ async fn an_approval_whose_account_never_comes_back_ends_unreachable() {
         })
         .await;
     assert_eq!(connections.token(), None);
+    assert_eq!(
+        fixture.audit.events().last(),
+        Some(&GithubAuditEvent::ConnectEnded {
+            end: ConnectEnd::Unreachable,
+            cause: EndCause::DeadlinePassed
+        })
+    );
 }
 
 #[tokio::test]
@@ -597,16 +622,18 @@ async fn a_cancelled_attempts_late_approval_is_dropped() {
 
 #[tokio::test]
 async fn github_out_of_reach_or_refusing_the_app_starts_nothing() {
-    for (failure, error, end) in [
+    for (failure, error, end, cause) in [
         (
             ApiFailure::Unreachable,
             GithubError::Unreachable,
             ConnectEnd::Unreachable,
+            EndCause::GithubUnreachable,
         ),
         (
             ApiFailure::Rejected,
             GithubError::Rejected,
             ConnectEnd::Rejected,
+            EndCause::GithubAnswered,
         ),
     ] {
         let fixture = Fixture::new();
@@ -618,7 +645,7 @@ async fn github_out_of_reach_or_refusing_the_app_starts_nothing() {
             fixture.audit.events(),
             [
                 GithubAuditEvent::ConnectRequested,
-                GithubAuditEvent::ConnectEnded(end)
+                GithubAuditEvent::ConnectEnded { end, cause }
             ]
         );
         assert!(fixture.timer.waits().is_empty(), "nothing polls");
@@ -626,7 +653,7 @@ async fn github_out_of_reach_or_refusing_the_app_starts_nothing() {
         let fixture = Fixture::new();
         *fixture.github.device.lock().unwrap() = Err(failure);
         *fixture.audit.refuse.lock().unwrap() =
-            Some(|event| matches!(event, GithubAuditEvent::ConnectEnded(_)));
+            Some(|event| matches!(event, GithubAuditEvent::ConnectEnded { .. }));
         let connections = fixture.connections().await;
         assert_eq!(connections.connect(caller("panel")).await, Err(error));
         assert_eq!(connections.status(), unrecorded(end));

@@ -14,7 +14,7 @@ use tokio::task::AbortHandle;
 use uuid::Uuid;
 
 use super::ports::{
-    ApiFailure, DeviceCode, GithubApi, GithubAudit, GithubAuditEvent, GithubAuditRecord,
+    ApiFailure, DeviceCode, EndCause, GithubApi, GithubAudit, GithubAuditEvent, GithubAuditRecord,
     GithubCaller, GithubTokenStore, PollAnswer,
 };
 use crate::github::domain::{AccessToken, ConnectEnd, GithubSignIn, GithubStatus};
@@ -150,20 +150,24 @@ impl GithubConnections {
         let authorization = match inner.api.request_device_code().await {
             Ok(authorization) => authorization,
             Err(failure) => {
-                let (end, error) = match failure {
-                    ApiFailure::Rejected | ApiFailure::Unauthorized => {
-                        (ConnectEnd::Rejected, GithubError::Rejected)
-                    }
-                    ApiFailure::Unreachable | ApiFailure::Malformed => {
-                        (ConnectEnd::Unreachable, GithubError::Unreachable)
-                    }
+                let (end, cause, error) = match failure {
+                    ApiFailure::Rejected | ApiFailure::Unauthorized => (
+                        ConnectEnd::Rejected,
+                        EndCause::GithubAnswered,
+                        GithubError::Rejected,
+                    ),
+                    ApiFailure::Unreachable | ApiFailure::Malformed => (
+                        ConnectEnd::Unreachable,
+                        EndCause::GithubUnreachable,
+                        GithubError::Unreachable,
+                    ),
                 };
                 // Nothing started, whether or not the end is on record: the
                 // answer says why it did not, and the status that it is not
                 // on record.
                 let unrecorded = inner
                     .audit
-                    .record(&record(GithubAuditEvent::ConnectEnded(end)))
+                    .record(&record(GithubAuditEvent::ConnectEnded { end, cause }))
                     .await
                     .is_err();
                 if unrecorded {
@@ -351,7 +355,7 @@ impl Inner {
 
     /// End the attempt `operation_id` without a sign-in, if it is still the
     /// one waiting.
-    async fn end(&self, operation_id: &str, end: ConnectEnd) {
+    async fn end(&self, operation_id: &str, end: ConnectEnd, cause: EndCause) {
         let _change = self.changes.lock().await;
         let Some(caller) = self.waiting(operation_id) else {
             return;
@@ -362,7 +366,7 @@ impl Inner {
             .record(&GithubAuditRecord {
                 operation_id: operation_id.to_owned(),
                 caller,
-                event: GithubAuditEvent::ConnectEnded(end),
+                event: GithubAuditEvent::ConnectEnded { end, cause },
             })
             .await
             .is_err();
@@ -411,9 +415,10 @@ impl Inner {
             tracing::error!("a GitHub sign-in could not be stored; its token is dropped");
             let unrecorded = self
                 .audit
-                .record(&record(GithubAuditEvent::ConnectEnded(
-                    ConnectEnd::StoreUnavailable,
-                )))
+                .record(&record(GithubAuditEvent::ConnectEnded {
+                    end: ConnectEnd::StoreUnavailable,
+                    cause: EndCause::StoreFailed,
+                }))
                 .await
                 .is_err();
             if unrecorded {
@@ -460,26 +465,52 @@ async fn poll(
             } else {
                 ConnectEnd::Expired
             };
-            return finish(&owner, &operation_id, end).await;
+            return finish(&owner, &operation_id, end, EndCause::DeadlinePassed).await;
         }
         timer.sleep_until(next).await;
         let token = match &granted {
             Some(token) => token.clone(),
             None => match within(timer.as_ref(), expires_at, api.poll(&device_code)).await {
-                Err(_) => return finish(&owner, &operation_id, ConnectEnd::Expired).await,
+                Err(_) => {
+                    return finish(
+                        &owner,
+                        &operation_id,
+                        ConnectEnd::Expired,
+                        EndCause::DeadlinePassed,
+                    )
+                    .await
+                }
                 Ok(Ok(PollAnswer::Pending)) => continue,
                 Ok(Ok(PollAnswer::SlowDown { interval: slower })) => {
                     interval = slower.max(interval);
                     continue;
                 }
                 Ok(Ok(PollAnswer::Expired)) => {
-                    return finish(&owner, &operation_id, ConnectEnd::Expired).await
+                    return finish(
+                        &owner,
+                        &operation_id,
+                        ConnectEnd::Expired,
+                        EndCause::GithubAnswered,
+                    )
+                    .await
                 }
                 Ok(Ok(PollAnswer::Denied)) => {
-                    return finish(&owner, &operation_id, ConnectEnd::Denied).await
+                    return finish(
+                        &owner,
+                        &operation_id,
+                        ConnectEnd::Denied,
+                        EndCause::GithubAnswered,
+                    )
+                    .await
                 }
                 Ok(Err(ApiFailure::Rejected | ApiFailure::Unauthorized)) => {
-                    return finish(&owner, &operation_id, ConnectEnd::Rejected).await
+                    return finish(
+                        &owner,
+                        &operation_id,
+                        ConnectEnd::Rejected,
+                        EndCause::GithubAnswered,
+                    )
+                    .await
                 }
                 Ok(Err(ApiFailure::Unreachable | ApiFailure::Malformed)) => continue,
                 Ok(Ok(PollAnswer::Granted(token))) => {
@@ -500,16 +531,30 @@ async fn poll(
                 return;
             }
             Ok(Err(ApiFailure::Rejected | ApiFailure::Unauthorized)) => {
-                return finish(&owner, &operation_id, ConnectEnd::Rejected).await
+                return finish(
+                    &owner,
+                    &operation_id,
+                    ConnectEnd::Rejected,
+                    EndCause::GithubAnswered,
+                )
+                .await
             }
             Ok(Err(ApiFailure::Unreachable | ApiFailure::Malformed)) => continue,
-            Err(_) => return finish(&owner, &operation_id, ConnectEnd::Unreachable).await,
+            Err(_) => {
+                return finish(
+                    &owner,
+                    &operation_id,
+                    ConnectEnd::Unreachable,
+                    EndCause::DeadlinePassed,
+                )
+                .await
+            }
         }
     }
 }
 
-async fn finish(owner: &Weak<Inner>, operation_id: &str, end: ConnectEnd) {
+async fn finish(owner: &Weak<Inner>, operation_id: &str, end: ConnectEnd, cause: EndCause) {
     if let Some(inner) = owner.upgrade() {
-        inner.end(operation_id, end).await;
+        inner.end(operation_id, end, cause).await;
     }
 }

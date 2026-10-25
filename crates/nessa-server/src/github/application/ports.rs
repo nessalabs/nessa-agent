@@ -101,6 +101,20 @@ pub struct GithubAuditRecord {
     pub event: GithubAuditEvent,
 }
 
+/// What decided that an attempt ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EndCause {
+    /// GitHub answered: declined, expired, or the app refused.
+    GithubAnswered,
+    /// The code's time ran out here with no answer that settled it.
+    DeadlinePassed,
+    /// GitHub could not be reached, or answered nothing usable, when asked
+    /// for a code.
+    GithubUnreachable,
+    /// GitHub gave a sign-in that the gateway could not keep.
+    StoreFailed,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GithubAuditEvent {
     /// Before GitHub is asked for a code. When it cannot be kept, nothing is
@@ -109,8 +123,9 @@ pub enum GithubAuditEvent {
     /// Approved, before the token is kept. When it cannot be kept, the token
     /// is dropped.
     Connected { account: GithubAccount },
-    /// The attempt ended without a sign-in, other than by a cancel.
-    ConnectEnded(ConnectEnd),
+    /// The attempt ended without a sign-in, other than by a cancel, and what
+    /// decided it.
+    ConnectEnded { end: ConnectEnd, cause: EndCause },
     /// The attempt was cancelled, by `by`, who may not be who started it.
     ConnectCancelled { by: GithubCaller },
     /// Before the token is deleted. When it cannot be kept, nothing is

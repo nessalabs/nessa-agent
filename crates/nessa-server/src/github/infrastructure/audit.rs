@@ -12,7 +12,7 @@ use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
 use serde_json::{json, Value};
 
 use crate::github::application::{
-    AuditUnavailable, GithubAudit, GithubAuditEvent, GithubAuditRecord, GithubCaller,
+    AuditUnavailable, EndCause, GithubAudit, GithubAuditEvent, GithubAuditRecord, GithubCaller,
 };
 use crate::github::domain::{ConnectEnd, GithubAccount};
 
@@ -64,7 +64,7 @@ fn name(event: &GithubAuditEvent) -> &'static str {
     match event {
         GithubAuditEvent::ConnectRequested => "connect-requested",
         GithubAuditEvent::Connected { .. } => "connected",
-        GithubAuditEvent::ConnectEnded(_) => "connect-ended",
+        GithubAuditEvent::ConnectEnded { .. } => "connect-ended",
         GithubAuditEvent::ConnectCancelled { .. } => "connect-cancelled",
         GithubAuditEvent::DisconnectRequested { .. } => "disconnect-requested",
         GithubAuditEvent::Disconnected => "disconnected",
@@ -97,10 +97,17 @@ fn end(end: ConnectEnd) -> &'static str {
     }
 }
 
-/// Who decided the event: the caller, or GitHub's answer to the attempt.
+/// What decided the event: the caller, GitHub's answer, or for an ending
+/// the cause it carries.
 fn cause(event: &GithubAuditEvent) -> &'static str {
     match event {
-        GithubAuditEvent::Connected { .. } | GithubAuditEvent::ConnectEnded(_) => "github_answered",
+        GithubAuditEvent::Connected { .. } => "github_answered",
+        GithubAuditEvent::ConnectEnded { cause, .. } => match cause {
+            EndCause::GithubAnswered => "github_answered",
+            EndCause::DeadlinePassed => "deadline_passed",
+            EndCause::GithubUnreachable => "github_unreachable",
+            EndCause::StoreFailed => "store_failed",
+        },
         GithubAuditEvent::ConnectRequested
         | GithubAuditEvent::ConnectCancelled { .. }
         | GithubAuditEvent::DisconnectRequested { .. }
@@ -117,7 +124,7 @@ fn stored(record: &GithubAuditRecord) -> Value {
         GithubAuditEvent::DisconnectRequested { account: held } => {
             json!({ "account": account(held) })
         }
-        GithubAuditEvent::ConnectEnded(reason) => json!({ "reason": end(*reason) }),
+        GithubAuditEvent::ConnectEnded { end: reason, .. } => json!({ "reason": end(*reason) }),
         GithubAuditEvent::ConnectCancelled { by } => json!({ "by": caller(by) }),
         GithubAuditEvent::ConnectRequested
         | GithubAuditEvent::Disconnected
@@ -173,6 +180,11 @@ mod tests {
             Err(AuditUnavailable),
             "one record of each event per operation"
         );
+        record.event = GithubAuditEvent::ConnectEnded {
+            end: ConnectEnd::StoreUnavailable,
+            cause: EndCause::StoreFailed,
+        };
+        audit.record(&record).await.unwrap();
         record.event = GithubAuditEvent::ConnectCancelled { by: owner };
         audit.record(&record).await.unwrap();
         let read = |name: &str| -> Value {
@@ -185,6 +197,10 @@ mod tests {
         let connected = read("github-op-connected.json");
         assert_eq!(connected["detail"]["account"]["login"], "octo");
         assert_eq!(connected["cause"], "github_answered");
+        // A local failure is said as one, never as GitHub's answer.
+        let ended = read("github-op-connect-ended.json");
+        assert_eq!(ended["detail"]["reason"], "store_unavailable");
+        assert_eq!(ended["cause"], "store_failed");
         assert_eq!(
             read("github-op-connect-cancelled.json")["detail"]["by"]["credentialId"],
             "panel"
