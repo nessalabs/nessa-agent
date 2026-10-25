@@ -808,8 +808,8 @@ choice, as a toggle is, moving as a toggle does.
 marked `pending` in the catalogue, its control disabled and its row saying
 "Not available yet": open at login, show in menu bar, open to, the three
 notifications, update checks and channel, keep finished sessions, default
-model, thinking and fast mode, providers, agents, Nessa account, GitHub, MCP
-servers, default access, remember approvals, crash reports, session history.
+model, thinking and fast mode, providers, agents, MCP servers, default
+access, remember approvals, crash reports, session history.
 No control may look as if it works when it does not (`settings-view.test.tsx`).
 
 Icons resolve through a provider that mirrors nessa_ui's `NessaIconProvider`

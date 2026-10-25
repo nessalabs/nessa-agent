@@ -114,7 +114,8 @@ jobs:
       - name: Install the pinned Chromium and its runtime dependencies
         run: pnpm exec playwright install --with-deps chromium
         timeout-minutes: 15
-      - run: cargo build -p nessa-server
+      # nessa-mcp: the `github` step runs commands through Nessa's own shell tool.
+      - run: cargo build -p nessa-server -p nessa-mcp
       - name: Pick the seed
         env:
           SEED: ${{ inputs.seed }}

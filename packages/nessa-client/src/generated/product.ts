@@ -2461,6 +2461,65 @@ export const PairingErrorCode = {
   PairingAuditUnavailable: "pairing_audit_unavailable",
 } as const
 export type PairingErrorCode = (typeof PairingErrorCode)[keyof typeof PairingErrorCode]
+/** The GitHub account a sign-in belongs to. */
+export interface GithubAccount {
+  /** GitHub's numeric id for the account, which never changes. */
+  id: number
+  /** The account's login, which can change. */
+  login: string
+}
+/** Where the gateway's GitHub sign-in stands. signed_out: no token is held, and agents are given none. connecting: a code is waiting for the person to enter it on GitHub. connected: a token is held and every agent opened from now on is given it. */
+export const GithubConnectState = {
+  SignedOut: "signed_out",
+  Connecting: "connecting",
+  Connected: "connected",
+} as const
+export type GithubConnectState =
+  (typeof GithubConnectState)[keyof typeof GithubConnectState]
+/** Why the latest sign-in ended without signing in. expired: the code ran out before it was entered. denied: the person refused it on GitHub. cancelled: it was cancelled here. rejected: GitHub refused the Nessa app itself. unreachable: GitHub could not be reached. store_unavailable: the token could not be kept, or a kept one could not be read at startup. audit_unavailable: its record could not be kept, so the token was dropped. */
+export const GithubConnectEnd = {
+  Expired: "expired",
+  Denied: "denied",
+  Cancelled: "cancelled",
+  Rejected: "rejected",
+  Unreachable: "unreachable",
+  StoreUnavailable: "store_unavailable",
+  AuditUnavailable: "audit_unavailable",
+} as const
+export type GithubConnectEnd = (typeof GithubConnectEnd)[keyof typeof GithubConnectEnd]
+/** The code a sign-in waits for. */
+export interface GithubCode {
+  /** What the person enters on GitHub. */
+  userCode: string
+  /** Where they enter it. */
+  verificationUri: string
+  /** Whole seconds left before the code expires, when this was answered. */
+  expiresInSeconds: number
+}
+/** Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in a private file of its own, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com. */
+export interface GithubConnection {
+  /** Where the sign-in stands. */
+  state: GithubConnectState
+  /** Present exactly when connected. */
+  account?: GithubAccount
+  /** Present exactly when connecting. */
+  code?: GithubCode
+  /** When signed out: why the latest sign-in ended, until another starts. Absent when there was none, or after a disconnect. */
+  last?: GithubConnectEnd
+  /** The gateway could not keep the last change in its audit, and that change still stands. With last: how the attempt ended. Connected: a sign-out that failed. Signed out with no last: the sign-out. Absent when it is on record, and with last audit_unavailable, which already says so. */
+  unrecorded?: true
+  /** Where the person chooses the repositories the Nessa app may use. A token reaches only those. */
+  installUrl: string
+}
+/** Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: github.disconnect could not delete the token file; a sign-in that was held is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status). */
+export const GithubErrorCode = {
+  GithubNotConfigured: "github_not_configured",
+  GithubUnreachable: "github_unreachable",
+  GithubRejected: "github_rejected",
+  GithubStorageUnavailable: "github_storage_unavailable",
+  GithubAuditUnavailable: "github_audit_unavailable",
+} as const
+export type GithubErrorCode = (typeof GithubErrorCode)[keyof typeof GithubErrorCode]
 /** Wire input for peer.enroll. This gateway enrolls with its own native key, so the peer knows it as one principal however often it is enrolled. */
 export interface PeerEnrollParams {
   /** The peer gateway's native listen address, as an IP address and port (`192.0.2.7:7443`, `[2001:db8::7]:7443`). No name is resolved. */
@@ -3143,7 +3202,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 83,
+  maxReadyMethods: 87,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3424,6 +3483,10 @@ export const ProductMethod = {
   PairingDeny: "pairing.deny",
   PairingCancel: "pairing.cancel",
   PairingSetLinking: "pairing.setLinking",
+  GithubStatus: "github.status",
+  GithubConnect: "github.connect",
+  GithubCancel: "github.cancel",
+  GithubDisconnect: "github.disconnect",
   PeerEnroll: "peer.enroll",
   PeerList: "peer.list",
   PeerForget: "peer.forget",
@@ -3520,6 +3583,10 @@ export const productReadyMethods = [
   "pairing.deny",
   "pairing.cancel",
   "pairing.setLinking",
+  "github.status",
+  "github.connect",
+  "github.cancel",
+  "github.disconnect",
   "peer.enroll",
   "peer.list",
   "peer.forget",
@@ -3607,6 +3674,10 @@ export const productMethodGrants = {
   "pairing.deny": "credential.manage",
   "pairing.cancel": "credential.manage",
   "pairing.setLinking": "credential.manage",
+  "github.status": "credential.manage",
+  "github.connect": "credential.manage",
+  "github.cancel": "credential.manage",
+  "github.disconnect": "credential.manage",
   "peer.enroll": "credential.manage",
   "peer.list": "credential.manage",
   "peer.forget": "credential.manage",

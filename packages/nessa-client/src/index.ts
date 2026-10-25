@@ -227,6 +227,20 @@ export {
   carriesMcpServersGrant,
   type McpServersApi,
 } from "./presentation/mcp-servers-api.js"
+export { type GithubApi } from "./presentation/github-api.js"
+export {
+  GithubRefusalCode,
+  NessaGithubError,
+  type GithubMethod,
+} from "./application/github-error.js"
+export {
+  GithubConnectEnd,
+  GithubConnectState,
+  GithubErrorCode,
+  type GithubAccount,
+  type GithubCode,
+  type GithubConnection,
+} from "./generated/product.js"
 export { type PairingApi } from "./presentation/pairing-api.js"
 export {
   NessaPairingError,
