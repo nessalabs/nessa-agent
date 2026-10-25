@@ -4,6 +4,10 @@ Standalone Cloudflare Workers Free receiver for the nessalabs-owned
 [Nessa Agent app](https://github.com/apps/nessa-agent), issue
 [#1107](https://github.com/nessalabs/nessa-agent/issues/1107). Its ordering and
 scope contract is [ADR 1107](../../docs/adr/todo/1107-github-webhook-receiver.md).
+The [state page](../../docs/state/services/github-webhooks/README.md) explains
+receipt outcomes. The existing [gateway admission primitive](../../docs/design/external-events.md)
+accepts Nessa-specific signatures; this receiver does not invoke it or choose
+a conversation from provider payloads.
 
 ## Module map
 
@@ -25,6 +29,17 @@ Malformed bodies/headers, wrong signatures, and payloads above one MiB return
 400/401/413. A full or unavailable database returns 503. `GET /health` is process
 liveness/configuration only; it does not query the database. All read APIs are
 absent. No CORS, desktop routing, or user-token exchange is implemented here.
+
+## Live receiver
+
+Endpoint: `https://nessa-github-webhooks.saurav-panthee.workers.dev/github/webhook`.
+Workers Free was confirmed in the account dashboard. A real GitHub ping
+`39bab46a-d05b-11f1-9d2e-c910672cafb6` returned 202 in 0.35 seconds and was
+confirmed in D1. A real redelivery returned 200 with `duplicate` in 0.3 seconds.
+All nine event selections below were read back after saving. The
+[verification record](verification.json) and [GitHub receipt](evidence/github-redelivery.png)
+retain the source checkpoint, checks, limits, and live evidence.
+The app still needs installation on repositories selected by each account.
 
 ## Local verification
 
@@ -54,6 +69,14 @@ pnpm exec wrangler d1 migrations apply nessa-github-webhooks --remote
 pnpm exec wrangler secret put GITHUB_WEBHOOK_SECRET
 pnpm run deploy
 ```
+
+The initial deployment used the signed-in dashboard because the least-scope
+Wrangler token could create the database and secret but could not deploy scripts.
+The editor contents were copied back and compared byte-for-byte with the tested
+bundle before deployment. In Settings, bind `DB` to the configured D1 database,
+pin compatibility to `2026-06-16`, enable logs, then deploy. In Domains, enable
+only the production Worker URL. Future CLI deployment needs the additional
+`workers_scripts:write` permission shown above.
 
 Enter the dedicated random webhook secret at Wrangler's prompt. Enter the same
 secret in GitHub App General > Webhook, set the deployed HTTPS URL followed by
