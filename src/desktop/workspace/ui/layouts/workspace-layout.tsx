@@ -13,6 +13,7 @@ import { sessionListLimits, type ColumnLimits } from "../../model/window-fit"
 import type { WindowArrangement } from "../../model/shown-window"
 import { IconButton } from "../../../ui/icon-button"
 import { SideRail, SideRailButton, RailView } from "../chrome/side-rail"
+import { StudioCorner } from "../chrome/identity-footer"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
 import { WindowTabs } from "../chrome/window-tabs"
 import { PanelMaximize, PanelToggle, WorkspacePanel } from "../chrome/right-panel"
@@ -185,6 +186,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                         room={railRoom}
                         toggle={onToggleRail}
                       />
+                      {shownRailItem?.studio === false ? null : <StudioCorner />}
                     </>
                   ) : null}
                   <div
