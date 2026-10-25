@@ -15,8 +15,7 @@
 import { channelFailure } from "../../application/ports"
 import { canCreate, type ChannelDraft, type ChannelStep } from "../../model/channel-draft"
 import { defaultModel } from "../../model/workspace-index"
-import type { WorkspaceCommand } from "./commands"
-import { loadWorkspace } from "./index-commands"
+import { loadWorkspace, type WorkspaceCommand } from "./commands"
 import { workspaceActions } from "./slice"
 
 const {

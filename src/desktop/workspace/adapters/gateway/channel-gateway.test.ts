@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
-import { NessaRpcError, type Channel as WireChannel } from "@nessa/client"
+import {
+  channelRules as publishedRules,
+  NessaRpcError,
+  type Channel as WireChannel,
+} from "@nessa/client"
 import { ChannelCreationError } from "../../application/ports"
-import { emptyDraft } from "../../model/channel-draft"
+import { channelRules, emptyDraft } from "../../model/channel-draft"
 import { channelGateway } from "./channel-gateway"
 
 const model = { provider: "openai", modelId: "gpt-5.6-terra" }
@@ -80,5 +84,12 @@ describe("making a channel on the gateway", () => {
     )
     expect(error).toHaveBeenCalled()
     error.mockRestore()
+  })
+})
+
+describe("the flow's bounds", () => {
+  it("are the ones the client publishes from the protocol", () => {
+    const { maxChannels: _, ...asked } = publishedRules
+    expect(channelRules).toEqual(asked)
   })
 })

@@ -9,7 +9,6 @@
  * Only the name must be given: a channel with no chosen folder gets one made
  * for it, and notes and resources may be left empty.
  */
-import { channelRules } from "@nessa/client"
 import type { AccessMode } from "./access"
 import type { Channel, ModelRef } from "./workspace-index"
 
@@ -31,8 +30,18 @@ export function channelStepsFor(pickable: boolean): readonly ChannelStep[] {
 /** What a resource is, as the picker that chose it said. */
 export type ResourceKind = "file" | "folder"
 
-/** The protocol's bounds (`x-channelRules`), as the flow checks them before asking. */
-export { channelRules }
+/**
+ * The protocol's bounds (`x-channelRules`), as the flow checks them before
+ * asking. The model does not import the client, so the gateway adapter's
+ * test holds these equal to the client's published `channelRules`.
+ */
+export const channelRules = {
+  maxNameChars: 80,
+  maxNotesBytes: 8_192,
+  maxResources: 32,
+  maxResourceBytes: 16_384,
+  maxPathBytes: 4_096,
+} as const
 
 export interface ChannelDraft {
   readonly name: string
