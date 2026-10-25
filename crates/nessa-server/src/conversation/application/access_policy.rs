@@ -130,11 +130,17 @@ pub enum AccessAction {
     ReviewNotice,
     /// Read what the owner's desktop windows show, on their workspace.
     WorkspaceRead,
+    /// Make a channel, on the owner's catalogue.
+    ChannelCreate,
+    /// List the owner's channels, on their catalogue.
+    ChannelList,
+    /// Create a conversation in a channel.
+    ChannelUse,
 }
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 20] = [
         Self::AgentTools,
         Self::Locate,
         Self::Act,
@@ -152,6 +158,9 @@ impl AccessAction {
         Self::NoteDeliver,
         Self::ReviewNotice,
         Self::WorkspaceRead,
+        Self::ChannelCreate,
+        Self::ChannelList,
+        Self::ChannelUse,
     ];
 
     /// The action's name, as the policy spells it.
@@ -174,6 +183,9 @@ impl AccessAction {
             Self::NoteDeliver => "note.deliver",
             Self::ReviewNotice => "review.notice",
             Self::WorkspaceRead => "workspace.read",
+            Self::ChannelCreate => "channel.create",
+            Self::ChannelList => "channel.list",
+            Self::ChannelUse => "channel.use",
         }
     }
 }
@@ -195,6 +207,11 @@ pub enum AccessResource<'a> {
     },
     /// One owner's workspace: what their desktop windows show.
     Workspace {
+        organization: &'a OrganizationId,
+        owner: &'a PrincipalId,
+    },
+    /// One of an owner's channels.
+    Channel {
         organization: &'a OrganizationId,
         owner: &'a PrincipalId,
     },

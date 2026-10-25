@@ -4,7 +4,7 @@ title: Webhook credential issuance
 kind: operation
 status: mixed
 summary: Owner product issuance selects private webhook seeds, retains actual registration work and joins mutations at shutdown; source and sender mounting remain pending.
-sourceRevision: "6f6bdde6a9fcce9fd6e4fee6ff864b2651b5849c"
+sourceRevision: "20d8051b5e03419d7d0d1854413d7e29be1b6207"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/credential_admin.rs
@@ -284,7 +284,7 @@ Configuration does not issue a credential or perform DNS/HTTP work by itself.
 | owner issues another principal | preserve the existing native ordinary issuance/replay/revoke contract |
 | repeated configured request | resolve original identity; a different command for the retained principal refuses before another reservation/issuance |
 | caller disconnects | admitted work remains in the bounded runtime job set |
-| public webhook share/unshare | retain the existing authorized native grant operation; unshare uses the independent control lane; ordinary targets keep their existing grant path |
+| public webhook share/unshare | validate caller attribution before target classification; reuse existing owner Act/Unshare policy actions respectively, including unshare on deleted conversations; retain the authorized native grant operation, with unshare on the independent control lane; ordinary targets keep their existing grant path |
 | first command panic | seal admission and mark failure before waking the response observer |
 | startup after interrupted issuance | reopen actual private stores and replay the original intent without recovering or issuing another bearer |
 | shutdown | seal admission, poll other drains and join actual credential/grant work before reporting its typed outcome |

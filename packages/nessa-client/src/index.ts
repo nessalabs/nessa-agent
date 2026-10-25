@@ -30,6 +30,8 @@ export {
   type IssueCredentialResult,
   type ServerApi,
   type WorkspaceApi,
+  type ChannelApi,
+  channelRefusal,
   type AgentsApi,
   type RecordReadApi,
   type AgentsSubscriptionHandlers,
@@ -157,7 +159,11 @@ export type {
 
 export type { SessionTermination } from "./generated/product.js"
 export { RecordReadErrorCode } from "./generated/product.js"
-export { mcpAppCallTiming, productMethodGrants } from "./generated/product.js"
+export {
+  channelRules,
+  mcpAppCallTiming,
+  productMethodGrants,
+} from "./generated/product.js"
 export type {
   ConversationRecordsHeadResult,
   RecordScope,
@@ -221,6 +227,20 @@ export {
   carriesMcpServersGrant,
   type McpServersApi,
 } from "./presentation/mcp-servers-api.js"
+export { type GithubApi } from "./presentation/github-api.js"
+export {
+  GithubRefusalCode,
+  NessaGithubError,
+  type GithubMethod,
+} from "./application/github-error.js"
+export {
+  GithubConnectEnd,
+  GithubConnectState,
+  GithubErrorCode,
+  type GithubAccount,
+  type GithubCode,
+  type GithubConnection,
+} from "./generated/product.js"
 export { type PairingApi } from "./presentation/pairing-api.js"
 export {
   NessaPairingError,
@@ -434,6 +454,12 @@ export type {
   ConversationEvents,
   ConversationMessageReceipt,
 } from "./generated/product.js"
+export type {
+  Channel,
+  ChannelCreateParams,
+  ChannelListResult,
+} from "./generated/product.js"
+export { ChannelErrorCode } from "./generated/product.js"
 export type {
   WorkspaceArrangement,
   WorkspaceColumn,

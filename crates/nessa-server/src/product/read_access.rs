@@ -618,6 +618,7 @@ pub(super) async fn dispatch_share(
                 let selected_capabilities = capabilities(&params.capabilities)?;
                 let expected = expected_revision(params.expected_policy_revision)?;
                 let webhook = if let Some(runtime) = state.webhooks.as_deref() {
+                    caller.actor()?;
                     // Preserve shape/owner refusal before any target lookup.
                     ShareAccess::new(selected_capabilities, requested_policy.clone())
                         .map_err(|_| ConversationError::InvalidInput)?;
@@ -702,10 +703,16 @@ pub(super) async fn dispatch_share(
                 let caller = caller(session, params.request_id.clone());
                 let expected = expected_revision(params.expected_policy_revision)?;
                 let webhook = if let Some(runtime) = state.webhooks.as_deref() {
+                    caller.actor()?;
                     let conversation = load_conversation(conversations.as_ref(), &id)
                         .await?
                         .ok_or(ConversationError::NotFound)?;
-                    OwnerAccess::new(policy).admit(&conversation, &caller)?;
+                    OwnerAccess::new(policy).admit_to(
+                        AccessAction::Unshare,
+                        &conversation,
+                        &caller.organization_id,
+                        &caller.principal_id,
+                    )?;
                     runtime
                         .is_webhook(&credential)
                         .await

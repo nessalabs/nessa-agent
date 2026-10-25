@@ -242,6 +242,7 @@ pub(super) fn test_acp_configuration(
         environment: BTreeMap::new(),
         runtime_environment: BTreeMap::new(),
         credential_environment: BTreeMap::new(),
+        open_credentials: Default::default(),
         workspace: root.path().to_path_buf(),
         tools_enabled: true,
         mcp_servers: crate::infrastructure::acp::sessions::McpServerList::none(),

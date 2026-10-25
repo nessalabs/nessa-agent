@@ -192,6 +192,8 @@ export async function exited(child, ms) {
  *   them (`{ agentIdleSeconds: 3 }`); the gateway's defaults when absent
  * @param {object} [o.native] the config's `native` section
  *   (`{ enabled: false, listenAddress: "127.0.0.1:0" }`); absent is none
+ * @param {Record<string, string>} [o.environment] more of the gateway's
+ *   environment, such as `NESSA_GITHUB_APP`
  * @returns the gateway: `{ directory, token, url, log, server, stop, restart }`.
  *   `token` is the owner token file's path; `log()` the gateway's output so
  *   far; `restart(signal, second)` kills it (a crash by default) and starts
@@ -245,6 +247,7 @@ export async function startLocalGateway(o) {
             ...process.env,
             ...(o.path ? { PATH: `${o.path}:${process.env.PATH}` } : {}),
           }),
+      ...o.environment,
       NESSA_STAGE: "ci",
       NESSA_PORT: String(o.port),
       NESSA_DATA_DIR: directory,

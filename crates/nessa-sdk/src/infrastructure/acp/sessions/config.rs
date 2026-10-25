@@ -298,6 +298,52 @@ impl fmt::Debug for McpServerList {
     }
 }
 
+/// Where an ACP binding reads credentials that can change while it is
+/// configured: a host's current ones, read once at each provider open and
+/// added to that open's [`AcpConfig::credential_environment`].
+pub trait OpenCredentialSource: Send + Sync {
+    /// The variables a provider open is given now. Called on the open's task,
+    /// so it must not block; it may be called from several opens at once.
+    fn variables(&self) -> BTreeMap<OsString, OsString>;
+}
+
+/// The credentials an [`AcpConfig`] reads at each provider open: none, or a
+/// host's [`OpenCredentialSource`]. An open keeps what it read for its
+/// provider session's life, through every restart of its process, so a
+/// harness already running keeps the credentials it was given while a later
+/// open is given the source's then.
+#[derive(Clone, Default)]
+pub struct OpenCredentials {
+    source: Option<Arc<dyn OpenCredentialSource>>,
+}
+impl OpenCredentials {
+    /// Nothing beyond [`AcpConfig::credential_environment`].
+    pub fn none() -> Self {
+        Self::default()
+    }
+    /// What `source` says at each open.
+    pub fn read_from(source: Arc<dyn OpenCredentialSource>) -> Self {
+        Self {
+            source: Some(source),
+        }
+    }
+    /// The variables as they are now; empty without a source.
+    pub(crate) fn current(&self) -> BTreeMap<OsString, OsString> {
+        self.source
+            .as_ref()
+            .map(|source| source.variables())
+            .unwrap_or_default()
+    }
+}
+impl std::fmt::Debug for OpenCredentials {
+    /// Names whether there is a source, never a value.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenCredentials")
+            .field("source", &self.source.is_some())
+            .finish()
+    }
+}
+
 /// Host-owned launch configuration. Environment is explicit, never inherited by
 /// the adapter. Use the normal HOME/auth environment without extracting secrets.
 /// Only trusted composition may choose the executable and its arguments.
@@ -342,6 +388,14 @@ pub struct AcpConfig {
     /// keep account/profile namespaces in environment when switching accounts.
     /// Keys must not overlap environment. Never persisted by the SDK.
     pub credential_environment: BTreeMap<OsString, OsString>,
+    /// Credentials read again at each provider open and added to that open's
+    /// [`Self::credential_environment`]: a host's sign-in that can begin or
+    /// end while this configuration is in use. Excluded from restoration
+    /// identity, like [`Self::credential_environment`]. Where any of its
+    /// names is already set by [`Self::environment`],
+    /// [`Self::runtime_environment`] or [`Self::credential_environment`], that
+    /// setting wins and the open credentials are left out whole, logged.
+    pub open_credentials: OpenCredentials,
     /// Absolute path used as the child working directory and ACP session workspace. It must exist
     /// and be accessible when the process starts. Must be UTF-8 because ACP encodes
     /// the workspace in JSON; invalid paths return Configuration before launch.
@@ -507,9 +561,34 @@ impl AcpConfig {
             .map(OsString::as_os_str)
     }
 
+    /// This configuration for one provider open: its open credentials read
+    /// now and added to [`Self::credential_environment`], and no source left
+    /// to read again. Each binding builds its open's process factory from
+    /// this, so every start of that open's process — a relaunch included —
+    /// is given what was read here, and a sign-in that begins or ends later
+    /// reaches the next open. A variable configured for the agent under a
+    /// name they use wins, and the open credentials are left out whole,
+    /// logged, so two halves of one setting never mix.
+    pub(crate) fn with_open_credentials(&self) -> Self {
+        let mut config = self.clone();
+        let read = self.open_credentials.current();
+        if read.keys().any(|name| {
+            config.environment.contains_key(name)
+                || config.runtime_environment.contains_key(name)
+                || config.credential_environment.contains_key(name)
+        }) {
+            tracing::warn!("a configured agent credential has the name of an open credential; the open credentials are left out");
+        } else {
+            config.credential_environment.extend(read);
+        }
+        config.open_credentials = OpenCredentials::none();
+        config
+    }
+
     /// This configuration for a harness a host starts, working in `workspace`
     /// there. What names this machine is left behind: its account's variables,
-    /// its credentials and the MCP servers whose stand-ins reach this process.
+    /// its credentials (open credentials included) and the MCP servers whose
+    /// stand-ins reach this process.
     /// The host supplies its own executable, variables and credentials, so
     /// `executable`, `staged_runtime_arguments`, and `arguments` are never
     /// launched from here. This
@@ -520,6 +599,7 @@ impl AcpConfig {
             environment: BTreeMap::new(),
             runtime_environment: BTreeMap::new(),
             credential_environment: BTreeMap::new(),
+            open_credentials: OpenCredentials::none(),
             workspace,
             workspace_paths: Arc::new(crate::infrastructure::workspace_paths::UnresolvedPaths),
             mcp_servers: McpServerList::none(),

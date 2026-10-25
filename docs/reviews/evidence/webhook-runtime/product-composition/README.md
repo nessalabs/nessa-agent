@@ -1,6 +1,6 @@
 # Retained product webhook commands and grants
 
-Source: `6f6bdde6a9fcce9fd6e4fee6ff864b2651b5849c`, preserving published
+Source: `20d8051b5e03419d7d0d1854413d7e29be1b6207`, preserving published
 locking repair `15e211372` and main `d3dbf580`. This is a product command/grant
 ownership slice. Canonical source/queue/sender mounting and recipient POST remain
 unfinished. No delivery or whole-feature qualification is claimed.
@@ -55,5 +55,21 @@ rule has its separate original-failure/corrected actual-physical-write regressio
 
 Original fixture compile failures and all raw original/corrected/mutation logs
 remain preserved in the execution workspace. Review findings must be closed by
-a fresh full round before treating this slice as independently reviewed. Browser,
+a fresh full round before treating this slice as independently reviewed. That
+[third round](review-3.md) is now clean at every priority. Browser,
 stress and recipient source qualification remain separate outstanding gates.
+
+Round-two closure: [original report](review-2.md). The new public target
+classification now invokes existing caller attribution validation first, and
+unshare asks the existing Cedar Unshare action, preserving deleted-conversation
+cleanup for both webhook and ordinary departed-receiver grants. Both actual
+product regressions failed on the original candidate and pass after correction;
+the latter checks canonical row removal. The attribution control covers blank,
+control-character and oversized request IDs on missing and deleted conversations.
+The original attribution test first had an incorrect expected wire literal; its
+corrected red control uses the existing error mapping and still fails before
+the fix. All 12 product tests, server all-target Clippy, formatting, 108
+architecture tests and architecture check pass. Other previously qualified source
+is unchanged; no unchanged retention or mutation suite was repeated. A fresh
+full third review is clean at every priority; its independent four targeted
+tests each passed. Delivery and final assembled qualifications remain pending.

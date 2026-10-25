@@ -47,6 +47,7 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::UnavailableAfterSave => ConversationErrorCode::UnavailableAfterSave,
         ConversationError::DeletionIncomplete(failures) => deletion_incomplete(failures),
         ConversationError::AgentNotConfigured => ConversationErrorCode::AgentNotConfigured,
+        ConversationError::ChannelNotFound => ConversationErrorCode::ChannelNotFound,
         ConversationError::AgentUnsupported => ConversationErrorCode::AgentUnsupported,
         ConversationError::LeaseRefused(LeaseRefusal::SandboxUnavailable) => {
             ConversationErrorCode::SandboxUnavailable

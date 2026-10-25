@@ -122,6 +122,7 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.InvalidRequest:
     case ConversationErrorCode.AgentStartupDeadline:
     case ConversationErrorCode.ConversationNotFound:
+    case ConversationErrorCode.ChannelNotFound:
     case ConversationErrorCode.ConversationCapacity:
     case ConversationErrorCode.ImageInputUnsupported:
     case ConversationErrorCode.AttachmentNotFound:

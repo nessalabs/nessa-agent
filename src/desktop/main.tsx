@@ -7,6 +7,9 @@ import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import {
   askReviewNoticeAccess,
+  chooseChannelFolder,
+  chooseChannelResources,
+  homeFolder,
   host,
   loadAssignedGatewayEndpoint,
   onReviewNoticeOpened,
@@ -30,6 +33,7 @@ import { hostGateway } from "./adapters/host-gateway"
 import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backend"
 import { seededWindow } from "./seeded-window"
 import {
+  GithubProvider,
   LinkedDevicesProvider,
   McpServersProvider,
   NativeHooksProvider,
@@ -120,8 +124,20 @@ if (nativeNotices) {
   })
   window.addEventListener("focus", showWaitingReviews)
 }
+// The system's pickers for a new channel's paths, in the app on macOS and
+// Windows. Linux has no picker of its own yet, and a browser none at all, so
+// there a channel's folder is made for it and it takes no resources.
+const channelPaths =
+  backend === "host" && (host.kind === "macos" || host.kind === "other")
+    ? {
+        home: homeFolder,
+        folder: chooseChannelFolder,
+        resources: chooseChannelResources,
+      }
+    : undefined
 const dependencies = createDesktopDependencies({
   signInToProvider,
+  paths: channelPaths,
   providerLoginAvailable,
   gateway,
   reviewNotices: nativeNotices ? { sync: syncReviewNotices } : undefined,
@@ -176,11 +192,13 @@ createRoot(container).render(
                             <PermissionRulesProvider
                               gateway={dependencies.permissionRules}
                             >
-                              <DesktopWindow
-                                hostKind={host.kind}
-                                browserSurface={host.kind === "browser"}
-                                inspectable={import.meta.env.DEV}
-                              />
+                              <GithubProvider gateway={dependencies.github}>
+                                <DesktopWindow
+                                  hostKind={host.kind}
+                                  browserSurface={host.kind === "browser"}
+                                  inspectable={import.meta.env.DEV}
+                                />
+                              </GithubProvider>
                             </PermissionRulesProvider>
                           </NativeHooksProvider>
                         </HeldFilesProvider>

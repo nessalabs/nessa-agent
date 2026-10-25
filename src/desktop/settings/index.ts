@@ -40,6 +40,11 @@
  *   (Access: remembered rules     (`client.conversation` list and
  *    and revoke)                   revokePermissionRule)
  *
+ *   ui/github-row.tsx ──▶ model/github.ts ◀── adapters/github-gateway.ts
+ *   (Accounts: connect      (its views)          (`client.github` read into
+ *    through the Nessa                            the model's words, with a
+ *    GitHub App's code)                           sentence for each code)
+ *
  *   ui/review-notice-rows.tsx
  *   (Access: the button that asks the browser to allow a notification
  *    while a review waits)
@@ -48,12 +53,13 @@
  * An arrow points from what reads to what it reads. The window mounts
  * `SettingsHost` once; anything opens it with `openSettings`. Composition
  * (`dependencies.ts`) builds the servers' gateway, the pairing gateway, and
- * the native-hooks gateway over the window's client and `main.tsx` provides
+ * the native-hooks gateway and the GitHub gateway over the window's client and `main.tsx` provides
  * them; with none, those tabs are pending and the hook rows rest.
  */
 export { openSettings, SettingsHost, useSettingsOpening } from "./ui/settings-view"
 export { McpServersProvider } from "./ui/integrations-tab"
 export { LinkedDevicesProvider } from "./ui/linked-devices-tab"
+export { GithubProvider } from "./ui/github-row"
 export { NativeHooksProvider } from "./ui/native-hooks-rows"
 export { PermissionRulesProvider } from "./ui/permission-rule-rows"
 export {
@@ -71,6 +77,11 @@ export {
   type NativeHooksClient,
   type NativeHooksGateway,
 } from "./adapters/native-hooks-gateway"
+export {
+  githubGateway,
+  type GithubClient,
+  type GithubGateway,
+} from "./adapters/github-gateway"
 export {
   permissionRulesGateway,
   type PermissionRulesClient,

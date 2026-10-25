@@ -133,9 +133,17 @@ export const KNOBS = {
     default: 1,
     what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps",
   },
+  githubs: {
+    default: 1,
+    what: "times GitHub is connected from Settings through a fake GitHub, an agent started after it holds the sign-in, then disconnected",
+  },
   launches: {
     default: 1,
     what: "window reloads while the host is still starting the gateway: no startup screen, and the conversation listed as soon as it is up",
+  },
+  channels: {
+    default: 1,
+    what: "times channels are made from the sidebar's + (a refused folder, then one made for it; then a chosen folder), each talked to in a new session",
   },
   long: {
     default: 30,
@@ -217,6 +225,8 @@ export function plan(knobs) {
   add(knobs.drifts, () => ({ kind: "drift" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))
   add(knobs.launches, () => ({ kind: "launch" }))
+  add(knobs.githubs, () => ({ kind: "github" }))
+  add(knobs.channels, () => ({ kind: "channel" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

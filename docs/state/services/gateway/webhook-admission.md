@@ -4,7 +4,7 @@ title: Outbound webhook admission
 kind: feature
 status: mixed
 summary: Owner product shares resolve registered principals and retain actual grant writes under current authority; delivery-worker mounting remains uncomposed.
-sourceRevision: "6f6bdde6a9fcce9fd6e4fee6ff864b2651b5849c"
+sourceRevision: "20d8051b5e03419d7d0d1854413d7e29be1b6207"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/ports.rs
@@ -201,7 +201,7 @@ unmounted in this scoped publication candidate.
 
 ## Product grant ownership checkpoint
 
-At source `6f6bdde6a9fcce9fd6e4fee6ff864b2651b5849c`, the existing owner
+At source `20d8051b5e03419d7d0d1854413d7e29be1b6207`, the existing owner
 product share command checks request shape and conversation ownership before
 classifying its target from actual immutable Auth origin. A webhook target uses
 the existing registration/grant/Cedar operation; no receiver scope is invented.

@@ -758,6 +758,9 @@ mod catalogue;
 #[path = "owner_phone_delete.rs"]
 mod delete;
 
+#[path = "owner_phone_channel.rs"]
+mod channel;
+
 #[path = "owner_phone_remember.rs"]
 mod remember;
 
