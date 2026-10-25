@@ -263,10 +263,13 @@
   padding-left: 2px;
 }
 
-/* It stands where a sidebar's foot or an item's view is: not over the panes. */
-.workspace-window[data-sidebar="closed"]:not([data-rail-view]):not(
-    :has(.workspace[data-peek])
-  )
+/*
+ * It belongs to whatever holds the corner — the sidebar's foot, the session
+ * list's (its rows scroll clear of it), a peeked sidebar or an item's view —
+ * at every window size. Only with the panes alone at the window's left edge
+ * does the toggle's mark stand there by itself: the words never cover a chat.
+ */
+.workspace-window:not([data-rail-view]):has(.workspace[data-panes-alone]:not([data-peek]))
   .side-rail-studio {
   visibility: hidden;
   opacity: 0;

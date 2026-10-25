@@ -21,6 +21,7 @@ import {
   movePane,
   newSession,
   openBeside,
+  openSession,
   openWidget,
   setComposerText,
   showContent,
@@ -213,7 +214,7 @@ describe("the right panel, in both layouts", () => {
     ["three columns", ThreeColumns],
     ["sessions in the sidebar", SessionsInSidebar],
   ] as const)
-    it(`opens, maximizes, leaves the maximized view with Escape and remembers its place, in ${name}`, async () => {
+    it(`opens, expands for the chat in front, docks for what brings another and for Escape, and remembers its place, in ${name}`, async () => {
       const { store, root } = await render(Layout)
       const panel = () => host.querySelector<HTMLElement>("#workspace-panel") ?? host
       const button = (label: string) =>
@@ -238,13 +239,56 @@ describe("the right panel, in both layouts", () => {
         )
       expect(covered()).toEqual([true, true, true])
       expect(panel().closest("[inert]")).toBeNull()
-      // Under it, the window's keys rest: no switcher, no overview, no fold.
+      // It is the chat in front's: the strip shows that chat's tab alone —
+      // b, not a beside it — and no toggle for the columns it covers.
+      const tabs = () =>
+        [...host.querySelectorAll<HTMLElement>('.workspace-tab-list [role="tab"]')].map(
+          (tab) => tab.getAttribute("title"),
+        )
+      const titles = (ids: string[]) =>
+        ids.map((id) => selectSession(store.getState(), id)?.title ?? "New session")
+      expect(tabs()).toEqual(titles(["b"]))
+      expect(button("Restore Panel")?.getAttribute("aria-pressed")).toBe("true")
+      expect(
+        host.querySelector('.workspace-titlebar [aria-controls="workspace-sidebar"]'),
+      ).toBeNull()
+      expect(
+        [...host.querySelectorAll(".workspace-titlebar button")].some((each) =>
+          each.getAttribute("aria-label")?.includes("Session List"),
+        ),
+      ).toBe(false)
+      // A window key brings the workspace back before it acts, so what it opens is seen.
       await act(async () => press("switcher"))
-      await act(async () => press("showOverview"))
-      await act(async () => press("toggleSidebar"))
-      expect(host.querySelector('[role="dialog"]')).toBeNull()
-      expect(store.getState().workspace.content).toBe("panes")
-      expect(store.getState().workspace.chrome.sidebar.open).toBe(true)
+      expect(panel().dataset.maximized).toBeUndefined()
+      expect(covered()).toEqual([false, false, false])
+      expect(host.querySelector('[role="dialog"]')).not.toBeNull()
+      await act(async () => press("switcher"))
+      expect(tabs()).toEqual(titles(["a", "b"]))
+      // The strip's New Tab opens a session in a tab of its own, in front: docked.
+      await act(async () => button("Expand Panel")?.click())
+      expect(tabs()).toEqual(titles(["b"]))
+      const before = store.getState().workspace.tabs.activeTab
+      await act(async () =>
+        host.querySelector<HTMLButtonElement>('[aria-label^="New Tab"]')?.click(),
+      )
+      expect(store.getState().workspace.tabs.activeTab).not.toBe(before)
+      expect(panel().dataset.maximized).toBeUndefined()
+      expect(tabs()).toEqual([...titles(["a", "b"]), "New session"])
+      // Back to b, expanded for b alone again.
+      await act(async () => store.dispatch(closePane()))
+      await act(async () => button("Expand Panel")?.click())
+      expect(tabs()).toEqual(titles(["b"]))
+      // A session brought in front by anything else — a notice, a menu — docks it too.
+      await act(async () => store.dispatch(openSession({ sessionId: "a" })))
+      expect(panel().dataset.maximized).toBeUndefined()
+      expect(covered()).toEqual([false, false, false])
+      // And the overview over the panes.
+      await act(async () => button("Expand Panel")?.click())
+      await act(async () => store.dispatch(showContent({ content: "agents" })))
+      expect(panel().dataset.maximized).toBeUndefined()
+      await act(async () => store.dispatch(showContent({ content: "panes" })))
+      await act(async () => button("Expand Panel")?.click())
+      expect(panel().dataset.maximized).toBe("true")
       // An Escape a menu or dialog over it takes is theirs, not the panel's.
       const menu = document.createElement("div")
       menu.setAttribute("role", "menu")
@@ -269,8 +313,15 @@ describe("the right panel, in both layouts", () => {
       ).toMatchObject({
         open: true,
       })
+      // ⌥⌘B while expanded hides it: docked, closed, and remembered closed.
+      await act(async () => button("Expand Panel")?.click())
       await act(async () => press("togglePanel"))
       expect(panel().hasAttribute("inert")).toBe(true)
+      expect(panel().dataset.maximized).toBeUndefined()
+      expect(covered()).toEqual([false, false, false])
+      expect(
+        JSON.parse(window.localStorage.getItem("nessa.desktop.right-panel") ?? "null"),
+      ).toMatchObject({ open: false })
       await act(async () => root.unmount())
     })
 
