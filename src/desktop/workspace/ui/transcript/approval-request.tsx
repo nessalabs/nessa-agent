@@ -12,9 +12,9 @@
  * | the answers' width | arrangement                                              |
  * | ------------------ | -------------------------------------------------------- |
  * | 380px or more      | Deny at the left; Always Allow and Allow Once at the right |
- * | 280–380px          | one row at the right; "Always Allow" says its first word  |
+ * | 280–380px          | Deny left, allows right; "Always Allow" says its first word  |
  * | under 280px        | Allow Once across the width, Always Allow in its menu;    |
- * |                    | Deny, quiet, across the width beneath                     |
+ * |                    | Deny, quiet, at the left beneath                     |
  *
  * A review that does not offer always has no such button and no menu.
  *
@@ -140,6 +140,22 @@ function commandWords(text: string, key: string) {
   )
 }
 
+/** The app's tool name the command begins with, if any, and the words after it. */
+function commandParts(command: string, name: string | undefined) {
+  const lead =
+    name && name.length > 0 && (command === name || command.startsWith(`${name} `))
+      ? name
+      : undefined
+  const rest = lead === undefined ? shownCommand(command) : command.slice(lead.length)
+  return { lead, rest }
+}
+
+/** The text `ApprovalCommand` draws for a command, after the prompt. */
+export function drawnCommand(command: string, name?: string): string {
+  const { lead, rest } = commandParts(command, name)
+  return lead === undefined ? rest : shownName(lead) + rest
+}
+
 /**
  * The command, broken only between its words. An app's tool name, when
  * `name` is that tool and the command begins with it, is isolated as a name
@@ -154,11 +170,7 @@ export function ApprovalCommand({
   /** The app's tool, when this command is that app's. */
   name?: string
 }) {
-  const lead =
-    name && name.length > 0 && (command === name || command.startsWith(`${name} `))
-      ? name
-      : undefined
-  const rest = lead === undefined ? shownCommand(command) : command.slice(lead.length)
+  const { lead, rest } = commandParts(command, name)
   const block = useRef<HTMLPreElement>(null)
   // Where a word is wider than the card, the block scrolls and fades the edge it cuts.
   useLayoutEffect(() => {
@@ -222,9 +234,17 @@ export function ApprovalActions({
   disabled,
   onAnswer,
   tips = {},
+  compact = false,
 }: {
   /** The review's answers. Each is a button; an answer it does not list is not drawn. */
   options: readonly ApprovalOption[]
+  /**
+   * Two buttons, whatever the review offers: its first refusal and its
+   * primary allow (once, else always), each on one line, in the same place
+   * on every card; every other answer is in the menu beside them. For a card
+   * that must stay compact, as the session list's does.
+   */
+  compact?: boolean
   disabled: boolean
   /** `at`: when the answer was made (the event's `timeStamp`, on `performance.now()`'s clock). */
   onAnswer: (option: ApprovalOption, at: number) => void
@@ -236,6 +256,83 @@ export function ApprovalActions({
   const once = options.filter((option) => option.choice === "once")
   const answer = (option: ApprovalOption) => (event: { timeStamp: number }) =>
     onAnswer(option, event.timeStamp)
+  if (compact) {
+    const refuse = denies[0]
+    const allow = once[0] ?? always[0]
+    const rest = options.filter((option) => option !== refuse && option !== allow)
+    const more =
+      rest.length > 0 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="workspace-button workspace-approval-more"
+              data-primary={allow ? true : undefined}
+              aria-label="More Answers"
+              disabled={disabled}
+            >
+              <DesktopIcon name="chevronDown" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {rest.map((option) => (
+              <MenuItem
+                key={option.id}
+                data-answer={option.choice}
+                onSelect={answer(option)}
+              >
+                {option.label}
+              </MenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null
+    return (
+      <div
+        className="workspace-approval-answers"
+        data-compact
+        onKeyDown={(event) => {
+          if (event.repeat) event.preventDefault()
+        }}
+      >
+        <div className="workspace-approval-actions">
+          {refuse ? (
+            <button
+              type="button"
+              className="workspace-button workspace-approval-deny"
+              data-answer={refuse.choice}
+              disabled={disabled}
+              title={refuse.label}
+              {...tips.deny}
+              onClick={answer(refuse)}
+            >
+              <span>{refuse.label}</span>
+            </button>
+          ) : null}
+          {allow ? (
+            <div className="workspace-approval-allow">
+              <button
+                type="button"
+                className="workspace-button workspace-approval-once"
+                data-answer={allow.choice}
+                data-primary
+                disabled={disabled}
+                title={allow.label}
+                {...tips[allow.choice]}
+                onClick={answer(allow)}
+              >
+                <span>{allow.label}</span>
+              </button>
+              {more}
+            </div>
+          ) : (
+            // With nothing to allow here, every other refusal is still in reach.
+            more
+          )}
+        </div>
+      </div>
+    )
+  }
   return (
     <div
       className="workspace-approval-answers"

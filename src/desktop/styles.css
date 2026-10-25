@@ -18,11 +18,6 @@ body,
   cursor: default;
 }
 
-/* The classic titlebar lays its controls out without a gap; the others keep 2px. */
-[data-slot="app-shell-titlebar"] [data-history] {
-  margin-left: 2px;
-}
-
 [data-history][aria-disabled]:hover {
   background: transparent;
 }
@@ -98,11 +93,22 @@ body {
   --desktop-base: 180ms;
   --desktop-slow: 240ms;
   /*
-   * Workspace bounds land immediately with content painted. The zero path
-   * skips FLIP snapshots and counter-scaling; sidebar and session-list CSS
-   * motion still use their independent base and slow tokens.
+   * A side column folding or unfolding — a sidebar, the session list, a
+   * panel — and everything beside it following: the workspace's columns
+   * move on this one curve
+   * (`--desktop-ease`), so a toggle feels the same in every layout. Reduced
+   * motion makes it instant.
    */
-  --desktop-flight: 0ms;
+  --desktop-drawer: 340ms;
+  /*
+   * Panes rearranged — a split, a close, a drop, a move — travel to their
+   * new boxes as a drawer does: the same duration, on the same curve. Their
+   * content is laid out once, at its final size, and painted throughout:
+   * never dimmed or rescaled (#914, `columns.mjs content-visible`). A new
+   * pane slides in from the edge it lands against. Reduced motion lands
+   * every change at once.
+   */
+  --desktop-flight: 340ms;
   /* A first message's composer gliding from a new session's home. */
   --desktop-arrival: 420ms;
   /* The pause before a second thing follows the first. */
@@ -200,6 +206,7 @@ html:not(.dark) [data-surface] {
 :root[data-motion="reduced"] [data-surface] {
   --desktop-base: 0ms;
   --desktop-slow: 0ms;
+  --desktop-drawer: 0ms;
   --desktop-flight: 0ms;
   --desktop-arrival: 0ms;
   --desktop-stagger: 0ms;
@@ -241,24 +248,6 @@ html:not(.dark) [data-surface] {
   transition: background 600ms ease;
 }
 
-.desktop-swatch {
-  width: 14px;
-  height: 14px;
-  margin-right: 8px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 30% 30%, var(--desktop-light-edge), transparent 70%),
-    linear-gradient(135deg, var(--desktop-light-high), var(--desktop-light-low)),
-    var(--background);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 14%, transparent);
-}
-
-/* In a menu row the row's own gap spaces it from its words. */
-.desktop-popover[role="menu"] .desktop-swatch {
-  margin-right: 0;
-}
-
 /*
  * Native macOS window buttons remain host-owned and sit inside the sidebar,
  * centred on the same row as the controls: 24px from the window's top, where
@@ -266,15 +255,6 @@ html:not(.dark) [data-surface] {
  */
 [data-host="macos"][data-surface="window"] {
   --desktop-window-controls-inset: 79px;
-}
-
-.desktop-titlebar[data-slot="app-shell-titlebar"] {
-  padding-right: var(--desktop-control-edge);
-}
-
-.desktop-shell {
-  isolation: isolate;
-  background: var(--background);
 }
 
 /* A slow, faint light behind everything, so the glass has something to hold. */
@@ -371,74 +351,6 @@ html:not(.dark) [data-surface] {
   }
 }
 
-.desktop-titlebar [data-slot="app-shell-titlebar-navigation"] {
-  color: color-mix(in oklab, var(--foreground) 55%, transparent);
-  border-radius: var(--desktop-control-radius);
-  transition:
-    color var(--desktop-fast) ease,
-    background-color var(--desktop-fast) ease;
-}
-
-/* SplitView owns sizing, capture, keyboard resizing, and collapse snapping. */
-.desktop-sidebar[data-slot="sidebar"] {
-  position: relative;
-  z-index: 0;
-  inset: auto;
-  height: 100%;
-  width: 100%;
-  min-width: 0;
-  border: 0;
-}
-
-/*
- * A floating pane of glass, inset from the window edge. The titlebar's
- * controls sit on top of it; its content starts below them.
- */
-.desktop-glass[data-slot="sidebar"] {
-  height: calc(100% - 2 * var(--desktop-gutter));
-  width: calc(100% - var(--desktop-gutter));
-  margin: var(--desktop-gutter) 0 var(--desktop-gutter) var(--desktop-gutter);
-  padding-top: calc(var(--desktop-titlebar-height) - var(--desktop-gutter));
-  border-radius: var(--desktop-radius);
-  /* The middle is the base everywhere; a pane is that base lifted by a faint
-     tint, so it reads as sitting on top. Translucent, so the light carries
-     through and the window stays one surface. */
-  background: var(--desktop-pane-fill);
-  backdrop-filter: blur(28px) saturate(170%);
-  -webkit-backdrop-filter: blur(28px) saturate(170%);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 7%, transparent),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 6%, transparent),
-    0 12px 40px -12px rgb(0 0 0 / 55%);
-  overflow: hidden;
-  transition:
-    opacity 260ms var(--desktop-ease),
-    transform 320ms var(--desktop-ease);
-}
-
-.desktop-glass[data-side="right"],
-#right .desktop-glass[data-slot="sidebar"] {
-  margin: var(--desktop-gutter) var(--desktop-gutter) var(--desktop-gutter) 0;
-}
-
-/* The right panel's own sidebar provider paints an opaque wrapper; without
-   this the gutter behind the right pane is a flat third colour that hides the
-   light the middle shows. */
-.desktop-right-content[data-slot="sidebar-wrapper"] {
-  background: transparent;
-}
-
-/* The design system's inner layer paints a solid fill; the glass is the fill here. */
-.desktop-glass [data-slot="sidebar-inner"] {
-  background: transparent;
-}
-
-/* A collapsed pane has no rim, so its edge has nothing to glow along. */
-#left[data-collapsed] + .desktop-sidebar-edge::before,
-.desktop-sidebar-edge:has(+ #right[data-collapsed])::before {
-  display: none;
-}
-
 /* The strip along the left edge that reveals a collapsed sidebar. */
 .desktop-peek-edge {
   position: absolute;
@@ -447,68 +359,6 @@ html:not(.dark) [data-surface] {
   bottom: 0;
   left: 0;
   width: 10px;
-}
-
-/* The revealed sidebar floats over the content: more opaque than a docked
-   pane, since there is content under it, and lifted with a deeper shadow. */
-/*
- * It slides, fully solid, like the Dock; it never fades. Opacity below 1 on
- * this container would make it the glass's backdrop root, switching the blur
- * off mid-transition so the content behind shows through for a few frames.
- * Hidden, it waits past the window edge with its shadow, and turns invisible
- * only once it has slid out.
- */
-.desktop-peek {
-  position: absolute;
-  z-index: 15;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  /* Its width is set inline to the sidebar's own, so a handoff lines up. */
-  pointer-events: none;
-  visibility: hidden;
-  transform: translate3d(calc(-100% - 48px), 0, 0);
-  will-change: transform;
-  transition:
-    transform 220ms cubic-bezier(0.4, 0, 1, 1),
-    visibility 0s linear 220ms;
-}
-
-/* After a handoff the docked sidebar is already in place: vanish, don't slide. */
-.desktop-peek[data-handed-off] {
-  transition: none;
-}
-
-.desktop-peek[data-shown] {
-  pointer-events: auto;
-  visibility: visible;
-  transform: translate3d(0, 0, 0);
-  transition:
-    transform 360ms var(--desktop-ease),
-    visibility 0s;
-}
-
-.desktop-peek .desktop-glass[data-slot="sidebar"] {
-  background: color-mix(
-    in oklab,
-    color-mix(in oklab, var(--background) 94%, var(--foreground)) 86%,
-    transparent
-  );
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 9%, transparent),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 7%, transparent),
-    0 24px 60px -16px rgb(0 0 0 / 70%);
-}
-
-/* Closing slides the pane toward its edge as it fades, instead of clipping it. */
-#left[data-collapsed] .desktop-glass {
-  opacity: 0;
-  transform: translateX(-12px) scale(0.985);
-}
-
-#right[data-collapsed] .desktop-glass {
-  opacity: 0;
-  transform: translateX(12px) scale(0.985);
 }
 
 /* ——— Empty states: the kit's EmptyState in the window's inks ——— */
@@ -559,32 +409,12 @@ html:not(.dark) [data-surface] {
   text-wrap: wrap;
 }
 
-/* The classic shell's notes: "Nothing open", and Recents' line, which keeps to its group's start. */
+/* A quiet note where a surface has nothing to show: the right panel's "Nothing open". */
 .desktop-empty-note {
   padding: 4px 8px;
 }
 
-.desktop-empty-note[data-align="start"] {
-  align-items: flex-start;
-  text-align: left;
-}
-
-/* The classic shell's foot: its mark, "nessa Studio" (`identity.tsx`), and the theme menu at the end. */
-.desktop-sidebar-footer[data-slot="sidebar-footer"] {
-  flex-direction: row;
-  align-items: center;
-  gap: 0;
-  /* The name's pill is 28px, the theme menu's 26: a pixel less above and below keeps the foot 52px. */
-  padding: 11px 16px 13px;
-  border-top: 0;
-  font-size: 13px;
-  letter-spacing: -0.01em;
-}
-
-.desktop-sidebar-footer[data-slot="sidebar-footer"] > :last-child {
-  margin-left: auto;
-}
-
+/* nessa's mark: the square before "nessa Studio" (`identity.tsx`). */
 .desktop-mark {
   width: 6px;
   height: 6px;
@@ -592,11 +422,6 @@ html:not(.dark) [data-surface] {
   border-radius: 1.5px;
   background: var(--foreground);
   box-shadow: 0 0 10px color-mix(in oklab, var(--foreground) 45%, transparent);
-}
-
-.desktop-main[data-slot] {
-  background: transparent;
-  padding-top: var(--desktop-titlebar-height);
 }
 
 /* Home: one greeting and one field, centred slightly above the middle. */
@@ -1111,7 +936,8 @@ html:not(.dark) [data-surface] {
  * below 520px of content the scene would need type smaller than 6px.
  */
 @container (max-height: 520px) {
-  .desktop-header {
+  /* The home's header; a conversation's band has its own floor (220px, below). */
+  .desktop-header:not([data-sliver]) {
     display: none;
   }
 }
@@ -1165,16 +991,18 @@ html:not(.dark) [data-surface] {
   top: 0;
   left: 0;
   width: 100%;
-  height: min(calc(var(--desktop-titlebar-height) + 56px), 24cqh);
-  justify-content: flex-end;
+  /* From the window's top edge, behind the tabs, so the art and the toolbar
+     read as one band rather than a bar stacked on a picture. */
+  height: min(calc(var(--desktop-titlebar-height) + 150px), 36cqh);
+  justify-content: center;
   overflow: clip;
-  opacity: 0.38;
-  filter: saturate(0.7);
+  opacity: 0.56;
+  filter: saturate(0.85);
   pointer-events: none;
   transition: opacity var(--desktop-base) ease;
   mask-image:
-    linear-gradient(to right, transparent, black 12%, black 88%, transparent),
-    linear-gradient(to bottom, black 20%, transparent);
+    linear-gradient(to right, transparent, black 8%, black 92%, transparent),
+    linear-gradient(to bottom, black 35%, rgb(0 0 0 / 45%) 70%, transparent);
   mask-composite: intersect;
 }
 
@@ -1202,16 +1030,14 @@ html:not(.dark) [data-surface] {
 .split-panes-grid[data-split-multi]
   .workspace-pane:not([data-focused])
   .desktop-header[data-sliver] {
-  opacity: 0.24;
+  opacity: 0.3;
 }
 
 /*
  * In the window's corner, with nothing beside it, the band begins after the
- * window's controls, as the pane's header does: nothing of it is drawn
- * beneath them, and its left fade starts where they end — and so where a
- * drag's preview would put it (`data-drag-corner`). While panes travel
- * it waits out of sight (`panes.css`), so a pane leaving the corner does not
- * carry the band under the controls on its way.
+ * window's controls: it runs up behind the tabs, but nothing of it is drawn
+ * beneath the traffic lights (ADR 238), and its left fade starts where they
+ * end — and so where a drag's preview would put it (`data-drag-corner`).
  */
 .workspace[data-panes-alone]
   .workspace-pane:is(
@@ -1219,7 +1045,7 @@ html:not(.dark) [data-surface] {
     [data-drag-corner="yes"]
   )
   .desktop-header[data-sliver] {
-  left: calc(var(--desktop-titlebar-safe-start) - var(--desktop-gutter));
+  left: var(--desktop-titlebar-safe-start);
   width: auto;
   right: 0;
 }
@@ -1912,109 +1738,10 @@ html:not(.dark) .desktop-tooltip {
   stroke-width: 2.2;
 }
 
-.desktop-sidebar [data-slot="sidebar-content"] {
-  min-width: 150px;
-}
-
-.desktop-split[data-settled] > [data-slot="split-view-panel"] {
-  transition: flex-grow 340ms var(--desktop-ease);
-}
-
-.desktop-split:has([data-resizing])
-  > [data-slot="split-view-panel"]:not([data-collapsed]) {
-  transition: none;
-}
-
-/* The panes carry their own edges; the separator is only a hit target and a glow. */
-.desktop-sidebar-edge[data-slot="split-view-separator"] {
-  background: transparent;
-  box-shadow: none;
-}
-
-/* Keep the hit target intact; this separate layer lights only near the pointer. */
-/*
- * The glow runs along the straight part of a pane's rim only: it stops where
- * the rounded corners begin, so it never draws a square edge past a curve.
- */
-.desktop-sidebar-edge[data-slot="split-view-separator"]::before {
-  --edge-inset: calc(var(--desktop-gutter) + var(--desktop-radius));
-  content: "";
-  position: absolute;
-  inset: var(--edge-inset) -3px;
-  pointer-events: none;
-  background: radial-gradient(
-    ellipse 3px 90px at 50% calc(var(--edge-glow-y, 50%) - var(--edge-inset)),
-    color-mix(in oklab, var(--desktop-light-edge) 55%, transparent) 0%,
-    color-mix(in oklab, var(--desktop-light-edge) 14%, transparent) 45%,
-    transparent 100%
-  );
-  opacity: 0;
-  transition: opacity var(--desktop-fast) ease;
-}
-
-.desktop-sidebar-edge[data-slot="split-view-separator"]:is(
-    :hover,
-    :focus-visible,
-    [data-resizing]
-  )::before {
-  opacity: 1;
-}
-
 /* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
-:root[data-motion="reduced"]
-  .desktop-split[data-settled]
-  > [data-slot="split-view-panel"],
-:root[data-motion="reduced"]
-  .desktop-sidebar-edge[data-slot="split-view-separator"]::before,
-:root[data-motion="reduced"] .desktop-glass[data-slot="sidebar"],
-:root[data-motion="reduced"] .desktop-peek {
-  transition: none;
-}
 :root[data-motion="reduced"] .desktop-ambient::before,
 :root[data-motion="reduced"] .desktop-ambient::after,
 :root[data-motion="reduced"] .desktop-home-inner,
-:root[data-motion="reduced"] .desktop-popover[data-state="open"],
-:root[data-motion="reduced"] [data-right-maximized] .desktop-glass[data-slot="sidebar"] {
+:root[data-motion="reduced"] .desktop-popover[data-state="open"] {
   animation: none;
-}
-
-/* Fill the window without changing measured panel widths or saved layout. */
-[data-right-maximized] .desktop-split > :not(#right) {
-  visibility: hidden;
-}
-
-[data-right-maximized] .desktop-split > #right {
-  overflow: visible;
-}
-
-[data-right-maximized] .desktop-right-content {
-  position: fixed;
-  inset: 0;
-  z-index: 15;
-}
-
-/*
- * Maximized, the panel becomes the window rather than a card floating in it:
- * no inset, no rim, no corners, so nothing frames the titlebar controls. The
- * history arrows have nothing to do here and step aside.
- */
-[data-right-maximized] #right .desktop-glass[data-slot="sidebar"] {
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  border-radius: 0;
-  box-shadow: none;
-  background: var(--desktop-pane-fill);
-  animation: desktop-fill 300ms var(--desktop-ease);
-}
-
-@keyframes desktop-fill {
-  from {
-    opacity: 0.4;
-    transform: scale(0.985);
-  }
-}
-
-[data-right-maximized] [data-slot="app-shell-titlebar-navigation"] {
-  visibility: hidden;
 }

@@ -41,6 +41,19 @@ export interface WidgetHost {
    * host runs the one registered last before the host's own.
    */
   onEscape(stepBack: () => void): () => void
+  /**
+   * Names where the view is inside itself — a detail it opened — and its way
+   * back, which the widget's chrome shows after the widget's own name, the
+   * one breadcrumb; `null` back at its top. Where there is no chrome (a card
+   * in a message), nothing.
+   */
+  crumb?(step: WidgetCrumb | null): void
+}
+
+/** A step inside a widget, as its chrome names it. */
+export interface WidgetCrumb {
+  readonly label: string
+  readonly back: () => void
 }
 
 /** What a view is given: the widget's id, where it is drawn, the host, and the place's context. */

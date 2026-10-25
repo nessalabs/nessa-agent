@@ -262,7 +262,7 @@ export const settingsEntries = [
     id: "workspace-layout",
     tab: "layout",
     label: "Layout",
-    keywords: "columns sidebar classic",
+    keywords: "columns sidebar",
   },
   {
     id: "show-session-list",
@@ -449,8 +449,6 @@ export const settingsEntries = [
   {
     id: "side-rail",
     tab: "experimental",
-    // Classic has no workspace shell to stand beside.
-    layouts: ["columns", "sidebar"],
     label: "Side rail",
     detail: "A strip at the window's edge for places beside Agents.",
     keywords: "rail plugins places apps strip",
@@ -503,6 +501,11 @@ export function settingsCategory(id: SettingsCategoryId): Category {
     settingsCategories.find((category) => category.id === id),
     `category ${id}`,
   )
+}
+
+/** Whether `value` names one of Settings' tabs: what an opening may ask for. */
+export function isSettingsTab(value: unknown): value is SettingsTabId {
+  return typeof value === "string" && tabs.has(value as SettingsTabId)
 }
 
 export function settingsTab(id: SettingsTabId): SettingsTab {

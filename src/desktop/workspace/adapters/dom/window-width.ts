@@ -22,11 +22,18 @@ export function useFitOnResize(
   windowWidth: number,
   columns: number,
   fit: (windowWidth: number) => void,
+  /**
+   * False while something covers the workspace — a side rail item's full
+   * view: nothing is fitted under it, and uncovered, only a width or column
+   * count that changed meanwhile is fitted.
+   */
+  active = true,
 ) {
   const latest = useRef(fit)
   latest.current = fit
   const seen = useRef<{ width: number; columns: number } | null>(null)
   useLayoutEffect(() => {
+    if (!active) return
     const previous = seen.current
     seen.current = { width: windowWidth, columns }
     if (previous === null || previous.width !== windowWidth) {
@@ -36,5 +43,5 @@ export function useFitOnResize(
     if (previous.columns === columns) return
     const id = requestAnimationFrame(() => latest.current(windowWidth))
     return () => cancelAnimationFrame(id)
-  }, [windowWidth, columns])
+  }, [windowWidth, columns, active])
 }

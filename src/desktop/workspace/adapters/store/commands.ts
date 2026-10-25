@@ -34,6 +34,7 @@ export const {
   toggleShowAll,
   toggleSidebar,
   toggleSessionList,
+  searchList,
   resizeSidebar,
   resizeSessionList,
   fitToWindow,
@@ -48,6 +49,9 @@ export const {
   deleteAsked,
   deleteClosed,
   arrangementShown,
+  tabSwitched: switchTab,
+  tabSplitOff: splitOffTab,
+  sessionWalked: walkToSession,
 } = workspaceActions
 
 export type WorkspaceCommand<Result = void> = ThunkAction<
@@ -63,6 +67,8 @@ export {
   canOpenBeside,
   closeInFront,
   closePane,
+  closeSessionTab,
+  closeTabItem,
   commitDrop,
   dropSession,
   fitPanes,

@@ -23,20 +23,7 @@
   display: flex;
   flex: 1;
   min-width: 0;
-  padding: var(--desktop-gutter) var(--desktop-gutter) var(--desktop-gutter)
-    var(--workspace-chat-lead);
-  background: var(--desktop-pane-fill);
-  box-shadow: inset 1px 0 0 var(--desktop-rim);
-}
-
-html:not(.dark) .workspace-chat {
-  background: color-mix(in oklab, var(--background) 60%, white);
-}
-
-/* With nothing to its left, the surface is the whole window, the panes a gutter in from its edge. */
-.workspace[data-panes-alone] .workspace-chat {
-  --workspace-chat-lead: var(--desktop-gutter);
-  box-shadow: none;
+  padding: 0;
 }
 
 .workspace-pane {
@@ -44,10 +31,12 @@ html:not(.dark) .workspace-chat {
   min-width: 0;
   flex-direction: column;
   container: workspace-pane / size;
-  /* The lifted slot's corners (below); at rest a pane draws no edge of its own. */
-  border-radius: var(--desktop-radius);
+  /* The top row runs up behind the titlebar, its content starting below it. */
+  padding-top: calc(max(0, 1 - var(--ri)) * var(--desktop-titlebar-height));
+  /* No edge of its own: the line between panes is the edge in their gutter
+     (`split-panes.css`), so there is one, not two. */
+  background: transparent;
   overflow: hidden;
-  transition: opacity var(--desktop-base) ease;
 }
 
 /*
@@ -108,16 +97,7 @@ html:not(.dark) .workspace-chat {
 
 /* ——— The pane's header ——— */
 
-/*
- * The session's mark, title and state, and nothing else until the pointer is
- * in the pane. Its row lines up with the window controls.
- */
-/*
- * The header is the pane's titlebar row, level with the window's controls;
- * what follows it begins below the titlebar's height, wherever the pane is
- * and wherever it is sliding — so a transcript scrolled, a narrow pane's
- * heading, or a home's scene never passes under the window's controls.
- */
+/* Pane controls sit inside the card, below the window's navigation row. */
 /* Above the body, whose home header picture reaches up behind it. */
 .workspace-pane-header {
   position: relative;
@@ -125,10 +105,6 @@ html:not(.dark) .workspace-chat {
   display: flex;
   height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
   flex: none;
-  margin-bottom: calc(
-    var(--desktop-titlebar-height) - var(--desktop-gutter) - var(--desktop-control-size) -
-      2 * var(--desktop-control-inset)
-  );
   align-items: center;
   gap: 8px;
   padding: var(--desktop-control-inset) var(--desktop-control-inset)
@@ -147,21 +123,6 @@ html:not(.dark) .workspace-chat {
 
 .split-panes-grid[data-split-multi] .workspace-pane-header:active {
   cursor: grabbing;
-}
-
-/*
- * In the window's corner, with nothing beside it, the header steps past the
- * window controls — and so it does where a drag's preview would put it
- * (`data-drag-corner`, `split-panes/adapters/dom/drag.ts`), and not where it
- * would leave.
- */
-.workspace[data-panes-alone]
-  .workspace-pane:is(
-    [data-split-corner]:not([data-drag-corner="no"]),
-    [data-drag-corner="yes"]
-  )
-  .workspace-pane-header {
-  padding-left: var(--desktop-titlebar-safe-start);
 }
 
 .split-panes-grid[data-split-multi]
@@ -280,9 +241,9 @@ html:not(.dark) .workspace-chat {
     var(--workspace-chat-lead) * var(--workspace-edge-first) + var(--desktop-gutter) / 2 *
       (1 - var(--workspace-edge-first))
   );
+  /* The panes reach the surface's right edge: there it stops with them. */
   --workspace-edge-end: calc(
-    var(--desktop-gutter) * var(--workspace-edge-last) + var(--desktop-gutter) / 2 *
-      (1 - var(--workspace-edge-last))
+    var(--desktop-gutter) / 2 * (1 - var(--workspace-edge-last))
   );
 }
 
@@ -294,10 +255,17 @@ html:not(.dark) .workspace-chat {
 }
 
 .workspace-chat .split-panes-pane-edge[data-axis="x"]::after {
-  top: calc(-1 * var(--workspace-edge-start));
-  bottom: calc(-1 * var(--workspace-edge-end));
+  /* The window's height, as the panes beside it run: up behind the tabs,
+     where it fades out so no rule crosses them, and down to the bottom. */
+  top: 0;
+  bottom: 0;
   left: calc(50% - 0.5px);
   width: 1px;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent calc(var(--desktop-titlebar-height) * 0.6),
+    black calc(var(--desktop-titlebar-height) + 48px)
+  );
 }
 
 .workspace-chat .split-panes-pane-edge[data-axis="y"]::after {
@@ -346,19 +314,24 @@ html:not(.dark) .workspace-chat {
 .workspace-widget-window {
   position: absolute;
   z-index: 2;
-  top: var(--desktop-gutter);
-  right: var(--desktop-gutter);
-  bottom: var(--desktop-gutter);
-  left: var(--workspace-chat-lead);
+  /* The chat surface itself, as a pane is: up behind the tabs to the
+     window's top, its header below them, on the window's own ground and
+     light — no slab with an edge of its own. The panes beneath are hidden
+     while it is up (`[data-window-widget]`, below), so nothing shows through. */
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   display: flex;
   min-width: 0;
   flex-direction: column;
+  padding-top: var(--desktop-titlebar-height);
+  background: transparent;
   overflow: hidden;
 }
 
-/* With nothing to its left, its header steps past the window's controls, as a corner pane's does. */
-.workspace[data-panes-alone] .workspace-widget-window .workspace-pane-header {
-  padding-left: var(--desktop-titlebar-safe-start);
+.workspace[data-panes-alone] .workspace-widget-window {
+  left: 0;
 }
 
 .workspace-widget-window:hover .workspace-pane-actions {

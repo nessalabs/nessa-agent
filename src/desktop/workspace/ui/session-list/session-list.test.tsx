@@ -92,7 +92,9 @@ it("draws the search, the captions and the rows with the kit", async () => {
   const caption = host.querySelector("[data-slot=group-header]")
   expect(caption).not.toBeNull()
   expect(caption?.getAttribute("aria-hidden")).toBe("true")
-  expect(caption?.closest("[role=group]")?.getAttribute("aria-label")).toMatch(/ \d+$/)
+  expect(caption?.closest("[data-list-group]")?.getAttribute("aria-label")).toMatch(
+    / \d+$/,
+  )
   expect(host.querySelectorAll(".desktop-list-row").length).toBeGreaterThan(0)
   const row = host.querySelector("[data-session-row]")
   expect(row?.getAttribute("role")).toBe("option")
@@ -210,7 +212,7 @@ it("a row's More menu holds what the row can do, less the ways to open it, and R
   const store = await shown(source)
   const { row, id } = quietRow()
   await more(row)
-  expect(menuWords()).toEqual(["Rename", "Pin to Sidebar", "Fork", "Archive", "Delete…"])
+  expect(menuWords()).toEqual(["Rename", "Pin", "Fork", "Archive", "Delete…"])
   expect(row.getAttribute("data-actions")).toBe("true")
 
   // Rename edits the title in place: Escape keeps what was there, ↩ what was typed.
@@ -262,7 +264,7 @@ it("a More menu closed on an item that asks nothing more gives focus to its row,
   await shown(source)
   const { row, id } = quietRow()
   await more(row)
-  await choose("Pin to Sidebar")
+  await choose("Pin")
   expect(menuWords()).toEqual([])
   await focusSettled((row) => expect(row).toBe(id))
 })
@@ -303,7 +305,9 @@ it("a rename outlives its row being drawn again in another group", async () => {
   })
   const moved = host.querySelector<HTMLElement>(`[data-session-row="${id}"]`)
   expect(moved).not.toBe(row)
-  expect(moved?.closest("[role=group]")?.getAttribute("aria-label")).toMatch(/^Running/)
+  expect(moved?.closest("[data-list-group]")?.getAttribute("aria-label")).toMatch(
+    /^Running/,
+  )
   expect(field(moved as HTMLElement)?.value).toBe("Half typed")
   expect(source.calls.some((call) => call[0] === "rename")).toBe(false)
 })
@@ -420,7 +424,7 @@ it("a More menu gives focus back where it was as it opened: another row, or a fi
   const firstId = first.getAttribute("data-session-row")
   await act(async () => first.focus())
   await more(second, true)
-  await choose("Pin to Sidebar")
+  await choose("Pin")
   await focusSettled(() => expect(focusedHere()).toBe(firstId))
 
   const field = document.createElement("input")

@@ -24,12 +24,20 @@ import { selectChrome, selectColumnCount } from "../../adapters/store/selectors"
 export function FoldMark({ root }: { root: RefObject<HTMLElement | null> }) {
   const chrome = usePaintedWithPanes(selectChrome, spareFoldFrame)
   const open = drawn(chrome.sidebar)
+  const was = useRef(open)
   useLayoutEffect(() => {
     const workspace = root.current
     const frame = workspace?.closest<HTMLElement>(".workspace-window")
     const value = open ? "open" : "closed"
     workspace?.setAttribute("data-sidebar", value)
     frame?.setAttribute("data-sidebar", value)
+    // Only a sidebar this change folds is held in the row until the new
+    // boxes paint (`data-spare-held`): one already folded stays out of it,
+    // or a split beside it would shove every pane over for two frames.
+    // The grid takes the mark away with its hold, in the same step (`split-panes.tsx`).
+    const folding = was.current && !open && workspace?.hasAttribute("data-spare-held")
+    was.current = open
+    if (folding) workspace?.setAttribute("data-folding", "")
   }, [open, root])
   return null
 }
@@ -93,17 +101,24 @@ export function ColumnFit({
   windowWidth,
   sidebarWidth,
   listWidth,
+  covered = false,
 }: {
   windowWidth: number
   sidebarWidth: number
   listWidth: number
+  /** A side rail item's full view is over the workspace: nothing is fitted beneath it. */
+  covered?: boolean
 }) {
   const dispatch = useWorkspaceDispatch()
   const columns = useWorkspaceSelector(selectColumnCount)
-  useFitOnResize(windowWidth, columns, (width) =>
-    dispatch(
-      fitToWindow({ windowWidth: width, sidebarWidth, sessionListWidth: listWidth }),
-    ),
+  useFitOnResize(
+    windowWidth,
+    columns,
+    (width) =>
+      dispatch(
+        fitToWindow({ windowWidth: width, sidebarWidth, sessionListWidth: listWidth }),
+      ),
+    !covered,
   )
   return null
 }
