@@ -65,6 +65,42 @@ describe("the person's channels", () => {
     await expect(api.list()).rejects.toThrow("Invalid channel list response")
   })
 
+  it("reads every page of a list the gateway cut, and refuses a cursor that goes nowhere", async () => {
+    const later = { ...made, channelId: "ch_bbbbbbbbbb", name: "later" }
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        channels: [conversations, made],
+        complete: false,
+        cursor: made.channelId,
+      })
+      .mockResolvedValueOnce({ channels: [later], complete: true })
+    const api = createChannelApi({ request })
+    expect(await api.list()).toEqual({
+      channels: [conversations, made, later],
+      complete: true,
+    })
+    expect(request).toHaveBeenNthCalledWith(1, "channel.list", {})
+    expect(request).toHaveBeenNthCalledWith(2, "channel.list", { after: made.channelId })
+    for (const pages of [
+      // The same cursor again would never end.
+      [
+        { channels: [made], complete: false, cursor: made.channelId },
+        { channels: [], complete: false, cursor: made.channelId },
+      ],
+      // A cut page with no cursor, a whole one with one, and a default cursor.
+      [{ channels: [made], complete: false }],
+      [{ channels: [made], complete: true, cursor: made.channelId }],
+      [{ channels: [conversations], complete: false, cursor: "default" }],
+    ]) {
+      const answers = vi.fn()
+      for (const page of pages) answers.mockResolvedValueOnce(page)
+      await expect(createChannelApi({ request: answers }).list()).rejects.toThrow(
+        "Invalid channel list response",
+      )
+    }
+  })
+
   it("reads a refusal's code when this build knows it", () => {
     expect(channelRefusal(new NessaRpcError("channel_folder_refused", "refused"))).toBe(
       "channel_folder_refused",

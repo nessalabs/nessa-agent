@@ -7535,7 +7535,7 @@
           "minLength": 1,
           "maxLength": 320,
           "x-utf8MaxBytes": 320,
-          "description": "What the channel is called: trimmed, 1 to 80 characters, no control characters."
+          "description": "What the channel is called: trimmed, 1 to x-channelRules.maxNameChars characters, no control characters."
         },
         "folder": {
           "type": "string",
@@ -7589,21 +7589,43 @@
       "properties": { "channel": { "$ref": "#/$defs/Channel" } },
       "required": ["channel"]
     },
+    "ChannelListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Which page of the caller's channels to list (channel.list). Empty for the first.",
+      "required": [],
+      "properties": {
+        "after": {
+          "type": "string",
+          "minLength": 13,
+          "maxLength": 13,
+          "pattern": "^ch_[a-z2-7]{10}$",
+          "description": "The cursor an earlier page returned: list the channels made after that one. An id the caller has no channel under lists nothing."
+        }
+      }
+    },
     "ChannelListResult": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The caller's channels (channel.list): the default channel first, then the rest in the order they were made.",
+      "description": "One page of the caller's channels (channel.list): the default channel first on the first page, then the rest in the order they were made.",
       "properties": {
         "channels": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "maxItems": 1001,
           "items": { "$ref": "#/$defs/Channel" },
-          "description": "The caller's channels, the default one first, as many as fit one frame."
+          "description": "This page's channels, as many as fit one frame. Only the first page holds the default channel, and only when the gateway has a workspace."
         },
         "complete": {
           "type": "boolean",
-          "description": "False when the frame bound left some out: the later ones made."
+          "description": "False when the frame bound left some out: the later ones made, listed from cursor."
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 13,
+          "maxLength": 13,
+          "pattern": "^ch_[a-z2-7]{10}$",
+          "description": "Present exactly when complete is false: the last channel on this page, to send back as after for the next one."
         }
       },
       "required": ["channels", "complete"]

@@ -3034,7 +3034,7 @@ export interface Channel {
 export interface ChannelCreateParams {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
-  /** What the channel is called: trimmed, 1 to 80 characters, no control characters. */
+  /** What the channel is called: trimmed, 1 to x-channelRules.maxNameChars characters, no control characters. */
   name: string
   /** An existing absolute folder the channel's agents work in. Omitted, the gateway makes one under its channels folder, named by the channel's id. */
   folder?: string
@@ -3053,12 +3053,19 @@ export interface ChannelCreateParams {
 export interface ChannelCreateResult {
   channel: Channel
 }
-/** The caller's channels (channel.list): the default channel first, then the rest in the order they were made. */
+/** Which page of the caller's channels to list (channel.list). Empty for the first. */
+export interface ChannelListParams {
+  /** The cursor an earlier page returned: list the channels made after that one. An id the caller has no channel under lists nothing. */
+  after?: string
+}
+/** One page of the caller's channels (channel.list): the default channel first on the first page, then the rest in the order they were made. */
 export interface ChannelListResult {
-  /** The caller's channels, the default one first, as many as fit one frame. */
+  /** This page's channels, as many as fit one frame. Only the first page holds the default channel, and only when the gateway has a workspace. */
   channels: Channel[]
-  /** False when the frame bound left some out: the later ones made. */
+  /** False when the frame bound left some out: the later ones made, listed from cursor. */
   complete: boolean
+  /** Present exactly when complete is false: the last channel on this page, to send back as after for the next one. */
+  cursor?: string
 }
 /** Tell the gateway what this connection's desktop window shows now (workspace.publish), so the person's agents can read it with the read_window tool. Each publication replaces this connection's previous one; one with a lower revision than the one held is not applied. A publication with no window withdraws it. The gateway keeps a window only while its connection is open: a closed connection withdraws it, and a window that connects again publishes again, under the same windowId, which replaces whatever an older connection of that window still holds. */
 export interface WorkspacePublishParams {
@@ -3122,6 +3129,15 @@ export const mcpServerRules = {
   maxArgs: 64,
   argMaxBytes: 8192,
   environmentNameMaxBytes: 256,
+} as const
+/** A channel's bounds, as x-channelRules publishes them: at most maxChannels per person; a name of 1 to maxNameChars characters once trimmed; notes of at most maxNotesBytes bytes; at most maxResources files and folders of at most maxResourceBytes bytes of paths in all; each path at most maxPathBytes bytes. The gateway refuses past them (invalid_request, channel_limit_reached); a client may refuse early by reading these. */
+export const channelRules = {
+  maxChannels: 1000,
+  maxNameChars: 80,
+  maxNotesBytes: 8192,
+  maxResources: 32,
+  maxResourceBytes: 16384,
+  maxPathBytes: 4096,
 } as const
 /** Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift. */
 export const bounds = {

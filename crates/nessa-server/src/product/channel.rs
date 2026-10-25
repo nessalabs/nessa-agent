@@ -9,20 +9,19 @@
 //! ```
 use super::socket::{failure, success};
 use super::state::ProductRouteState;
-use nessa_auth::application::session::AuthenticatedSession;
 use crate::conversation::application::{ChannelError, ChannelListing, FolderRefusal};
 use crate::conversation::domain::{
     Channel, ChannelDefaults, ChannelId, ChannelName, ChannelNotes, ChannelPath, ChannelRequest,
     ChannelResources,
 };
+use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_protocol::product::generated::{
     ApprovalMode, Channel as WireChannel, ChannelCreateParams, ChannelCreateResult,
-    ChannelErrorCode, ChannelListResult,
+    ChannelErrorCode, ChannelListParams, ChannelListResult,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, MAX_PAYLOAD_BYTES};
-use serde_json::json;
 use std::path::PathBuf;
 
 /// What the default channel is called in a list. It is never stored: its
@@ -35,7 +34,10 @@ pub(super) async fn dispatch(
     frame: RequestFrame,
 ) -> OutgoingMessage {
     let Some(service) = state.conversations.as_ref() else {
-        return failure(&frame.id, ChannelErrorCode::ConversationsNotConfigured.as_str());
+        return failure(
+            &frame.id,
+            ChannelErrorCode::ConversationsNotConfigured.as_str(),
+        );
     };
     match frame.method.as_str() {
         "channel.create" => {
@@ -60,12 +62,25 @@ pub(super) async fn dispatch(
             }
         }
         "channel.list" => {
-            if frame.params != json!({}) && !frame.params.is_null() {
-                return failure(&frame.id, ChannelErrorCode::InvalidRequest.as_str());
-            }
+            let params = if frame.params.is_null() {
+                ChannelListParams { after: None }
+            } else {
+                match serde_json::from_value::<ChannelListParams>(frame.params) {
+                    Ok(params) => params,
+                    Err(_) => return failure(&frame.id, ChannelErrorCode::InvalidRequest.as_str()),
+                }
+            };
+            let after = match params.after.as_deref().map(ChannelId::new) {
+                None => None,
+                Some(Ok(id)) if !id.is_default() => Some(id),
+                Some(_) => return failure(&frame.id, ChannelErrorCode::InvalidRequest.as_str()),
+            };
             let caller = super::conversation::caller(session, frame.id.clone());
             match service.list_channels(&caller).await {
-                Ok(listing) => success(&frame.id, &fitted(listed(listing), &frame.id)),
+                Ok(listing) => success(
+                    &frame.id,
+                    &fitted(listed(listing, after.as_ref()), &frame.id),
+                ),
                 Err(error) => refused(&frame.id, error),
             }
         }
@@ -125,34 +140,51 @@ fn wire_channel(channel: &Channel) -> WireChannel {
     }
 }
 
-/// The default channel, then the stored ones. With no workspace configured
-/// the default channel has no folder to show, and is left out.
-fn listed(listing: ChannelListing) -> ChannelListResult {
-    let default = listing.default_folder.map(|folder| WireChannel {
-        channel_id: ChannelId::DEFAULT.to_owned(),
-        name: DEFAULT_NAME.to_owned(),
-        folder,
-        folder_made: false,
-        agent: None,
-        model: None,
-        approval_mode: ApprovalMode::Ask,
-        created_at_ms: 0,
-    });
-    ChannelListResult {
-        channels: default
+/// The default channel, then the stored ones; after `after`, only the stored
+/// ones made after it. With no workspace configured the default channel has
+/// no folder to show, and is left out.
+fn listed(listing: ChannelListing, after: Option<&ChannelId>) -> ChannelListResult {
+    let channels: Vec<WireChannel> = match after {
+        Some(after) => listing
+            .channels
+            .iter()
+            .skip_while(|channel| channel.id() != after)
+            .skip(1)
+            .map(wire_channel)
+            .collect(),
+        None => listing
+            .default_folder
+            .map(|folder| WireChannel {
+                channel_id: ChannelId::DEFAULT.to_owned(),
+                name: DEFAULT_NAME.to_owned(),
+                folder,
+                folder_made: false,
+                agent: None,
+                model: None,
+                approval_mode: ApprovalMode::Ask,
+                created_at_ms: 0,
+            })
             .into_iter()
             .chain(listing.channels.iter().map(wire_channel))
             .collect(),
+    };
+    ChannelListResult {
+        channels,
         complete: true,
+        cursor: None,
     }
 }
 
-/// As many channels as one frame holds, saying so when some were left out:
-/// a response past the frame closes the socket.
+/// As many channels as one frame holds. When some are left out, the page
+/// says so and names its last channel as the cursor the next page starts
+/// after: a response past the frame closes the socket. One stored channel
+/// at its largest fits a frame beside the default one, so a cut page always
+/// ends on a stored channel.
 fn fitted(mut list: ChannelListResult, request_id: &str) -> ChannelListResult {
     let empty = ChannelListResult {
         channels: Vec::new(),
         complete: false,
+        cursor: Some(format!("ch_{}", "a".repeat(10))),
     };
     let Ok(empty) = success(request_id, &empty).to_wire_text() else {
         return list;
@@ -172,6 +204,11 @@ fn fitted(mut list: ChannelListResult, request_id: &str) -> ChannelListResult {
     if keep < list.channels.len() {
         list.channels.truncate(keep);
         list.complete = false;
+        list.cursor = list
+            .channels
+            .last()
+            .map(|channel| channel.channel_id.clone())
+            .filter(|id| id != ChannelId::DEFAULT);
     }
     list
 }

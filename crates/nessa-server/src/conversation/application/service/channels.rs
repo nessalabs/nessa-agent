@@ -21,16 +21,15 @@
 //! configured workspace.
 use super::{ConversationCaller, ConversationError, ConversationService};
 use crate::conversation::application::{
-    ConversationFuture,
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
-    RequestShape,
+    ConversationFuture, RequestShape,
 };
 use crate::conversation::domain::{
-    Channel, ChannelFolder, ChannelId, ChannelParts, ChannelPath, ChannelRequest,
-    ChannelResources, MAX_CHANNELS_PER_OWNER,
+    Channel, ChannelFolder, ChannelId, ChannelParts, ChannelPath, ChannelRequest, ChannelResources,
+    MAX_CHANNELS_PER_OWNER,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
@@ -62,8 +61,10 @@ pub trait ChannelStore: Send + Sync {
         channel: &ChannelId,
     ) -> ConversationFuture<'_, ()>;
     /// The stored channel `conversation` is in; `None` is the default one.
-    fn channel_of(&self, conversation: &ConversationId)
-        -> ConversationFuture<'_, Option<ChannelId>>;
+    fn channel_of(
+        &self,
+        conversation: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ChannelId>>;
     /// The stored channels these conversations are in; one in the default
     /// channel is left out.
     fn channels_of(
@@ -239,30 +240,47 @@ impl ConversationService {
         ) else {
             return Err(ChannelError::NotConfigured);
         };
-        if !self.inner.agents.configured.contains(&request.defaults.agent) {
+        // A retry is answered from what was kept, even when what it named
+        // has since changed: a file it attached may be gone, or its agent no
+        // longer configured, and the channel was still made.
+        let kept = store
+            .by_request(&caller.organization_id, &caller.principal_id, &request_id)
+            .await?;
+        if kept.is_none()
+            && !self
+                .inner
+                .agents
+                .configured
+                .contains(&request.defaults.agent)
+        {
             return Err(ChannelError::InvalidInput);
         }
         // Resolved before anything is compared or kept, so a retry naming a
         // folder by another spelling of the same place is the same request.
+        // For a retry, a path that no longer resolves is compared as named.
         let id = channel_id_for(&caller, &request_id);
         let checking = folders.clone();
         let asked = request.clone();
+        let retry = kept.is_some();
         let (folder, resources) = tokio::task::spawn_blocking(move || {
             let folder = asked
                 .folder
                 .as_ref()
-                .map(|chosen| checking.accept_folder(chosen))
+                .map(|chosen| match checking.accept_folder(chosen) {
+                    Err(_) if retry => Ok(chosen.clone()),
+                    accepted => accepted,
+                })
                 .transpose()
                 .map_err(ChannelError::Folder)?;
             let resources = asked
                 .resources
                 .paths()
                 .iter()
-                .map(|path| {
-                    checking.accept_resource(path).map_err(|refusal| match refusal {
-                        FolderRefusal::Unavailable => ChannelError::Storage,
-                        _ => ChannelError::ResourceNotFound,
-                    })
+                .map(|path| match checking.accept_resource(path) {
+                    Err(_) if retry => Ok(path.clone()),
+                    Err(FolderRefusal::Unavailable) => Err(ChannelError::Storage),
+                    Err(_) => Err(ChannelError::ResourceNotFound),
+                    Ok(resolved) => Ok(resolved),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok::<_, ChannelError>((folder, resources))
@@ -270,17 +288,13 @@ impl ConversationService {
         .await
         .map_err(|_| ChannelError::Unavailable)??;
         // Two spellings of one file are one resource.
-        let resources =
-            ChannelResources::new(resources).map_err(|_| ChannelError::InvalidInput)?;
+        let resources = ChannelResources::new(resources).map_err(|_| ChannelError::InvalidInput)?;
         let resolved = ChannelRequest {
             folder,
             resources,
             ..request
         };
-        if let Some(kept) = store
-            .by_request(&caller.organization_id, &caller.principal_id, &request_id)
-            .await?
-        {
+        if let Some(kept) = kept {
             return if kept.made_of(&resolved) {
                 Ok(kept)
             } else {
@@ -400,6 +414,33 @@ impl ConversationService {
         }
     }
 
+    /// The approval preset a creation starts in when it names none: its
+    /// channel's, or Ask outside one. A check of the creation (an owner
+    /// phone's) asks this, so it judges the preset the conversation gets.
+    /// A channel's defaults never change once made, so the answer holds
+    /// until the creation applies it.
+    pub async fn creation_default_mode(
+        &self,
+        caller: &ConversationCaller,
+        channel: Option<&ChannelId>,
+    ) -> Result<ConversationApprovalMode, ConversationError> {
+        Ok(Self::starting_mode(
+            None,
+            self.channel_for_creation(caller, channel).await?.as_ref(),
+        ))
+    }
+
+    /// What a creation starts in: the preset it asked for, else its
+    /// channel's, else Ask.
+    pub(super) fn starting_mode(
+        requested: Option<ConversationApprovalMode>,
+        channel: Option<&Channel>,
+    ) -> ConversationApprovalMode {
+        requested
+            .or(channel.map(|channel| channel.defaults().mode))
+            .unwrap_or_else(Self::default_creation_approval_mode)
+    }
+
     /// Put a conversation being created in `channel`, before its record
     /// exists, so it never exists in the wrong place.
     pub(super) async fn place_in_channel(
@@ -446,6 +487,29 @@ impl ConversationService {
             Some(store) => store.channel_of(id).await,
             None => Ok(None),
         }
+    }
+
+    /// Where a thread an agent starts from `source` begins: in `source`'s
+    /// channel, unless it runs on another host, and there on the preset
+    /// `source` is on now, never the channel's default. A person who turned a
+    /// conversation down to Ask has not let its agent start Full threads in
+    /// the same folder. Outside a channel the thread starts as any creation
+    /// that names no preset does.
+    pub(crate) async fn thread_start(
+        &self,
+        source: &ConversationId,
+        elsewhere: bool,
+    ) -> Result<(Option<ChannelId>, Option<ConversationApprovalMode>), ConversationError> {
+        if elsewhere {
+            return Ok((None, None));
+        }
+        let Some(channel) = self.channel_id_of(source).await? else {
+            return Ok((None, None));
+        };
+        let record = super::load_conversation(self.inner.metadata.as_ref(), source)
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        Ok((Some(channel), Some(record.approval_mode())))
     }
 
     /// The stored channels of the listed conversations.

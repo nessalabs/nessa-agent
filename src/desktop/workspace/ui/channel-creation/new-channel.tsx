@@ -56,6 +56,7 @@ import {
   failureStep,
   failureText,
   homeShort,
+  nameFits,
   notesFit,
   pathName,
   type ChannelDraft,
@@ -117,6 +118,7 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
   const ready = canCreate(draft) && !creating
 
   useCovers(layer)
+  useFocusReturns()
   // Escape cancels and the chord creates, from anywhere in the window but a
   // menu or a popover over it, which takes its own keys. Create asks nothing
   // of a draft it cannot make (`createChannel`).
@@ -196,6 +198,10 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
           <StatusLabel tone="warning" role="status" className="new-channel-notice">
             {failureText(failedAtCreate)}
           </StatusLabel>
+        ) : asking === "name" && !nameFits(draft.name) ? (
+          <StatusLabel tone="warning" role="status" className="new-channel-notice">
+            Names can be up to {channelRules.maxNameChars} characters.
+          </StatusLabel>
         ) : asking === "notes" && !notesFit(draft.notes) ? (
           <StatusLabel tone="warning" role="status" className="new-channel-notice">
             Notes can be up to {channelRules.maxNotesBytes / 1024} KB.
@@ -211,7 +217,6 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
               rows={1}
               placeholder={composerHints[asking]}
               value={asking === "name" ? draft.name : draft.notes}
-              maxLength={asking === "name" ? channelRules.maxNameChars : undefined}
               readOnly={creating}
               onChange={(event) =>
                 dispatch(
@@ -313,6 +318,25 @@ function AnsweredLine({
   )
 }
 
+/**
+ * The keyboard goes back where it was when the flow opened, once it closes:
+ * the + that opened it. WebKit does not focus a clicked button, so with
+ * nothing focused it goes to the first section's +. A channel that opens
+ * focuses its own composer after this.
+ */
+function useFocusReturns() {
+  useLayoutEffect(() => {
+    const active = document.activeElement
+    const opener =
+      active instanceof HTMLElement && active !== document.body
+        ? active
+        : document.querySelector<HTMLElement>(".workspace-section-add")
+    return () => {
+      if (opener?.isConnected) opener.focus({ preventScroll: true })
+    }
+  }, [])
+}
+
 /** What a folded line says of its step. */
 function Answer({ step, draft }: { step: ChannelStep; draft: ChannelDraft }) {
   const { home } = useWorkspaceSelector(selectChannelMaking)
@@ -373,9 +397,12 @@ function Asked({
   return (
     <div className="new-channel-asked" data-step={step}>
       <p className="new-channel-question">{questions[step]}</p>
-      {step === "folder" ? <FolderAnswer flow={flow} /> : null}
-      {step === "model" ? <ModelAnswer flow={flow} /> : null}
-      {step === "resources" ? <ResourcesAnswer flow={flow} /> : null}
+      {/* A Create on its way holds the draft as sent: nothing here changes it. */}
+      <fieldset className="new-channel-answers" disabled={flow.creating}>
+        {step === "folder" ? <FolderAnswer flow={flow} /> : null}
+        {step === "model" ? <ModelAnswer flow={flow} /> : null}
+        {step === "resources" ? <ResourcesAnswer flow={flow} /> : null}
+      </fieldset>
       {failure ? (
         <StatusLabel tone="warning" role="status" className="new-channel-notice">
           {failureText(failure)}

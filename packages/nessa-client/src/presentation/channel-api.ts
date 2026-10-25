@@ -24,7 +24,11 @@ export type ChannelApi = {
    * it made; a different channel under it is refused `channel_request_conflict`.
    */
   create(params: ChannelCreateParams): Promise<Channel>
-  /** The caller's channels, the default one first. */
+  /**
+   * Every one of the caller's channels, the default one first. The gateway
+   * answers a page per frame; this reads each page in turn, so `complete` is
+   * always true on what it returns.
+   */
   list(): Promise<ChannelListResult>
 }
 
@@ -37,21 +41,53 @@ export function createChannelApi(session: RpcRequester): ChannelApi {
       return channel(answer.channel, "Invalid channel create response")
     },
     list: async () => {
-      const answer = await session.request(ProductMethod.ChannelList, {})
-      if (
-        !isRecord(answer) ||
-        !onlyKeys(answer, ["channels", "complete"]) ||
-        !Array.isArray(answer.channels) ||
-        typeof answer.complete !== "boolean"
-      )
-        throw new Error("Invalid channel list response")
-      return {
-        channels: answer.channels.map((value) =>
-          channel(value, "Invalid channel list response"),
-        ),
-        complete: answer.complete,
+      const channels: Channel[] = []
+      let after: string | undefined
+      // Each page past the first holds at least one channel the last did not,
+      // so the walk ends within the most channels an owner may make.
+      for (let page = 0; page <= MAX_CHANNEL_PAGES; page += 1) {
+        const answer = await session.request(
+          ProductMethod.ChannelList,
+          after === undefined ? {} : { after },
+        )
+        const listed = listPage(answer)
+        channels.push(...listed.channels)
+        if (listed.complete) return { channels, complete: true }
+        if (listed.cursor === undefined || listed.cursor === after)
+          throw new Error("Invalid channel list response")
+        after = listed.cursor
       }
+      throw new Error("Invalid channel list response")
     },
+  }
+}
+
+/** One stored channel per page at least, after the default one. */
+const MAX_CHANNEL_PAGES = 1001
+
+function listPage(answer: unknown): ChannelListResult {
+  if (
+    !isRecord(answer) ||
+    !onlyKeys(
+      answer,
+      Object.hasOwn(answer, "cursor")
+        ? ["channels", "complete", "cursor"]
+        : ["channels", "complete"],
+    ) ||
+    !Array.isArray(answer.channels) ||
+    typeof answer.complete !== "boolean" ||
+    // A cursor is there exactly when the page is cut, and names a made channel.
+    answer.complete === Object.hasOwn(answer, "cursor") ||
+    (Object.hasOwn(answer, "cursor") &&
+      (typeof answer.cursor !== "string" || !MADE_CHANNEL_ID.test(answer.cursor)))
+  )
+    throw new Error("Invalid channel list response")
+  return {
+    channels: answer.channels.map((value) =>
+      channel(value, "Invalid channel list response"),
+    ),
+    complete: answer.complete,
+    ...(typeof answer.cursor === "string" ? { cursor: answer.cursor } : {}),
   }
 }
 
@@ -76,6 +112,7 @@ const CHANNEL_KEYS = [
 ] as const
 const MODES = new Set<string>(["ask", "auto", "full"])
 const CHANNEL_ID = /^(default|ch_[a-z2-7]{10})$/
+const MADE_CHANNEL_ID = /^ch_[a-z2-7]{10}$/
 
 function channel(value: unknown, invalid: string): Channel {
   if (!isRecord(value) || !onlyKeys(value, CHANNEL_KEYS)) throw new Error(invalid)
@@ -113,6 +150,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function onlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return (
     Object.keys(value).every((key) => keys.includes(key)) &&
-    keys.every((key) => key in value)
+    keys.every((key) => Object.hasOwn(value, key))
   )
 }

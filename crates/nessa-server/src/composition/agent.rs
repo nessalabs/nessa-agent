@@ -1124,9 +1124,7 @@ pub(super) mod build {
             ),
             None => builder,
         };
-        builder
-            .build()
-            .map_err(|e| RunError::Agent(e.to_string()))
+        builder.build().map_err(|e| RunError::Agent(e.to_string()))
     }
 
     /// Whether everything this agent would launch is on the machine now.

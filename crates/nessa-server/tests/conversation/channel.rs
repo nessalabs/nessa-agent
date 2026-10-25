@@ -40,14 +40,30 @@ fn an_id_is_the_default_or_ch_and_ten_base32_characters() {
         ChannelId::new("ch_abcdefgh27").unwrap().as_str(),
         "ch_abcdefgh27"
     );
-    for refused in ["", "ch_", "ch_abcdefgh2", "ch_abcdefgh278", "ch_ABCDEFGH27", "ch_abcdefgh18", "xx_abcdefgh27"] {
-        assert_eq!(ChannelId::new(refused), Err(ChannelRefusal::Id), "{refused}");
+    for refused in [
+        "",
+        "ch_",
+        "ch_abcdefgh2",
+        "ch_abcdefgh278",
+        "ch_ABCDEFGH27",
+        "ch_abcdefgh18",
+        "xx_abcdefgh27",
+    ] {
+        assert_eq!(
+            ChannelId::new(refused),
+            Err(ChannelRefusal::Id),
+            "{refused}"
+        );
     }
 }
 
 #[test]
 fn a_random_id_reads_back_as_an_id() {
-    for bytes in [[0; 10], [0xff; 10], [7, 31, 32, 63, 64, 95, 128, 200, 255, 1]] {
+    for bytes in [
+        [0; 10],
+        [0xff; 10],
+        [7, 31, 32, 63, 64, 95, 128, 200, 255, 1],
+    ] {
         let id = ChannelId::from_random(bytes);
         assert_eq!(ChannelId::new(id.as_str()).unwrap(), id);
         assert!(!id.is_default());
@@ -88,7 +104,10 @@ fn a_path_is_absolute() {
         Err(ChannelRefusal::Path)
     );
     assert_eq!(
-        ChannelPath::new(PathBuf::from(format!("/{}", "a".repeat(MAX_CHANNEL_PATH_BYTES)))),
+        ChannelPath::new(PathBuf::from(format!(
+            "/{}",
+            "a".repeat(MAX_CHANNEL_PATH_BYTES)
+        ))),
         Err(ChannelRefusal::Path)
     );
 }
@@ -142,7 +161,10 @@ fn a_retry_is_the_same_channel_only_when_it_asks_for_the_same_folder() {
     };
     assert!(made.made_of(&asked));
     asked.defaults.mode = ConversationApprovalMode::Ask;
-    assert!(!made.made_of(&asked), "another default mode is another channel");
+    assert!(
+        !made.made_of(&asked),
+        "another default mode is another channel"
+    );
     asked.defaults.mode = ConversationApprovalMode::Auto;
     asked.folder = Some(path("/data/channels/x"));
     assert!(!made.made_of(&asked), "a chosen folder is not the made one");

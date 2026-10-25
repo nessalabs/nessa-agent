@@ -4,6 +4,7 @@
 use super::*;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::protocol::ResponseFrame;
+use serde_json::json;
 
 fn params(value: serde_json::Value) -> ChannelCreateParams {
     serde_json::from_value(value).unwrap()
@@ -43,7 +44,10 @@ fn a_create_that_is_not_a_channel_is_refused_before_the_service() {
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "resources": ["/a", "/a"]}),
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "notes": "bell\u{7}"}),
     ] {
-        assert!(channel_request(&params(refused.clone())).is_none(), "{refused}");
+        assert!(
+            channel_request(&params(refused.clone())).is_none(),
+            "{refused}"
+        );
     }
 }
 
@@ -74,10 +78,13 @@ fn stored(n: u8, notes: &str) -> Channel {
 
 #[test]
 fn a_list_starts_with_the_default_channel_and_lists_no_notes() {
-    let list = listed(ChannelListing {
-        default_folder: Some("/work/default".into()),
-        channels: vec![stored(1, "private notes")],
-    });
+    let list = listed(
+        ChannelListing {
+            default_folder: Some("/work/default".into()),
+            channels: vec![stored(1, "private notes")],
+        },
+        None,
+    );
     let wire = serde_json::to_value(&list).unwrap();
     assert_eq!(
         wire["channels"][0],
@@ -91,28 +98,84 @@ fn a_list_starts_with_the_default_channel_and_lists_no_notes() {
     assert_eq!(wire["channels"][1]["approvalMode"], "auto");
     assert!(!wire.to_string().contains("private notes"));
     assert!(list.complete);
-    let without = listed(ChannelListing {
-        default_folder: None,
-        channels: vec![],
-    });
+    let without = listed(
+        ChannelListing {
+            default_folder: None,
+            channels: vec![],
+        },
+        None,
+    );
     assert!(without.channels.is_empty());
 }
 
+/// The `index`th of many channels, each with a folder near the longest a
+/// path may be.
+fn long(index: u16) -> Channel {
+    let mut bytes = [0; 10];
+    bytes[0] = (index & 0x1f) as u8;
+    bytes[1] = ((index >> 5) & 0x1f) as u8;
+    Channel::new(
+        ChannelId::from_random(bytes),
+        OrganizationId::new("org").unwrap(),
+        PrincipalId::new("person").unwrap(),
+        crate::conversation::domain::ChannelParts {
+            name: ChannelName::new(&format!("channel-{index}")).unwrap(),
+            folder: crate::conversation::domain::ChannelFolder {
+                path: ChannelPath::new(PathBuf::from(format!("/{}", "f".repeat(4000)))).unwrap(),
+                made: false,
+            },
+            defaults: ChannelDefaults {
+                agent: AgentId::Claude,
+                model: ConversationModelId::new("claude-x").unwrap(),
+                mode: ConversationApprovalMode::Auto,
+            },
+            notes: ChannelNotes::new("").unwrap(),
+            resources: ChannelResources::new(vec![]).unwrap(),
+        },
+        format!("request-{index}"),
+        u64::from(index),
+    )
+    .unwrap()
+}
+
 #[test]
-fn a_list_longer_than_a_frame_is_cut_and_says_so() {
-    let many = (0..1000).map(|n| stored((n % 250) as u8, "")).collect();
-    let mut list = listed(ChannelListing {
+fn a_list_longer_than_a_frame_is_paged_and_every_channel_is_listed_once() {
+    let channels: Vec<Channel> = (0..1000).map(long).collect();
+    let listing = || ChannelListing {
         default_folder: Some("/work/default".into()),
-        channels: many,
-    });
-    for channel in &mut list.channels {
-        channel.folder = format!("/{}", "f".repeat(4000));
+        channels: channels.clone(),
+    };
+    let mut seen = Vec::new();
+    let mut after: Option<ChannelId> = None;
+    let mut pages = 0;
+    loop {
+        let page = fitted(listed(listing(), after.as_ref()), "request");
+        let wire = success("request", &page).to_wire_text().unwrap();
+        assert!(wire.len() <= MAX_PAYLOAD_BYTES as usize);
+        assert_eq!(page.complete, page.cursor.is_none());
+        assert_eq!(
+            page.channels.first().map(|c| c.channel_id == "default"),
+            Some(pages == 0)
+        );
+        seen.extend(page.channels.iter().map(|c| c.channel_id.clone()));
+        pages += 1;
+        match page.cursor {
+            Some(cursor) => {
+                assert_eq!(Some(&cursor), seen.last());
+                after = Some(ChannelId::new(&cursor).unwrap());
+            }
+            None => break,
+        }
     }
-    let cut = fitted(list, "request");
-    assert!(!cut.complete);
-    assert!(cut.channels.len() < 1001);
-    let wire = success("request", &cut).to_wire_text().unwrap();
-    assert!(wire.len() <= MAX_PAYLOAD_BYTES as usize);
+    assert!(pages > 1);
+    let expected: Vec<String> = std::iter::once("default".to_owned())
+        .chain(channels.iter().map(|c| c.id().as_str().to_owned()))
+        .collect();
+    assert_eq!(seen, expected);
+    // After a channel the caller has none under, nothing is listed.
+    let unknown = ChannelId::from_random([31; 10]);
+    let page = fitted(listed(listing(), Some(&unknown)), "request");
+    assert!(page.channels.is_empty() && page.complete);
 }
 
 fn code(message: OutgoingMessage) -> String {
@@ -125,10 +188,22 @@ fn code(message: OutgoingMessage) -> String {
 #[test]
 fn each_refusal_has_its_own_code() {
     for (error, expected) in [
-        (ChannelError::Folder(FolderRefusal::NotFound), "channel_folder_not_found"),
-        (ChannelError::Folder(FolderRefusal::NotADirectory), "channel_folder_not_a_directory"),
-        (ChannelError::Folder(FolderRefusal::Refused), "channel_folder_refused"),
-        (ChannelError::Folder(FolderRefusal::Unavailable), "channel_storage_unavailable"),
+        (
+            ChannelError::Folder(FolderRefusal::NotFound),
+            "channel_folder_not_found",
+        ),
+        (
+            ChannelError::Folder(FolderRefusal::NotADirectory),
+            "channel_folder_not_a_directory",
+        ),
+        (
+            ChannelError::Folder(FolderRefusal::Refused),
+            "channel_folder_refused",
+        ),
+        (
+            ChannelError::Folder(FolderRefusal::Unavailable),
+            "channel_storage_unavailable",
+        ),
         (ChannelError::ResourceNotFound, "channel_resource_not_found"),
         (ChannelError::LimitReached, "channel_limit_reached"),
         (ChannelError::RequestConflict, "channel_request_conflict"),

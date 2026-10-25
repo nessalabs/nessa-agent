@@ -1370,7 +1370,7 @@ async fn conversations(
                 directory
                     .parent()
                     .expect("conversation root already validated"),
-                std::env::var_os("HOME").map(std::path::PathBuf::from),
+                crate::env::home_folder_from_system(),
             )
             .map_err(|error| RunError::Agent(error.to_string()))?,
         ),

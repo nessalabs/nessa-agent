@@ -9,6 +9,7 @@
  * Only the name must be given: a channel with no chosen folder gets one made
  * for it, and notes and resources may be left empty.
  */
+import { channelRules } from "@nessa/client"
 import type { AccessMode } from "./access"
 import type { Channel, ModelRef } from "./workspace-index"
 
@@ -31,13 +32,7 @@ export function channelStepsFor(pickable: boolean): readonly ChannelStep[] {
 export type ResourceKind = "file" | "folder"
 
 /** The protocol's bounds (`x-channelRules`), as the flow checks them before asking. */
-export const channelRules = {
-  maxNameChars: 80,
-  maxNotesBytes: 8192,
-  maxResources: 32,
-  maxResourceBytes: 16384,
-  maxPathBytes: 4096,
-} as const
+export { channelRules }
 
 export interface ChannelDraft {
   readonly name: string
@@ -62,7 +57,12 @@ export function channelName(text: string): string | null {
   const name = text.trim()
   // eslint-disable-next-line no-control-regex
   if (name === "" || /[\u0000-\u001f\u007f-\u009f]/.test(name)) return null
-  return [...name].length <= channelRules.maxNameChars ? name : null
+  return nameFits(name) ? name : null
+}
+
+/** Whether a name, once trimmed, is short enough: counted in characters, not UTF-16 units. */
+export function nameFits(text: string): boolean {
+  return [...text.trim()].length <= channelRules.maxNameChars
 }
 
 /** Whether the notes fit what a channel keeps. */

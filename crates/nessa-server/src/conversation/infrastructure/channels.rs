@@ -334,7 +334,10 @@ impl ChannelStore for LocalChannelStore {
                     .optional()
                     .map_err(failed)?;
                 if let Some(id) = found {
-                    placed.insert(conversation, ChannelId::new(&id).map_err(|_| unreadable(&id))?);
+                    placed.insert(
+                        conversation,
+                        ChannelId::new(&id).map_err(|_| unreadable(&id))?,
+                    );
                 }
             }
             Ok(placed)
@@ -356,75 +359,107 @@ impl ChannelStore for LocalChannelStore {
 }
 
 /// The file system a channel's folder and resources live on. A chosen
-/// folder is refused when agents must not work there: the root, the home
-/// folder itself, a system folder, or Nessa's own data other than its
-/// channels folder.
+/// folder is refused when agents must not work there: the root of a drive,
+/// a system folder, Nessa's own data other than a folder under its channels
+/// folder, or a folder that holds the home folder or Nessa's data (`/Users`
+/// would give an agent `~/.nessa` and every other person's home).
 pub struct LocalChannelFolders {
     /// Nessa's data folder (`~/.nessa`), resolved.
     data: PathBuf,
     /// Where folders are made for channels no folder was chosen for.
     channels: PathBuf,
     home: Option<PathBuf>,
+    /// Folders, and everything under them, no agent works in.
+    system: Vec<PathBuf>,
 }
 
-/// Folders, and everything under them, no agent works in.
-const SYSTEM_FOLDERS: &[&str] = &[
-    "/bin",
-    "/boot",
-    "/dev",
-    "/etc",
-    "/lib",
-    "/lib64",
-    "/proc",
-    "/sbin",
-    "/sys",
-    "/usr",
-    "/System",
-    "/Library",
-    "/private/etc",
-    "/private/var",
-    "/var",
-];
+/// This system's folders no agent works in, nor in anything under them.
+fn system_folders() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        [
+            "SystemRoot",
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramData",
+        ]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .filter_map(|folder| dunce::canonicalize(folder).ok())
+        .collect()
+    } else {
+        [
+            "/bin",
+            "/boot",
+            "/dev",
+            "/etc",
+            "/lib",
+            "/lib64",
+            "/proc",
+            "/sbin",
+            "/sys",
+            "/usr",
+            "/System",
+            "/Library",
+            "/private/etc",
+            "/private/var",
+            "/var",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect()
+    }
+}
 
 impl LocalChannelFolders {
     /// Check folders against `data`, and make channel folders in
-    /// `data/channels`. `home` is the person's home folder, refused itself.
+    /// `data/channels`. `home` is the person's home folder.
     pub fn new(data: &Path, home: Option<PathBuf>) -> std::io::Result<Self> {
-        let data = std::fs::canonicalize(data)?;
+        Self::with_system(data, home, system_folders())
+    }
+
+    /// As [`Self::new`], with the system folders named.
+    pub fn with_system(
+        data: &Path,
+        home: Option<PathBuf>,
+        system: Vec<PathBuf>,
+    ) -> std::io::Result<Self> {
+        let data = dunce::canonicalize(data)?;
         Ok(Self {
             channels: data.join("channels"),
             data,
-            home: home.and_then(|home| std::fs::canonicalize(home).ok()),
+            home: home.and_then(|home| dunce::canonicalize(home).ok()),
+            system,
         })
     }
 
     fn resolve(path: &ChannelPath) -> Result<(PathBuf, std::fs::Metadata), FolderRefusal> {
-        let resolved = std::fs::canonicalize(path.as_path()).map_err(|error| {
-            match error.kind() {
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => {
-                    FolderRefusal::NotFound
-                }
-                std::io::ErrorKind::PermissionDenied => FolderRefusal::Refused,
-                _ => FolderRefusal::Unavailable,
+        let resolved = dunce::canonicalize(path.as_path()).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => {
+                FolderRefusal::NotFound
             }
+            std::io::ErrorKind::PermissionDenied => FolderRefusal::Refused,
+            _ => FolderRefusal::Unavailable,
         })?;
         let metadata = std::fs::metadata(&resolved).map_err(|_| FolderRefusal::Unavailable)?;
         Ok((resolved, metadata))
     }
 
     fn refused(&self, folder: &Path) -> bool {
-        let system = SYSTEM_FOLDERS.iter().any(|system| {
-            let system = Path::new(system);
-            folder == system || folder.starts_with(system)
-        });
         // The temporary folder is under /var on macOS and is a place a
         // person may well work in.
-        let temporary = folder.starts_with("/private/var/folders") || folder.starts_with("/var/tmp");
+        let temporary =
+            folder.starts_with("/private/var/folders") || folder.starts_with("/var/tmp");
+        let system = self.system.iter().any(|system| folder.starts_with(system)) && !temporary;
+        // A folder holding the home folder or the data folder, the home
+        // folder itself included.
+        let holds = |inner: &Path| inner.starts_with(folder);
+        let made_for_a_channel = folder.starts_with(&self.channels) && folder != self.channels;
         folder.parent().is_none()
-            || self.home.as_deref() == Some(folder)
-            || (system && !temporary)
-            || (folder.starts_with(&self.data) && !folder.starts_with(&self.channels))
-            || folder == self.channels
+            || system
+            || self.home.as_deref().is_some_and(holds)
+            || holds(&self.data)
+            || (folder.starts_with(&self.data) && !made_for_a_channel)
     }
 }
 

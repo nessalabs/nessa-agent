@@ -19,7 +19,8 @@ fn path(text: &str) -> ChannelPath {
 
 fn made(request_id: &str, name: &str, at: u64) -> Channel {
     let mut id = [0; 10];
-    id[..request_id.len().min(10)].copy_from_slice(&request_id.as_bytes()[..request_id.len().min(10)]);
+    id[..request_id.len().min(10)]
+        .copy_from_slice(&request_id.as_bytes()[..request_id.len().min(10)]);
     Channel::new(
         ChannelId::from_random(id),
         OrganizationId::new("org").unwrap(),
@@ -48,16 +49,22 @@ fn made(request_id: &str, name: &str, at: u64) -> Channel {
 #[tokio::test]
 async fn channels_read_back_in_the_order_they_were_made_after_a_reopen() {
     let directory = tempfile::tempdir().unwrap();
-    let (org, owner) = (OrganizationId::new("org").unwrap(), PrincipalId::new("owner").unwrap());
+    let (org, owner) = (
+        OrganizationId::new("org").unwrap(),
+        PrincipalId::new("owner").unwrap(),
+    );
     let (first, second) = (made("request-1", "design", 2), made("request-2", "ops", 1));
     {
         let store = store(directory.path());
         assert_eq!(store.create(first.clone()).await.unwrap(), first);
         assert_eq!(store.create(second.clone()).await.unwrap(), second);
     }
-    let store = LocalChannelStore::open(&directory.path().join("conversations/channels.sqlite3"))
-        .unwrap();
-    assert_eq!(store.list(&org, &owner).await.unwrap(), vec![first.clone(), second]);
+    let store =
+        LocalChannelStore::open(&directory.path().join("conversations/channels.sqlite3")).unwrap();
+    assert_eq!(
+        store.list(&org, &owner).await.unwrap(),
+        vec![first.clone(), second]
+    );
     assert_eq!(store.get(first.id()).await.unwrap(), Some(first.clone()));
     assert_eq!(
         store.by_request(&org, &owner, "request-1").await.unwrap(),
@@ -65,7 +72,13 @@ async fn channels_read_back_in_the_order_they_were_made_after_a_reopen() {
     );
     let stranger = PrincipalId::new("stranger").unwrap();
     assert!(store.list(&org, &stranger).await.unwrap().is_empty());
-    assert_eq!(store.by_request(&org, &stranger, "request-1").await.unwrap(), None);
+    assert_eq!(
+        store
+            .by_request(&org, &stranger, "request-1")
+            .await
+            .unwrap(),
+        None
+    );
 }
 
 #[tokio::test]
@@ -76,7 +89,10 @@ async fn a_retried_creation_answers_the_channel_already_kept() {
     store.create(kept.clone()).await.unwrap();
     // Same request id, so the same id, but asked later with another name:
     // the kept one is answered, for the service to compare.
-    assert_eq!(store.create(made("request-1", "other", 9)).await.unwrap(), kept);
+    assert_eq!(
+        store.create(made("request-1", "other", 9)).await.unwrap(),
+        kept
+    );
 }
 
 #[tokio::test]
@@ -93,13 +109,19 @@ async fn a_conversation_stays_in_the_channel_it_was_placed_in() {
         store.place(&placed, ops.id()).await,
         Err(ConversationError::RequestConflict)
     ));
-    assert_eq!(store.channel_of(&placed).await.unwrap(), Some(design.id().clone()));
+    assert_eq!(
+        store.channel_of(&placed).await.unwrap(),
+        Some(design.id().clone())
+    );
     assert_eq!(store.channel_of(&unplaced).await.unwrap(), None);
     let listed = store
         .channels_of(vec![placed.clone(), unplaced.clone()])
         .await
         .unwrap();
-    assert_eq!(listed, HashMap::from([(placed.clone(), design.id().clone())]));
+    assert_eq!(
+        listed,
+        HashMap::from([(placed.clone(), design.id().clone())])
+    );
     store.forget(&placed).await.unwrap();
     assert_eq!(store.channel_of(&placed).await.unwrap(), None);
 }
@@ -109,12 +131,19 @@ fn folders(directory: &Path) -> (LocalChannelFolders, PathBuf, PathBuf) {
     let home = directory.join("home");
     nessa_local_storage::create_directory(&data).unwrap();
     std::fs::create_dir_all(home.join("repo")).unwrap();
+    std::fs::create_dir_all(directory.join("system").join("tools")).unwrap();
+    std::fs::create_dir_all(directory.join("elsewhere")).unwrap();
     std::fs::write(home.join("notes.md"), "notes").unwrap();
-    let folders = LocalChannelFolders::new(&data, Some(home.clone())).unwrap();
+    let folders = LocalChannelFolders::with_system(
+        &data,
+        Some(home.clone()),
+        vec![dunce::canonicalize(directory.join("system")).unwrap()],
+    )
+    .unwrap();
     (
         folders,
-        std::fs::canonicalize(data).unwrap(),
-        std::fs::canonicalize(home).unwrap(),
+        dunce::canonicalize(data).unwrap(),
+        dunce::canonicalize(home).unwrap(),
     )
 }
 
@@ -138,7 +167,18 @@ fn a_chosen_folder_must_exist_be_a_directory_and_not_be_refused() {
         folders.accept_folder(&chosen(&home.join("notes.md"))),
         Err(FolderRefusal::NotADirectory)
     );
-    for refused in [Path::new("/"), &home, &data, Path::new("/etc"), Path::new("/usr/bin")] {
+    // A folder beside the home folder is a place to work; one that holds it
+    // or Nessa's data is not, nor is the root.
+    let parent = dunce::canonicalize(directory.path()).unwrap();
+    assert_eq!(
+        folders
+            .accept_folder(&chosen(&parent.join("elsewhere")))
+            .unwrap(),
+        chosen(&parent.join("elsewhere"))
+    );
+    let root = parent.ancestors().last().unwrap().to_path_buf();
+    let system = parent.join("system");
+    for refused in [&root, &parent, &home, &data, &system, &system.join("tools")] {
         assert_eq!(
             folders.accept_folder(&chosen(refused)),
             Err(FolderRefusal::Refused),
@@ -174,7 +214,11 @@ fn a_made_folder_is_under_the_channels_folder_and_may_be_chosen_again() {
     let made = folders.make(&id).unwrap();
     assert_eq!(made, chosen(&data.join("channels").join(id.as_str())));
     assert!(made.as_path().is_dir());
-    assert_eq!(folders.make(&id).unwrap(), made, "making it again is no error");
+    assert_eq!(
+        folders.make(&id).unwrap(),
+        made,
+        "making it again is no error"
+    );
     // Another channel may share a made folder, but not the channels folder.
     assert_eq!(folders.accept_folder(&made).unwrap(), made);
     assert_eq!(
@@ -182,11 +226,29 @@ fn a_made_folder_is_under_the_channels_folder_and_may_be_chosen_again() {
         Err(FolderRefusal::Refused)
     );
     assert_eq!(
-        folders.accept_resource(&chosen(&home.join("notes.md"))).unwrap(),
+        folders
+            .accept_resource(&chosen(&home.join("notes.md")))
+            .unwrap(),
         chosen(&home.join("notes.md"))
     );
     assert_eq!(
         folders.accept_resource(&chosen(&home.join("gone.md"))),
         Err(FolderRefusal::NotFound)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn this_systems_folders_are_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let data = directory.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    let folders = LocalChannelFolders::new(&data, None).unwrap();
+    for refused in ["/etc", "/usr/bin"] {
+        assert_eq!(
+            folders.accept_folder(&chosen(Path::new(refused))),
+            Err(FolderRefusal::Refused),
+            "{refused}"
+        );
+    }
 }

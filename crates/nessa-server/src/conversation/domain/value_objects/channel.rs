@@ -21,15 +21,16 @@ use nessa_protocol::conversation::domain::{
 };
 use std::path::{Path, PathBuf};
 
-/// The longest channel name, in characters.
+/// The longest channel name, in characters. These bounds are published as
+/// the schema's `x-channelRules`; generation fails when the two differ.
 pub const MAX_CHANNEL_NAME_CHARS: usize = 80;
 /// The longest notes a channel keeps, in bytes.
-pub const MAX_CHANNEL_NOTES_BYTES: usize = 8 * 1024;
+pub const MAX_CHANNEL_NOTES_BYTES: usize = 8_192;
 /// The most files and folders one channel names.
 pub const MAX_CHANNEL_RESOURCES: usize = 32;
 /// The most bytes of paths one channel's resources hold in all, so a
 /// channel's request always fits one frame.
-pub const MAX_CHANNEL_RESOURCE_BYTES: usize = 16 * 1024;
+pub const MAX_CHANNEL_RESOURCE_BYTES: usize = 16_384;
 /// The longest path a channel keeps, in bytes.
 pub const MAX_CHANNEL_PATH_BYTES: usize = 4096;
 /// The most channels one owner keeps: past what a sidebar lists readably.

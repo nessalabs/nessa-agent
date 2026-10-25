@@ -29,7 +29,7 @@ pub use config::key::{HOST, PORT, STAGE};
 #[cfg(all(test, unix))]
 pub(crate) use config::LEASE_PROTOCOL_SOURCES;
 pub use config::{HOST_BUILDS, HOST_BUILDS_FROM, LEASE_PROTOCOL, VERSION};
-pub use environment::Environment;
+pub use environment::{home_folder_from_system, Environment};
 pub use error::EnvironmentError;
 pub use source::MockEnv;
 pub use stage::Stage;

@@ -330,3 +330,12 @@
 .new-channel .new-channel-create {
   color: var(--nessa-button-inverse-ink, var(--background));
 }
+
+/* Holds a question's answers only to disable them together. */
+.new-channel .new-channel-answers {
+  display: contents;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}

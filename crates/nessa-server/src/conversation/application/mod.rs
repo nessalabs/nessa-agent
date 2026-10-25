@@ -327,9 +327,9 @@ pub use service::{
 };
 pub use service::{
     AgentPlace, AwaitedTurn, ChannelError, ChannelFolders, ChannelListing, ChannelStore,
-    FolderRefusal, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
-    ConversationAgents, ConversationCaller, ConversationDeletionBudgets, ConversationDependencies,
-    ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, HistoryGeneration,
+    ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
+    ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
+    ConversationService, DeletionsLeft, FailureBackoff, FolderRefusal, HistoryGeneration,
     McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, PendingReport,
     PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt, PreferenceReading,
     PreferenceUpdate, QuestionChoiceInput, ReadOpening, ReconcileRetry, RecordedPreference,

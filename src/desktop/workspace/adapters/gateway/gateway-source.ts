@@ -749,7 +749,19 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     summaries.set(sessionId, summary)
     removedIds.delete(sessionId)
     emit({ kind: "session", session: summary })
+    // A channel made since the index was read (from another window, or an
+    // agent's thread) is read with the index again, once per channel: the
+    // session is placed in it then.
+    if (
+      !channels.some((channel) => channel.id === summary.channelId) &&
+      !unknownChannels.has(summary.channelId)
+    ) {
+      unknownChannels.add(summary.channelId)
+      resync()
+    }
   }
+  // Channels a session was in before the index listed them, each read for once.
+  const unknownChannels = new Set<string>()
 
   // The conversations followed, least recently opened first (D7).
   const views = new Map<string, Followed<Transcript>>()
@@ -1027,11 +1039,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     scheduleRetry()
   }
 
-  /** The index once a list frame is applied: opening the list subscription as `who`. */
   /**
-   * The channels the gateway lists, the default one first; the ones held
-   * when it does not answer. A list cut by the frame keeps its first ones,
-   * and a session in a channel left out is left out of the index with it.
+   * Every channel the gateway lists, the default one first; the ones held
+   * when it does not answer.
    */
   const listChannels = async (live: () => boolean): Promise<readonly Channel[]> => {
     try {
@@ -1047,6 +1057,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     }
   }
 
+  /** The index once a list frame is applied: opening the list subscription as `who`. */
   const listReady = async (who: Caller): Promise<void> => {
     if (list.applied) return
     const ready = new Promise<void>((resolve, reject) =>

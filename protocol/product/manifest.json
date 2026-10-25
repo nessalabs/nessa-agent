@@ -315,7 +315,7 @@
       "grant": "conversation.write"
     },
     "channel.list": {
-      "params": null,
+      "params": "ChannelListParams",
       "grant": "conversation.write"
     },
     "conversation.subscribeEvents": {

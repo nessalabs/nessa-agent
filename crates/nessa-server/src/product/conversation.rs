@@ -147,12 +147,25 @@ async fn answer(
         match frame.method.as_str() {
             "conversation.create" => {
                 let params = target_params!(ConversationCreateParams);
+                // The phone check judges the preset the conversation starts
+                // in, which a channel's defaults can set.
+                let default_mode = service
+                    .creation_default_mode(
+                        &caller(params.request_id.clone()),
+                        requested_channel(params.channel_id.as_deref())?.as_ref(),
+                    )
+                    .await?;
                 if let Err(code) = super::owner_phone::admit_creation(
                     state,
                     session,
-                    params.approval_mode.map(approval_mode).map(|mode| mode.as_str()),
-                    crate::conversation::application::ConversationService::default_creation_approval_mode().as_str(),
-                ).await {
+                    params
+                        .approval_mode
+                        .map(approval_mode)
+                        .map(|mode| mode.as_str()),
+                    default_mode.as_str(),
+                )
+                .await
+                {
                     return Ok(failure(&frame.id, code));
                 }
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
@@ -342,8 +355,14 @@ async fn answer(
                 if let Err(code) = super::read_access::admit_list(state, session).await {
                     return Ok(failure(&frame.id, code));
                 }
-                let listed =
-                    read_list(state, service, session, archived.unwrap_or(false), &frame.id).await?;
+                let listed = read_list(
+                    state,
+                    service,
+                    session,
+                    archived.unwrap_or(false),
+                    &frame.id,
+                )
+                .await?;
                 Ok(success(&frame.id, &fitted_list(listed, &frame.id)))
             }
             "conversation.observe" => {
@@ -364,12 +383,16 @@ async fn answer(
                     .await;
                 trace_conversation_observe(observed.as_ref().err());
                 let observed = observe_result(observed?);
-                super::read_access::admit_index_rows(state, session, &observed.conversations).await?;
+                super::read_access::admit_index_rows(state, session, &observed.conversations)
+                    .await?;
                 Ok(success(&frame.id, &observed))
             }
             "conversation.send" | "conversation.steer" => {
                 let params = target_params!(ConversationSendParams);
-                if let Err(code) = super::owner_phone::admit_submission_input(state, session, params.files.len()).await {
+                if let Err(code) =
+                    super::owner_phone::admit_submission_input(state, session, params.files.len())
+                        .await
+                {
                     return Ok(failure(&frame.id, code));
                 }
                 let mode = if frame.method == "conversation.steer" {

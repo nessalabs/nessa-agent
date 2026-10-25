@@ -229,6 +229,40 @@ describe("the index and the list subscription", () => {
     expect(channelOf(conversationB)).toBe("gateway-conversations")
   })
 
+  it("C1: a session in a channel made since the index was read resyncs, once per channel", async () => {
+    const { gateway, source, updates, follow } = started()
+    follow()
+    await source.index()
+    // Another window makes a channel and starts a conversation in it.
+    await gateway.client.channels.create({
+      requestId: "elsewhere",
+      name: "design-review",
+      agent: "codex",
+      model: "gpt-5",
+    })
+    const channelId = gateway.channels[0].channel.channelId
+    gateway.rows.set(conversationA, { ...row(conversationA), channelId })
+    updates.length = 0
+    gateway.publishList()
+    await flush()
+    expect(kinds(updates)).toEqual(["session", "resync"])
+    const index = await source.index()
+    expect(index.channels.map((channel) => channel.id)).toContain(channelId)
+    expect(
+      index.sessions.find((session) => session.id === conversationA)?.channelId,
+    ).toBe(channelId)
+    // Said again, it is known now: no second resync.
+    updates.length = 0
+    gateway.rows.set(conversationA, {
+      ...row(conversationA),
+      channelId,
+      title: "renamed",
+    })
+    gateway.publishList()
+    await flush()
+    expect(kinds(updates)).toEqual(["session"])
+  })
+
   it("C1: a list of channels that fails keeps the channels last listed", async () => {
     const { gateway, source } = started()
     await gateway.client.channels.create({

@@ -4,10 +4,11 @@
 use super::*;
 use crate::conversation::application::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
-    ConversationDependencies, ConversationLimits, ProviderSessionErasers, RequestedConversation, SubmissionMode, SubmittedMessage,
+    ConversationDependencies, ConversationLimits, ProviderSessionErasers, RequestedConversation,
+    SubmissionMode, SubmittedMessage,
 };
 use crate::conversation::domain::{
-    ChannelDefaults, ChannelName, ChannelNotes, ChannelRefusal,
+    ChannelDefaults, ChannelName, ChannelNotes, ChannelRefusal, ProviderSessionErasure,
 };
 use crate::conversation::infrastructure::{LocalChannelStore, LocalConversationStore};
 use crate::conversation_test_support::{
@@ -91,17 +92,38 @@ impl ConversationAgentSource for RecordingSource {
         mode: ConversationApprovalMode,
         place: &'a AgentPlace,
     ) -> ConversationAgentFuture<'a> {
-        assert!(place.instructions.contains("Its folder is"), "{}", place.instructions);
+        assert!(
+            place.instructions.contains("Its folder is"),
+            "{}",
+            place.instructions
+        );
         self.record(agent, model, mode, Some(place))
     }
 }
 
 /// Folders as a fixed table says: `/missing` is not there, `/file` is a
 /// file, `/refused` is refused, and a made folder is under `/data/channels`.
-struct TableFolders;
+/// A path named in `gone` was removed since it was attached.
+#[derive(Clone, Default)]
+struct TableFolders {
+    gone: Arc<Mutex<Vec<String>>>,
+}
+
+impl TableFolders {
+    fn is_gone(&self, path: &ChannelPath) -> bool {
+        self.gone
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|gone| gone == path.as_str())
+    }
+}
 
 impl ChannelFolders for TableFolders {
     fn accept_folder(&self, chosen: &ChannelPath) -> Result<ChannelPath, FolderRefusal> {
+        if self.is_gone(chosen) {
+            return Err(FolderRefusal::NotFound);
+        }
         match chosen.as_str() {
             "/missing" => Err(FolderRefusal::NotFound),
             "/file" => Err(FolderRefusal::NotADirectory),
@@ -112,6 +134,9 @@ impl ChannelFolders for TableFolders {
         }
     }
     fn accept_resource(&self, path: &ChannelPath) -> Result<ChannelPath, FolderRefusal> {
+        if self.is_gone(path) {
+            return Err(FolderRefusal::NotFound);
+        }
         match path.as_str() {
             "/missing" => Err(FolderRefusal::NotFound),
             _ => Ok(path.clone()),
@@ -125,6 +150,7 @@ impl ChannelFolders for TableFolders {
 struct Fixture {
     service: ConversationService,
     source: Arc<RecordingSource>,
+    folders: TableFolders,
     _directory: tempfile::TempDir,
 }
 
@@ -161,6 +187,10 @@ fn request(folder: Option<&str>) -> ChannelRequest {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_erasers(ProviderSessionErasers::default())
+    }
+
+    fn with_erasers(provider_sessions: ProviderSessionErasers) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let root = &directory.path().join("gateway");
         nessa_local_storage::create_directory(root).unwrap();
@@ -193,7 +223,7 @@ impl Fixture {
                 summaries: metadata.clone(),
                 listing: metadata.clone(),
                 deletion_audit: Arc::new(AcceptingDeletionAudit),
-                provider_sessions: ProviderSessionErasers::default(),
+                provider_sessions,
                 deletion_budgets: DELETION_BUDGETS,
                 message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
                 clock: Arc::new(TestClock),
@@ -204,20 +234,26 @@ impl Fixture {
         )
         .unwrap();
         service.bind_commands(storage);
+        let folders = TableFolders::default();
         service.bind_channels(
             Arc::new(LocalChannelStore::open(&root.join("channels.sqlite3")).unwrap()),
-            Arc::new(TableFolders),
+            Arc::new(folders.clone()),
         );
         Self {
             service,
             source,
+            folders,
             _directory: directory,
         }
     }
 
     async fn channel(&self, request_id: &str, folder: Option<&str>) -> Channel {
         self.service
-            .create_channel(caller("person", request_id), request_id.into(), request(folder))
+            .create_channel(
+                caller("person", request_id),
+                request_id.into(),
+                request(folder),
+            )
             .await
             .unwrap()
     }
@@ -272,7 +308,10 @@ async fn a_chosen_folder_is_kept_resolved_and_a_refused_one_says_why() {
     assert!(!linked.folder().made);
     assert_eq!(linked.folder().path.as_str(), "/work/repo");
     // A retry naming the same place another way is the same request.
-    assert_eq!(fixture.channel("request-1", Some("/work/repo")).await, linked);
+    assert_eq!(
+        fixture.channel("request-1", Some("/work/repo")).await,
+        linked
+    );
     // Two channels may share a folder.
     let shared = fixture.channel("request-2", Some("/work/repo")).await;
     assert_ne!(shared.id(), linked.id());
@@ -284,7 +323,11 @@ async fn a_chosen_folder_is_kept_resolved_and_a_refused_one_says_why() {
         assert_eq!(
             fixture
                 .service
-                .create_channel(caller("person", folder), folder.into(), request(Some(folder)))
+                .create_channel(
+                    caller("person", folder),
+                    folder.into(),
+                    request(Some(folder))
+                )
                 .await,
             Err(ChannelError::Folder(refusal)),
             "{folder}"
@@ -488,4 +531,267 @@ async fn nobody_else_can_start_a_conversation_in_a_channel() {
         .unwrap()
         .channels
         .is_empty());
+}
+
+#[tokio::test]
+async fn a_creation_that_names_no_preset_is_judged_by_its_channels() {
+    // What a check of the creation (an owner phone's) is told it starts in
+    // is the channel's preset, the one the conversation then gets.
+    let fixture = Fixture::new();
+    let channel = fixture.channel("request-1", None).await;
+    let asks = |who: &'static str, channel: Option<ChannelId>| {
+        let service = &fixture.service;
+        async move {
+            service
+                .creation_default_mode(&caller(who, "create"), channel.as_ref())
+                .await
+        }
+    };
+    assert_eq!(
+        asks("person", Some(channel.id().clone())).await.unwrap(),
+        ConversationApprovalMode::Auto
+    );
+    assert_eq!(
+        asks("person", None).await.unwrap(),
+        ConversationApprovalMode::Ask
+    );
+    assert_eq!(
+        asks("person", Some(ChannelId::default_channel()))
+            .await
+            .unwrap(),
+        ConversationApprovalMode::Ask
+    );
+    assert!(matches!(
+        asks("other", Some(channel.id().clone())).await,
+        Err(ConversationError::ChannelNotFound)
+    ));
+}
+
+#[tokio::test]
+async fn a_thread_an_agent_starts_keeps_its_conversations_preset_not_the_channels() {
+    let fixture = Fixture::new();
+    let channel = fixture.channel("request-1", Some("/work/repo")).await;
+    let id = new_id();
+    fixture
+        .service
+        .create(
+            id.clone(),
+            caller("person", "create"),
+            RequestedConversation {
+                channel: Some(channel.id().clone()),
+                ..RequestedConversation::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.service.thread_start(&id, false).await.unwrap(),
+        (
+            Some(channel.id().clone()),
+            Some(ConversationApprovalMode::Auto)
+        )
+    );
+    // The person turned it down to Ask: its threads start in Ask, though the
+    // channel's default is Auto. The agent is built again in the folder.
+    fixture.asked();
+    fixture
+        .service
+        .set_approval_mode(
+            id.clone(),
+            caller("person", "ask"),
+            ConversationApprovalMode::Ask,
+        )
+        .await
+        .unwrap();
+    assert!(fixture
+        .asked()
+        .iter()
+        .all(|asked| asked.3.as_deref() == Some(std::path::Path::new("/work/repo"))));
+    assert_eq!(
+        fixture.service.thread_start(&id, false).await.unwrap(),
+        (
+            Some(channel.id().clone()),
+            Some(ConversationApprovalMode::Ask)
+        )
+    );
+    // On another host it is in no channel, and names no preset.
+    assert_eq!(
+        fixture.service.thread_start(&id, true).await.unwrap(),
+        (None, None)
+    );
+    let outside = new_id();
+    fixture
+        .service
+        .create(
+            outside.clone(),
+            caller("person", "plain"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.service.thread_start(&outside, false).await.unwrap(),
+        (None, None)
+    );
+}
+
+#[tokio::test]
+async fn a_retry_is_answered_with_the_kept_channel_after_what_it_named_is_gone() {
+    // The answer to a create was lost, and before the retry the attached
+    // folder and the chosen one were removed: the channel was still made,
+    // and the retry is told so rather than asked to change the request.
+    let fixture = Fixture::new();
+    let made = fixture.channel("request-1", Some("/work/repo")).await;
+    fixture
+        .folders
+        .gone
+        .lock()
+        .unwrap()
+        .extend(["/work/brand-kit".to_owned(), "/work/repo".to_owned()]);
+    assert_eq!(fixture.channel("request-1", Some("/work/repo")).await, made);
+    // A new request naming them is refused.
+    assert_eq!(
+        fixture
+            .service
+            .create_channel(caller("person", "new"), "request-2".into(), request(None))
+            .await,
+        Err(ChannelError::ResourceNotFound)
+    );
+}
+
+/// An agent's own store of sessions: says where each erasure was asked from,
+/// and whether the conversation was still in its channel then.
+struct PlaceEraser {
+    channels: Mutex<Option<ConversationService>>,
+    asked: Mutex<Vec<(Option<PathBuf>, bool)>>,
+    conversation: Mutex<Option<ConversationId>>,
+}
+
+impl PlaceEraser {
+    fn ask(&self, place: Option<PathBuf>) -> ConversationFuture<'_, ProviderSessionErasure> {
+        Box::pin(async move {
+            let service = self.channels.lock().unwrap().clone().unwrap();
+            let id = self.conversation.lock().unwrap().clone().unwrap();
+            let placed = service.channel_id_of(&id).await.unwrap().is_some();
+            self.asked.lock().unwrap().push((place, placed));
+            Ok(ProviderSessionErasure::Deleted)
+        })
+    }
+}
+
+impl crate::conversation::application::ProviderSessionEraser for PlaceEraser {
+    fn erase(
+        &self,
+        _session: nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId,
+    ) -> ConversationFuture<'_, ProviderSessionErasure> {
+        self.ask(None)
+    }
+    fn erase_in(
+        &self,
+        _session: nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId,
+        place: AgentPlace,
+    ) -> ConversationFuture<'_, ProviderSessionErasure> {
+        self.ask(Some(place.folder))
+    }
+    fn cleanup_outstanding(&self) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+async fn a_deleted_conversation_is_erased_from_its_channels_folder_then_let_go() {
+    let eraser = Arc::new(PlaceEraser {
+        channels: Mutex::new(None),
+        asked: Mutex::new(Vec::new()),
+        conversation: Mutex::new(None),
+    });
+    let mut erasers = ProviderSessionErasers::default();
+    erasers.register(AgentId::Codex, eraser.clone());
+    let fixture = Fixture::with_erasers(erasers);
+    *eraser.channels.lock().unwrap() = Some(fixture.service.clone());
+    let channel = fixture.channel("request-1", Some("/work/repo")).await;
+    let id = new_id();
+    *eraser.conversation.lock().unwrap() = Some(id.clone());
+    fixture
+        .service
+        .create(
+            id.clone(),
+            caller("person", "create"),
+            RequestedConversation {
+                channel: Some(channel.id().clone()),
+                ..RequestedConversation::default()
+            },
+        )
+        .await
+        .unwrap();
+    fixture
+        .service
+        .submit(
+            id.clone(),
+            caller("person", "say"),
+            "say".to_owned(),
+            SubmittedMessage {
+                text: "hello".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let view = fixture
+                .service
+                .read(id.clone(), caller("person", "read"))
+                .await
+                .unwrap();
+            if view.messages.iter().any(|message| {
+                message.status
+                    == nessa_protocol::conversation::view::ConversationMessageStatus::Completed
+            }) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the turn completes");
+    fixture
+        .service
+        .delete(id.clone(), caller("person", "delete"))
+        .await
+        .unwrap();
+    // Asked from the channel's folder, while the conversation was still in it.
+    assert_eq!(
+        eraser.asked.lock().unwrap().clone(),
+        vec![(Some(PathBuf::from("/work/repo")), true)]
+    );
+    assert_eq!(fixture.service.channel_id_of(&id).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_person_keeps_at_most_the_channels_the_rules_allow() {
+    let fixture = Fixture::new();
+    for n in 0..MAX_CHANNELS_PER_OWNER {
+        fixture.channel(&format!("request-{n}"), None).await;
+    }
+    assert_eq!(
+        fixture
+            .service
+            .create_channel(
+                caller("person", "one-more"),
+                "one-more".into(),
+                request(None)
+            )
+            .await,
+        Err(ChannelError::LimitReached)
+    );
+    // A retry of one already made is still answered, and somebody else's
+    // channels are their own.
+    fixture.channel("request-0", None).await;
+    fixture
+        .service
+        .create_channel(caller("other", "first"), "first".into(), request(None))
+        .await
+        .unwrap();
 }

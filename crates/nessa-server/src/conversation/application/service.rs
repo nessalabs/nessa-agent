@@ -37,6 +37,9 @@ use super::{
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
 };
+pub use channels::{
+    AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore, FolderRefusal,
+};
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -126,9 +129,6 @@ use std::{
 pub(crate) use thread_reports::report_text_for_test;
 pub use thread_reports::{
     AwaitedTurn, PendingReport, ReportRegistration, ThreadReport, ThreadReportStore, ThreadTurn,
-};
-pub use channels::{
-    AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore, FolderRefusal,
 };
 pub use workspace_windows::{PaneConversation, WindowReading};
 
@@ -1572,10 +1572,7 @@ impl ConversationService {
             None => defaults.map(|defaults| defaults.agent),
         };
         let agent = service.inner.agents.select(agent_request)?;
-        let approval_mode = requested
-            .approval_mode
-            .or(defaults.map(|defaults| defaults.mode))
-            .unwrap_or_else(Self::default_creation_approval_mode);
+        let approval_mode = Self::starting_mode(requested.approval_mode, channel.as_ref());
         let model = requested.model.clone().or_else(|| {
             defaults
                 .filter(|defaults| defaults.agent == agent)
