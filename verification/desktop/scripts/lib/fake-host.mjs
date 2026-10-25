@@ -92,7 +92,8 @@ export function gatewayHost({
         window.__fakeHostReplays++
         return Promise.resolve(null)
       }
-      if (started && command === "host_startup") return Promise.resolve({ state: "ready" })
+      if (started && command === "host_startup")
+        return Promise.resolve({ state: "ready" })
       // The gateway it manages is up: the stack's gateway is already running,
       // and nothing about it changes, so a listener is taken and never told.
       if (started && command === "gateway_startup")

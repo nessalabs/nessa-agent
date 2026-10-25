@@ -1508,7 +1508,12 @@ const steps = {
     const page = await panelWindow(run)
     try {
       const strip = page.locator(css.panelTabs)
-      if (!(await strip.waitFor({ timeout: 30_000 }).then(() => true, () => false))) {
+      if (
+        !(await strip.waitFor({ timeout: 30_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
         failures.push("the panel drew no tab strip")
         return
       }
@@ -1519,8 +1524,17 @@ const steps = {
       await page.locator(css.panelMessages).click()
       const rowFor = (title) =>
         page.locator(css.panelListRow).filter({ hasText: title }).first()
-      if (!(await rowFor(run.main.title).waitFor({ timeout: 15_000 }).then(() => true, () => false))) {
-        failures.push(`the panel's Messages does not list ${JSON.stringify(run.main.title)}`)
+      if (
+        !(await rowFor(run.main.title)
+          .waitFor({ timeout: 15_000 })
+          .then(
+            () => true,
+            () => false,
+          ))
+      ) {
+        failures.push(
+          `the panel's Messages does not list ${JSON.stringify(run.main.title)}`,
+        )
         return
       }
       const dotsBefore = await page.locator(css.panelDot).count()
@@ -1540,10 +1554,15 @@ const steps = {
         )
       const oneBar = (all) => {
         const bar = all.filter((each) => each.selected)
-        return bar.length === 1 && all.every((each) => each.selected || each.width + 6 <= bar[0].width)
+        return (
+          bar.length === 1 &&
+          all.every((each) => each.selected || each.width + 6 <= bar[0].width)
+        )
       }
       if (!(await waitFor(async () => oneBar(await widths()), 5_000)))
-        failures.push(`the selected dot is not the one bar: ${JSON.stringify(await widths())}`)
+        failures.push(
+          `the selected dot is not the one bar: ${JSON.stringify(await widths())}`,
+        )
       // A message sent from the panel wears the chat accent and its rim.
       const text = prompt(run, STRESS.reply, step, " from the panel")
       const seen = await seenTurns(run, run.main.id)
@@ -1554,7 +1573,12 @@ const steps = {
       run.sent.set(run.main.id, (run.sent.get(run.main.id) ?? 0) + 1)
       await settled(run, run.main.id, seen, text, "completed", failures)
       const bubble = page.locator(css.sentBubble).filter({ hasText: text }).first()
-      if (!(await bubble.waitFor({ timeout: 15_000 }).then(() => true, () => false))) {
+      if (
+        !(await bubble.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
         failures.push("the panel does not show the message it sent")
       } else {
         // Its colours are nessa_ui's to choose: the bubble must wear the chat
@@ -1581,24 +1605,42 @@ const steps = {
           paint.background !== paint.accent ||
           !paint.shadow.includes(paint.rim)
         )
-          failures.push(`a sent bubble does not wear the chat accent and its rim: ${JSON.stringify(paint)}`)
+          failures.push(
+            `a sent bubble does not wear the chat accent and its rim: ${JSON.stringify(paint)}`,
+          )
       }
       // The panel has no workspace, so its reply is looked for on the page.
       const echo = `${SAYS.echo}${text}`
-      if (!(await page.getByText(echo).first().waitFor({ timeout: 30_000 }).then(() => true, () => false)))
+      if (
+        !(await page
+          .getByText(echo)
+          .first()
+          .waitFor({ timeout: 30_000 })
+          .then(
+            () => true,
+            () => false,
+          ))
+      )
         failures.push(`the panel does not show ${JSON.stringify(echo)}`)
       // A chat archived from Messages leaves a row card with its avatar,
       // and the card's Undo brings it back, in the list and the gateway.
       const conversationId = randomUUID()
       const first = prompt(run, STRESS.reply, step, " to archive")
       await run.client.conversation.create({ conversationId, agent: run.stack.agent })
-      await run.client.conversation.submit(run.client.conversation.prepare(conversationId, first))
+      await run.client.conversation.submit(
+        run.client.conversation.prepare(conversationId, first),
+      )
       run.checked.push(conversationId)
       await settled(run, conversationId, new Set(), first, "completed", failures)
       const title = await titleOf(run, conversationId)
       await page.locator(css.panelMessages).click()
       const row = rowFor(title)
-      if (!(await row.waitFor({ timeout: 15_000 }).then(() => true, () => false))) {
+      if (
+        !(await row.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
         failures.push(`the panel's Messages does not list ${JSON.stringify(title)}`)
         return
       }
@@ -1610,20 +1652,33 @@ const steps = {
       await waitFor(
         () =>
           page.evaluate(
-            () => document.activeElement?.getAttribute("data-slot") === "conversation-history-row-action",
+            () =>
+              document.activeElement?.getAttribute("data-slot") ===
+              "conversation-history-row-action",
           ),
         5_000,
       )
       const onArchive = () =>
-        page.evaluate((name) => document.activeElement?.getAttribute("aria-label") === name, `Archive ${title}`)
-      for (let tabs = 0; tabs < 4 && !(await onArchive()); tabs++) await page.keyboard.press("Tab")
+        page.evaluate(
+          (name) => document.activeElement?.getAttribute("aria-label") === name,
+          `Archive ${title}`,
+        )
+      for (let tabs = 0; tabs < 4 && !(await onArchive()); tabs++)
+        await page.keyboard.press("Tab")
       if (!(await onArchive())) {
-        failures.push(`Shift+F10 on ${JSON.stringify(title)} does not reach its Archive action`)
+        failures.push(
+          `Shift+F10 on ${JSON.stringify(title)} does not reach its Archive action`,
+        )
         return
       }
       await page.keyboard.press("Enter")
       const undoCard = page.locator(css.undoCard)
-      if (!(await undoCard.waitFor({ timeout: 15_000 }).then(() => true, () => false))) {
+      if (
+        !(await undoCard.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
         failures.push("archiving from the panel left no undo card")
         return
       }
@@ -1634,12 +1689,21 @@ const steps = {
       const archived = async (want) =>
         waitFor(async () => {
           const { conversations } = await run.client.conversation.list({ archived: true })
-          return conversations.some((each) => each.conversationId === conversationId) === want
+          return (
+            conversations.some((each) => each.conversationId === conversationId) === want
+          )
         }, 15_000)
-      if (!(await archived(true))) failures.push("the gateway did not archive the conversation")
+      if (!(await archived(true)))
+        failures.push("the gateway did not archive the conversation")
       await undoCard.getByRole("button", { name: /^Undo/ }).click()
-      if (!(await archived(false))) failures.push("Undo did not unarchive the conversation")
-      if (!(await row.waitFor({ timeout: 15_000 }).then(() => true, () => false)))
+      if (!(await archived(false)))
+        failures.push("Undo did not unarchive the conversation")
+      if (
+        !(await row.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
         failures.push("Undo did not put the row back in the panel's Messages")
       if (!(await waitFor(async () => (await undoCard.count()) === 0, 5_000)))
         failures.push("the undo card stayed after Undo")
@@ -3372,10 +3436,17 @@ async function panelWindow(run) {
 /** Waits until the panel's strip leads with `title`, the selected tab's name. */
 async function panelNamed(page, title, failures) {
   const named = await waitFor(
-    async () => (await page.locator(css.panelCurrent).innerText().catch(() => "")).includes(title),
+    async () =>
+      (
+        await page
+          .locator(css.panelCurrent)
+          .innerText()
+          .catch(() => "")
+      ).includes(title),
     15_000,
   )
-  if (!named) failures.push(`the panel's strip does not lead with ${JSON.stringify(title)}`)
+  if (!named)
+    failures.push(`the panel's strip does not lead with ${JSON.stringify(title)}`)
 }
 
 /**

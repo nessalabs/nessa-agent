@@ -195,7 +195,8 @@ body {
   transition: none;
 }
 
-.nessa-panel[data-compositor="layout"] [data-slot="chat-tab-dot"][data-busy]:not([data-attention]) {
+.nessa-panel[data-compositor="layout"]
+  [data-slot="chat-tab-dot"][data-busy]:not([data-attention]) {
   box-shadow: none;
   background-color: var(--nessa-chat-accent-ink);
 }
