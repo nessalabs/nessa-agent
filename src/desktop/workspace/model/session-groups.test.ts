@@ -51,6 +51,22 @@ describe("grouping by status", () => {
     expect(groupByStatus([session("a", 1)]).map((group) => group.id)).toEqual(["idle"])
   })
 
+  it("lists pinned sessions first, under Pinned, and each there only", () => {
+    const groups = groupByStatus([
+      session("old", 1),
+      session("pin-wait", 4, "needs-you", { pinned: true }),
+      session("pin-old", 2, "idle", { pinned: true }),
+      session("wait", 3, "needs-you"),
+    ])
+    expect(groups.map((group) => [group.label, group.sessions.map((s) => s.id)])).toEqual(
+      [
+        ["Pinned", ["pin-wait", "pin-old"]],
+        ["Needs you", ["wait"]],
+        ["Earlier", ["old"]],
+      ],
+    )
+  })
+
   it("lists running sessions with the rest, newest first, when they are not kept at the top", () => {
     const groups = groupByStatus(
       [session("old", 1), session("run", 3, "running"), session("wait", 2, "needs-you")],

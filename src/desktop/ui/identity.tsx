@@ -48,22 +48,34 @@ export function IdentityButton({
 }
 
 /**
- * The row that holds the name at a sidebar's foot: one corner control tall,
- * the control inset from the card's side as the titlebar's controls are
- * from its top. `className` is a hook for the surface that places it.
+ * The row that holds the name at a sidebar's foot — the one owner of where
+ * "nessa Studio" and "‹ nessa Agent" stand, in every layout and in Settings,
+ * so switching between them moves nothing: nessa's mark, then the pill.
+ * `className` is a hook for the surface that places it.
  */
 export function IdentityRow({
   as: Element = "footer",
   className,
+  mark = "studio",
   children,
 }: {
   /** `div` where the row sits inside another landmark, as Settings' does in its nav. */
   as?: "footer" | "div"
   className?: string
+  /**
+   * What stands in the row's mark slot, which keeps one width so "nessa"
+   * never moves between places: Studio's square, or nothing — where the way
+   * back's chevron takes the slot (`IdentityButton back`) or a control the
+   * place lays over it (the side rail's toggle).
+   */
+  mark?: "studio" | "none"
   children: ReactNode
 }) {
   return (
     <Element className={className ? `desktop-identity ${className}` : "desktop-identity"}>
+      <span className="desktop-identity-mark" aria-hidden="true">
+        {mark === "studio" ? <span className="desktop-mark" /> : null}
+      </span>
       {children}
     </Element>
   )

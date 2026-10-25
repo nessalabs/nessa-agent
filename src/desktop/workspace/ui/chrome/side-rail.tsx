@@ -1,7 +1,7 @@
 /**
  * Prototype: the side rail. A narrow strip at the window's left edge
  * listing the workspace and the other places beside it; choosing one gives it the whole
- * window. Each icon has its own small hover gesture (`side-rail.css`).
+ * content area below the window bar. Each icon has its own small hover gesture (`side-rail.css`).
  */
 import { LoadingText } from "@nessa-ui/react/loading-text"
 import {
@@ -13,32 +13,11 @@ import {
   useRef,
   useState,
 } from "react"
-import type { HostKind } from "../../../../host/features"
 import { IconButton } from "../../../ui/icon-button"
-import { IdentityFooter } from "./identity-footer"
 import "./side-rail.css"
 
-/**
- * The rail's width, which the workspace beside it fits the window less of.
- * One corner control (28px) with the control edge (10px) on each side, from
- * the geometry in `styles.css`, so the rail's column of controls is the
- * titlebar's.
- *
- * In the macOS window the traffic lights stay where the host puts them
- * (`traffic_lights.rs`: 16px in, 23px apart, so they end 76px in), and the
- * rail holds them in its top row (`holdsWindowControls`): the first card's
- * edge (this plus `--desktop-gutter`) stands as far past the green button as
- * the red one stands from the window's edge, and the rail's controls are
- * centred under the lights (`side-rail.css`).
- */
-export function railWidth(host: HostKind): number {
-  return holdsWindowControls(host) ? 84 : 48
-}
-
-/** Whether the open rail holds the window's own controls (the traffic lights). */
-export function holdsWindowControls(host: HostKind): boolean {
-  return host === "macos"
-}
+/** One 28px control on the sidebar's icon column (`--rail-column`, 18px), with as much on its other side. */
+export const SIDE_RAIL_WIDTH = 64
 
 export interface RailItem {
   readonly id: string
@@ -142,7 +121,7 @@ export function SideRail({
   )
   const nav = useRef<HTMLElement>(null)
   // Folding away — for room, or by the toggle — never strands the keyboard on
-  // a hidden button: focus goes to the toggle in the corner, or else lets go.
+  // a hidden button: focus goes to the toggle in the bottom corner, or else lets go.
   useLayoutEffect(() => {
     const rail = nav.current
     if (open || !rail?.contains(document.activeElement)) return
@@ -160,7 +139,6 @@ export function SideRail({
       aria-hidden={!open || undefined}
       style={{ "--rail-index": index } as CSSProperties}
     >
-      <div className="side-rail-drag" data-tauri-drag-region aria-hidden="true" />
       <div className="side-rail-items">
         <span className="side-rail-lens" aria-hidden="true" />
         {railItems.map((item, i) => (
@@ -183,11 +161,7 @@ export function SideRail({
   )
 }
 
-/**
- * Shows or hides the side rail. It stays in the window's bottom-left corner,
- * open or closed, so a second click needs no travel (`columns.mjs`,
- * rail-corner). Its four tiles breathe apart on hover.
- */
+/** Shows or hides the side rail from its slot at the window's bottom-left. */
 export function SideRailButton({
   open,
   room,
@@ -240,13 +214,7 @@ export const RAIL_LOADING_DELAY_MS = 3000
 export function RailView({ item }: { item: RailItem }) {
   return (
     <section key={item.id} className="rail-view" aria-label={item.name}>
-      <div className="rail-view-drag" data-tauri-drag-region aria-hidden="true" />
       <RailLoading name={item.name} />
-      {item.studio === false ? null : (
-        <div className="rail-view-foot">
-          <IdentityFooter />
-        </div>
-      )}
     </section>
   )
 }

@@ -204,7 +204,8 @@ export function resendMessage({
  * says why while it shows the session); `unknown` when it is not known to be
  * taken (`outcomeOf`); `answering` already, a first answer on
  * its way; or `not-asked` — the window holds no such approval: the session is
- * not on screen (`onScreen`: in a pane, or in the open overview), or its
+ * not on screen (`onScreen`: in a pane, in the open overview, or as one of
+ * the session list's request cards), or its
  * conversation has moved on. Nothing is sent
  * then, and the source records nothing, since nothing was asked of it.
  */
@@ -234,7 +235,7 @@ function answer(
     const approval = entry(state.transcripts, sessionId)?.approvals.find(
       (asked) => asked.id === approvalId,
     )
-    // Only an approval on screen is answered: one a pane or the open overview shows.
+    // Only an approval on screen is answered: one a pane, the open overview or a list card shows.
     if (!onScreen(state, sessionId) || !approval) return "not-asked"
     // One answer to an approval at a time: a second waits until the first is refused.
     if (answering(answerOf(state, sessionId, approvalId), approvalId)) return "answering"
@@ -423,7 +424,7 @@ export function stopTurn({
 }
 
 /**
- * Pins a session under its channel in the sidebar, or unpins it, saying who
+ * Pins a session to the top of its channel's list, or unpins it, saying who
  * asked for the source's record. The pin shows when the source's update says
  * so; a refusal leaves it as it was.
  */

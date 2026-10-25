@@ -74,6 +74,7 @@ export type {
   DesktopWidgetRegistry,
   NativeWidgetPlugin,
   SessionAccessoryProps,
+  WidgetCrumb,
   WidgetHost,
   WidgetPlugin,
   WidgetViewProps,

@@ -41,7 +41,9 @@
  *               beside, the panes are regions of one flat chat surface that
  *               reaches the window's top, right and bottom edges: no pane
  *               draws a fill or rim of its own, and a hairline down the
- *               middle of the gutter between them divides them
+ *               middle of the gutter between them divides them; the two
+ *               are one merged tab: New Tab opens a home alone and leaves it
+ *               as it was, and clicking back into it restores the split
  *   long        another conversation takes `--long` turns of long streamed
  *               answers through the gateway; the last answer is whole, and
  *               still whole after its agent is closed and its history opened
@@ -64,9 +66,8 @@
  *               list nor the window holds it
  *   rail        the side rail is turned on in Settings › Advanced ›
  *               Experimental and opened: the window's traffic lights stay
- *               where the host puts them and the rail holds them in its top
- *               row, its controls centred under them, the first card past
- *               them by the gap they keep from the window's edge; a message
+ *               where the host puts them above a compact rail; the top bar
+ *               keeps its controls clear of them in every rail state; a message
  *               sent with the rail open is answered; closed, opened again,
  *               and turned off while open, the titlebar's controls go back to
  *               starting where the lights end
@@ -467,42 +468,34 @@ async function setSideRail(page, on, failures) {
   if (!shown) failures.push(`the side rail's toggle is ${on ? "missing" : "still shown"}`)
 }
 
-/**
- * The macOS traffic lights, where `traffic_lights.rs` puts them and keeps
- * them: the close button 16px from the window's edge, the three 23px apart,
- * so they end 76px in and their middle is 46px in. The page never moves them.
- */
-const LIGHTS = { left: 16, middle: 46, end: 76 }
-// The page's rail is tied to the host's and the stylesheet's copies in
-// `side-rail.test.tsx`; this copy is the harness's own model of the host.
+/** The macOS traffic lights end at x=76 (`traffic_lights.rs`). */
+const LIGHTS_END = 76
 
-/**
- * Waits until the rail is `rail` (open, closed, or off) and laid out around
- * the traffic lights: open, the rail holds them in its top row, its items
- * centred under them, and the first card starts past them by the gap they
- * keep from the window's edge; open or closed, the rail's toggle stays
- * centred under them; open or not, the titlebar's first control starts
- * where they end, never under them. False, with the last measurement
- * said, when that never holds.
- */
+/** The compact rail and the window bar keep separate geometry. */
 async function aroundTheLights(page, rail, failures) {
   const near = (a, b) => Math.abs(a - b) <= 0.5
   const holds = (now) =>
     now.rail === rail &&
     [now.at.workspace, now.at.inset, now.at.control].every(Number.isFinite) &&
-    near(now.at.control, now.at.workspace + now.at.inset) &&
-    now.at.control >= LIGHTS.end &&
+    near(now.at.control, now.at.inset) &&
+    now.at.control >= LIGHTS_END &&
     (rail === "open"
       ? near(now.at.workspace, now.at.railWidth) &&
-        near(now.at.card, LIGHTS.end + LIGHTS.left) &&
-        near(now.at.item, LIGHTS.middle)
+        near(now.at.railTop, now.at.barBottom) &&
+        near(now.at.railWidth, 64) &&
+        near(now.at.item, now.at.railWidth / 2)
       : near(now.at.workspace, 0)) &&
-    (rail === "off" || near(now.at.toggle, LIGHTS.middle))
+    // The toggle is nessa's mark: in the footer's mark slot, right before
+    // "nessa Studio", wherever the footer is drawn; at the corner otherwise.
+    (rail === "off" ||
+      (now.at.slot && now.at.toggleMiddle
+        ? near(now.at.toggleMiddle[0], now.at.slot[0]) &&
+          near(now.at.toggleMiddle[1], now.at.slot[1])
+        : near(now.at.toggle, now.at.itemColumn)))
   if (await waitFor(async () => holds(await railLayout(page)), 10_000)) return true
   const now = await railLayout(page)
   failures.push(
-    `rail ${rail} (now ${now.rail}) around lights ending at ${LIGHTS.end}, middle ${LIGHTS.middle}: ` +
-      JSON.stringify(now.at),
+    `rail ${rail} (now ${now.rail}) below window bar: ` + JSON.stringify(now.at),
   )
   return false
 }
@@ -515,7 +508,7 @@ async function aroundTheLights(page, rail, failures) {
  */
 function railLayout(page) {
   return page.evaluate(
-    ({ frame, workspace, control, rail, item, toggle }) => {
+    ({ frame, workspace, control, rail, item, toggle, titlebar }) => {
       const box = (selector) => document.querySelector(selector)?.getBoundingClientRect()
       const middle = (selector) => {
         const at = box(selector)
@@ -551,10 +544,39 @@ function railLayout(page) {
         at: {
           railWidth: box(rail)?.width ?? NaN,
           item: middle(item),
-          toggle: middle(toggle),
+          toggle: box(toggle)?.left ?? NaN,
+          toggleBottom: box(toggle)?.bottom ?? NaN,
+          toggleMiddle: box(toggle)
+            ? [
+                box(toggle).left + box(toggle).width / 2,
+                box(toggle).top + box(toggle).height / 2,
+              ]
+            : null,
+          // The footer's mark slot the toggle stands in: the visible one, if any.
+          slot: (() => {
+            const found = [
+              ...document.querySelectorAll(".workspace-identity .desktop-identity-mark"),
+            ]
+              .filter(
+                (e) =>
+                  getComputedStyle(e).visibility !== "hidden" && !e.closest("[inert]"),
+              )
+              .map((e) => e.getBoundingClientRect())
+              .find((r) => r.width > 0 && r.left >= 0 && r.left < innerWidth)
+            return found
+              ? [found.left + found.width / 2, found.top + found.height / 2]
+              : null
+          })(),
+          windowBottom: innerHeight,
+          itemColumn: length(document.querySelector(frame), "--rail-column"),
+          railTop: box(rail)
+            ? box(rail).top +
+              parseFloat(getComputedStyle(document.querySelector(rail)).paddingTop)
+            : NaN,
+          barBottom: box(titlebar)?.bottom ?? NaN,
           workspace: at.getBoundingClientRect().left,
           card: card(at),
-          inset: length(at, "--desktop-window-controls-inset"),
+          inset: length(document.querySelector(frame), "--desktop-window-controls-inset"),
           control: box(control)?.left ?? NaN,
         },
       }
@@ -562,12 +584,59 @@ function railLayout(page) {
     {
       frame: css.workspaceWindow,
       workspace: css.workspace,
-      control: css.titlebarSidebarToggle,
+      control: `${css.titlebar} button`,
+      titlebar: css.titlebar,
       rail: css.sideRail,
       item: `${css.sideRail} [data-rail-item]`,
       toggle: css.sideRailToggle,
     },
   )
+}
+
+/**
+ * Toggles the rail from the page and follows "nessa Studio" every frame: it
+ * stands in the corner beside the toggle, 8px past the toggle's mark, and
+ * neither moves, not even for a frame. Settled, the toggle (with the rail
+ * closed) stands on Agents' icon column. Returns what it found wrong.
+ */
+function footerThroughToggle(page) {
+  return page.evaluate(async (toggleSelector) => {
+    const words = () =>
+      document.querySelector(".side-rail-studio .desktop-identity-words")
+    const toggle = document.querySelector(toggleSelector)
+    const mark = () => toggle.querySelector("svg").getBoundingClientRect()
+    const middle = (e) => {
+      const at = e.getBoundingClientRect()
+      return at.left + at.width / 2
+    }
+    const failures = []
+    if (!words()) failures.push(`no "nessa Studio" beside the rail's toggle`)
+    const seen = []
+    const started = performance.now()
+    toggle.click()
+    await new Promise((done) => {
+      const frame = () => {
+        if (words()) seen.push(words().getBoundingClientRect().left - mark().right)
+        if (performance.now() - started < 900) requestAnimationFrame(frame)
+        else done()
+      }
+      requestAnimationFrame(frame)
+    })
+    const off = seen.find((gap) => Math.abs(gap - 8) > 0.5)
+    if (off !== undefined)
+      failures.push(
+        `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8px`,
+      )
+    const icon = document.querySelector(".agents-overview-entry svg")
+    if (toggle.getAttribute("aria-expanded") === "false" && icon) {
+      const apart = middle(toggle) - middle(icon)
+      if (Math.abs(apart) > 0.5)
+        failures.push(
+          `the closed rail's toggle is ${apart.toFixed(1)}px off Agents' icon`,
+        )
+    }
+    return failures
+  }, css.sideRailToggle)
 }
 
 /** The row of the conversation `conversationId` in the window's list. */
@@ -1093,6 +1162,48 @@ const steps = {
     )
   },
 
+  async listAnswer(run, step, failures) {
+    const text = prompt(run, STRESS.permission, step)
+    const seen = await send(run, run.main.id, text, failures)
+    // The conversation asks; the session list's Needs you card asks the same.
+    const listCard = run.page.locator(
+      `[data-list-group="needs-you"] .workspace-request-card:has([data-session-row="${run.main.id}"])`,
+    )
+    const shown = await listCard
+      .locator(".workspace-request")
+      .first()
+      .waitFor({ timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!shown) {
+      failures.push("the session list shows no request card for the waiting conversation")
+      return
+    }
+    const words = async (locator) =>
+      ((await locator.first().textContent()) ?? "").replace(/\s+/g, " ").trim()
+    const fromList = await words(listCard.locator(".workspace-approval-command"))
+    const fromPane = await words(
+      run.page.locator(`${css.agentApproval} .workspace-approval-command`),
+    )
+    if (fromList !== fromPane)
+      failures.push(
+        `the list's card reads "${fromList}", the conversation's "${fromPane}"`,
+      )
+    await listCard
+      .locator(`button[data-answer="${step.answer === "allow" ? "once" : "deny"}"]`)
+      .first()
+      .click()
+    await settled(run, run.main.id, seen, text, "completed", failures)
+    await expectShown(
+      run.page,
+      step.answer === "allow" ? SAYS.allowed : SAYS.denied,
+      failures,
+    )
+    // Answered, the card goes with the row out of Needs you.
+    if (!(await waitFor(async () => (await listCard.count()) === 0, 10_000)))
+      failures.push("the answered card is still in Needs you")
+  },
+
   async reviews(run, step, failures) {
     const text = prompt(run, STRESS.reviews, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -1458,10 +1569,20 @@ const steps = {
       // Open, closed, open again. Each open sends its own phrase: settled
       // counts copies of one phrase, and the first send is already there.
       let opened = 0
+      let place
       for (const open of [true, false, true]) {
         if ((await toggle.getAttribute("aria-expanded")) !== String(open))
-          await toggle.click()
+          failures.push(...(await footerThroughToggle(run.page)))
         if (!(await aroundTheLights(run.page, open ? "open" : "closed", failures))) return
+        // The toggle stays under the pointer: opening or closing the rail
+        // moves what is beside it, never the toggle itself.
+        const box = await toggle.boundingBox()
+        const at = box && [box.x, box.y, box.width, box.height].map(Math.round).join()
+        place ??= at
+        if (at !== place)
+          failures.push(
+            `the rail's toggle moved to [${at}] with the rail ${open ? "open" : "closed"}, from [${place}]`,
+          )
         // The workspace still takes a message with the rail beside it.
         if (open && failures.length === 0) {
           opened += 1
@@ -1476,6 +1597,65 @@ const steps = {
       // the titlebar's controls start where the lights end again.
       await setSideRail(run.page, false, failures)
       await aroundTheLights(run.page, "off", failures)
+    })
+  },
+
+  async panel(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      const panel = page.locator("#workspace-panel")
+      const grid = () =>
+        page.evaluate(
+          () =>
+            document.querySelector(".split-panes-grid")?.getBoundingClientRect().right ??
+            0,
+        )
+      const before = await grid()
+      await page.keyboard.press("Meta+Alt+KeyB")
+      const opened = await waitFor(
+        async () => (await panel.getAttribute("aria-hidden")) === null,
+        3000,
+      )
+      if (!opened) {
+        failures.push("⌥⌘B did not open the right panel")
+        return
+      }
+      await page.waitForTimeout(500)
+      // The panes give the panel its room; the conversation still takes a message.
+      const beside = await grid()
+      if (!(beside < before - 100))
+        failures.push(`the panes did not make room for the panel: ${before} → ${beside}`)
+      await steps.reply(run, step, failures)
+      await page.getByRole("button", { name: "Expand Panel" }).click()
+      if (
+        !(await waitFor(
+          async () => (await panel.getAttribute("data-maximized")) !== null,
+          2000,
+        ))
+      )
+        failures.push("Expand Panel did not maximize it")
+      await page.keyboard.press("Escape")
+      if (
+        !(await waitFor(
+          async () => (await panel.getAttribute("data-maximized")) === null,
+          2000,
+        ))
+      )
+        failures.push("Escape did not restore the maximized panel")
+      await page.keyboard.press("Meta+Alt+KeyB")
+      if (
+        !(await waitFor(
+          async () => (await panel.getAttribute("aria-hidden")) === "true",
+          3000,
+        ))
+      )
+        failures.push("⌥⌘B did not close the right panel")
+      await page.waitForTimeout(500)
+      const after = await grid()
+      if (Math.abs(after - before) > 1)
+        failures.push(
+          `the panes did not take the panel's room back: ${before} → ${after}`,
+        )
     })
   },
 
@@ -1766,7 +1946,10 @@ const steps = {
       failures.push("the thread's report never reached the conversation that sent it")
     else if (report.status !== "completed")
       failures.push(`the report's turn ended ${report.status}`)
-    else await expectShown(run.page, SAYS.report, failures)
+    else {
+      await expectShown(run.page, SAYS.report, failures)
+      await reportLine(run, report, failures)
+    }
   },
 
   async await(run, step, failures) {
@@ -1878,6 +2061,10 @@ const steps = {
       )
         failures.push(`the main conversation's pane reads ${JSON.stringify(left)}`)
     }
+    // The two are one merged tab. A new tab stands alone and leaves the
+    // merged tab as it was; clicking back into it restores the split.
+    await mergedTabStays(run, conversationId, failures)
+    if (failures.length) return
     // ⌘W closes the focused pane: the one beside.
     await run.page.keyboard.press(keys.closePane)
     if (
@@ -1943,10 +2130,27 @@ const steps = {
         clients.push(await connectClient(run.stack.gateway, INSTANCE, "panel"))
       for (let n = 0; n < FRESH_BURST; n += 1)
         burst.push(startedBeside(run, clients[n % FRESH_CLIENTS], step, n, failures))
-      await run.page.keyboard.press(keys.newSession)
+      const tabs = run.page.getByRole("tablist", { name: "Open views" })
+      const previous = await tabs
+        .locator('[role="tab"][aria-selected="true"]')
+        .locator("..")
+        .getAttribute("data-session-tab")
+      await run.page.getByRole("button", { name: /^New Tab/ }).click()
       const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
       await home.locator(css.field).waitFor({ timeout: 15_000 })
       await home.locator(css.field).fill(text)
+      const draft = await tabs
+        .locator('[role="tab"][aria-selected="true"]')
+        .locator("..")
+        .getAttribute("data-session-tab")
+      if (previous) {
+        await tabs.locator(`[data-session-tab="${previous}"] [role="tab"]`).click()
+        await tabs.locator(`[data-session-tab="${draft}"] [role="tab"]`).click()
+        if ((await home.locator(css.field).inputValue()) !== text)
+          failures.push(
+            "switching workspace tabs lost the new conversation's first message",
+          )
+      }
       await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
       const conversationId = await waitFor(
         () => selectedStressConversation(run.page, text),
@@ -2803,6 +3007,163 @@ const steps = {
  * Two panes side by side are regions of one flat chat surface, not cards
  * (`flatSurfaceFailures`): one hairline between them, mid-gutter.
  */
+/**
+ * The merged tab (#1077): two conversations beside each other are one tab.
+ * New Tab opens a home alone, the merged tab untouched; clicking one of the
+ * merged tab's chats brings the split back as it was left, with that chat's
+ * pane focused. The new tab is then closed.
+ */
+/**
+ * The window shows a thread's report as one line — the thread's chat as a
+ * pill with its title, and what it did — never the report's text or ids;
+ * pressed, the pill brings that chat to the front, in a tab of its own.
+ */
+async function reportLine(run, report, failures) {
+  const thread = /^\[Thread report\] Thread (\S+) /.exec(report.userText)?.[1]
+  if (!thread) {
+    failures.push(`the report did not name its thread: ${report.userText.slice(0, 120)}`)
+    return
+  }
+  const line = run.page.locator('[data-role="thread-report"]').filter({
+    has: run.page.locator(`[data-chat-pill="${thread}"]`),
+  })
+  const shown = await line
+    .first()
+    .waitFor({ timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!shown) {
+    failures.push("the thread's report is not one line with the thread's pill")
+    return
+  }
+  const title = await titleOf(run, thread)
+  const said = (await line.first().innerText()).replace(/\s+/g, " ").trim()
+  if (!said.includes(title) || !said.endsWith("responded"))
+    failures.push(`the report line reads "${said}", not "${title} responded"`)
+  if (
+    /finished the turn you sent it|execution /.test(
+      await run.page.locator(css.pane).first().innerText(),
+    )
+  )
+    failures.push("the window shows the report's text, not just its line")
+  await line.first().locator(`[data-chat-pill="${thread}"]`).click()
+  const front = await waitFor(
+    async () =>
+      (await run.page
+        .getByRole("tablist", { name: "Open views" })
+        .locator('[role="tab"][aria-selected="true"]')
+        .locator("..")
+        .getAttribute("data-session-tab")) === thread,
+    10_000,
+  )
+  if (!front)
+    failures.push("pressing the report's pill did not bring its chat to the front")
+  await openStressConversation(run.page, run.main.id, run.main.title)
+}
+
+async function mergedTabStays(run, besideId, failures) {
+  const tabs = run.page.getByRole("tablist", { name: "Open views" })
+  // A merged tab draws its chats together; only its chats are tabs.
+  const group = tabs.locator(".workspace-tab-group")
+  const widths = () =>
+    run.page
+      .locator(css.pane)
+      .evaluateAll((panes) =>
+        panes.map((pane) => Math.round(pane.getBoundingClientRect().width)),
+      )
+  const before = await widths()
+  if ((await group.locator("[data-session-tab]").count()) !== 2) {
+    failures.push("two conversations side by side are not one merged tab")
+    return
+  }
+  await run.page.getByRole("button", { name: /^New Tab/ }).click()
+  if (
+    !(await waitFor(async () => (await run.page.locator(css.pane).count()) === 1, 10_000))
+  ) {
+    failures.push(
+      `a new tab shows ${await run.page.locator(css.pane).count()} panes, not 1`,
+    )
+    return
+  }
+  const fresh = await tabs
+    .locator('[role="tab"][aria-selected="true"]')
+    .locator("..")
+    .getAttribute("data-session-tab")
+  if ((await run.page.locator(`${css.focusedPane} ${css.paneHome}`).count()) !== 1)
+    failures.push("a new tab does not show a new session's home")
+  if ((await group.locator("[data-session-tab]").count()) !== 2)
+    failures.push("opening a new tab changed the merged tab")
+  if (fresh && (await group.locator(`[data-session-tab="${fresh}"]`).count()) > 0)
+    failures.push("a new tab joined the merged tab")
+  // At rest — once the selection's fade has run — a merged group is drawn
+  // as a plain tab is: no fill of its own.
+  const restFill = () =>
+    tabs.evaluate((list) => {
+      const fill = (e) => (e ? getComputedStyle(e).backgroundColor : null)
+      const group = list.querySelector(".workspace-tab-group:not([data-active])")
+      const plain = list.querySelector(
+        ":scope > .workspace-window-tab:not([data-active])",
+      )
+      return { group: fill(group), plain: fill(plain) ?? "rgba(0, 0, 0, 0)" }
+    })
+  if (
+    !(await waitFor(async () => {
+      const { group, plain } = await restFill()
+      return group === plain
+    }, 2_000))
+  ) {
+    const { group, plain } = await restFill()
+    failures.push(`an unselected merged tab is filled ${group}, a plain one ${plain}`)
+  }
+  // Each frame after the click: the panes go from the one tab's layout to
+  // the other's in one step, never through another.
+  const sampling = run.page.evaluate(
+    (pane) =>
+      new Promise((done) => {
+        const seen = []
+        const step = () => {
+          seen.push(
+            [...document.querySelectorAll(pane)]
+              .map((p) => Math.round(p.getBoundingClientRect().width))
+              .join(","),
+          )
+          if (seen.length < 30) requestAnimationFrame(step)
+          else done(seen)
+        }
+        requestAnimationFrame(step)
+      }),
+    css.pane,
+  )
+  await group.locator(`[data-session-tab="${besideId}"] [role="tab"]`).click()
+  const frames = [...new Set(await sampling)]
+  if (frames.length > 2)
+    failures.push(
+      `switching tabs passed through ${frames.length - 2} other layouts: ${frames.join(" → ")}`,
+    )
+  if (
+    !(await waitFor(async () => (await run.page.locator(css.pane).count()) === 2, 10_000))
+  ) {
+    failures.push("going back to the merged tab did not restore its split")
+    return
+  }
+  const after = await widths()
+  if (after.length !== before.length || after.some((w, i) => Math.abs(w - before[i]) > 1))
+    failures.push(`the merged tab came back at ${after} wide, not ${before}`)
+  if (!fresh) return
+  await tabs
+    .locator(`[data-session-tab="${fresh}"]`)
+    .getByRole("button", { name: /^Close Tab/ })
+    .click()
+  const closedAlone = await waitFor(
+    async () =>
+      (await tabs.locator(`[data-session-tab="${fresh}"]`).count()) === 0 &&
+      (await group.locator("[data-session-tab]").count()) === 2,
+    5_000,
+  )
+  if (!closedAlone)
+    failures.push("closing the new tab did not close it alone, the merged tab intact")
+}
+
 async function flatPanes(page, failures) {
   const now = async () => ({
     panes: await page.locator(css.pane).count(),

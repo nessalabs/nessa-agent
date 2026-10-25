@@ -4,7 +4,8 @@
  * instant, and forgets the rest to be read again when asked.
  *
  * - **Conversations**: every one a pane shows; those the open Agents
- *   overview shows, up to a bound, most recently active first; and the few
+ *   overview shows, and those the session list asks the person about, each
+ *   up to a bound, most recently active first; and the few
  *   most recently active of the rest (by the summary's `updatedAt`). Another
  *   is read afresh when a pane or the overview shows it.
  * - **Removals**: the newest few hundred, each with the revision it was taken
@@ -17,6 +18,8 @@ export const retention = {
   unshownConversations: 8,
   /** Conversations the open overview shows that are read and kept, at most. */
   overviewConversations: 24,
+  /** Conversations the session list's waiting rows ask about that are read and kept, at most. */
+  listConversations: 12,
   /** Removals remembered. */
   removals: 256,
 } as const
