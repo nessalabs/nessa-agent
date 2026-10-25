@@ -21,8 +21,12 @@ const bind = (chord: Chord, command: ShortcutCommand): Binding<ShortcutCommand> 
 export const workspaceShortcuts: readonly Binding<ShortcutCommand>[] = [
   bind({ code: "KeyB", command: true }, "toggleSidebar"),
   bind({ code: "KeyS", command: true, alt: true }, "toggleSessionList"),
+  // ⌥⌘B: the sidebar's ⌘B, for the panel on the other side.
+  bind({ code: "KeyB", command: true, alt: true }, "togglePanel"),
   bind({ code: "KeyN", command: true }, "newSession"),
   bind({ code: "KeyN", command: true, shift: true }, "newSessionBeside"),
+  // Splits the chat in front: a new session beside it, merged into its tab.
+  bind({ code: "KeyD", command: true }, "splitRight"),
   bind({ code: "KeyW", command: true }, "closePane"),
   bind({ code: "Backslash", command: true }, "openBeside"),
   bind({ code: "Backslash", command: true, shift: true }, "splitDown"),
@@ -48,6 +52,7 @@ export const workspaceShortcuts: readonly Binding<ShortcutCommand>[] = [
 export const shortcutNames: Readonly<Record<ShortcutCommand, string>> = {
   toggleSidebar: "Show or hide the sidebar",
   toggleSessionList: "Show or hide the session list",
+  togglePanel: "Show or hide the panel",
   newSession: "New session",
   newSessionBeside: "New session beside",
   splitRight: "Split right",

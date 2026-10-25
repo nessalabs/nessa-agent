@@ -143,6 +143,18 @@ function insideGrid(frames) {
   return out.length ? [`${out.length} pane-frames outside the grid, e.g. ${out[0]}`] : []
 }
 
+/** Every frame's drop outline starts below the titlebar row, never up under its tabs. */
+function belowBar(frames) {
+  const under = frames.filter(
+    (f) => f.placeholder && f.barBottom !== null && f.placeholder.y < f.barBottom - 0.5,
+  )
+  return under.length
+    ? [
+        `${under.length} frames drew the drop outline under the titlebar, e.g. top ${Math.round(under[0].placeholder.y)} above ${Math.round(under[0].barBottom)}`,
+      ]
+    : []
+}
+
 function insideWindow(frames) {
   const out = []
   for (const f of frames)
@@ -432,14 +444,16 @@ async function stationaryThrough(page, { focus, count, change }) {
   )
     failures.push("the action changed no pane geometry")
   if (samples.length < 2) failures.push("no layout change frames were sampled")
-  if (samples.some((sample) => sample.flight))
-    failures.push("workspace bounds started a FLIP")
+  // Panes that move travel to their new boxes (`--desktop-flight`); one that
+  // keeps its box is never flown, hidden or held (below).
   for (const sample of samples) {
     if (sample.measuring) failures.push("the temporary measurement hold reached paint")
     for (const pane of sample.panes) {
       if (!stationary.includes(pane.key)) continue
       if (pane.quiet === "hidden" || pane.flying || pane.restoring)
-        failures.push(`stationary pane ${pane.key} was suppressed`)
+        failures.push(
+          `stationary pane ${pane.key} was suppressed (${pane.quiet === "hidden" ? "hidden" : pane.flying ? "flying" : "restoring"})`,
+        )
       if (pane.fill !== colors.find((old) => old.key === pane.key)?.fill)
         failures.push(`stationary pane ${pane.key} changed its material`)
     }
@@ -518,6 +532,7 @@ const checks = {
         ...followsPointer(during, liftedAt, glideMs).map((f) => `follows-pointer: ${f}`),
         ...insideGrid(during).map((f) => `inside-grid: ${f}`),
         ...insideWindow(during).map((f) => `inside-window: ${f}`),
+        ...belowBar(during).map((f) => `below-bar: ${f}`),
         ...oneWay(during).map((f) => `one-way: ${f}`),
         ...(during.some((f) => f.selection)
           ? [
@@ -1401,7 +1416,7 @@ Usage: node verification/desktop/scripts/drag.mjs [options]
   --reduced-motion Every check with the system's reduced motion on.
   --shots <dir>    Screenshots from compact-drag-card go there.
 
-sweep-across-zones covers follows-pointer, inside-grid, inside-window, one-way
+sweep-across-zones covers follows-pointer, inside-grid, inside-window, below-bar, one-way
 and no-selection in one recorded drag. Side columns are hidden first so the
 panes have the room. A check made for one layout runs only there.
 boundary-jitter reads the model's edgeReach from the dev server; under

@@ -58,8 +58,11 @@ const meta = {
 Usage: node verification/desktop/scripts/subagents.mjs [options]
 
 Checks, per engine and layout (--only <names> to pick):
-  panel    the card opens a pane beside the conversation; the list order and
-           the closed child; a child opens, focus stays in the panel, the
+  panel    the card opens a pane beside the conversation; the list order, in
+           Ongoing and Ended sections with no avatars or summary, and the
+           closed child; one breadcrumb, the pane's, naming the open child;
+           expanded, the chat surface from the window's top with Back to
+           Pane; a child opens, focus stays in the panel, the
            transcript follows then stays put when scrolled up; Escape returns
            to the list (a pane's next Escape changes nothing; the window's
            returns to the panes)
@@ -288,9 +291,23 @@ const checks = {
       .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-subagent-name")))
     if (namesInOrder.join(",") !== "Mara,Idris,Nia,Sol")
       failures.push(`the list is ${namesInOrder.join(", ")}, not Mara, Idris, Nia, Sol`)
-    const summary = await page.locator(css.subagentSummary).innerText()
-    if (summary !== "1 working · 1 planning · 1 stuck · 1 closed")
-      failures.push(`the summary says "${summary}"`)
+    // Sections, as the session list groups its rows; no avatars, no summary.
+    const summary = await page
+      .locator("[data-subagent-group]")
+      .evaluateAll((groups) =>
+        groups.map(
+          (group) =>
+            `${group.getAttribute("data-subagent-group")}:${[
+              ...group.querySelectorAll("[data-subagent-row]"),
+            ]
+              .map((row) => row.getAttribute("data-subagent-name"))
+              .join(",")}`,
+        ),
+      )
+    if (summary.join(" ") !== "ongoing:Mara,Idris,Nia ended:Sol")
+      failures.push(`the sections are ${summary.join(" ")}`)
+    if (await page.locator(`${css.subagentPanel} [data-slot="avatar-stack"]`).count())
+      failures.push("the list still leads with its avatars")
     const sol = await page
       .locator(`${css.subagentRow}[data-subagent-name="Sol"]`)
       .innerText()
@@ -307,6 +324,14 @@ const checks = {
       return Boolean(node && node.contains(document.activeElement))
     }, css.subagentDetail)
     if (!focused) failures.push("focus left the open subagent")
+    // One breadcrumb, the pane's own: it names the child and steps back.
+    const crumbs = await page
+      .locator(`${css.widgetPane} [data-slot="breadcrumb"]`)
+      .evaluateAll((trails) => trails.map((trail) => trail.textContent?.trim() ?? ""))
+    if (crumbs.length !== 1 || !crumbs[0].endsWith("Mara"))
+      failures.push(
+        `the pane's breadcrumbs read ${JSON.stringify(crumbs)}, not one ending in Mara`,
+      )
     await shot(page, label, `detail-${label.engine}.png`, css.subagentPanel)
     const before = await scrollGap(page)
     if (!before || before.height <= before.client + 40)
@@ -349,6 +374,33 @@ const checks = {
     if (!(await contentIs(page, content.widget)))
       failures.push("Open in Window did not show the window")
     await need(page, css.widgetWindow, "the window")
+    // Expanded, it is the chat surface's own ground, from the window's top,
+    // with its way back to the pane where the expand control was.
+    const ground = await page.evaluate((sel) => {
+      const window_ = document.querySelector(sel)
+      const surface = window_.closest("[data-surface]")
+      return {
+        top: window_.getBoundingClientRect().top,
+        fill: getComputedStyle(window_).backgroundColor,
+        surface: getComputedStyle(surface).backgroundColor,
+      }
+    }, css.widgetWindow)
+    if (ground.top !== 0)
+      failures.push(`the window starts ${ground.top}px down, not at the top`)
+    // Its fill is the surface's: clear, on the window's ambient ground.
+    if (ground.fill !== ground.surface)
+      failures.push(`the window is ${ground.fill}, the surface ${ground.surface}`)
+    const hidden = await page.evaluate(
+      () => getComputedStyle(document.querySelector(".split-panes-grid")).visibility,
+    )
+    if (hidden !== "hidden") failures.push("the panes beneath the window still show")
+    if (
+      !(await page
+        .locator(css.widgetWindow)
+        .getByRole("button", { name: "Back to Pane" })
+        .count())
+    )
+      failures.push("the expanded view offers no way back to its pane")
     await page
       .locator(`${css.widgetWindow} ${css.subagentRow}[data-subagent-name="Mara"]`)
       .click()
@@ -361,6 +413,20 @@ const checks = {
     await settled(page)
     if (!(await contentIs(page, content.panes)))
       failures.push("Escape did not leave the window for the panes")
+    // Back to Pane: the expanded view goes back to its pane.
+    await page
+      .locator(css.widgetPane)
+      .getByRole("button", { name: names.openInWindow })
+      .click()
+    await need(page, css.widgetWindow, "the window again")
+    await page
+      .locator(css.widgetWindow)
+      .getByRole("button", { name: "Back to Pane" })
+      .click()
+    if (!(await contentIs(page, content.panes)))
+      failures.push("Back to Pane did not return to the panes")
+    if (!(await page.locator(css.widgetPane).count()))
+      failures.push("Back to Pane left no pane for the widget")
     return { namesInOrder, summary, failures }
   },
 

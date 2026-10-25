@@ -1,0 +1,218 @@
+/* Compact document tabs share the native window toolbar's control row. */
+.workspace-window-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  margin-left: 12px;
+  pointer-events: auto;
+}
+
+.workspace-tab-list {
+  display: flex;
+  align-items: stretch;
+  height: 30px;
+  align-self: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/*
+ * One look for every state:
+ *   - at rest, a tab or a merged group is plain text on the band: no fill, no
+ *     rim — a group only adds its merge glyph and faint dividers;
+ *   - hovered, a light fill;
+ *   - selected, one opaque pill: the tab, or the whole merged group, with the
+ *     focused chat inside marked by brightness alone, never a second pill.
+ * The pill is opaque so header art behind the row never shows through its
+ * text. It fades between tabs in the window's base duration, which reduced
+ * motion makes zero (`styles.css`).
+ */
+.workspace-tab-list {
+  --tab-pill-fill: color-mix(in oklab, var(--foreground) 11%, var(--background));
+  --tab-pill-edge:
+    inset 0 0.5px 0 color-mix(in oklab, white 14%, transparent),
+    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent),
+    0 1px 2px rgb(0 0 0 / 18%);
+  --tab-hover-fill: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+html:not(.dark) .workspace-tab-list {
+  --tab-pill-fill: color-mix(in oklab, white 80%, var(--background));
+  --tab-pill-edge:
+    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent),
+    0 1px 2px rgb(0 0 0 / 8%);
+}
+
+/*
+ * One width for every chat's tab, shrinking together as the strip runs out of
+ * room: a tab, or each chat in a merged group, is one unit of at most 196px
+ * (`--tab-unit`). The titles truncate first; below `--tab-icon-only` a tab is
+ * its icon alone, the selected one still its pill. The strip does not scroll
+ * for room: the Agents overview lists everything open. Past even that, the
+ * strip alone brings the selected tab into view (`window-tabs.tsx`).
+ */
+.workspace-tab-list {
+  --tab-unit: 196px;
+  --tab-icon-only: 36px;
+  /* Every unit, every group's glyph, and the gaps between tabs (`stripMeasure`). */
+  flex: 0 1
+    calc(
+      var(--tab-units, 1) * var(--tab-unit) + var(--tab-groups, 0) * 24px +
+        (var(--tab-count, 1) - 1) * 4px
+    );
+}
+
+.workspace-window-tab {
+  display: flex;
+  align-items: center;
+  position: relative;
+  width: auto;
+  min-width: var(--tab-icon-only);
+  flex: 0 1 var(--tab-unit);
+  container: workspace-tab / inline-size;
+  border-radius: var(--desktop-radius-sm);
+  color: var(--desktop-muted);
+  transition:
+    background-color var(--desktop-base) var(--desktop-out),
+    color var(--desktop-base) var(--desktop-out),
+    box-shadow var(--desktop-base) var(--desktop-out);
+}
+
+.workspace-window-tab > [role="tab"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: inherit;
+  white-space: nowrap;
+  font: inherit;
+  /* Every title the same: selected or not, merged or not. */
+  font-size: var(--desktop-text-body);
+  font-weight: 500;
+}
+
+.workspace-window-tab > [role="tab"] > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-window-tab:hover {
+  color: var(--foreground);
+  background: var(--tab-hover-fill);
+}
+
+/* A plain tab, selected: the pill. */
+.workspace-tab-list > .workspace-window-tab[data-active] {
+  color: var(--foreground);
+  background: var(--tab-pill-fill);
+  box-shadow: var(--tab-pill-edge);
+}
+
+/* A merged group: one unit, quiet at rest — its glyph, its chats, faint dividers. */
+.workspace-tab-group {
+  display: flex;
+  align-items: stretch;
+  /* Its chats' units and its glyph, shrinking as one tab of that many units. */
+  flex: 0 1 calc(var(--tab-chats, 2) * var(--tab-unit) + 24px);
+  min-width: 0;
+  gap: 1px;
+  border-radius: var(--desktop-radius-sm);
+  transition:
+    background-color var(--desktop-base) var(--desktop-out),
+    box-shadow var(--desktop-base) var(--desktop-out);
+}
+
+/* Selected, the whole group is the pill. */
+.workspace-tab-group[data-active] {
+  background: var(--tab-pill-fill);
+  box-shadow: var(--tab-pill-edge);
+}
+
+.workspace-tab-group-glyph {
+  flex: none;
+  align-self: center;
+  margin: 0 0 0 10px;
+  color: var(--desktop-muted);
+  transition: color var(--desktop-base) var(--desktop-out);
+}
+
+.workspace-tab-group[data-active] > .workspace-tab-group-glyph {
+  color: color-mix(
+    in oklab,
+    var(--desktop-light-edge, var(--foreground)) 70%,
+    var(--foreground)
+  );
+}
+
+.workspace-tab-group > .workspace-window-tab {
+  flex: 1 1 0;
+}
+
+/* Too narrow for a title: the icon alone, centred; the close waits for a wider tab. */
+@container workspace-tab (max-width: 72px) {
+  .workspace-window-tab > [role="tab"] {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .workspace-window-tab > [role="tab"] > span:last-child,
+  .workspace-window-tab > .desktop-icon-button {
+    display: none;
+  }
+}
+
+/* Inside the selected group the pill is the group's: the focused chat is
+   brighter, the others stay quiet, and hovering adds no second fill. */
+.workspace-tab-group[data-active] > .workspace-window-tab:hover {
+  background: transparent;
+}
+
+.workspace-tab-group[data-active] > .workspace-window-tab[data-active] {
+  color: var(--foreground);
+}
+
+.workspace-tab-group > .workspace-window-tab + .workspace-window-tab::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 30%;
+  bottom: 30%;
+  width: 1px;
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+.workspace-window-tab > .desktop-icon-button {
+  flex: none;
+  margin-right: 3px;
+  border-radius: var(--desktop-radius-xs);
+  opacity: 0;
+}
+
+.workspace-window-tab:is(:hover, :focus-within, [data-active]) > .desktop-icon-button {
+  opacity: 1;
+}
+.workspace-window-tab > [role="tab"] svg,
+.workspace-window-tab .workspace-agent-tile {
+  flex: none;
+}
+.workspace-tabs-space {
+  flex: 1;
+  min-width: 8px;
+  height: 100%;
+}
+
+@media (hover: none) {
+  .workspace-window-tab > .desktop-icon-button {
+    opacity: 1;
+  }
+}

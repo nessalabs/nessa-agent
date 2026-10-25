@@ -28,24 +28,11 @@
   flex-direction: column;
 }
 
-.subagents-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px 20px 8px;
-}
-
-.subagents-summary,
 .subagents-unreadable,
 .subagents-failed {
   margin: 0;
   color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);
-}
-
-.subagents-summary {
-  padding: 0 20px 8px;
 }
 
 .subagents-rows {

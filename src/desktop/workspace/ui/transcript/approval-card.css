@@ -173,8 +173,7 @@
   font-size: var(--desktop-text-caption);
 }
 
-.workspace-approval-disclose,
-.workspace-approval-copy {
+.workspace-approval-disclose {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -194,10 +193,55 @@
     color var(--desktop-fast) ease;
 }
 
-.workspace-approval-disclose:hover,
-.workspace-approval-copy:hover {
+.workspace-approval-disclose:hover {
   background: var(--desktop-hover-strong);
   color: var(--foreground);
+}
+
+.workspace-approval-command-block {
+  position: relative;
+  min-width: 0;
+}
+
+.workspace-approval-command-block .workspace-approval-command {
+  padding-right: calc(var(--desktop-control-size) + 12px);
+}
+
+.workspace-approval-command-block .workspace-approval-copy {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  opacity: 0;
+  transition: opacity var(--desktop-fast) ease;
+}
+
+.workspace-approval-command-block:is(:hover, :focus-within) .workspace-approval-copy {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .workspace-approval-command-block .workspace-approval-copy {
+    opacity: 1;
+  }
+}
+
+/* What the copy did, beside its button: visible only once it said something. */
+.workspace-approval-copy-said {
+  position: absolute;
+  top: 8px;
+  right: 34px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  pointer-events: none;
+}
+
+.workspace-approval-copy-said:empty {
+  display: none;
+}
+
+/* Said, it stays in view until it is gone, hovered or not. */
+.workspace-approval-copy[data-said] {
+  opacity: 1;
 }
 
 /* A folded script fades out at its last shown line: there is more below. */
@@ -327,8 +371,8 @@
  * A label wraps inside its button, and options that do not fit continue on
  * the next line. When the review also offers always:
  * wide, Deny at the left and the two ways to allow at the right; narrower,
- * one row at the right with "Always"; narrowest, the once answer across the
- * width with Always in its menu, and Deny, quiet, across the width beneath.
+ * Deny stays left with the allow group right and "Always" shortened; narrowest, the once answer across the
+ * width with Always in its menu, and Deny, quiet, aligned left beneath.
  * A review that does not offer always has no such button and no menu.
  */
 .workspace-approval-answers {
@@ -406,14 +450,6 @@
 }
 
 @container approval-answers (width < 380px) {
-  .workspace-approval-actions .workspace-approval-deny {
-    margin-left: auto;
-  }
-
-  .workspace-approval-allow {
-    margin-left: 0;
-  }
-
   .workspace-approval-long {
     display: none;
   }
@@ -433,6 +469,8 @@
   .workspace-approval-allow {
     order: -1;
     gap: 1px;
+    margin-left: 0;
+    width: 100%;
   }
 
   .workspace-approval-actions .workspace-approval-always {
@@ -460,12 +498,12 @@
 
   .workspace-approval-actions .workspace-approval-deny {
     margin-left: 0;
+    align-self: flex-start;
   }
 }
 
 .workspace-approval .workspace-button:focus-visible,
-.workspace-approval-disclose:focus-visible,
-.workspace-approval-copy:focus-visible {
+.workspace-approval-disclose:focus-visible {
   outline: var(--desktop-focus-outline);
   outline-offset: 2px;
 }

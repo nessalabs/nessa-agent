@@ -129,6 +129,8 @@ export function Composer({
   return (
     <form
       className="desktop-composer"
+      // A turn is running: the composer offers Stop (a quiet pane shows only that).
+      data-running={onStop ? "" : undefined}
       onSubmit={(event) => {
         event.preventDefault()
         send()

@@ -32,8 +32,15 @@ import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overvie
 import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
 import { drawn, type SideColumn } from "../../model/side-column"
 import type { WindowArrangement } from "../model/shown-window"
-import type { SessionView } from "../model/session-groups"
-import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
+import { waitingInList, type SessionView } from "../model/session-groups"
+import { keepDrafts, type Draft } from "../model/session-lifecycle"
+import {
+  itemsInTabs,
+  noTabs,
+  reconcileTabs,
+  removeFromTab,
+  type WindowTabs,
+} from "../model/window-tabs"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
 import { settledBy, type AccessChoice } from "../model/access"
 import type {
@@ -181,6 +188,12 @@ export interface WorkspaceState {
   readonly composerText: Readonly<Record<string, string>>
   /** Where conversations sit; none until the index arrives. */
   readonly panes: PaneLayout | null
+  /**
+   * The window's tabs, each one chat or a merged group, each with its own
+   * layout: the active tab's is `panes` (`model/window-tabs.ts`). A draft
+   * stays while a tab holds it; only the active tab's panes are on screen.
+   */
+  readonly tabs: WindowTabs
   readonly view: SessionView
   /**
    * What fills the content region: the panes, the Agents overview over
@@ -194,8 +207,8 @@ export interface WorkspaceState {
   readonly chrome: Chrome
   /**
    * The layout drawing the panes now, as the layout itself says when it is
-   * on screen (`arrangementShown`); `null` while none is, as in the classic
-   * shell. What the window tells the person's agents it shows
+   * on screen (`arrangementShown`); `null` while none is, as before the
+   * first one mounts. What the window tells the person's agents it shows
    * (`usecases/window.ts`) is said only while one is.
    */
   readonly arrangement: WindowArrangement | null
@@ -401,6 +414,7 @@ export const initialWorkspace: WorkspaceState = {
   accessChoices: {},
   composerText: {},
   panes: null,
+  tabs: noTabs,
   view: { channelId: "" },
   content: "panes",
   overview: { selected: null, filter: defaultFilter, group: null },
@@ -514,13 +528,31 @@ export function overviewShows(state: WorkspaceState, sessionId: string): boolean
 }
 
 /**
- * On screen: in a pane, or in the open overview. Only an approval on screen
- * is answered (`approve`, `deny`), so an agent answers what it has opened.
+ * The sessions the session list asks the person about from request cards:
+ * in three columns, the list drawn and not under the overview, its "Needs
+ * you" rows as its search lists them (`waitingInList`), the newest first, at
+ * most `retention.listConversations`. The one rule for which rows the list
+ * draws as cards, what they answer (`onScreen`), and whose conversations the
+ * window reads and keeps for them (`shownIds`).
+ */
+export function listAskIds(state: WorkspaceState): string[] {
+  if (state.arrangement !== "columns" || state.content === "agents") return []
+  if (!drawn(state.chrome.sessionList)) return []
+  return waitingInList(listedSessions(state), state.view)
+    .slice(0, retention.listConversations)
+    .map((session) => session.id)
+}
+
+/**
+ * On screen: in a pane, in the open overview, or asked about by the session
+ * list. Only an approval on screen is answered (`approve`, `deny`), so an
+ * agent answers what it has opened.
  */
 export function onScreen(state: WorkspaceState, sessionId: string): boolean {
   return (
     (state.panes !== null && paneShowingSession(state.panes, sessionId) !== undefined) ||
-    overviewShows(state, sessionId)
+    overviewShows(state, sessionId) ||
+    listAskIds(state).includes(sessionId)
   )
 }
 
@@ -543,10 +575,15 @@ export function overviewShownIds(state: WorkspaceState): string[] {
 
 /**
  * The sessions on screen whose conversations the window keeps whatever
- * their age: the panes' (drafts among them), and the overview's, bounded.
+ * their age: the panes' (drafts among them), the overview's and the
+ * session list's requests, each bounded.
  */
 export function shownIds(state: WorkspaceState): Set<string> {
-  return new Set([...paneIds(state.panes), ...overviewShownIds(state)])
+  return new Set([
+    ...paneIds(state.panes),
+    ...overviewShownIds(state),
+    ...listAskIds(state),
+  ])
 }
 
 /**
@@ -624,23 +661,65 @@ export function without<T>(
 }
 
 /**
- * Applies a change of panes, letting go of any draft no pane shows any more.
- * The one place panes change, so no draft outlives its pane.
+ * Applies a change of the active tab's panes, and reconciles the tabs with
+ * it (`reconcileTabs`): a chat that arrives leaves the tab it was in, and one
+ * that leaves stands as a tab of its own unless `released` (pane item keys)
+ * — closed, or let go. Then keeps what the tabs hold (`withTabs`).
  */
-export function withPanes(state: WorkspaceState, panes: PaneLayout): WorkspaceState {
+export function withPanes(
+  state: WorkspaceState,
+  panes: PaneLayout,
+  released: readonly string[] = [],
+): WorkspaceState {
   if (panes === state.panes) return state
-  const shown = new Set(paneIds(panes))
-  const drafts = keepShownDrafts(state.drafts, shown)
-  // A new session's typing, and its access, go with it; a listed session's
-  // stay until it is let go.
+  const tabs = reconcileTabs(
+    state.tabs,
+    state.panes,
+    panes,
+    (item) => {
+      // A widget, or a new session nothing was typed in, does not stand as a
+      // tab of its own once it leaves: it is closed with its pane.
+      const shown = paneItemOf(item)
+      if (shown?.kind !== "session") return false
+      if (entry(state.sessions, shown.sessionId)) return true
+      return (
+        !!entry(state.drafts, shown.sessionId) &&
+        !!entry(state.composerText, shown.sessionId)
+      )
+    },
+    new Set(released),
+  )
+  return withTabs(state, { tabs, panes })
+}
+
+/**
+ * Sets the tabs and the active tab's panes, keeping a draft only while a tab
+ * holds it — its typing and its access go with it — and a failed read only
+ * while its session is on screen.
+ */
+export function withTabs(
+  state: WorkspaceState,
+  { tabs, panes }: { tabs: WindowTabs; panes: PaneLayout | null },
+): WorkspaceState {
+  const held = new Set(
+    [...itemsInTabs(tabs, panes)].flatMap((item) => {
+      const shown = paneItemOf(item)
+      return shown?.kind === "session" ? [shown.sessionId] : []
+    }),
+  )
+  const drafts = keepDrafts(state.drafts, held)
   const dropped =
     drafts === state.drafts
       ? []
       : Object.keys(state.drafts).filter((id) => !Object.hasOwn(drafts, id))
-  const composerText = dropped.reduce(without, state.composerText)
-  const accessChoices = dropped.reduce(without, state.accessChoices)
-  // A failed read belongs to what showed it: shown again, a session is read afresh.
-  return keepShownFailures({ ...state, panes, drafts, composerText, accessChoices })
+  return keepShownFailures({
+    ...state,
+    panes,
+    tabs,
+    drafts,
+    composerText: dropped.reduce(without, state.composerText),
+    accessChoices: dropped.reduce(without, state.accessChoices),
+  })
 }
 
 /** Adds `id` to a list of ids, or takes it out; the same list when nothing changes. */
@@ -694,6 +773,11 @@ export function modelForNextTurn(
 export function forgetSession(state: WorkspaceState, sessionId: string): WorkspaceState {
   return {
     ...state,
+    // Out of any other tab; the active tab's panes are the caller's.
+    tabs: state.tabs.tabs.reduce(
+      (tabs, tab) => removeFromTab(tabs, tab.id, paneItemKey(sessionItem(sessionId))),
+      state.tabs,
+    ),
     sessions: without(state.sessions, sessionId),
     transcripts: without(state.transcripts, sessionId),
     conversationRevisions: without(state.conversationRevisions, sessionId),

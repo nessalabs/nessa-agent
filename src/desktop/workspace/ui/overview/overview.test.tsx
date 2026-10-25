@@ -337,6 +337,9 @@ describe("the agents overview", () => {
       host.querySelector('.agents-clear [data-slot="empty-state-title"]')?.textContent,
     ).toBe("Nothing needs you")
     expect(host.querySelector("[data-overview-listed]")).not.toBeNull()
+    expect(
+      host.querySelector(".agents-overview-surface")?.hasAttribute("data-bare"),
+    ).toBe(true)
   })
 
   it("covers on the frame after it opens, and draws the list on the frame after the title", async () => {

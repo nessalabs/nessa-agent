@@ -35,7 +35,7 @@ import {
   withTranscript,
   type WorkspaceState,
 } from "../workspace-state"
-import { createDraft } from "./panes"
+import { closeActiveTab, createDraft } from "./panes"
 
 /** Whether the session was removed at or after this revision of it: it stays out. */
 function removedSince(state: WorkspaceState, session: SessionSummary): boolean {
@@ -108,6 +108,8 @@ function removeSession(
   const showing = panes && paneShowingSession(panes, sessionId)
   if (!panes || !showing) return removed
   if (paneCount(panes) > 1) return withPanes(removed, removePane(panes, showing.key))
+  // Alone in its tab while another is open: the tab closes.
+  if (removed.tabs.tabs.length > 1) return closeActiveTab(removed)
   const restarted = createDraft(removed, {
     draftId,
     channelId: session.channelId,
@@ -390,8 +392,8 @@ function sessionsInPanes(state: WorkspaceState): SessionSummary[] {
 }
 
 /**
- * The sessions on screen — in a pane, or in the open overview, bounded
- * (`shownIds`) — whose conversations are the source's to give: listed, and
+ * The sessions on screen — in a pane, in the open overview, or asked about
+ * by the session list's cards, each bounded (`shownIds`) — whose conversations are the source's to give: listed, and
  * spoken of by the source — a session whose first message is still on its
  * way has nothing to read yet. What the window reads, and reads again on a
  * resync (`effects.ts`).

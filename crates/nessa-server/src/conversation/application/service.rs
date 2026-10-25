@@ -126,7 +126,7 @@ use std::{
     time::Duration,
 };
 #[cfg(test)]
-pub(crate) use thread_reports::report_text_for_test;
+pub(crate) use thread_reports::{report_outcomes_for_test, report_text_for_test};
 pub use thread_reports::{
     AwaitedTurn, PendingReport, ReportRegistration, ThreadReport, ThreadReportStore, ThreadTurn,
 };

@@ -6,7 +6,10 @@ use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::subagents::{
     AgentLifetimeId, Initiator, LifetimeState, OwnershipGraph,
 };
-use std::{future::Future, sync::atomic::Ordering, time::Instant};
+use std::{future::Future, sync::atomic::Ordering};
+
+#[path = "../../../../../../scripts/rust-test-support/isolated.rs"]
+mod isolated;
 
 fn private_directory() -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
@@ -430,32 +433,10 @@ fn originating_runtime_shutdown_is_typed() {
 }
 
 fn isolated_fault_case(name: &str, body: impl FnOnce()) {
-    const CHILD: &str = "NESSA_627_FAULT_CASE";
-    if std::env::var(CHILD).ok().as_deref() == Some(name) {
-        body();
-        return;
-    }
-    let exact = format!("infrastructure::session_storage::ownership::tests::{name}");
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", &exact])
-        .env(CHILD, name)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    let start = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            assert!(status.success(), "isolated physical fault failed: {status}");
-            break;
-        }
-        if start.elapsed() > std::time::Duration::from_secs(5) {
-            child.kill().unwrap();
-            let _ = child.wait();
-            panic!("physical fault subprocess watchdog expired");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    isolated::run(
+        &format!("infrastructure::session_storage::ownership::tests::{name}"),
+        body,
+    );
 }
 
 #[test]

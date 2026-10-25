@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, type RefObject } from "react"
+import { memo, useCallback, useRef, useState, type RefObject } from "react"
 import {
   offeredBy,
   offersWindow,
@@ -9,6 +9,7 @@ import {
   type EscapeStack,
   type WidgetAnswer,
   type WidgetPlugin,
+  type WidgetCrumb,
   type WidgetRef,
 } from "../../../widgets"
 import { paneScope, useEscapeScope } from "../../adapters/dom/widget-escape"
@@ -88,7 +89,8 @@ function WidgetPaneParts({
   const focusHandlers = usePaneFocus(pane)
   const origin = widgetOrigin(answer)
   const title = widgetTitle(answer)
-  const host = usePaneWidgetHost(pane, widget, origin, steps)
+  const [crumb, setCrumb] = useState<WidgetCrumb | null>(null)
+  const host = usePaneWidgetHost(pane, widget, origin, steps, setCrumb)
   const filled = useFilledAfterFirstPaint()
   // Back to the conversation: focused where it is, or opened beside this pane.
   const toOrigin = useCallback(
@@ -108,7 +110,9 @@ function WidgetPaneParts({
       <PaneHeaderFrame
         pane={pane}
         multi={multi}
-        name={<WidgetTrail origin={origin} title={title} onOrigin={toOrigin} />}
+        name={
+          <WidgetTrail origin={origin} title={title} onOrigin={toOrigin} inner={crumb} />
+        }
         actions={
           <>
             {offersWindow(answer, offeredBy(plugin)) ? (

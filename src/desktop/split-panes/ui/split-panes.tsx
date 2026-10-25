@@ -134,9 +134,11 @@ export const SplitPanes = memo(function SplitPanes({
       frames = []
     }
     const hold = (on: boolean) => {
-      gridRef.current
-        ?.closest<HTMLElement>("[data-workspace]")
-        ?.toggleAttribute("data-spare-held", on)
+      const workspace = gridRef.current?.closest<HTMLElement>("[data-workspace]")
+      workspace?.toggleAttribute("data-spare-held", on)
+      // The host's mark for a column this change folds goes with the hold,
+      // in the same step: what is measured next never sees one without the other.
+      if (!on) workspace?.removeAttribute("data-folding")
     }
     const draw = (columns: Columns) => {
       pending = { columns }
@@ -171,9 +173,22 @@ export const SplitPanes = memo(function SplitPanes({
     // Subscribing does not call back. A layout that landed before this
     // effect, or a source this grid just took, is read now and still waits
     // its frames.
+    let lastCut = source.cut?.()
     const reconcile = () => {
       const next = source.layout()?.columns ?? null
       const shown = drawnRef.current
+      // Another layout in the old one's place: drawn at once, boxes and all,
+      // so no frame shows its panes in the boxes of the one it replaced.
+      const cut = source.cut?.()
+      if (cut !== lastCut) {
+        lastCut = cut
+        cancel()
+        armed = false
+        waiting = null
+        hold(false)
+        if (next !== shown) draw(next)
+        return
+      }
       if (pending?.columns === shown) pending = null
       // This arrangement is already the update React will commit.
       if (pending?.columns === next) return
@@ -226,8 +241,13 @@ export const SplitPanes = memo(function SplitPanes({
     const workspace = gridRef.current?.closest<HTMLElement>("[data-workspace]")
     if (!workspace) return
     const live = source.layout()?.columns ?? null
-    workspace.toggleAttribute("data-spare-held", drawn !== live)
-    return () => workspace.removeAttribute("data-spare-held")
+    const held = drawn !== live
+    workspace.toggleAttribute("data-spare-held", held)
+    if (!held) workspace.removeAttribute("data-folding")
+    return () => {
+      workspace.removeAttribute("data-spare-held")
+      workspace.removeAttribute("data-folding")
+    }
   }, [drawn, source])
   const multi = panes.length > 1
   // In the order the panes were opened, not where they sit: a pane is placed
