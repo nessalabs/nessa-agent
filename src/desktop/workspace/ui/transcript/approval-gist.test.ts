@@ -151,3 +151,24 @@ it("finds every address in a word, each host as the browser spells it", () => {
   expect(gist.hosts).toEqual(["evil.example", "xn--gthub-n2e.com", "example.com"])
   expect(gist.programs.map((program) => program.name)).toEqual(["curl", "git"])
 })
+
+it("reads a shell list as its script only for a known shell, from a system directory, with -c or -lc", () => {
+  const read = (argv: string[]) =>
+    commandGist(`exec ${JSON.stringify({ command: argv })}`)
+  expect(read(["bash", "-c", "ls"]).script).toBe("ls")
+  expect(read(["/bin/zsh", "-lc", "ls"]).script).toBe("ls")
+  expect(read(["/opt/homebrew/bin/fish", "-c", "ls"]).script).toBe("ls")
+  // Anything else is shown as it was sent: the whole list is a field, never just the script.
+  for (const argv of [
+    ["/tmp/evil/bash", "-c", "ls"],
+    ["bash", "-ic", "ls"],
+    ["python3", "-c", "print(1)"],
+  ]) {
+    const gist = read(argv)
+    expect(gist.script, argv.join(" ")).toBeUndefined()
+    expect(
+      gist.fields.map(([name]) => name),
+      argv.join(" "),
+    ).toContain("command")
+  }
+})

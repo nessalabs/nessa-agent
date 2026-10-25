@@ -52,6 +52,12 @@ const folder = (
 )
 
 export const nessaIcons: DesktopIconFamily = {
+  copy: drawn(
+    <>
+      <rect x="7" y="7" width="9" height="10" rx="2" />
+      <path d="M12.5 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v5.5a2 2 0 0 0 2 2h2" />
+    </>,
+  ),
   check: drawn(<path d="M5.25 10.25l3.25 3.25 6.25-6.5" />),
   close: drawn(<path d="M6 6l8 8M14 6l-8 8" />),
   chevronDown: drawn(<path d="M6.25 8.25 10 12l3.75-3.75" />),

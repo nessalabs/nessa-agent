@@ -63,7 +63,11 @@ document.documentElement.dataset.nessaModule = "started"
 // page whose query names a seeded run, on that in-memory workspace
 // (`seeded-window.ts`); otherwise the sample (`model/workspace-backend.ts`).
 const environment = environmentFromVite()
-const backend = workspaceBackend(host.kind, window.location.search)
+const backend = workspaceBackend(
+  host.kind,
+  window.location.search,
+  environment.sampleWorkspace,
+)
 const seeded = backend === "seeded" ? seededWindow(window.location.search) : undefined
 const gateway = seeded ? undefined : windowGateway(backend)
 

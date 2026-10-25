@@ -70,8 +70,8 @@ export function useWindowTooltips(): void {
       const shortcut = target.dataset.tooltipShortcut ?? ""
       key.textContent = shortcut
       key.hidden = shortcut === ""
-      // Drawn inside the surface the control sits in — the workspace, Settings,
-      // the classic shell — so it takes that surface's tokens and theme.
+      // Drawn inside the surface the control sits in — the workspace or
+      // Settings — so it takes that surface's tokens and theme.
       const surface = target.closest<HTMLElement>("[data-surface]")
       const home = surface ?? document.body
       if (tip.parentElement !== home) home.append(tip)

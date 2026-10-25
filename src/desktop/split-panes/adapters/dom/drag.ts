@@ -377,6 +377,8 @@ interface Made {
   readonly room: PaneRoom | undefined
   /** What the drag may aim at; `null` while no pane can be seen. */
   readonly targets: Targets | null
+  /** The outline's least top: the bottom of what it stays clear of (`clearOf`). */
+  readonly clearTop: number
   /** Each pane's parts and where each sits in it: what a preview counter-scales. */
   readonly parts: ReadonlyMap<HTMLElement, readonly PanePart[]>
   readonly motion: { duration: number; easing: string }
@@ -513,6 +515,16 @@ export interface SplitPanesDragOptions {
    * layer that is never seen (`split-panes-drag.test.tsx`).
    */
   readonly unscaled?: readonly string[]
+  /**
+   * Another part of the page, beside `root`, whose items can be carried onto
+   * the panes: the window's tab strip, say. Read as the drag is set up.
+   */
+  readonly carriedFrom?: (root: HTMLElement) => HTMLElement | null
+  /**
+   * What a drop's outline stays below: a bar the host lays over the grid's
+   * top, such as the window's titlebar with its tabs. Measured at the press.
+   */
+  readonly clearOf?: (root: HTMLElement) => HTMLElement | null
 }
 
 /**
@@ -554,6 +566,7 @@ export function useSplitPanesDrag(
   useEffect(() => {
     const scope = root.current
     if (!scope) return
+    const beside = options.carriedFrom?.(scope) ?? null
 
     const announcer = document.createElement("div")
     announcer.className = "split-panes-announcer"
@@ -774,14 +787,22 @@ export function useSplitPanesDrag(
      * take. It glides between zones by transform. Its width and height are
      * set at once — transitioning them would lay the page out every frame.
      */
-    const placeholder = (made: Made, box: Box | null) => {
+    const placeholder = (made: Made, landingBox: Box | null) => {
+      let box = landingBox
       const { drawing } = made
-      drawing.landing = box
       if (!box) {
+        drawing.landing = null
         drawing.outline?.remove()
         drawing.outline = null
         return
       }
+      // Never up under the host's bar: the outline starts where a pane's
+      // content does, below it, however far the pane's own box reaches.
+      if (box.top < made.clearTop) {
+        const cut = made.clearTop - box.top
+        box = { ...box, top: made.clearTop, height: Math.max(0, box.height - cut) }
+      }
+      drawing.landing = box
       const fresh = !drawing.outline
       const element = drawing.outline ?? document.createElement("div")
       element.className = classes.placeholder
@@ -1147,6 +1168,7 @@ export function useSplitPanesDrag(
         grid,
         room,
         targets,
+        clearTop: options.clearOf?.(scope)?.getBoundingClientRect().bottom ?? -Infinity,
         parts,
         motion,
         drawing: {
@@ -1544,7 +1566,7 @@ export function useSplitPanesDrag(
       const pressed = target.closest<HTMLElement>(
         `[${marks.dragPane}], [${marks.dragItem}]`,
       )
-      if (!pressed || !scope.contains(pressed)) return
+      if (!pressed || !(scope.contains(pressed) || beside?.contains(pressed))) return
       // A control inside what is carried keeps its own press.
       const control = target.closest("button, input, textarea, a, [role='menuitem']")
       if (control && control !== pressed && pressed.contains(control)) return
@@ -1670,6 +1692,7 @@ export function useSplitPanesDrag(
     const unsubscribe = source.subscribe(onStore)
 
     scope.addEventListener("pointerdown", onPointerDown)
+    beside?.addEventListener("pointerdown", onPointerDown)
     window.addEventListener("pointermove", onPointerMove)
     window.addEventListener("pointerup", onPointerUp)
     window.addEventListener("pointercancel", onLost)
@@ -1684,6 +1707,7 @@ export function useSplitPanesDrag(
       unsubscribe()
       inert.disconnect()
       scope.removeEventListener("pointerdown", onPointerDown)
+      beside?.removeEventListener("pointerdown", onPointerDown)
       window.removeEventListener("pointermove", onPointerMove)
       window.removeEventListener("pointerup", onPointerUp)
       window.removeEventListener("pointercancel", onLost)

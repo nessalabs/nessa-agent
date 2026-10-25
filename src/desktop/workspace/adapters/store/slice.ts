@@ -37,6 +37,7 @@ import * as overview from "../../application/usecases/overview"
 import type { AgentsFilter } from "../../model/overview/filter"
 import type { AgentsGroup } from "../../model/overview/agents-glance"
 import * as panes from "../../application/usecases/panes"
+import * as sessionTabs from "../../application/usecases/session-tabs"
 import * as sessions from "../../application/usecases/sessions"
 import * as access from "../../application/usecases/access"
 import type { AccessMode } from "../../model/access"
@@ -54,6 +55,17 @@ const workspaceSlice = createSlice({
   name: "workspace",
   initialState: initialWorkspace as WorkspaceState,
   reducers: {
+    // Tabs: each one chat or a merged group, each with its own layout (#1077).
+    tabSwitched: (state, { payload }: Payload<{ tabId: string }>) =>
+      sessionTabs.switchTab(state, payload),
+    tabClosed: (state, { payload }: Payload<{ sessionId: string; draftId: string }>) =>
+      panes.closeTab(state, payload),
+    tabItemClosed: (state, { payload }: Payload<{ item: string; draftId: string }>) =>
+      panes.closeTabItem(state, payload),
+    tabSplitOff: (state, { payload }: Payload<{ sessionId: string }>) =>
+      panes.splitOffTab(state, payload),
+    sessionWalked: (state, { payload }: Payload<{ sessionId: string }>) =>
+      panes.walkToSession(state, payload),
     // Panes
     focusPane: (state, { payload }: Payload<{ pane: PaneKey }>) =>
       panes.focusPane(state, payload.pane),
@@ -174,6 +186,8 @@ const workspaceSlice = createSlice({
       navigation.toggleSidebar(state, payload ?? {}),
     toggleSessionList: (state, { payload }: Payload<{ open?: boolean } | undefined>) =>
       navigation.toggleSessionList(state, payload ?? {}),
+    searchList: (state, { payload }: Payload<{ query: string }>) =>
+      navigation.searchList(state, payload),
     resizeSidebar: (state, { payload }: Payload<{ width: number }>) =>
       navigation.resizeSidebar(state, payload),
     resizeSessionList: (state, { payload }: Payload<{ width: number }>) =>
@@ -427,6 +441,8 @@ const goesSomewhere: ReadonlySet<string> = new Set(
     workspaceActions.widgetOpened,
     workspaceActions.selectChannel,
     workspaceActions.channelOpened,
+    workspaceActions.tabSwitched,
+    workspaceActions.sessionWalked,
   ].map((action) => action.type),
 )
 
@@ -446,6 +462,9 @@ const changesPanes: ReadonlySet<string> = new Set(
     workspaceActions.closeInFront,
     workspaceActions.equalizePanes,
     workspaceActions.resizePanes,
+    workspaceActions.tabClosed,
+    workspaceActions.tabItemClosed,
+    workspaceActions.tabSplitOff,
   ].map((action) => action.type),
 )
 

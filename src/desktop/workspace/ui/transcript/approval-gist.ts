@@ -54,15 +54,39 @@ export interface CommandGist {
 
 const shells = new Set(["bash", "sh", "zsh", "dash", "fish", "ksh"])
 
-/** A shell list such as `["bash", "-lc", "…"]` is its script; any other list has none. */
+/** Where a shell named by its path may live and still read as that shell. */
+const shellHomes = new Set([
+  "/bin/",
+  "/usr/bin/",
+  "/usr/local/bin/",
+  "/opt/homebrew/bin/",
+])
+
+/**
+ * The flags agents send to run a script (`-c`, and Codex's `-lc`). The
+ * shell still reads its own startup files (`-l` a login profile, zsh
+ * `~/.zshenv` always); what the card reads is the script it was given.
+ */
+const scriptFlags = new Set(["-c", "-lc"])
+
+/**
+ * A shell list such as `["bash", "-lc", "…"]` is its script; any other list
+ * has none, and is shown as it was sent. The shell must be one by its bare
+ * name or from a system directory — `/tmp/evil/bash` runs something else —
+ * and its flag one agents send (`scriptFlags`): `-ic` also reads the
+ * person's rc files, which agents do not ask for.
+ */
 function scriptOf(value: unknown): string | undefined {
   if (typeof value === "string") return value
   if (!Array.isArray(value) || value.length !== 3) return undefined
   const [shell, flag, script] = value as unknown[]
   if (typeof shell !== "string" || typeof flag !== "string" || typeof script !== "string")
     return undefined
-  if (!shells.has(shell.split("/").at(-1) ?? "") || !/^-[a-z]*c[a-z]*$/.test(flag))
-    return undefined
+  const slash = shell.lastIndexOf("/")
+  const name = shell.slice(slash + 1)
+  const home = shell.slice(0, slash + 1)
+  if (!shells.has(name) || (home !== "" && !shellHomes.has(home))) return undefined
+  if (!scriptFlags.has(flag)) return undefined
   return script
 }
 

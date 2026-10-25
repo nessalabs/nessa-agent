@@ -58,6 +58,13 @@ export const paneLimits = {
   minWidth: 300,
   /** The shortest a stacked pane may be and still show a turn and a composer. */
   minHeight: 220,
+  /**
+   * Below this height, a pane of several you are not in quiets its composer —
+   * one line, or Stop alone while its turn runs — so its conversation keeps
+   * the room (`conversation.css`, which repeats it: a container query cannot
+   * read a property). Roughly two readable minimums less the dock.
+   */
+  quietComposerBelow: 420,
   /** The gap between panes, as the stylesheet draws it. */
   gutter: 8,
 } as const

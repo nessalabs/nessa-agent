@@ -706,7 +706,7 @@ export function AgentsOverview({
         <div
           ref={surface}
           className="agents-overview-surface"
-          data-bare={filled ? undefined : ""}
+          data-bare={filled && rowCount > 0 ? undefined : ""}
           data-list-width={listWidth === null ? undefined : true}
           style={
             {

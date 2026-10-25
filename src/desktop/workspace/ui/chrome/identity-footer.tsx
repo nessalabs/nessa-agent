@@ -4,8 +4,7 @@ import { commandLabel } from "../../../model/keyboard"
 import { IdentityButton, IdentityRow } from "../../../ui/identity"
 
 /**
- * The sidebar's foot: "nessa Studio", which opens Settings. Its mark is the
- * side rail's toggle beside it — a separate control, one tab stop each.
+ * The sidebar's left-aligned foot: "nessa Studio", which opens Settings.
  */
 export function IdentityFooter() {
   return (
@@ -14,7 +13,7 @@ export function IdentityFooter() {
         product="Studio"
         label="nessa Studio Settings"
         shortcut={`${commandLabel(isMac)},`}
-        onClick={openSettings}
+        onClick={() => openSettings()}
       />
     </IdentityRow>
   )

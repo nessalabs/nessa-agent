@@ -1,20 +1,10 @@
-/*
- * What the sessions-in-sidebar layout adds to the shared parts: compose
- * lives in the sidebar, and with the sidebar away it waits by the toggle.
- */
-.workspace-titlebar-compose {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.workspace[data-sidebar="closed"] .workspace-titlebar-compose {
-  opacity: 1;
-  pointer-events: auto;
-  transition-delay: var(--desktop-fast);
-}
-
 /* The overview owns this group's inert state; each region keeps its own. */
 .workspace-content {
+  display: contents;
+}
+
+/* What the maximized right panel covers (`workspace-layout.tsx`): only its inert state. */
+.workspace-covered {
   display: contents;
 }
 
@@ -31,9 +21,12 @@
   top: 0;
   right: 0;
   bottom: 0;
-  left: calc(2 * var(--desktop-gutter) + var(--workspace-sidebar-width));
+  /* From the sidebar's own edge: the resize edge's gutter is under the
+     cover too, so no strip of what lies beneath shows beside the sidebar. */
+  left: calc(var(--desktop-gutter) + var(--workspace-sidebar-width));
   display: flex;
-  padding: var(--desktop-gutter) var(--desktop-gutter) var(--desktop-gutter) 0;
+  padding: var(--desktop-titlebar-height) var(--desktop-gutter) var(--desktop-gutter)
+    var(--desktop-gutter);
   pointer-events: none;
 }
 
@@ -44,9 +37,10 @@
 
 /* While the spare hold keeps the sidebar in the row, the layer keeps the
    place it had, so the fold's attribute does not move it. */
-.workspace[data-spare-held][data-sidebar="closed"] .workspace-overview-layer {
-  left: calc(2 * var(--desktop-gutter) + var(--workspace-sidebar-width));
-  padding-left: 0;
+.workspace[data-spare-held][data-folding][data-sidebar="closed"]
+  .workspace-overview-layer {
+  left: calc(var(--desktop-gutter) + var(--workspace-sidebar-width));
+  padding-left: var(--desktop-gutter);
 }
 
 .workspace-overview-layer[data-open] {

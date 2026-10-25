@@ -580,7 +580,7 @@ describe("what is typed and not sent", () => {
     expect(byPerson.composerText.a).toBeUndefined()
   })
 
-  it("goes with its session: removed, or a new session no pane shows any more", () => {
+  it("goes with a removed session, and stays with a draft document when hidden", () => {
     const typed = composerTextChanged(loadedState(), { sessionId: "a", text: "x" })
     const removed = sessionRemoved(typed, {
       sessionId: "a",
@@ -594,6 +594,6 @@ describe("what is typed and not sent", () => {
     })
     expect(drafted.composerText.new).toBe("y")
     const replaced = openSession(drafted, { sessionId: "c" })
-    expect(replaced.composerText.new).toBeUndefined()
+    expect(replaced.composerText.new).toBe("y")
   })
 })
