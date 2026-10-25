@@ -18,7 +18,7 @@ sources:
   - "crates/nessa-server/src/webhooks/application/admission.rs"
   - "crates/nessa-server/src/webhooks/application/source.rs"
   - "crates/nessa-server/tests/webhooks/infrastructure/source.rs"
-  - "crates/nessa-client-core/tests/read_only_sync/gateway/deadline_stream.rs"
+  - "crates/nessa-client-core/tests/protected/deadline_stream.rs"
 diagramLinks: {}
 ---
 
@@ -109,4 +109,4 @@ their previous source revisions.
 
 ## Further reading
 
-[Source](../../../../crates/nessa-server/src/product/socket.rs) · [Related source](../../../../crates/nessa-server/src/product/record_read/dispatch.rs) · [Related tests](../../../../crates/nessa-client-core/tests/read_only_sync/gateway/deadline_stream.rs)
+[Source](../../../../crates/nessa-server/src/product/socket.rs) · [Related source](../../../../crates/nessa-server/src/product/record_read/dispatch.rs) · [Related tests](../../../../crates/nessa-client-core/tests/protected/deadline_stream.rs)
