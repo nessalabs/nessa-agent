@@ -94,6 +94,14 @@ impl CompositionRoot {
             Command::Doctor { credential_file } => super::cli::online(false, credential_file, None),
             Command::InstallAgent { agent } => super::install_command::execute(&agent).await,
             Command::Limits => print_limits(),
+            Command::GithubConnect {
+                repository,
+                accept_gap,
+            } => super::github_relay::connect(repository, accept_gap).await,
+            Command::GithubEvents { repository } => super::github_relay::events(repository).await,
+            Command::GithubDisconnect { repository } => {
+                super::github_relay::disconnect(repository).await
+            }
             Command::EnvProtocol => {
                 writeln!(std::io::stdout(), "{}", crate::env::LEASE_PROTOCOL)?;
                 Ok(())
@@ -353,6 +361,7 @@ impl CompositionRoot {
         .map_err(|error| RunError::Serve(std::io::Error::other(error.to_string())))?
         .map_err(RunError::Serve)?;
 
+        let _github_relay = super::github_relay::start(&config);
         let shutdown_product = product.clone();
         let mut router = http::router(product).layer(Extension(endpoint_identity));
         if let Some(identity) = &desktop_identity {

@@ -1,6 +1,6 @@
 # Nessa GitHub webhooks
 
-Standalone Cloudflare Workers Free receiver for the nessalabs-owned
+Cloudflare Workers Free receiver and desktop relay for the nessalabs-owned
 [Nessa Agent app](https://github.com/apps/nessa-agent), issue
 [#1107](https://github.com/nessalabs/nessa-agent/issues/1107). Its ordering and
 scope contract is [ADR 1107](../../docs/adr/todo/1107-github-webhook-receiver.md).
@@ -27,8 +27,8 @@ runtime; composition supplies database, cryptography, clock, and reporting.
 200 (identical duplicate). A reused ID with different bytes/event returns 409.
 Malformed bodies/headers, wrong signatures, and payloads above one MiB return
 400/401/413. A full or unavailable database returns 503. `GET /health` is process
-liveness/configuration only; it does not query the database. All read APIs are
-absent. No CORS, desktop routing, or user-token exchange is implemented here.
+liveness/configuration only; it does not query the database. The relay read and watch routes below are authenticated separately. No browser CORS
+or user-token exchange is exposed.
 
 ## Live receiver
 
@@ -67,7 +67,7 @@ cd packages/github-webhooks
 pnpm exec wrangler login --use-keyring --scopes account:read user:read workers:write workers_scripts:write d1:write
 pnpm exec wrangler d1 migrations apply nessa-github-webhooks --remote
 pnpm exec wrangler secret put GITHUB_WEBHOOK_SECRET
-pnpm run deploy
+pnpm run deploy dev
 ```
 
 The initial deployment used the signed-in dashboard because the least-scope
@@ -100,19 +100,119 @@ pnpm exec wrangler d1 execute nessa-github-webhooks --remote --command 'SELECT d
 pnpm exec wrangler d1 execute nessa-github-webhooks --remote --command 'SELECT delivery_id, event, received_at FROM deliveries ORDER BY received_at DESC LIMIT 20'
 ```
 
-The inbox retains up to 10,000 deliveries / 64 MiB of raw payload, without expiry
-or eviction. A full inbox returns 503 for new IDs while accepting known identical
-duplicates. Export to a protected file before any deliberate cleanup, verify the
-export, and preserve deletion evidence with the operator's identity and reason.
-Deletion is an explicit separate operator action. Never silently delete data to
-make a failing request succeed. Accounting triggers follow explicit row deletes.
+The cloud inbox holds up to 10,000 deliveries / 64 MiB raw payload. Retention
+has a seven-day target: a five-minute cron deletes at most 64 expired rows per
+run, with deletion evidence and a per-repository expiry watermark in the same
+transaction. Sweeps can lag the target. Full/quota-exhausted service refuses new
+deliveries; it never upgrades the account. GitHub does not automatically retry
+failed webhooks: inspect App Advanced > Recent deliveries and redeliver original
+IDs after resolving the cause. A full free inbox is not lossless unlimited capture.
 
-GitHub does **not** automatically retry failed webhook deliveries. In the App's
-Advanced > Recent deliveries, inspect failures and redeliver after fixing the
-cause. An ambiguous/lost response can be safely redelivered under its original
-UUID. Before adding a consumer, define retention, authenticated ownership, and
-automatic recovery from missed deliveries; this receiver alone does not deliver
-events into desktop conversations.
+## User routing and offline catch-up
+
+`GET /relay/v1/events?repository=NUMERIC_ID&after=SEQUENCE` requires a GitHub
+bearer credential, `x-github-user-id` and `x-nessa-stage`. The identity header is
+an expected identity, not proof: GitHub verifies the token's user and current
+repository access on every page. Cedar evaluates those facts. Private repositories
+also require the GitHub-reported `repo` OAuth scope; a metadata-only token is not
+accepted for private payloads. Fine-grained PATs and GitHub App user tokens with
+no OAuth scope proof are not a supported private-repository login in this slice.
+The local adapter uses the machine's existing `gh auth` account. Tokens are sent
+only over HTTPS to the stage's compiled origin, never persisted or logged by the
+relay. Installation owners are not assumed to own all their members' identities.
+
+Each page returns at most eight events and one MiB of source payload, an explicit
+continuation flag, a next cursor and a two-minute signed
+watch ticket. `GET /relay/v1/watch` upgrades to WebSocket with `x-nessa-stage`
+and `x-nessa-watch-ticket` headers. Tickets never go in URLs. SQLite Durable Objects
+use hibernation; sockets carry only `changed`, without event data. Expiry closes
+them. Every payload read still checks GitHub access. Authorization is a snapshot
+at read admission; a read already admitted may finish after a revocation.
+
+The native gateway imports into a private stage/instance SQLite inbox. It obtains
+a ticket, watches, then catches up again to close the read/watch race. It renews
+at 90 seconds, which also recovers lost wake-ups without polling GitHub event APIs.
+Local event inserts and the cursor commit together. A lost response/crash replays
+the page; competing consumers use a cursor and binding-generation check. Reconnect
+preserves the cursor; a disconnect/reconnect generation fences in-flight old work.
+Local delivery-ID deduplication also handles a cloud-expired event redelivered while
+its original local copy remains. Neither store promises deduplication after erasure.
+
+A cursor behind an expired event gets HTTP 410 and a durable local gap. It does
+not silently advance. An explicit reconnect with `--accept-gap` records the local
+owner's acceptance before advancing. Local storage retains seven days from import,
+with a 10,000-event / 64 MiB payload cap and at most 16 repository/account bindings.
+Cleanup runs in page transactions; without a consumer it can lag. Deletion and
+connection/cursor changes keep bounded audit metadata (last 10,000 records per
+log). The cloud access and deletion audit logs are likewise bounded, not archives.
+
+From the corresponding development checkout/binary (the packaged app receives
+its stage automatically from its host):
+
+```sh
+nessa github connect nessalabs/nessa-agent
+nessa github events nessalabs/nessa-agent
+nessa github disconnect nessalabs/nessa-agent
+# Only after inspecting a reported catch-up gap:
+nessa github connect nessalabs/nessa-agent --accept-gap
+```
+
+The serving gateway discovers connection changes within five seconds. `events`
+reads the latest 100 events per matching local binding without network access;
+it emits JSON on stdout, diagnostics on stderr. The local owner controls this
+private inbox through OS file ownership, not a new unauthenticated HTTP route.
+These events are data: this slice does not auto-create conversations or run tools.
+Existing conversation command admission and Cedar remain their separate owners.
+The first connection requires an installed, signed-in `gh`; packaged browser
+onboarding and GitHub App OAuth token refresh are not supplied by this relay.
+
+## Stages and free-plan rollout
+
+The desktop host already embeds `NESSA_BUNDLE_STAGE` and refuses a conflicting
+runtime override. The relay reuses that selection. The native binary embeds
+[`github-relays.json`](../../protocol/defaults/github-relays.json), so users do
+not choose a stage or enter an endpoint. `dev` uses the existing workers.dev URL;
+`alpha`, `ci` and `prod` are disabled and never fall back to dev. Shared wire and
+storage bounds live in [the relay contract](../../protocol/defaults/github-relay-contract.json),
+compiled into Rust and bundled into the Worker.
+
+[`stage-deployments.json`](stage-deployments.json) selects each stage's Wrangler
+file. To enable a rollout stage, provision an independent **free** Worker, D1,
+SQLite Durable Object namespace and **separate GitHub App**, add its HTTPS origin,
+app slug and client ID to the public table, and add its Wrangler config path to
+the deployment table. Each config supplies its own `RELAY_STAGE`, D1 ID and Worker
+name; each deployment receives independent `GITHUB_WEBHOOK_SECRET` and
+`RELAY_TICKET_SECRET` encrypted bindings. Deploy with `pnpm run deploy STAGE`.
+The guard refuses incomplete configuration, shared Worker/database resources or
+shared app identities/origins. It does not create production resources for you.
+Never run ad-hoc `wrangler --env prod` against the dev-only config.
+
+The current URL is **Nessa development**, even though Cloudflare calls a Worker's
+live deployment slot "Production". No paid plan, Queue, KV or automatic paid
+fallback is needed. Durable Objects use SQLite classes supported on Free. Workers
+Free's 100,000 requests/day and D1/DO daily limits include idle renewals, reads,
+audits and catch-up. One idle watched repository uses roughly 1,920 read requests
+per day at the current renewal interval; this starter is not a 10,000-user free
+service. Limit/refusal recovery may require operator redelivery of GitHub webhooks.
+
+## Relay module map
+
+```text
+relay/domain/cursor.ts           shared bounds and wire identities
+relay/application/read.ts        GitHub facts -> Cedar -> audit -> bounded page
+relay/application/ports.ts       identity, policy, inbox, audit and ticket ports
+relay/infrastructure/github.ts  fixed GitHub origin; credential never retained
+relay/infrastructure/cedar/     validated schema/policy and bundled Cedar WASM
+relay/infrastructure/d1.ts      page snapshot, retention and audit persistence
+relay/infrastructure/tickets.ts stage-bound HMAC watch tickets
+relay/infrastructure/wake-room.ts SQLite DO hibernating sockets; wake-up only
+relay/infrastructure/http.ts    authenticated HTTP and watch adapter
+```
+
+The [native relay module](../../crates/nessa-server/src/github_relay/mod.rs),
+[composition](../../crates/nessa-server/src/composition/github_relay.rs) and
+[ADR 1117](../../docs/adr/todo/1117-github-relay.md) describe the local owner and
+ordering matrix. The local receiver remains optional in unconfigured stages.
 
 To disable ingestion, first deactivate the GitHub App webhook. Removing the
 Worker stops HTTP service; removing D1 permanently removes its inbox and needs

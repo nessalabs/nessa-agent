@@ -1,0 +1,491 @@
+use crate::{
+    env::Stage,
+    github_relay::{
+        application::{catch_up, RelaySource, RelayStore},
+        domain::{Binding, Event, Failure, Page},
+        infrastructure::{relay_configuration, SqliteRelayStore},
+    },
+};
+use std::sync::{
+    atomic::{AtomicBool, AtomicI64, Ordering},
+    Arc,
+};
+fn binding(user: &str) -> Binding {
+    Binding::new(
+        user.into(),
+        "42".into(),
+        "nessalabs/nessa-agent".into(),
+        uuid::Uuid::new_v4(),
+    )
+    .unwrap()
+}
+fn page(user: &str, sequence: i64) -> Page {
+    Page {
+        user_id: user.into(),
+        next: sequence,
+        has_more: false,
+        ticket: "ticket".into(),
+        events: vec![Event {
+            sequence,
+            delivery_id: uuid::Uuid::new_v4().to_string(),
+            event: "issues".into(),
+            payload: "{}".into(),
+            received_at: "2026-10-25T00:00:00Z".into(),
+            repository_id: "42".into(),
+        }],
+    }
+}
+fn store(directory: &tempfile::TempDir) -> SqliteRelayStore {
+    SqliteRelayStore::new(
+        directory.path().join("private/inbox.sqlite"),
+        Arc::new(|| 1000000),
+    )
+}
+
+#[tokio::test]
+async fn failed_page_rolls_back_events_and_cursor_and_reopen_replays() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory);
+    let binding = binding("11");
+    store.bind(&binding, false).await.unwrap();
+    let mut bad = page("11", 1);
+    let mut duplicate = bad.events[0].clone();
+    duplicate.sequence = 2;
+    bad.events.push(duplicate);
+    bad.next = 2;
+    assert_eq!(store.commit(&binding, 0, &bad).await, Err(Failure::Storage));
+    assert_eq!(store.cursor(&binding).await.unwrap(), 0);
+    assert!(store.events(&binding).await.unwrap().is_empty());
+    let good = page("11", 1);
+    store.commit(&binding, 0, &good).await.unwrap();
+    let reopened = SqliteRelayStore::new(
+        directory.path().join("private/inbox.sqlite"),
+        Arc::new(|| 1000000),
+    );
+    assert_eq!(reopened.cursor(&binding).await.unwrap(), 1);
+    assert_eq!(reopened.events(&binding).await.unwrap(), good.events);
+}
+#[tokio::test]
+async fn concurrent_consumers_commit_only_the_page_matching_the_current_cursor() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory);
+    let binding = binding("11");
+    store.bind(&binding, false).await.unwrap();
+    let page = page("11", 1);
+    let (a, b) = tokio::join!(
+        store.commit(&binding, 0, &page),
+        store.commit(&binding, 0, &page)
+    );
+    assert!(
+        (a.is_ok() && b == Err(Failure::CursorChanged))
+            || (b.is_ok() && a == Err(Failure::CursorChanged))
+    );
+    assert_eq!(store.events(&binding).await.unwrap().len(), 1);
+}
+#[tokio::test]
+async fn account_and_repository_correlation_precede_local_effects() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory);
+    let first = binding("11");
+    let second = binding("22");
+    store.bind(&first, false).await.unwrap();
+    store.bind(&second, false).await.unwrap();
+    assert_eq!(
+        store.commit(&first, 0, &page("22", 1)).await,
+        Err(Failure::IdentityChanged)
+    );
+    let mut wrong_repo = page("11", 1);
+    wrong_repo.events[0].repository_id = "43".into();
+    assert_eq!(
+        store.commit(&first, 0, &wrong_repo).await,
+        Err(Failure::InvalidResponse)
+    );
+    store.commit(&first, 0, &page("11", 1)).await.unwrap();
+    assert!(store.events(&second).await.unwrap().is_empty());
+    assert_eq!(store.cursor(&second).await.unwrap(), 0);
+}
+#[tokio::test]
+async fn gap_is_durable_and_requires_explicit_owner_acknowledgement() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory);
+    let binding = binding("11");
+    store.bind(&binding, false).await.unwrap();
+    store.gap(&binding, 10).await.unwrap();
+    store.gap(&binding, 10).await.unwrap();
+    assert_eq!(store.cursor(&binding).await, Err(Failure::Gap(10)));
+    store.bind(&binding, false).await.unwrap();
+    assert_eq!(store.cursor(&binding).await, Err(Failure::Gap(10)));
+    store.bind(&binding, true).await.unwrap();
+    assert_eq!(store.cursor(&binding).await.unwrap(), 10);
+    let schema = nessa_local_database::Schema::new(include_str!(
+        "../../src/github_relay/infrastructure/schema.sql"
+    ))
+    .unwrap();
+    let db = nessa_local_database::open(&directory.path().join("private/inbox.sqlite"), &schema)
+        .unwrap();
+    let evidence:(String,String,i64,i64)=db.query_row("SELECT cause,initiator,before_cursor,after_cursor FROM audit WHERE cause='gap_accepted'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+    assert_eq!(
+        evidence,
+        ("gap_accepted".into(), "local-owner:github:11".into(), 0, 10)
+    );
+}
+#[tokio::test]
+async fn retention_records_delivery_identity_and_system_cause_with_cursor_unchanged() {
+    let directory = tempfile::tempdir().unwrap();
+    let now = Arc::new(AtomicI64::new(1000000));
+    let clock = now.clone();
+    let store = SqliteRelayStore::new(
+        directory.path().join("private/inbox.sqlite"),
+        Arc::new(move || clock.load(Ordering::SeqCst)),
+    );
+    let binding = binding("11");
+    store.bind(&binding, false).await.unwrap();
+    let first = page("11", 1);
+    store.commit(&binding, 0, &first).await.unwrap();
+    now.store(2000000, Ordering::SeqCst);
+    store.commit(&binding, 1, &page("11", 2)).await.unwrap();
+    assert_eq!(store.events(&binding).await.unwrap().len(), 1);
+    assert_eq!(store.cursor(&binding).await.unwrap(), 2);
+    let schema = nessa_local_database::Schema::new(include_str!(
+        "../../src/github_relay/infrastructure/schema.sql"
+    ))
+    .unwrap();
+    let db = nessa_local_database::open(&directory.path().join("private/inbox.sqlite"), &schema)
+        .unwrap();
+    let identity:String=db.query_row("SELECT delivery_id FROM audit WHERE cause='retention_expired' AND initiator='system:local-relay'",[],|r|r.get(0)).unwrap();
+    assert_eq!(identity, first.events[0].delivery_id);
+}
+struct OfflineThenPage(AtomicBool);
+#[async_trait::async_trait]
+impl RelaySource for OfflineThenPage {
+    async fn page(&self, _: &str, binding: &Binding, after: i64) -> Result<Page, Failure> {
+        if !self.0.swap(true, Ordering::SeqCst) {
+            return Err(Failure::Offline);
+        }
+        Ok(page(binding.user_id(), after + 1))
+    }
+}
+#[tokio::test]
+async fn offline_transport_preserves_cursor_then_recovers_using_injected_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory);
+    let binding = binding("11");
+    store.bind(&binding, false).await.unwrap();
+    let source = OfflineThenPage(AtomicBool::new(false));
+    assert!(matches!(
+        catch_up(&source, &store, &binding, "token").await,
+        Err(Failure::Offline)
+    ));
+    assert_eq!(store.cursor(&binding).await.unwrap(), 0);
+    catch_up(&source, &store, &binding, "token").await.unwrap();
+    assert_eq!(store.cursor(&binding).await.unwrap(), 1);
+}
+#[test]
+fn stage_table_selects_dev_and_refuses_unconfigured_release_stages() {
+    assert_eq!(
+        relay_configuration(Stage::Dev).unwrap().origin,
+        "https://nessa-github-webhooks.saurav-panthee.workers.dev"
+    );
+    for stage in [Stage::Alpha, Stage::Ci, Stage::Prod] {
+        assert!(matches!(
+            relay_configuration(stage),
+            Err(Failure::UnconfiguredStage)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn disconnected_generation_cannot_commit_or_delete_a_replacement_connection() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory);
+    let first = binding("11");
+    store.bind(&first, false).await.unwrap();
+    let pending = page("11", 1);
+    store.unbind(&first).await.unwrap();
+    let replacement = binding("11");
+    store.bind(&replacement, false).await.unwrap();
+    assert_eq!(
+        store.commit(&first, 0, &pending).await,
+        Err(Failure::CursorChanged)
+    );
+    assert_eq!(store.unbind(&first).await, Err(Failure::CursorChanged));
+    assert_eq!(store.gap(&first, 9).await, Err(Failure::CursorChanged));
+    assert_eq!(store.cursor(&replacement).await.unwrap(), 0);
+    assert!(store.events(&replacement).await.unwrap().is_empty());
+    store.commit(&replacement, 0, &pending).await.unwrap();
+    assert_eq!(store.cursor(&replacement).await.unwrap(), 1);
+}
+#[tokio::test]
+async fn a_real_sqlite_write_failure_rolls_back_the_whole_page() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory);
+    let binding = binding("11");
+    store.bind(&binding, false).await.unwrap();
+    let schema = nessa_local_database::Schema::new(include_str!(
+        "../../src/github_relay/infrastructure/schema.sql"
+    ))
+    .unwrap();
+    let db = nessa_local_database::open(&directory.path().join("private/inbox.sqlite"), &schema)
+        .unwrap();
+    db.execute_batch("CREATE TRIGGER disk_failure BEFORE INSERT ON events WHEN NEW.sequence=2 BEGIN SELECT RAISE(ABORT,'injected write failure'); END;").unwrap();
+    let mut both = page("11", 1);
+    both.events.push(page("11", 2).events.remove(0));
+    both.next = 2;
+    assert_eq!(
+        store.commit(&binding, 0, &both).await,
+        Err(Failure::Storage)
+    );
+    assert_eq!(store.cursor(&binding).await.unwrap(), 0);
+    assert!(store.events(&binding).await.unwrap().is_empty());
+    db.execute_batch("DROP TRIGGER disk_failure;").unwrap();
+    drop(db);
+    store.commit(&binding, 0, &both).await.unwrap();
+    assert_eq!(store.events(&binding).await.unwrap().len(), 2);
+}
+#[test]
+fn malformed_provider_identities_cannot_become_bindings() {
+    for id in ["0", "-1", "01", "../11", "9007199254740992"] {
+        assert!(Binding::new(
+            id.into(),
+            "42".into(),
+            "nessalabs/nessa-agent".into(),
+            uuid::Uuid::new_v4()
+        )
+        .is_err());
+    }
+}
+
+#[tokio::test]
+async fn redelivery_after_cloud_expiry_preserves_local_identity_and_advances_cursor() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory);
+    let binding = binding("11");
+    store.bind(&binding, false).await.unwrap();
+    let first = page("11", 1);
+    store.commit(&binding, 0, &first).await.unwrap();
+    let mut redelivery = page("11", 2);
+    redelivery.events[0].delivery_id = first.events[0].delivery_id.clone();
+    store.commit(&binding, 1, &redelivery).await.unwrap();
+    assert_eq!(store.cursor(&binding).await.unwrap(), 2);
+    assert_eq!(store.events(&binding).await.unwrap(), first.events);
+    let mut changed = page("11", 3);
+    changed.events[0].delivery_id = first.events[0].delivery_id.clone();
+    changed.events[0].payload = "{\"changed\":true}".into();
+    assert_eq!(
+        store.commit(&binding, 2, &changed).await,
+        Err(Failure::InvalidResponse)
+    );
+    assert_eq!(store.cursor(&binding).await.unwrap(), 2);
+}
+
+struct LiveSource {
+    latest: AtomicI64,
+    arrival_on_watch: AtomicBool,
+}
+struct SilentNotifications;
+#[async_trait::async_trait]
+impl crate::github_relay::application::RelayNotifications for SilentNotifications {
+    async fn changed(&mut self) -> Result<(), Failure> {
+        std::future::pending().await
+    }
+}
+#[async_trait::async_trait]
+impl RelaySource for LiveSource {
+    async fn page(&self, _: &str, binding: &Binding, after: i64) -> Result<Page, Failure> {
+        let latest = self.latest.load(Ordering::SeqCst);
+        if after >= latest {
+            return Ok(Page {
+                user_id: binding.user_id().into(),
+                events: vec![],
+                next: after,
+                ticket: "ticket".into(),
+                has_more: false,
+            });
+        }
+        let mut page = page(binding.user_id(), after + 1);
+        page.has_more = after + 1 < latest;
+        Ok(page)
+    }
+}
+#[async_trait::async_trait]
+impl crate::github_relay::application::RelayLiveSource for LiveSource {
+    async fn watch(
+        &self,
+        _: &str,
+    ) -> Result<Box<dyn crate::github_relay::application::RelayNotifications>, Failure> {
+        if self.arrival_on_watch.swap(false, Ordering::SeqCst) {
+            self.latest.store(2, Ordering::SeqCst);
+        }
+        Ok(Box::new(SilentNotifications))
+    }
+}
+struct ManualWait {
+    waiting: AtomicBool,
+    renew: tokio::sync::Notify,
+}
+#[async_trait::async_trait]
+impl crate::github_relay::application::RelayWait for ManualWait {
+    async fn wait(&self, duration: std::time::Duration) {
+        if duration.as_secs() == crate::github_relay::domain::contract::RENEW_AFTER_SECONDS {
+            self.waiting.store(true, Ordering::SeqCst);
+            self.renew.notified().await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+struct Credentials;
+#[async_trait::async_trait]
+impl crate::github_relay::application::GitHubCredentials for Credentials {
+    async fn token(&self) -> Result<String, Failure> {
+        Ok("test-token".into())
+    }
+    async fn identify(&self, _: &str) -> Result<Binding, Failure> {
+        Err(Failure::InvalidResponse)
+    }
+}
+struct Reporter;
+impl crate::github_relay::application::RelayReporter for Reporter {
+    fn disconnected(&self, _: &Binding, failure: &Failure) {
+        panic!("unexpected disconnection: {failure}")
+    }
+    fn storage_failed(&self, failure: &Failure) {
+        panic!("unexpected storage failure: {failure}")
+    }
+    fn task_failed(&self) {
+        panic!("unexpected task failure")
+    }
+}
+async fn reaches_cursor(store: &SqliteRelayStore, binding: &Binding, expected: i64) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if store.cursor(binding).await.unwrap() == expected {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("consumer reached durable cursor");
+}
+#[tokio::test]
+async fn subscribing_before_the_second_read_closes_the_live_arrival_race() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(store(&directory));
+    let binding = binding("11");
+    store.bind(&binding, false).await.unwrap();
+    let source = Arc::new(LiveSource {
+        latest: AtomicI64::new(1),
+        arrival_on_watch: AtomicBool::new(true),
+    });
+    let wait = Arc::new(ManualWait {
+        waiting: AtomicBool::new(false),
+        renew: tokio::sync::Notify::new(),
+    });
+    let task = {
+        let (source, store, wait, binding) =
+            (source.clone(), store.clone(), wait.clone(), binding.clone());
+        tokio::spawn(async move {
+            crate::github_relay::application::follow(
+                source.as_ref(),
+                store.as_ref(),
+                &Credentials,
+                &binding,
+                wait.as_ref(),
+                &Reporter,
+            )
+            .await
+        })
+    };
+    reaches_cursor(store.as_ref(), &binding, 2).await;
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+}
+#[tokio::test]
+async fn a_lost_notification_is_recovered_by_the_injected_renewal_clock() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(store(&directory));
+    let binding = binding("11");
+    store.bind(&binding, false).await.unwrap();
+    let source = Arc::new(LiveSource {
+        latest: AtomicI64::new(1),
+        arrival_on_watch: AtomicBool::new(false),
+    });
+    let wait = Arc::new(ManualWait {
+        waiting: AtomicBool::new(false),
+        renew: tokio::sync::Notify::new(),
+    });
+    let task = {
+        let (source, store, wait, binding) =
+            (source.clone(), store.clone(), wait.clone(), binding.clone());
+        tokio::spawn(async move {
+            crate::github_relay::application::follow(
+                source.as_ref(),
+                store.as_ref(),
+                &Credentials,
+                &binding,
+                wait.as_ref(),
+                &Reporter,
+            )
+            .await
+        })
+    };
+    reaches_cursor(store.as_ref(), &binding, 1).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !wait.waiting.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    source.latest.store(2, Ordering::SeqCst);
+    wait.renew.notify_one();
+    reaches_cursor(store.as_ref(), &binding, 2).await;
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert_eq!(store.events(&binding).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_full_inbox_expiry_keeps_each_deletion_identity_in_the_bounded_audit() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(&directory);
+    let binding = binding("11");
+    store.bind(&binding, false).await.unwrap();
+    let schema = nessa_local_database::Schema::new(include_str!(
+        "../../src/github_relay/infrastructure/schema.sql"
+    ))
+    .unwrap();
+    let db = nessa_local_database::open(&directory.path().join("private/inbox.sqlite"), &schema)
+        .unwrap();
+    db.execute("WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM numbers WHERE n < ?) INSERT INTO events(user_id,repository_id,sequence,delivery_id,event,payload,received_at,stored_at) SELECT '11','42',n,printf('%08x-0000-4000-8000-000000000000',n),'issues','{}','2026-01-01T00:00:00Z',0 FROM numbers",[crate::github_relay::domain::contract::STORED_EVENTS]).unwrap();
+    db.execute(
+        "UPDATE bindings SET cursor=?",
+        [crate::github_relay::domain::contract::STORED_EVENTS],
+    )
+    .unwrap();
+    drop(db);
+    let count = crate::github_relay::domain::contract::STORED_EVENTS;
+    store
+        .commit(&binding, count, &page("11", count + 1))
+        .await
+        .unwrap();
+    let db = nessa_local_database::open(&directory.path().join("private/inbox.sqlite"), &schema)
+        .unwrap();
+    let evidence: i64 = db
+        .query_row(
+            "SELECT COUNT(DISTINCT delivery_id) FROM audit WHERE cause='retention_expired'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(evidence, count);
+    let receipt: i64 = db
+        .query_row(
+            "SELECT after_cursor FROM binding_audit WHERE cause='page_committed'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(receipt, count + 1);
+}

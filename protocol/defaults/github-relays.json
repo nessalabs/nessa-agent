@@ -1,0 +1,10 @@
+{
+  "dev": {
+    "origin": "https://nessa-github-webhooks.saurav-panthee.workers.dev",
+    "appSlug": "nessa-agent",
+    "clientId": "Iv23linAB5VSgOF5PvKi"
+  },
+  "alpha": null,
+  "ci": null,
+  "prod": null
+}

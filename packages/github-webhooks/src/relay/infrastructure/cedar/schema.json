@@ -1,0 +1,48 @@
+{
+  "Relay": {
+    "entityTypes": {
+      "User": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "repositories": {
+              "type": "Set",
+              "element": {
+                "type": "Entity",
+                "name": "Repository"
+              }
+            },
+            "oauthScopes": {
+              "type": "Set",
+              "element": {
+                "type": "String"
+              }
+            }
+          }
+        }
+      },
+      "Repository": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "isPrivate": {
+              "type": "Boolean"
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "read": {
+        "appliesTo": {
+          "principalTypes": ["User"],
+          "resourceTypes": ["Repository"],
+          "context": {
+            "type": "Record",
+            "attributes": {}
+          }
+        }
+      }
+    }
+  }
+}

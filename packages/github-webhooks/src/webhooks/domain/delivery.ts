@@ -1,7 +1,8 @@
+import contract from "../../../../../protocol/defaults/github-relay-contract.json"
 export const inboxLimits = Object.freeze({
-  bodyBytes: 1024 * 1024,
-  deliveries: 10_000,
-  storedBytes: 64 * 1024 * 1024,
+  bodyBytes: contract.payloadBytes,
+  deliveries: contract.storedEvents,
+  storedBytes: contract.storedBytes,
 })
 
 export type DeliveryIdentity = Readonly<{ id: string; event: string }>

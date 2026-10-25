@@ -26,6 +26,10 @@ function signed(payload: string, id = randomUUID(), event = "issues") {
 async function fixture(t: { after(fn: () => Promise<void>): void }, configured = true) {
   const worker = new Miniflare({
     modules: true,
+    modulesRules: [
+      { type: "CompiledWasm", include: ["**/*.wasm"] },
+      { type: "Text", include: ["**/*.cedar"] },
+    ],
     scriptPath: new URL("../dist/worker.js", import.meta.url).pathname,
     compatibilityDate: "2026-06-16",
     d1Databases: ["DB"],

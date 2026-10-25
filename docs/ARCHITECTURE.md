@@ -1100,11 +1100,26 @@ registry lock. Cloud selection fails explicitly until its implementation exists.
 See the [CLI module map](../crates/nessa-server/src/cli/mod.rs) and
 [local auth guide](guides/local-auth.md).
 
-## Hosted GitHub webhook ingress
+## Hosted GitHub webhook ingress and local relay
 
-`packages/github-webhooks` is a standalone Cloudflare Workers Free deployment,
-with D1 as its bounded durable inbox. Composition builds the HTTP, HMAC and SQL
-adapters; the application acknowledges a delivery only after the store's
-confirmed receipt. It does not import the desktop/gateway, expose retained
-events to users, or run agents. The package [module map and operations runbook](../packages/github-webhooks/README.md)
-and [ADR 1107](adr/todo/1107-github-webhook-receiver.md) own its lifecycle.
+`packages/github-webhooks` composes the Workers Free signed receiver, bounded D1
+inbox, GitHub identity adapter, Cedar repository policy and SQLite Durable Object
+wake-up channels. An authenticated page rechecks the GitHub user and current
+repository access; an installation is not a user. Per-repository sequence/expiry
+watermarks support bounded offline catch-up and explicit gaps. No private payload
+is sent over the wake-up socket. Source wire bounds are published in
+`protocol/defaults/github-relay-contract.json`.
+
+`crates/nessa-server/src/github_relay` owns the native consumer and private local
+SQLite inbox. Its application coordinates injected credentials, source and store;
+composition starts the optional follower under the serving gateway and exposes
+local connect/events/disconnect CLI commands. The packaged host's existing baked
+stage selects the compiled table in `protocol/defaults/github-relays.json`.
+Production has no dev fallback; a future stage needs its own GitHub App and cloud
+resources. The consumer saves event pages/cursors atomically and fences old
+connection generations. It imports data without creating conversational authority
+or automatically dispatching turns.
+
+The [module map and operations runbook](../packages/github-webhooks/README.md),
+[receiver ADR](adr/todo/1107-github-webhook-receiver.md) and
+[relay ADR](adr/todo/1117-github-relay.md) own the boundaries and lifecycle.

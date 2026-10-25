@@ -4,6 +4,7 @@ import { inboxLimits, type Delivery } from "../domain/delivery.js"
 interface Statement {
   bind(...values: (string | number)[]): Statement
   first<T>(): Promise<T | null>
+  all<T>(): Promise<{ results: T[] }>
 }
 
 export interface SqlDatabase {

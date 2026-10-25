@@ -15,6 +15,7 @@ pub mod device_pairing;
 pub mod env;
 pub mod env_serve;
 pub mod external_events;
+pub mod github_relay;
 pub mod health;
 pub(crate) mod limits;
 pub mod mcp_authorization;

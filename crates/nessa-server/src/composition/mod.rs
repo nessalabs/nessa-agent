@@ -45,6 +45,7 @@ mod env_dial_command;
 mod env_grant_command;
 #[cfg(unix)]
 mod env_serve_command;
+mod github_relay;
 mod install_command;
 #[cfg(unix)]
 mod installed_launch;

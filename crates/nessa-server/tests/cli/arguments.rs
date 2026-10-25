@@ -505,3 +505,25 @@ fn env_ungrant_takes_one_thing_back_and_env_grants_lists_them() {
     assert!(help.contains("nessa env ungrant [--peer ssh|PIN] (--agent NAME | --commands | --all)"));
     assert!(help.contains("nessa env grants"));
 }
+
+#[test]
+fn github_connection_has_no_user_facing_stage_or_endpoint_override() {
+    assert!(matches!(
+        parse(&args(&["github", "connect", "nessalabs/nessa-agent"])),
+        Ok(Command::GithubConnect {
+            accept_gap: false,
+            ..
+        })
+    ));
+    assert!(matches!(
+        parse(&args(&["github", "events", "nessalabs/nessa-agent"])),
+        Ok(Command::GithubEvents { .. })
+    ));
+    assert!(matches!(
+        parse(&args(&["github", "disconnect", "nessalabs/nessa-agent"])),
+        Ok(Command::GithubDisconnect { .. })
+    ));
+    for extra in ["--stage", "--url", "--accept-gap"] {
+        assert!(parse(&args(&["github", "events", "nessalabs/nessa-agent", extra])).is_err());
+    }
+}

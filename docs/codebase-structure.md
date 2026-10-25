@@ -2577,15 +2577,24 @@ windows `product/workspace.rs` holds for each connection in
 `service/workspace_windows.rs`; see [the window an agent
 shares](design/agent-window.md).
 
-## GitHub webhook ingress
+## GitHub webhook ingress and relay
 
-`packages/github-webhooks/src/webhooks/` owns the hosted ingress context:
-`domain/delivery.ts` constrains delivery identity and inbox bounds;
-`application/receive.ts` coordinates acceptance through its storage port;
-`infrastructure/` implements HTTP, GitHub signature verification and D1.
-`src/composition/worker.ts` constructs the runtime, and `migrations/` owns
-SQLite tables and atomic accounting triggers. Domain/application tests sit
-beside their layers; `tests/worker.test.ts` drives the bundled Worker with
-real local D1. This package is deployed separately from the desktop. Its
-[module map](../packages/github-webhooks/README.md) describes operations and
-[ADR 1107](adr/todo/1107-github-webhook-receiver.md) records ordering and limits.
+`packages/github-webhooks` owns the hosted receiver and authenticated delivery
+boundary: feature-first `webhooks/` and `relay/`, each with domain, application
+ports and infrastructure. `composition/worker.ts` wires GitHub, Cedar/WASM, D1,
+clock, crypto and hibernating Durable Object adapters. Migrations own the atomic
+inbox, expiry watermarks and bounded audit metadata. Tests run the bundled Worker
+with real local D1 and Durable Objects.
+
+The native `crates/nessa-server/src/github_relay` context mirrors its own feature
+vocabulary: domain identities/order, application catch-up and ports, and
+infrastructure GH CLI credentials, HTTPS/WebSocket and private SQLite. Composition
+owns optional lifecycle and CLI output. Tests under `tests/github_relay` exercise
+real SQLite, failures, competing consumers, identity isolation and reconnect
+fencing. No provider DTO chooses a conversation or actor.
+
+The packaged host retains build-stage ownership. The compiled public stage table
+and shared bounds are `protocol/defaults/github-relays.json` and
+`github-relay-contract.json`; the Worker deployment map supplies isolated configs.
+[The runbook](../packages/github-webhooks/README.md) and
+[ADR 1117](adr/todo/1117-github-relay.md) describe limits and operations.
