@@ -78,6 +78,22 @@ it("says a gone chat is gone, and how a failed turn ended", async () => {
   expect(host.querySelector(".workspace-thread-report")?.textContent).toContain("failed")
 })
 
+it("names no chat for an id only an object has, such as constructor", async () => {
+  const s = await store()
+  await act(async () =>
+    root.render(
+      <Provider store={s}>
+        <Message
+          sessionId="a"
+          message={report("constructor", "completed")}
+          isNew={false}
+        />
+      </Provider>,
+    ),
+  )
+  expect(host.querySelector("[data-gone]")).not.toBeNull()
+})
+
 it("draws a chat id an agent wrote as that chat's pill, and other code as code", async () => {
   const s = await store()
   await act(async () =>

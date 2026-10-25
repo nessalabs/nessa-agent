@@ -237,6 +237,36 @@ it("asks a question from the list, held to the card's bound", async () => {
   expect(question?.dataset.request).toBe("question")
 })
 
+it("asks the next question with a card of its own once the first is answered", async () => {
+  const asking = (questionId: string) => ({
+    executionId: "e1",
+    questionId,
+    message: `Question ${questionId}?`,
+    questions: [
+      {
+        key: "pick",
+        prompt: "Pick one",
+        multiSelect: false,
+        freeText: false,
+        required: true,
+        options: [{ value: "a", label: "A" }],
+      },
+    ],
+  })
+  await waitingOn({ questions: [asking("first"), asking("second")] })
+  const question = () =>
+    host.querySelector<HTMLElement>('[aria-label="Question from Session b"]')
+  const skip = () =>
+    [...(question()?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
+      (button) => button.textContent === "Skip",
+    )
+  await act(async () => skip()?.click())
+  await act(async () => settle())
+  // The first card's sent state stays with it: the second starts fresh.
+  expect(question()?.querySelector('[data-question="second"]')).not.toBeNull()
+  expect(skip()?.disabled).toBe(false)
+})
+
 /** The list in three columns over `sessions` added to the test index, each waiting on one review. */
 async function listOf(extra: ReturnType<typeof summary>[]) {
   const index = testIndex()

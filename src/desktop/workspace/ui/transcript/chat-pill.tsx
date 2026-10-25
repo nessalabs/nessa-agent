@@ -26,7 +26,11 @@ export const ChatPill = memo(function ChatPill({
   still?: boolean
 }) {
   const store = useOptionalStore()
-  const session = useChats()[sessionId] as SessionSummary | undefined
+  const chats = useChats()
+  // An id comes from text anyone wrote: `constructor` is not a chat.
+  const session = Object.hasOwn(chats, sessionId)
+    ? (chats[sessionId] as SessionSummary)
+    : undefined
   if (!session)
     return (
       <span className="workspace-chat-pill" data-gone title="This chat is no longer here">

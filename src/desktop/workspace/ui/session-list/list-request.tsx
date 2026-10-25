@@ -154,7 +154,15 @@ export const ListRequest = memo(function ListRequest({
         aria-label={`Question from ${session.title}`}
         data-request="question"
       >
-        <QuestionCard sessionId={sessionId} question={question} />
+        <QuestionCard
+          key={JSON.stringify([
+            question.key ?? null,
+            question.executionId,
+            question.questionId,
+          ])}
+          sessionId={sessionId}
+          question={question}
+        />
         {more}
       </div>
     )
