@@ -1,5 +1,6 @@
 //! Concrete product command owner. Caller loss does not cancel admitted work.
 use super::SqlOutbox;
+use crate::conversation::application::ConversationError;
 use crate::webhooks::application::{
     ExpiryObserver, ObserveRegistrationStop, OutboxError, RegisterWebhook, RegistrationConfig,
     RegistrationFailure, RegistrationIntent, StopObservationResult, MAX_OUTBOX_WORKERS,
@@ -111,6 +112,10 @@ impl WebhookRuntime {
             }),
         })
     }
+    #[cfg(test)]
+    pub(super) fn ordinary_in_flight(&self) -> usize {
+        MAX_OUTBOX_WORKERS - self.owner.ordinary.available_permits()
+    }
     pub(crate) fn store(&self) -> &SqlOutbox {
         &self.owner.store
     }
@@ -154,6 +159,7 @@ impl WebhookRuntime {
             if !commands.accepting {
                 return Err(CredentialAdminError::Unavailable);
             }
+            let owner = self.owner.clone();
             commands.jobs.spawn(async move {
                 let _permit = permit;
                 match AssertUnwindSafe(work).catch_unwind().await {
@@ -162,6 +168,12 @@ impl WebhookRuntime {
                         true
                     }
                     Err(_) => {
+                        // Failure is visible before the response can wake a
+                        // racing caller. Reaping task exit is too late.
+                        if let Ok(mut commands) = owner.commands.lock() {
+                            commands.failed = true;
+                            commands.accepting = false;
+                        }
                         let _ = send.send(Err(CredentialAdminError::Unavailable));
                         false
                     }
@@ -172,6 +184,18 @@ impl WebhookRuntime {
             .await
             .map_err(|_| CredentialAdminError::Unavailable)?
     }
+    /// Retain an admitted registered-principal grant mutation through its
+    /// original native completion. This does not replace its authorization.
+    pub(crate) async fn retain_grant<T: Send + 'static>(
+        &self,
+        control: bool,
+        work: impl Future<Output = Result<T, ConversationError>> + Send + 'static,
+    ) -> Result<T, ConversationError> {
+        self.owned(control, async move { Ok(work.await) })
+            .await
+            .map_err(|_| ConversationError::Metadata)?
+    }
+
     async fn issue_command(
         &self,
         request: IssueCredentialRequest,
@@ -286,13 +310,13 @@ impl WebhookRuntime {
         };
         let mut cleanup = cleanup.lock().await;
         if let Some(result) = &cleanup.result {
-            return result.clone();
+            return *result;
         }
         let result = match cleanup.job.as_mut() {
             Some(job) => job.await.unwrap_or(Err(CredentialAdminError::Unavailable)),
             None => Err(CredentialAdminError::Unavailable),
         };
-        cleanup.result = Some(result.clone());
+        cleanup.result = Some(result);
         cleanup.job = None;
         result
     }
@@ -386,3 +410,7 @@ fn registration_error(error: RegistrationFailure) -> CredentialAdminError {
         _ => CredentialAdminError::Unavailable,
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/webhooks/infrastructure/runtime.rs"]
+mod tests;

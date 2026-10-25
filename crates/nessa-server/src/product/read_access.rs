@@ -633,31 +633,41 @@ pub(super) async fn dispatch_share(
                     false
                 };
                 let granted = if webhook {
-                    let runtime = state
-                        .webhooks
-                        .as_deref()
+                    let runtime = state.webhooks.as_ref().ok_or(ConversationError::Metadata)?;
+                    let owner = runtime.clone();
+                    let grants = grants.clone();
+                    let conversations = conversations.clone();
+                    let policy = state
+                        .conversation_access
+                        .clone()
                         .ok_or(ConversationError::Metadata)?;
-                    ShareWebhookConversation {
-                        registrations: runtime.store(),
-                        admission: AdmitDelivery {
-                            credentials: runtime.credentials(),
-                            grants: grants.as_ref(),
-                            conversations: conversations.as_ref(),
-                            policy: policy,
-                            clock: state.clock.as_ref(),
-                            gateway: &state.gateway,
-                        },
-                    }
-                    .execute(
-                        caller,
-                        id,
-                        credential,
-                        selected_capabilities,
-                        requested_policy,
-                        expected,
-                        now,
-                    )
-                    .await?
+                    let clock = state.clock.clone();
+                    let gateway = state.gateway.clone();
+                    runtime
+                        .retain_grant(false, async move {
+                            ShareWebhookConversation {
+                                registrations: owner.store(),
+                                admission: AdmitDelivery {
+                                    credentials: owner.credentials(),
+                                    grants: grants.as_ref(),
+                                    conversations: conversations.as_ref(),
+                                    policy: policy.as_ref(),
+                                    clock: clock.as_ref(),
+                                    gateway: &gateway,
+                                },
+                            }
+                            .execute(
+                                caller,
+                                id,
+                                credential,
+                                selected_capabilities,
+                                requested_policy,
+                                expected,
+                                now,
+                            )
+                            .await
+                        })
+                        .await?
                 } else {
                     shares
                         .share(
@@ -690,15 +700,51 @@ pub(super) async fn dispatch_share(
                 let credential = CredentialId::new(params.credential_id)
                     .map_err(|_| ConversationError::InvalidInput)?;
                 let caller = caller(session, params.request_id.clone());
-                let applied = shares
-                    .unshare(
-                        caller,
-                        id,
-                        credential,
-                        expected_revision(params.expected_policy_revision)?,
-                        now,
-                    )
-                    .await?;
+                let expected = expected_revision(params.expected_policy_revision)?;
+                let webhook = if let Some(runtime) = state.webhooks.as_deref() {
+                    let conversation = load_conversation(conversations.as_ref(), &id)
+                        .await?
+                        .ok_or(ConversationError::NotFound)?;
+                    OwnerAccess::new(policy).admit(&conversation, &caller)?;
+                    runtime
+                        .is_webhook(&credential)
+                        .await
+                        .map_err(|_| ConversationError::Metadata)?
+                } else {
+                    false
+                };
+                let applied = if webhook {
+                    let runtime = state.webhooks.as_ref().ok_or(ConversationError::Metadata)?;
+                    let conversations = conversations.clone();
+                    let receivers = receivers.clone();
+                    let grants = grants.clone();
+                    let access = state.access.clone();
+                    let gateway = state.gateway.clone();
+                    let policy = state
+                        .conversation_access
+                        .clone()
+                        .ok_or(ConversationError::Metadata)?;
+                    let inventory = state.fence_capture.clone();
+                    runtime
+                        .retain_grant(true, async move {
+                            ShareConversation {
+                                conversations: conversations.as_ref(),
+                                receivers: receivers.as_ref(),
+                                grants: grants.as_ref(),
+                                access: access.as_ref(),
+                                gateway: &gateway,
+                                policy: policy.as_ref(),
+                                inventory: inventory.as_deref(),
+                            }
+                            .unshare(caller, id, credential, expected, now)
+                            .await
+                        })
+                        .await?
+                } else {
+                    shares
+                        .unshare(caller, id, credential, expected, now)
+                        .await?
+                };
                 if applied {
                     recheck_review_visibility(state);
                 }

@@ -903,6 +903,9 @@ admission and joins admitted work before dependencies are released.
 | revoke | actual canonical revocation, then current original stop coordination before acknowledgement |
 | startup | reconcile bounded stored unfinished commands before admitting source/send work; unresolved work refuses startup |
 | shutdown | seal, stop source/send admission, retain physical work, join command owners; unresolved work is not successful cleanup |
+| first command panic | mark failed and seal admission before waking the response observer; actual retained drain remains failed |
+| registered-webhook share/unshare admitted | retain the existing authorized grant operation in the same bounded owner until its physical write joins; ordinary grant targets keep their existing path |
+| stop while a canonical grant write is in flight | retain original share/unshare work, poll other drains, and withhold successful webhook cleanup until the mutation returns |
 
 These rows govern the composed path; adding its wiring does not itself qualify
 recipient delivery, known-outcome settlement or startup/shutdown fault behavior.

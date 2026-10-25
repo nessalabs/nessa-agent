@@ -366,7 +366,6 @@ impl ProductRouteState {
         self
     }
 
-    /// Register credential lifecycle operations; missing administration fails closed.
     /// Bind the concrete retained webhook/ordinary credential command owner.
     pub fn with_webhooks(mut self, runtime: Arc<WebhookRuntime>) -> Self {
         self.admin = Some(runtime.clone());
@@ -374,6 +373,7 @@ impl ProductRouteState {
         self
     }
 
+    /// Register credential lifecycle operations; missing administration fails closed.
     pub fn with_admin(mut self, admin: Arc<dyn CredentialAdmin>) -> Self {
         self.admin = Some(admin);
         self

@@ -19,3 +19,7 @@ mod message_tests;
 #[cfg(test)]
 #[path = "../../../tests/webhooks/infrastructure/admission.rs"]
 mod admission_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/webhooks/infrastructure/product.rs"]
+mod product_tests;

@@ -48,6 +48,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use std::sync::{Condvar, MutexGuard, PoisonError};
+#[cfg(test)]
+use std::time::Duration;
 
 /// A grant write that has entered its blocking task and will not commit
 /// until [`GrantWritePause::release`]. The permit is held across the wait.
@@ -93,6 +95,15 @@ impl GrantWritePause {
                 .wait(entered)
                 .unwrap_or_else(PoisonError::into_inner);
         }
+    }
+
+    pub(crate) fn wait_until_entered_timeout(&self, timeout: Duration) -> bool {
+        let entered = self.entered.lock().unwrap_or_else(PoisonError::into_inner);
+        let (entered, _) = self
+            .entered_cv
+            .wait_timeout_while(entered, timeout, |entered| !*entered)
+            .unwrap_or_else(PoisonError::into_inner);
+        *entered
     }
 
     pub(crate) fn release(&self) {

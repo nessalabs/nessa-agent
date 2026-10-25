@@ -369,6 +369,14 @@ pub(super) async fn product_state(
         store: store.clone(),
         inventory: Some(inventory.clone()),
     });
+    let webhooks = super::webhooks::prepare(
+        &settings,
+        directory,
+        store.clone(),
+        admin.clone(),
+        Arc::new(SystemClock),
+    )
+    .await?;
     let caller_kinds = store.clone();
     let mut product = ProductRouteState::new(
         gateway,
@@ -399,6 +407,9 @@ pub(super) async fn product_state(
         PersistentSessions::open(&path, SystemClock.unix_seconds())
             .map_err(|cause| RunError::opening_browser_sessions(&path, cause))?
     }));
+    if let Some(runtime) = &webhooks {
+        product = product.with_webhooks(runtime.clone());
+    }
     if bundle.is_some() {
         product =
             product.with_agent_installations(Arc::new(super::install_command::GatewayInstaller {

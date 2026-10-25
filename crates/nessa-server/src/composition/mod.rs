@@ -95,3 +95,8 @@ mod peer_reading_tests;
 #[cfg(test)]
 #[path = "../../tests/composition/read_only_online.rs"]
 mod read_only_online_tests;
+
+mod webhooks;
+
+#[cfg(test)]
+pub(crate) use root::cleanup_product;
