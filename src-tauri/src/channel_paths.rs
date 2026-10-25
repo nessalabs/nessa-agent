@@ -52,7 +52,7 @@ pub async fn choose_channel_folder(app: AppHandle) -> Result<Option<String>, Str
         app.dialog()
             .file()
             .set_title("Where the channel's agents work")
-            .pick_folder(move |folder| done(folder))
+            .pick_folder(done)
     })
     .await?;
     Ok(match chosen {
@@ -72,9 +72,9 @@ pub async fn choose_channel_resources(
     let chosen = answered(|done| {
         let dialog = app.dialog().file().set_title("Attach to the channel");
         if folders {
-            dialog.pick_folders(move |picked| done(picked))
+            dialog.pick_folders(done)
         } else {
-            dialog.pick_files(move |picked| done(picked))
+            dialog.pick_files(done)
         }
     })
     .await?;
