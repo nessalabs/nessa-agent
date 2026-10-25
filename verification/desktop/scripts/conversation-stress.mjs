@@ -79,13 +79,17 @@
  *               and Close sits in the top-right corner; past it the picker
  *               has Back in the top-left corner, which returns to welcome;
  *               it lists Claude, Codex and a Local AI that is coming, never
- *               OpenCode, with each one's figure on the picture beside it,
- *               and pointing at a row lights that figure; Close then leaves
- *               setup, handing over as left, not finished; a second setup
- *               window is finished on a ready agent: the window flies into
- *               the menu bar, asking the host where its icon is, and hands
- *               over finished on that agent; the message sent in the window
- *               after it is answered
+ *               OpenCode, with each one's figure on the picture beside it;
+ *               pointing at a row leaves the picture alone and clicking it
+ *               turns the picture to that agent; Close then leaves setup,
+ *               handing over as left, not finished; a second setup window,
+ *               where Codex is not installed but can be downloaded, shows
+ *               Codex as a download card with no row to pick, and no list
+ *               of installed agents or Check downloads; its Download installs
+ *               it and the card becomes Codex's row; setup is then finished
+ *               on a ready agent: the window flies into the menu bar, asking
+ *               the host where its icon is, and hands over finished on that
+ *               agent; the message sent in the window after it is answered
  *   notice      a review waits in another conversation, which the window does
  *               not show: the host's system notice names its tool and the
  *               conversation's title, opening it brings that conversation
@@ -1614,8 +1618,11 @@ const steps = {
         return
       }
       // The host opens the setup window for that ask; this page is that
-      // window, over the same gateway, as the real host builds it.
-      const page = await setupWindow(run)
+      // window, over the same gateway, as the real host builds it. Both
+      // agents are ready, so a click on either is a choice.
+      const page = await setupWindow(run, (page) =>
+        agentsProbe(page, () => ({ claude: "ready", codex: "ready" })),
+      )
       try {
         const heading = (name) => page.getByRole("heading", { name, exact: true })
         const button = (name) => page.getByRole("button", { name, exact: true })
@@ -3356,13 +3363,151 @@ async function pickerOffers(page, failures) {
   const resting = await cards()
   if (resting !== "clawd,clawd")
     failures.push(`the picture shows ${JSON.stringify(resting)}`)
-  await page.getByRole("button", { name: /^Codex/ }).hover()
-  const lit = await waitFor(() => cards().then((shown) => shown === "codex,codex"), 5_000)
-  if (!lit)
+  // Pointing along the rows leaves the picture as it is: only a click
+  // changes it. Watched for a while, since a change would be a crossfade.
+  const codex = page.getByRole("button", { name: "Codex", exact: true })
+  await codex.hover()
+  const moved = await waitFor(
+    () => cards().then((shown) => shown !== "clawd,clawd"),
+    1_000,
+  )
+  if (moved)
     failures.push(
-      `pointing at Codex did not turn the picture to it: ${JSON.stringify(await cards())}`,
+      `pointing at Codex turned the picture to ${JSON.stringify(await cards())}`,
+    )
+  await codex.click()
+  const chosen = await waitFor(
+    () => cards().then((shown) => shown === "codex,codex"),
+    5_000,
+  )
+  if (!chosen)
+    failures.push(
+      `clicking Codex did not turn the picture to it: ${JSON.stringify(await cards())}`,
+    )
+  await page.getByRole("button", { name: "Claude", exact: true }).hover()
+  if (await waitFor(() => cards().then((shown) => shown !== "codex,codex"), 1_000))
+    failures.push(
+      `pointing at Claude after choosing Codex turned the picture to ${JSON.stringify(await cards())}`,
     )
   await page.mouse.move(1, 1)
+}
+
+/**
+ * The gateway's machine probe, answered here: this stack's page is not an
+ * origin it answers. `readiness` is read on every ask, so a step can change
+ * what the machine has between asks.
+ */
+function agentsProbe(page, readiness) {
+  return page.route("**/onboarding/agents", (route) =>
+    route.fulfill({
+      // The gateway's own origin, not the page's: the ask is cross-origin.
+      headers: { "access-control-allow-origin": "*" },
+      json: {
+        agents: Object.entries(readiness()).map(([id, state]) => ({
+          id,
+          readiness: state,
+        })),
+      },
+    }),
+  )
+}
+
+/** The size the fake installer gives Codex's download. */
+const CODEX_ARCHIVE_BYTES = 45_000_000
+
+/**
+ * A gateway whose installer offers Codex and installs it on request, without
+ * fetching anything: the page's socket goes to the real gateway, and only
+ * the installer's two asks are answered here. `installed` says when the
+ * install has been asked for, so the machine probe can follow it.
+ */
+async function codexInstaller(page) {
+  const state = { installed: false, installs: 0 }
+  await page.routeWebSocket(
+    () => true,
+    (socket) => {
+      const server = socket.connectToServer()
+      const answer = (id, payload) => {
+        try {
+          socket.send(JSON.stringify({ type: "res", id, ok: true, payload }))
+        } catch {
+          // The window closed first: nothing is waiting for the answer.
+        }
+      }
+      socket.onMessage((message) => {
+        let frame
+        try {
+          frame = typeof message === "string" ? JSON.parse(message) : undefined
+        } catch {
+          // Not a request this fake answers: it goes to the gateway as sent.
+        }
+        if (frame?.type !== "req") frame = undefined
+        if (frame?.method === "agents.installOptions")
+          return answer(frame.id, {
+            agents: [
+              {
+                agent: "codex",
+                version: "0.0.0-stress",
+                archiveBytes: CODEX_ARCHIVE_BYTES,
+                installed: state.installed,
+              },
+            ],
+          })
+        if (frame?.method === "agents.install" && frame.params?.agent === "codex") {
+          state.installs += 1
+          // Long enough that the card is seen fetching.
+          return void setTimeout(() => {
+            state.installed = true
+            answer(frame.id, {
+              agent: "codex",
+              version: "0.0.0-stress",
+              downloaded: true,
+              cleanupPending: false,
+            })
+          }, 600)
+        }
+        server.send(message)
+      })
+      server.onMessage((message) => socket.send(message))
+    },
+  )
+  return state
+}
+
+/**
+ * An agent that is not installed but can be downloaded is a card with one
+ * Download button where its row would be, and nothing else on the picker
+ * talks about downloads. Its Download installs it, and the card becomes the
+ * agent's row.
+ */
+async function downloadCard(page, installer, evidence, failures) {
+  const group = page.getByRole("group", { name: "Agent" })
+  const card = group.getByRole("group", { name: names.setup.codexCard })
+  const shown = await waitFor(async () => (await card.count()) === 1, 15_000)
+  await page.screenshot({ path: join(evidence, "onboarding-download-card.png") })
+  if (!shown) {
+    failures.push("Codex, not installed but offered, is not shown as a download card")
+    return
+  }
+  if (await group.locator("button[aria-pressed]", { hasText: "Codex" }).count())
+    failures.push("Codex has both a download card and a row to pick")
+  for (const text of [/Check downloads/, /Download only the agents/, /^Installed$/])
+    if (await page.getByText(text).count()) failures.push(`the picker still says ${text}`)
+  await page.screenshot({ path: join(evidence, "onboarding-download-card.png") })
+  await card
+    .getByRole("button", {
+      name: names.setup.codexDownload,
+      exact: true,
+    })
+    .click()
+  const row = group.locator("button[aria-pressed]:not([aria-disabled='true'])", {
+    hasText: "Codex",
+  })
+  if (!(await waitFor(async () => (await row.count()) === 1, 15_000)))
+    failures.push("the installed Codex did not become a row to pick")
+  else if (await card.count()) failures.push("Codex's download card stayed after install")
+  if (installer.installs !== 1)
+    failures.push(`Download asked the installer ${installer.installs} times, not once`)
 }
 
 /** The picker's agent rows, and not the buttons of a key form beside one. */
@@ -3377,28 +3522,25 @@ const AGENT_ROWS = `button[aria-pressed], button[aria-label='${names.setup.local
  * Which agents are ready is the gateway's machine probe, which this stack's
  * page is not an origin it answers; the probe is answered here instead with
  * Claude ready, so the step is about the finish rather than about the machine.
+ * Codex starts not installed, with a download on offer, so the same window
+ * shows its download card on the way.
  */
 async function finishedIntoTheMenuBar(run, failures) {
-  const page = await setupWindow(run, (page) =>
-    page.route("**/onboarding/agents", (route) =>
-      route.fulfill({
-        // The gateway's own origin, not the page's: the ask is cross-origin.
-        headers: { "access-control-allow-origin": "*" },
-        json: {
-          agents: [
-            { id: "claude", readiness: "ready" },
-            { id: "codex", readiness: "not-installed" },
-          ],
-        },
-      }),
-    ),
-  )
+  let installer
+  const page = await setupWindow(run, async (page) => {
+    installer = await codexInstaller(page)
+    await agentsProbe(page, () => ({
+      claude: "ready",
+      codex: installer.installed ? "ready" : "not-installed",
+    }))
+  })
   try {
     const button = (name) => page.getByRole("button", { name, exact: true })
     await page
       .getByRole("heading", { name: names.setup.welcome, exact: true })
       .waitFor({ timeout: 15_000 })
     await button(names.setup.getStarted).click()
+    await downloadCard(page, installer, run.evidence, failures)
     const ready = page
       .getByRole("group", { name: "Agent" })
       .locator("button[aria-pressed]:not([aria-disabled='true'])")

@@ -1,0 +1,159 @@
+// @vitest-environment jsdom
+import * as React from "react"
+import { createRoot } from "react-dom/client"
+import { expect, it, vi } from "vitest"
+import { Onboarding } from "./onboarding"
+import type { InstallationOutcome } from "../application/agent-installations"
+import {
+  beginOnboarding,
+  recordReadiness,
+  startAgentChoice,
+  type OnboardingState,
+} from "../model/onboarding"
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+
+const asking = startAgentChoice(beginOnboarding())
+
+function installer(installed = false) {
+  let finish!: (outcome: InstallationOutcome) => void
+  return {
+    finish: (outcome: InstallationOutcome) => finish(outcome),
+    source: {
+      subscribe: () => () => {},
+      offers: vi
+        .fn()
+        .mockResolvedValue([{ agent: "codex", archiveBytes: 44_200_000, installed }]),
+      install: vi.fn(
+        () =>
+          new Promise<InstallationOutcome>((done) => {
+            finish = done
+          }),
+      ),
+    },
+  }
+}
+
+async function picker(
+  state: OnboardingState,
+  installations: ReturnType<typeof installer>["source"],
+  onRecheck = () => {},
+) {
+  const container = document.createElement("div")
+  const root = createRoot(container)
+  const render = (next: OnboardingState) =>
+    React.act(async () =>
+      root.render(
+        <Onboarding
+          state={next}
+          installations={installations}
+          gatewayStartup={{ revision: 0, state: "unmanaged" }}
+          platform="apple"
+          onBegin={() => {}}
+          onChoose={() => {}}
+          onConfirm={() => {}}
+          onFinish={() => {}}
+          onRecheck={onRecheck}
+          onRetryGateway={() => {}}
+        />,
+      ),
+    )
+  await render(state)
+  return { container, render, unmount: () => React.act(async () => root.unmount()) }
+}
+
+const card = (container: HTMLElement) =>
+  container.querySelector('[data-agent-download="codex"]')
+const codexRow = (container: HTMLElement) =>
+  [...container.querySelectorAll("button[aria-pressed]")].find((row) =>
+    row.textContent?.includes("Codex"),
+  )
+
+it("shows an agent that can be downloaded as a card in its place, and nothing else about downloads", async () => {
+  const { source } = installer()
+  const state = recordReadiness(asking, { claude: "ready", codex: "not-installed" })
+  const { container, unmount } = await picker(state, source)
+  expect(card(container)?.getAttribute("aria-label")).toBe("Download Codex")
+  expect(codexRow(container)).toBeUndefined()
+  // Claude, installed, is just a row to pick.
+  expect(container.querySelector('[data-agent-download="claude"]')).toBeNull()
+  for (const words of ["Check downloads", "Download only", "Installed"])
+    expect(container.textContent).not.toContain(words)
+  await unmount()
+})
+
+it("downloads from the card, then rechecks so the card becomes the agent's row", async () => {
+  const pending = installer()
+  const onRecheck = vi.fn()
+  const state = recordReadiness(asking, { claude: "ready", codex: "not-installed" })
+  const { container, render, unmount } = await picker(state, pending.source, onRecheck)
+  const download = card(container)?.querySelector("button")
+  expect(download?.getAttribute("aria-label")).toBe("Download Codex · 45 MB")
+  await React.act(async () => {
+    download?.click()
+    download?.click()
+  })
+  expect(pending.source.install).toHaveBeenCalledExactlyOnceWith("codex")
+  // The same button, still focusable, now the download's spinner.
+  expect(card(container)?.querySelector("button")).toBe(download)
+  expect(download?.getAttribute("aria-label")).toBe("Downloading and verifying Codex")
+  expect(download?.getAttribute("aria-disabled")).toBe("true")
+  pending.source.offers.mockResolvedValue([
+    { agent: "codex", archiveBytes: 44_200_000, installed: true },
+  ])
+  await React.act(async () =>
+    pending.finish({ status: "installed", cleanupPending: false }),
+  )
+  expect(onRecheck).toHaveBeenCalledTimes(1)
+  // Installed, and held as a card until the check says the agent is ready.
+  expect(card(container)?.getAttribute("data-download-state")).toBe("installed")
+  await render(recordReadiness(asking, { claude: "ready", codex: "ready" }))
+  expect(card(container)).toBeNull()
+  expect(codexRow(container)?.getAttribute("aria-disabled")).toBeNull()
+  await unmount()
+})
+
+it("keeps a failed download's card, saying why, with a way to check again when the attempt may still run", async () => {
+  const pending = installer()
+  const state = recordReadiness(asking, { claude: "ready", codex: "not-installed" })
+  const { container, unmount } = await picker(state, pending.source)
+  await React.act(async () => card(container)?.querySelector("button")?.click())
+  await React.act(async () =>
+    pending.finish({ status: "failed", reason: "not-confirmed" }),
+  )
+  expect(card(container)?.textContent).toContain("Not confirmed")
+  const again = card(container)?.querySelector("button")
+  expect(again?.textContent).toBe("Check again")
+  await React.act(async () => again?.click())
+  // The fresh read offers the download again.
+  expect(card(container)?.querySelector("button")?.getAttribute("aria-label")).toBe(
+    "Download Codex · 45 MB",
+  )
+  await unmount()
+})
+
+it("gives the row back once a fresh read no longer offers the agent", async () => {
+  const pending = installer()
+  const state = recordReadiness(asking, { claude: "ready", codex: "not-installed" })
+  const { container, unmount } = await picker(state, pending.source)
+  await React.act(async () => card(container)?.querySelector("button")?.click())
+  await React.act(async () => pending.finish({ status: "failed", reason: "busy" }))
+  pending.source.offers.mockResolvedValue([])
+  await React.act(async () => card(container)?.querySelector("button")?.click())
+  expect(card(container)).toBeNull()
+  expect(codexRow(container)?.getAttribute("aria-label")).toBe("Codex, not installed")
+  await unmount()
+})
+
+it("says downloads could not be read, with a way to read them again", async () => {
+  const { source } = installer()
+  source.offers.mockRejectedValueOnce(new Error("connecting"))
+  const state = recordReadiness(asking, { claude: "ready", codex: "not-installed" })
+  const { container, unmount } = await picker(state, source)
+  expect(card(container)?.textContent).toContain("Downloads could not be checked.")
+  await React.act(async () => card(container)?.querySelector("button")?.click())
+  expect(card(container)?.querySelector("button")?.getAttribute("aria-label")).toBe(
+    "Download Codex · 45 MB",
+  )
+  await unmount()
+})
