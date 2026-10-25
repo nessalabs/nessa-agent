@@ -5,9 +5,11 @@ use crate::webhooks::application::{
 };
 use crate::webhooks::infrastructure::outbox::{audit, retirement, stop::SavedStop};
 use nessa_auth::application::{
-    credential_admin::CredentialAdmin,
+    credential_admin::{CredentialAdmin, RevokeCredentialOutcome},
+    dto::CredentialMetadataDto,
     ports::{AccessAdmission, AccessHold, AccessReader, AccessSnapshot, PortFuture},
 };
+use nessa_auth::domain::Credential;
 use std::collections::BTreeMap;
 use std::io::Write;
 use tokio::sync::Notify;
@@ -1027,5 +1029,138 @@ async fn only_a_drained_registration_can_retain_a_published_initial_projection()
             std::fs::read_to_string(f.audit.join(format!("{id}.json"))).unwrap(),
             original
         );
+    }
+}
+
+struct RevokeAfterIssue<'a>(&'a LocalCredentialStore);
+impl CredentialAdmin for RevokeAfterIssue<'_> {
+    fn issue<'a>(
+        &'a self,
+        request: IssueCredentialRequest,
+    ) -> PortFuture<'a, IssueCredentialOutcome, CredentialAdminError> {
+        Box::pin(async move {
+            let credential = request.credential_id.clone();
+            let outcome = self.0.issue(request).await?;
+            self.0
+                .revoke_sync(RevokeCredentialRequest {
+                    request_id: "review-revoke-between-reply-and-hold".into(),
+                    issuer_principal_id: "owner".into(),
+                    credential_id: credential,
+                    revoked_at: 20,
+                })
+                .unwrap();
+            Ok(outcome)
+        })
+    }
+    fn list<'a>(
+        &'a self,
+        request: ListCredentialsRequest,
+    ) -> PortFuture<'a, Vec<CredentialMetadataDto>, CredentialAdminError> {
+        self.0.list(request)
+    }
+    fn revoke<'a>(
+        &'a self,
+        request: RevokeCredentialRequest,
+    ) -> PortFuture<'a, RevokeCredentialOutcome, CredentialAdminError> {
+        self.0.revoke(request)
+    }
+}
+#[tokio::test]
+async fn revocation_between_issue_reply_and_hold_cleans_uninstalled_and_installed_ownership() {
+    for installed in [false, true] {
+        let f = Registered::new();
+        let intent = f.proposed();
+        if installed {
+            f.command(&f.store).execute(intent.clone()).await.unwrap();
+        }
+        f.clock.0.store(20_007, Ordering::SeqCst);
+        let credentials = RevokeAfterIssue(&f.auth);
+        let mut command = f.command(&f.store);
+        command.credentials = &credentials;
+        assert_eq!(
+            command.execute(intent.clone()).await,
+            Err(RegistrationFailure::Stopped)
+        );
+        assert_eq!(f.count("registrations"), 0);
+        assert_eq!(f.count("registration_intents"), 0);
+        let snapshot = f
+            .auth
+            .read(&CredentialId::new(&intent.issue.credential_id).unwrap())
+            .await
+            .unwrap();
+        let original =
+            serde_json::to_value(SavedStop::of(&actual_stop(&snapshot, 20_007))).unwrap();
+        let values = files(&f);
+        assert_eq!(values.len(), if installed { 3 } else { 1 });
+        let terminal: Value = values
+            .values()
+            .map(|text| serde_json::from_str::<Value>(text).unwrap())
+            .find(|record| {
+                record["cause"]
+                    == if installed {
+                        "drained"
+                    } else {
+                        "registration_cancelled"
+                    }
+            })
+            .unwrap();
+        assert_eq!(terminal["credentialStop"], original);
+    }
+}
+
+struct ChangedHeldBinding<'a> {
+    auth: &'a LocalCredentialStore,
+    audience: bool,
+}
+impl AccessAdmission for ChangedHeldBinding<'_> {
+    fn hold<'a>(&'a self, credential: &'a CredentialId) -> PortFuture<'a, AccessHold> {
+        Box::pin(async move {
+            let mut metadata = self
+                .auth
+                .list_sync(&ListCredentialsRequest {
+                    organization_id: "org".into(),
+                })
+                .unwrap()
+                .into_iter()
+                .find(|saved| saved.id == credential.as_str())
+                .unwrap();
+            let mut hold = self.auth.hold(credential).await?;
+            if self.audience {
+                metadata.audience_id = "another-gateway".into();
+            } else {
+                metadata.grants.clear();
+            }
+            hold.snapshot.credential = Credential::try_from(metadata).unwrap();
+            Ok(hold)
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_real_later_revocation_cannot_mask_substituted_current_credential_bindings() {
+    for audience in [false, true] {
+        let f = Registered::new();
+        let intent = f.proposed();
+        f.clock.0.store(20_007, Ordering::SeqCst);
+        let credentials = RevokeAfterIssue(&f.auth);
+        let admission = ChangedHeldBinding {
+            auth: &f.auth,
+            audience,
+        };
+        let mut command = f.command(&f.store);
+        command.credentials = &credentials;
+        command.admission = &admission;
+        assert_eq!(
+            command.execute(intent.clone()).await,
+            Err(RegistrationFailure::Inconsistent)
+        );
+        assert_eq!(f.count("registrations"), 0);
+        assert_eq!(f.count("registration_intents"), 1);
+        assert!(files(&f).is_empty());
+        assert_eq!(
+            f.command(&f.store).execute(intent).await,
+            Err(RegistrationFailure::Stopped)
+        );
+        assert_eq!(f.count("registration_intents"), 0);
     }
 }

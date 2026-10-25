@@ -270,7 +270,24 @@ impl RegisterWebhook<'_> {
                 | AccessError::InactiveMembership
                 | AccessError::IdentityMismatch => RegistrationFailure::Stopped,
             })?;
-        if hold.snapshot.credential != credential
+        let revocation = hold
+            .snapshot
+            .revocation_fact()
+            .map_err(|_| RegistrationFailure::Inconsistent)?;
+        // A real revocation can commit after issue returns and before this
+        // hold. Advance only that lifecycle field using its original fact;
+        // every immutable binding still has to equal the issued metadata.
+        let expected_current = match revocation {
+            Some(fact) if credential.revoked_at().is_none() => {
+                Credential::try_from(CredentialMetadataDto {
+                    revoked_at: fact.transition().after().revoked_at,
+                    ..metadata.clone()
+                })
+                .map_err(|_| RegistrationFailure::Inconsistent)?
+            }
+            _ => credential.clone(),
+        };
+        if hold.snapshot.credential != expected_current
             || hold.snapshot.membership.id() != membership.id()
             || hold.snapshot.membership.principal_id() != membership.principal_id()
             || hold.snapshot.membership.organization_id() != membership.organization_id()
@@ -294,11 +311,7 @@ impl RegisterWebhook<'_> {
             return Err(RegistrationFailure::Inconsistent);
         }
         let now_ms = self.clock.unix_milliseconds();
-        let stop = if let Some(fact) = hold
-            .snapshot
-            .revocation_fact()
-            .map_err(|_| RegistrationFailure::Inconsistent)?
-        {
+        let stop = if let Some(fact) = revocation {
             Some(RegistrationStop::revoked(fact, now_ms))
         } else if credential
             .expires_at()
