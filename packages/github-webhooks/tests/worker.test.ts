@@ -278,24 +278,25 @@ test("malformed headers, JSON and unsupported routes fail without storage", asyn
   )
 })
 
-test("a correctly signed body with invalid UTF-8 is a malformed delivery", async (t) => {
+test("a signed body cannot be accepted after decoding changes its bytes", async (t) => {
   const { worker, db } = await fixture(t)
-  const payload = Buffer.from([0xff])
-  const headers = {
-    ...signed("{}"),
-    "x-hub-signature-256":
-      "sha256=" + createHmac("sha256", secret).update(payload).digest("hex"),
+  for (const payload of [Buffer.from([0xff]), Buffer.from("\ufeff{}")]) {
+    const headers = {
+      ...signed("{}"),
+      "x-hub-signature-256":
+        "sha256=" + createHmac("sha256", secret).update(payload).digest("hex"),
+    }
+    assert.equal(
+      (
+        await worker.dispatchFetch("https://service.test/github/webhook", {
+          method: "POST",
+          headers,
+          body: payload,
+        })
+      ).status,
+      400,
+    )
   }
-  assert.equal(
-    (
-      await worker.dispatchFetch("https://service.test/github/webhook", {
-        method: "POST",
-        headers,
-        body: payload,
-      })
-    ).status,
-    400,
-  )
   assert.equal(
     (await db.prepare("SELECT COUNT(*) AS count FROM deliveries").first())?.count,
     0,

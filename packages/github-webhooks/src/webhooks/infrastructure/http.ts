@@ -88,7 +88,7 @@ export function createWebhookHandler(dependencies: Dependencies) {
       let payload: string
       let parsed: unknown
       try {
-        payload = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+        payload = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
         parsed = JSON.parse(payload)
       } catch {
         return response(400, "invalid_json")
