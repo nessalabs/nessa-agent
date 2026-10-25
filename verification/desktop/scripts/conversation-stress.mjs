@@ -102,7 +102,8 @@
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
- *               message sent after it is answered. While it is on, Pair a
+ *               message sent after it is answered. While it is on, the
+ *               gateway is found by a DNS-SD browse on its port, and Pair a
  *               device opens a code with the window's own sign-in, in a
  *               modal with one signal orb; Escape hides it, Show code
  *               brings the same code back, Cancel closes it, and leaving
@@ -209,6 +210,7 @@ import {
   WATCH_CALLS,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
+import { browse } from "./lib/mdns-probe.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, log } from "./lib/cli.mjs"
 import { gatewayHost, STARTING } from "./lib/fake-host.mjs"
@@ -365,6 +367,8 @@ class Run {
     this.sent = new Map()
     /** Where native linking listens once the `linking` step turns it on. */
     this.nativeAddress = stack.nativeAddress
+    /** What config.json names for it: every interface, on the same port. */
+    this.nativeListen = stack.nativeListen
   }
 
   /** Waits while a restart holds the gateway. */
@@ -1721,6 +1725,7 @@ const steps = {
     await run.exclusive(async () => {
       await openLinkedDevices(run.page)
       if (!(await switchLinking(run, true, failures))) return
+      if (!(await announced(run, failures))) return
       if (!(await pairFromWindow(run, failures))) return
       // Away and back: the tab reads linking again, and it is still on.
       await closeSettings(run.page)
@@ -4490,6 +4495,31 @@ async function closeSettings(page) {
 }
 
 /**
+ * With linking on, the gateway is found on the local network the way a phone
+ * that scanned the code finds it: a DNS-SD browse for `_nessa-link._tcp`
+ * hears it on its native port, with its gateway id. Resolves whether it did.
+ */
+async function announced(run, failures) {
+  const port = Number(run.nativeListen.split(":").pop())
+  let heard = []
+  for (
+    let attempt = 0;
+    attempt < 3 && !heard.some((each) => each.port === port);
+    attempt++
+  )
+    heard = await browse("_nessa-link._tcp.local", 3_000)
+  const gateway = heard.find((each) => each.port === port)
+  if (!gateway) {
+    failures.push(
+      `the gateway was not announced on port ${port}; heard ${JSON.stringify(heard)}`,
+    )
+    return false
+  }
+  if (!gateway.txt.gw) failures.push("the announcement carries no gateway id")
+  return Boolean(gateway.txt.gw)
+}
+
+/**
  * Pair a device on the Linked devices tab, with linking on: the window's own
  * sign-in opens a code, shown as a person pairing a phone sees it, never the
  * card that says this sign-in cannot manage credentials. The code opens in a
@@ -4617,7 +4647,7 @@ async function switchLinking(run, enabled, failures) {
     const saved = JSON.parse(readFileSync(config, "utf8")).native
     if (
       (saved?.enabled !== false) !== enabled ||
-      saved?.listenAddress !== run.nativeAddress
+      saved?.listenAddress !== run.nativeListen
     )
       failures.push(`config.json holds native ${JSON.stringify(saved)}`)
     if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
@@ -4914,7 +4944,11 @@ async function atRest(run, ids) {
 
 async function startStack(options) {
   const knobs = knobsFrom(options)
-  const nativeAddress = `127.0.0.1:${await freePort()}`
+  // Linking listens on every interface, as Settings sets it up, so the
+  // gateway announces itself; clients on this machine dial it on loopback.
+  const nativePort = await freePort()
+  const nativeAddress = `127.0.0.1:${nativePort}`
+  const nativeListen = `0.0.0.0:${nativePort}`
   const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
   const scenario = join(directory, "stress.json")
   writeFileSync(
@@ -4959,7 +4993,7 @@ async function startStack(options) {
       // The agent a `handoff` step switches its conversation to.
       others: knobs.handoffs > 0 ? [otherAgent(options.agent)] : [],
       // Off, at a port of its own: the `linking` step turns it on from Settings.
-      native: { enabled: false, listenAddress: nativeAddress },
+      native: { enabled: false, listenAddress: nativeListen },
     })
   } catch (error) {
     await github?.close()
@@ -4979,6 +5013,7 @@ async function startStack(options) {
     knobs,
     agent: options.agent,
     nativeAddress,
+    nativeListen,
     github,
     scenario,
     // Removed when the stack closes.
