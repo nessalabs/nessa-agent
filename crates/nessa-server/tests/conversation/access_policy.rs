@@ -258,7 +258,14 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
     let (org, owner) = (organization("org"), principal("owner"));
     for action in AccessAction::ALL {
         let resource = match action {
-            AccessAction::List | AccessAction::Write => AccessResource::Catalogue {
+            AccessAction::List
+            | AccessAction::Write
+            | AccessAction::ChannelCreate
+            | AccessAction::ChannelList => AccessResource::Catalogue {
+                organization: &org,
+                owner: &owner,
+            },
+            AccessAction::ChannelUse => AccessResource::Channel {
                 organization: &org,
                 owner: &owner,
             },
@@ -498,6 +505,71 @@ fn owner_workspace_read_is_the_owners_own_windows_and_nobody_elses() {
         },
         &Paired::default()
     )));
+}
+
+#[test]
+fn owner_channels_are_the_owners_own_and_nobody_elses() {
+    let policy = policy();
+    let (org, elsewhere, owner, other) = (
+        organization("org"),
+        organization("elsewhere"),
+        principal("owner"),
+        principal("other"),
+    );
+    let cases = [
+        (
+            AccessAction::ChannelCreate,
+            AccessResource::Catalogue {
+                organization: &org,
+                owner: &owner,
+            },
+            "owner.channel_create",
+        ),
+        (
+            AccessAction::ChannelList,
+            AccessResource::Catalogue {
+                organization: &org,
+                owner: &owner,
+            },
+            "owner.channel_list",
+        ),
+        (
+            AccessAction::ChannelUse,
+            AccessResource::Channel {
+                organization: &org,
+                owner: &owner,
+            },
+            "owner.channel_use",
+        ),
+    ];
+    for (action, resource, id) in cases {
+        let ask = |organization: &OrganizationId, principal: &PrincipalId| {
+            policy.evaluate(&AccessAsk {
+                subject: AccessSubject::Person {
+                    organization,
+                    principal,
+                },
+                action,
+                resource,
+                held: None,
+                request: RequestShape::default(),
+                target: None,
+            })
+        };
+        assert_eq!(
+            allowed_by(&ask(&org, &owner)),
+            Some(&[id.to_owned()][..]),
+            "{id}"
+        );
+        assert!(!allowed(&ask(&org, &other)), "{id}");
+        assert!(!allowed(&ask(&elsewhere, &owner)), "{id}");
+        // A paired device makes, lists, and uses no channel: a channel can
+        // name a folder on this machine.
+        assert!(
+            !allowed(&paired(&policy, action, resource, &Paired::default())),
+            "{id}"
+        );
+    }
 }
 
 #[test]

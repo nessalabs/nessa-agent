@@ -1,4 +1,5 @@
 mod agent_tools;
+mod channels;
 mod creation;
 mod model_changes;
 mod mutation;
@@ -36,6 +37,9 @@ use super::{
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
+};
+pub use channels::{
+    AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore, FolderRefusal,
 };
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
@@ -288,6 +292,8 @@ pub struct RequestedConversation {
     /// it by; `None` runs it here. Kept as asked: a name the configuration
     /// does not have is refused where it would be used.
     pub environment: Option<String>,
+    /// The channel it is in for its whole life; `None` is the default one.
+    pub channel: Option<crate::conversation::domain::ChannelId>,
 }
 
 /// Server-selected admission limits. Clients cannot choose provider budgets or owner capacity.
@@ -372,6 +378,19 @@ pub trait ConversationAgentSource: Send + Sync {
         model: &'a str,
         mode: ConversationApprovalMode,
     ) -> ConversationAgentFuture<'a>;
+    /// As [`Self::resolve_for`], for a conversation in a stored channel: its
+    /// agent is started in `place.folder` and told `place.instructions`. A
+    /// source that cannot start an agent anywhere but its own workspace
+    /// answers `Unavailable`, and the conversation is opened nowhere.
+    fn resolve_in<'a>(
+        &'a self,
+        _agent: AgentId,
+        _model: &'a str,
+        _mode: ConversationApprovalMode,
+        _place: &'a AgentPlace,
+    ) -> ConversationAgentFuture<'a> {
+        Box::pin(async { Err(ConversationError::Unavailable) })
+    }
 }
 
 #[derive(Clone)]
@@ -483,24 +502,29 @@ impl ConversationAgents {
         &self,
         agent: AgentId,
         model: &str,
+        place: Option<&AgentPlace>,
     ) -> Result<ConversationAgent, ConversationError> {
-        self.resolve_for(agent, model, ConversationApprovalMode::Ask)
+        self.resolve_for(agent, model, ConversationApprovalMode::Ask, place)
             .await
     }
+    /// The provider generation for `agent` on `model` under `mode`, started
+    /// where the conversation's channel says (`place`), or in the gateway's
+    /// workspace for the default channel.
     async fn resolve_for(
         &self,
         agent: AgentId,
         model: &str,
         mode: ConversationApprovalMode,
+        place: Option<&AgentPlace>,
     ) -> Result<ConversationAgent, ConversationError> {
         if !self.configured.contains(&agent) {
             return Err(ConversationError::AgentNotConfigured);
         }
-        let configured = self
-            .source
-            .resolve_for(agent, model, mode)
-            .await?
-            .ok_or(ConversationError::AgentNotConfigured)?;
+        let resolved = match place {
+            None => self.source.resolve_for(agent, model, mode).await?,
+            Some(place) => self.source.resolve_in(agent, model, mode, place).await?,
+        };
+        let configured = resolved.ok_or(ConversationError::AgentNotConfigured)?;
         if configured.reserved_output_tokens == 0 {
             return Err(ConversationError::InvalidInput);
         }
@@ -854,6 +878,8 @@ struct Inner {
     workspace_windows: Arc<super::WorkspaceWindows>,
     /// Agent sends waiting to report their thread's finished turn.
     thread_reports: thread_reports::ThreadReports,
+    /// Where channels, and which conversation is in which, are kept.
+    channels: channels::ChannelBinding,
     /// One-shot continuations after a provider usage limit.
     scheduled_messages: OnceLock<Arc<dyn scheduled_messages::ScheduledMessageStore>>,
     /// Cedar for the gateway usage-limit preference. Unbound refuses the change.
@@ -1396,6 +1422,7 @@ impl ConversationService {
                 )),
                 workspace_windows: super::WorkspaceWindows::new(),
                 thread_reports: Default::default(),
+                channels: Default::default(),
                 scheduled_messages: OnceLock::new(),
                 preference_policy: OnceLock::new(),
                 schedule_wakeup: Arc::new(Notify::new()),
@@ -1529,32 +1556,52 @@ impl ConversationService {
         // conversation that does not need that agent at all. The same is
         // true of a name no adapter exists for, which is why that one is
         // carried this far instead of being refused where it was parsed.
+        // A stored channel's folder is on this machine: a conversation in one
+        // runs here.
+        let channel = service
+            .channel_for_creation(&caller, requested.channel.as_ref())
+            .await?;
+        if channel.is_some() && requested.environment.is_some() {
+            return Err(ConversationError::InvalidInput);
+        }
+        // What the caller left out starts as its channel says. The channel's
+        // model is its agent's, so it is the default only on that agent.
+        let defaults = channel.as_ref().map(|channel| channel.defaults());
         let agent_request = match requested.agent {
             Some(RequestedAgent::Known(agent)) => Some(agent),
             Some(RequestedAgent::Unknown) => return Err(ConversationError::InvalidInput),
-            None => None,
+            None => defaults.map(|defaults| defaults.agent),
         };
         let agent = service.inner.agents.select(agent_request)?;
-        let approval_mode = requested
-            .approval_mode
-            .unwrap_or_else(Self::default_creation_approval_mode);
-        let configured = match requested.model.as_deref() {
+        let approval_mode = Self::starting_mode(requested.approval_mode, channel.as_ref());
+        let model = requested.model.clone().or_else(|| {
+            defaults
+                .filter(|defaults| defaults.agent == agent)
+                .map(|defaults| defaults.model.as_str().to_owned())
+        });
+        let place = channel.as_ref().map(AgentPlace::of);
+        let configured = match model.as_deref() {
             Some(model) => {
                 service
                     .inner
                     .agents
-                    .resolve_for(agent, model, approval_mode)
+                    .resolve_for(agent, model, approval_mode, place.as_ref())
                     .await?
             }
             None => {
                 let default = service.inner.agents.resolve(agent).await?;
-                if approval_mode == ConversationApprovalMode::Ask {
+                if approval_mode == ConversationApprovalMode::Ask && place.is_none() {
                     default
                 } else {
                     service
                         .inner
                         .agents
-                        .resolve_for(agent, default.provider.identity().model_id(), approval_mode)
+                        .resolve_for(
+                            agent,
+                            default.provider.identity().model_id(),
+                            approval_mode,
+                            place.as_ref(),
+                        )
                         .await?
                 }
             }
@@ -1606,6 +1653,7 @@ impl ConversationService {
             .environment
             .place(&id, requested.environment.as_deref())
             .await?;
+        service.place_in_channel(&id, channel.as_ref()).await?;
         let outcome = service.inner.metadata.create(proposed.clone()).await?;
         let record = &outcome.conversation;
         validate_target(&id, record)?;
@@ -1904,12 +1952,19 @@ impl ConversationService {
                             })?;
                             let agent = plan.agent;
                             *carried.lock().expect("carried switch") = plan.switch.clone();
+                            let place = service.agent_place(&id).await.map_err(|cause| {
+                                OpeningFailure {
+                                    cause,
+                                    holds: false,
+                                }
+                            })?;
                             let mut stops = service.inner.stops.subscribe();
                             let configured = tokio::select! {
                                 resolved = service.inner.agents.resolve_for(
                                     agent,
                                     plan.model.as_str(),
                                     record.approval_mode(),
+                                    place.as_ref(),
                                 ) => {
                                     resolved.map_err(|cause| OpeningFailure {
                                         cause,
@@ -2229,9 +2284,13 @@ impl ConversationService {
                             // Where its agent works: what its environment
                             // reported (a host's own directory), else this
                             // gateway's.
+                            let channel_folder = place
+                                .as_ref()
+                                .and_then(|place| place.folder.to_str().map(str::to_owned));
                             let workspace = opening
                                 .workspace
                                 .as_ref()
+                                .or(channel_folder.as_ref())
                                 .or(service.inner.workspace.as_ref());
                             if let Some(workspace) = workspace {
                                 let identity = configured.provider.identity();
@@ -2793,10 +2852,11 @@ impl ConversationService {
                 return Err(ConversationError::ApprovalModeUncertain);
             }
             let agent = record.agent().ok_or(ConversationError::AgentUnsupported)?;
+            let place = service.agent_place(&id).await?;
             service
                 .inner
                 .agents
-                .resolve_for(agent, record.model().as_str(), mode)
+                .resolve_for(agent, record.model().as_str(), mode, place.as_ref())
                 .await?;
             let live_slot = service.inner.conversations.lock().await.get(&id).cloned();
             let live = if let Some(slot) = live_slot {
@@ -4402,9 +4462,10 @@ impl ConversationService {
             .take(MAX_LISTED_CONVERSATIONS)
             .collect();
         let running = self.running_ids(&owned).await;
+        let channels = self.listed_channels(listed_ids(&owned)).await?;
         Ok((
             ConversationList {
-                conversations: list_entries(&owned, &running),
+                conversations: list_entries(&owned, &running, &channels),
                 complete,
             },
             head,
@@ -4465,8 +4526,9 @@ impl ConversationService {
         let owned: Vec<ListedConversation> =
             self.admitted_for(conversations, &caller, reader, owner, paired_policy)?;
         let running = self.running_ids(&owned).await;
+        let channels = self.listed_channels(listed_ids(&owned)).await?;
         Ok(ConversationObservation {
-            conversations: list_entries(&owned, &running),
+            conversations: list_entries(&owned, &running, &channels),
             complete,
             cursor: cursor.map(|cursor| ConversationObservationCursor {
                 incarnation: cursor.incarnation,
@@ -5731,6 +5793,7 @@ impl ConversationService {
                 }
             }
             self.forget_thread_reports_of(&id).await;
+            self.forget_channel_of(&id).await;
             let _writes = self.inner.summary_writes.lock(&id).await;
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);
@@ -5966,8 +6029,18 @@ impl ConversationService {
         // other: the tombstone is written, so the delete happened and is
         // answered unfinished (`conversation_erasure_incomplete`), not as
         // the command failing (`a_slot_freed_by_an_ask_that_panicked_still_wakes_those_waiting`).
+        // A conversation in a channel kept its session where its agent
+        // worked: the channel's folder.
+        let place = self
+            .agent_place(record.id())
+            .await
+            .map_err(AskFailure::Failed)?;
         let asked = async {
-            match AssertUnwindSafe(eraser.erase(session)).catch_unwind().await {
+            let erasing = match place {
+                Some(place) => eraser.erase_in(session, place),
+                None => eraser.erase(session),
+            };
+            match AssertUnwindSafe(erasing).catch_unwind().await {
                 Ok(erased) => erased,
                 Err(payload) => {
                     mem::forget(payload);
@@ -7116,9 +7189,17 @@ fn carried(
     retries.done(claim);
 }
 
+fn listed_ids(owned: &[ListedConversation]) -> Vec<ConversationId> {
+    owned
+        .iter()
+        .map(|listed| listed.conversation.id().clone())
+        .collect()
+}
+
 fn list_entries(
     owned: &[ListedConversation],
     running: &HashSet<ConversationId>,
+    channels: &HashMap<ConversationId, crate::conversation::domain::ChannelId>,
 ) -> Vec<ConversationListEntry> {
     owned
         .iter()
@@ -7136,6 +7217,9 @@ fn list_entries(
             updated_at_ms: listed.summary.updated_at_ms(),
             running: running.contains(listed.conversation.id()),
             archived: listed.summary.archived(),
+            channel_id: channels
+                .get(listed.conversation.id())
+                .map(|channel| channel.as_str().to_owned()),
         })
         .collect()
 }

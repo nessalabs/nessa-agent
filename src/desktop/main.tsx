@@ -7,6 +7,9 @@ import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import {
   askReviewNoticeAccess,
+  chooseChannelFolder,
+  chooseChannelResources,
+  homeFolder,
   host,
   loadAssignedGatewayEndpoint,
   onReviewNoticeOpened,
@@ -120,8 +123,20 @@ if (nativeNotices) {
   })
   window.addEventListener("focus", showWaitingReviews)
 }
+// The system's pickers for a new channel's paths, in the app on macOS and
+// Windows. Linux has no picker of its own yet, and a browser none at all, so
+// there a channel's folder is made for it and it takes no resources.
+const channelPaths =
+  backend === "host" && (host.kind === "macos" || host.kind === "other")
+    ? {
+        home: homeFolder,
+        folder: chooseChannelFolder,
+        resources: chooseChannelResources,
+      }
+    : undefined
 const dependencies = createDesktopDependencies({
   signInToProvider,
+  paths: channelPaths,
   providerLoginAvailable,
   gateway,
   reviewNotices: nativeNotices ? { sync: syncReviewNotices } : undefined,

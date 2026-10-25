@@ -140,3 +140,41 @@ when {
     principal.organization == resource.organization &&
     principal.id == resource.owner
 };
+
+// The owner makes channels in their own catalogue. Only this action takes a
+// folder path; every later request names the channel, never the path.
+@id("owner.channel_create")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"channel.create",
+    resource is NessaConversation::Catalogue
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner
+};
+
+// The owner lists their own channels.
+@id("owner.channel_list")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"channel.list",
+    resource is NessaConversation::Catalogue
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner
+};
+
+// The owner starts conversations in their own channels, so their agents work
+// in that channel's folder.
+@id("owner.channel_use")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"channel.use",
+    resource is NessaConversation::Channel
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner
+};

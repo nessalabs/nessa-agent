@@ -236,6 +236,8 @@ export function submissionRefusalMessage(reason: CommandFailure): string | undef
       return "The gateway could not read this message's images, so it was not sent. It is back in the draft and its images are uploading again; send once they finish."
     case "conversation-not-found":
       return "The gateway no longer has this conversation, so the message was not sent. It is back in the draft."
+    case "channel-not-found":
+      return "The gateway has no such channel, so the conversation was not started. The message is back in the draft; start it in another channel."
     case "conversation-capacity":
       return "The gateway has too many conversations open to take this one. The message is back in the draft; close a conversation or try again shortly."
     case "conversation-state-unreadable":

@@ -143,6 +143,105 @@ async fn paired_lists_start_empty_without_grants() {
 }
 
 #[tokio::test]
+async fn paired_lists_keep_channel_ids_without_widening_their_scope() {
+    use crate::conversation::application::ChannelStore;
+    use crate::conversation::domain::{
+        Channel, ChannelDefaults, ChannelFolder, ChannelId, ChannelName, ChannelNotes,
+        ChannelParts, ChannelPath, ChannelResources,
+    };
+    use crate::conversation::infrastructure::{LocalChannelFolders, LocalChannelStore};
+
+    let fixture = SubscriptionFixture::new()
+        .await
+        .with_devices(this_device(true));
+    grants(&fixture.authority, &["conversation.read", "server.read"]);
+    let shared = stored_row(&fixture, 1, true).await;
+    let hidden = stored_row(&fixture, 2, false).await;
+    let private = fixture._directory.path().join("conversations");
+    let channels = Arc::new(LocalChannelStore::open(&private.join("channels.sqlite3")).unwrap());
+    fixture.service.bind_channels(
+        channels.clone(),
+        Arc::new(LocalChannelFolders::new(&private, None).unwrap()),
+    );
+    let visible_channel = ChannelId::new("ch_aaaaaaaaaa").unwrap();
+    for (channel_id, conversation) in [
+        (visible_channel.clone(), &shared),
+        (ChannelId::new("ch_bbbbbbbbbb").unwrap(), &hidden),
+    ] {
+        let request = channel_id.as_str().to_owned();
+        channels
+            .create(
+                Channel::new(
+                    channel_id.clone(),
+                    OrganizationId::new("organization").unwrap(),
+                    PrincipalId::new("principal").unwrap(),
+                    ChannelParts {
+                        name: ChannelName::new("Fixture channel").unwrap(),
+                        folder: ChannelFolder {
+                            path: ChannelPath::new(private.clone()).unwrap(),
+                            made: false,
+                        },
+                        defaults: ChannelDefaults {
+                            agent: AgentId::Claude,
+                            model: ConversationModelId::new("test").unwrap(),
+                            mode: ConversationApprovalMode::Ask,
+                        },
+                        notes: ChannelNotes::new("").unwrap(),
+                        resources: ChannelResources::new(Vec::new()).unwrap(),
+                    },
+                    request,
+                    1,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        channels.place(conversation, &channel_id).await.unwrap();
+    }
+    for method in ["conversation.list", "conversation.observe"] {
+        let reply = fixture.call(method, json!({})).await;
+        assert_eq!(reply["ok"], true, "{reply}");
+        let rows = reply["payload"]["conversations"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{reply}");
+        assert_eq!(rows[0]["conversationId"], shared.to_string());
+        assert_eq!(rows[0]["channelId"], visible_channel.as_str());
+    }
+    let mut client = fixture.connect();
+    let (subscription, first) = open_list(&mut client).await;
+    assert_eq!(
+        first["payload"]["list"]["conversations"][0]["channelId"],
+        visible_channel.as_str()
+    );
+    fixture
+        .metadata
+        .record(
+            &hidden,
+            ConversationSummary::new(None, None, 30, false).unwrap(),
+        )
+        .await
+        .unwrap();
+    client.quiet(&subscription).await;
+    fixture
+        .metadata
+        .record(
+            &shared,
+            ConversationSummary::new(None, None, 40, false).unwrap(),
+        )
+        .await
+        .unwrap();
+    let changed = client.next().await;
+    assert_eq!(changed["event"], "conversation.listed", "{changed}");
+    let rows = changed["payload"]["list"]["conversations"]
+        .as_array()
+        .unwrap();
+    assert_eq!(rows.len(), 1, "{changed}");
+    assert_eq!(rows[0]["conversationId"], shared.to_string());
+    assert_eq!(rows[0]["channelId"], visible_channel.as_str());
+    assert_eq!(rows[0]["updatedAtMs"], 40);
+    client.close().await;
+}
+
+#[tokio::test]
 async fn an_incomplete_paired_list_ignores_ungranted_wakes() {
     let fixture = SubscriptionFixture::new()
         .await

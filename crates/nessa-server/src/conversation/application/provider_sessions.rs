@@ -18,6 +18,19 @@ use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 /// asked or refused; the deletion stays unfinished and is asked again.
 pub trait ProviderSessionEraser: Send + Sync {
     fn erase(&self, session: ExecutionSessionId) -> ConversationFuture<'_, ProviderSessionErasure>;
+    /// As [`Self::erase`], for a session an agent kept while it worked in a
+    /// channel's folder, `place`: an agent that keys its sessions by the
+    /// folder it worked in is asked from there. The default asks as
+    /// [`Self::erase`] does, which is right for an eraser whose agent keeps
+    /// its sessions in one place whatever folder it worked in.
+    fn erase_in(
+        &self,
+        session: ExecutionSessionId,
+        place: super::AgentPlace,
+    ) -> ConversationFuture<'_, ProviderSessionErasure> {
+        let _ = place;
+        self.erase(session)
+    }
     /// Resolves once every ask this eraser started, and whose caller stopped
     /// waiting, has finished cleaning up after itself — within the eraser's
     /// own bound. Awaited by retirement before the runtime ends. The default

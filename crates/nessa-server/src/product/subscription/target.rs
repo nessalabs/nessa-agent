@@ -1007,6 +1007,7 @@ mod tests {
             updated_at_ms: n as u64,
             running: false,
             archived: false,
+            channel_id: None,
         }
     }
 

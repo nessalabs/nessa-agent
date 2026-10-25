@@ -5,12 +5,14 @@ import { IconButton } from "../../../ui/icon-button"
 import {
   openBeside,
   openChannel,
+  openChannelCreation,
   toggleChannel,
   toggleSection,
 } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
   selectChannelIdsIn,
+  selectChannelMaking,
   selectSectionCollapsed,
   selectSections,
 } from "../../adapters/store/selectors"
@@ -170,6 +172,7 @@ const SourceSection = memo(function SourceSection({
     selectSectionCollapsed(state, sectionId),
   )
   const channelIds = useWorkspaceSelector((state) => selectChannelIdsIn(state, sectionId))
+  const { creatable } = useWorkspaceSelector(selectChannelMaking)
   return (
     <section className="workspace-section" data-collapsed={collapsed || undefined}>
       <div className="workspace-section-head">
@@ -184,14 +187,23 @@ const SourceSection = memo(function SourceSection({
           <span>{name}</span>
           <DesktopIcon name="chevronRight" />
         </button>
-        {variant === "channels" ? (
-          // Channels cannot be added yet; the control shows where it will be.
+        {creatable ? (
           <IconButton
             className="workspace-section-add"
             icon="add"
             label={`Add channel to ${name}`}
             tone="faint"
-            {...tooltip("Adding channels isn’t available yet")}
+            {...tooltip("New channel")}
+            onClick={() => dispatch(openChannelCreation())}
+          />
+        ) : variant === "channels" ? (
+          // This window cannot make channels; the control shows where it would be.
+          <IconButton
+            className="workspace-section-add"
+            icon="add"
+            label={`Add channel to ${name}`}
+            tone="faint"
+            {...tooltip("Adding channels isn’t available here")}
             disabled
           />
         ) : null}
