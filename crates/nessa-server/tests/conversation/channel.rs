@@ -193,7 +193,13 @@ fn agents_are_told_the_name_folder_notes_and_resources() {
     });
     let text = made.instructions();
     assert!(text.contains("\"design-review\""), "{text}");
-    assert!(text.contains("Its folder is /repo."), "{text}");
+    assert!(
+        text.contains(&format!("Its folder is {}.", absolute("/repo"))),
+        "{text}"
+    );
     assert!(text.contains("Check every export."), "{text}");
-    assert!(text.contains("\n- /home/me/brand-kit"), "{text}");
+    assert!(
+        text.contains(&format!("\n- {}", absolute("/home/me/brand-kit"))),
+        "{text}"
+    );
 }
