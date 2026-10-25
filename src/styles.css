@@ -177,16 +177,16 @@ body {
 }
 
 /*
- * The tab pill grows when the title fills in, and the activity glow is a
- * box-shadow layer. A layout compositor leaves both behind, so two tabs
- * sit in one place. Keep a fixed-width pill with no transitions, and the
- * working state is the avatar's `busy` wash — not a loading dot.
+ * The tabs are page dots after the selected tab's name. The selected dot
+ * widens to a bar and the busy glow is a box-shadow layer; a layout
+ * compositor leaves both behind, so two dots sit in one place. No
+ * transitions there, and busy is the dot drawn in the ink instead of a glow.
  */
 .nessa-panel[data-compositor="layout"] [data-slot="chat-tab"],
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab-dot"],
 .nessa-panel[data-compositor="layout"] [data-slot="chat-tabs-new"],
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tabs-back"],
 .nessa-panel[data-compositor="layout"] [data-slot="chat-tab-close"] {
-  /* Do not set `translate`/`scale` here: those inherit and freeze the
-     avatar's busy wash. */
   transform: none;
   filter: none;
   isolation: auto;
@@ -195,35 +195,20 @@ body {
   transition: none;
 }
 
-.nessa-panel[data-compositor="layout"] [data-slot="chat-tab"] {
-  position: static;
-  width: 11rem;
-  max-width: 11rem;
-  /* Opaque chip: a 10% wash does not cover the previous title, so a layout
-     compositor leaves "New chat" sitting under the new name. */
-  background-color: var(--card);
-  border-color: var(--border);
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab-dot"][data-busy]:not([data-attention]) {
+  box-shadow: none;
+  background-color: var(--nessa-chat-accent-ink);
 }
 
-.nessa-panel[data-compositor="layout"] [data-slot="chat-tab"][data-active] {
-  background-color: color-mix(in oklab, var(--nessa-chat-accent) 18%, var(--card));
-  border-color: color-mix(in oklab, var(--nessa-chat-accent) 50%, var(--border));
-}
-
-.nessa-panel[data-compositor="layout"] [data-slot="chat-tab"] > [role="tab"] {
-  flex: 1;
-  min-width: 0;
-}
-
-.nessa-panel [data-slot="chat-tab"] span:has([data-slot="random-avatar"]),
-.nessa-panel [data-slot="chat-tab"] span:has(> .nessa-messages-icon) {
+.nessa-panel [data-slot="chat-tabs-current"] span:has([data-slot="random-avatar"]),
+.nessa-panel [data-slot="chat-tabs-current"] span:has(> .nessa-messages-icon) {
   width: 1.25rem;
   height: 1.25rem;
 }
 
-.nessa-panel [data-slot="chat-tab"] [data-slot="random-avatar"],
-.nessa-panel [data-slot="chat-tab"] [data-slot="random-avatar"] svg,
-.nessa-panel [data-slot="chat-tab"] .nessa-messages-icon {
+.nessa-panel [data-slot="chat-tabs-current"] [data-slot="random-avatar"],
+.nessa-panel [data-slot="chat-tabs-current"] [data-slot="random-avatar"] svg,
+.nessa-panel [data-slot="chat-tabs-current"] .nessa-messages-icon {
   width: 1.25rem;
   height: 1.25rem;
 }
@@ -233,8 +218,13 @@ body {
   flex: none;
 }
 
-.nessa-panel[data-compositor="layout"] [data-slot="chat-tab-loading"] {
-  display: none;
+/* The undo card rises in over a blur and a shadow, each its own layer; a
+   layout compositor would leave their frames behind. A border keeps its edge. */
+.nessa-panel[data-compositor="layout"] .nessa-undo-card {
+  animation: none;
+  backdrop-filter: none;
+  box-shadow: none;
+  border: 1px solid var(--border);
 }
 
 /*

@@ -5,11 +5,11 @@ import * as React from "react"
  * strength, so a palette swap recolours the whole painting consistently.
  */
 export interface MessagesIconColors {
-  /** The deepest blue: the ground's darkest corner and the pooled wash at left. */
+  /** The deepest shade: the ground's darkest corner and the pooled wash at left. */
   deep: string
   /** The ground's middle, and the diagonal band across it. */
   mid: string
-  /** The lavender pool behind the bubbles and the ground's far corner. */
+  /** The paler pool behind the bubbles and the ground's far corner. */
   lavender: string
   /** The pale sheet falling from the top edge. */
   light: string
@@ -23,19 +23,23 @@ export interface MessagesIconColors {
   bubbleShade: string
 }
 
+/**
+ * Graphite, as the chat accent is: the panel is monochrome, and the icon
+ * leads its tab strip, so a blue painting there would be the one colour left.
+ */
 export const messagesIconColors: MessagesIconColors = {
-  deep: "#1257ff",
-  mid: "#4a82ff",
-  lavender: "#8395f7",
-  light: "#c8d6fd",
-  wave: "#8ccaf8",
-  foam: "#c4e9f7",
-  bubble: "#f5f8ff",
-  bubbleShade: "#c7d9fb",
+  deep: "#2a2a2c",
+  mid: "#4a4a4e",
+  lavender: "#8e8e93",
+  light: "#d1d1d6",
+  wave: "#a1a1a6",
+  foam: "#dcdce0",
+  bubble: "#fafafa",
+  bubbleShade: "#d4d4d8",
 }
 
 /**
- * The Messages icon: two speech bubbles over a watercolour pool of blues, as a
+ * The Messages icon: two speech bubbles over a watercolour pool of greys, as a
  * vector so one drawing serves every size, and recolourable through `colors`.
  *
  * Drawn on a 100-unit circle. The washes are translucent shapes clipped to it,
@@ -89,7 +93,7 @@ export function MessagesIcon({
       </defs>
       <g clipPath={`url(#${clip})`}>
         <rect width="100" height="100" fill={`url(#${ground})`} />
-        {/* The pool of deep blue pooled at the left. */}
+        {/* The deep pool at the left. */}
         <path
           d="M7 52C4 36 16 19 31 14c9-3 12 8 8 24-4 16-15 25-24 23-5-1-7-5-8-9Z"
           fill={paint.deep}

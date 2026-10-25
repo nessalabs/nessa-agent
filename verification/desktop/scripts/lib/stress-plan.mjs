@@ -125,6 +125,10 @@ export const KNOBS = {
     default: 1,
     what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps",
   },
+  panels: {
+    default: 1,
+    what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there is a rimmed graphite bubble, and a chat archived from Messages leaves a row card whose Undo brings it back",
+  },
   launches: {
     default: 1,
     what: "window reloads while the host is still starting the gateway: no startup screen, and the conversation listed as soon as it is up",
@@ -207,6 +211,7 @@ export function plan(knobs) {
   add(knobs.drifts, () => ({ kind: "drift" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))
   add(knobs.launches, () => ({ kind: "launch" }))
+  add(knobs.panels, () => ({ kind: "panel" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

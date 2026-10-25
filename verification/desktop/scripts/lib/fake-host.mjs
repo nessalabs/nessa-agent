@@ -48,6 +48,11 @@ export const STARTING = {
  * It says there is no linger question (a host with no logind), and answers
  * where its menu bar icon is (`setup_tray_point`), 80 px in from the page's
  * top right, counting each ask in `window.__fakeHostTrayAsks`.
+ *
+ * Given `panel`, the page is the menu-bar panel: the host says it started and
+ * its gateway is up, as for setup, takes event listeners, answers the
+ * panel's size (`panel_size`) with the page's own, and says setup chose no
+ * agent (`chosen_agent`).
  */
 export function gatewayHost({
   endpoint,
@@ -55,7 +60,10 @@ export function gatewayHost({
   notices = false,
   starting = null,
   setup = false,
+  panel = false,
 }) {
+  // Setup and the panel both wait for the host to say it is up.
+  const started = setup || panel
   // The host's typed refusals (`SurfaceCommandError`). The page maps the
   // reason; a sentence here would be an untyped failure.
   const notReady = { reason: "not-ready" }
@@ -84,16 +92,20 @@ export function gatewayHost({
         window.__fakeHostReplays++
         return Promise.resolve(null)
       }
-      if (setup && command === "host_startup") return Promise.resolve({ state: "ready" })
+      if (started && command === "host_startup") return Promise.resolve({ state: "ready" })
       // The gateway it manages is up: the stack's gateway is already running,
       // and nothing about it changes, so a listener is taken and never told.
-      if (setup && command === "gateway_startup")
+      if (started && command === "gateway_startup")
         return Promise.resolve({ revision: 1, state: "ready" })
-      if (setup && command === "plugin:event|listen") {
+      if (started && command === "plugin:event|listen") {
         window.__TAURI_EVENT_PLUGIN_INTERNALS__ ??= { unregisterListener() {} }
         return Promise.resolve(args.handler)
       }
-      if (setup && command === "plugin:event|unlisten") return Promise.resolve(null)
+      if (started && command === "plugin:event|unlisten") return Promise.resolve(null)
+      if (panel && command === "panel_size")
+        return Promise.resolve({ width: innerWidth, height: innerHeight })
+      // No agent chosen in setup: a new chat starts on the gateway's default.
+      if (panel && command === "chosen_agent") return Promise.resolve(null)
       if (setup && command === "reveal_setup_window") return Promise.resolve(null)
       if (setup && command === "linger_status")
         return Promise.resolve({ shown: "not-applicable" })

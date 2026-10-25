@@ -293,6 +293,11 @@ const FRESH_CLIENTS = 3
 const LAUNCH_STARTING_MS = 3_000
 const LAUNCH_LISTED_MS = 10_000
 /**
+ * A sent bubble's fill, Light then Dark: the chat accent (`--nessa-chat-accent`
+ * in nessa_ui's theme), as the browser reports it.
+ */
+const GRAPHITE = ["rgb(42, 42, 44)", "rgb(58, 58, 61)"]
+/**
  * How much longer opening the `long` conversation again may take than
  * opening one of a single long turn, both closed first so their whole saved
  * history is replayed: half a second of noise, and a little for each turn.
@@ -1437,6 +1442,114 @@ const steps = {
       await openStressConversation(page, run.main.id, run.main.title)
     })
     if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async panel(run, step, failures) {
+    const page = await panelWindow(run)
+    try {
+      const strip = page.locator(css.panelTabs)
+      if (!(await strip.waitFor({ timeout: 30_000 }).then(() => true, () => false))) {
+        failures.push("the panel drew no tab strip")
+        return
+      }
+      if ((await strip.getAttribute("data-variant")) !== "dots")
+        failures.push("the panel's tabs are not page dots")
+      // Messages, then the main conversation from its row: a chat opened
+      // from the list takes a dot, and its name leads the strip.
+      await page.locator(css.panelMessages).click()
+      const rowFor = (title) =>
+        page.locator(css.panelListRow).filter({ hasText: title }).first()
+      if (!(await rowFor(run.main.title).waitFor({ timeout: 15_000 }).then(() => true, () => false))) {
+        failures.push(`the panel's Messages does not list ${JSON.stringify(run.main.title)}`)
+        return
+      }
+      const dotsBefore = await page.locator(css.panelDot).count()
+      await rowFor(run.main.title).click()
+      await panelNamed(page, run.main.title, failures)
+      const dots = await page.locator(css.panelDot).count()
+      if (dots !== dotsBefore + 1)
+        failures.push(`opening a chat left ${dots} dots, not ${dotsBefore + 1}`)
+      // The selected dot is the bar: wider than every other dot, once its
+      // width has settled.
+      const widths = () =>
+        page.locator(css.panelDot).evaluateAll((all) =>
+          all.map((dot) => ({
+            width: dot.getBoundingClientRect().width,
+            selected: dot.closest("[data-active]") !== null,
+          })),
+        )
+      const oneBar = (all) => {
+        const bar = all.filter((each) => each.selected)
+        return bar.length === 1 && all.every((each) => each.selected || each.width + 6 <= bar[0].width)
+      }
+      if (!(await waitFor(async () => oneBar(await widths()), 5_000)))
+        failures.push(`the selected dot is not the one bar: ${JSON.stringify(await widths())}`)
+      // A message sent from the panel is a rimmed graphite bubble.
+      const text = prompt(run, STRESS.reply, step, " from the panel")
+      const seen = await seenTurns(run, run.main.id)
+      const box = page.locator(css.panelComposer)
+      await box.click()
+      await page.keyboard.type(text)
+      await page.keyboard.press("Enter")
+      run.sent.set(run.main.id, (run.sent.get(run.main.id) ?? 0) + 1)
+      await settled(run, run.main.id, seen, text, "completed", failures)
+      const bubble = page.locator(css.sentBubble).filter({ hasText: text }).first()
+      if (!(await bubble.waitFor({ timeout: 15_000 }).then(() => true, () => false))) {
+        failures.push("the panel does not show the message it sent")
+      } else {
+        const paint = await bubble.evaluate((node) => {
+          const style = getComputedStyle(node)
+          return { background: style.backgroundColor, shadow: style.boxShadow }
+        })
+        if (!GRAPHITE.includes(paint.background) || !paint.shadow.includes("inset"))
+          failures.push(`a sent bubble is not rimmed graphite: ${JSON.stringify(paint)}`)
+      }
+      // The panel has no workspace, so its reply is looked for on the page.
+      const echo = `${SAYS.echo}${text}`
+      if (!(await page.getByText(echo).first().waitFor({ timeout: 30_000 }).then(() => true, () => false)))
+        failures.push(`the panel does not show ${JSON.stringify(echo)}`)
+      // A chat archived from Messages leaves a row card with its avatar,
+      // and the card's Undo brings it back, in the list and the gateway.
+      const conversationId = randomUUID()
+      const first = prompt(run, STRESS.reply, step, " to archive")
+      await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+      await run.client.conversation.submit(run.client.conversation.prepare(conversationId, first))
+      run.checked.push(conversationId)
+      await settled(run, conversationId, new Set(), first, "completed", failures)
+      const title = await titleOf(run, conversationId)
+      await page.locator(css.panelMessages).click()
+      const row = rowFor(title)
+      if (!(await row.waitFor({ timeout: 15_000 }).then(() => true, () => false))) {
+        failures.push(`the panel's Messages does not list ${JSON.stringify(title)}`)
+        return
+      }
+      await row.focus()
+      await page.keyboard.press("Shift+F10")
+      await page.getByRole("button", { name: `Archive ${title}` }).click({ timeout: 10_000 })
+      const undoCard = page.locator(css.undoCard)
+      if (!(await undoCard.waitFor({ timeout: 15_000 }).then(() => true, () => false))) {
+        failures.push("archiving from the panel left no undo card")
+        return
+      }
+      if (!(await undoCard.innerText()).includes(title))
+        failures.push(`the undo card does not name ${JSON.stringify(title)}`)
+      if ((await undoCard.locator(css.randomAvatar).count()) !== 1)
+        failures.push("the undo card does not lead with the conversation's avatar")
+      const archived = async (want) =>
+        waitFor(async () => {
+          const { conversations } = await run.client.conversation.list({ archived: true })
+          return conversations.some((each) => each.conversationId === conversationId) === want
+        }, 15_000)
+      if (!(await archived(true))) failures.push("the gateway did not archive the conversation")
+      await undoCard.getByRole("button", { name: /^Undo/ }).click()
+      if (!(await archived(false))) failures.push("Undo did not unarchive the conversation")
+      if (!(await row.waitFor({ timeout: 15_000 }).then(() => true, () => false)))
+        failures.push("Undo did not put the row back in the panel's Messages")
+      if (!(await waitFor(async () => (await undoCard.count()) === 0, 5_000)))
+        failures.push("the undo card stayed after Undo")
+    } finally {
+      await page.close()
+    }
   },
 
   async rail(run, step, failures) {
@@ -2895,6 +3008,28 @@ async function replayOnboarding(page, evidence) {
   const asked = (await page.evaluate(() => window.__fakeHostReplays)) - before
   await closeSettings(page)
   return asked
+}
+
+/** The menu-bar panel as the host opens it, over the run's gateway. */
+async function panelWindow(run) {
+  const page = await run.page.context().newPage()
+  await page.setViewportSize({ width: 420, height: 760 })
+  await page.addInitScript(gatewayHost, {
+    endpoint: run.stack.endpoint,
+    credential: run.stack.credential,
+    panel: true,
+  })
+  await page.goto(`${new URL(run.page.url()).origin}/index.html`)
+  return page
+}
+
+/** Waits until the panel's strip leads with `title`, the selected tab's name. */
+async function panelNamed(page, title, failures) {
+  const named = await waitFor(
+    async () => (await page.locator(css.panelCurrent).innerText().catch(() => "")).includes(title),
+    15_000,
+  )
+  if (!named) failures.push(`the panel's strip does not lead with ${JSON.stringify(title)}`)
 }
 
 /**
