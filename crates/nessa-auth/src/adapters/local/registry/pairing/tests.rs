@@ -3974,7 +3974,7 @@ fn ordinary_pairing_expiry_and_cancellation_serialize_with_a_held_noop_writer() 
     let before = fixture.store.revision().unwrap();
     let (started_tx, started_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
-    let (entered, early, holder, expiry, decision) = thread::scope(|threads| {
+    let (entered, started, was_held, early, holder, expiry, decision) = thread::scope(|threads| {
         let release = ReleasePairingMutation(Some(release_tx));
         let holder = threads.spawn(|| fixture.store.expire_pairing_if_due(id, &clock));
         let entered = entered_rx.recv_timeout(Duration::from_secs(2));
@@ -4006,9 +4006,12 @@ fn ordinary_pairing_expiry_and_cancellation_serialize_with_a_held_noop_writer() 
             "holder=expiry-clock entered={entered:?} started={started:?} held={} early={early:?}",
             held.load(Ordering::Acquire)
         );
+        let was_held = held.load(Ordering::Acquire);
         drop(release);
         (
             entered,
+            started,
+            was_held,
             early,
             holder.join().unwrap(),
             expiry.join().unwrap(),
@@ -4016,6 +4019,14 @@ fn ordinary_pairing_expiry_and_cancellation_serialize_with_a_held_noop_writer() 
         )
     });
     assert!(entered.is_ok());
+    let mut started =
+        started.map(|result| result.expect("each real worker reached its operation boundary"));
+    started.sort();
+    assert_eq!(started, ["decision", "expiry"]);
+    assert!(
+        was_held,
+        "the original writer remained held until explicit release"
+    );
     assert!(
         matches!(early, Err(mpsc::RecvTimeoutError::Timeout)),
         "an ordinary writer must wait for the original writer: {early:?}"
