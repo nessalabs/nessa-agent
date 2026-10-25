@@ -24,6 +24,10 @@ path = "src/backup_plan_main.rs"
 
 [dependencies]
 base64 = "0.22"
+# The local-network announcement while native linking listens there
+# (device_pairing::infrastructure::announcer), so a phone that scanned the
+# desktop's code finds the gateway. No async runtime of its own.
+mdns-sd = { version = "0.21", default-features = false }
 nessa-protocol = { path = "../nessa-protocol" }
 # A peer gateway dials another gateway as a client (ADR 483, amended for slice
 # H of ADR 252). Without the example's command line.

@@ -378,6 +378,7 @@ async fn faulted_listener_join_reports_the_fault_without_reconciling() {
         poller: bound.start_poller(),
         peers: bound.peers.clone(),
         audit: bound.audit.clone(),
+        announced: None,
     };
     assert_eq!(
         tokio::time::timeout(WAIT, running.join()).await.unwrap(),
@@ -552,3 +553,137 @@ async fn a_relay_that_cannot_be_reached_leaves_direct_readers_served() {
 mod owner_phone;
 #[path = "phone_endpoint.rs"]
 mod phone_endpoint;
+
+/// What the fake announcer was asked: each announcement, and how many were
+/// withdrawn.
+#[derive(Default)]
+struct Announcements {
+    made: std::sync::Mutex<Vec<LinkingAnnouncement>>,
+    withdrawn: std::sync::atomic::AtomicUsize,
+}
+struct FakeAnnouncer(Arc<Announcements>);
+struct FakeAnnounced(Arc<Announcements>);
+impl LinkingAnnouncer for FakeAnnouncer {
+    fn announce(
+        &self,
+        announcement: &LinkingAnnouncement,
+    ) -> Result<Box<dyn Announced>, crate::device_pairing::application::AnnouncementUnavailable>
+    {
+        self.0.made.lock().unwrap().push(announcement.clone());
+        Ok(Box::new(FakeAnnounced(self.0.clone())))
+    }
+}
+impl Announced for FakeAnnounced {
+    fn withdraw(self: Box<Self>) {
+        self.0
+            .withdrawn
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// A listener on every interface is announced with its address and the
+/// gateway's id once it serves, and withdrawn as stop begins.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_network_listener_is_announced_and_withdrawn_on_stop() {
+    let namespace = Namespace::new();
+    namespace.bootstrap().await;
+    let registry = namespace.registry();
+    let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+    let config = NativeConfig {
+        listen_address: listener.local_addr().unwrap(),
+        relay: None,
+        advertised_address: None,
+    };
+    let (prepared, _commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
+        .await
+        .unwrap();
+    let announcements = Arc::new(Announcements::default());
+    let bound = bind(
+        adopt(prepared, listener),
+        RuntimeDependencies::default().clock,
+        product(registry.clone()),
+    )
+    .await
+    .unwrap()
+    .with_announcer(Arc::new(FakeAnnouncer(announcements.clone())));
+    let address = bound.local_address();
+    let (failure, _failed) = watch::channel(None);
+    let mut running = start(bound, failure);
+    assert_eq!(
+        *announcements.made.lock().unwrap(),
+        [LinkingAnnouncement {
+            address,
+            gateway: registry.gateway_id().unwrap(),
+        }]
+    );
+    running.signal_stop();
+    assert_eq!(
+        announcements
+            .withdrawn
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    tokio::time::timeout(WAIT, running.join())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+/// A loopback listener serves this machine alone: nothing is announced.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_loopback_listener_is_not_announced() {
+    let namespace = Namespace::new();
+    namespace.bootstrap().await;
+    let registry = namespace.registry();
+    let (prepared, _commands, _peers) = prepared_loopback(namespace.inputs(registry.clone())).await;
+    let announcements = Arc::new(Announcements::default());
+    let bound = bind(
+        prepared,
+        RuntimeDependencies::default().clock,
+        product(registry),
+    )
+    .await
+    .unwrap()
+    .with_announcer(Arc::new(FakeAnnouncer(announcements.clone())));
+    let (failure, _failed) = watch::channel(None);
+    let running = start(bound, failure);
+    assert!(announcements.made.lock().unwrap().is_empty());
+    tokio::time::timeout(WAIT, running.join())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+/// A network listener on an ephemeral port is not one the next start
+/// repeats: nothing is announced, though the port it got is not zero.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_ephemeral_network_listener_is_not_announced() {
+    let namespace = Namespace::new();
+    namespace.bootstrap().await;
+    let registry = namespace.registry();
+    let config = NativeConfig {
+        listen_address: "0.0.0.0:0".parse().unwrap(),
+        relay: None,
+        advertised_address: None,
+    };
+    let (prepared, _commands, _peers) = prepare(&config, namespace.inputs(registry.clone()))
+        .await
+        .unwrap();
+    let announcements = Arc::new(Announcements::default());
+    let bound = bind(
+        prepared,
+        RuntimeDependencies::default().clock,
+        product(registry),
+    )
+    .await
+    .unwrap()
+    .with_announcer(Arc::new(FakeAnnouncer(announcements.clone())));
+    assert_ne!(bound.local_address().port(), 0);
+    let (failure, _failed) = watch::channel(None);
+    let running = start(bound, failure);
+    assert!(announcements.made.lock().unwrap().is_empty());
+    tokio::time::timeout(WAIT, running.join())
+        .await
+        .unwrap()
+        .unwrap();
+}

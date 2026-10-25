@@ -144,9 +144,18 @@ where
 }
 
 /// Where native pairing listens when Settings turns it on and `config.json`
-/// names no address yet.
+/// names no address yet: every interface, so a phone on the local network
+/// can reach it (and find it by its announcement). The listener admits only
+/// TLS with a pairing code or a paired key.
 #[cfg(unix)]
 pub(super) const DEFAULT_NATIVE_LISTEN: SocketAddr =
+    SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 47650);
+
+/// The address Settings named before it listened on the network. Only this
+/// machine could reach it, so turning linking on replaces it with
+/// [`DEFAULT_NATIVE_LISTEN`]; any other saved address is the person's own.
+#[cfg(unix)]
+pub(super) const SUPERSEDED_NATIVE_LISTEN: SocketAddr =
     SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 47650);
 
 #[derive(Debug, Deserialize)]

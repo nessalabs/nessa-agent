@@ -315,7 +315,9 @@ impl CompositionRoot {
                     native_listen_addr = %bound.local_address(),
                     "native pairing listening"
                 );
-                Some(bound)
+                Some(bound.with_announcer(Arc::new(
+                    crate::device_pairing::infrastructure::MulticastAnnouncer,
+                )))
             }
             None => None,
         };
