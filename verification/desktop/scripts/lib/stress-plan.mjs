@@ -133,6 +133,10 @@ export const KNOBS = {
     default: 1,
     what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps",
   },
+  menuPanels: {
+    default: 1,
+    what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, and a chat archived from Messages leaves a row card whose Undo brings it back",
+  },
   githubs: {
     default: 1,
     what: "times GitHub is connected from Settings through a fake GitHub, an agent started after it holds the sign-in, then disconnected",
@@ -225,6 +229,7 @@ export function plan(knobs) {
   add(knobs.drifts, () => ({ kind: "drift" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))
   add(knobs.launches, () => ({ kind: "launch" }))
+  add(knobs.menuPanels, () => ({ kind: "menuPanel" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.channels, () => ({ kind: "channel" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })

@@ -2,8 +2,8 @@
 /**
  * Settings › Connections › Linked devices (#462) against a scripted product
  * session: linking off, the switch turning it on across a gateway restart, a
- * refused owner, a code with both orbs, approve, revoke, and an expired code. Chromium and WebKit. The phone's scanner is
- * not this screen.
+ * refused owner, a code in a modal with one orb, approve, revoke, and an
+ * expired code. Chromium and WebKit. The phone's scanner is not this screen.
  *
  * The page is the dev server's, opened with `?gateway` so it uses the browser
  * session. `/browser/check` is answered here, and so is the product socket:
@@ -58,6 +58,7 @@ const sessionReady = {
     "conversation.unsubscribe",
     "credential.list",
     "credential.revoke",
+    "channel.list",
     "pairing.pending",
     "pairing.create",
     "pairing.cancel",
@@ -111,6 +112,7 @@ function scriptedGateway(scenario) {
   const unexpected = []
   const known = new Set([
     "server.health",
+    "channel.list",
     "workspace.publish",
     "conversation.subscribeList",
     "conversation.unsubscribe",
@@ -148,6 +150,9 @@ function scriptedGateway(scenario) {
     }
     if (method === "conversation.unsubscribe") return { ok: true, payload: {} }
     if (method === "auth.session") return { ok: true, payload: sessionReady }
+    // The workspace's channel picker reads the channels; none here.
+    if (method === "channel.list")
+      return { ok: true, payload: { channels: [], complete: true } }
     if (method === "credential.list")
       return { ok: true, payload: { credentials: devices } }
     if (method === "credential.revoke") {
@@ -332,16 +337,41 @@ function rawCodesIn(text) {
 
 async function laidOut(page) {
   return page.evaluate(
-    ({ panel, linked }) => {
+    ({ panel, linked, dialog }) => {
       const bounds = document.querySelector(panel)?.getBoundingClientRect()
       const root = document.querySelector(linked)?.getBoundingClientRect()
       if (!bounds || !root) return ["the linked devices page was not measured"]
       const outside = []
       if (root.left < bounds.left - 1 || root.right > bounds.right + 1)
         outside.push("the page is wider than the settings panel")
+      // The pairing modal, when open, fits the window with nothing cut inside it.
+      const modal = document.querySelector(dialog)
+      if (modal) {
+        const box = modal.getBoundingClientRect()
+        // Settings is a fixed layer over the window: a modal portalled past it
+        // is in the page and drawn underneath, unseen.
+        if (!modal.closest("[data-settings-layers]"))
+          outside.push(
+            "the pairing modal is not inside Settings, so it is drawn under it",
+          )
+        if (
+          box.left < 0 ||
+          box.top < 0 ||
+          box.right > innerWidth ||
+          box.bottom > innerHeight
+        )
+          outside.push("the pairing modal does not fit the window")
+        for (const part of modal.querySelectorAll(
+          '[data-slot="signal-orb"], [data-slot="pairing-code"]',
+        )) {
+          const inner = part.getBoundingClientRect()
+          if (inner.left < box.left - 1 || inner.right > box.right + 1)
+            outside.push(`${part.getAttribute("data-slot")} is wider than the modal`)
+        }
+      }
       return outside
     },
-    { panel: css.settingsPanel, linked: css.linked },
+    { panel: css.settingsPanel, linked: css.linked, dialog: css.pairingDialog },
   )
 }
 
@@ -357,7 +387,7 @@ Per engine, against a scripted product session (and one sample page):
   off        linking off: the switch can be turned, no config hint, no group title, no pair control
   toggle     turning the switch on restarts the gateway, and the page comes back on
   refused    this sign-in cannot pair; recover-owner is named
-  pair       a code, both orbs, Cancel focused, then cancel clears it
+  pair       a code and one orb in a modal; Escape hides it, Show code brings it back, Cancel clears it
   approve    a claimed device's fingerprint; Approve stays on a retryable stop
   revoke     a linked device is revoked only after confirm; the owner credential is not listed
   expired    a code already past its deadline reads as expired
@@ -478,28 +508,56 @@ await main(meta, async ({ options, rep, url }) => {
 
     await gatewayStep("pair", { mode: "on" }, async (page) => {
       await page.locator(selectorFor.linkedAction("pair")).click()
+      const dialog = page.locator(css.pairingDialog)
+      const cancel = dialog.locator(selectorFor.linkedAction("cancel"))
       await page.waitForFunction(
         (selector) => {
           const button = document.querySelector(selector)
-          return button && !button.disabled && document.activeElement === button
+          return button && !button.disabled
         },
-        selectorFor.linkedAction("cancel"),
+        `${css.pairingDialog} ${selectorFor.linkedAction("cancel")}`,
         { timeout: 10_000 },
       )
       const shown = (
-        await page.locator('[data-slot="pairing-code-value"]').innerText()
+        await dialog.locator('[data-slot="pairing-code-value"]').innerText()
       ).replace(/\s+/g, "")
       const orbs = {
-        signal: await page.locator(css.signalOrb).count(),
+        signal: await dialog.locator(css.signalOrb).count(),
         qr: await page.locator(css.qrOrb).count(),
+        onPage: await page.locator(`${css.linked} ${css.pairingCode}`).count(),
       }
       const fit = await laidOut(page)
-      await page.locator(selectorFor.linkedAction("cancel")).click()
-      await page.waitForSelector(css.pairingCode, { state: "detached", timeout: 10_000 })
+      // Escape closes the modal and leaves the code open; the row shows it
+      // again, and focus is on it.
+      await page.keyboard.press("Escape")
+      await dialog.waitFor({ state: "detached", timeout: 10_000 })
+      const returned = await page
+        .waitForFunction(
+          (selector) => document.activeElement === document.querySelector(selector),
+          selectorFor.linkedAction("show"),
+          { timeout: 5_000 },
+        )
+        .then(() => true)
+        .catch(() => false)
+      await page.locator(selectorFor.linkedAction("show")).click()
+      await dialog.waitFor({ timeout: 10_000 })
+      const again = (
+        await dialog.locator('[data-slot="pairing-code-value"]').innerText()
+      ).replace(/\s+/g, "")
+      await cancel.click()
+      await dialog.waitFor({ state: "detached", timeout: 10_000 })
       return [
         shown === "ABCD2345" ? null : `the code was ${shown}`,
-        orbs.signal === 1 ? null : `signal orbs: ${orbs.signal}`,
-        orbs.qr === 1 ? null : `qr orbs: ${orbs.qr}`,
+        again === shown ? null : `the code shown again was ${again}`,
+        orbs.signal === 1 ? null : `signal orbs in the modal: ${orbs.signal}`,
+        orbs.qr === 0 ? null : `qr orbs: ${orbs.qr}`,
+        orbs.onPage === 0
+          ? null
+          : "the code was drawn on the page, not only in the modal",
+        returned ? null : "focus did not return to Show code when the modal closed",
+        (await page.locator(selectorFor.linkedAction("pair")).count()) === 1
+          ? null
+          : "Pair a device was not offered again after cancelling",
         ...fit,
       ].filter(Boolean)
     })
@@ -557,14 +615,17 @@ await main(meta, async ({ options, rep, url }) => {
 
     await gatewayStep("expired", { mode: "on", expire: true }, async (page) => {
       await page.locator(selectorFor.linkedAction("pair")).click()
-      await page.waitForSelector(`${css.pairingCode}[data-state="expired"]`, {
-        timeout: 10_000,
-      })
-      const text = await panelText(page)
+      await page.waitForSelector(
+        `${css.pairingDialog} ${css.pairingCode}[data-state="expired"]`,
+        { timeout: 10_000 },
+      )
+      const text = await page.locator(css.pairingDialog).innerText()
+      const orbs = await page.locator(`${css.pairingDialog} ${css.signalOrb}`).count()
       return [
         text.includes("This code has expired")
           ? null
           : "the expired sentence was missing",
+        orbs === 0 ? null : "an expired code still drew an orb",
       ].filter(Boolean)
     })
   })

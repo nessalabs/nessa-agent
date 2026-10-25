@@ -104,10 +104,12 @@
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
- *               message sent after it is answered. While it is on, Pair a
- *               device shows a code with the window's own sign-in; the
- *               code is cancelled, and leaving the tab and coming back
- *               still shows linking on
+ *               message sent after it is answered. While it is on, the
+ *               gateway is found by a DNS-SD browse on its port, and Pair a
+ *               device opens a code with the window's own sign-in, in a
+ *               modal with one signal orb; Escape hides it, Show code
+ *               brings the same code back, Cancel closes it, and leaving
+ *               the tab and coming back still shows linking on
  *   drift       the gateway is stopped and started again with its staged
  *               runtime directory moved and a different agent PATH and
  *               TMPDIR, the way an app update stages a new tree and
@@ -210,6 +212,7 @@ import {
   WATCH_CALLS,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
+import { browse } from "./lib/mdns-probe.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, log } from "./lib/cli.mjs"
 import { gatewayHost, STARTING } from "./lib/fake-host.mjs"
@@ -366,6 +369,8 @@ class Run {
     this.sent = new Map()
     /** Where native linking listens once the `linking` step turns it on. */
     this.nativeAddress = stack.nativeAddress
+    /** What config.json names for it: every interface, on the same port. */
+    this.nativeListen = stack.nativeListen
   }
 
   /** Waits while a restart holds the gateway. */
@@ -1723,7 +1728,8 @@ const steps = {
     await run.exclusive(async () => {
       await openLinkedDevices(run.page)
       if (!(await switchLinking(run, true, failures))) return
-      if (!(await pairFromWindow(run.page, failures))) return
+      if (!(await announced(run, failures))) return
+      if (!(await pairFromWindow(run, failures))) return
       // Away and back: the tab reads linking again, and it is still on.
       await closeSettings(run.page)
       await openLinkedDevices(run.page)
@@ -1945,6 +1951,214 @@ const steps = {
       await openStressConversation(page, run.main.id, run.main.title)
     })
     if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async menuPanel(run, step, failures) {
+    const page = await panelWindow(run)
+    try {
+      const strip = page.locator(css.panelTabs)
+      if (
+        !(await strip.waitFor({ timeout: 30_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push("the panel drew no tab strip")
+        return
+      }
+      if ((await strip.getAttribute("data-variant")) !== "dots")
+        failures.push("the panel's tabs are not page dots")
+      // Messages, then the main conversation from its row: a chat opened
+      // from the list takes a dot, and its name leads the strip.
+      await page.locator(css.panelMessages).click()
+      const rowFor = (title) =>
+        page.locator(css.panelListRow).filter({ hasText: title }).first()
+      if (
+        !(await rowFor(run.main.title)
+          .waitFor({ timeout: 15_000 })
+          .then(
+            () => true,
+            () => false,
+          ))
+      ) {
+        failures.push(
+          `the panel's Messages does not list ${JSON.stringify(run.main.title)}`,
+        )
+        return
+      }
+      const dotsBefore = await page.locator(css.panelDot).count()
+      await rowFor(run.main.title).click()
+      await panelNamed(page, run.main.title, failures)
+      const dots = await page.locator(css.panelDot).count()
+      if (dots !== dotsBefore + 1)
+        failures.push(`opening a chat left ${dots} dots, not ${dotsBefore + 1}`)
+      // The selected dot is the bar: wider than every other dot, once its
+      // width has settled.
+      const widths = () =>
+        page.locator(css.panelDot).evaluateAll((all) =>
+          all.map((dot) => ({
+            width: dot.getBoundingClientRect().width,
+            selected: dot.closest("[data-active]") !== null,
+          })),
+        )
+      const oneBar = (all) => {
+        const bar = all.filter((each) => each.selected)
+        return (
+          bar.length === 1 &&
+          all.every((each) => each.selected || each.width + 6 <= bar[0].width)
+        )
+      }
+      if (!(await waitFor(async () => oneBar(await widths()), 5_000)))
+        failures.push(
+          `the selected dot is not the one bar: ${JSON.stringify(await widths())}`,
+        )
+      // A message sent from the panel wears the chat accent and its rim.
+      const text = prompt(run, STRESS.reply, step, " from the panel")
+      const seen = await seenTurns(run, run.main.id)
+      const box = page.locator(css.panelComposer)
+      await box.click()
+      await page.keyboard.type(text)
+      await page.keyboard.press("Enter")
+      run.sent.set(run.main.id, (run.sent.get(run.main.id) ?? 0) + 1)
+      await settled(run, run.main.id, seen, text, "completed", failures)
+      const bubble = page.locator(css.sentBubble).filter({ hasText: text }).first()
+      if (
+        !(await bubble.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push("the panel does not show the message it sent")
+      } else {
+        // Its colours are nessa_ui's to choose: the bubble must wear the chat
+        // accent and its rim, whatever values the theme gives them.
+        const paint = await bubble.evaluate((node) => {
+          const probe = document.createElement("span")
+          probe.style.background = "var(--nessa-chat-accent)"
+          probe.style.boxShadow = "var(--nessa-chat-accent-rim)"
+          node.parentElement.append(probe)
+          const want = getComputedStyle(probe)
+          const style = getComputedStyle(node)
+          const paint = {
+            background: style.backgroundColor,
+            accent: want.backgroundColor,
+            shadow: style.boxShadow,
+            rim: want.boxShadow,
+          }
+          probe.remove()
+          return paint
+        })
+        if (
+          paint.accent === "rgba(0, 0, 0, 0)" ||
+          paint.rim === "none" ||
+          paint.background !== paint.accent ||
+          !paint.shadow.includes(paint.rim)
+        )
+          failures.push(
+            `a sent bubble does not wear the chat accent and its rim: ${JSON.stringify(paint)}`,
+          )
+      }
+      // The panel has no workspace, so its reply is looked for on the page.
+      const echo = `${SAYS.echo}${text}`
+      if (
+        !(await page
+          .getByText(echo)
+          .first()
+          .waitFor({ timeout: 30_000 })
+          .then(
+            () => true,
+            () => false,
+          ))
+      )
+        failures.push(`the panel does not show ${JSON.stringify(echo)}`)
+      // A chat archived from Messages leaves a row card with its avatar,
+      // and the card's Undo brings it back, in the list and the gateway.
+      const conversationId = randomUUID()
+      const first = prompt(run, STRESS.reply, step, " to archive")
+      await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+      await run.client.conversation.submit(
+        run.client.conversation.prepare(conversationId, first),
+      )
+      run.checked.push(conversationId)
+      await settled(run, conversationId, new Set(), first, "completed", failures)
+      const title = await titleOf(run, conversationId)
+      await page.locator(css.panelMessages).click()
+      const row = rowFor(title)
+      if (
+        !(await row.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push(`the panel's Messages does not list ${JSON.stringify(title)}`)
+        return
+      }
+      await row.focus()
+      // From the keyboard: a pointer click races the row sliding open, and a
+      // list that redraws under it. Shift+F10 opens the actions and focuses
+      // the first; Tab walks them.
+      await page.keyboard.press("Shift+F10")
+      await waitFor(
+        () =>
+          page.evaluate(
+            () =>
+              document.activeElement?.getAttribute("data-slot") ===
+              "conversation-history-row-action",
+          ),
+        5_000,
+      )
+      const onArchive = () =>
+        page.evaluate(
+          (name) => document.activeElement?.getAttribute("aria-label") === name,
+          `Archive ${title}`,
+        )
+      for (let tabs = 0; tabs < 4 && !(await onArchive()); tabs++)
+        await page.keyboard.press("Tab")
+      if (!(await onArchive())) {
+        failures.push(
+          `Shift+F10 on ${JSON.stringify(title)} does not reach its Archive action`,
+        )
+        return
+      }
+      await page.keyboard.press("Enter")
+      const undoCard = page.locator(css.undoCard)
+      if (
+        !(await undoCard.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push("archiving from the panel left no undo card")
+        return
+      }
+      if (!(await undoCard.innerText()).includes(title))
+        failures.push(`the undo card does not name ${JSON.stringify(title)}`)
+      if ((await undoCard.locator(css.randomAvatar).count()) !== 1)
+        failures.push("the undo card does not lead with the conversation's avatar")
+      const archived = async (want) =>
+        waitFor(async () => {
+          const { conversations } = await run.client.conversation.list({ archived: true })
+          return (
+            conversations.some((each) => each.conversationId === conversationId) === want
+          )
+        }, 15_000)
+      if (!(await archived(true)))
+        failures.push("the gateway did not archive the conversation")
+      await undoCard.getByRole("button", { name: /^Undo/ }).click()
+      if (!(await archived(false)))
+        failures.push("Undo did not unarchive the conversation")
+      if (
+        !(await row.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        failures.push("Undo did not put the row back in the panel's Messages")
+      if (!(await waitFor(async () => (await undoCard.count()) === 0, 5_000)))
+        failures.push("the undo card stayed after Undo")
+    } finally {
+      await page.close()
+    }
   },
 
   async rail(run, step, failures) {
@@ -3694,6 +3908,35 @@ async function replayOnboarding(page, evidence) {
   return asked
 }
 
+/** The menu-bar panel as the host opens it, over the run's gateway. */
+async function panelWindow(run) {
+  const page = await run.page.context().newPage()
+  await page.setViewportSize({ width: 420, height: 760 })
+  await page.addInitScript(gatewayHost, {
+    endpoint: run.stack.endpoint,
+    credential: run.stack.credential,
+    panel: true,
+  })
+  await page.goto(`${new URL(run.page.url()).origin}/index.html`)
+  return page
+}
+
+/** Waits until the panel's strip leads with `title`, the selected tab's name. */
+async function panelNamed(page, title, failures) {
+  const named = await waitFor(
+    async () =>
+      (
+        await page
+          .locator(css.panelCurrent)
+          .innerText()
+          .catch(() => "")
+      ).includes(title),
+    15_000,
+  )
+  if (!named)
+    failures.push(`the panel's strip does not lead with ${JSON.stringify(title)}`)
+}
+
 /**
  * A setup window as the host opens it, over the run's gateway, recording
  * each beat of its opening as it comes: the beat, and whether the window's
@@ -4231,19 +4474,54 @@ async function closeSettings(page) {
 }
 
 /**
+ * With linking on, the gateway is found on the local network the way a phone
+ * that scanned the code finds it: a DNS-SD browse for `_nessa-link._tcp`
+ * hears it on its native port, with its gateway id. Resolves whether it did.
+ */
+async function announced(run, failures) {
+  const port = Number(run.nativeListen.split(":").pop())
+  let heard = []
+  for (
+    let attempt = 0;
+    attempt < 3 && !heard.some((each) => each.port === port);
+    attempt++
+  )
+    heard = await browse("_nessa-link._tcp.local", 3_000)
+  const gateway = heard.find((each) => each.port === port)
+  if (!gateway) {
+    failures.push(
+      `the gateway was not announced on port ${port}; heard ${JSON.stringify(heard)}`,
+    )
+    return false
+  }
+  if (!gateway.txt.gw) failures.push("the announcement carries no gateway id")
+  return Boolean(gateway.txt.gw)
+}
+
+/**
  * Pair a device on the Linked devices tab, with linking on: the window's own
  * sign-in opens a code, shown as a person pairing a phone sees it, never the
- * card that says this sign-in cannot manage credentials. The code is then
- * cancelled. Resolves whether all of that held.
+ * card that says this sign-in cannot manage credentials. The code opens in a
+ * modal with the one signal orb, none of it drawn on the page; Escape hides
+ * the modal and leaves the code open, and Show code brings back the same
+ * code. Cancel in the modal then closes it and Pair a device is offered
+ * again. Resolves whether all of that held.
  */
-async function pairFromWindow(page, failures) {
+async function pairFromWindow(run, failures) {
+  const { page } = run
   const before = failures.length
+  const dialog = page.locator(css.pairingDialog)
+  const codeIn = async () =>
+    (await dialog.locator('[data-slot="pairing-code-value"]').innerText()).replace(
+      /\s+/g,
+      "",
+    )
   await page.locator(selectorFor.linkedAction("pair")).click()
   const shown = await waitFor(
     async () =>
       (await page.locator(css.linkedRefused).count()) > 0
         ? "refused"
-        : (await page.locator(css.pairingCode).count()) > 0
+        : (await dialog.locator(css.pairingCode).count()) > 0
           ? "code"
           : null,
     10_000,
@@ -4252,18 +4530,54 @@ async function pairFromWindow(page, failures) {
     failures.push(
       shown === "refused"
         ? "Pair a device was refused: the window's sign-in cannot manage credentials"
-        : "Pair a device showed no code",
+        : "Pair a device opened no modal with a code",
     )
     return false
   }
-  const code = (
-    await page.locator('[data-slot="pairing-code-value"]').innerText()
-  ).replace(/\s+/g, "")
+  // The orb gathers in, then stays live: animated, not drawn still.
+  const orb = dialog.locator(css.signalOrb)
+  const live = await waitFor(
+    async () => (await orb.getAttribute("data-state").catch(() => null)) === "live",
+    5_000,
+  )
+  if (!live)
+    failures.push(
+      `the pairing orb was ${await orb.getAttribute("data-state").catch(() => "missing")}, not live`,
+    )
+  if (run.evidence)
+    await page
+      .screenshot({ path: join(run.evidence, `pairing-${run.engine}-modal.png`) })
+      .catch(() => {})
+  const code = await codeIn()
   if (!code) failures.push("the pairing code shown was empty")
-  await page.locator(selectorFor.linkedAction("cancel")).click()
+  // Settings is a fixed layer over the window: a modal portalled past it is
+  // in the page but drawn underneath it, unseen.
+  if (!(await dialog.evaluate((node) => Boolean(node.closest("[data-settings-layers]")))))
+    failures.push("the pairing modal is not inside Settings, so it is drawn under it")
+  const orbs = await dialog.locator(css.signalOrb).count()
+  if (orbs !== 1) failures.push(`the pairing modal drew ${orbs} signal orbs, not 1`)
+  if ((await page.locator(css.qrOrb).count()) > 0) failures.push("a QR orb was drawn")
+  if ((await page.locator(`${css.linked} ${css.pairingCode}`).count()) > 0)
+    failures.push("the pairing code was drawn on the tab, not only in the modal")
+  await page.keyboard.press("Escape")
+  await dialog
+    .waitFor({ state: "detached", timeout: 10_000 })
+    .catch(() => failures.push("Escape did not close the pairing modal"))
+  await page.locator(selectorFor.linkedAction("show")).click()
+  await dialog
+    .waitFor({ timeout: 10_000 })
+    .catch(() => failures.push("Show code did not open the pairing modal again"))
+  const again = await codeIn().catch(() => "")
+  if (again !== code)
+    failures.push(`Show code showed ${JSON.stringify(again)}, not the open code`)
+  await dialog.locator(selectorFor.linkedAction("cancel")).click()
+  await dialog
+    .waitFor({ state: "detached", timeout: 10_000 })
+    .catch(() => failures.push("the cancelled code's modal stayed open"))
   await page
-    .waitForSelector(css.pairingCode, { state: "detached", timeout: 10_000 })
-    .catch(() => failures.push("the cancelled code stayed on the tab"))
+    .locator(selectorFor.linkedAction("pair"))
+    .waitFor({ timeout: 10_000 })
+    .catch(() => failures.push("Pair a device was not offered again after cancelling"))
   return failures.length === before
 }
 
@@ -4312,7 +4626,7 @@ async function switchLinking(run, enabled, failures) {
     const saved = JSON.parse(readFileSync(config, "utf8")).native
     if (
       (saved?.enabled !== false) !== enabled ||
-      saved?.listenAddress !== run.nativeAddress
+      saved?.listenAddress !== run.nativeListen
     )
       failures.push(`config.json holds native ${JSON.stringify(saved)}`)
     if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
@@ -4609,7 +4923,11 @@ async function atRest(run, ids) {
 
 async function startStack(options) {
   const knobs = knobsFrom(options)
-  const nativeAddress = `127.0.0.1:${await freePort()}`
+  // Linking listens on every interface, as Settings sets it up, so the
+  // gateway announces itself; clients on this machine dial it on loopback.
+  const nativePort = await freePort()
+  const nativeAddress = `127.0.0.1:${nativePort}`
+  const nativeListen = `0.0.0.0:${nativePort}`
   const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
   const scenario = join(directory, "stress.json")
   writeFileSync(
@@ -4654,7 +4972,7 @@ async function startStack(options) {
       // The agent a `handoff` step switches its conversation to.
       others: knobs.handoffs > 0 ? [otherAgent(options.agent)] : [],
       // Off, at a port of its own: the `linking` step turns it on from Settings.
-      native: { enabled: false, listenAddress: nativeAddress },
+      native: { enabled: false, listenAddress: nativeListen },
     })
   } catch (error) {
     await github?.close()
@@ -4674,6 +4992,7 @@ async function startStack(options) {
     knobs,
     agent: options.agent,
     nativeAddress,
+    nativeListen,
     github,
     scenario,
     // Removed when the stack closes.

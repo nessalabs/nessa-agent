@@ -986,9 +986,13 @@ phone's scanner is not this screen.
   `linked-devices-tab.test.tsx`; `linked-devices.mjs` (`pending`).
 - [ ] **Linking off, refused, pair, approve, revoke, and an expired code**
   are said in plain words. The switch does not pretend to write config.
-  A wire code is not on the page. The code, both orbs and the actions sit
-  inside the settings panel, and Cancel takes focus once it can be used.
-  _Check:_ `linked-devices.mjs` (Chromium and WebKit). Rows L1–L21:
+  A wire code is not on the page. Pair a device is one row; the code opens
+  in a modal that sits inside the settings panel and fits it, with one live
+  signal orb (no QR orb) and New code and Cancel. Closing the modal keeps
+  the code; Show code reopens the same one and focus returns to the row's
+  control. Cancel closes it and focus goes to Pair a device. An expired code
+  draws no orb. _Check:_ `linked-devices.mjs` (Chromium and WebKit);
+  `conversation-stress.mjs` (`linking`). Rows L1–L21:
   `linked-devices.test.ts`, `linked-devices-gateway.test.ts`,
   `device-key.test.ts`.
 
@@ -2242,3 +2246,18 @@ qualified same-task composer counterexample.
 _Check:_ `settings-action-owners.mjs` (both engines), component regressions in
 `native-hooks-rows.test.tsx` and `review-notice-rows.test.tsx`. See
 [settings action ownership](../../docs/design/settings-action-owners.md).
+
+## Menu-bar panel: page dots, accent and undo card
+
+- [ ] **The panel's tabs are page dots after the selected chat's name.** Opening
+  a chat from Messages adds a dot and names it in the lead. Once widths settle,
+  the selected dot is the only bar, wider than every other dot.
+- [ ] **A sent bubble wears the chat accent and its rim.** The bubble's
+  background is `--nessa-chat-accent`, and its shadow carries
+  `--nessa-chat-accent-rim`, both read from the live tokens.
+- [ ] **Archiving from Messages leaves an undo row card.** The card names the
+  chat and leads with its avatar. Undo unarchives it in the gateway, puts the
+  row back, and the card goes.
+
+_Check:_ `conversation-stress.mjs` step `menuPanel` (knob `menuPanels`), in
+Chromium within the default run and alone in WebKit in CI (`local-auth.yml`).
