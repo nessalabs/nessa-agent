@@ -116,6 +116,7 @@ fn main() {
             panel::chosen_agent,
             panel::reveal_setup_window,
             panel::replay_onboarding,
+            tray::setup_tray_point,
             agent_credentials::infrastructure::save_agent_api_key,
             provider_authentication::commands::sign_in_to_provider,
             provider_authentication::commands::provider_login_available,
