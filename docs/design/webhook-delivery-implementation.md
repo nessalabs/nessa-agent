@@ -869,7 +869,7 @@ semantics stay unchanged. No implicit receiver removal, new state or permit.
 
 | Relationship at actual native boundary | Required result before acknowledgement/effects |
 | --- | --- |
-| principal grant input names a receiver, lacks its exact held principal, or is a revoke | refuse the dedicated grant operation; ordinary change owns those shapes |
+| dedicated grant input | accepts resource/access/revision/actor/time and actual Auth hold; derives exact principal/credential and constructs Grant with receiver absent |
 | live same-principal row retains any receiver | refuse before replay acknowledgement or fresh mutation; preserve row/journal |
 | original request journal retains a receiver, including after later unshare | refuse its reinterpretation as a receiver-absent request |
 | original receiver-absent request after unshare | return its original historical receipt without recreating the grant |
@@ -878,3 +878,9 @@ semantics stay unchanged. No implicit receiver removal, new state or permit.
 The dedicated port is named `grant_principal_with_credential` to identify the
 exact contract. The actual retained credential owner identifies this native
 entry path; no caller-provided mode flag or persisted state is added.
+
+The dedicated grant-only signature accepts no receiver, revoke, or separate
+principal/credential field. Its native mapping constructs those facts from the
+actual held credential, preventing contradictory input shapes without a new DTO
+or mode/state flag. Current receiver evidence is still checked transactionally
+before replay; historical receiver evidence is checked before replay receipt.

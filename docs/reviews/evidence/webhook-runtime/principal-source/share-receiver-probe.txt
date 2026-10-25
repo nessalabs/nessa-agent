@@ -15,4 +15,3 @@ failures:
     receiver_bearing_existing_principal_row_must_not_be_acknowledged_as_receiver_free
 
 test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
-
