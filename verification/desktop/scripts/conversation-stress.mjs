@@ -294,11 +294,6 @@ const FRESH_CLIENTS = 3
 const LAUNCH_STARTING_MS = 3_000
 const LAUNCH_LISTED_MS = 10_000
 /**
- * A sent bubble's fill, Light then Dark: the chat accent (`--nessa-chat-accent`
- * in nessa_ui's theme), as the browser reports it.
- */
-const GRAPHITE = ["rgb(42, 42, 44)", "rgb(58, 58, 61)"]
-/**
  * How much longer opening the `long` conversation again may take than
  * opening one of a single long turn, both closed first so their whole saved
  * history is replayed: half a second of noise, and a little for each turn.
@@ -1549,7 +1544,7 @@ const steps = {
       }
       if (!(await waitFor(async () => oneBar(await widths()), 5_000)))
         failures.push(`the selected dot is not the one bar: ${JSON.stringify(await widths())}`)
-      // A message sent from the panel is a rimmed graphite bubble.
+      // A message sent from the panel wears the chat accent and its rim.
       const text = prompt(run, STRESS.reply, step, " from the panel")
       const seen = await seenTurns(run, run.main.id)
       const box = page.locator(css.panelComposer)
@@ -1562,12 +1557,31 @@ const steps = {
       if (!(await bubble.waitFor({ timeout: 15_000 }).then(() => true, () => false))) {
         failures.push("the panel does not show the message it sent")
       } else {
+        // Its colours are nessa_ui's to choose: the bubble must wear the chat
+        // accent and its rim, whatever values the theme gives them.
         const paint = await bubble.evaluate((node) => {
+          const probe = document.createElement("span")
+          probe.style.background = "var(--nessa-chat-accent)"
+          probe.style.boxShadow = "var(--nessa-chat-accent-rim)"
+          node.parentElement.append(probe)
+          const want = getComputedStyle(probe)
           const style = getComputedStyle(node)
-          return { background: style.backgroundColor, shadow: style.boxShadow }
+          const paint = {
+            background: style.backgroundColor,
+            accent: want.backgroundColor,
+            shadow: style.boxShadow,
+            rim: want.boxShadow,
+          }
+          probe.remove()
+          return paint
         })
-        if (!GRAPHITE.includes(paint.background) || !paint.shadow.includes("inset"))
-          failures.push(`a sent bubble is not rimmed graphite: ${JSON.stringify(paint)}`)
+        if (
+          paint.accent === "rgba(0, 0, 0, 0)" ||
+          paint.rim === "none" ||
+          paint.background !== paint.accent ||
+          !paint.shadow.includes(paint.rim)
+        )
+          failures.push(`a sent bubble does not wear the chat accent and its rim: ${JSON.stringify(paint)}`)
       }
       // The panel has no workspace, so its reply is looked for on the page.
       const echo = `${SAYS.echo}${text}`
@@ -1589,8 +1603,25 @@ const steps = {
         return
       }
       await row.focus()
+      // From the keyboard: a pointer click races the row sliding open, and a
+      // list that redraws under it. Shift+F10 opens the actions and focuses
+      // the first; Tab walks them.
       await page.keyboard.press("Shift+F10")
-      await page.getByRole("button", { name: `Archive ${title}` }).click({ timeout: 10_000 })
+      await waitFor(
+        () =>
+          page.evaluate(
+            () => document.activeElement?.getAttribute("data-slot") === "conversation-history-row-action",
+          ),
+        5_000,
+      )
+      const onArchive = () =>
+        page.evaluate((name) => document.activeElement?.getAttribute("aria-label") === name, `Archive ${title}`)
+      for (let tabs = 0; tabs < 4 && !(await onArchive()); tabs++) await page.keyboard.press("Tab")
+      if (!(await onArchive())) {
+        failures.push(`Shift+F10 on ${JSON.stringify(title)} does not reach its Archive action`)
+        return
+      }
+      await page.keyboard.press("Enter")
       const undoCard = page.locator(css.undoCard)
       if (!(await undoCard.waitFor({ timeout: 15_000 }).then(() => true, () => false))) {
         failures.push("archiving from the panel left no undo card")

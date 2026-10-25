@@ -135,7 +135,7 @@ export const KNOBS = {
   },
   menuPanels: {
     default: 1,
-    what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there is a rimmed graphite bubble, and a chat archived from Messages leaves a row card whose Undo brings it back",
+    what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, and a chat archived from Messages leaves a row card whose Undo brings it back",
   },
   launches: {
     default: 1,
