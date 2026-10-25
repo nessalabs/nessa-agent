@@ -13,8 +13,9 @@
  * the view lists, and a notice that a review or question was left out, are
  * kept; a question or notice that names nothing is left out.
  *
- * The gateway has no sections or channels, so the index has one of each and
- * every conversation is in it. It keeps no pin and no unread mark, so every
+ * The gateway has no sections, so the index has one, and every channel the
+ * gateway lists is in it: its default channel as `gatewayChannel`, then the
+ * person's own (`channelFrom`). It keeps no pin and no unread mark, so every
  * summary is unpinned and read. Its summaries name no model: the one passed
  * in is the adapter's best word for it (`modelFor`).
  */
@@ -30,6 +31,7 @@ import {
   type ConversationSummary,
   type ConversationTool,
   type ConversationView,
+  type Channel as WireChannel,
 } from "@nessa/client"
 import {
   referencedContent,
@@ -39,7 +41,7 @@ import {
   shownNote,
   usageLimitOnClientClock,
 } from "../../../../conversation"
-import { composerModels } from "../../../model/composer-options"
+import { agentForProvider, composerModels } from "../../../model/composer-options"
 import { encodeId } from "../../../model/id-encoding"
 import type {
   Approval,
@@ -67,13 +69,58 @@ import { gatewayToolWidget } from "./tool-widget"
 /** The one section the gateway's conversations are listed under. */
 export const gatewaySection: Section = { id: "gateway", name: "Nessa" }
 
-/** The one channel every gateway conversation is in. */
+/** The gateway's default channel: every conversation made in no other. */
 export const gatewayChannel: Channel = {
   id: "gateway-conversations",
   name: "Conversations",
   sectionId: gatewaySection.id,
   private: false,
   topic: "",
+}
+
+/** The gateway's id for its default channel, which the index names `gatewayChannel`. */
+const defaultChannelId = "default"
+
+/** A channel's id in the index, from the gateway's: its default one is `gatewayChannel`. */
+export function channelIdFrom(gatewayId: string | undefined): string {
+  return gatewayId === undefined || gatewayId === defaultChannelId
+    ? gatewayChannel.id
+    : gatewayId
+}
+
+/** The gateway's id for a channel the index names, for `conversation.create`; none for its default. */
+export function gatewayChannelId(channelId: string): string | undefined {
+  return channelId === gatewayChannel.id ? undefined : channelId
+}
+
+/** The catalogue's entry for a gateway agent's model, if the catalogue lists it. */
+function catalogueModel(agent: string, modelId: string): ModelRef | undefined {
+  const listed = composerModels.find(
+    (model) => model.modelId === modelId && agentForProvider(model.provider) === agent,
+  )
+  return listed && { provider: listed.provider, modelId: listed.modelId }
+}
+
+/**
+ * A channel the gateway lists, as the index holds it. The default channel is
+ * `gatewayChannel`, with the folder the gateway says it works in. A channel
+ * whose model the catalogue does not list has no defaults: its new sessions
+ * start as any other.
+ */
+export function channelFrom(wire: WireChannel): Channel {
+  if (wire.channelId === defaultChannelId)
+    return { ...gatewayChannel, folder: wire.folder }
+  const model =
+    wire.agent && wire.model ? catalogueModel(wire.agent, wire.model) : undefined
+  return {
+    id: wire.channelId,
+    name: wire.name,
+    sectionId: gatewaySection.id,
+    private: false,
+    topic: "",
+    folder: wire.folder,
+    ...(model ? { defaults: { model, access: wire.approvalMode } } : {}),
+  }
 }
 
 /** What the adapter knows of a session besides its list row. */
@@ -90,7 +137,7 @@ export function summaryFrom(
 ): Omit<SessionSummary, "revision"> {
   return {
     id: row.conversationId,
-    channelId: gatewayChannel.id,
+    channelId: channelIdFrom(row.channelId),
     title: row.title ?? "",
     model: context.model,
     status: context.waitingOnPerson ? "needs-you" : row.running ? "running" : "idle",

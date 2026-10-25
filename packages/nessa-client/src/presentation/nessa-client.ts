@@ -14,6 +14,7 @@ import { createConversationApi, type ConversationApi } from "./conversation-api.
 import { createAgentsApi, type AgentsApi } from "./agents-api.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
 import { createWorkspaceApi, type WorkspaceApi } from "./workspace-api.js"
+import { createChannelApi, type ChannelApi } from "./channel-api.js"
 import { createCredentialApi, type CredentialApi } from "./credential-api.js"
 import { createPairingApi, type PairingApi } from "./pairing-api.js"
 import { createAuthApi, type AuthApi } from "./auth-api.js"
@@ -104,6 +105,8 @@ export class NessaClient {
   readonly auth: AuthApi
   /** Tell the gateway what this window shows, for the person's agents to read. */
   readonly workspace: WorkspaceApi
+  /** Make a channel, with its folder and defaults, and list every channel. */
+  readonly channels: ChannelApi
 
   private constructor(
     private readonly wire: ManagedSession,
@@ -128,6 +131,7 @@ export class NessaClient {
     this.pairing = createPairingApi(wire)
     this.auth = createAuthApi(wire)
     this.workspace = createWorkspaceApi(wire)
+    this.channels = createChannelApi(wire)
   }
 
   /** Validate options, authenticate, and resolve only when a session is ready.

@@ -35,6 +35,7 @@ pub fn receipt_params(intent: &PhoneIntent) -> ConversationReceiptParams {
         model: None,
         approval_mode: None,
         environment: None,
+        channel_id: None,
     }
 }
 

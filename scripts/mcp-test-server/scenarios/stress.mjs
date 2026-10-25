@@ -29,6 +29,7 @@ export const STRESS = {
   window: "stress window",
   table: "stress table",
   trace: "stress trace",
+  channel: "stress channel",
 }
 
 /**
@@ -68,6 +69,8 @@ export const SAYS = {
   table: "Tables: ",
   trace: "Traced: ",
   carried: "Carried on by ",
+  channel: "Working in: ",
+  channelPrompt: "System prompt: ",
 }
 
 /**
@@ -302,6 +305,21 @@ export function stressScenario({
             save: "window",
           },
           { do: "text", chunks: [SAYS.window + "${window}"] },
+          { do: "end" },
+        ],
+      },
+      {
+        // Where the session works and what it was told, said back: a turn in
+        // a channel is seen to run in the channel's folder, with its notes.
+        when: STRESS.channel,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.channel + "${session.cwd}\n\n",
+              SAYS.channelPrompt + "${session.systemPrompt}",
+            ],
+          },
           { do: "end" },
         ],
       },

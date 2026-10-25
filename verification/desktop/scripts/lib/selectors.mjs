@@ -74,6 +74,12 @@ export const css = {
   dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot — and a new session's home's, docked there in a small pane
   conversationDock: ".workspace-conversation .workspace-dock", // class: a conversation's composer, never a home's
   paneHome: ".workspace-pane-home", // class: a new session's home in a pane
+  channelAdd: ".workspace-section-add", // class: a sidebar section's +, which opens the "New channel" flow
+  newChannel: ".new-channel", // class: the "New channel" flow over the content region
+  newChannelField: ".new-channel-field", // class: the flow's composer field, for the name and the notes; data-step
+  newChannelAsked: ".new-channel-asked", // class: the question being asked; data-step
+  newChannelAnswered: ".new-channel-answered", // class: an answered question's ✓ line; data-step
+  newChannelResource: ".new-channel-resources li", // a file or folder attached to the channel being made
   homeScene: ".workspace-pane-home .desktop-header", // class: the home's night scene or picture
   greeting: ".workspace-pane-home .desktop-greeting", // class: "Working late?"
   conversationTitle: ".workspace-heading h2", // class: a conversation's title, atop its transcript

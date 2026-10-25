@@ -45,6 +45,7 @@ fn agents(servers: Vec<StdioMcpServer>) -> AgentsConfig {
             .collect(),
         stand_ins: Default::default(),
         mcp_stand_ins: Default::default(),
+        channel_instructions: None,
         selected: None,
         runtimes: HashMap::new(),
     }

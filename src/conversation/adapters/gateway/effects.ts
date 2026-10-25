@@ -291,6 +291,7 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   approval_request_conflict: "approval-request-conflict",
   turn_running: "turn-running",
   conversations_not_configured: "conversations-not-configured",
+  channel_not_found: "channel-not-found",
   agent_startup_deadline: "agent-startup-deadline",
   sandbox_unavailable: "sandbox-unavailable",
   environment_not_configured: "environment-not-configured",
@@ -399,6 +400,8 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   conversation_capacity: "unavailable",
   conversation_closed: "unavailable",
   conversation_not_found: "unavailable",
+  // A creation's refusal; no read is ever answered with it.
+  channel_not_found: "unavailable",
   conversation_storage_unavailable: "unavailable",
   image_input_unsupported: "unavailable",
   invalid_request: "unavailable",

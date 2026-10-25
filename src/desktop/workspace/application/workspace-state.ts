@@ -12,6 +12,12 @@ import type { ModelChoice } from "../model/model-choice"
 import type { StageMismatch, WorkspaceFailureReason } from "../model/failure"
 import { knownToSource } from "../model/revision"
 import type { Channel, ModelRef, Section, SessionSummary } from "../model/workspace-index"
+import type {
+  ChannelDraft,
+  ChannelFailure,
+  ChannelStep,
+  ResourceKind,
+} from "../model/channel-draft"
 import {
   focusedPane,
   panesOf,
@@ -216,6 +222,20 @@ export interface WorkspaceState {
   /** The share dialog, while it is open (`usecases/sharing.ts`). */
   readonly share: ShareDialog | null
   /**
+   * Whether channels can be made from this window, and whether it has the
+   * system's pickers for their paths: composition gave it a channel source,
+   * and a path picker. Read once, into the first state, as `shareable` is.
+   * `home` is the person's home folder once a picker has said it, so paths
+   * under it are written from `~`.
+   */
+  readonly channelMaking: {
+    readonly creatable: boolean
+    readonly pickable: boolean
+    readonly home: string | null
+  }
+  /** The "New channel" flow, while it is open (`usecases/channel-creation.ts`). */
+  readonly channelCreation: ChannelCreation | null
+  /**
    * The title being renamed where it stands, and what is typed so far
    * (`usecases/row-editing.ts`). The window's, not the row's: a row is drawn
    * afresh when its session moves group, and the edit outlives that.
@@ -233,6 +253,34 @@ export interface WorkspaceState {
     readonly sessionId: string
     readonly change: ShareChange
   } | null
+}
+
+/**
+ * The "New channel" flow over the content region, named by the opening that
+ * made it: an answer for any other opening is let go. It asks one step at a
+ * time; an answered step folds into a line that asks it again when clicked.
+ */
+export interface ChannelCreation {
+  readonly opening: string
+  readonly draft: ChannelDraft
+  /** The step being asked; null once every step is answered. */
+  readonly asking: ChannelStep | null
+  /** The steps answered, in the order they were. */
+  readonly answered: readonly ChannelStep[]
+  /**
+   * The id the next Create sends: kept while the draft stays as it was sent,
+   * so asking again after no answer makes one channel; any change to the
+   * draft lets it go, and the next Create takes a fresh one.
+   */
+  readonly requestId: string | null
+  /** A Create on its way: the draft is held until it settles. */
+  readonly creating: boolean
+  /** Why the last Create made nothing, until the draft changes or Create is asked again. */
+  readonly failure: ChannelFailure | null
+  /** How many picked files and folders did not fit, from the last pick. */
+  readonly leftOut: number
+  /** Whether each resource is a file or a folder, as its picker said, by path. */
+  readonly kinds: Readonly<Record<string, ResourceKind>>
 }
 
 /**
@@ -380,6 +428,8 @@ export const initialWorkspace: WorkspaceState = {
   tree: { collapsedSections: [], expandedChannels: [], showAllChannels: [] },
   shareable: false,
   share: null,
+  channelMaking: { creatable: false, pickable: false, home: null },
+  channelCreation: null,
   renaming: null,
   deleteAsked: null,
   shareChange: null,
