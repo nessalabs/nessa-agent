@@ -1,6 +1,6 @@
 //! Whole persisted cursor decoding, shared by restoration and live reads.
-use super::{codec, invalid, unavailable, uuid};
-use crate::webhooks::application::OutboxError;
+use super::{codec, invalid, unavailable, uuid, SqlOutbox};
+use crate::webhooks::application::{OutboxError, QueueInitiator};
 use nessa_local_database::rusqlite::{
     Connection, Error, OptionalExtension, Result as SqlResult, Row,
 };
@@ -131,4 +131,53 @@ pub(super) fn check_replacement(
         return Err(OutboxError::Invalid);
     }
     Ok(())
+}
+
+impl SqlOutbox {
+    /// Correlate the freshly authorized physical head with the durable cursor.
+    /// Replacement freezes the original cursor and captures pending deliveries;
+    /// it never rewinds history or invents a new access epoch.
+    pub(crate) async fn source_after(
+        &self,
+        registration: Uuid,
+        conversation: ConversationId,
+        observed: Scope,
+        initiator: QueueInitiator,
+        at_ms: u64,
+    ) -> Result<u64, OutboxError> {
+        self.run(move |connection, audit| {
+            check_identity(
+                &registration.to_string(),
+                &conversation.to_string(),
+                &observed,
+            )?;
+            let transaction = connection.transaction().map_err(unavailable)?;
+            let saved = super::registry::by_id(&transaction, registration)?;
+            if !saved.lifecycle.retains_queued() {
+                return Err(OutboxError::Conflict);
+            }
+            let Some(prior) = read(&transaction, registration, &conversation)? else {
+                return Ok(0);
+            };
+            if prior.reset_required {
+                return Err(OutboxError::ResetRequired);
+            }
+            if codec::same_source(&prior.scope, &observed) {
+                return Ok(prior.position);
+            }
+            super::source_reset::observe(
+                &transaction,
+                registration,
+                &conversation,
+                &prior,
+                &observed,
+                initiator,
+                at_ms,
+            )?;
+            super::journal::commit(transaction, Some(registration), at_ms)?;
+            super::publication::publish(connection, audit)?;
+            Err(OutboxError::ResetRequired)
+        })
+        .await
+    }
 }

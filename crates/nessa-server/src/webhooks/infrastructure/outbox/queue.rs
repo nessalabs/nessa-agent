@@ -1,7 +1,6 @@
 //! One transaction advances the contiguous source cursor with its delivery.
-use super::audit::Record;
-use super::journal::{commit, delivery_audit, invalidate_source};
-use super::publication::{append, publish};
+use super::journal::{commit, delivery_audit};
+use super::publication::publish;
 use super::stored::{self, StoredDelivery};
 use super::{codec, cursor, integer, unavailable};
 use crate::webhooks::application::{DeliveryCause, OutboxError, QueuedRecord, MAX_BODY_BYTES};
@@ -63,25 +62,15 @@ pub(super) fn queue(
             return Err(OutboxError::ResetRequired);
         }
         if !codec::same_source(old, &record.scope) {
-            let fact = super::source_reset::Fact {
-                id: Uuid::new_v4(),
-                registration: record.registration,
-                conversation: record.conversation.clone(),
-                prior_scope: old.clone(),
-                prior_position: current.position,
-                observed_scope: record.scope.clone(),
-                stop: codec::SourceStop {
-                    initiator: record.initiator,
-                    at_ms: record.observed_at_ms,
-                },
-            };
-            super::source_reset::insert(&transaction, &fact)?;
-            let changed=transaction.execute("UPDATE cursors SET reset_required=1,source_reset=?3 WHERE registration=?1 AND conversation=?2 AND reset_required=0",params![registration,conversation,fact.id.to_string()]).map_err(unavailable)?;
-            if changed != 1 {
-                return Err(OutboxError::Conflict);
-            }
-            invalidate_source(&transaction, &fact)?;
-            append(&transaction, Record::cursor(&fact))?;
+            super::source_reset::observe(
+                &transaction,
+                record.registration,
+                &record.conversation,
+                current,
+                &record.scope,
+                record.initiator,
+                record.observed_at_ms,
+            )?;
             commit(
                 transaction,
                 Some(record.registration),

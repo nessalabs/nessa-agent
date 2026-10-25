@@ -1,10 +1,13 @@
 //! Bounded reads and transactional writes of original reset facts and captures.
 use super::{
-    super::{codec, cursor, integer, invalid, stored::CheckedDelivery, unavailable, uuid},
+    super::{
+        audit::Record, codec, cursor, integer, invalid, journal, publication,
+        stored::CheckedDelivery, unavailable, uuid,
+    },
     retention, Fact,
 };
 use crate::webhooks::{
-    application::{OutboxError, SOURCE_RESET_BYTES},
+    application::{OutboxError, QueueInitiator, SOURCE_RESET_BYTES},
     domain::{Delivery, Phase},
 };
 use nessa_local_database::rusqlite::{
@@ -156,4 +159,36 @@ pub(in super::super) fn delivery(
             Ok(Capture { fact, before })
         })
         .transpose()
+}
+
+/// One owner of original source-change capture, whether discovered from a
+/// bounded head or from the first record of a replacement source.
+pub(in super::super) fn observe(
+    transaction: &Transaction<'_>,
+    registration: Uuid,
+    conversation: &ConversationId,
+    prior: &cursor::Cursor,
+    observed: &Scope,
+    initiator: QueueInitiator,
+    at_ms: u64,
+) -> Result<(), OutboxError> {
+    if prior.reset_required || codec::same_source(&prior.scope, observed) {
+        return Err(OutboxError::Invalid);
+    }
+    let fact = Fact {
+        id: Uuid::new_v4(),
+        registration,
+        conversation: conversation.clone(),
+        prior_scope: prior.scope.clone(),
+        prior_position: prior.position,
+        observed_scope: observed.clone(),
+        stop: codec::SourceStop { initiator, at_ms },
+    };
+    insert(transaction, &fact)?;
+    let changed=transaction.execute("UPDATE cursors SET reset_required=1,source_reset=?3 WHERE registration=?1 AND conversation=?2 AND reset_required=0",params![registration.to_string(),conversation.to_string(),fact.id.to_string()]).map_err(unavailable)?;
+    if changed != 1 {
+        return Err(OutboxError::Conflict);
+    }
+    journal::invalidate_source(transaction, &fact)?;
+    publication::append(transaction, Record::cursor(&fact))
 }

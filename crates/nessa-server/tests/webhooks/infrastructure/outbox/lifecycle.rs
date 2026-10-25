@@ -469,6 +469,7 @@ async fn first_expiry_and_actual_auth_revocation_remain_distinct_after_retiremen
     for first in [
         ExpiryObserver::Owner(PrincipalId::new("owner").unwrap()),
         ExpiryObserver::Restart,
+        ExpiryObserver::Source(Uuid::new_v4()),
     ] {
         let mut f = Registered::new();
         let proposed = f.proposed();
@@ -481,6 +482,7 @@ async fn first_expiry_and_actual_auth_revocation_remain_distinct_after_retiremen
         let expected = match &first {
             ExpiryObserver::Owner(p) => format!("owner:{}", p.as_str()),
             ExpiryObserver::Restart => "restart".into(),
+            ExpiryObserver::Source(id) => format!("source:{id}"),
             ExpiryObserver::Delivery(_) => unreachable!(),
         };
         f.store

@@ -161,6 +161,18 @@ impl Delivery {
         })
     }
 
+    /// The admitted attempt never invoked transport (for example its absolute
+    /// authority lifetime ended during the durable Sending acknowledgement).
+    pub fn not_dispatched(&self) -> Result<Self, DeliveryError> {
+        if self.phase != Phase::Sending {
+            return Err(DeliveryError::InvalidTransition);
+        }
+        Ok(Self {
+            phase: Phase::Terminal(Outcome::NotSent),
+            ..self.clone()
+        })
+    }
+
     /// Restart has no observation for Sending. It records Unknown and does
     /// not infer either remote success or a safe retry from a lost response.
     pub fn recovered(&self) -> Self {

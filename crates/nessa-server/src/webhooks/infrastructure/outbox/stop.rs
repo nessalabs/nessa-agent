@@ -46,6 +46,8 @@ impl SavedStop {
                     ExpiryObserver::Restart
                 } else if let Some(owner) = self.initiator.strip_prefix("owner:") {
                     ExpiryObserver::Owner(PrincipalId::new(owner).map_err(invalid)?)
+                } else if let Some(source) = self.initiator.strip_prefix("source:") {
+                    ExpiryObserver::Source(uuid(source)?)
                 } else {
                     ExpiryObserver::Delivery(uuid(
                         self.initiator
@@ -88,6 +90,7 @@ pub(super) fn actor(stop: &StopObservation) -> String {
         StopReason::Expired { observed_by } => match observed_by {
             ExpiryObserver::Owner(id) => format!("owner:{}", id.as_str()),
             ExpiryObserver::Delivery(id) => format!("delivery:{id}"),
+            ExpiryObserver::Source(id) => format!("source:{id}"),
             ExpiryObserver::Restart => "restart".into(),
         },
     }

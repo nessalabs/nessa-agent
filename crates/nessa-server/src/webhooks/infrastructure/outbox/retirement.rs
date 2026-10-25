@@ -256,6 +256,7 @@ fn validate_history(connection: &Connection, facts: &Retirement) -> Result<(), O
                 | audit::Cause::Response
                 | audit::Cause::Deadline
                 | audit::Cause::AdmissionRefused
+                | audit::Cause::AdmissionExpired
                 | audit::Cause::Restart
                 | audit::Cause::SourceChanged
                 | audit::Cause::SourceCheckpoint => return Err(OutboxError::Invalid),

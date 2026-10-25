@@ -20,6 +20,7 @@ pub enum StopReason {
 pub enum ExpiryObserver {
     Owner(PrincipalId),
     Delivery(Uuid),
+    Source(Uuid),
     Restart,
 }
 

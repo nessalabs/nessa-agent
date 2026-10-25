@@ -30,6 +30,7 @@ pub(super) enum Cause {
     RegistrationCancelled,
     Admission,
     Response,
+    AdmissionExpired,
     Deadline,
     AdmissionRefused,
     Restart,
@@ -249,6 +250,7 @@ impl Record {
                 match other {
                     DeliveryCause::Admission => Cause::Admission,
                     DeliveryCause::Response => Cause::Response,
+                    DeliveryCause::AdmissionExpired => Cause::AdmissionExpired,
                     DeliveryCause::Deadline => Cause::Deadline,
                     DeliveryCause::Refused => Cause::AdmissionRefused,
                     _ => return Err(OutboxError::Invalid),
@@ -520,6 +522,7 @@ impl Record {
                     cause if initiator == &format!("delivery:{}", next.id()) => match cause {
                         Cause::Admission => DeliveryCause::Admission,
                         Cause::Response => DeliveryCause::Response,
+                        Cause::AdmissionExpired => DeliveryCause::AdmissionExpired,
                         Cause::Deadline => DeliveryCause::Deadline,
                         Cause::AdmissionRefused => DeliveryCause::Refused,
                         _ => return Err(OutboxError::Invalid),

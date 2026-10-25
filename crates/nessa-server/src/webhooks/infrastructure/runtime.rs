@@ -1,4 +1,6 @@
 //! Concrete product command owner. Caller loss does not cancel admitted work.
+#[path = "runtime/delivery.rs"]
+mod delivery;
 use super::SqlOutbox;
 use crate::conversation::application::ConversationError;
 use crate::webhooks::application::{
@@ -6,6 +8,8 @@ use crate::webhooks::application::{
     RegistrationFailure, RegistrationIntent, StopObservationResult, MAX_OUTBOX_WORKERS,
     MAX_REGISTRATIONS,
 };
+pub(crate) use delivery::DeliveryDependencies;
+use delivery::KnownObservation;
 use futures_util::FutureExt;
 use nessa_auth::adapters::local::LocalCredentialStore;
 use nessa_auth::application::{
@@ -22,7 +26,7 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{oneshot, Mutex as AsyncMutex, Semaphore};
+use tokio::sync::{oneshot, Mutex as AsyncMutex, Notify, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 use uuid::Uuid;
 
@@ -42,6 +46,7 @@ struct Commands {
     accepting: bool,
     failed: bool,
     jobs: JoinSet<bool>,
+    delivery: Option<JoinHandle<Result<(), CredentialAdminError>>>,
     cleanup: Option<Arc<AsyncMutex<Cleanup>>>,
 }
 struct Cleanup {
@@ -68,6 +73,12 @@ struct Owner {
     commands: Mutex<Commands>,
     ordinary: Arc<Semaphore>,
     controls: Arc<Semaphore>,
+    wake: Notify,
+    known: Mutex<Option<KnownObservation>>,
+    #[cfg(test)]
+    delivery_cycles: std::sync::atomic::AtomicU64,
+    #[cfg(test)]
+    cycle_finished: Notify,
 }
 #[derive(Clone)]
 pub struct WebhookRuntime {
@@ -105,16 +116,71 @@ impl WebhookRuntime {
                     accepting: true,
                     failed: false,
                     jobs: JoinSet::new(),
+                    delivery: None,
                     cleanup: None,
                 }),
                 ordinary: Arc::new(Semaphore::new(MAX_OUTBOX_WORKERS)),
                 controls: Arc::new(Semaphore::new(MAX_OUTBOX_WORKERS)),
+                wake: Notify::new(),
+                known: Mutex::new(None),
+                #[cfg(test)]
+                delivery_cycles: std::sync::atomic::AtomicU64::new(0),
+                #[cfg(test)]
+                cycle_finished: Notify::new(),
             }),
         })
     }
     #[cfg(test)]
     pub(super) fn ordinary_in_flight(&self) -> usize {
         MAX_OUTBOX_WORKERS - self.owner.ordinary.available_permits()
+    }
+    pub(crate) fn start_delivery(
+        &self,
+        dependencies: DeliveryDependencies,
+    ) -> Result<(), CredentialAdminError> {
+        let mut commands = self
+            .owner
+            .commands
+            .lock()
+            .map_err(|_| CredentialAdminError::Unavailable)?;
+        commands.reap();
+        if !commands.accepting || commands.delivery.is_some() {
+            return Err(CredentialAdminError::Unavailable);
+        }
+        let this = self.clone();
+        commands.delivery = Some(tokio::spawn(async move {
+            let result = AssertUnwindSafe(this.delivery_loop(dependencies))
+                .catch_unwind()
+                .await
+                .unwrap_or(Err(CredentialAdminError::Unavailable));
+            if result.is_err() {
+                if let Ok(mut commands) = this.owner.commands.lock() {
+                    commands.failed = true;
+                    commands.accepting = false;
+                }
+            }
+            result
+        }));
+        Ok(())
+    }
+    #[cfg(test)]
+    pub(crate) fn completed_delivery_cycles(&self) -> u64 {
+        self.owner
+            .delivery_cycles
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(test)]
+    pub(crate) async fn after_delivery_cycle(&self, prior: u64) {
+        loop {
+            let changed = self.owner.cycle_finished.notified();
+            if self.completed_delivery_cycles() > prior {
+                return;
+            }
+            changed.await;
+        }
+    }
+    pub(crate) fn wake_delivery(&self) {
+        self.owner.wake.notify_one();
     }
     pub(crate) fn store(&self) -> &SqlOutbox {
         &self.owner.store
@@ -164,6 +230,7 @@ impl WebhookRuntime {
                 let _permit = permit;
                 match AssertUnwindSafe(work).catch_unwind().await {
                     Ok(result) => {
+                        owner.wake.notify_one();
                         let _ = send.send(result);
                         true
                     }
@@ -242,6 +309,12 @@ impl WebhookRuntime {
         let this = self.clone();
         self.owned(false, async move {
             let _issuance = this.owner.issuance.lock().await;
+            crate::webhooks::application::Outbox::recover(
+                this.owner.store.as_ref(),
+                this.owner.clock.unix_milliseconds(),
+            )
+            .await
+            .map_err(store_error)?;
             let originals = this.owner.store.intents().await.map_err(store_error)?;
             for intent in originals {
                 let credential = CredentialId::new(&intent.issue.credential_id)
@@ -296,11 +369,13 @@ impl WebhookRuntime {
             } else {
                 commands.accepting = false;
                 let jobs = std::mem::take(&mut commands.jobs);
+                let delivery = commands.delivery.take();
+                self.owner.wake.notify_one();
                 let failed = commands.failed;
                 let this = self.clone();
                 let cleanup = Arc::new(AsyncMutex::new(Cleanup {
                     job: Some(tokio::spawn(async move {
-                        this.drain_commands(jobs, failed).await
+                        this.drain_commands(jobs, delivery, failed).await
                     })),
                     result: None,
                 }));
@@ -323,8 +398,17 @@ impl WebhookRuntime {
     async fn drain_commands(
         &self,
         mut jobs: JoinSet<bool>,
+        delivery: Option<JoinHandle<Result<(), CredentialAdminError>>>,
         mut failed: bool,
     ) -> Result<(), CredentialAdminError> {
+        if let Some(delivery) = delivery {
+            if !matches!(delivery.await, Ok(Ok(()))) {
+                failed = true;
+            }
+        }
+        if self.settle_known().await.is_err() {
+            failed = true;
+        }
         while let Some(done) = jobs.join_next().await {
             if !matches!(done, Ok(true)) {
                 failed = true;

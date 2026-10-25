@@ -265,3 +265,34 @@ fn public_v6(ip: Ipv6Addr) -> bool {
 #[cfg(test)]
 #[path = "../../../tests/webhooks/infrastructure/https.rs"]
 mod https_tests;
+
+/// Disposable recipient seam: only the socket and in-memory test CA differ.
+/// The actual bounded production POST, headers, signature and response parser run.
+#[cfg(test)]
+pub(crate) fn isolated_post(
+    address: SocketAddr,
+    root: &[u8],
+    capacity: Arc<Semaphore>,
+) -> Result<Box<dyn WebhookPost>, PrepareFailure> {
+    install_tls_backend();
+    assert!(address.ip().is_loopback());
+    let permit = capacity
+        .try_acquire_owned()
+        .map_err(|_| PrepareFailure::Busy)?;
+    let client = client_builder("recipient.test", &[address])
+        .add_root_certificate(
+            reqwest::Certificate::from_der(root).map_err(|_| PrepareFailure::Unavailable)?,
+        )
+        .build()
+        .map_err(|_| PrepareFailure::Unavailable)?;
+    Ok(Box::new(PreparedPost {
+        client,
+        url: url::Url::parse(&format!(
+            "https://recipient.test:{}/synthetic",
+            address.port()
+        ))
+        .expect("synthetic loopback URL"),
+        deadline: Instant::now() + POST_DEADLINE,
+        _permit: permit,
+    }))
+}

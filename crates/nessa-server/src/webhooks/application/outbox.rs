@@ -76,6 +76,7 @@ impl QueueInitiator {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeliveryCause {
     Admission,
+    AdmissionExpired,
     Response,
     Deadline,
     AuthorityStopped,
@@ -92,6 +93,7 @@ impl DeliveryCause {
         let is_after = |candidate: Result<Delivery, _>| candidate.as_ref() == Ok(after);
         match self {
             Self::Admission => is_after(before.admit(before.epoch(), at_ms)),
+            Self::AdmissionExpired => is_after(before.not_dispatched()),
             Self::Response => [
                 Observation::Success,
                 Observation::Retryable,

@@ -6,6 +6,7 @@ mod outbox;
 mod runtime;
 mod signature;
 pub use outbox::SqlOutbox;
+pub(crate) use runtime::DeliveryDependencies;
 pub use runtime::{ConfiguredWebhook, WebhookRuntime};
 
 pub use https::{HttpsWebhook, SystemResolver, MAX_IN_FLIGHT};
@@ -23,3 +24,6 @@ mod admission_tests;
 #[cfg(test)]
 #[path = "../../../tests/webhooks/infrastructure/product.rs"]
 mod product_tests;
+
+#[cfg(test)]
+pub(crate) use https::isolated_post;

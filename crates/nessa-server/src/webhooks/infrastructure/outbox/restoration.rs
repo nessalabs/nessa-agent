@@ -168,6 +168,7 @@ pub(super) fn contextual(
                 | audit::Cause::Response
                 | audit::Cause::Deadline
                 | audit::Cause::AdmissionRefused
+                | audit::Cause::AdmissionExpired
                 | audit::Cause::Restart
                 | audit::Cause::SourceChanged
                 | audit::Cause::SourceCheckpoint => return Err(OutboxError::Invalid),

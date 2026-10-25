@@ -27,7 +27,6 @@ use crate::{
             CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
             DurableConversationDeletionAudit, DurableConversationFileLinkAudit,
             DurableConversationModeAudit, DurableDriveToolAudit, DurableMcpAppAudit,
-            LocalConversationStore,
         },
     },
 };
@@ -41,13 +40,13 @@ use crate::{
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{
-            ConversationAccessPolicyEvaluator, ConversationRepository, ConversationService,
-            FenceCapture, McpAppAudit, ReceiverAuthority, ReviewNoticeAuditor, ShareGrants,
-            WatchCatalogue, WatchRecords,
+            ConversationAccessPolicyEvaluator, ConversationService, FenceCapture, McpAppAudit,
+            ReceiverAuthority, ReviewNoticeAuditor, ShareGrants, WatchCatalogue, WatchRecords,
         },
         infrastructure::{
-            CedarConversationAccessPolicy, DurableReviewNoticeAudit, LocalReceiverAuthority,
-            MonotonicReviewNoticeClock, NessaCatalogueReadSource, NessaRecordReadSource,
+            CedarConversationAccessPolicy, DurableReviewNoticeAudit, LocalConversationStore,
+            LocalReceiverAuthority, MonotonicReviewNoticeClock, NessaCatalogueReadSource,
+            NessaRecordReadSource,
         },
     },
     core::RunError,
@@ -490,6 +489,22 @@ pub(super) async fn product_state(
             Uuid::new_v4(),
         )
         .map_err(|error| RunError::Agent(format!("review-notice audit unavailable: {error:?}")))?;
+        if let Some(runtime) = &product.webhooks {
+            runtime
+                .start_delivery(crate::webhooks::infrastructure::DeliveryDependencies {
+                    metadata: metadata.clone(),
+                    source: reader.clone(),
+                    policy: access_policy.clone(),
+                    capacity: product.record_reads.clone(),
+                    gateway: product.gateway.clone(),
+                    http: Arc::new(crate::webhooks::infrastructure::HttpsWebhook::new(
+                        Arc::new(crate::webhooks::infrastructure::SystemResolver::new()),
+                    )),
+                })
+                .map_err(|error| {
+                    RunError::Agent(format!("webhook delivery unavailable: {error:?}"))
+                })?;
+        }
         record_reader = Some(reader.clone());
         catalogue_reader = Some(catalogue.clone());
         product = product
@@ -586,7 +601,7 @@ struct BuiltConversations {
     record_watches: Arc<dyn WatchRecords>,
     catalogue_watches: Arc<dyn WatchCatalogue>,
     receivers: Arc<dyn ReceiverAuthority>,
-    metadata: Arc<dyn ConversationRepository>,
+    metadata: Arc<LocalConversationStore>,
     share_grants: Arc<dyn ShareGrants>,
     attachments: (AttachmentService, HeldReads),
     agents_catalog: AgentsListResult,

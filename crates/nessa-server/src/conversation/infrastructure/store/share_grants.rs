@@ -1352,3 +1352,34 @@ mod cancelled_wait {
         );
     }
 }
+
+impl LocalConversationStore {
+    /// Bounded scheduling candidates, not read authority. The caller must
+    /// freshly admit each principal/resource revision before physical reads.
+    pub(crate) async fn principal_conversations(
+        &self,
+        principal: PrincipalId,
+        credential: CredentialId,
+        limit: usize,
+    ) -> Result<Vec<(ConversationId, u64)>, ConversationError> {
+        let take = limit
+            .checked_add(1)
+            .and_then(|n| i64::try_from(n).ok())
+            .ok_or(ConversationError::Metadata)?;
+        self.run(move |connection| {
+            let mut statement=connection.prepare("SELECT resource_id,policy_revision FROM share_grants WHERE principal_id=?1 AND credential_id=?2 AND resource_kind=?3 AND receiver_id IS NULL ORDER BY resource_id LIMIT ?4").map_err(failed)?;
+            let mut rows=statement.query(params![principal.as_str(),credential.as_str(),CONVERSATION,take]).map_err(failed)?;
+            let mut result=Vec::new();
+            while let Some(row)=rows.next().map_err(failed)? {
+                // Validate borrowed text before allocating an owned identifier.
+                let text=row.get_ref(0).map_err(failed)?.as_str().map_err(|_|ConversationError::Metadata)?;
+                if text.len()>MAX_IDENTIFIER_BYTES {return Err(ConversationError::Metadata);}
+                let id=ConversationId::new(text).map_err(|_|ConversationError::Metadata)?;
+                let revision=sequence(row.get::<_,i64>(1).map_err(failed)?).ok_or(ConversationError::Metadata)?;
+                result.push((id,revision));
+            }
+            if result.len()>limit {return Err(ConversationError::Metadata);}
+            Ok(result)
+        }).await
+    }
+}

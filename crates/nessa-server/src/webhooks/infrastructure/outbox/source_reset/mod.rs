@@ -5,6 +5,6 @@ mod store;
 
 pub(super) use fact::Fact;
 pub(super) use retention::{validate_all, validate_owed};
+pub(super) use store::{capture, delivery, observe, read};
 #[cfg(test)]
-pub(super) use store::READ;
-pub(super) use store::{capture, delivery, insert, read};
+pub(super) use store::{insert, READ};

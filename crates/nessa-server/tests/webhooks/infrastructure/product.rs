@@ -255,6 +255,7 @@ impl Client {
 }
 struct Harness {
     _root: Arc<tempfile::TempDir>,
+    clock: Arc<Time>,
     state: ProductRouteState,
     runtime: Arc<WebhookRuntime>,
     store: Arc<SqlOutbox>,
@@ -383,7 +384,7 @@ impl Harness {
                 owner_phone_policy: Arc::new(CedarOwnerPhonePolicyEvaluator::new().unwrap()),
                 owner_phone_receivers: None,
                 clock: clock.clone(),
-                uptime_clock: clock,
+                uptime_clock: clock.clone(),
                 policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
                 agent_probe: Arc::new(NoAgents),
             },
@@ -410,6 +411,7 @@ impl Harness {
         });
         Self {
             _root: root,
+            clock,
             state,
             runtime,
             store,
@@ -987,3 +989,6 @@ async fn ordinary_unpaired_targets_stay_unpaired_and_a_nonowner_cannot_share_the
     drop(owner);
     f.close().await.unwrap();
 }
+
+#[path = "product_delivery.rs"]
+mod delivery;

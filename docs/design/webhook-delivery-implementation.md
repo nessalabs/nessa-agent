@@ -934,3 +934,27 @@ mutex remains nonblocking. No opposite-order cycle can wait on both locks: async
 revocation never awaits its fence with the registry mutex held, and a synchronous
 mutation never waits for a fence. Current authority and revision checks still run
 against the locked canonical registry before persistence.
+
+### Supervised canonical delivery composition
+
+The concrete runtime next connects the existing principal reader, private outbox
+and signed transport. The following order is required before recipient delivery
+is qualified; this table is not an execution receipt.
+
+| Boundary | Required ordering/result |
+| --- | --- |
+| scheduling | enumerate bounded actual principal/credential conversation grants; those rows are candidates, never read authority |
+| source capture | freshly admit the exact registration/conversation/epoch, read actual canonical head/page under the shared record budget and encode through recordsPage before queueing |
+| saved cursor | continue only the same physical source, without skipping a predecessor; an observed replacement captures the original reset fact and freezes the cursor, including an empty replacement head |
+| queue pressure | retain the original checkpoint; continue draining existing bounded work rather than skipping source records |
+| transport preparation | reserve/validate the destination before fresh send authority; preparation transmits no key/body |
+| send authority | use one freshly admitted canonical head result and its actual retained credential/grant ownership across Sending, POST and settlement; never reacquire Auth while retaining the first hold |
+| physical dispatch | acknowledge durable Sending before POST, recheck absolute expiry immediately before dispatch and do not confuse a proven pre-dispatch refusal with an unknown remote effect |
+| response | retain the actual complete/incomplete transport observation before later callbacks; stable delivery ID/body and first timestamp survive retries |
+| uncertain settlement | never repeat POST to learn its outcome; reconcile the original observation using positive durable evidence or report unresolved cleanup |
+| restart | reconcile original registrations and saved delivery states before source/send admission; Sending without a durable observation becomes Unknown and is not automatically resent |
+| stop | seal admission, stop new source/send work, retain admitted physical effects and join the delivery owner with credential/grant jobs; the process report keeps their actual failure/unknown evidence |
+
+All recipient qualification uses disposable synthetic data and loopback TLS via
+an injected test transport. The production public-address, TLS, deadline and byte
+policies remain the existing transport owner's rules.
