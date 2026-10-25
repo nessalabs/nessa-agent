@@ -30,6 +30,7 @@ import { hostGateway } from "./adapters/host-gateway"
 import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backend"
 import { seededWindow } from "./seeded-window"
 import {
+  GithubProvider,
   LinkedDevicesProvider,
   McpServersProvider,
   NativeHooksProvider,
@@ -176,11 +177,13 @@ createRoot(container).render(
                             <PermissionRulesProvider
                               gateway={dependencies.permissionRules}
                             >
-                              <DesktopWindow
-                                hostKind={host.kind}
-                                browserSurface={host.kind === "browser"}
-                                inspectable={import.meta.env.DEV}
-                              />
+                              <GithubProvider gateway={dependencies.github}>
+                                <DesktopWindow
+                                  hostKind={host.kind}
+                                  browserSurface={host.kind === "browser"}
+                                  inspectable={import.meta.env.DEV}
+                                />
+                              </GithubProvider>
                             </PermissionRulesProvider>
                           </NativeHooksProvider>
                         </HeldFilesProvider>

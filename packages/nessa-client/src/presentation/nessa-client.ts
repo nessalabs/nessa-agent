@@ -15,6 +15,7 @@ import { createAgentsApi, type AgentsApi } from "./agents-api.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
 import { createWorkspaceApi, type WorkspaceApi } from "./workspace-api.js"
 import { createCredentialApi, type CredentialApi } from "./credential-api.js"
+import { createGithubApi, type GithubApi } from "./github-api.js"
 import { createPairingApi, type PairingApi } from "./pairing-api.js"
 import { createAuthApi, type AuthApi } from "./auth-api.js"
 import { createCatalogueReadApi, type CatalogueReadApi } from "./catalogue-read-api.js"
@@ -100,6 +101,8 @@ export class NessaClient {
   readonly credentials: CredentialApi
   /** Owner pairing: create a one-use code, and approve, deny or cancel an invitation. */
   readonly pairing: PairingApi
+  /** The gateway's GitHub sign-in: read it, start it, cancel it, or forget it. */
+  readonly github: GithubApi
   /** Fetch a fresh snapshot of the authenticated product identity and restrictions. */
   readonly auth: AuthApi
   /** Tell the gateway what this window shows, for the person's agents to read. */
@@ -126,6 +129,7 @@ export class NessaClient {
     this.mcpServers = createMcpServersApi(wire)
     this.credentials = createCredentialApi(wire, newRequestId)
     this.pairing = createPairingApi(wire)
+    this.github = createGithubApi(wire)
     this.auth = createAuthApi(wire)
     this.workspace = createWorkspaceApi(wire)
   }

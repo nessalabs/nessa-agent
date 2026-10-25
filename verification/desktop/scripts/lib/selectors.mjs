@@ -281,6 +281,7 @@ export const css = {
   // (src/desktop/settings/ui/integrations-tab.tsx)
   mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
   // Settings › Connections › Linked devices (src/desktop/settings/ui/linked-devices-tab.tsx)
+  github: '[data-setting="github"]', // Settings › Accounts' GitHub row; data-github-state: absent | reading | unread | signed-out | connecting | connected
   linked: "[data-linked]", // the tab; its value: pending | checking | off | on | refused | unreachable
   linkedOn: '[data-linked="on"]',
   linkedOff: '[data-linked="off"]',
@@ -543,6 +544,10 @@ export const names = {
   connections: "Connections",
   integrations: "Integrations",
   linkedDevices: "Linked devices",
+  /** Settings › Connections' tab holding the GitHub sign-in, and its row's buttons. */
+  accounts: "Accounts",
+  githubConnect: "Connect…",
+  githubDisconnect: "Disconnect",
   /** Settings' category and tab holding the previews, the side rail's switch among them. */
   advanced: "Advanced",
   experimental: "Experimental",

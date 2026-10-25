@@ -294,9 +294,23 @@ pub(super) async fn product_state(
     // for every command, passive read and share change (ADR 803 step 3).
     let access_policy: Arc<dyn ConversationAccessPolicyEvaluator> =
         Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
+    // The GitHub sign-in, composed where agents are: they are what it is for.
+    #[cfg(unix)]
+    let github = match &settings.agents {
+        Some(_) => super::github::compose(namespace).await,
+        None => None,
+    };
     let (conversations, agent_probe, warm_ups, mcp, environment_peers) =
         match (&settings.agents, receivers.clone()) {
             (Some(agents), Some(receivers)) => {
+                #[cfg(unix)]
+                let agents = &{
+                    let mut agents = agents.clone();
+                    if let Some(github) = &github {
+                        agents.open_credentials = github.credentials.clone();
+                    }
+                    agents
+                };
                 let mut built = conversations(
                     agents,
                     directory,
@@ -410,6 +424,10 @@ pub(super) async fn product_state(
             }));
     }
     product.browser_http_allowed = config.browser_http_allowed();
+    #[cfg(unix)]
+    if let Some(github) = github {
+        product = product.with_github(github.routes);
+    }
     #[cfg(unix)]
     let restart = Arc::new(crate::core::self_restart::SelfRestart::default());
     // Composed whether or not native pairing runs: turning it on is how it

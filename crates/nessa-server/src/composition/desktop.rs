@@ -127,6 +127,8 @@ pub(super) fn configure(
             #[cfg(unix)]
             stand_ins: Default::default(),
             #[cfg(unix)]
+            open_credentials: Default::default(),
+            #[cfg(unix)]
             mcp_stand_ins: Default::default(),
             selected: None,
             runtimes: HashMap::new(),

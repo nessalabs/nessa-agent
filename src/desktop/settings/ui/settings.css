@@ -760,6 +760,14 @@ html:not(.dark) .settings .settings-card {
   color: var(--desktop-faint);
 }
 
+/* An anchor is inline: it takes the button's box, so a link and a button side by side share a line. */
+.settings-button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 /* A list of keys reads as a list: its rows sit closer than a setting's. */
 .settings .settings-row:has(.settings-kbd) {
   padding-block: 8px;

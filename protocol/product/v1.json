@@ -210,7 +210,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 81,
+          "maxItems": 85,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -6019,6 +6019,55 @@
         "pairing_audit_unavailable"
       ],
       "description": "Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which)."
+    },
+    "GithubAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The GitHub account a sign-in belongs to.",
+      "properties": {
+        "id": { "type": "integer", "minimum": 0, "description": "GitHub's numeric id for the account, which never changes." },
+        "login": { "type": "string", "minLength": 1, "maxLength": 256, "description": "The account's login, which can change." }
+      },
+      "required": ["id", "login"]
+    },
+    "GithubConnectState": {
+      "type": "string",
+      "enum": ["signed_out", "connecting", "connected"],
+      "description": "Where the gateway's GitHub sign-in stands. signed_out: no token is held, and agents are given none. connecting: a code is waiting for the person to enter it on GitHub. connected: a token is held and every agent opened from now on is given it."
+    },
+    "GithubConnectEnd": {
+      "type": "string",
+      "enum": ["expired", "denied", "cancelled", "rejected", "unreachable", "store_unavailable", "audit_unavailable"],
+      "description": "Why the latest sign-in ended without signing in. expired: the code ran out before it was entered. denied: the person refused it on GitHub. cancelled: it was cancelled here. rejected: GitHub refused the Nessa app itself. unreachable: GitHub could not be reached. store_unavailable: the token could not be kept, or a kept one could not be read at startup. audit_unavailable: its record could not be kept, so the token was dropped."
+    },
+    "GithubCode": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The code a sign-in waits for.",
+      "properties": {
+        "userCode": { "type": "string", "minLength": 1, "maxLength": 64, "description": "What the person enters on GitHub." },
+        "verificationUri": { "type": "string", "minLength": 1, "maxLength": 2048, "description": "Where they enter it." },
+        "expiresInSeconds": { "type": "integer", "minimum": 0, "description": "Whole seconds left before the code expires, when this was answered." }
+      },
+      "required": ["userCode", "verificationUri", "expiresInSeconds"]
+    },
+    "GithubConnection": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in a private file of its own, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com.",
+      "properties": {
+        "state": { "$ref": "#/$defs/GithubConnectState", "description": "Where the sign-in stands." },
+        "account": { "$ref": "#/$defs/GithubAccount", "description": "Present exactly when connected." },
+        "code": { "$ref": "#/$defs/GithubCode", "description": "Present exactly when connecting." },
+        "last": { "$ref": "#/$defs/GithubConnectEnd", "description": "When signed out: why the latest sign-in ended, until another starts. Absent when there was none, or after a disconnect." },
+        "installUrl": { "type": "string", "minLength": 1, "maxLength": 2048, "description": "Where the person chooses the repositories the Nessa app may use. A token reaches only those." }
+      },
+      "required": ["state", "installUrl"]
+    },
+    "GithubErrorCode": {
+      "type": "string",
+      "enum": ["github_not_configured", "github_unreachable", "github_rejected", "github_storage_unavailable", "github_audit_unavailable"],
+      "description": "Why the gateway refused a github method. github_not_configured: this gateway signs in to nothing (no agents run here). github_unreachable: github.connect could not reach GitHub for a code; nothing started. github_rejected: GitHub refused the Nessa app; nothing started. github_storage_unavailable: github.disconnect could not delete the token, which is still held. github_audit_unavailable: a record could not be kept; before a change nothing changed, and after github.disconnect deleted the token or github.cancel stopped the code, that stands (read github.status)."
     },
     "PeerEnrollParams": {
       "type": "object",

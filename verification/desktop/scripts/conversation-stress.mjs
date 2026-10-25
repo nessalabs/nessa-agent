@@ -115,6 +115,16 @@
  *               screen never covers it, and once the gateway is up the
  *               window lists the conversation and the message sent after
  *               it is answered
+ *   github      GitHub is connected in Settings › Connections › Accounts
+ *               against a fake GitHub on this machine: the row shows the
+ *               code GitHub handed out and where to enter it, and once the
+ *               fake approves it names the account; the sign-in is a private
+ *               file the gateway never logs; an agent started after it has
+ *               GH_TOKEN and a git credential helper for github.com, both the
+ *               token, and so do the commands it runs through Nessa's own
+ *               shell tool; Disconnect forgets it, and an agent started after
+ *               that has neither, nor do its commands; the audit holds each
+ *               step and no token
  *   upgrade     the gateway is stopped, its conversation metadata turned
  *               back into the file an older build wrote (version 6, or 7
  *               when a newer table holds rows), and started again: it
@@ -149,24 +159,25 @@
  *   NESSA_STRESS_ROUNDS=60 pnpm test:e2e:stress # the same, from the environment
  */
 import catalog from "../../../crates/nessa-sdk/data/models.json" with { type: "json" }
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import {
   chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
-import { basename, isAbsolute, join } from "node:path"
+import { basename, dirname, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
-import { MODELS } from "../../../scripts/mcp-test-server/local-gateway.mjs"
+import { MODELS, repoRoot } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
   SAYS,
@@ -197,6 +208,7 @@ import {
   offeredLabel,
   selectorFor,
 } from "./lib/selectors.mjs"
+import { FAKE_ACCOUNT, startFakeGithub } from "./lib/fake-github.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
@@ -1404,6 +1416,121 @@ const steps = {
     })
     // The restarted gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async github(run, step, failures) {
+    const github = run.stack.github
+    if (!github) {
+      failures.push("the stack was started without the fake GitHub")
+      return
+    }
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
+    const signIn = join(namespace, "github", "sign-in.json")
+    const print = createHash("sha256").update(github.token).digest("hex").slice(0, 16)
+    const row = run.page.locator(css.github)
+    const state = () => row.getAttribute("data-github-state").catch(() => null)
+    // Each state the person sees, kept with the evidence.
+    const shot = (name) =>
+      run.evidence
+        ? run.page
+            .screenshot({ path: join(run.evidence, `github-${name}.png`) })
+            .catch(() => {})
+        : undefined
+    await run.exclusive(async () => {
+      await openAccounts(run.page)
+      if (!(await waitFor(async () => (await state()) === "signed-out", 30_000))) {
+        failures.push(`GitHub was ${await state()} before Connect`)
+        return
+      }
+      await shot("signed-out")
+      await row.getByRole("button", { name: names.githubConnect }).click()
+      const code = row.locator("[data-github-code]")
+      const shown = await waitFor(
+        async () =>
+          github.userCode() !== null &&
+          (await code.getAttribute("data-github-code").catch(() => null)) ===
+            github.userCode(),
+        30_000,
+      )
+      if (!shown) {
+        failures.push(
+          `the row did not show the code GitHub handed out (${github.userCode()})`,
+        )
+        return
+      }
+      await shot("connecting")
+      const open = await row.locator("[data-github-open]").getAttribute("href")
+      if (open !== github.verificationUri)
+        failures.push(`Open GitHub goes to ${open}, not ${github.verificationUri}`)
+      // The person enters the code on GitHub: the gateway's next poll takes it.
+      github.approve()
+      const connected = await waitFor(
+        async () =>
+          (await state()) === "connected" &&
+          (await row.textContent()).includes(`Signed in as @${FAKE_ACCOUNT.login}.`),
+        30_000,
+      )
+      if (!connected) {
+        failures.push(`the row is ${await state()} after GitHub approved the code`)
+        return
+      }
+      await shot("connected")
+      const repositories = await row
+        .locator("[data-github-repositories]")
+        .getAttribute("href")
+      if (repositories !== github.installUrl)
+        failures.push(
+          `Choose repositories goes to ${repositories}, not ${github.installUrl}`,
+        )
+      await closeSettings(run.page)
+    })
+    if (failures.length) return
+    if (!existsSync(signIn)) failures.push("the sign-in was not saved")
+    else if ((lstatSync(signIn).mode & 0o077) !== 0)
+      failures.push(
+        `the sign-in file is mode ${(lstatSync(signIn).mode & 0o777).toString(8)}`,
+      )
+    if (run.stack.gateway.log().includes(github.token))
+      failures.push("the gateway logged the GitHub token")
+    // An agent opened now is started with the sign-in, for gh and for git.
+    await githubAgent(run, step, " connected", `token=${print} git=${print}`, failures)
+    await githubAgent(
+      run,
+      step,
+      " connected",
+      `token=${print} git=${print}`,
+      failures,
+      true,
+    )
+    if (failures.length) return
+    await run.exclusive(async () => {
+      await openAccounts(run.page)
+      await row.getByRole("button", { name: names.githubDisconnect }).click()
+      if (!(await waitFor(async () => (await state()) === "signed-out", 30_000)))
+        failures.push(`the row is ${await state()} after Disconnect`)
+      await closeSettings(run.page)
+    })
+    if (failures.length) return
+    if (existsSync(signIn)) failures.push("Disconnect left the sign-in file")
+    await githubAgent(run, step, " disconnected", "token=none git=none", failures)
+    await githubAgent(run, step, " disconnected", "token=none git=none", failures, true)
+    // Each step of both is on record, and no record holds the token.
+    const audit = join(namespace, "conversations", "audit", "github")
+    const records = existsSync(audit) ? readdirSync(audit) : []
+    for (const event of [
+      "connect-requested",
+      "connected",
+      "disconnect-requested",
+      "disconnected",
+    ])
+      if (!records.some((name) => name.endsWith(`-${event}.json`)))
+        failures.push(`the audit has no ${event} record`)
+    if (
+      records.some((name) =>
+        readFileSync(join(audit, name), "utf8").includes(github.token),
+      )
+    )
+      failures.push("an audit record holds the GitHub token")
   },
 
   async upgrade(run, step, failures) {
@@ -3528,6 +3655,63 @@ function inCorner(place, side) {
   return side === "left" ? place.x < 0.15 : place.x > 0.85
 }
 
+/**
+ * Nessa's own shell tool as the gateway's managed `nessa` server: the
+ * `nessa-mcp` built beside the gateway, working in a directory of the run's.
+ */
+function shellServer(directory) {
+  const gateway = process.env.MCP_LIVE_NESSA ?? join(repoRoot, "target/debug/nessa")
+  const command = join(dirname(gateway), "nessa-mcp")
+  if (!existsSync(command))
+    throw new CannotRun(
+      `build the shell tool first (cargo build -p nessa-mcp): ${command}`,
+    )
+  const workspace = join(directory, "shell-workspace")
+  mkdirSync(workspace)
+  return {
+    name: "nessa",
+    command,
+    args: ["--workspace", workspace, "--audit-directory", join(directory, "shell-audit")],
+  }
+}
+
+/** Opens Settings › Connections › Accounts, where the GitHub row is. */
+async function openAccounts(page) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.connections }).click()
+  await page.locator(css.settingsTab, { hasText: names.accounts }).click()
+}
+
+/**
+ * A new conversation's agent, opened now, says what GitHub sign-in it was
+ * started with; `said` is what it must say. A sign-in is read when an agent
+ * opens, so only a new one shows a change.
+ */
+async function githubAgent(run, step, extra, said, failures, shell = false) {
+  const conversationId = randomUUID()
+  run.checked.push(conversationId)
+  const text = prompt(run, shell ? STRESS.githubShell : STRESS.github, step, extra)
+  await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+  await run.client.conversation.submit(
+    run.client.conversation.prepare(conversationId, text),
+  )
+  const { turn } = await settled(
+    run,
+    conversationId,
+    new Set(),
+    text,
+    "completed",
+    failures,
+  )
+  if (!turn) return
+  const answer = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+  const where = shell ? SAYS.githubShell : SAYS.github
+  if (answer !== `${where}${said}`)
+    failures.push(
+      `an agent started${extra} says ${JSON.stringify(answer)}${shell ? " from its shell tool" : ""}, not ${said}`,
+    )
+}
+
 /** Leaves Settings: Esc does not close it; its back control returns to the app. */
 async function closeSettings(page) {
   await page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
@@ -3896,9 +4080,24 @@ async function startStack(options) {
       `${JSON.stringify(knobs)}\n${describe(plan(knobs))}\n`,
     )
   }
+  // The `github` step's GitHub, on this machine, which the gateway reads its
+  // app from, and Nessa's own shell tool, where an agent's git and gh run.
+  let servers = []
+  try {
+    if (knobs.githubs > 0) servers = [shellServer(directory)]
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true })
+    throw error
+  }
+  const github = knobs.githubs > 0 ? await startFakeGithub() : null
+  const environment = github
+    ? { NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")) }
+    : {}
   let stack
   try {
     stack = await startGatewayStack(options, INSTANCE, {
+      environment,
+      servers,
       as: "panel",
       scenario,
       evidence: options.evidence,
@@ -3909,6 +4108,7 @@ async function startStack(options) {
       native: { enabled: false, listenAddress: nativeAddress },
     })
   } catch (error) {
+    await github?.close()
     rmSync(directory, { recursive: true, force: true })
     throw error
   }
@@ -3917,6 +4117,7 @@ async function startStack(options) {
     try {
       await close()
     } finally {
+      await github?.close()
       rmSync(directory, { recursive: true, force: true })
     }
   }
@@ -3924,6 +4125,7 @@ async function startStack(options) {
     knobs,
     agent: options.agent,
     nativeAddress,
+    github,
     scenario,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
   }))

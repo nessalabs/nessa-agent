@@ -48,10 +48,13 @@ import {
   type HeldFileReader,
 } from "../conversation"
 import {
+  githubGateway,
   linkedDevicesGateway,
   mcpServersGateway,
   nativeHooksGateway,
   permissionRulesGateway,
+  type GithubClient,
+  type GithubGateway,
   type LinkedDevicesClient,
   type LinkedDevicesGateway,
   type McpServersClient,
@@ -117,6 +120,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly nativeHooks: NativeHooksGateway | undefined
   /** Remembered permission rules, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly permissionRules: PermissionRulesGateway | undefined
+  /** The gateway's GitHub sign-in, for Settings; absent without a gateway. Provided by `main.tsx`. */
+  readonly github: GithubGateway | undefined
   /**
    * How the window reads back a file a conversation holds — one its agent
    * published — verified, for the transcript to show and save. Through the
@@ -227,6 +232,7 @@ export function createDesktopDependencies(
     permissionRules: source
       ? permissionRulesGateway({ connected: () => source.connected() })
       : undefined,
+    github: source ? githubGateway({ connected: () => source.connected() }) : undefined,
     // Shared on the gateway's own client; the sample shares in memory, and a
     // window with neither offers no Share.
     sharing: source
@@ -262,8 +268,9 @@ export function createDesktopDependencies(
   }
 }
 
-/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, set native hooks and share sessions through. */
+/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, set native hooks, sign in to GitHub and share sessions through. */
 type WindowGatewayClient = GatewayClient &
+  GithubClient &
   McpServersClient &
   LinkedDevicesClient &
   NativeHooksClient &

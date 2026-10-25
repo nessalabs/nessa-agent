@@ -43,6 +43,7 @@ import {
   type AgentsApi,
   type AttachmentApi,
   type AuthApi,
+  type GithubApi,
   type ConversationMessage,
   type ConversationPermission,
   type ConversationView,
@@ -316,6 +317,7 @@ const settingsParts = {
   pairing: {} as PairingApi,
   credentials: {} as CredentialApi,
   auth: {} as AuthApi,
+  github: {} as GithubApi,
   // Read back only for a file a view names; none here does.
   attachments: {} as AttachmentApi,
   agents: {
