@@ -1509,7 +1509,7 @@ const steps = {
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
-  async panel(run, step, failures) {
+  async menuPanel(run, step, failures) {
     const page = await panelWindow(run)
     try {
       const strip = page.locator(css.panelTabs)

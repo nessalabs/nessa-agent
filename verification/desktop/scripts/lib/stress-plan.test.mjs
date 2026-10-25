@@ -31,7 +31,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("window"), knobs.windows)
   assert.equal(count("linking"), knobs.linkings)
   assert.equal(count("rail"), knobs.rails)
-  assert.equal(count("panel"), knobs.panels)
+  assert.equal(count("menuPanel"), knobs.menuPanels)
   assert.equal(count("listAnswer"), knobs.listAnswers)
   assert.equal(count("onboarding"), knobs.onboardings)
   assert.equal(count("table"), knobs.tables)
@@ -141,7 +141,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         drifts: "0",
         upgrades: "0",
         launches: "0",
-        panels: "0",
+        menuPanels: "0",
         awaits: "0",
         fresh: "0",
         renames: "0",
