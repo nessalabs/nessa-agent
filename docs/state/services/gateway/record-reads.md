@@ -108,7 +108,10 @@ found early capacity release when an adapter replaced its returned lease. The
 original global permit now shares the same owner as the fences; its regression
 failed before correction and passes afterward. Three affected controls catch
 substituted original permits, lost physical ownership and missing expiry checks.
-Fresh review of that correction is pending. Runtime mounting, share resolution,
+[Fresh round two](../../../reviews/evidence/webhook-runtime/principal-source/review-2.md)
+is clean at every priority at candidate35c11449a, with205+12+1 independent tests
+passing. It includes the later fixture-only Windows handle repair; native Windows
+qualification of that repair remains pending. Runtime mounting, share resolution,
 supervised source/sender ownership, recipient E2E and platform/browser qualification
 of this source remain open. The existing chart was not visually re-rendered; no
 Nessa Docs renderer checkout is available here. Unrelated state pages retain
