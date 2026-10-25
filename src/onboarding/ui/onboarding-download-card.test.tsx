@@ -199,3 +199,26 @@ it("says downloads could not be read, with a way to read them again", async () =
   )
   await unmount()
 })
+
+it("lets go of an installed card when no readiness check ever runs", async () => {
+  const pending = installer()
+  const state = recordReadiness(asking, { claude: "ready", codex: "not-installed" })
+  const { container, unmount } = await picker(state, pending.source)
+  await React.act(async () => card(container)?.querySelector("button")?.click())
+  pending.source.offers.mockResolvedValue([
+    { agent: "codex", archiveBytes: 44_200_000, installed: true },
+  ])
+  vi.useFakeTimers()
+  try {
+    await React.act(async () =>
+      pending.finish({ status: "installed", cleanupPending: false }),
+    )
+    expect(card(container)?.getAttribute("data-download-state")).toBe("installed")
+    await React.act(async () => vi.advanceTimersByTime(5_000))
+    expect(card(container)).toBeNull()
+    expect(codexRow(container)?.getAttribute("aria-label")).toBe("Codex, not installed")
+  } finally {
+    vi.useRealTimers()
+  }
+  await unmount()
+})

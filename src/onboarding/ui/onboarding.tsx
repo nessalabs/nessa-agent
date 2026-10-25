@@ -510,25 +510,35 @@ function ReadDownloads({
   )
 }
 
+/** The longest an install waits on its readiness check before the card lets
+ * go: the check may never start (a gateway that is not ready asks nothing). */
+const INSTALL_HOLD_MS = 5_000
+
 /**
  * Whether an install is waiting on the readiness check it starts. The check
  * is asked for once the downloads have been read again, a moment after the
  * install reports, so "not checking" alone would let the row show through for
- * that moment. Held until a check has been seen running and has come back.
+ * that moment. Held until a check has been seen running and has come back, or
+ * for `INSTALL_HOLD_MS` at most, so a check that never runs cannot leave the
+ * card standing for good.
  */
 function useInstallHeld(outcome: Downloads["outcome"], checking: boolean): boolean {
-  const [seen, setSeen] = React.useState<{ outcome: Downloads["outcome"]; ran: boolean }>(
-    {
-      outcome: undefined,
-      ran: false,
-    },
-  )
-  const ran = seen.outcome === outcome && seen.ran
+  const installed = outcome?.status === "installed" ? outcome : undefined
+  // The install whose wait is over: its check came back, or it waited long
+  // enough. Keyed by the outcome, which each install makes afresh.
+  const [released, setReleased] = React.useState<Downloads["outcome"]>()
+  const [ran, setRan] = React.useState<Downloads["outcome"]>()
   React.useEffect(() => {
-    if (outcome?.status === "installed" && checking && !ran)
-      setSeen({ outcome, ran: true })
-  }, [outcome, checking, ran])
-  return outcome?.status === "installed" && (checking || !ran)
+    if (!installed || released === installed) return
+    if (checking) setRan(installed)
+    else if (ran === installed) setReleased(installed)
+  }, [installed, checking, ran, released])
+  React.useEffect(() => {
+    if (!installed) return
+    const timer = setTimeout(() => setReleased(installed), INSTALL_HOLD_MS)
+    return () => clearTimeout(timer)
+  }, [installed])
+  return installed !== undefined && released !== installed
 }
 
 /** What an agent's download card is doing, when its place in the picker is a
