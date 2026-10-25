@@ -741,3 +741,19 @@ second read without changing retention bounds, audit correlation or retirement
 semantics. The malformed 1 MiB ID allocation probe, maximum valid stop-size control,
 indexed-limit control and ID-budget omission mutation are retained in the
 [general-stop review evidence](../reviews/evidence/webhook-runtime/general-stop/README.md).
+
+### Retained credential ownership during recovery
+
+The recovery environment has only published general-stop source. Unpublished
+cancellation source and its correction were not recovered. Before composing that
+work again, retained retirement validation must consume the same indexed
+credential selection as command correlation.
+
+| Retained relationship | Decision before restoration or owed publication | Regression |
+| --- | --- | --- |
+| Two retired registration IDs name one credential | Invalid; neither projection may publish or trim evidence | Duplicate complete retirement histories, live and cold refusal, repaired original-byte recovery |
+| Live and retired registration IDs name one credential | Invalid; a live row cannot bypass the retained original owner | Matching intent/live row with a conflicting complete retirement, live and cold refusal |
+| Distinct credentials own distinct live or retired registrations | Accept, including owed Drained acknowledgement recovery | Positive controls for both relationships |
+
+This is retained data correlation, not permission. It adds no durable state,
+acknowledgement flag, schema, credential authority or cancellation behavior.

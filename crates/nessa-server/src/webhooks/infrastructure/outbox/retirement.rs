@@ -118,7 +118,16 @@ pub(super) fn by_credential(
         .map_err(super::cursor::row_error)?
         .map(SavedRetirement::checked)
         .transpose()?;
-    if rows.next().map_err(unavailable)?.is_some() {
+    if rows.next().map_err(unavailable)?.is_some()
+        || (first.is_some()
+            && connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM registrations WHERE credential=?1)",
+                    [credential.as_str()],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(unavailable)?)
+    {
         return Err(OutboxError::Invalid);
     }
     Ok(first)
@@ -150,6 +159,14 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
         let facts = SavedRetirement::row(row)
             .map_err(super::cursor::row_error)?
             .checked()?;
+        // Use the same indexed ownership check as command correlation. Distinct
+        // registration IDs cannot retain the same original credential, even
+        // when each row and its audit are independently well formed.
+        if by_credential(connection, &facts.target.credential)?
+            .is_none_or(|owner| owner.registration != facts.registration)
+        {
+            return Err(OutboxError::Invalid);
+        }
         let id = facts.registration.to_string();
         let saved = connection
             .query_row(

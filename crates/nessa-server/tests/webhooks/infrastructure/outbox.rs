@@ -2502,6 +2502,9 @@ mod lifecycle_context_tests;
 #[path = "outbox/issuance_context.rs"]
 mod issuance_context_tests;
 
+#[path = "outbox/retained_ownership.rs"]
+mod retained_ownership_tests;
+
 #[tokio::test]
 async fn oversized_stop_is_invalid_in_public_registration_read() {
     let f = Fixture::new().await;
