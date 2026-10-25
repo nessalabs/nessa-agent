@@ -3,8 +3,8 @@ id: gateway-webhook-admission
 title: Outbound webhook admission
 kind: feature
 status: mixed
-summary: Owner product shares resolve registered principals and retain actual grant writes under current authority; delivery-worker mounting remains uncomposed.
-sourceRevision: "20d8051b5e03419d7d0d1854413d7e29be1b6207"
+summary: Registered principal reads and sends use fresh Auth, exact grant epochs and Cedar under retained physical ownership; no receiver authority is fabricated.
+sourceRevision: "fc713591785970b8eca5ec20ad819024bf131cb0"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/ports.rs
@@ -30,6 +30,8 @@ sources:
   - crates/nessa-server/tests/webhooks/infrastructure/admission.rs
   - crates/nessa-server/tests/composition/local_auth.rs
   - crates/nessa-server/tests/conversation/store.rs
+  - crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/product_delivery.rs
 diagramLinks: {}
 diagramDetails:
   - diagram: 0
@@ -195,8 +197,8 @@ Every other linked source is byte-identical to this page's preceding `f990b7df`
 checkpoint. Only the registry writer change and its test are newly traced;
 unrelated Auth state pages are unchanged. The admission diagram is unchanged,
 because its states and permission decisions are unchanged. No new diagram render
-or browser result is claimed. Product runtime and recipient delivery remain
-unmounted in this scoped publication candidate.
+or browser result is claimed. Product runtime and recipient delivery were
+unmounted in that scoped publication candidate.
 
 
 ## Product grant ownership checkpoint
@@ -220,4 +222,33 @@ The complete linked admission path was compared with the preceding checkpoint.
 The new product/composition wiring and retained command owner are reviewed with
 the unchanged inner Auth/grant/Cedar sources. The existing admission diagram is
 unchanged; no new diagram render or browser qualification is claimed. Source
-and sender mounting, recipient POST and final whole-feature review remain open.
+and sender mounting and recipient POST were still open at that checkpoint;
+the mounted checkpoint below records the later composition. Final whole-feature
+review remains a separate gate.
+
+
+## Mounted delivery checkpoint
+
+At source `fc713591785970b8eca5ec20ad819024bf131cb0`, the product owner
+flow issues/registers the configured principal and shares only the selected
+conversation. The one retained runtime captures actual canonical records under
+current principal authority, queues exact recordsPage bytes and sends through
+the existing bounded signed HTTPS adapter. Ordinary credential/grant paths remain
+their native operations; webhook credentials obtain no paired-reader authority.
+
+Construction prepares dependencies without spawning a sender. The root starts
+it after fallible listener/signal setup, immediately before entering the existing
+retained serve/cleanup owner. Shutdown seals admission and joins actual physical
+work; failed, unknown or exceeded-deadline evidence prevents confirmed cleanup.
+The [outbox checkpoint](webhook-outbox.md#supervised-delivery-checkpoint) describes
+positive response reconciliation, late expiry and the unchanged retention bound.
+
+The isolated recipient fixtures use actual owner WebSocket commands, native
+Auth/Cedar and canonical SDK records. Only the granted chat is delivered; HMAC,
+retry identity/timestamp/signature/bytes, unshare/revoke/expiry/old-epoch no-send,
+capability refusal, cold recovery and physical POST/revocation/shutdown ownership
+are exercised. Only the test socket and in-memory CA replace public transport
+preparation; production routing, TLS, deadline and byte policies are unchanged.
+Historical unmounted/checkpoint statements above describe their earlier scoped
+publications. The inner diagrams remain unchanged. Final whole-feature review,
+source-matched CI/platform/browser and stress acceptance remain separate gates.

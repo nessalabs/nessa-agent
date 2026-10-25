@@ -3,8 +3,8 @@ id: gateway-webhook-outbox
 title: Durable outbound webhook state
 kind: feature
 status: mixed
-summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "97c9c1d13adfe7ade3a3ca06e140ec47ff69df04"
+summary: Private intents, canonical cursors and causal delivery outcomes compose with owned product commands and signed sending; acknowledgement and retained cleanup stay distinct.
+sourceRevision: "fc713591785970b8eca5ec20ad819024bf131cb0"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
@@ -52,6 +52,12 @@ sources:
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/cleanup.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/source_reset.rs
+  - crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/product_delivery.rs
+  - crates/nessa-server/src/composition/root.rs
+  - crates/nessa-server/src/composition/local_auth.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/response.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/retention_fixture.rs
 diagramLinks: {}
 diagramDetails:
   - diagram: 0
@@ -70,26 +76,20 @@ can resume without creating a new delivery. This page describes persistence
 beneath [delivery mechanics](webhook-foundation.md) and
 [current authority admission](webhook-admission.md).
 
-This checkpoint is an uncomposed storage adapter. No product command registers
-it, no authorized source reader feeds it, and no supervised sender consumes it.
-Those pieces and capability/revoke delivery E2E remain required for
-[issue #896](https://github.com/nessalabs/nessa-agent/issues/896).
-The [inner registration use case](webhook-issuance.md#destination-installation)
-asks the existing auth owner and correlates its actual result before installing
-under a current credential hold. The private intent supplies no permission verdict;
-product command ownership, source replay and the sender remain pending. Application installation #1052 and inbound
-workflow triggers #1088 remain separate.
+The current runtime connects owner issuance/registration and principal sharing to
+canonical source capture, this private outbox and signed delivery. Construction
+returns passive dependencies; the root starts the one retained sender after
+fallible startup and joins it through the same process cleanup owner. Application
+installation #1052 and inbound workflow triggers #1088 remain separate.
 
 ## Principal read boundary
 
-The [inner principal source use case](record-reads.md#principal-source-reads)
-can now obtain a bounded canonical SDK page under current Auth, grant and Cedar
-checks, without constructing a paired reader. Its registration UUID and epoch
-match this outbox's existing scope contract. The compatibility fixture queues
-actual synthetic canonical wire records while retaining the original fences.
-This is not a mounted source feed or supervised sender. Stored cursors still
-supply no authority, and every send must ask current admission again. This
-navigation note does not advance this page's persistence review checkpoint.
+The [principal source use case](record-reads.md#principal-source-reads) obtains
+bounded canonical SDK head/pages under current Auth, exact grant revision and
+Cedar. It constructs no paired receiver. A saved cursor is only progress; each
+physical read and dispatch asks current authority again. A source replacement
+captures its original reset fact and freezes the cursor, including an empty
+replacement head. Bounded source preparation pauses without cursor or POST effects.
 
 ## Cancelling a stopped uninstalled reservation
 
@@ -111,8 +111,8 @@ five rows: four legal lifecycle facts and one contradiction sentinel. Lost audit
 acknowledgement replays identical bytes and preserves the first observer; only
 acknowledged evidence may be trimmed. A different private schema is refused.
 
-These are inner use-case and persistence guarantees. Caller cancellation,
-startup reconciliation and supervised shutdown still need runtime composition.
+The runtime retains these native operations across caller cancellation and
+joins their actual results at shutdown; startup replays their original inputs.
 The cancellation tests exercise original revocation, expiry boundaries,
 supersession, inactive membership cleanup, held Auth reads, publication failure,
 cold restoration, conflicting histories and distinct-credential controls.
@@ -124,7 +124,8 @@ to stop that credential. A revocation must carry the original journal record;
 missing or mismatched evidence fails before the stop is requested. Without a
 revocation, only elapsed expiry creates an expiry observation. A credential whose
 start time is still in the future does not create an expiry event. This use case
-is not mounted and does not own caller cancellation or startup reconciliation.
+is mounted by retained revoke, startup and reader observation paths. The
+runtime owns cancellation and shutdown; this inner future alone supplies neither.
 
 The same bounded stop value is stored with live registrations, retirements and
 causal audit. It retains the original principal or offline operator, revocation
@@ -293,7 +294,9 @@ The first committed observer and stop time survive later observations, settlemen
 retirement and restart. The decoder rejects alternate spellings and oversized
 timestamps; audit projections correlate to the original stop fact. No delivery ID
 or human actor is fabricated for lifecycle expiry. Actual credential-revoke and
-expiry scheduling coordination remain uncomposed.
+expiry observation are composed by the retained runtime. Fresh due selection
+avoids preparing work already retired by an earlier attempt; a pre-dispatch
+refusal CAS conflict proves no acknowledgement and creates no substitute audit.
 
 [Expiry evidence](../../../reviews/evidence/webhook-runtime/expiry/README.md)
 records the source checkpoints, failure/recovery tests and mutation controls.
@@ -376,9 +379,9 @@ Canonical Chromium/WebKit, stress and chaos evidence remains an applicable
 integration gate. The foundation's hosted browser setup timed out before
 assertions ran; local pinned browser binaries were unavailable. The
 [validation handoff](../../../reviews/evidence/webhook-validation-gates/README.md)
-records exact inputs and exclusions. No browser gate is waived by this
-adapter being unmounted. Full registration, authorized source selection,
-current-authority dispatch, live outcome reconciliation and capability/revoke
+records exact inputs and exclusions. At that scoped checkpoint the adapter was unmounted; this waived no browser
+gate. Full registration, authorized source selection, current-authority dispatch,
+live outcome reconciliation and capability/revoke
 E2E remain unfinished.
 
 ## Expiry observation before stopping
@@ -396,7 +399,7 @@ stateDiagram-v2
     Stopped --> Retired: Outcomes drained / remove private configuration and retain owed audit facts
 ```
 
-The current outbox revocation input covers a known principal. Auth now exposes its actual original revocation fact under the existing held snapshot, including offline and supersession provenance. The general outbox/runtime mapping remains pending; the coordinator must not invent an actor. The combined test below exercises actual explicit owner revocation without claiming that general mapping is composed.
+The current outbox revocation input covers a known principal. Auth now exposes its actual original revocation fact under the existing held snapshot, including offline and supersession provenance. The runtime now consumes that original fact through the held stop use case; it never invents an actor. The combined historical test below covers explicit owner revocation; current mounted controls are recorded separately.
 
 The immutable registration lifecycle value owns legal replacements and its decoder checks local phase/fact combinations. However, [fresh independent review M1](../../../reviews/evidence/webhook-runtime/lifecycle-observation/review-1/report.md) found missing contextual phase/acknowledgement/work relationships: a substituted Stopped phase can publish an owed observation or silently clean genuine Queued work, and a retired fact can accept a reintroduced owed observation. The [f75 correction](../../../reviews/evidence/webhook-runtime/lifecycle-observation/m1-repair/README.md) adds complete retained phase/ack/work validation before both restoration and publication. It reuses one domain Queued compatibility predicate for queue admission, and checks distinct Queued registration IDs through the existing ready index without scanning terminal history. It rejects all three demonstrated contradictions, preserves valid lateSending-to-Retry recovery, and leaves indistinguishable missing history unclaimed. Its147canonical tests andsix controls passed at that source. [Round2](../../../reviews/evidence/webhook-runtime/lifecycle-observation/review-2/report.md) independently confirms M1 fixed, but reports the adjacent owed-Issue prerequisite contradiction M2. That original report and failing required-rejection probe remain preserved. That checkpoint stayed unpublished pending correction qualification. One observation per already-bounded registration adds no unbounded history.
 
@@ -466,7 +469,7 @@ the same lifecycle and require render validation at the new checkpoint.
 
 ## Assembled correction checkpoint
 
-Source `8f83f7394251814575429f5f1362cb3abac61687` combines the clean original-issuance correction (`1c1355b5`) and cleanup-cost correction (`611b5a87`). Their independent reports are scoped to their original bases; [assembled correction round2](../../../reviews/evidence/webhook-runtime/assembled-corrections/review-2/report.md) is clean at ecbb440e. It also includes the earlier typed expiry-observer helper (`7b83e425`), which that review explicitly covered. That helper does not implement the separate observation-before-stop lifecycle. That reviewed correction excluded W24. The composition adds the observation-before-stop lifecycle described above. Current canonical evidence has 160 webhook tests and seven-package Clippy passing, with clean independent structural review at e8f1564f. Full outbound delivery remains uncomposed.
+Source `8f83f7394251814575429f5f1362cb3abac61687` combines the clean original-issuance correction (`1c1355b5`) and cleanup-cost correction (`611b5a87`). Their independent reports are scoped to their original bases; [assembled correction round2](../../../reviews/evidence/webhook-runtime/assembled-corrections/review-2/report.md) is clean at ecbb440e. It also includes the earlier typed expiry-observer helper (`7b83e425`), which that review explicitly covered. That helper does not implement the separate observation-before-stop lifecycle. That reviewed correction excluded W24. The composition adds the observation-before-stop lifecycle described above. That checkpoint had 160 webhook tests and seven-package Clippy passing, with clean independent structural review at e8f1564f. Full outbound delivery was then uncomposed; the mounted checkpoint below supersedes that implementation status.
 
 Windows and scripted gateway Chromium/WebKit, stress/chaos, recipient capability/revoke E2E and exact-head CI remain unqualified. Historical timeout and unrelated cleanup failures remain evidence, not passing gates.
 
@@ -514,3 +517,33 @@ stop-retention was still unfinished at timeout. The [source evidence](../../../r
 retains exact names/times and the original log hash. The earlier timeout-only
 receipts above remain historical; they do not describe this later run. Windows
 qualification is still blocked, with an independent read-only diagnosis pending.
+
+
+## Supervised delivery checkpoint
+
+Source `fc713591785970b8eca5ec20ad819024bf131cb0` composes the existing
+Auth/grant/source/transport owners. A physical POST follows actual durable Sending
+acknowledgement and a final absolute-expiry check. Expiry during that acknowledgement
+uses `admission_expired`: Sending becomes NotSent without polling transport, while
+retaining its actual attempt and timestamp. A received observation is stored in
+the supervisor before later Clock or persistence callbacks. An identical retained
+response transition can establish a prior commit; original before/after/time and
+complete retained context must match before publication. Missing evidence never
+establishes an acknowledgement. Cold Sending without a durable outcome becomes
+Unknown and is not automatically POSTed.
+
+A late response can belong to a queued row older than 1,024 newer terminal rows.
+The unchanged indexed cutoff protects owed facts; a bounded fallback reclaims
+only enough oldest published alternatives from affected registrations to meet
+the unchanged 1,024-terminal limit. It visits no unrelated published history when
+no terminal audit is owed: the measured counter is 80 VM steps at 128, 512 and
+1,024 rows. No flush, acknowledgement, assertion or production budget was relaxed.
+
+[Composition evidence](../../../reviews/evidence/webhook-runtime/delivery-composition/README.md)
+distinguishes actual product/TLS delivery controls, native retention effects and
+historical receipts. All three original full-boundary retention cases pass on
+this source; they are no longer excluded from the final local suite. The three
+inner diagrams are unchanged: the new caller and cause use their existing legal
+states. No new render or browser/platform qualification is claimed. Older scoped
+sections above retain their original source and review limits; they do not stand
+in for final whole-feature review or source-matched CI/stress acceptance.

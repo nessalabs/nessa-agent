@@ -3,8 +3,8 @@ id: gateway-webhook-issuance
 title: Webhook credential issuance
 kind: operation
 status: mixed
-summary: Owner product issuance selects private webhook seeds, retains actual registration work and joins mutations at shutdown; source and sender mounting remain pending.
-sourceRevision: "20d8051b5e03419d7d0d1854413d7e29be1b6207"
+summary: Owner issuance and grants feed supervised canonical signed delivery; local lifecycle evidence is qualified separately from final platform and browser acceptance.
+sourceRevision: "fc713591785970b8eca5ec20ad819024bf131cb0"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/credential_admin.rs
@@ -43,6 +43,8 @@ sources:
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_origin.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/intent_rows.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/schema.rs
+  - crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/product_delivery.rs
 diagramLinks: {}
 diagramDetails:
   - diagram: 0
@@ -307,4 +309,32 @@ No new diagram render, browser or recipient-delivery result is claimed.
 
 [Product command evidence](../../../reviews/evidence/webhook-runtime/product-composition/README.md)
 records exact source/test boundaries, original failures and caught controls.
-The source and sender remain unmounted in this slice; it does not complete #896.
+The source and sender were unmounted in that slice. The later mounted checkpoint
+below records composition without claiming final #896 acceptance.
+
+
+## Mounted delivery checkpoint
+
+At source `fc713591785970b8eca5ec20ad819024bf131cb0`, the product owner
+flow issues/registers the configured principal and shares only the selected
+conversation. The one retained runtime captures actual canonical records under
+current principal authority, queues exact recordsPage bytes and sends through
+the existing bounded signed HTTPS adapter. Ordinary credential/grant paths remain
+their native operations; webhook credentials obtain no paired-reader authority.
+
+Construction prepares dependencies without spawning a sender. The root starts
+it after fallible listener/signal setup, immediately before entering the existing
+retained serve/cleanup owner. Shutdown seals admission and joins actual physical
+work; failed, unknown or exceeded-deadline evidence prevents confirmed cleanup.
+The [outbox checkpoint](webhook-outbox.md#supervised-delivery-checkpoint) describes
+positive response reconciliation, late expiry and the unchanged retention bound.
+
+The isolated recipient fixtures use actual owner WebSocket commands, native
+Auth/Cedar and canonical SDK records. Only the granted chat is delivered; HMAC,
+retry identity/timestamp/signature/bytes, unshare/revoke/expiry/old-epoch no-send,
+capability refusal, cold recovery and physical POST/revocation/shutdown ownership
+are exercised. Only the test socket and in-memory CA replace public transport
+preparation; production routing, TLS, deadline and byte policies are unchanged.
+Historical unmounted/checkpoint statements above describe their earlier scoped
+publications. The inner diagrams remain unchanged. Final whole-feature review,
+source-matched CI/platform/browser and stress acceptance remain separate gates.
