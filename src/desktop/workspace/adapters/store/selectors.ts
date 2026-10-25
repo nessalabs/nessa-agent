@@ -260,6 +260,15 @@ export const selectPaneCount = (state: Root) =>
 export const selectFocusedPaneKey = (state: Root): PaneKey | null =>
   state.workspace.panes ? focusedPane(state.workspace.panes).key : null
 
+/**
+ * The chat or widget in front: the active tab and its focused pane's item.
+ * It changes only when what the workspace shows in front does.
+ */
+export const selectInFront = (state: Root): string =>
+  `${state.workspace.tabs.activeTab ?? ""}\n${
+    state.workspace.panes ? focusedPane(state.workspace.panes).item : ""
+  }`
+
 /** The session in the focused pane; none while it shows a widget. */
 export const selectFocusedSessionId = (state: Root): string | null => {
   const panes = state.workspace.panes

@@ -497,6 +497,92 @@ async function setSideRail(page, on, failures) {
   if (!shown) failures.push(`the side rail's toggle is ${on ? "missing" : "still shown"}`)
 }
 
+/**
+ * The expanded right panel is the chat in front's: the strip shows that
+ * chat's tab alone and no toggles for the columns it covers. New Tab docks
+ * it before the new session opens, so the session is in front, in sight —
+ * never under the panel. The new home is closed again and the chat brought
+ * back, docked.
+ */
+async function expandedForItsChat(page, failures) {
+  const tabs = page.getByRole("tablist", { name: "Open views" })
+  const chat = await tabs
+    .locator('[role="tab"][aria-selected="true"]')
+    .locator("..")
+    .getAttribute("data-session-tab")
+  if ((await tabs.locator('[role="tab"]').count()) !== 1)
+    failures.push("the expanded panel's strip shows other chats' tabs")
+  if (await page.locator(`${css.titlebar} [aria-controls="workspace-sidebar"]`).count())
+    failures.push("the expanded panel's titlebar offers the sidebar it covers")
+  await page.getByRole("button", { name: /^New Tab/ }).click()
+  const docked = await waitFor(
+    async () => (await page.locator("#workspace-panel[data-maximized]").count()) === 0,
+    2000,
+  )
+  if (!docked) failures.push("New Tab left the panel expanded over the new session")
+  const home = page.locator(`${css.focusedPane} ${css.paneHome}`)
+  await home.locator(css.field).waitFor({ timeout: 15_000 })
+  if (await home.evaluate((node) => node.closest("[inert]") !== null))
+    failures.push("the new session opened under the panel")
+  if ((await tabs.locator('[role="tab"]').count()) < 2)
+    failures.push("docked again, the strip did not show the other tabs")
+  await page.keyboard.press(keys.closePane)
+  await home.waitFor({ state: "detached", timeout: 5000 }).catch(() => {
+    failures.push("⌘W did not close the new session's home")
+  })
+  if (chat) await tabs.locator(`[data-session-tab="${chat}"] [role="tab"]`).click()
+}
+
+/**
+ * "nessa Studio" belongs to whatever column holds the bottom-left corner, at
+ * any width: with the sidebar folded the session list still holds it and the
+ * words stay; only with the panes alone at the window's edge are they gone.
+ * Leaves the columns as it found them.
+ */
+async function studioWithTheCorner(page, failures) {
+  const shown = () =>
+    page.evaluate(
+      () =>
+        getComputedStyle(document.querySelector(".side-rail-studio") ?? document.body)
+          .visibility === "visible",
+    )
+  const column = (controls) =>
+    page.locator(`${css.titlebar} button[aria-controls="${controls}"]`)
+  const list = page.locator(
+    ["Hide", "Show"]
+      .map((verb) => `${css.titlebar} button[aria-label^="${verb} Session List"]`)
+      .join(", "),
+  )
+  const sidebar = column("workspace-sidebar")
+  // Hidden, it fades first and turns invisible at the fade's end: a "shown"
+  // read too soon after a change would see the fade. Settle, then read.
+  const expect = async (want, what) => {
+    await page.waitForTimeout(600)
+    if (!(await waitFor(async () => (await shown()) === want, 2000)))
+      failures.push(`"nessa Studio" is ${want ? "missing" : "shown"} ${what}`)
+  }
+  const open = async (button) =>
+    (await button.count()) > 0 && (await button.getAttribute("aria-expanded")) === "true"
+  const set = async (button, want) => {
+    if ((await button.count()) > 0 && (await open(button)) !== want) await button.click()
+  }
+  // Away from the window's left edge, where the pointer would peek the sidebar out.
+  const size = page.viewportSize()
+  if (size) await page.mouse.move(size.width / 2, size.height / 2)
+  const was = { sidebar: await open(sidebar), list: await open(list) }
+  await set(sidebar, true)
+  await expect(true, "beside the open sidebar")
+  await set(sidebar, false)
+  if ((await list.count()) > 0) {
+    await set(list, true)
+    await expect(true, "with the session list holding the corner")
+    await set(list, false)
+  }
+  await expect(false, "over the panes alone")
+  await set(list, was.list)
+  await set(sidebar, was.sidebar)
+}
+
 /** The macOS traffic lights end at x=76 (`traffic_lights.rs`). */
 const LIGHTS_END = 76
 
@@ -1894,6 +1980,7 @@ const steps = {
           )
         }
       }
+      await studioWithTheCorner(run.page, failures)
       // Turned off with the rail open: the rail goes, and back from Settings
       // the titlebar's controls start where the lights end again.
       await setSideRail(run.page, false, failures)
@@ -1935,6 +2022,15 @@ const steps = {
         ))
       )
         failures.push("Expand Panel did not maximize it")
+      await expandedForItsChat(page, failures)
+      await page.getByRole("button", { name: "Expand Panel" }).click()
+      if (
+        !(await waitFor(
+          async () => (await panel.getAttribute("data-maximized")) !== null,
+          2000,
+        ))
+      )
+        failures.push("Expand Panel did not maximize it again")
       await page.keyboard.press("Escape")
       if (
         !(await waitFor(
