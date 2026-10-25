@@ -225,33 +225,57 @@
 }
 
 /*
- * Wherever the rail is offered, its toggle is nessa's mark at the footer, and
- * Studio's square steps aside. The footer keeps one shape, rail open or
- * closed, so toggling the rail only carries it with the sidebar: its mark
- * slot on the icon column, "nessa Studio" on the labels' column, as Agents
- * is above it. With the rail closed the toggle stands in that slot; with it
- * open the toggle stays in the rail and the slot is left empty.
+ * Wherever the rail is offered, its toggle is nessa's mark and "nessa Studio"
+ * stands beside it in the corner (`StudioCorner`), one gap after the mark,
+ * the gap Agents' label keeps after its icon. Neither moves when the rail
+ * opens or closes. The sidebar's foot keeps its room, its mark slot on the
+ * icon column: with the rail closed the toggle stands in it; with it open
+ * the toggle stays in the rail and the slot is left empty.
  */
-.workspace-window:is([data-rail="open"], [data-rail="closed"])
-  .workspace-identity
-  .desktop-mark {
-  visibility: hidden;
-}
-
 .workspace-window:is([data-rail="open"], [data-rail="closed"]) .workspace-identity {
   padding-left: calc(var(--rail-column) - var(--desktop-gutter));
 }
 
-/* A row's label starts 16px past its icon's middle, the slot's end 14px past
-   it: the pill keeps 2px of its padding there, so it starts where the toggle
-   ends and "nessa" stands where "Agents" does. */
-.workspace-window:is([data-rail="open"], [data-rail="closed"])
-  .workspace-identity
-  .desktop-identity-button {
+.workspace-window[data-rail="open"] .workspace-identity .desktop-identity-mark {
+  visibility: hidden;
+}
+
+.desktop-identity-room {
+  height: var(--desktop-control-size);
+}
+
+/* The pill keeps 2px of its padding by the toggle, so it starts where the
+   toggle ends and "nessa" stands 8px past the mark. */
+.side-rail-studio {
+  position: absolute;
+  z-index: 42;
+  bottom: calc(var(--desktop-gutter) + 13px);
+  left: calc(var(--rail-column) + var(--desktop-control-size));
+  display: flex;
+  font-size: var(--desktop-text-body);
+  letter-spacing: -0.01em;
+  transition:
+    opacity var(--desktop-slow) var(--desktop-out),
+    visibility 0s linear 0s;
+}
+
+.side-rail-studio .desktop-identity-button {
   padding-left: 2px;
 }
 
-.workspace-window[data-rail="open"] .workspace-identity .desktop-identity-mark {
+/* It stands where a sidebar's foot or an item's view is: not over the panes. */
+.workspace-window[data-sidebar="closed"]:not([data-rail-view]):not(
+    :has(.workspace[data-peek])
+  )
+  .side-rail-studio {
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity var(--desktop-slow) var(--desktop-out),
+    visibility 0s linear var(--desktop-slow);
+}
+
+.workspace-window[data-panel-maximized] .side-rail-studio {
   visibility: hidden;
 }
 
@@ -307,12 +331,6 @@
 }
 
 /* "nessa Studio" in a full view: where the sidebar card's foot puts it. */
-.rail-view-foot {
-  position: absolute;
-  bottom: var(--desktop-gutter);
-  left: var(--desktop-gutter);
-}
-
 :root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view),
 :root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view) * {
   animation: none !important;

@@ -591,53 +591,41 @@ function railLayout(page) {
 }
 
 /**
- * Toggles the rail from the page and follows "nessa Studio" every frame of the
- * slide: it rides with the sidebar, so its place under Agents' label never
- * changes, not even for a frame. Settled, the toggle (with the rail closed)
- * stands on Agents' icon column. Returns what it found wrong.
+ * Toggles the rail from the page and follows "nessa Studio" every frame: it
+ * stands in the corner beside the toggle, 8px past the toggle's mark, and
+ * neither moves, not even for a frame. Settled, the toggle (with the rail
+ * closed) stands on Agents' icon column. Returns what it found wrong.
  */
 function footerThroughToggle(page) {
   return page.evaluate(async (toggleSelector) => {
     const words = () =>
-      document.querySelector(
-        ".workspace-sidebar .workspace-identity .desktop-identity-words",
-      )
-    const entry = () => document.querySelector(".agents-overview-entry")
-    const label = () =>
-      [...(entry()?.querySelectorAll("span") ?? [])].find(
-        (each) => each.textContent.trim() === "Agents",
-      )
+      document.querySelector(".side-rail-studio .desktop-identity-words")
     const toggle = document.querySelector(toggleSelector)
-    // A sidebar folded for room has neither: the toggle alone is checked.
-    if (!words() || !label()) {
-      toggle.click()
-      return []
-    }
+    const mark = () => toggle.querySelector("svg").getBoundingClientRect()
     const middle = (e) => {
       const at = e.getBoundingClientRect()
       return at.left + at.width / 2
     }
-    const offset = () =>
-      words().getBoundingClientRect().left - label().getBoundingClientRect().left
-    const offsets = []
+    const failures = []
+    if (!words()) failures.push(`no "nessa Studio" beside the rail's toggle`)
+    const seen = []
     const started = performance.now()
     toggle.click()
     await new Promise((done) => {
       const frame = () => {
-        offsets.push(offset())
+        if (words()) seen.push(words().getBoundingClientRect().left - mark().right)
         if (performance.now() - started < 900) requestAnimationFrame(frame)
         else done()
       }
       requestAnimationFrame(frame)
     })
-    const failures = []
-    const off = offsets.find((each) => Math.abs(each) > 0.5)
+    const off = seen.find((gap) => Math.abs(gap - 8) > 0.5)
     if (off !== undefined)
       failures.push(
-        `"nessa Studio" stood ${off.toFixed(1)}px off Agents' label mid-slide`,
+        `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8px`,
       )
-    if (toggle.getAttribute("aria-expanded") === "false") {
-      const icon = entry().querySelector("svg")
+    const icon = document.querySelector(".agents-overview-entry svg")
+    if (toggle.getAttribute("aria-expanded") === "false" && icon) {
       const apart = middle(toggle) - middle(icon)
       if (Math.abs(apart) > 0.5)
         failures.push(
