@@ -3,8 +3,8 @@ id: gateway-webhook-issuance
 title: Webhook credential issuance
 kind: operation
 status: mixed
-summary: Cedar owns webhook issuance; a bounded private intent coordinates actual auth receipts and fenced installation, while product and worker composition remain pending.
-sourceRevision: "97c9c1d13adfe7ade3a3ca06e140ec47ff69df04"
+summary: Owner product issuance selects private webhook seeds, retains actual registration work and joins mutations at shutdown; source and sender mounting remain pending.
+sourceRevision: "6f6bdde6a9fcce9fd6e4fee6ff864b2651b5849c"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/credential_admin.rs
@@ -22,6 +22,17 @@ sources:
   - crates/nessa-auth/src/adapters/local/registry.rs
   - crates/nessa-auth/tests/adapters/local/webhook_issue.rs
   - crates/nessa-server/src/product/socket.rs
+  - crates/nessa-server/src/product/state.rs
+  - crates/nessa-server/src/product/read_access.rs
+  - crates/nessa-server/src/composition/webhooks.rs
+  - crates/nessa-server/src/composition/runtime_config.rs
+  - crates/nessa-server/src/composition/local_auth.rs
+  - crates/nessa-server/src/composition/root.rs
+  - crates/nessa-server/src/core/shutdown.rs
+  - crates/nessa-server/src/webhooks/infrastructure/runtime.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/product.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/runtime.rs
+  - crates/nessa-server/tests/composition/webhooks.rs
   - crates/nessa-server/src/webhooks/application/registration.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/intents.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/cancellation.rs
@@ -51,10 +62,12 @@ diagramDetails:
 # Webhook credential issuance
 
 The auth boundary can issue a read-only integration credential through the
-existing registry. This checkpoint implements that issuing path and receipt
-identity, plus an inner registration use case. The product handler still selects ordinary issuance: there is no
-webhook configuration field or composed endpoint registration yet. Application
-installation (#1052) remains separate.
+existing registry. Private startup seeds select a principal on the existing
+owner `credential.issue` command. The runtime retains registration work and
+returns actual metadata with `secretUnavailable`, while ordinary principals keep
+their existing one-time-secret behavior. Application installation (#1052) remains
+separate. Canonical source/queue/sender mounting and recipient delivery are still
+unfinished.
 
 ## Guards and effects
 
@@ -166,8 +179,10 @@ including immutable guards and transactional retirement cleanup. Removing a guar
 weakening a reference or adding an effectful trigger rejects cold restoration.
 
 This inner use case is **not** the W1 coordinator or a supervised command owner.
-Caller cancellation, complete revocation coordination, automatic pending-command
-recovery and the product configuration entry point still require runtime composition.
+The concrete runtime now supplies W1 serialization, retained credential work,
+actual revoke/stop coordination, original pending-command startup recovery and
+the private product configuration entry point. The inner use case alone does
+not establish those properties.
 
 ## Evidence and limits
 
@@ -178,13 +193,13 @@ and [incomplete historical review](../../../reviews/evidence/webhook-runtime/reg
 remain preserved. That failed delivery has not been retried or reconstructed.
 These are historical checks, not qualification of the new correction.
 
-The parent selected actual retained origin and removal of unnecessary bearer
+The correction uses actual retained origin and returns no bearer
 output. [New correction evidence](../../../reviews/evidence/webhook-runtime/origin/README.md)
 records its separate tests, failure controls and fresh review status.
 
-Product registration, W1 coordination across ordinary issuance, revocation/expiry stop
-composition, source capture, supervised sending and actual recipient E2E remain
-unfinished. Canonical scripted Chromium/WebKit and feature stress/chaos remain
+The product command checkpoint below adds registration, W1 coordination and
+actual revoke/stop ownership. Source capture, supervised sending and actual
+recipient E2E remain unfinished. Canonical scripted Chromium/WebKit and feature stress/chaos remain
 applicable and unqualified. A documentation render does not qualify those gates.
 
 ## Original purpose and product session entry
@@ -252,3 +267,44 @@ SQL plans and state-page source/link checks. Its reviewed candidate1a7ca49e
 contains the same production/test bytes as this source checkpoint. Historical source-qualified results retain their
 original revisions. Runtime composition, recipient E2E and browser rendering
 remain unqualified.
+
+
+## Retained product command checkpoint
+
+The existing private `config.json` accepts at most 64 `webhooks` seeds. Each
+selects `principalId`, an HTTPS `url` and a padded-base64 `macKey` encoding exactly
+32 bytes. Validation precedes opening webhook storage, and diagnostics redact
+URL/key material. No seeds and no existing database create no webhook files.
+An existing private outbox is still opened and reconciled after seeds are removed.
+Configuration does not issue a credential or perform DNS/HTTP work by itself.
+
+| Boundary | Current owner behavior |
+| --- | --- |
+| owner issues configured principal | preserve original durable intent and actual Auth transitions, install under current authority, return secret-unavailable metadata |
+| owner issues another principal | preserve the existing native ordinary issuance/replay/revoke contract |
+| repeated configured request | resolve original identity; a different command for the retained principal refuses before another reservation/issuance |
+| caller disconnects | admitted work remains in the bounded runtime job set |
+| public webhook share/unshare | retain the existing authorized native grant operation; unshare uses the independent control lane; ordinary targets keep their existing grant path |
+| first command panic | seal admission and mark failure before waking the response observer |
+| startup after interrupted issuance | reopen actual private stores and replay the original intent without recovering or issuing another bearer |
+| shutdown | seal admission, poll other drains and join actual credential/grant work before reporting its typed outcome |
+| drain failure, unknown result or exceeded deadline | keep separate webhook evidence in the process report; do not confirm cleanup from another owner's success |
+
+The actual loopback WebSocket fixture exercises owner issue/register/share,
+ordinary issuance/replay/revoke, request identity, ordinary/configured contention,
+capability and nonowner refusal, lost observers, cold recovery and the production
+cleanup function. A new regression originally reproduced successful cleanup while
+a real canonical share write remained paused. Retaining share/unshare in the
+same job owner makes cleanup wait for both physical operations.
+
+This source checkpoint reviews the complete linked issuance path. Relative to
+`97c9c1d`, the original linked-source changes are the independently reviewed
+registry writer handoff, actual registration transition return, bounded intent
+enumeration and closing the synthetic Windows audit handle before rename. The
+new runtime/product/cleanup sources are traced together. The two inner issuance
+and installation diagrams remain byte-identical: their transitions still apply.
+No new diagram render, browser or recipient-delivery result is claimed.
+
+[Product command evidence](../../../reviews/evidence/webhook-runtime/product-composition/README.md)
+records exact source/test boundaries, original failures and caught controls.
+The source and sender remain unmounted in this slice; it does not complete #896.

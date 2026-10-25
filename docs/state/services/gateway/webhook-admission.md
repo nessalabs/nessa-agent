@@ -3,8 +3,8 @@ id: gateway-webhook-admission
 title: Outbound webhook admission
 kind: feature
 status: mixed
-summary: Inner registered-principal shares and credential/grant fences use current authority; product command and delivery-worker mounting remain uncomposed.
-sourceRevision: "9bef5b428a6b987136544109f5bf8e286e29297f"
+summary: Owner product shares resolve registered principals and retain actual grant writes under current authority; delivery-worker mounting remains uncomposed.
+sourceRevision: "6f6bdde6a9fcce9fd6e4fee6ff864b2651b5849c"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/ports.rs
@@ -13,6 +13,12 @@ sources:
   - crates/nessa-auth/src/adapters/local/registry/pairing/enrollment.rs
   - crates/nessa-auth/src/adapters/local/registry/pairing/owner_phone.rs
   - crates/nessa-server/src/composition/local_auth.rs
+  - crates/nessa-server/src/composition/root.rs
+  - crates/nessa-server/src/core/shutdown.rs
+  - crates/nessa-server/src/webhooks/infrastructure/runtime.rs
+  - crates/nessa-server/src/product/read_access.rs
+  - crates/nessa-server/src/product/state.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/product.rs
   - crates/nessa-server/src/conversation/application/share_grants.rs
   - crates/nessa-server/src/conversation/infrastructure/store/share_grants.rs
   - crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/readers.cedar
@@ -191,3 +197,27 @@ unrelated Auth state pages are unchanged. The admission diagram is unchanged,
 because its states and permission decisions are unchanged. No new diagram render
 or browser result is claimed. Product runtime and recipient delivery remain
 unmounted in this scoped publication candidate.
+
+
+## Product grant ownership checkpoint
+
+At source `6f6bdde6a9fcce9fd6e4fee6ff864b2651b5849c`, the existing owner
+product share command checks request shape and conversation ownership before
+classifying its target from actual immutable Auth origin. A webhook target uses
+the existing registration/grant/Cedar operation; no receiver scope is invented.
+The ordinary target path remains the existing paired grant operation.
+
+Admitted webhook share/unshare futures now belong to the same bounded runtime
+owner as credential commands. Their original native operations and permission
+checks remain unchanged. Socket loss cannot cancel the owned grant future;
+shutdown waits for its physical write and records the actual result separately.
+The regression holds a real canonical share or unshare write in its blocking
+worker, closes product admission, and proves cleanup remains pending until
+release. An authenticated ordinary nonowner is refused, ordinary unpaired targets
+remain unpaired, and read+comment is refused by the actual capability policy.
+
+The complete linked admission path was compared with the preceding checkpoint.
+The new product/composition wiring and retained command owner are reviewed with
+the unchanged inner Auth/grant/Cedar sources. The existing admission diagram is
+unchanged; no new diagram render or browser qualification is claimed. Source
+and sender mounting, recipient POST and final whole-feature review remain open.
