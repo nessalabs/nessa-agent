@@ -4,7 +4,7 @@ title: Outbound webhook admission
 kind: feature
 status: mixed
 summary: Registered principal reads and sends use fresh Auth, exact grant epochs and Cedar under retained physical ownership; no receiver authority is fabricated.
-sourceRevision: "fc713591785970b8eca5ec20ad819024bf131cb0"
+sourceRevision: "365f769078a3d2298340952ba519edc515468332"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/ports.rs
@@ -32,6 +32,7 @@ sources:
   - crates/nessa-server/tests/conversation/store.rs
   - crates/nessa-server/src/webhooks/infrastructure/runtime/delivery.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery.rs
+  - crates/nessa-server/src/conversation/infrastructure/store.rs
 diagramLinks: {}
 diagramDetails:
   - diagram: 0
@@ -44,10 +45,11 @@ diagramDetails:
 
 # Outbound webhook admission
 
-This page covers inner principal sharing and authority holds for [outbound webhook delivery](webhook-foundation.md).
-It mounts no product command or sender. Private registration and persistence have
-[their own checkpoint](webhook-outbox.md); full runtime/recipient composition remains
-required for [issue #896](https://github.com/nessalabs/nessa-agent/issues/896).
+This page covers principal sharing and authority admission for [outbound webhook delivery](webhook-foundation.md).
+The mounted source and sender use these boundaries. Private registration and
+persistence have [their own checkpoint](webhook-outbox.md); whole-feature review,
+source-matched CI/platform/browser and stress acceptance remain required for
+[issue #896](https://github.com/nessalabs/nessa-agent/issues/896).
 Application installation (#1052) and inbound triggers (#1088) remain separate.
 
 ## Admission guards and effects
@@ -93,17 +95,24 @@ comment, drive, artifact and other actions have no webhook permit.
 
 `DeliveryHold` keeps the credential and grant holds. It does not suspend
 absolute credential expiry. Admission checks lifetime again after all waits;
-the future sender must call `is_valid_at` after its durable Sending receipt,
-immediately before POST. The attempt must be bounded while its actual holds survive until physical work
-has stopped. The worker enforcing those calls is not implemented at this checkpoint.
+the mounted sender rechecks lifetime after its durable Sending receipt,
+immediately before POST. Its dispatch deadline starts before fresh admission.
+`DispatchAdmission` owns partial Auth/grant fences independently of the retained
+metadata future. At deadline it permanently releases those fences and disables
+POST while the runtime joins any physical read already in progress. Gate-only
+acquisition supplies synchronization, not permission: the same application
+validator reloads the exact credential/grant epoch and asks existing Cedar.
+Canonical capture operations retain their separate source ownership through
+physical SDK and cursor effects; this is not a blanket revoke-latency claim.
 
 ### Failures and recovery
 
 Missing, revoked, expired, stale or mismatched authority refuses admission.
 Unavailable metadata or authorities remain Unavailable, rather than a permanent
 policy refusal. No transition in this chart writes an outbox row or sends HTTP.
-This chart makes no delivery recovery claim. Private outbox/retirement behavior
-is documented separately; composed startup, source replay and sending remain unfinished.
+The admission chart makes no persistence acknowledgement claim. The runtime
+separately owns startup, source replay, Sending and actual response settlement;
+[the outbox page](webhook-outbox.md) records their failure and recovery orderings.
 
 ## Evidence
 
@@ -252,3 +261,40 @@ preparation; production routing, TLS, deadline and byte policies are unchanged.
 Historical unmounted/checkpoint statements above describe their earlier scoped
 publications. The inner diagrams remain unchanged. Final whole-feature review,
 source-matched CI/platform/browser and stress acceptance remain separate gates.
+
+
+## Dispatch and credential lifecycle correction
+
+Source `365f769078a3d2298340952ba519edc515468332` preserves current main
+`5bb482a6b7c11dea2ddb64a2898edb6c623b0a19`, including Channels, GitHub App
+and the later panel/stress integration. The correction addresses the
+[whole-feature round-one findings](../../../reviews/evidence/webhook-runtime/delivery-composition/review-1.md).
+That report remains changes-required at its original source; it is not a clean
+review of this newer checkpoint.
+
+Fresh dispatch admission, Sending and POST share one 15-second deadline. The
+runtime releases partial fences independently while retaining and joining real
+metadata/SQL work. It checks the last interruptible COMMIT boundary; an already
+running filesystem sync can still finish a late conditional commit under
+W-audit-race. An expired attempt cannot POST. Known complete responses retain
+their actual outcome before callbacks and settle after authority is released.
+Live reads reconcile unowned Sending and retry idle credential stops without a
+grant or queued delivery; first reader/revocation facts remain unchanged.
+
+Issuance distinguishes active registration authority, installed stopped history
+and uncertain uninstalled reservations. Expired/stopped reissue acknowledges the
+old stop before installing a new identity. Retained intents select replay even
+after private seed removal; they do not become an ordinary credential route.
+Once all private history is retired, no permanent principal classification is
+inferred. Genuine unregistered principals retain native ordinary issuance.
+
+At this exact source, 265 webhook tests passed with no retention exclusions,
+38 host tests and the native principal-grant gate regression passed; required
+seven-package all-target Clippy, formatting and 108 architecture tests/checker
+passed. [Evidence and exclusions](../../../reviews/evidence/webhook-runtime/delivery-composition/README.md)
+retain the original interrupted fixture, failed controls, source-specific results
+and outstanding gates. Final assembled independent review and exact-head
+CI/platform/browser/default-and-raised-stress remain required. The existing
+inner diagrams describe the same authority and durable states and are unchanged;
+no new renderer or browser result is claimed. Only these three feature pages and
+their linked source changes are newly reconciled, not unrelated Auth/SDK pages.

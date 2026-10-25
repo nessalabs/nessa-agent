@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, canonical cursors and causal delivery outcomes compose with owned product commands and signed sending; acknowledgement and retained cleanup stay distinct.
-sourceRevision: "fc713591785970b8eca5ec20ad819024bf131cb0"
+sourceRevision: "365f769078a3d2298340952ba519edc515468332"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
@@ -346,7 +346,10 @@ and transport policy remain owned by the linked delivery mechanics page.
 | Audit projection unavailable after SQL commit | Return unavailable; next operation replays the saved evidence first. |
 | Projection file exists with different bytes | Refuse without replacing historical evidence. |
 | SQL publication acknowledgement affects zero rows | Conflict; do not spin or report publication success. |
-| Sending observer disappears or process restarts | Startup recovery records Unknown; no automatic POST. |
+| Sending has no active physical owner or held outcome | Live/restart reconciliation records Unknown; no automatic POST. |
+| Sending write/ACK fails | Keep its actual original identity; guarded Queued/Retry becomes NotSent with audit-unavailable cause, actual Sending becomes Unknown; storage failure pauses the sender without permanently sealing commands. |
+| Dispatch admission or Sending exceeds its deadline | Release partial authority, disable POST and join physical work. A late conditional COMMIT is uncertain until read/reconciled; it is not a rollback or ACK. |
+| Complete response precedes slow settlement | Capture the actual response first, release dispatch authority, retain the original decision and retry local settlement without repeating POST. |
 | Stop or source replacement reaches retention ceiling | Shared commit owner trims only eligible published rows in the same write. |
 | Invalid identity, cursor/reset observation, audit-to-owning facts, history, encoding or capacity | Refuse before publication, cleanup or filtered ready scans. |
 | Caller stops awaiting a blocking operation | Physical worker retains its capacity permit and owner lock until completion. |
@@ -547,3 +550,40 @@ inner diagrams are unchanged: the new caller and cause use their existing legal
 states. No new render or browser/platform qualification is claimed. Older scoped
 sections above retain their original source and review limits; they do not stand
 in for final whole-feature review or source-matched CI/stress acceptance.
+
+
+## Dispatch and credential lifecycle correction
+
+Source `365f769078a3d2298340952ba519edc515468332` preserves current main
+`5bb482a6b7c11dea2ddb64a2898edb6c623b0a19`, including Channels, GitHub App
+and the later panel/stress integration. The correction addresses the
+[whole-feature round-one findings](../../../reviews/evidence/webhook-runtime/delivery-composition/review-1.md).
+That report remains changes-required at its original source; it is not a clean
+review of this newer checkpoint.
+
+Fresh dispatch admission, Sending and POST share one 15-second deadline. The
+runtime releases partial fences independently while retaining and joining real
+metadata/SQL work. It checks the last interruptible COMMIT boundary; an already
+running filesystem sync can still finish a late conditional commit under
+W-audit-race. An expired attempt cannot POST. Known complete responses retain
+their actual outcome before callbacks and settle after authority is released.
+Live reads reconcile unowned Sending and retry idle credential stops without a
+grant or queued delivery; first reader/revocation facts remain unchanged.
+
+Issuance distinguishes active registration authority, installed stopped history
+and uncertain uninstalled reservations. Expired/stopped reissue acknowledges the
+old stop before installing a new identity. Retained intents select replay even
+after private seed removal; they do not become an ordinary credential route.
+Once all private history is retired, no permanent principal classification is
+inferred. Genuine unregistered principals retain native ordinary issuance.
+
+At this exact source, 265 webhook tests passed with no retention exclusions,
+38 host tests and the native principal-grant gate regression passed; required
+seven-package all-target Clippy, formatting and 108 architecture tests/checker
+passed. [Evidence and exclusions](../../../reviews/evidence/webhook-runtime/delivery-composition/README.md)
+retain the original interrupted fixture, failed controls, source-specific results
+and outstanding gates. Final assembled independent review and exact-head
+CI/platform/browser/default-and-raised-stress remain required. The existing
+inner diagrams describe the same authority and durable states and are unchanged;
+no new renderer or browser result is claimed. Only these three feature pages and
+their linked source changes are newly reconciled, not unrelated Auth/SDK pages.

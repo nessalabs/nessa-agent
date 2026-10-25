@@ -1,6 +1,6 @@
 # Supervised canonical outbound delivery
 
-Source `fc713591785970b8eca5ec20ad819024bf131cb0` preserves main
+Initial mounted source `fc713591785970b8eca5ec20ad819024bf131cb0` preserves main
 `37c7772244dde5ab7d9ba382196b3f34fd0192fc` (Channels and GitHub App), the
 published command/grant slice `3a347ad38`, and its earlier scoped reviews.
 This checkpoint does not assert merge readiness or final platform/browser/stress
@@ -66,3 +66,68 @@ remain separate outstanding gates.
 [State-source reconciliation](source-pages.json) records the three affected page
 checkpoints and changed linked inputs. Their existing inner diagrams are
 byte-identical; no new render or browser result is claimed.
+
+
+## Corrected dispatch and credential lifecycle
+
+Current source is `365f769078a3d2298340952ba519edc515468332`, preserving actual
+main `5bb482a6b7c11dea2ddb64a2898edb6c623b0a19`. The source correction is
+`17eed9f1a18e861e13a0f1f989fdac6fec5924e0`; merge `39ae5d96` adds only
+upstream UI/stress changes; the final source commit imports types at module
+boundaries without changing the decisions. [Whole-feature round one](review-1.md)
+reported three P1 and two P2 findings and remains changes-required at its
+original snapshot. It does not approve this correction.
+
+Dispatch admission begins inside the existing 15-second deadline. Partial Auth
+and grant fences have an independent owner so deadline expiry can release them
+while the same pinned future joins actual metadata work. Gate-only acquisition
+supplies no authority; current grant, epoch and Cedar validation stay in one
+application owner. Canonical capture retains its separate SDK/cursor ownership.
+Sending SQL is likewise retained/joined after deadline; an in-progress fsync can
+still produce a late conditional commit under W-audit-race, never permission to
+POST. Actual responses are captured before callbacks and settled after authority
+release. Live recovery distinguishes guarded original Queued/Retry from actual
+Sending, preserves known outcomes, and never repeats an uncertain Sending id.
+
+Installed stopped history no longer blocks a new registration after canonical
+stop acknowledgement. Idle reads retry stop without a grant or delivery and keep
+the original initiator. Seed removal cannot route retained webhook history into
+ordinary issuance: matching replay uses its original configuration/purpose;
+genuine unregistered principals keep native ordinary issuance.
+
+Final exact-source checks: **265 full webhook tests**, including all three
+original retention boundaries, late response/full-boundary and actual prehistory
+equivalence; **38 host tests** and the native principal-grant/epoch regression;
+required **seven-package all-target Clippy -D warnings**, formatting and
+**108 architecture tests/checker** passed. The delivery module has eighteen cases:
+sixteen mount the retained worker, one is scheduling-query coverage and one
+exercises the real dispatch-admission method with blocked native metadata. The
+preparing-source case injects SourcePreparing; it is not a physical SDK read.
+Other mounted fixture boundaries remain as described above.
+
+[Six refreshed fault controls](review-1-controls.jsonl) and
+[two additional controls](review-1-additional-controls.jsonl) each produced a
+named runtime failure, not a compiler-only result. [Selected actual result lines](review-1-results.txt)
+include the failed PUBLIC revoke-before-metadata-release assertion at10.04s.
+The source was restored byte-identically. The six controls are pinned to39ae5d96;
+the two additional application/command source files are unchanged at365f7690.
+The reproducible scripts reject a mismatching source before mutating it.
+Earlier local controls and failed attempts remain historical, not extra passes.
+
+The first partial-admission fixture driver deadlocked by stopping polls of the
+future that generated its awaited notice. That suite completed31of32 cases and
+was interrupted with scoped SIGINT: it is **not a full pass**. The corrected
+fixture drives that SAME future concurrently with its notice, resumes real time
+before OS progress, releases/joins the real blocker on failure, and catches a
+retained-fence defect as an assertion failure without hanging. The new cold
+runtime test proves retained-purpose replay, active fresh-request refusal and
+normal ordinary issuance after seeds are removed. No production assertion,
+retry/retention bound, TLS policy or deadline budget was relaxed.
+
+The [three page source checkpoint](source-pages.json) covers the current owners
+and their linked changed inputs. Inner diagrams remain byte-identical; source and
+link checks do not claim a new Nessa Docs renderer/browser run. Review round two,
+exact-head CI/platform, canonical Chromium/WebKit and default/raised feature
+stress remain pending. Native outbox reset tests do not establish a new public
+owner-reset surface; this review must assess required reachability rather than
+infer completion. No issue-close or merge-ready claim is made.

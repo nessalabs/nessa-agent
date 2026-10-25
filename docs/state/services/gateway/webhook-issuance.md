@@ -4,7 +4,7 @@ title: Webhook credential issuance
 kind: operation
 status: mixed
 summary: Owner issuance and grants feed supervised canonical signed delivery; local lifecycle evidence is qualified separately from final platform and browser acceptance.
-sourceRevision: "fc713591785970b8eca5ec20ad819024bf131cb0"
+sourceRevision: "365f769078a3d2298340952ba519edc515468332"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/credential_admin.rs
@@ -68,8 +68,9 @@ existing registry. Private startup seeds select a principal on the existing
 owner `credential.issue` command. The runtime retains registration work and
 returns actual metadata with `secretUnavailable`, while ordinary principals keep
 their existing one-time-secret behavior. Application installation (#1052) remains
-separate. Canonical source/queue/sender mounting and recipient delivery are still
-unfinished.
+separate. Canonical source, queue and signed sender are mounted with isolated
+recipient coverage; whole-feature review and platform/browser/stress acceptance
+remain separate gates.
 
 ## Guards and effects
 
@@ -199,10 +200,11 @@ The correction uses actual retained origin and returns no bearer
 output. [New correction evidence](../../../reviews/evidence/webhook-runtime/origin/README.md)
 records its separate tests, failure controls and fresh review status.
 
-The product command checkpoint below adds registration, W1 coordination and
-actual revoke/stop ownership. Source capture, supervised sending and actual
-recipient E2E remain unfinished. Canonical scripted Chromium/WebKit and feature stress/chaos remain
-applicable and unqualified. A documentation render does not qualify those gates.
+The historical product-command checkpoint below added registration, W1
+coordination and actual revoke/stop ownership. The later mounted checkpoint
+records source capture, supervised sending and isolated recipient coverage.
+Canonical scripted Chromium/WebKit and feature stress/chaos remain applicable
+and unqualified. A documentation render does not qualify those gates.
 
 ## Original purpose and product session entry
 
@@ -284,7 +286,9 @@ Configuration does not issue a credential or perform DNS/HTTP work by itself.
 | --- | --- |
 | owner issues configured principal | preserve original durable intent and actual Auth transitions, install under current authority, return secret-unavailable metadata |
 | owner issues another principal | preserve the existing native ordinary issuance/replay/revoke contract |
-| repeated configured request | resolve original identity; a different command for the retained principal refuses before another reservation/issuance |
+| repeated configured request | resolve the original identity; a different command first observes installed current/expired/stopped history; uncertain uninstalled history is not displaced |
+| fresh request after expiry or stop | acknowledge the original stop before a distinct registration; stopped nonterminal history stays separate and grants/cursors are not inherited |
+| seeds removed while an intent remains | matching replay keeps its immutable configuration and Webhook purpose; a fresh request cannot fall through to ordinary issuance; unreadable history is not absence |
 | caller disconnects | admitted work remains in the bounded runtime job set |
 | public webhook share/unshare | validate caller attribution before target classification; reuse existing owner Act/Unshare policy actions respectively, including unshare on deleted conversations; retain the authorized native grant operation, with unshare on the independent control lane; ordinary targets keep their existing grant path |
 | first command panic | seal admission and mark failure before waking the response observer |
@@ -338,3 +342,40 @@ preparation; production routing, TLS, deadline and byte policies are unchanged.
 Historical unmounted/checkpoint statements above describe their earlier scoped
 publications. The inner diagrams remain unchanged. Final whole-feature review,
 source-matched CI/platform/browser and stress acceptance remain separate gates.
+
+
+## Dispatch and credential lifecycle correction
+
+Source `365f769078a3d2298340952ba519edc515468332` preserves current main
+`5bb482a6b7c11dea2ddb64a2898edb6c623b0a19`, including Channels, GitHub App
+and the later panel/stress integration. The correction addresses the
+[whole-feature round-one findings](../../../reviews/evidence/webhook-runtime/delivery-composition/review-1.md).
+That report remains changes-required at its original source; it is not a clean
+review of this newer checkpoint.
+
+Fresh dispatch admission, Sending and POST share one 15-second deadline. The
+runtime releases partial fences independently while retaining and joining real
+metadata/SQL work. It checks the last interruptible COMMIT boundary; an already
+running filesystem sync can still finish a late conditional commit under
+W-audit-race. An expired attempt cannot POST. Known complete responses retain
+their actual outcome before callbacks and settle after authority is released.
+Live reads reconcile unowned Sending and retry idle credential stops without a
+grant or queued delivery; first reader/revocation facts remain unchanged.
+
+Issuance distinguishes active registration authority, installed stopped history
+and uncertain uninstalled reservations. Expired/stopped reissue acknowledges the
+old stop before installing a new identity. Retained intents select replay even
+after private seed removal; they do not become an ordinary credential route.
+Once all private history is retired, no permanent principal classification is
+inferred. Genuine unregistered principals retain native ordinary issuance.
+
+At this exact source, 265 webhook tests passed with no retention exclusions,
+38 host tests and the native principal-grant gate regression passed; required
+seven-package all-target Clippy, formatting and 108 architecture tests/checker
+passed. [Evidence and exclusions](../../../reviews/evidence/webhook-runtime/delivery-composition/README.md)
+retain the original interrupted fixture, failed controls, source-specific results
+and outstanding gates. Final assembled independent review and exact-head
+CI/platform/browser/default-and-raised-stress remain required. The existing
+inner diagrams describe the same authority and durable states and are unchanged;
+no new renderer or browser result is claimed. Only these three feature pages and
+their linked source changes are newly reconciled, not unrelated Auth/SDK pages.

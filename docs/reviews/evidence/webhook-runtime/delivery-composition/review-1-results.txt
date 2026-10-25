@@ -1,0 +1,86 @@
+CONTROL dispatch_authority_retained_past_deadline; exit=101
+thread 'webhooks::infrastructure::product_tests::delivery::dispatch_deadline_releases_grant_while_native_sending_sql_stays_owned' (118622) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product.rs:254:10:
+product frame is bounded: Elapsed(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'webhooks::infrastructure::product_tests::delivery::dispatch_deadline_releases_grant_while_native_sending_sql_stays_owned' (118622) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:1207:37:
+thread 'webhooks::infrastructure::product_tests::delivery::dispatch_deadline_releases_grant_while_native_sending_sql_stays_owned' (118622) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:1207:37:
+called `Result::unwrap()` on an `Err` value: JoinError::Panic(Id(116), "product frame is bounded: Elapsed(())", ...)
+test webhooks::infrastructure::product_tests::delivery::dispatch_deadline_releases_grant_while_native_sending_sql_stays_owned ... FAILED
+
+failures:
+test webhooks::infrastructure::product_tests::delivery::dispatch_deadline_releases_grant_while_native_sending_sql_stays_owned ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4099 filtered out; finished in 10.06s
+
+CONTROL stopped_installation_mistaken_for_absence; exit=101
+thread 'webhooks::infrastructure::product_tests::delivery::public_reissue_keeps_stopped_sending_history_separate_from_the_new_registration' (118700) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:1320:5:
+assertion `left == right` failed: {"type":"res","id":"5","ok":false,"error":{"code":"credential_conflict","message":"credential_conflict"}}
+  left: Bool(false)
+ right: true
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::product_tests::delivery::public_reissue_keeps_stopped_sending_history_separate_from_the_new_registration ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4099 filtered out; finished in 0.08s
+
+CONTROL sending_io_seals_owner; exit=101
+thread 'webhooks::infrastructure::product_tests::delivery::lost_sending_ack_reconciles_unknown_and_sends_next_record_in_the_same_live_owner' (118789) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:1061:14:
+called `Result::unwrap()` on an `Err` value: Elapsed(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::product_tests::delivery::lost_sending_ack_reconciles_unknown_and_sends_next_record_in_the_same_live_owner ... FAILED
+
+test webhooks::infrastructure::product_tests::delivery::lost_sending_ack_reconciles_unknown_and_sends_next_record_in_the_same_live_owner ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4099 filtered out; finished in 10.05s
+
+CONTROL idle_credential_stop_omitted; exit=101
+thread 'webhooks::infrastructure::product_tests::delivery::idle_expiry_retries_its_original_stop_after_publication_returns_without_grants' (118853) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:1084:7:
+called `Result::unwrap()` on an `Err` value: QueryReturnedNoRows
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::product_tests::delivery::idle_expiry_retries_its_original_stop_after_publication_returns_without_grants ... FAILED
+
+test webhooks::infrastructure::product_tests::delivery::idle_expiry_retries_its_original_stop_after_publication_returns_without_grants ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4099 filtered out; finished in 0.05s
+
+CONTROL clock_before_response_capture; exit=101
+thread 'tokio-rt-worker' (118946) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:1002:9:
+synthetic post-response clock panic
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'webhooks::infrastructure::product_tests::delivery::actual_response_is_owned_before_a_later_clock_callback_panics' (118945) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:1043:5:
+thread 'webhooks::infrastructure::product_tests::delivery::actual_response_is_owned_before_a_later_clock_callback_panics' (118945) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:1043:5:
+assertion `left == right` failed: owned cleanup preserves and settles the actual received 503 despite the later callback panic
+  left: 0
+ right: 1
+test webhooks::infrastructure::product_tests::delivery::actual_response_is_owned_before_a_later_clock_callback_panics ... FAILED
+test webhooks::infrastructure::product_tests::delivery::actual_response_is_owned_before_a_later_clock_callback_panics ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4099 filtered out; finished in 0.08s
+
+CONTROL live_unowned_sending_scan_omitted; exit=101
+thread 'webhooks::infrastructure::product_tests::delivery::public_reissue_keeps_stopped_sending_history_separate_from_the_new_registration' (119039) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:1329:5:
+the unowned old Sending row reconciles live, without POST
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::product_tests::delivery::public_reissue_keeps_stopped_sending_history_separate_from_the_new_registration ... FAILED
+
+test webhooks::infrastructure::product_tests::delivery::public_reissue_keeps_stopped_sending_history_separate_from_the_new_registration ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4099 filtered out; finished in 0.09s
+
+CONTROL partial_dispatch_fences_retained; exit=101
+thread 'webhooks::infrastructure::product_tests::delivery::dispatch_deadline_releases_partial_admission_before_joining_native_metadata' (116844) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product.rs:254:10:
+product frame is bounded: Elapsed(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'webhooks::infrastructure::product_tests::delivery::dispatch_deadline_releases_partial_admission_before_joining_native_metadata' (116844) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:1458:5:
+thread 'webhooks::infrastructure::product_tests::delivery::dispatch_deadline_releases_partial_admission_before_joining_native_metadata' (116844) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:1458:5:
+public revoke must finish while metadata remains blocked
+test webhooks::infrastructure::product_tests::delivery::dispatch_deadline_releases_partial_admission_before_joining_native_metadata ... FAILED
+
+failures:
+test webhooks::infrastructure::product_tests::delivery::dispatch_deadline_releases_partial_admission_before_joining_native_metadata ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4099 filtered out; finished in 10.04s
+
+CONTROL seed_removal_bypasses_retained_route; exit=101
+thread 'webhooks::infrastructure::product_tests::cold_runtime_without_seeds_replays_webhook_history_before_ordinary_routing' (116903) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product.rs:1258:5:
+the original Webhook purpose/identity survives seed removal
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test webhooks::infrastructure::product_tests::cold_runtime_without_seeds_replays_webhook_history_before_ordinary_routing ... FAILED
+
+test webhooks::infrastructure::product_tests::cold_runtime_without_seeds_replays_webhook_history_before_ordinary_routing ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4099 filtered out; finished in 0.04s
