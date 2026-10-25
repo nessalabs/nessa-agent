@@ -1,5 +1,8 @@
 //! Public Rust parent calls with one actual FS owner and held admitted publication.
 use super::*;
+
+#[path = "../../../../scripts/rust-test-support/isolated.rs"]
+mod isolated;
 use crate::test_support::PrivateFixture;
 use nessa_auth::{
     adapters::pairing::verify_owner_phone_request,
@@ -128,11 +131,13 @@ fn parent(root: &Path, state: Arc<dyn NativePrivateState>, counts: Arc<Counts>) 
 struct Gate {
     entered: mpsc::SyncSender<()>,
     release: Mutex<mpsc::Receiver<()>>,
+    after_release: Duration,
 }
 impl Gate {
     fn hold(&self) {
         self.entered.send(()).unwrap();
         self.release.lock().unwrap().recv().unwrap();
+        thread::sleep(self.after_release);
     }
 }
 struct Release(Option<mpsc::Sender<()>>);
@@ -256,6 +261,21 @@ fn parent_prepares_after_actual_reservation_and_revalidates_restoration_without_
 }
 #[test]
 fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fact_or_failure() {
+    isolated::run(
+        "session::owner_original_tests::admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fact_or_failure",
+        || admitted_preparation(Duration::ZERO),
+    );
+}
+
+#[test]
+fn admitted_preparation_can_finish_after_the_former_three_second_wait() {
+    isolated::run(
+        "session::owner_original_tests::admitted_preparation_can_finish_after_the_former_three_second_wait",
+        || admitted_preparation(Duration::from_secs(4)),
+    );
+}
+
+fn admitted_preparation(after_release: Duration) {
     for failure in [None, Some(PrivateStateError::Uncertain)] {
         let root = root();
         let counts = Counts::new();
@@ -264,6 +284,7 @@ fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fac
         let gate = Arc::new(Gate {
             entered: entered_tx,
             release: Mutex::new(released),
+            after_release,
         });
         let parent = Arc::new(parent(
             root.path(),
@@ -282,7 +303,7 @@ fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fac
             })
         };
         let release = Release(Some(release));
-        entered.recv_timeout(Duration::from_secs(3)).unwrap();
+        entered.recv().unwrap();
         let (admission_tx, admission_rx) = mpsc::channel();
         let concurrent = {
             let parent = parent.clone();
@@ -290,10 +311,7 @@ fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fac
                 admission_tx.send(parent.local_enrollment()).ok();
             })
         };
-        assert!(matches!(
-            admission_rx.recv_timeout(Duration::from_secs(3)),
-            Ok(Err(SessionFailure::Busy))
-        ));
+        assert!(matches!(admission_rx.recv(), Ok(Err(SessionFailure::Busy))));
         concurrent.join().unwrap();
         assert_eq!(
             &fs::read(root.path().join("private/owner-phone-original")).unwrap()[..4],
@@ -311,10 +329,7 @@ fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fac
             Err(PrivateStateError::Locked)
         ));
         drop(release);
-        match (
-            failure,
-            received.recv_timeout(Duration::from_secs(3)).unwrap(),
-        ) {
+        match (failure, received.recv().unwrap()) {
             (None, Ok(proof)) => {
                 assert_eq!(proof.original().id(), reservation().id());
                 verify_owner_phone_request(proof.original().clone(), proof.signature()).unwrap();
@@ -327,7 +342,7 @@ fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fac
             ) => assert_eq!(actual, expected),
             _ => panic!("admitted physical result was lost or fabricated"),
         }
-        let receipt = closed.recv_timeout(Duration::from_secs(3)).unwrap();
+        let receipt = closed.recv().unwrap();
         assert!(receipt.released());
         assert_eq!(receipt.outcome(), &Ok(()));
         call.join().unwrap();
@@ -338,6 +353,7 @@ fn admitted_preparation_keeps_private_lease_through_close_and_preserves_late_fac
         assert_eq!(counts.entropy.load(Ordering::SeqCst), 1);
     }
 }
+
 #[test]
 fn disappearing_observer_and_last_parent_owner_do_not_abandon_admitted_private_work() {
     let root = root();
@@ -351,6 +367,7 @@ fn disappearing_observer_and_last_parent_owner_do_not_abandon_admitted_private_w
             gate: Some(Arc::new(Gate {
                 entered: entered_tx,
                 release: Mutex::new(released),
+                after_release: Duration::ZERO,
             })),
             failure: None,
         }),

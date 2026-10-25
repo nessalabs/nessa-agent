@@ -2465,6 +2465,15 @@ The panel's causal recovery integration test is
 `src/conversation/adapters/store/authentication-recovery.test.tsx`: local send,
 retry and replacement use cases followed by the real transcript renderer.
 
+## Isolated Rust test completion
+
+[`scripts/rust-test-support/`](../scripts/rust-test-support/README.md) owns the
+shared test-only direct-child watchdog used by SDK ownership-fault tests and
+native-device owner-original preparation tests. Startup and test execution have
+separate bounded deadlines; channel completion inside the child follows actual
+work. Captured diagnostics, exact test execution and kill/wait remain parent
+checks. This infrastructure changes no product lifecycle or statechart.
+
 ## Container process cleanup acceptance
 
 [`scripts/process-cleanup/`](../scripts/process-cleanup/README.md) owns the opt-in
