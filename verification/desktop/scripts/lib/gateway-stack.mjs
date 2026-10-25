@@ -336,7 +336,7 @@ export async function agentTurn(
  */
 export function webhookNoAttempt(gateway, instance, credentialId, checkpoint) {
   const database = new DatabaseSync(
-    join(gateway.directory, "ci", "instances", instance, "webhooks.sqlite"),
+    join(gateway.directory, "ci", "instances", instance, "auth", "webhooks.sqlite"),
     { readOnly: true },
   )
   try {

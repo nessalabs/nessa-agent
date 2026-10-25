@@ -114,7 +114,7 @@ test("native no-send proof requires queued zero-attempt rows in the fixed comple
   }
   const saved = { ...scope, access_epoch: scope.accessEpoch }
   delete saved.accessEpoch
-  const path = join(directory, "ci", "instances", "test")
+  const path = join(directory, "ci", "instances", "test", "auth")
   mkdirSync(path, { recursive: true })
   const db = new DatabaseSync(join(path, "webhooks.sqlite"))
   try {

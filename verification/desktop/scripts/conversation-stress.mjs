@@ -2740,6 +2740,7 @@ const steps = {
       }
       const credential = run.stack.webhookCredential
       await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+      run.checked.push(conversationId)
       const setup = prompt(run, STRESS.reply, step, " webhook setup")
       await run.client.conversation.submit(
         run.client.conversation.prepare(conversationId, setup),
