@@ -1250,7 +1250,12 @@ Object.assign(checks, {
         try {
           await lift(page, 0)
           const next = list[1]
-          await page.mouse.move(next.x + next.w / 2, next.y + next.h / 2, { steps: 20 })
+          // Approach from the left: stay inside Swap, not on the midpoint
+          // where fractional DOM rounding can leave a settling pointer in Left.
+          // The unchanged zonesAt model holds this input in compact-glass.test.mjs.
+          await page.mouse.move(next.x + next.w / 2 + 1, next.y + next.h / 2, {
+            steps: 20,
+          })
           if (!(await zoneSays(page, zoneSaid.swap)))
             throw new CannotRun("no swap was offered for compact glass release")
           if (end === "cancel") await page.keyboard.press(keys.escape)
