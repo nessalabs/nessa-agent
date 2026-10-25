@@ -784,3 +784,26 @@ The retirement kind is data correlation, independent of its audit projection.
 There is no new table, authority, acknowledgement flag or parallel stop codec.
 The existing bounded retirement projection and credential selector cover both
 kinds. The private schema remains one current contract and refuses old shapes.
+
+### Principal-authorized canonical record reads
+
+The next source slice uses a separate principal selector, never a receiver
+binding. Existing `AdmitDelivery` remains the sole credential/grant/Cedar gate.
+A selector is data, not permission. Its replication consumer ID is the existing
+registration UUID, matching the durable outbox; it creates no receiver binding.
+Physical SDK payloads are binary; HTTP composition must use the existing
+recordsPage encoder and preserve its RecordWireRecord JSON, not parse raw frame
+bytes as text. The physical SDK reader shares its existing
+tracked worker, budgets and exact identity checks through two concrete entries.
+
+| Ordering | Effect | Required control |
+| --- | --- | --- |
+| Before any source I/O | Try-reserve the composition-owned global record slot without waiting, then acquire Auth hold, then principal grant revision hold, then load actual metadata and ask existing webhook Cedar policy | Other chat/tenant/owner/credential and stale epoch call no source |
+| Principal page request | Compare registration-specific selector, conversation and epoch before SDK I/O; validate returned page through canonical sync owner | Wrong selector/request/body budget refuses without checkpoint advancement |
+| Physical identity changes | Compare complete SDK-owned origin/stream/incarnation/schema with requested tuple | Replaced source refuses; receiver entry remains unchanged |
+| Read waiter disappears | Actual read fence and capacity remain with tracked physical worker until source join | Revoke/unshare still wait; shutdown joins original work |
+| Read completes | Retain original fence with bounded result; check absolute expiry before exposing it | Expiry during read and after return refuses data exposure |
+| Cursor or sender later consumes the result | This source-only slice creates neither cursor nor HTTP effect. Later composition must retain the fence through queue acknowledgement and independently re-admit each send | No source-only result is labelled recipient E2E or current send permission |
+
+No new Cedar action, paired principal, product session or receiver authority is
+introduced. No protocol, SDK or client contract changes are required.

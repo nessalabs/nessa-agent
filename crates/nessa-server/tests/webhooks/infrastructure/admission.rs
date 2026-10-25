@@ -59,6 +59,9 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::with_purpose(CredentialIssuePurpose::Product).await
+    }
+    async fn with_purpose(purpose: CredentialIssuePurpose) -> Self {
         let root = tempfile::tempdir().unwrap();
         let private = root.path().join("private");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -101,7 +104,7 @@ impl Fixture {
             .unwrap();
         credentials
             .issue_sync(IssueCredentialRequest {
-                purpose: CredentialIssuePurpose::Product,
+                purpose,
                 request_id: "issue-synthetic-hook".into(),
                 issuer_principal_id: "owner".into(),
                 credential_id: "hook-key".into(),
@@ -318,3 +321,6 @@ async fn webhook_cedar_subject_has_no_send_or_owner_authority() {
         Err(AdmissionFailure::Refused)
     ));
 }
+
+#[path = "source.rs"]
+mod source_tests;

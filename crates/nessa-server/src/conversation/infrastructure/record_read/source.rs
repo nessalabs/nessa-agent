@@ -3,16 +3,25 @@
 use super::operation;
 use crate::conversation::application::conversation_session;
 use crate::conversation::application::{
-    RecordReadError, RecordReadFuture, RecordReadLease, RecordReadOperation, RecordReadResponse,
-    RecordReadSource,
+    PrincipalRecordReadSource, PrincipalRecordScope, RecordReadError, RecordReadFuture,
+    RecordReadLease, RecordReadOperation, RecordReadResponse, RecordReadSource,
 };
-use crate::conversation::infrastructure::record_scope_from_identity;
+use crate::conversation::infrastructure::{
+    exact_record_scope,
+    record_scope::{exact_principal_record_scope, principal_scope_from_identity},
+    record_scope_from_identity,
+};
 use crate::core::read_workers::{ReadWorkerError, ReadWorkers};
-use nessa_protocol::conversation::read_scope::{ReadRefusal, ReceiverReadScope};
-use nessa_sdk::{
-    domain::agent_execution::sessions::SessionId, infrastructure::session_storage::RecordStorage,
+use nessa_protocol::conversation::{
+    domain::ConversationId,
+    read_scope::{ReadRefusal, ReceiverReadScope},
 };
-use nessa_sync::replication::domain::Id;
+#[cfg(test)]
+use nessa_sdk::domain::agent_execution::sessions::SessionId;
+use nessa_sdk::infrastructure::session_storage::{
+    NessaRecordSource, RecordStorage, RecordStreamIdentity,
+};
+use nessa_sync::replication::domain::{Id, Scope};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -152,6 +161,34 @@ impl NessaRecordReadSource {
     }
 }
 
+pub(super) enum ReadSelection {
+    Receiver(ReceiverReadScope),
+    Principal(PrincipalRecordScope),
+}
+impl ReadSelection {
+    fn conversation(&self) -> &ConversationId {
+        match self {
+            Self::Receiver(scope) => &scope.conversation_id,
+            Self::Principal(scope) => scope.conversation(),
+        }
+    }
+    pub(super) fn check_opened(
+        &self,
+        source: &NessaRecordSource,
+        observed: &Scope,
+    ) -> Result<(), ReadRefusal> {
+        match self {
+            Self::Receiver(scope) => exact_record_scope(scope, source, observed).map(|_| ()),
+            Self::Principal(scope) => exact_principal_record_scope(scope, source, observed),
+        }
+    }
+    fn scope(&self, identity: &RecordStreamIdentity) -> Result<Scope, ReadRefusal> {
+        match self {
+            Self::Receiver(scope) => record_scope_from_identity(scope, identity),
+            Self::Principal(scope) => principal_scope_from_identity(scope, identity),
+        }
+    }
+}
 impl RecordReadSource for NessaRecordReadSource {
     fn read<'a>(
         &'a self,
@@ -159,9 +196,29 @@ impl RecordReadSource for NessaRecordReadSource {
         operation: RecordReadOperation,
         lease: RecordReadLease,
     ) -> RecordReadFuture<'a, RecordReadResponse> {
+        self.read_selected(ReadSelection::Receiver(admitted), operation, lease)
+    }
+}
+impl PrincipalRecordReadSource for NessaRecordReadSource {
+    fn read_principal<'a>(
+        &'a self,
+        admitted: PrincipalRecordScope,
+        operation: RecordReadOperation,
+        lease: RecordReadLease,
+    ) -> RecordReadFuture<'a, RecordReadResponse> {
+        self.read_selected(ReadSelection::Principal(admitted), operation, lease)
+    }
+}
+impl NessaRecordReadSource {
+    fn read_selected<'a>(
+        &'a self,
+        admitted: ReadSelection,
+        operation: RecordReadOperation,
+        lease: RecordReadLease,
+    ) -> RecordReadFuture<'a, RecordReadResponse> {
         Box::pin(async move {
             self.workers.admit().map_err(worker_error)?;
-            let session = session_id(&admitted)?;
+            let session = conversation_session(admitted.conversation());
             let storage = self.storage.clone();
             let runtime = self.runtime.clone();
             let origin = self.origin.clone();
@@ -195,7 +252,8 @@ impl RecordReadSource for NessaRecordReadSource {
                     .block_on(storage.record_identity(&session, origin))
                     .map_err(operation::storage_error)?
                     .ok_or(RecordReadError::IdentityChanged)?;
-                let observed = record_scope_from_identity(&admitted, &identity)
+                let observed = admitted
+                    .scope(&identity)
                     .map_err(RecordReadError::Admission)?;
                 if let RecordReadOperation::Page(request) = &operation {
                     if request.scope != observed {
@@ -250,10 +308,6 @@ fn worker_error(error: ReadWorkerError) -> RecordReadError {
         ReadWorkerError::Unavailable => RecordReadError::TemporarilyUnavailable,
         ReadWorkerError::WorkerPanicked => RecordReadError::WorkerPanicked,
     }
-}
-
-fn session_id(admitted: &ReceiverReadScope) -> Result<SessionId, RecordReadError> {
-    Ok(conversation_session(&admitted.conversation_id))
 }
 
 #[cfg(test)]

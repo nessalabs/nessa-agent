@@ -6,6 +6,8 @@ mod outbox;
 mod ports;
 mod registration;
 mod registration_stop;
+mod source;
+pub use source::{ReadWebhookRecords, WebhookReadFailure, WebhookRecords};
 
 pub use admission::{AdmissionFailure, AdmitDelivery, DeliveryHold, Target};
 pub use outbox::{
