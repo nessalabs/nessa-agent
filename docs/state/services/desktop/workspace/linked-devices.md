@@ -5,7 +5,7 @@ kind: statechart
 status: implemented
 summary: Settings shows the gateway's pairing state, approves the exact displayed device key, and rereads after uncertain changes.
 parent: desktop-workspace
-sourceRevision: "0b8019cf45f99b285f10c41199875d474492c6d1"
+sourceRevision: "b14bdf40fc17117dba10024a3a9bd190d28cc990"
 sources:
   - src/desktop/settings/model/linked-devices.ts
   - src/desktop/settings/model/linked-devices.test.ts
