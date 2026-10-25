@@ -2,9 +2,10 @@
 use crate::agents::application::{AgentProbe, AgentProbeEvidence};
 use crate::conversation::{
     application::{
-        ConversationError, ConversationRepository, ReceiverAuthority, ReceiverBinding, ShareGrants,
+        error_code, ConversationCaller, ConversationError, ConversationRepository,
+        ReceiverAuthority, ReceiverBinding, ShareGrantChange, ShareGrantTransition, ShareGrants,
     },
-    domain::Conversation,
+    domain::{Conversation, ConversationDeletion, ShareAccess},
     infrastructure::{
         CedarConversationAccessPolicy, CedarOwnerPhonePolicyEvaluator, GrantWritePause,
         LocalConversationStore,
@@ -984,6 +985,131 @@ async fn ordinary_unpaired_targets_stay_unpaired_and_a_nonowner_cannot_share_the
         .unwrap()
         .is_none());
     drop(ordinary_client);
+    drop(owner);
+    f.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deleted_conversation_unshare_preserves_webhook_and_departed_receiver_cleanup() {
+    for webhook in [false, true] {
+        let f = Harness::new().await;
+        let (mut owner, ready) = Client::open(f.address, &f.owner).await;
+        assert_eq!(ready["ok"], true);
+        let issued = owner
+            .call(
+                "credential.issue",
+                if webhook {
+                    issue_params()
+                } else {
+                    ordinary_params()
+                },
+            )
+            .await;
+        assert_eq!(issued["ok"], true);
+        let credential =
+            CredentialId::new(issued["payload"]["credential"]["id"].as_str().unwrap()).unwrap();
+        let principal = PrincipalId::new(if webhook { "hook" } else { "ordinary" }).unwrap();
+        if webhook {
+            assert_eq!(owner.call("conversation.share",json!({"requestId":"grant-before-deletion","conversationId":f.a.to_string(),"credentialId":credential.as_str(),"capabilities":["read"]})).await["ok"],true);
+        } else {
+            // Real canonical legacy grant whose receiver is no longer paired.
+            // Unshare must remove it without requiring that departed binding.
+            let receipt = f
+                .grants
+                .change(ShareGrantChange {
+                    transition: ShareGrantTransition::Grant(ShareAccess::read()),
+                    conversation_id: f.a.clone(),
+                    principal_id: Some(principal.clone()),
+                    receiver_id: Some("synthetic-departed-receiver".into()),
+                    credential_id: credential.clone(),
+                    expected_policy_revision: None,
+                    initiator: ConversationCaller {
+                        organization_id: OrganizationId::new("org").unwrap(),
+                        principal_id: PrincipalId::new("owner").unwrap(),
+                        surface_id: "synthetic".into(),
+                        action_id: "canonical-legacy-grant".into(),
+                    },
+                    at_ms: 2_000,
+                })
+                .await
+                .unwrap();
+            assert!(receipt.applied);
+        }
+        assert!(f
+            .grants
+            .principal_grant(&f.a, &principal)
+            .await
+            .unwrap()
+            .is_some());
+        f.grants
+            .record_deletion(
+                &f.a,
+                ConversationDeletion::new(
+                    OrganizationId::new("org").unwrap(),
+                    PrincipalId::new("owner").unwrap(),
+                    "synthetic".into(),
+                    "delete-owned-conversation".into(),
+                    2_000,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let revoked=owner.call("conversation.unshare",json!({"requestId":"revoke-deleted","conversationId":f.a.to_string(),"credentialId":credential.as_str()})).await;
+        let grant = f.grants.principal_grant(&f.a, &principal).await.unwrap();
+        drop(owner);
+        f.close().await.unwrap();
+        assert_eq!(
+            revoked["ok"], true,
+            "deleted owner cleanup webhook={webhook}: {revoked}"
+        );
+        assert_eq!(revoked["payload"]["applied"], true);
+        assert!(grant.is_none());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn malformed_action_attribution_is_refused_before_new_target_classification() {
+    let f = Harness::new().await;
+    let (mut owner, ready) = Client::open(f.address, &f.owner).await;
+    assert_eq!(ready["ok"], true);
+    let issued = owner.call("credential.issue", issue_params()).await;
+    assert_eq!(issued["ok"], true);
+    f.grants
+        .record_deletion(
+            &f.a,
+            ConversationDeletion::new(
+                OrganizationId::new("org").unwrap(),
+                PrincipalId::new("owner").unwrap(),
+                "synthetic".into(),
+                "delete-for-attribution-control".into(),
+                2_000,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    for method in ["conversation.share", "conversation.unshare"] {
+        for conversation in [Uuid::new_v4().to_string(), f.a.to_string()] {
+            for request in [
+                String::new(),
+                "invalid\nrequest".to_owned(),
+                "x".repeat(Conversation::MAX_CREATOR_CONTEXT_BYTES + 1),
+            ] {
+                let mut params = json!({"requestId":request,"conversationId":conversation,"credentialId":issued["payload"]["credential"]["id"]});
+                if method == "conversation.share" {
+                    params["capabilities"] = json!(["read"]);
+                }
+                let refused = owner.call(method, params).await;
+                assert_eq!(refused["ok"], false);
+                assert_eq!(
+                    refused["error"]["code"],
+                    error_code(&ConversationError::InvalidInput).as_str(),
+                    "attribution must precede resource/target lookup: {refused}"
+                );
+            }
+        }
+    }
     drop(owner);
     f.close().await.unwrap();
 }
