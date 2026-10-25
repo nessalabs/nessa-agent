@@ -3,8 +3,10 @@
 mod https;
 mod message;
 mod outbox;
+mod runtime;
 mod signature;
 pub use outbox::SqlOutbox;
+pub use runtime::{ConfiguredWebhook, WebhookRuntime};
 
 pub use https::{HttpsWebhook, SystemResolver, MAX_IN_FLIGHT};
 pub use message::record_message;

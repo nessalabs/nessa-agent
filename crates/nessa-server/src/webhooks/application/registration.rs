@@ -8,7 +8,7 @@ use nessa_auth::application::{
         CredentialAdmin, CredentialAdminError, CredentialIssuePurpose, IssueCredentialOutcome,
         IssueCredentialRequest, ListCredentialsRequest,
     },
-    dto::CredentialMetadataDto,
+    dto::{CredentialMetadataDto, CredentialTransitionDto},
     ports::{AccessAdmission, AccessError, Clock},
 };
 use nessa_auth::domain::{
@@ -146,6 +146,8 @@ pub trait RegistrationLookup: Send + Sync {
 pub struct RegisteredWebhook {
     pub registration_id: Uuid,
     pub credential: CredentialMetadataDto,
+    /// Actual original command transitions, with no bearer evidence.
+    pub transitions: Vec<CredentialTransitionDto>,
 }
 
 pub struct RegisterWebhook<'a> {
@@ -368,6 +370,7 @@ impl RegisterWebhook<'_> {
         Ok(RegisteredWebhook {
             registration_id,
             credential: metadata,
+            transitions,
         })
     }
 }

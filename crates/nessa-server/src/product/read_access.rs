@@ -28,13 +28,17 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    binding_of, error_code, paired_facts, AccessAction, AuditedReviewSelection,
-    ConversationAccessPolicyEvaluator, ConversationError, PairedAccess, PairedParty, PairedRefusal,
-    Reader, ReceiverBinding, RequestShape, ReviewNoticeAuditCause, ReviewNoticeAuditFailure,
-    SelectReviewNotice, ShareConversation, ShareGrant, MAX_POLICY_REVISION,
+    binding_of, error_code, load_conversation, paired_facts, AccessAction, AuditedReviewSelection,
+    ConversationAccessPolicyEvaluator, ConversationError, OwnerAccess, PairedAccess, PairedParty,
+    PairedRefusal, Reader, ReceiverBinding, RequestShape, ReviewNoticeAuditCause,
+    ReviewNoticeAuditFailure, SelectReviewNotice, ShareConversation, ShareGrant,
+    MAX_POLICY_REVISION,
 };
-use crate::conversation::domain::{CommandHosts, ToolChoice, ToolPolicy, ToolPreset, ToolRules};
+use crate::conversation::domain::{
+    CommandHosts, ShareAccess, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
+};
 use crate::conversation::infrastructure::PublishedReview;
+use crate::webhooks::application::{AdmitDelivery, ShareWebhookConversation};
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_auth::domain::CredentialId;
 use nessa_protocol::conversation::domain::ConversationId;
@@ -223,11 +227,10 @@ pub(super) async fn admit_conversation(
         let Some((_, conversations, _)) = state.passive_read.as_ref() else {
             return Err("temporarily_unavailable");
         };
-        let target =
-            crate::conversation::application::load_conversation(conversations.as_ref(), id)
-                .await
-                .map_err(|_| "temporarily_unavailable")?
-                .ok_or("conversation_not_found")?;
+        let target = load_conversation(conversations.as_ref(), id)
+            .await
+            .map_err(|_| "temporarily_unavailable")?
+            .ok_or("conversation_not_found")?;
         return phone
             .admit_conversation(&target, AccessAction::Read)
             .map_err(refusal_code);
@@ -279,10 +282,9 @@ pub(super) async fn admit_command_target(
     let Some((_, repository, _)) = state.passive_read.as_ref() else {
         return Err("temporarily_unavailable");
     };
-    if let Some(target) =
-        crate::conversation::application::load_conversation(repository.as_ref(), id)
-            .await
-            .map_err(|_| "temporarily_unavailable")?
+    if let Some(target) = load_conversation(repository.as_ref(), id)
+        .await
+        .map_err(|_| "temporarily_unavailable")?
     {
         let action = if target.deletion().is_some() {
             when_deleted
@@ -315,7 +317,7 @@ pub(super) async fn admit_index_rows(
     };
     for row in rows {
         let id = conversation_id(&row.conversation_id)?;
-        let target = crate::conversation::application::load_conversation(repository.as_ref(), &id)
+        let target = load_conversation(repository.as_ref(), &id)
             .await?
             .ok_or(ConversationError::Metadata)?;
         phone
@@ -611,19 +613,64 @@ pub(super) async fn dispatch_share(
                 let id = conversation_id(&params.conversation_id)?;
                 let credential = CredentialId::new(params.credential_id)
                     .map_err(|_| ConversationError::InvalidInput)?;
-                let policy = params.policy.map(tool_policy).transpose()?;
+                let requested_policy = params.policy.map(tool_policy).transpose()?;
                 let caller = caller(session, params.request_id.clone());
-                let granted = shares
-                    .share(
+                let selected_capabilities = capabilities(&params.capabilities)?;
+                let expected = expected_revision(params.expected_policy_revision)?;
+                let webhook = if let Some(runtime) = state.webhooks.as_deref() {
+                    // Preserve shape/owner refusal before any target lookup.
+                    ShareAccess::new(selected_capabilities, requested_policy.clone())
+                        .map_err(|_| ConversationError::InvalidInput)?;
+                    let conversation = load_conversation(conversations.as_ref(), &id)
+                        .await?
+                        .ok_or(ConversationError::NotFound)?;
+                    OwnerAccess::new(policy).admit(&conversation, &caller)?;
+                    runtime
+                        .is_webhook(&credential)
+                        .await
+                        .map_err(|_| ConversationError::Metadata)?
+                } else {
+                    false
+                };
+                let granted = if webhook {
+                    let runtime = state
+                        .webhooks
+                        .as_deref()
+                        .ok_or(ConversationError::Metadata)?;
+                    ShareWebhookConversation {
+                        registrations: runtime.store(),
+                        admission: AdmitDelivery {
+                            credentials: runtime.credentials(),
+                            grants: grants.as_ref(),
+                            conversations: conversations.as_ref(),
+                            policy: policy,
+                            clock: state.clock.as_ref(),
+                            gateway: &state.gateway,
+                        },
+                    }
+                    .execute(
                         caller,
                         id,
                         credential,
-                        capabilities(&params.capabilities)?,
-                        policy,
-                        expected_revision(params.expected_policy_revision)?,
+                        selected_capabilities,
+                        requested_policy,
+                        expected,
                         now,
                     )
-                    .await?;
+                    .await?
+                } else {
+                    shares
+                        .share(
+                            caller,
+                            id,
+                            credential,
+                            selected_capabilities,
+                            requested_policy,
+                            expected,
+                            now,
+                        )
+                        .await?
+                };
                 if granted.applied {
                     recheck_review_visibility(state);
                 }

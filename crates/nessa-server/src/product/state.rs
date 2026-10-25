@@ -20,6 +20,7 @@ use crate::mcp_servers::{
     infrastructure::ResourceTicketStore,
 };
 use crate::peer_gateways::infrastructure::PeerCommands;
+use crate::webhooks::infrastructure::WebhookRuntime;
 use axum::extract::FromRef;
 use nessa_auth::{
     application::{
@@ -158,6 +159,7 @@ pub struct ProductRouteState {
     /// composed, and then that route answers every ticket `404`.
     pub(crate) resource_tickets: Option<(Arc<ResourceTicketStore>, Arc<dyn McpAppAudit>)>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
+    pub(crate) webhooks: Option<Arc<WebhookRuntime>>,
     /// Reconciles the deletion inventory after `conversation.unshare`.
     /// Absent, the grant is still revoked.
     pub(crate) fence_capture: Option<Arc<dyn FenceCapture>>,
@@ -309,6 +311,7 @@ impl ProductRouteState {
             owner_phone_policy: dependencies.owner_phone_policy,
             owner_phone_receivers: dependencies.owner_phone_receivers,
             admin: None,
+            webhooks: None,
             fence_capture: None,
             mcp_server_settings: None,
             mcp_authorization: None,
@@ -364,6 +367,13 @@ impl ProductRouteState {
     }
 
     /// Register credential lifecycle operations; missing administration fails closed.
+    /// Bind the concrete retained webhook/ordinary credential command owner.
+    pub fn with_webhooks(mut self, runtime: Arc<WebhookRuntime>) -> Self {
+        self.admin = Some(runtime.clone());
+        self.webhooks = Some(runtime);
+        self
+    }
+
     pub fn with_admin(mut self, admin: Arc<dyn CredentialAdmin>) -> Self {
         self.admin = Some(admin);
         self

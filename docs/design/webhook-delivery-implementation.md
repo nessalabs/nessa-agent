@@ -885,3 +885,24 @@ principal/credential field. Its native mapping constructs those facts from the
 actual held credential, preventing contradictory input shapes without a new DTO
 or mode/state flag. Current receiver evidence is still checked transactionally
 before replay; historical receiver evidence is checked before replay receipt.
+
+### Product runtime composition
+
+One concrete runtime owns configured credential commands and the source/sender
+lifetime. Configuration selects a principal on the existing credential.issue
+contract; it supplies no new wire fields. Actual auth command transitions remain
+attached to the secret-free registration acknowledgement. All issue modes pass
+one retained issuance gate. Caller loss drops only observation; shutdown seals
+admission and joins admitted work before dependencies are released.
+
+| Boundary | Required behavior |
+| --- | --- |
+| configured principal issue | original durable reservation, actual Webhook issuance/install, secret-unavailable wire result with actual command transitions |
+| ordinary issue | unchanged auth outcome/one-time secret, through the same retained issuance owner |
+| existing different command for principal | conflict before another issuance |
+| revoke | actual canonical revocation, then current original stop coordination before acknowledgement |
+| startup | reconcile bounded stored unfinished commands before admitting source/send work; unresolved work refuses startup |
+| shutdown | seal, stop source/send admission, retain physical work, join command owners; unresolved work is not successful cleanup |
+
+These rows govern the composed path; adding its wiring does not itself qualify
+recipient delivery, known-outcome settlement or startup/shutdown fault behavior.

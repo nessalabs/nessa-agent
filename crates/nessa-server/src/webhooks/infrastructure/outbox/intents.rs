@@ -232,3 +232,24 @@ pub(super) fn validate(connection: &Connection) -> Result<(), OutboxError> {
 #[cfg(test)]
 #[path = "../../../../tests/webhooks/infrastructure/outbox/intent_rows.rs"]
 mod row_tests;
+
+impl SqlOutbox {
+    /// Bounded original command inputs for concrete startup/W1 coordination.
+    pub(crate) async fn intents(&self) -> Result<Vec<RegistrationIntent>, OutboxError> {
+        self.run(|connection, _| {
+            let mut query = connection
+                .prepare(&format!("{SELECT} ORDER BY rowid LIMIT ?1"))
+                .map_err(unavailable)?;
+            let saved = query
+                .query_map([(MAX_REGISTRATIONS + 1) as i64], Saved::row)
+                .map_err(unavailable)?
+                .collect::<SqlResult<Vec<_>>>()
+                .map_err(super::cursor::row_error)?;
+            if saved.len() > MAX_REGISTRATIONS {
+                return Err(OutboxError::Invalid);
+            }
+            saved.into_iter().map(Saved::checked).collect()
+        })
+        .await
+    }
+}
