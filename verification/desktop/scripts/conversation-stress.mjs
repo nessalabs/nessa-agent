@@ -979,26 +979,40 @@ async function makeChannel(
         failures.push(`the new channel flow never asked its ${stepName}`)
         return false
       })
+  // With evidence asked for, each question is photographed as it is asked.
+  const photograph = (label) =>
+    run.evidence
+      ? page
+          .screenshot({ path: join(run.evidence, `channel-${run.engine}-${label}.png`) })
+          .catch(() => {})
+      : Promise.resolve()
   const head = page.locator(`${css.sidebar} .workspace-section-head`).first()
   await head.hover()
   await head.locator(css.channelAdd).click({ timeout: 10_000 })
   const flow = page.locator(css.newChannel)
   if (!(await asking("name"))) return null
   await page.locator(`${css.newChannelField}[data-step="name"]`).fill(name)
+  await photograph(`${name}-1-name`)
   await page.keyboard.press(keys.enter)
   if (!(await asking("folder"))) return null
   const folderChoice = refusedFolder ?? folder
   if (folderChoice) {
     await pick("folders", folderChoice)
     await flow.getByRole("button", { name: "Choose a folder…" }).click()
+    await flow
+      .getByRole("button", { name: "Use this folder" })
+      .waitFor({ timeout: 5_000 })
+    await photograph(`${name}-2-folder`)
     await flow.getByRole("button", { name: "Use this folder" }).click()
   } else {
     await flow.getByRole("button", { name: "Make one for me" }).click()
   }
   if (!(await asking("model"))) return null
+  await photograph(`${name}-3-model`)
   await page.keyboard.press(keys.enter)
   if (!(await asking("notes"))) return null
   if (notes) await page.locator(`${css.newChannelField}[data-step="notes"]`).fill(notes)
+  await photograph(`${name}-4-notes`)
   await page.keyboard.press(keys.enter)
   if (!(await asking("resources"))) return null
   if (resource) {
@@ -1013,6 +1027,7 @@ async function makeChannel(
     )
       failures.push(`the attached ${basename(resource)} is not listed in the flow`)
   }
+  await photograph(`${name}-5-resources`)
   const create = flow.getByRole("button", { name: /^Create channel/ })
   await create.click()
   if (refusedFolder) {
@@ -1027,6 +1042,7 @@ async function makeChannel(
       )
     if (!said)
       failures.push(`choosing ${refusedFolder} was not refused at the folder question`)
+    await photograph(`${name}-6-refused`)
     await flow.getByRole("button", { name: "Make one for me" }).click()
     await create.click()
   }
