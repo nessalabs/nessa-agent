@@ -60,6 +60,7 @@ import {
   selectDraft,
   selectFocusedPaneKey,
   selectActiveTab,
+  selectInFront,
   selectPaneShape,
   selectPanes,
   selectSession,
@@ -68,6 +69,7 @@ import {
 } from "../../adapters/store/selectors"
 import { workspaceSplitPanes } from "../../adapters/store/split-panes-source"
 import { panesOf, type Direction } from "../../../split-panes/model/pane-layout"
+import { sameContent } from "../../application/workspace-state"
 import type { SwitcherRow } from "../../model/session-search"
 import { columnWidth, railFits, sessionListLimits } from "../../model/window-fit"
 import { railItems, SIDE_RAIL_WIDTH, type RailItem } from "../chrome/side-rail"
@@ -125,6 +127,8 @@ function useWorkspaceKeys(
   own: Partial<Record<ShortcutCommand, () => boolean | void>>,
   /** While true, only `own` commands run: something modal has the keyboard. */
   paused: boolean,
+  /** Runs first for every command the keys bring. */
+  before?: (command: ShortcutCommand) => void,
 ) {
   const dispatch = useWorkspaceDispatch()
   const store = useWorkspaceStore()
@@ -143,6 +147,7 @@ function useWorkspaceKeys(
     return focusAt(Math.min(Math.max(at + step, 0), order.length - 1))
   }
   useKeyBindings(workspaceShortcuts, (command) => {
+    before?.(command)
     const handler = own[command]
     if (handler) return handler()
     if (paused) return false
@@ -299,6 +304,7 @@ function useWorkspaceChrome(region: SidebarRegion) {
   const [panelMaximized, setPanelMaximized] = useState(false)
   const panelOpen = panelPlace.open && shownRailItem === undefined
   if (!panelOpen && panelMaximized) setPanelMaximized(false)
+  usePanelHeldByChat(panelMaximized, setPanelMaximized)
   const panelDrawnWidth = panelWidth(panelPlace.width, fullWidth)
   // The rail and the panel stand beside the workspace's columns, not among
   // them: the columns fit what is left. The fit itself is `ColumnFit`, so
@@ -325,6 +331,7 @@ function useWorkspaceChrome(region: SidebarRegion) {
     [setPanelPlace],
   )
   const toggleMaximized = useCallback(() => setPanelMaximized((value) => !value), [])
+  const dockPanel = useCallback(() => setPanelMaximized(false), [])
   return {
     sidebarOpen,
     listOpen,
@@ -348,7 +355,31 @@ function useWorkspaceChrome(region: SidebarRegion) {
     resizePanel,
     closePanel,
     toggleMaximized,
+    dockPanel,
   }
+}
+
+/**
+ * The right panel belongs to the chat in front, so expanded it stands for
+ * that chat alone. It holds only while that chat stays in front: anything
+ * that brings another — a new tab, a session opened, a tab switched to, a
+ * pane split off, the overview or a widget over the panes — docks it again,
+ * so nothing ever opens out of sight under it.
+ */
+function usePanelHeldByChat(maximized: boolean, setMaximized: (value: boolean) => void) {
+  const store = useWorkspaceStore()
+  useEffect(() => {
+    if (!maximized) return
+    const held = store.getState()
+    return store.subscribe(() => {
+      const now = store.getState()
+      if (
+        selectInFront(now) !== selectInFront(held) ||
+        !sameContent(now.workspace.content, held.workspace.content)
+      )
+        setMaximized(false)
+    })
+  }, [store, maximized, setMaximized])
 }
 
 function useColumnDrag(
@@ -394,53 +425,51 @@ function useWorkspaceSwitcher(
   root: RefObject<HTMLDivElement | null>,
   shownRailItem: RailItem | undefined,
   togglePanel: () => void,
-  /** The right panel covers the workspace: only its own toggle answers. */
-  panelMaximized: boolean,
+  /** Docks the expanded right panel, which a window command brings the workspace back from. */
+  dockPanel: () => void,
 ) {
   const dispatch = useWorkspaceDispatch()
   const [switcher, setSwitcher] = useState<SwitcherMode | null>(null)
   const frame = useWindowFrame(root, workspaceShortcuts, setSwitcher)
   // While the switcher is up it has the keyboard, but for ⌘K, which closes it.
-  // Under an item's full view the workspace answers no keys at all; under the
-  // maximized panel, only ⌥⌘B, which closes it.
+  // Under an item's full view the workspace answers no keys at all. Any window
+  // key docks the expanded panel first, one it declines included: a key is
+  // the person turning back to the workspace, and what it opens is seen.
   useWorkspaceKeys(
     shownRailItem !== undefined
       ? {}
-      : panelMaximized
-        ? { togglePanel }
-        : {
-            switcher: () => setSwitcher((open) => (open ? null : "open")),
-            // Offered as "beside" only where a pane could open there; else it is a jump.
-            openBeside: () =>
-              switcher
-                ? false
-                : setSwitcher(dispatch(canOpenBeside()) ? "split" : "open"),
-            toggleSessionList: () => {
-              if (!region.sessionList) return false
-              dispatch(toggleSessionList())
-            },
-            togglePanel: () => {
-              if (switcher) return false
-              togglePanel()
-            },
-            // A place to go, as the sidebar's entry is: asked again, it stays; Escape in it leaves.
-            showOverview: () => {
-              if (switcher) return false
-              dispatch(showContent({ content: "agents" }))
-            },
-            // Searching the list brings it back first; with no list, it is a jump.
-            search: () => {
-              if (switcher) return false
-              if (!region.sessionList) return setSwitcher("open")
-              dispatch(toggleSessionList({ open: true }))
-              requestAnimationFrame(() =>
-                root.current
-                  ?.querySelector<HTMLInputElement>(".workspace-search input")
-                  ?.focus(),
-              )
-            },
+      : {
+          switcher: () => setSwitcher((open) => (open ? null : "open")),
+          // Offered as "beside" only where a pane could open there; else it is a jump.
+          openBeside: () =>
+            switcher ? false : setSwitcher(dispatch(canOpenBeside()) ? "split" : "open"),
+          toggleSessionList: () => {
+            if (!region.sessionList) return false
+            dispatch(toggleSessionList())
           },
-    switcher !== null || shownRailItem !== undefined || panelMaximized,
+          togglePanel: () => {
+            if (switcher) return false
+            togglePanel()
+          },
+          // A place to go, as the sidebar's entry is: asked again, it stays; Escape in it leaves.
+          showOverview: () => {
+            if (switcher) return false
+            dispatch(showContent({ content: "agents" }))
+          },
+          // Searching the list brings it back first; with no list, it is a jump.
+          search: () => {
+            if (switcher) return false
+            if (!region.sessionList) return setSwitcher("open")
+            dispatch(toggleSessionList({ open: true }))
+            requestAnimationFrame(() =>
+              root.current
+                ?.querySelector<HTMLInputElement>(".workspace-search input")
+                ?.focus(),
+            )
+          },
+        },
+    switcher !== null || shownRailItem !== undefined,
+    shownRailItem !== undefined ? undefined : dockPanel,
   )
   // Beside where the room allows it, in the focused pane's place where not —
   // what ⌘-click does — so a pick never goes nowhere, and a typed message is
@@ -542,7 +571,7 @@ export function useWorkspaceWindow({
     root,
     chrome.shownRailItem,
     chrome.togglePanel,
-    chrome.panelMaximized,
+    chrome.dockPanel,
   )
   usePanelEscape(root, chrome.panelMaximized, chrome.setPanelMaximized)
   const panelDrag = usePanelDrag(chrome.panelWidth, chrome.resizePanel, chrome.closePanel)

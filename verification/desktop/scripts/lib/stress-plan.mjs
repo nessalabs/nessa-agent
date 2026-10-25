@@ -91,7 +91,7 @@ export const KNOBS = {
   },
   rails: {
     default: 1,
-    what: "times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off, its toggle never moving",
+    what: 'times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off, its toggle never moving; "nessa Studio" stays while a column holds the corner and goes over the panes alone',
   },
   listAnswers: {
     default: 1,
@@ -99,7 +99,7 @@ export const KNOBS = {
   },
   panels: {
     default: 1,
-    what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, maximized and left with Escape, then closed",
+    what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, expanded for that chat alone (its tab only; New Tab docks it and the new session opens in sight), left with Escape, then closed",
   },
   onboardings: {
     default: 1,
