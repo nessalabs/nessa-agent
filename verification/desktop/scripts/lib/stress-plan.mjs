@@ -107,7 +107,7 @@ export const KNOBS = {
   },
   linkings: {
     default: 1,
-    what: "times native linking is turned on and off again from Settings, each restarting the gateway",
+    what: "times native linking is turned on and off again from Settings, each restarting the gateway, with a code opened by Pair a device while it is on",
   },
   tables: {
     default: 1,
