@@ -399,6 +399,9 @@ jobs:
         with:
           node-version: 24
       - shell: bash
+        env:
+          # Emit panic details immediately even if later tests hit the step deadline.
+          RUST_TEST_NOCAPTURE: "1"
         run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk
         timeout-minutes: 45
 

@@ -874,6 +874,8 @@ async fn four_fact_history(live_checks: bool) {
             .unwrap();
             file.write_all(text.as_bytes()).unwrap();
             file.sync_all().unwrap();
+            // The rejection checks rename the audit directory on Windows too.
+            drop(file);
             f.store
                 .owner
                 .connection
