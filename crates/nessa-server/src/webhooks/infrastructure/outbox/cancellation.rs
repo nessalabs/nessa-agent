@@ -16,7 +16,7 @@ use crate::webhooks::application::{
 use nessa_local_database::rusqlite::{Connection, OptionalExtension};
 
 enum Ownership {
-    Reserved(RegistrationIntent),
+    Reserved(Box<RegistrationIntent>),
     Installed,
     Cancelled,
 }
@@ -121,7 +121,7 @@ fn inspect(
         {
             return Err(OutboxError::Invalid);
         }
-        return Ok(Ownership::Reserved(saved));
+        return Ok(Ownership::Reserved(Box::new(saved)));
     }
     let retired = retired.ok_or(OutboxError::Conflict)?;
     if live.is_some()

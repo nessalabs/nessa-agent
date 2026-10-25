@@ -665,7 +665,9 @@ async fn disabled_membership_does_not_restore_install_authority_or_block_canonic
             i64::from(mode == "current")
         );
         assert_eq!(
-            files(&f).values().any(|text| text.contains("registration_cancelled")),
+            files(&f)
+                .values()
+                .any(|text| text.contains("registration_cancelled")),
             mode != "current"
         );
     }
