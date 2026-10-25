@@ -946,9 +946,17 @@ async function firstMessageHandoff(page, reduced = false) {
 /** A retired workspace cannot start a new focus search from its held frame. */
 async function retiredLayout(page, layout) {
   await openPanes(page, 2)
+  // Opening the split can still be handing the caret to its new pane.
+  // Establish that entry point before asking the first pane to take focus.
+  await focusComposer(page)
   await page.keyboard.press(keys.focusPane(1))
-  await settled(page)
-  await frames(page, 4)
+  const initialKeys = await order(page)
+  const initial = await paneFocusSettled(page, {
+    keys: initialKeys,
+    target: initialKeys[0],
+  })
+  if (!initial.converged)
+    throw new CannotRun("the first pane did not take focus before holding its movement")
   const clock = await page.evaluateHandle((workspace) => {
     const previous = document.querySelector(workspace)
     const request = window.requestAnimationFrame
