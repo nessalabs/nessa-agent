@@ -79,13 +79,19 @@
  *               and Close sits in the top-right corner; past it the picker
  *               has Back in the top-left corner, which returns to welcome;
  *               it lists Claude, Codex and a Local AI that is coming, never
- *               OpenCode, with each one's figure on the picture beside it,
- *               and pointing at a row lights that figure; Close then leaves
- *               setup, handing over as left, not finished; a second setup
- *               window is finished on a ready agent: the window flies into
- *               the menu bar, asking the host where its icon is, and hands
- *               over finished on that agent; the message sent in the window
- *               after it is answered
+ *               OpenCode, with each one's figure on the picture beside it;
+ *               pointing at a row leaves the picture alone and clicking it
+ *               turns the picture to that agent; Close then leaves setup,
+ *               handing over as left, not finished; a second setup window,
+ *               where Codex is not installed but can be downloaded, shows
+ *               Codex as a download card with no row to pick, and no list
+ *               of installed agents or Check downloads; its Download, pressed
+ *               from the keyboard, fetches with the focus kept on the card,
+ *               installs it, and the card becomes Codex's row, which takes
+ *               the focus; setup is then finished
+ *               on a ready agent: the window flies into the menu bar, asking
+ *               the host where its icon is, and hands over finished on that
+ *               agent; the message sent in the window after it is answered
  *   notice      a review waits in another conversation, which the window does
  *               not show: the host's system notice names its tool and the
  *               conversation's title, opening it brings that conversation
@@ -96,7 +102,10 @@
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
- *               message sent after it is answered
+ *               message sent after it is answered. While it is on, Pair a
+ *               device shows a code with the window's own sign-in; the
+ *               code is cancelled, and leaving the tab and coming back
+ *               still shows linking on
  *   drift       the gateway is stopped and started again with its staged
  *               runtime directory moved and a different agent PATH and
  *               TMPDIR, the way an app update stages a new tree and
@@ -115,12 +124,32 @@
  *               screen never covers it, and once the gateway is up the
  *               window lists the conversation and the message sent after
  *               it is answered
+ *   github      GitHub is connected in Settings › Connections › Accounts
+ *               against a fake GitHub on this machine: the row shows the
+ *               code GitHub handed out and where to enter it, and once the
+ *               fake approves it names the account; the sign-in is a private
+ *               file the gateway never logs; an agent started after it has
+ *               GH_TOKEN and a git credential helper for github.com, both the
+ *               token, and so do the commands it runs through Nessa's own
+ *               shell tool; Disconnect forgets it, and an agent started after
+ *               that has neither, nor do its commands; the audit holds each
+ *               step and no token
  *   upgrade     the gateway is stopped, its conversation metadata turned
  *               back into the file an older build wrote (version 6, or 7
  *               when a newer table holds rows), and started again: it
  *               upgrades the file to the current version, lists every
  *               conversation it listed before, and the message sent in the
  *               window after it is answered
+ *   channel     a channel is made from the sidebar's +, asked in the
+ *               transcript: named, a folder chosen in the host's picker that
+ *               agents may not work in (the root) refused at its question,
+ *               then one made for it; its model kept, notes typed, and a file
+ *               attached from the host's picker; Create opens a new
+ *               session's home in it, whose first message runs in the made
+ *               folder with the notes in the agent's system prompt (Claude).
+ *               A second channel works in a folder chosen in the picker, and
+ *               its first message runs there; the gateway lists both, with
+ *               their folders, and each conversation in its own
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
@@ -149,24 +178,26 @@
  *   NESSA_STRESS_ROUNDS=60 pnpm test:e2e:stress # the same, from the environment
  */
 import catalog from "../../../crates/nessa-sdk/data/models.json" with { type: "json" }
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import {
   chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
-import { basename, isAbsolute, join } from "node:path"
+import { basename, dirname, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
-import { MODELS } from "../../../scripts/mcp-test-server/local-gateway.mjs"
+import { MODELS, repoRoot } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
   SAYS,
@@ -197,6 +228,7 @@ import {
   offeredLabel,
   selectorFor,
 } from "./lib/selectors.mjs"
+import { FAKE_ACCOUNT, startFakeGithub } from "./lib/fake-github.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
@@ -463,6 +495,92 @@ async function setSideRail(page, on, failures) {
     10_000,
   )
   if (!shown) failures.push(`the side rail's toggle is ${on ? "missing" : "still shown"}`)
+}
+
+/**
+ * The expanded right panel is the chat in front's: the strip shows that
+ * chat's tab alone and no toggles for the columns it covers. New Tab docks
+ * it before the new session opens, so the session is in front, in sight —
+ * never under the panel. The new home is closed again and the chat brought
+ * back, docked.
+ */
+async function expandedForItsChat(page, failures) {
+  const tabs = page.getByRole("tablist", { name: "Open views" })
+  const chat = await tabs
+    .locator('[role="tab"][aria-selected="true"]')
+    .locator("..")
+    .getAttribute("data-session-tab")
+  if ((await tabs.locator('[role="tab"]').count()) !== 1)
+    failures.push("the expanded panel's strip shows other chats' tabs")
+  if (await page.locator(`${css.titlebar} [aria-controls="workspace-sidebar"]`).count())
+    failures.push("the expanded panel's titlebar offers the sidebar it covers")
+  await page.getByRole("button", { name: /^New Tab/ }).click()
+  const docked = await waitFor(
+    async () => (await page.locator("#workspace-panel[data-maximized]").count()) === 0,
+    2000,
+  )
+  if (!docked) failures.push("New Tab left the panel expanded over the new session")
+  const home = page.locator(`${css.focusedPane} ${css.paneHome}`)
+  await home.locator(css.field).waitFor({ timeout: 15_000 })
+  if (await home.evaluate((node) => node.closest("[inert]") !== null))
+    failures.push("the new session opened under the panel")
+  if ((await tabs.locator('[role="tab"]').count()) < 2)
+    failures.push("docked again, the strip did not show the other tabs")
+  await page.keyboard.press(keys.closePane)
+  await home.waitFor({ state: "detached", timeout: 5000 }).catch(() => {
+    failures.push("⌘W did not close the new session's home")
+  })
+  if (chat) await tabs.locator(`[data-session-tab="${chat}"] [role="tab"]`).click()
+}
+
+/**
+ * "nessa Studio" belongs to whatever column holds the bottom-left corner, at
+ * any width: with the sidebar folded the session list still holds it and the
+ * words stay; only with the panes alone at the window's edge are they gone.
+ * Leaves the columns as it found them.
+ */
+async function studioWithTheCorner(page, failures) {
+  const shown = () =>
+    page.evaluate(
+      () =>
+        getComputedStyle(document.querySelector(".side-rail-studio") ?? document.body)
+          .visibility === "visible",
+    )
+  const column = (controls) =>
+    page.locator(`${css.titlebar} button[aria-controls="${controls}"]`)
+  const list = page.locator(
+    ["Hide", "Show"]
+      .map((verb) => `${css.titlebar} button[aria-label^="${verb} Session List"]`)
+      .join(", "),
+  )
+  const sidebar = column("workspace-sidebar")
+  // Hidden, it fades first and turns invisible at the fade's end: a "shown"
+  // read too soon after a change would see the fade. Settle, then read.
+  const expect = async (want, what) => {
+    await page.waitForTimeout(600)
+    if (!(await waitFor(async () => (await shown()) === want, 2000)))
+      failures.push(`"nessa Studio" is ${want ? "missing" : "shown"} ${what}`)
+  }
+  const open = async (button) =>
+    (await button.count()) > 0 && (await button.getAttribute("aria-expanded")) === "true"
+  const set = async (button, want) => {
+    if ((await button.count()) > 0 && (await open(button)) !== want) await button.click()
+  }
+  // Away from the window's left edge, where the pointer would peek the sidebar out.
+  const size = page.viewportSize()
+  if (size) await page.mouse.move(size.width / 2, size.height / 2)
+  const was = { sidebar: await open(sidebar), list: await open(list) }
+  await set(sidebar, true)
+  await expect(true, "beside the open sidebar")
+  await set(sidebar, false)
+  if ((await list.count()) > 0) {
+    await set(list, true)
+    await expect(true, "with the session list holding the corner")
+    await set(list, false)
+  }
+  await expect(false, "over the panes alone")
+  await set(list, was.list)
+  await set(sidebar, was.sidebar)
 }
 
 /** The macOS traffic lights end at x=76 (`traffic_lights.rs`). */
@@ -1010,6 +1128,163 @@ function providerName(provider) {
   )
 }
 
+/**
+ * Makes a channel with the sidebar's + as a person does, answering each
+ * question as it is asked, and answers the gateway's listing of it; `null`
+ * when it was not made. With `refusedFolder`, that folder is chosen first and
+ * Create must be refused at the folder question, before a folder made for it
+ * is taken instead.
+ */
+async function makeChannel(
+  run,
+  failures,
+  { name, folder, refusedFolder, notes, resource },
+) {
+  const { page } = run
+  const pick = (kind, value) =>
+    page.evaluate(
+      ([kind, value]) => window.__fakeHostPicks[kind].push(value),
+      [kind, value],
+    )
+  const asking = (stepName) =>
+    page
+      .locator(`${css.newChannelAsked}[data-step="${stepName}"]`)
+      .waitFor({ timeout: 10_000 })
+      .then(() => true)
+      .catch(() => {
+        failures.push(`the new channel flow never asked its ${stepName}`)
+        return false
+      })
+  // With evidence asked for, each question is photographed as it is asked.
+  const photograph = (label) =>
+    run.evidence
+      ? page
+          .screenshot({ path: join(run.evidence, `channel-${run.engine}-${label}.png`) })
+          .catch(() => {})
+      : Promise.resolve()
+  const head = page.locator(`${css.sidebar} .workspace-section-head`).first()
+  await head.hover()
+  await head.locator(css.channelAdd).click({ timeout: 10_000 })
+  const flow = page.locator(css.newChannel)
+  if (!(await asking("name"))) return null
+  await page.locator(`${css.newChannelField}[data-step="name"]`).fill(name)
+  await photograph(`${name}-1-name`)
+  await page.keyboard.press(keys.enter)
+  if (!(await asking("folder"))) return null
+  const folderChoice = refusedFolder ?? folder
+  if (folderChoice) {
+    await pick("folders", folderChoice)
+    await flow.getByRole("button", { name: "Choose a folder…" }).click()
+    await flow
+      .getByRole("button", { name: "Use this folder" })
+      .waitFor({ timeout: 5_000 })
+    await photograph(`${name}-2-folder`)
+    await flow.getByRole("button", { name: "Use this folder" }).click()
+  } else {
+    await flow.getByRole("button", { name: "Make one for me" }).click()
+  }
+  if (!(await asking("model"))) return null
+  await photograph(`${name}-3-model`)
+  await page.keyboard.press(keys.enter)
+  if (!(await asking("notes"))) return null
+  if (notes) await page.locator(`${css.newChannelField}[data-step="notes"]`).fill(notes)
+  await photograph(`${name}-4-notes`)
+  await page.keyboard.press(keys.enter)
+  if (!(await asking("resources"))) return null
+  if (resource) {
+    await pick("resources", [resource])
+    await flow.getByRole("button", { name: "Add files…" }).click()
+    const row = flow.locator(css.newChannelResource, { hasText: basename(resource) })
+    if (
+      !(await row.waitFor({ timeout: 5_000 }).then(
+        () => true,
+        () => false,
+      ))
+    )
+      failures.push(`the attached ${basename(resource)} is not listed in the flow`)
+  }
+  await photograph(`${name}-5-resources`)
+  const create = flow.getByRole("button", { name: /^Create channel/ })
+  await create.click()
+  if (refusedFolder) {
+    if (!(await asking("folder"))) return null
+    const said = await flow
+      .locator(`${css.newChannelAsked}[data-step="folder"]`)
+      .getByText("Agents can’t work there", { exact: false })
+      .waitFor({ timeout: 10_000 })
+      .then(
+        () => true,
+        () => false,
+      )
+    if (!said)
+      failures.push(`choosing ${refusedFolder} was not refused at the folder question`)
+    await photograph(`${name}-6-refused`)
+    await flow.getByRole("button", { name: "Make one for me" }).click()
+    await create.click()
+  }
+  const gone = await flow.waitFor({ state: "detached", timeout: 15_000 }).then(
+    () => true,
+    () => false,
+  )
+  if (!gone) {
+    failures.push(
+      `the channel ${name} was not made: ${fold(await flow.innerText().catch(() => ""))}`,
+    )
+    await page.keyboard.press(keys.escape)
+    return null
+  }
+  const { channels } = await run.client.channels.list()
+  const listed = channels.find((channel) => channel.name === name)
+  if (!listed) failures.push(`the gateway does not list the channel ${name}`)
+  return listed ?? null
+}
+
+/**
+ * The first message of a new session in `channel`, from the home Create left
+ * open: it is listed in that channel, and its agent works in the channel's
+ * folder, told the channel's notes (Claude's system prompt, where it has one).
+ */
+async function talkInChannel(run, step, channel, failures, notes) {
+  const text = prompt(run, STRESS.channel, step, ` ${channel.name}`)
+  const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+  await home.locator(css.field).waitFor({ timeout: 15_000 })
+  await home.locator(css.field).fill(text)
+  await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+  const conversationId = await waitFor(
+    () => selectedStressConversation(run.page, text),
+    30_000,
+  )
+  if (!conversationId) {
+    failures.push(`the first message in ${channel.name} was never listed`)
+    return
+  }
+  run.checked.push(conversationId)
+  const { view } = await settled(
+    run,
+    conversationId,
+    new Set(),
+    text,
+    "completed",
+    failures,
+  )
+  const { conversations } = await run.client.conversation.list({})
+  const summary = conversations.find((each) => each.conversationId === conversationId)
+  if (summary?.channelId !== channel.channelId)
+    failures.push(
+      `the conversation started in ${channel.name} is in ${summary?.channelId ?? "no channel"}`,
+    )
+  const reply = (view?.messages.find((each) => each.userText === text)?.parts ?? [])
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("")
+  if (!reply.includes(`${SAYS.channel}${channel.folder}\n`))
+    failures.push(
+      `the agent in ${channel.name} did not work in ${channel.folder}: ${fold(reply.slice(0, 300))}`,
+    )
+  if (notes && run.stack.agent === "claude" && !reply.includes(notes))
+    failures.push(`the agent in ${channel.name} was not told the channel's notes`)
+}
+
 const steps = {
   async model(run, step, failures) {
     const picker = dock(run.page).locator(css.modelChip)
@@ -1444,12 +1719,131 @@ const steps = {
   async linking(run, step, failures) {
     await run.exclusive(async () => {
       await openLinkedDevices(run.page)
-      for (const enabled of [true, false])
-        if (!(await switchLinking(run, enabled, failures))) return
+      if (!(await switchLinking(run, true, failures))) return
+      if (!(await pairFromWindow(run.page, failures))) return
+      // Away and back: the tab reads linking again, and it is still on.
+      await closeSettings(run.page)
+      await openLinkedDevices(run.page)
+      if (!(await switchLinking(run, false, failures))) return
       await closeSettings(run.page)
     })
     // The restarted gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async github(run, step, failures) {
+    const github = run.stack.github
+    if (!github) {
+      failures.push("the stack was started without the fake GitHub")
+      return
+    }
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
+    const signIn = join(namespace, "github", "sign-in.json")
+    const print = createHash("sha256").update(github.token).digest("hex").slice(0, 16)
+    const row = run.page.locator(css.github)
+    const state = () => row.getAttribute("data-github-state").catch(() => null)
+    // Each state the person sees, kept with the evidence.
+    const shot = (name) =>
+      run.evidence
+        ? run.page
+            .screenshot({ path: join(run.evidence, `github-${name}.png`) })
+            .catch(() => {})
+        : undefined
+    await run.exclusive(async () => {
+      await openAccounts(run.page)
+      if (!(await waitFor(async () => (await state()) === "signed-out", 30_000))) {
+        failures.push(`GitHub was ${await state()} before Connect`)
+        return
+      }
+      await shot("signed-out")
+      await row.getByRole("button", { name: names.githubConnect }).click()
+      const code = row.locator("[data-github-code]")
+      const shown = await waitFor(
+        async () =>
+          github.userCode() !== null &&
+          (await code.getAttribute("data-github-code").catch(() => null)) ===
+            github.userCode(),
+        30_000,
+      )
+      if (!shown) {
+        failures.push(
+          `the row did not show the code GitHub handed out (${github.userCode()})`,
+        )
+        return
+      }
+      await shot("connecting")
+      const open = await row.locator("[data-github-open]").getAttribute("href")
+      if (open !== github.verificationUri)
+        failures.push(`Open GitHub goes to ${open}, not ${github.verificationUri}`)
+      // The person enters the code on GitHub: the gateway's next poll takes it.
+      github.approve()
+      const connected = await waitFor(
+        async () =>
+          (await state()) === "connected" &&
+          (await row.textContent()).includes(`Signed in as @${FAKE_ACCOUNT.login}.`),
+        30_000,
+      )
+      if (!connected) {
+        failures.push(`the row is ${await state()} after GitHub approved the code`)
+        return
+      }
+      await shot("connected")
+      const repositories = await row
+        .locator("[data-github-repositories]")
+        .getAttribute("href")
+      if (repositories !== github.installUrl)
+        failures.push(
+          `Choose repositories goes to ${repositories}, not ${github.installUrl}`,
+        )
+      await closeSettings(run.page)
+    })
+    if (failures.length) return
+    if (!existsSync(signIn)) failures.push("the sign-in was not saved")
+    else if ((lstatSync(signIn).mode & 0o077) !== 0)
+      failures.push(
+        `the sign-in file is mode ${(lstatSync(signIn).mode & 0o777).toString(8)}`,
+      )
+    if (run.stack.gateway.log().includes(github.token))
+      failures.push("the gateway logged the GitHub token")
+    // An agent opened now is started with the sign-in, for gh and for git.
+    await githubAgent(run, step, " connected", `token=${print} git=${print}`, failures)
+    await githubAgent(
+      run,
+      step,
+      " connected",
+      `token=${print} git=${print}`,
+      failures,
+      true,
+    )
+    if (failures.length) return
+    await run.exclusive(async () => {
+      await openAccounts(run.page)
+      await row.getByRole("button", { name: names.githubDisconnect }).click()
+      if (!(await waitFor(async () => (await state()) === "signed-out", 30_000)))
+        failures.push(`the row is ${await state()} after Disconnect`)
+      await closeSettings(run.page)
+    })
+    if (failures.length) return
+    if (existsSync(signIn)) failures.push("Disconnect left the sign-in file")
+    await githubAgent(run, step, " disconnected", "token=none git=none", failures)
+    await githubAgent(run, step, " disconnected", "token=none git=none", failures, true)
+    // Each step of both is on record, and no record holds the token.
+    const audit = join(namespace, "conversations", "audit", "github")
+    const records = existsSync(audit) ? readdirSync(audit) : []
+    for (const event of [
+      "connect-requested",
+      "connected",
+      "disconnect-requested",
+      "disconnected",
+    ])
+      if (!records.some((name) => name.endsWith(`-${event}.json`)))
+        failures.push(`the audit has no ${event} record`)
+    if (
+      records.some((name) =>
+        readFileSync(join(audit, name), "utf8").includes(github.token),
+      )
+    )
+      failures.push("an audit record holds the GitHub token")
   },
 
   async upgrade(run, step, failures) {
@@ -1794,6 +2188,7 @@ const steps = {
           )
         }
       }
+      await studioWithTheCorner(run.page, failures)
       // Turned off with the rail open: the rail goes, and back from Settings
       // the titlebar's controls start where the lights end again.
       await setSideRail(run.page, false, failures)
@@ -1835,6 +2230,15 @@ const steps = {
         ))
       )
         failures.push("Expand Panel did not maximize it")
+      await expandedForItsChat(page, failures)
+      await page.getByRole("button", { name: "Expand Panel" }).click()
+      if (
+        !(await waitFor(
+          async () => (await panel.getAttribute("data-maximized")) !== null,
+          2000,
+        ))
+      )
+        failures.push("Expand Panel did not maximize it again")
       await page.keyboard.press("Escape")
       if (
         !(await waitFor(
@@ -1868,8 +2272,11 @@ const steps = {
         return
       }
       // The host opens the setup window for that ask; this page is that
-      // window, over the same gateway, as the real host builds it.
-      const page = await setupWindow(run)
+      // window, over the same gateway, as the real host builds it. Both
+      // agents are ready, so a click on either is a choice.
+      const page = await setupWindow(run, (page) =>
+        agentsProbe(page, () => ({ claude: "ready", codex: "ready" })),
+      )
       try {
         const heading = (name) => page.getByRole("heading", { name, exact: true })
         const button = (name) => page.getByRole("button", { name, exact: true })
@@ -2310,6 +2717,56 @@ const steps = {
     await settled(run, conversationId, seen, second, "completed", failures)
     await expectShown(run.page, `${SAYS.echo}${second}`, failures)
     await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
+  async channel(run, step, failures) {
+    const notes = `Answer as the stress channel s${run.knobs.seed}.`
+    // In the run's own folder, removed with it: the rest check reads these
+    // channels' conversations again at the end, and an agent cannot be built
+    // in a folder that is gone.
+    const attached = mkdtempSync(join(run.stack.scratch, "channel-"))
+    const resource = join(attached, "brief.md")
+    writeFileSync(resource, "# Brief\n")
+    const chosen = mkdtempSync(join(run.stack.scratch, "chosen-"))
+    try {
+      // Made in a folder of its own, after a folder agents may not use.
+      const made = await makeChannel(run, failures, {
+        name: `stress-made-r${step.index}-s${run.knobs.seed}`,
+        refusedFolder: "/",
+        notes,
+        resource,
+      })
+      if (made) {
+        if (!made.folderMade || !made.folder.includes(`/channels/${made.channelId}`))
+          failures.push(
+            `the channel made without a folder works in ${made.folder}, not one made for it`,
+          )
+        if (!existsSync(made.folder))
+          failures.push(`the made folder ${made.folder} is not there`)
+        await talkInChannel(run, step, made, failures, notes)
+      }
+      // Made in a folder chosen in the host's picker.
+      const there = await makeChannel(run, failures, {
+        name: `stress-chosen-r${step.index}-s${run.knobs.seed}`,
+        folder: chosen,
+      })
+      if (there) {
+        if (there.folderMade || there.folder !== realpathSync(chosen))
+          failures.push(
+            `the channel made in ${chosen} works in ${there.folder} (made: ${there.folderMade})`,
+          )
+        await talkInChannel(run, step, there, failures)
+      }
+    } finally {
+      // Back to the main conversation, in the default channel.
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText("Conversations", { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+        .catch(() => {})
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
   },
 
   async fresh(run, step, failures) {
@@ -3639,13 +4096,173 @@ async function pickerOffers(page, failures) {
   const resting = await cards()
   if (resting !== "clawd,clawd")
     failures.push(`the picture shows ${JSON.stringify(resting)}`)
-  await page.getByRole("button", { name: /^Codex/ }).hover()
-  const lit = await waitFor(() => cards().then((shown) => shown === "codex,codex"), 5_000)
-  if (!lit)
+  // Pointing along the rows leaves the picture as it is: only a click
+  // changes it. Watched for a while, since a change would be a crossfade.
+  const codex = page.getByRole("button", { name: "Codex", exact: true })
+  await codex.hover()
+  const moved = await waitFor(
+    () => cards().then((shown) => shown !== "clawd,clawd"),
+    1_000,
+  )
+  if (moved)
     failures.push(
-      `pointing at Codex did not turn the picture to it: ${JSON.stringify(await cards())}`,
+      `pointing at Codex turned the picture to ${JSON.stringify(await cards())}`,
+    )
+  await codex.click()
+  const chosen = await waitFor(
+    () => cards().then((shown) => shown === "codex,codex"),
+    5_000,
+  )
+  if (!chosen)
+    failures.push(
+      `clicking Codex did not turn the picture to it: ${JSON.stringify(await cards())}`,
+    )
+  await page.getByRole("button", { name: "Claude", exact: true }).hover()
+  if (await waitFor(() => cards().then((shown) => shown !== "codex,codex"), 1_000))
+    failures.push(
+      `pointing at Claude after choosing Codex turned the picture to ${JSON.stringify(await cards())}`,
     )
   await page.mouse.move(1, 1)
+}
+
+/**
+ * The gateway's machine probe, answered here: this stack's page is not an
+ * origin it answers. `readiness` is read on every ask, so a step can change
+ * what the machine has between asks.
+ */
+function agentsProbe(page, readiness) {
+  return page.route("**/onboarding/agents", (route) =>
+    route.fulfill({
+      // The gateway's own origin, not the page's: the ask is cross-origin.
+      headers: { "access-control-allow-origin": "*" },
+      json: {
+        agents: Object.entries(readiness()).map(([id, state]) => ({
+          id,
+          readiness: state,
+        })),
+      },
+    }),
+  )
+}
+
+/** The size the fake installer gives Codex's download. */
+const CODEX_ARCHIVE_BYTES = 45_000_000
+
+/**
+ * A gateway whose installer offers Codex and installs it on request, without
+ * fetching anything: the page's socket goes to the real gateway, and only
+ * the installer's two asks are answered here. `installed` says when the
+ * install has been asked for, so the machine probe can follow it.
+ */
+async function codexInstaller(page) {
+  const state = { installed: false, installs: 0 }
+  await page.routeWebSocket(
+    () => true,
+    (socket) => {
+      const server = socket.connectToServer()
+      const answer = (id, payload) => {
+        try {
+          socket.send(JSON.stringify({ type: "res", id, ok: true, payload }))
+        } catch {
+          // The window closed first: nothing is waiting for the answer.
+        }
+      }
+      socket.onMessage((message) => {
+        let frame
+        try {
+          frame = typeof message === "string" ? JSON.parse(message) : undefined
+        } catch {
+          // Not a request this fake answers: it goes to the gateway as sent.
+        }
+        if (frame?.type !== "req") frame = undefined
+        if (frame?.method === "agents.installOptions")
+          return answer(frame.id, {
+            agents: [
+              {
+                agent: "codex",
+                version: "0.0.0-stress",
+                archiveBytes: CODEX_ARCHIVE_BYTES,
+                installed: state.installed,
+              },
+            ],
+          })
+        if (frame?.method === "agents.install" && frame.params?.agent === "codex") {
+          state.installs += 1
+          // Long enough that the card is seen fetching.
+          return void setTimeout(() => {
+            state.installed = true
+            answer(frame.id, {
+              agent: "codex",
+              version: "0.0.0-stress",
+              downloaded: true,
+              cleanupPending: false,
+            })
+          }, 600)
+        }
+        server.send(message)
+      })
+      server.onMessage((message) => socket.send(message))
+    },
+  )
+  return state
+}
+
+/**
+ * An agent that is not installed but can be downloaded is a card with one
+ * Download button where its row would be, and nothing else on the picker
+ * talks about downloads. Its Download installs it, and the card becomes the
+ * agent's row.
+ */
+async function downloadCard(page, installer, evidence, failures) {
+  const group = page.getByRole("group", { name: "Agent" })
+  const card = group.getByRole("group", { name: names.setup.codexCard })
+  const download = card.getByRole("button", {
+    name: names.setup.codexDownload,
+    exact: true,
+  })
+  const shown = await waitFor(async () => (await download.count()) === 1, 15_000)
+  await page.screenshot({ path: join(evidence, "onboarding-download-card.png") })
+  if (!shown) {
+    failures.push("Codex, not installed but offered, is not shown as a download card")
+    return
+  }
+  if (await group.locator("button[aria-pressed]", { hasText: "Codex" }).count())
+    failures.push("Codex has both a download card and a row to pick")
+  for (const text of [/Check downloads/, /Download only the agents/, /^Installed$/])
+    if (await page.getByText(text).count()) failures.push(`the picker still says ${text}`)
+  // Pressed from the keyboard, so where the focus goes is part of the check.
+  await download.focus()
+  await page.keyboard.press("Enter")
+  // The installer holds its answer, so the card is seen fetching, with the
+  // focus still on its button.
+  const fetching = await waitFor(
+    () =>
+      card.evaluate(
+        (each) =>
+          each.dataset.downloadState === "fetching" &&
+          each.contains(document.activeElement),
+      ),
+    2_000,
+  )
+  if (!fetching) failures.push("Codex's card did not fetch with the focus kept on it")
+  const row = group.locator("button[aria-pressed]:not([aria-disabled='true'])", {
+    hasText: "Codex",
+  })
+  if (!(await waitFor(async () => (await row.count()) === 1, 15_000)))
+    failures.push("the installed Codex did not become a row to pick")
+  else {
+    if (await card.count()) failures.push("Codex's download card stayed after install")
+    // The focus the download held is handed to the row it became.
+    if (
+      !(await waitFor(
+        () => row.evaluate((each) => each === document.activeElement),
+        2_000,
+      ))
+    )
+      failures.push("the focus was not handed to Codex's row after install")
+  }
+  if (installer.installs !== 1)
+    failures.push(`Download asked the installer ${installer.installs} times, not once`)
 }
 
 /** The picker's agent rows, and not the buttons of a key form beside one. */
@@ -3660,28 +4277,25 @@ const AGENT_ROWS = `button[aria-pressed], button[aria-label='${names.setup.local
  * Which agents are ready is the gateway's machine probe, which this stack's
  * page is not an origin it answers; the probe is answered here instead with
  * Claude ready, so the step is about the finish rather than about the machine.
+ * Codex starts not installed, with a download on offer, so the same window
+ * shows its download card on the way.
  */
 async function finishedIntoTheMenuBar(run, failures) {
-  const page = await setupWindow(run, (page) =>
-    page.route("**/onboarding/agents", (route) =>
-      route.fulfill({
-        // The gateway's own origin, not the page's: the ask is cross-origin.
-        headers: { "access-control-allow-origin": "*" },
-        json: {
-          agents: [
-            { id: "claude", readiness: "ready" },
-            { id: "codex", readiness: "not-installed" },
-          ],
-        },
-      }),
-    ),
-  )
+  let installer
+  const page = await setupWindow(run, async (page) => {
+    installer = await codexInstaller(page)
+    await agentsProbe(page, () => ({
+      claude: "ready",
+      codex: installer.installed ? "ready" : "not-installed",
+    }))
+  })
   try {
     const button = (name) => page.getByRole("button", { name, exact: true })
     await page
       .getByRole("heading", { name: names.setup.welcome, exact: true })
       .waitFor({ timeout: 15_000 })
     await button(names.setup.getStarted).click()
+    await downloadCard(page, installer, run.evidence, failures)
     const ready = page
       .getByRole("group", { name: "Agent" })
       .locator("button[aria-pressed]:not([aria-disabled='true'])")
@@ -3811,10 +4425,104 @@ function inCorner(place, side) {
   return side === "left" ? place.x < 0.15 : place.x > 0.85
 }
 
+/**
+ * Nessa's own shell tool as the gateway's managed `nessa` server: the
+ * `nessa-mcp` built beside the gateway, working in a directory of the run's.
+ */
+function shellServer(directory) {
+  const gateway = process.env.MCP_LIVE_NESSA ?? join(repoRoot, "target/debug/nessa")
+  const command = join(dirname(gateway), "nessa-mcp")
+  if (!existsSync(command))
+    throw new CannotRun(
+      `build the shell tool first (cargo build -p nessa-mcp): ${command}`,
+    )
+  const workspace = join(directory, "shell-workspace")
+  mkdirSync(workspace)
+  return {
+    name: "nessa",
+    command,
+    args: ["--workspace", workspace, "--audit-directory", join(directory, "shell-audit")],
+  }
+}
+
+/** Opens Settings › Connections › Accounts, where the GitHub row is. */
+async function openAccounts(page) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.connections }).click()
+  await page.locator(css.settingsTab, { hasText: names.accounts }).click()
+}
+
+/**
+ * A new conversation's agent, opened now, says what GitHub sign-in it was
+ * started with; `said` is what it must say. A sign-in is read when an agent
+ * opens, so only a new one shows a change.
+ */
+async function githubAgent(run, step, extra, said, failures, shell = false) {
+  const conversationId = randomUUID()
+  run.checked.push(conversationId)
+  const text = prompt(run, shell ? STRESS.githubShell : STRESS.github, step, extra)
+  await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+  await run.client.conversation.submit(
+    run.client.conversation.prepare(conversationId, text),
+  )
+  const { turn } = await settled(
+    run,
+    conversationId,
+    new Set(),
+    text,
+    "completed",
+    failures,
+  )
+  if (!turn) return
+  const answer = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+  const where = shell ? SAYS.githubShell : SAYS.github
+  if (answer !== `${where}${said}`)
+    failures.push(
+      `an agent started${extra} says ${JSON.stringify(answer)}${shell ? " from its shell tool" : ""}, not ${said}`,
+    )
+}
+
 /** Leaves Settings: Esc does not close it; its back control returns to the app. */
 async function closeSettings(page) {
   await page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
   await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
+}
+
+/**
+ * Pair a device on the Linked devices tab, with linking on: the window's own
+ * sign-in opens a code, shown as a person pairing a phone sees it, never the
+ * card that says this sign-in cannot manage credentials. The code is then
+ * cancelled. Resolves whether all of that held.
+ */
+async function pairFromWindow(page, failures) {
+  const before = failures.length
+  await page.locator(selectorFor.linkedAction("pair")).click()
+  const shown = await waitFor(
+    async () =>
+      (await page.locator(css.linkedRefused).count()) > 0
+        ? "refused"
+        : (await page.locator(css.pairingCode).count()) > 0
+          ? "code"
+          : null,
+    10_000,
+  )
+  if (shown !== "code") {
+    failures.push(
+      shown === "refused"
+        ? "Pair a device was refused: the window's sign-in cannot manage credentials"
+        : "Pair a device showed no code",
+    )
+    return false
+  }
+  const code = (
+    await page.locator('[data-slot="pairing-code-value"]').innerText()
+  ).replace(/\s+/g, "")
+  if (!code) failures.push("the pairing code shown was empty")
+  await page.locator(selectorFor.linkedAction("cancel")).click()
+  await page
+    .waitForSelector(css.pairingCode, { state: "detached", timeout: 10_000 })
+    .catch(() => failures.push("the cancelled code stayed on the tab"))
+  return failures.length === before
 }
 
 /**
@@ -4179,9 +4887,24 @@ async function startStack(options) {
       `${JSON.stringify(knobs)}\n${describe(plan(knobs))}\n`,
     )
   }
+  // The `github` step's GitHub, on this machine, which the gateway reads its
+  // app from, and Nessa's own shell tool, where an agent's git and gh run.
+  let servers = []
+  try {
+    if (knobs.githubs > 0) servers = [shellServer(directory)]
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true })
+    throw error
+  }
+  const github = knobs.githubs > 0 ? await startFakeGithub() : null
+  const environment = github
+    ? { NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")) }
+    : {}
   let stack
   try {
     stack = await startGatewayStack(options, INSTANCE, {
+      environment,
+      servers,
       as: "panel",
       scenario,
       evidence: options.evidence,
@@ -4192,6 +4915,7 @@ async function startStack(options) {
       native: { enabled: false, listenAddress: nativeAddress },
     })
   } catch (error) {
+    await github?.close()
     rmSync(directory, { recursive: true, force: true })
     throw error
   }
@@ -4200,6 +4924,7 @@ async function startStack(options) {
     try {
       await close()
     } finally {
+      await github?.close()
       rmSync(directory, { recursive: true, force: true })
     }
   }
@@ -4207,7 +4932,10 @@ async function startStack(options) {
     knobs,
     agent: options.agent,
     nativeAddress,
+    github,
     scenario,
+    // Removed when the stack closes.
+    scratch: directory,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
   }))
 }

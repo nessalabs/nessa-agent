@@ -322,10 +322,15 @@ impl AgentProvider for ClaudeAcpProvider {
         // The process start reads the switch. This open does not snapshot it.
         let profile = self.launch_profile();
         let traces = self.traces.clone();
+        // This open's credentials, read once for every start of its process.
+        let opened = Self {
+            config: self.config.with_open_credentials(),
+            ..self.clone()
+        };
         Box::pin(async move {
             acp_binding::open(
-                self.process_factory(),
-                self.config.clone(),
+                opened.process_factory(),
+                opened.config.clone(),
                 self.capabilities.clone(),
                 profile,
                 self.audit.clone(),

@@ -21,6 +21,7 @@ import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
 import { SessionList } from "../session-list/session-list"
 import { ShareDialogHost } from "../share/share-dialog"
+import { NewChannelHost } from "../channel-creation/new-channel"
 import { DeleteSessionHost } from "../session-row-actions"
 import { OverviewQuietProvider } from "../source-list/overview-quiet"
 import { SourceList } from "../source-list/source-list"
@@ -141,15 +142,18 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       </div>
                     ) : (
                       <div className="workspace-titlebar-navigation">
-                        <IconButton
-                          icon="sidebar"
-                          label={`${sidebarOpen ? "Hide" : "Show"} Sidebar`}
-                          shortcut={frame.shortcut("toggleSidebar")}
-                          aria-expanded={sidebarOpen}
-                          aria-controls="workspace-sidebar"
-                          onClick={onToggleSidebar}
-                        />
-                        {region.sessionList ? (
+                        {/* The expanded panel has no columns beside it to show or hide. */}
+                        {panelMaximized ? null : (
+                          <IconButton
+                            icon="sidebar"
+                            label={`${sidebarOpen ? "Hide" : "Show"} Sidebar`}
+                            shortcut={frame.shortcut("toggleSidebar")}
+                            aria-expanded={sidebarOpen}
+                            aria-controls="workspace-sidebar"
+                            onClick={onToggleSidebar}
+                          />
+                        )}
+                        {region.sessionList && !panelMaximized ? (
                           <IconButton
                             icon="sessionList"
                             label={`${listOpen ? "Hide" : "Show"} Session List`}
@@ -165,7 +169,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       <div className="workspace-titlebar-space" data-tauri-drag-region />
                     ) : (
                       <>
-                        <WindowTabs />
+                        <WindowTabs panelChat={panelMaximized} />
                         <div className="workspace-titlebar-trailing">
                           {panelOpen ? (
                             <PanelMaximize
@@ -251,6 +255,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                     />
                     <Covered by={panelMaximized}>
                       <OverviewLayer root={root} />
+                      <NewChannelHost />
                     </Covered>
                     <ShareDialogHost />
                     <DeleteSessionHost />

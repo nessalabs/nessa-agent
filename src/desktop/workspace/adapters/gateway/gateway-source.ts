@@ -110,6 +110,7 @@ import {
   NessaRpcError,
   NessaSessionUnavailableError,
   subscriptionLimits,
+  type ChannelApi,
   type ConnectionState,
   type ConversationApi,
   conversationTitle,
@@ -140,9 +141,11 @@ import {
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import type { Transcript } from "../../model/transcript"
-import type { SessionSummary, WorkspaceIndex } from "../../model/workspace-index"
+import type { Channel, SessionSummary, WorkspaceIndex } from "../../model/workspace-index"
 import {
+  channelFrom,
   gatewayChannel,
+  gatewayChannelId,
   gatewaySection,
   modelFor,
   REMEMBER_ALLOW_OPTION,
@@ -177,6 +180,8 @@ export interface GatewayClient {
     | "delete"
   >
   readonly subscriptions: Pick<SubscriptionApi, "view" | "list">
+  /** The person's channels, which the index lists and a new session names. */
+  readonly channels: Pick<ChannelApi, "list" | "create">
   /** Stops the active execution, which the gateway names from its own peek. */
   stopThread(threadId: string): Promise<StopThreadResult>
   readonly connectionState: ConnectionState
@@ -419,6 +424,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const removedIds = new Set<string>()
   const takenOut = (sessionId: string) => removedIds.has(sessionId)
   const rows = new Map<string, ConversationSummary>()
+  // The channels the gateway last listed, the default one first. Kept when a
+  // listing fails, so a session in one of them is not left out of the index
+  // for a read that did not answer.
+  let channels: readonly Channel[] = [gatewayChannel]
   // Each conversation's counter, and its latest frame.
   const transcriptCounts = new Map<string, number>()
   const reads = new Map<string, Read>()
@@ -740,7 +749,19 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     summaries.set(sessionId, summary)
     removedIds.delete(sessionId)
     emit({ kind: "session", session: summary })
+    // A channel made since the index was read (from another window, or an
+    // agent's thread) is read with the index again, once per channel: the
+    // session is placed in it then.
+    if (
+      !channels.some((channel) => channel.id === summary.channelId) &&
+      !unknownChannels.has(summary.channelId)
+    ) {
+      unknownChannels.add(summary.channelId)
+      resync()
+    }
   }
+  // Channels a session was in before the index listed them, each read for once.
+  const unknownChannels = new Set<string>()
 
   // The conversations followed, least recently opened first (D7).
   const views = new Map<string, Followed<Transcript>>()
@@ -1016,6 +1037,26 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     gap = true
     settle(list, { error: endRefusal(end) })
     scheduleRetry()
+  }
+
+  /**
+   * Every channel the gateway lists, the default one first; the ones held
+   * when it does not answer.
+   */
+  const listChannels = async (live: () => boolean): Promise<readonly Channel[]> => {
+    try {
+      const listed = await dispatch(live, (connected) => connected.channels.list())
+      const made = listed.channels.map(channelFrom)
+      return made.some((channel) => channel.id === gatewayChannel.id)
+        ? made
+        : [gatewayChannel, ...made]
+    } catch (error) {
+      if (!live()) throw error
+      console.warn("The gateway's channels were not read; the last ones are kept", error)
+      // A channel a session named is asked for again, by its next frame.
+      unknownChannels.clear()
+      return channels
+    }
   }
 
   /** The index once a list frame is applied: opening the list subscription as `who`. */
@@ -1402,16 +1443,17 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
 
   return {
     index: () =>
-      within(async () => {
+      within(async (live) => {
         await listReady("person").catch((error: unknown) => {
           gap = true
           throw error
         })
         // The index is the resync: what any gap missed is read now (S20).
         gap = false
+        channels = await listChannels(live)
         const index: WorkspaceIndex = {
           sections: [gatewaySection],
-          channels: [gatewayChannel],
+          channels,
           sessions: [...summaries.values()].filter((summary) => !takenOut(summary.id)),
         }
         return index
@@ -1435,6 +1477,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       const model = Object.freeze({ ...message.model })
       const start = message.start !== undefined
       const access = message.start?.access
+      const channelId = message.start && gatewayChannelId(message.start.channelId)
       let prepared
       try {
         prepared = prepareSubmission({
@@ -1464,8 +1507,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
               conversationId: prepared.conversationId,
               ...(agent ? { agent } : {}),
               model: model.modelId,
-              // The access chosen in the home; the gateway asks when told none.
+              // The access chosen in the home; the gateway asks when told none,
+              // or starts as the channel says.
               ...(access ? { approvalMode: access } : {}),
+              // The channel it is in for its whole life; none is the default one.
+              ...(channelId ? { channelId } : {}),
             })
           })
         }
@@ -2106,6 +2152,7 @@ function reasonFor(
       return uncertain ? "unavailable" : "agent-not-configured"
     case ConversationErrorCode.AgentUnsupported:
     case ConversationErrorCode.ConversationsNotConfigured:
+    case ConversationErrorCode.ChannelNotFound:
     case ConversationErrorCode.EnvironmentNotConfigured:
     case ConversationErrorCode.EnvironmentVersionMismatch:
     case ConversationErrorCode.EnvironmentPlatformUnsupported:

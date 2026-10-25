@@ -114,6 +114,12 @@ export const selectReady = (state: Root) => state.workspace.status === "ready"
 export const selectShareable = (state: Root) => state.workspace.shareable
 /** The share dialog, while it is open; its own slice of state, nothing else. */
 export const selectShareDialog = (state: Root) => state.workspace.share
+/** Whether channels can be made from this window, and their paths picked. */
+export const selectChannelMaking = (state: Root) => state.workspace.channelMaking
+/** The "New channel" flow, while it is open. */
+export const selectChannelCreation = (state: Root) => state.workspace.channelCreation
+/** Every channel the index lists, for the flow to say which share a folder. */
+export const selectAllChannels = (state: Root) => state.workspace.channels
 
 /** What is typed into a session's title while it is being renamed, or `null`. */
 export const selectRenameDraft = (state: Root, sessionId: string) =>
@@ -253,6 +259,15 @@ export const selectPaneCount = (state: Root) =>
 
 export const selectFocusedPaneKey = (state: Root): PaneKey | null =>
   state.workspace.panes ? focusedPane(state.workspace.panes).key : null
+
+/**
+ * The chat or widget in front: the active tab and its focused pane's item.
+ * It changes only when what the workspace shows in front does.
+ */
+export const selectInFront = (state: Root): string =>
+  `${state.workspace.tabs.activeTab ?? ""}\n${
+    state.workspace.panes ? focusedPane(state.workspace.panes).item : ""
+  }`
 
 /** The session in the focused pane; none while it shows a widget. */
 export const selectFocusedSessionId = (state: Root): string | null => {

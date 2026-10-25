@@ -94,6 +94,13 @@ pub(super) struct AgentsConfig {
     #[cfg(unix)]
     #[serde(skip)]
     pub stand_ins: nessa_sdk::infrastructure::acp::sessions::StandInSessions,
+    /// What each provider open's sign-ins outside the agent's own vendor are
+    /// read from: the GitHub connection once it is composed
+    /// ([`super::github`]), none before. Never configured. Unix only, as
+    /// launching an agent is.
+    #[cfg(unix)]
+    #[serde(skip)]
+    pub open_credentials: nessa_sdk::infrastructure::acp::sessions::OpenCredentials,
     /// The agent a conversation runs on when nothing else names one.
     ///
     /// Left out where only one agent is configured, because there is nothing to
@@ -108,6 +115,14 @@ pub(super) struct AgentsConfig {
     /// survives parsing and can be reported as the name the operator typed.
     #[serde(default)]
     pub runtimes: HashMap<String, AgentRuntime>,
+    /// What an agent started for a conversation in a stored channel is told
+    /// about that channel (`Channel::instructions`), after Nessa's own
+    /// instructions; `None` outside one. Set only on the copy of this
+    /// configuration a channel's agent is built from, with [`Self::workspace`]
+    /// set to the channel's folder. Never configured.
+    #[serde(skip)]
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub channel_instructions: Option<String>,
 }
 
 /// How one agent is started, within the shared configuration above.
@@ -1102,15 +1117,22 @@ pub(super) mod build {
     ///
     /// The same text for either agent: it describes what Nessa is and how its
     /// tools are reached, and none of that changes with the harness underneath.
-    fn system_prompt() -> Result<SystemPrompt, RunError> {
-        SystemPromptBuilder::new()
+    fn system_prompt(config: &AgentsConfig) -> Result<SystemPrompt, RunError> {
+        let builder = SystemPromptBuilder::new()
             .text(
                 PromptSource::new(PromptSourceKind::Core, "nessa/gateway")
                     .map_err(|e| RunError::Agent(e.to_string()))?,
                 "You are Nessa, a helpful assistant. Follow the user's request. Use your native tools for file operations and web research. All Nessa tools are provided through MCP. For shell commands use the Nessa MCP shell tool, which tracks execution through Shepherd; never substitute an unmanaged shell path. Report tool failures accurately.",
-            )
-            .build()
-            .map_err(|e| RunError::Agent(e.to_string()))
+            );
+        let builder = match &config.channel_instructions {
+            Some(channel) => builder.text(
+                PromptSource::new(PromptSourceKind::User, "nessa/channel")
+                    .map_err(|e| RunError::Agent(e.to_string()))?,
+                format!("\n\n{channel}"),
+            ),
+            None => builder,
+        };
+        builder.build().map_err(|e| RunError::Agent(e.to_string()))
     }
 
     /// Whether everything this agent would launch is on the machine now.
@@ -1182,6 +1204,7 @@ pub(super) mod build {
             environment,
             runtime_environment,
             credential_environment,
+            open_credentials: config.open_credentials.clone(),
             workspace,
             tools_enabled: runtime.tools_enabled,
             // MCP servers are tools: a runtime with tools off is given none,
@@ -1294,7 +1317,7 @@ pub(super) mod build {
         let (permission_rules, review_notices) = super::remembered_rules(agent, dependencies);
         acp.permission_rules = permission_rules;
         acp.review_notices = review_notices;
-        let prompt = system_prompt()?;
+        let prompt = system_prompt(config)?;
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
         // One entry per agent: its provider, and the same binding as the way
         // it deletes its own record of a session.

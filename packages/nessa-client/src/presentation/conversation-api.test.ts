@@ -112,6 +112,17 @@ it("passes the SSH host a conversation runs on only when one is named", async ()
   ])
 })
 
+it("passes the channel a conversation is in only when one is named", async () => {
+  const request = vi.fn().mockResolvedValue({ conversationId })
+  const api = createConversationApi({ request }, () => "generated")
+  await api.create({ conversationId, requestId: "create-default" })
+  await api.create({ conversationId, requestId: "create-in", channelId: "ch_aaaaaaaaaa" })
+  expect(request.mock.calls.map(([, params]) => params)).toEqual([
+    { conversationId, requestId: "create-default" },
+    { conversationId, requestId: "create-in", channelId: "ch_aaaaaaaaaa" },
+  ])
+})
+
 it("correlates an acknowledged mode change and rejects a mismatched reply", async () => {
   const request = vi.fn().mockResolvedValue({ requestId: "mode-1", mode: "auto" })
   const api = createConversationApi({ request }, () => "generated")
@@ -1568,6 +1579,29 @@ it("refuses a list row outside the schema, or one conversation listed twice", as
       () => "id",
     )
     await expect(unsaid.list()).rejects.toThrow(/complete/)
+  }
+})
+
+it("keeps the channel a listed conversation is in, and refuses one the schema cannot name", async () => {
+  const inChannel = { ...summary, channelId: "ch_abcdefgh27" }
+  const api = createConversationApi(
+    {
+      request: vi.fn().mockResolvedValue({ conversations: [inChannel], complete: true }),
+    },
+    () => "id",
+  )
+  expect((await api.list()).conversations).toEqual([inChannel])
+  for (const channelId of ["default", "ch_bad", 7]) {
+    const refused = createConversationApi(
+      {
+        request: vi.fn().mockResolvedValue({
+          conversations: [{ ...summary, channelId }],
+          complete: true,
+        }),
+      },
+      () => "id",
+    )
+    await expect(refused.list(), String(channelId)).rejects.toThrow(/channelId/)
   }
 })
 

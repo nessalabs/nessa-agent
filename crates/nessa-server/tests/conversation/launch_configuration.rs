@@ -45,7 +45,9 @@ fn agents_config() -> AgentsConfig {
         workspace: PathBuf::from("/workspace"),
         mcp_servers: Vec::new(),
         stand_ins: Default::default(),
+        open_credentials: Default::default(),
         mcp_stand_ins: Default::default(),
+        channel_instructions: None,
         selected: None,
         runtimes: HashMap::new(),
     }
@@ -643,7 +645,9 @@ fn composed_provider(
         workspace: workspace.to_owned(),
         mcp_servers: Vec::new(),
         stand_ins: Default::default(),
+        open_credentials: Default::default(),
         mcp_stand_ins: Default::default(),
+        channel_instructions: None,
         selected: None,
         runtimes: HashMap::new(),
     };

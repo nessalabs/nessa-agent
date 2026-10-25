@@ -273,6 +273,11 @@ while True:
         # carried, by method, for the test to read back; otherwise none.
         if mode == "stand-ins":
             record("mcp-servers-" + method.split("/")[1], json.dumps(servers))
+            # And the open's credential the process was started with.
+            record(
+                "open-credential-" + method.split("/")[1],
+                os.environ.get("NESSA_FIXTURE_OPEN_CREDENTIAL", ""),
+            )
         elif mode != "forwarded-result":
             assert servers == []
         assert options["settings"]["allowedMcpServers"] == [{"serverName": server["name"]} for server in servers]

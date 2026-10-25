@@ -29,6 +29,9 @@ export const STRESS = {
   window: "stress window",
   table: "stress table",
   trace: "stress trace",
+  github: "stress github",
+  githubShell: "stress shell github",
+  channel: "stress channel",
 }
 
 /**
@@ -67,7 +70,11 @@ export const SAYS = {
   window: "Window: ",
   table: "Tables: ",
   trace: "Traced: ",
+  github: "GitHub: ",
+  githubShell: "GitHub in the shell: ",
   carried: "Carried on by ",
+  channel: "Working in: ",
+  channelPrompt: "System prompt: ",
 }
 
 /**
@@ -109,6 +116,21 @@ export const TRACE_CALLS = [
   // way; the arguments are there to be kept as its input.
   { tool: "always_fails", arguments: { reason: "stress trace" }, status: "failed" },
 ]
+
+/**
+ * A command printing what GitHub sign-in a shell command has, as
+ * `token=<fingerprint> git=<fingerprint>` (`none` for either it lacks): the
+ * fingerprint of `GH_TOKEN`, and of the password git's credential helpers
+ * give for https://github.com, with no system git config. The same as the
+ * scripted agent's `credentials` (`scripted-agent.mjs`).
+ */
+export const GITHUB_FINGERPRINTS = `node -e '${[
+  'const c=require("crypto"),{execFileSync:x}=require("child_process")',
+  'const p=(s)=>s?c.createHash("sha256").update(s).digest("hex").slice(0,16):"none"',
+  "let g",
+  'try{g=/^password=(.*)$/m.exec(x("git",["credential","fill"],{input:"protocol=https\\nhost=github.com\\n\\n",env:{...process.env,GIT_TERMINAL_PROMPT:"0",GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null"},stdio:["pipe","pipe","ignore"],timeout:10000}).toString())?.[1]}catch{}',
+  'process.stdout.write("token="+p(process.env.GH_TOKEN)+" git="+p(g))',
+].join(";")}'`
 
 /** The tool every review asks for: the test server's own, so an allow can run it. */
 const TOOL = "report_rows"
@@ -226,6 +248,36 @@ export function stressScenario({
         ],
       },
       {
+        // What GitHub sign-in the agent was started with, as fingerprints.
+        when: STRESS.github,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.github,
+              "token=${credentials.githubToken} git=${credentials.gitPassword}",
+            ],
+          },
+          { do: "end" },
+        ],
+      },
+      {
+        // The same, from a command run by Nessa's own shell tool, where an
+        // agent's git and gh actually run.
+        when: STRESS.githubShell,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa",
+            tool: "shell",
+            arguments: { command: GITHUB_FINGERPRINTS },
+            save: "shell",
+          },
+          { do: "text", chunks: [SAYS.githubShell, "${shell.stdout}"] },
+          { do: "end" },
+        ],
+      },
+      {
         when: STRESS.permission,
         steps: [
           { do: "text", chunks: ["Asking: ${prompt.text}"] },
@@ -302,6 +354,21 @@ export function stressScenario({
             save: "window",
           },
           { do: "text", chunks: [SAYS.window + "${window}"] },
+          { do: "end" },
+        ],
+      },
+      {
+        // Where the session works and what it was told, said back: a turn in
+        // a channel is seen to run in the channel's folder, with its notes.
+        when: STRESS.channel,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.channel + "${session.cwd}\n\n",
+              SAYS.channelPrompt + "${session.systemPrompt}",
+            ],
+          },
           { do: "end" },
         ],
       },

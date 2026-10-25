@@ -57,7 +57,16 @@ function moveTab(event: KeyboardEvent<HTMLDivElement>) {
   tabs[next]?.click()
 }
 
-export const WindowTabs = memo(function WindowTabs() {
+export const WindowTabs = memo(function WindowTabs({
+  panelChat = false,
+}: {
+  /**
+   * The right panel is expanded: it is the chat in front's own, so the strip
+   * shows that chat's tab alone. Every other tab is still there, and the
+   * strip shows them again once the panel docks.
+   */
+  panelChat?: boolean
+}) {
   const dispatch = useWorkspaceDispatch()
   const panes = useWorkspaceSelector(selectPanes)
   const tabs = useWorkspaceSelector(selectTabs)
@@ -75,7 +84,7 @@ export const WindowTabs = memo(function WindowTabs() {
     const at = tab.getBoundingClientRect()
     if (at.left < from.left) strip.scrollLeft -= from.left - at.left
     else if (at.right > from.right) strip.scrollLeft += at.right - from.right
-  }, [panes?.focused, focused, overview, tabs.activeTab])
+  }, [panes?.focused, focused, overview, tabs.activeTab, panelChat])
   const frame = useWorkspaceFrame()
   return (
     <div className="workspace-window-tabs" data-tauri-drag-region>
@@ -85,14 +94,17 @@ export const WindowTabs = memo(function WindowTabs() {
         role="tablist"
         aria-label="Open views"
         // Its natural width: every chat a unit, every merged group its glyph.
-        style={stripMeasure(tabs, panes)}
+        style={panelChat ? oneChat : stripMeasure(tabs, panes)}
         onKeyDown={moveTab}
       >
         {tabs.tabs.map((tab) => {
           const current = tab.id === tabs.activeTab
+          if (panelChat && !current) return null
           const active = !overview && current
           const layout = layoutOf(tabs, panes, tab)
-          const shown = layout ? panesOf(layout) : []
+          const shown = (layout ? panesOf(layout) : []).filter(
+            (pane) => !panelChat || pane.key === layout?.focused,
+          )
           const lit = (key: number) => active && layout?.focused === key
           // One tab is always the strip's Tab stop: the focused pane's, the
           // overview open or not.
@@ -347,6 +359,9 @@ function MergedGlyph() {
     </svg>
   )
 }
+
+/** The strip's measure while it shows the expanded panel's chat alone. */
+const oneChat = { "--tab-units": 1, "--tab-groups": 0, "--tab-count": 1 } as CSSProperties
 
 /** The strip's natural width, as units of tab and merged groups (`window-tabs.css`). */
 function stripMeasure(tabs: TabsState, panes: PaneLayout | null): CSSProperties {

@@ -17,6 +17,8 @@ import {
   createSubscriptionGate,
   subscriptionLimits,
   viewEntryBounds,
+  type Channel as WireChannel,
+  type ChannelCreateParams,
   type ConnectionState,
   type ConversationApi,
   type ConversationListResult,
@@ -50,6 +52,18 @@ export type FakeGatewayClient = GatewayClient &
       SharingClient["conversation"] &
       Pick<ConversationApi, "permissionRules" | "revokePermissionRule">
   }
+
+/** The default channel, as the gateway lists it first. */
+const defaultChannel: WireChannel = {
+  channelId: "default",
+  name: "Conversations",
+  folder: "/workspace",
+  folderMade: false,
+  agent: null,
+  model: null,
+  approvalMode: "ask",
+  createdAtMs: 0,
+}
 
 const notShared = () => Promise.reject(new Error("the fake gateway does not share"))
 
@@ -86,6 +100,8 @@ type Method =
   | "delete"
   | "permissionRules"
   | "revokePermissionRule"
+  | "listChannels"
+  | "createChannel"
 
 /** A turn's reply as a fork copies it: its text, joined. */
 function turnReply(turn: ConversationView["messages"][number]): string | undefined {
@@ -359,6 +375,16 @@ export interface FakeGateway {
    * `permissionReview` answers with, as the review's live owner holds it.
    */
   readonly reviews: Map<string, Unkeyed<ConversationPermission>>
+  /**
+   * The person's channels past the default one, oldest first, each with what
+   * made it, as `channel.list` answers them; `channel.create` adds to it, once
+   * per request id as the gateway does.
+   */
+  readonly channels: {
+    readonly requestId: string
+    readonly params: ChannelCreateParams
+    readonly channel: WireChannel
+  }[]
   /** Whether a list names every conversation. */
   complete: boolean
   /**
@@ -432,6 +458,7 @@ export function fakeGateway(
   const views = new Map<string, ConversationView>()
   const active = new Map<string, string>()
   const reviews = new Map<string, ConversationPermission>()
+  const channels: FakeGateway["channels"] = []
   const overrides = new Map<Exclude<Method, "answer">, Behaviour[]>()
   const answerOverrides: AnswerBehaviour[] = []
   const observers = new Set<(state: ConnectionState) => void>()
@@ -789,6 +816,31 @@ export function fakeGateway(
           applied: false,
         })) as never,
     },
+    channels: {
+      list: () =>
+        answer("listChannels", [], () => ({
+          channels: [defaultChannel, ...channels.map((held) => held.channel)],
+          complete: true,
+        })) as never,
+      create: (params) =>
+        answer("createChannel", [params], () => {
+          const held = channels.find((entry) => entry.requestId === params.requestId)
+          if (held) return held.channel
+          const channelId = `ch_${"a".repeat(9)}${"abcdefghijklmnopqrstuvwxyz234567"[channels.length % 32]}`
+          const channel: WireChannel = {
+            channelId,
+            name: params.name,
+            folder: params.folder ?? `/data/channels/${channelId}`,
+            folderMade: params.folder === undefined,
+            agent: params.agent,
+            model: params.model,
+            approvalMode: params.approvalMode ?? "ask",
+            createdAtMs: channels.length + 1,
+          }
+          channels.push({ requestId: params.requestId, params, channel })
+          return channel
+        }) as never,
+    },
     workspace: {
       publish: (_windowId, revision, window) => {
         const held = windows.at(-1)?.revision ?? -1
@@ -895,6 +947,7 @@ export function fakeGateway(
     views,
     active,
     reviews,
+    channels,
     once(method: Exclude<Method, "answer">, behaviour: Behaviour) {
       overrides.set(method, [...(overrides.get(method) ?? []), behaviour])
     },

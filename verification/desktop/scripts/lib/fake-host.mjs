@@ -38,6 +38,12 @@ export const STARTING = {
  * still set after `waitMs`. A scenario sets it before a reload and removes it
  * once the gateway is "up": a launch.
  *
+ * A new channel's pickers answer from `window.__fakeHostPicks`: the next
+ * folder chosen (`folders`, null for a cancel) and the next files or folders
+ * (`resources`, an array per pick), each taken once, in order; a pick with
+ * none queued is a cancel. Each pick is counted in `window.__fakeHostPicked`
+ * with the kind it asked for. The home folder is `window.__fakeHostHome`.
+ *
  * Every window may ask for setup again (`replay_onboarding`, from Settings),
  * which is counted in `window.__fakeHostReplays`. Given `setup`, the page is
  * the setup window the real host opens for that ask: the host says it started
@@ -77,6 +83,9 @@ export function gatewayHost({
   window.__fakeHostReplays = 0
   window.__fakeHostSetupFinishes = []
   window.__fakeHostTrayAsks = 0
+  window.__fakeHostPicks = { folders: [], resources: [] }
+  window.__fakeHostPicked = []
+  window.__fakeHostHome = "/home/person"
   window.__TAURI_INTERNALS__ = {
     transformCallback: (callback) => {
       const id = ++callbacks
@@ -88,6 +97,15 @@ export function gatewayHost({
         const answered = noticeHost(command, args)
         if (answered) return answered
       }
+      if (command === "choose_channel_folder") {
+        window.__fakeHostPicked.push("folder")
+        return Promise.resolve(window.__fakeHostPicks.folders.shift() ?? null)
+      }
+      if (command === "choose_channel_resources") {
+        window.__fakeHostPicked.push(args.folders ? "folders" : "files")
+        return Promise.resolve(window.__fakeHostPicks.resources.shift() ?? [])
+      }
+      if (command === "home_folder") return Promise.resolve(window.__fakeHostHome)
       if (command === "replay_onboarding") {
         window.__fakeHostReplays++
         return Promise.resolve(null)

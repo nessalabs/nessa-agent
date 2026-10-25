@@ -49,6 +49,7 @@ import {
   Toggle,
   usePrototype,
 } from "./settings-controls"
+import { GithubRow } from "./github-row"
 import { IntegrationsTab } from "./integrations-tab"
 import { LinkedDevicesTab } from "./linked-devices-tab"
 import { NativeHooksRows } from "./native-hooks-rows"
@@ -484,12 +485,7 @@ function AgentsTab() {
 function AccountsTab() {
   return (
     <Group>
-      <Row id="nessa-account">
-        <PendingAction>Sign in…</PendingAction>
-      </Row>
-      <Row id="github">
-        <PendingAction>Connect…</PendingAction>
-      </Row>
+      <GithubRow />
     </Group>
   )
 }

@@ -91,7 +91,7 @@ export const KNOBS = {
   },
   rails: {
     default: 1,
-    what: "times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off, its toggle never moving",
+    what: 'times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off, its toggle never moving; "nessa Studio" stays while a column holds the corner and goes over the panes alone',
   },
   listAnswers: {
     default: 1,
@@ -99,7 +99,7 @@ export const KNOBS = {
   },
   panels: {
     default: 1,
-    what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, maximized and left with Escape, then closed",
+    what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, expanded for that chat alone (its tab only; New Tab docks it and the new session opens in sight), left with Escape, then closed",
   },
   onboardings: {
     default: 1,
@@ -107,7 +107,7 @@ export const KNOBS = {
   },
   linkings: {
     default: 1,
-    what: "times native linking is turned on and off again from Settings, each restarting the gateway",
+    what: "times native linking is turned on and off again from Settings, each restarting the gateway, with a code opened by Pair a device while it is on",
   },
   tables: {
     default: 1,
@@ -137,9 +137,17 @@ export const KNOBS = {
     default: 1,
     what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, and a chat archived from Messages leaves a row card whose Undo brings it back",
   },
+  githubs: {
+    default: 1,
+    what: "times GitHub is connected from Settings through a fake GitHub, an agent started after it holds the sign-in, then disconnected",
+  },
   launches: {
     default: 1,
     what: "window reloads while the host is still starting the gateway: no startup screen, and the conversation listed as soon as it is up",
+  },
+  channels: {
+    default: 1,
+    what: "times channels are made from the sidebar's + (a refused folder, then one made for it; then a chosen folder), each talked to in a new session",
   },
   long: {
     default: 30,
@@ -222,6 +230,8 @@ export function plan(knobs) {
   add(knobs.upgrades, () => ({ kind: "upgrade" }))
   add(knobs.launches, () => ({ kind: "launch" }))
   add(knobs.menuPanels, () => ({ kind: "menuPanel" }))
+  add(knobs.githubs, () => ({ kind: "github" }))
+  add(knobs.channels, () => ({ kind: "channel" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)
