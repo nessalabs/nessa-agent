@@ -985,9 +985,13 @@ phone's scanner is not this screen.
   `linked-devices-tab.test.tsx`; `linked-devices.mjs` (`pending`).
 - [ ] **Linking off, refused, pair, approve, revoke, and an expired code**
   are said in plain words. The switch does not pretend to write config.
-  A wire code is not on the page. The code, both orbs and the actions sit
-  inside the settings panel, and Cancel takes focus once it can be used.
-  _Check:_ `linked-devices.mjs` (Chromium and WebKit). Rows L1–L21:
+  A wire code is not on the page. Pair a device is one row; the code opens
+  in a modal that sits inside the settings panel and fits it, with one live
+  signal orb (no QR orb) and New code and Cancel. Closing the modal keeps
+  the code; Show code reopens the same one and focus returns to the row's
+  control. Cancel closes it and focus goes to Pair a device. An expired code
+  draws no orb. _Check:_ `linked-devices.mjs` (Chromium and WebKit);
+  `conversation-stress.mjs` (`linking`). Rows L1–L21:
   `linked-devices.test.ts`, `linked-devices-gateway.test.ts`,
   `device-key.test.ts`.
 

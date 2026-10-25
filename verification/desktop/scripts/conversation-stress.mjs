@@ -103,9 +103,10 @@
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
  *               message sent after it is answered. While it is on, Pair a
- *               device shows a code with the window's own sign-in; the
- *               code is cancelled, and leaving the tab and coming back
- *               still shows linking on
+ *               device opens a code with the window's own sign-in, in a
+ *               modal with one signal orb; Escape hides it, Show code
+ *               brings the same code back, Cancel closes it, and leaving
+ *               the tab and coming back still shows linking on
  *   drift       the gateway is stopped and started again with its staged
  *               runtime directory moved and a different agent PATH and
  *               TMPDIR, the way an app update stages a new tree and
@@ -1720,7 +1721,7 @@ const steps = {
     await run.exclusive(async () => {
       await openLinkedDevices(run.page)
       if (!(await switchLinking(run, true, failures))) return
-      if (!(await pairFromWindow(run.page, failures))) return
+      if (!(await pairFromWindow(run, failures))) return
       // Away and back: the tab reads linking again, and it is still on.
       await closeSettings(run.page)
       await openLinkedDevices(run.page)
@@ -4491,17 +4492,27 @@ async function closeSettings(page) {
 /**
  * Pair a device on the Linked devices tab, with linking on: the window's own
  * sign-in opens a code, shown as a person pairing a phone sees it, never the
- * card that says this sign-in cannot manage credentials. The code is then
- * cancelled. Resolves whether all of that held.
+ * card that says this sign-in cannot manage credentials. The code opens in a
+ * modal with the one signal orb, none of it drawn on the page; Escape hides
+ * the modal and leaves the code open, and Show code brings back the same
+ * code. Cancel in the modal then closes it and Pair a device is offered
+ * again. Resolves whether all of that held.
  */
-async function pairFromWindow(page, failures) {
+async function pairFromWindow(run, failures) {
+  const { page } = run
   const before = failures.length
+  const dialog = page.locator(css.pairingDialog)
+  const codeIn = async () =>
+    (await dialog.locator('[data-slot="pairing-code-value"]').innerText()).replace(
+      /\s+/g,
+      "",
+    )
   await page.locator(selectorFor.linkedAction("pair")).click()
   const shown = await waitFor(
     async () =>
       (await page.locator(css.linkedRefused).count()) > 0
         ? "refused"
-        : (await page.locator(css.pairingCode).count()) > 0
+        : (await dialog.locator(css.pairingCode).count()) > 0
           ? "code"
           : null,
     10_000,
@@ -4510,18 +4521,54 @@ async function pairFromWindow(page, failures) {
     failures.push(
       shown === "refused"
         ? "Pair a device was refused: the window's sign-in cannot manage credentials"
-        : "Pair a device showed no code",
+        : "Pair a device opened no modal with a code",
     )
     return false
   }
-  const code = (
-    await page.locator('[data-slot="pairing-code-value"]').innerText()
-  ).replace(/\s+/g, "")
+  // The orb gathers in, then stays live: animated, not drawn still.
+  const orb = dialog.locator(css.signalOrb)
+  const live = await waitFor(
+    async () => (await orb.getAttribute("data-state").catch(() => null)) === "live",
+    5_000,
+  )
+  if (!live)
+    failures.push(
+      `the pairing orb was ${await orb.getAttribute("data-state").catch(() => "missing")}, not live`,
+    )
+  if (run.evidence)
+    await page
+      .screenshot({ path: join(run.evidence, `pairing-${run.engine}-modal.png`) })
+      .catch(() => {})
+  const code = await codeIn()
   if (!code) failures.push("the pairing code shown was empty")
-  await page.locator(selectorFor.linkedAction("cancel")).click()
+  // Settings is a fixed layer over the window: a modal portalled past it is
+  // in the page but drawn underneath it, unseen.
+  if (!(await dialog.evaluate((node) => Boolean(node.closest("[data-settings-layers]")))))
+    failures.push("the pairing modal is not inside Settings, so it is drawn under it")
+  const orbs = await dialog.locator(css.signalOrb).count()
+  if (orbs !== 1) failures.push(`the pairing modal drew ${orbs} signal orbs, not 1`)
+  if ((await page.locator(css.qrOrb).count()) > 0) failures.push("a QR orb was drawn")
+  if ((await page.locator(`${css.linked} ${css.pairingCode}`).count()) > 0)
+    failures.push("the pairing code was drawn on the tab, not only in the modal")
+  await page.keyboard.press("Escape")
+  await dialog
+    .waitFor({ state: "detached", timeout: 10_000 })
+    .catch(() => failures.push("Escape did not close the pairing modal"))
+  await page.locator(selectorFor.linkedAction("show")).click()
+  await dialog
+    .waitFor({ timeout: 10_000 })
+    .catch(() => failures.push("Show code did not open the pairing modal again"))
+  const again = await codeIn().catch(() => "")
+  if (again !== code)
+    failures.push(`Show code showed ${JSON.stringify(again)}, not the open code`)
+  await dialog.locator(selectorFor.linkedAction("cancel")).click()
+  await dialog
+    .waitFor({ state: "detached", timeout: 10_000 })
+    .catch(() => failures.push("the cancelled code's modal stayed open"))
   await page
-    .waitForSelector(css.pairingCode, { state: "detached", timeout: 10_000 })
-    .catch(() => failures.push("the cancelled code stayed on the tab"))
+    .locator(selectorFor.linkedAction("pair"))
+    .waitFor({ timeout: 10_000 })
+    .catch(() => failures.push("Pair a device was not offered again after cancelling"))
   return failures.length === before
 }
 
