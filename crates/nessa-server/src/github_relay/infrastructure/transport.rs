@@ -118,6 +118,7 @@ impl HttpRelaySource {
         .await
         .map_err(|_| Failure::Offline)?
         .map_err(|_| Failure::Offline)?;
+        tracing::debug!("GitHub relay watch connected");
         Ok(RelayWatch(socket))
     }
 }
