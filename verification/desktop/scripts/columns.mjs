@@ -479,9 +479,10 @@ const body = {
         // The toggle holds one place in every state (`side-rail.css`): the
         // rail's column, on the footer row's line, its foot 13px above the
         // row's — toggling the rail or the sidebar moves what is beside it,
-        // never the toggle. With the rail open the footer keeps its own 6px
-        // inset; with it closed the footer's mark slot moves onto the
-        // toggle's column (`rail-corner` checks the slot).
+        // never the toggle. The footer keeps one 10px inset, rail open or
+        // closed, so its mark slot is on the rail's column (the sidebar's
+        // icon column) and toggling the rail never reflows it; closed, the
+        // toggle stands in that slot (`rail-corner` checks the slot).
         if (state.toggle) {
           firstToggle ??= state.toggle
           if (
@@ -492,10 +493,12 @@ const body = {
               `${label}: rail toggle at x ${state.toggle.x}, foot ${state.toggle.bottom}, not at x ${firstToggle.x} on the footer's line`,
             )
         }
-        if (state.sidebar && state.drawnRail && state.footerInset !== 6)
-          failures.push(`${label}: footer inset ${state.footerInset}, not the row's 6px`)
-        if (state.rail?.width && state.rail.width !== 48)
-          failures.push(`${label}: rail width ${state.rail.width}, expected 48`)
+        if (state.sidebar && state.drawnRail && state.footerInset !== 10)
+          failures.push(
+            `${label}: footer inset ${state.footerInset}, not the rail column's 10px`,
+          )
+        if (state.rail?.width && state.rail.width !== 64)
+          failures.push(`${label}: rail width ${state.rail.width}, expected 64`)
       }
     if (failures.length) return { states, failures }
     await arrange(page, size, { rail: false, sidebar: true })

@@ -483,7 +483,7 @@ async function aroundTheLights(page, rail, failures) {
     (rail === "open"
       ? near(now.at.workspace, now.at.railWidth) &&
         near(now.at.railTop, now.at.barBottom) &&
-        near(now.at.railWidth, 48) &&
+        near(now.at.railWidth, 64) &&
         near(now.at.item, now.at.railWidth / 2)
       : near(now.at.workspace, 0)) &&
     // The toggle is nessa's mark: in the footer's mark slot, right before
@@ -569,7 +569,7 @@ function railLayout(page) {
               : null
           })(),
           windowBottom: innerHeight,
-          itemColumn: length(document.querySelector(frame), "--desktop-control-edge"),
+          itemColumn: length(document.querySelector(frame), "--rail-column"),
           railTop: box(rail)
             ? box(rail).top +
               parseFloat(getComputedStyle(document.querySelector(rail)).paddingTop)
@@ -592,6 +592,52 @@ function railLayout(page) {
       toggle: css.sideRailToggle,
     },
   )
+}
+
+/**
+ * Toggles the rail from the page and follows "nessa Studio" every frame: it
+ * stands in the corner beside the toggle, 8px past the toggle's mark, and
+ * neither moves, not even for a frame. Settled, the toggle (with the rail
+ * closed) stands on Agents' icon column. Returns what it found wrong.
+ */
+function footerThroughToggle(page) {
+  return page.evaluate(async (toggleSelector) => {
+    const words = () =>
+      document.querySelector(".side-rail-studio .desktop-identity-words")
+    const toggle = document.querySelector(toggleSelector)
+    const mark = () => toggle.querySelector("svg").getBoundingClientRect()
+    const middle = (e) => {
+      const at = e.getBoundingClientRect()
+      return at.left + at.width / 2
+    }
+    const failures = []
+    if (!words()) failures.push(`no "nessa Studio" beside the rail's toggle`)
+    const seen = []
+    const started = performance.now()
+    toggle.click()
+    await new Promise((done) => {
+      const frame = () => {
+        if (words()) seen.push(words().getBoundingClientRect().left - mark().right)
+        if (performance.now() - started < 900) requestAnimationFrame(frame)
+        else done()
+      }
+      requestAnimationFrame(frame)
+    })
+    const off = seen.find((gap) => Math.abs(gap - 8) > 0.5)
+    if (off !== undefined)
+      failures.push(
+        `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8px`,
+      )
+    const icon = document.querySelector(".agents-overview-entry svg")
+    if (toggle.getAttribute("aria-expanded") === "false" && icon) {
+      const apart = middle(toggle) - middle(icon)
+      if (Math.abs(apart) > 0.5)
+        failures.push(
+          `the closed rail's toggle is ${apart.toFixed(1)}px off Agents' icon`,
+        )
+    }
+    return failures
+  }, css.sideRailToggle)
 }
 
 /** The row of the conversation `conversationId` in the window's list. */
@@ -1531,7 +1577,7 @@ const steps = {
       let place
       for (const open of [true, false, true]) {
         if ((await toggle.getAttribute("aria-expanded")) !== String(open))
-          await toggle.click()
+          failures.push(...(await footerThroughToggle(run.page)))
         if (!(await aroundTheLights(run.page, open ? "open" : "closed", failures))) return
         // The toggle stays under the pointer: opening or closing the rail
         // moves what is beside it, never the toggle itself.
