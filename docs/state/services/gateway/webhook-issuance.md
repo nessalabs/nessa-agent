@@ -245,7 +245,10 @@ architecture, formatting and diff checks. The original race probe failed before
 correction; removing full current-binding agreement fails its new regression.
 The earlier13 cancellation controls retain their earlier scope rather than
 claiming this exact final tree. [Independent round one](../../../reviews/evidence/webhook-runtime/recovery-cancellation/review-1.md)
-found this race and the stopped-versus-drained diagram error; fresh review of the
-corrections remains pending. Historical source-qualified results retain their
+found this race and the stopped-versus-drained diagram error.
+[Fresh round two](../../../reviews/evidence/webhook-runtime/recovery-cancellation/review-2.md)
+is clean at every priority and independently passed192 webhook tests, indexed
+SQL plans and state-page source/link checks. Its reviewed candidate1a7ca49e
+contains the same production/test bytes as this source checkpoint. Historical source-qualified results retain their
 original revisions. Runtime composition, recipient E2E and browser rendering
 remain unqualified.
