@@ -3947,3 +3947,86 @@ fn the_gateway_id_prefix_belongs_to_gateway_principals_alone() {
 
 #[path = "owner_phone_registry_tests.rs"]
 mod owner_phone_registry_tests;
+
+#[test]
+fn ordinary_pairing_expiry_and_cancellation_serialize_with_a_held_noop_writer() {
+    let fixture = enrolled_claim();
+    let policy = CedarPolicyEvaluator::new().unwrap();
+    let admission = ready(
+        AuthorizePairing {
+            access: fixture.store.as_ref(),
+            policy: &policy,
+            clock: &Time,
+        }
+        .execute(&fixture.session, fixture.record.intent(), &fixture.gateway),
+    )
+    .unwrap();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let held = Arc::new(AtomicBool::new(false));
+    let clock = HeldPairingClock {
+        entered: entered_tx,
+        release: Mutex::new(release_rx),
+        held: held.clone(),
+        expiry_ms: Time.unix_milliseconds(),
+    };
+    let id = fixture.record.id();
+    let before = fixture.store.revision().unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let (entered, early, holder, expiry, decision) = thread::scope(|threads| {
+        let release = ReleasePairingMutation(Some(release_tx));
+        let holder = threads.spawn(|| fixture.store.expire_pairing_if_due(id, &clock));
+        let entered = entered_rx.recv_timeout(Duration::from_secs(2));
+        let expiry = threads.spawn(|| {
+            started_tx.send("expiry").unwrap();
+            let result = fixture.store.expire_pairing_if_due(id, &Time);
+            done_tx.send(("expiry", result.clone())).unwrap();
+            result
+        });
+        let decision = threads.spawn(|| {
+            started_tx.send("decision").unwrap();
+            let result = ready(fixture.store.decide_pairing(
+                id,
+                OwnerDecision::Cancel,
+                &admission,
+                &Time,
+            ));
+            done_tx.send(("decision", result.clone())).unwrap();
+            result
+        });
+        // Both real workers are admitted. A watchdog observes an incorrect
+        // early result; there is no retry, sleep, or registry-read inference.
+        let started = [
+            started_rx.recv_timeout(Duration::from_secs(2)),
+            started_rx.recv_timeout(Duration::from_secs(2)),
+        ];
+        let early = done_rx.recv_timeout(Duration::from_secs(2));
+        eprintln!(
+            "holder=expiry-clock entered={entered:?} started={started:?} held={} early={early:?}",
+            held.load(Ordering::Acquire)
+        );
+        drop(release);
+        (
+            entered,
+            early,
+            holder.join().unwrap(),
+            expiry.join().unwrap(),
+            decision.join().unwrap(),
+        )
+    });
+    assert!(entered.is_ok());
+    assert!(
+        matches!(early, Err(mpsc::RecvTimeoutError::Timeout)),
+        "an ordinary writer must wait for the original writer: {early:?}"
+    );
+    assert!(holder.is_ok());
+    assert!(expiry.is_ok(), "expiry must serialize: {expiry:?}");
+    assert_eq!(decision.unwrap().phase(), PairingPhase::Terminal);
+    assert_eq!(
+        fixture.store.revision().unwrap(),
+        before + 1,
+        "only cancellation changes canonical facts"
+    );
+    eprintln!("holder=expiry-clock exited=true serialized-expiry=ok serialized-cancel=terminal");
+}

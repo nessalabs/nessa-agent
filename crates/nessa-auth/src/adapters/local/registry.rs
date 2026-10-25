@@ -319,8 +319,10 @@ pub struct LocalCredentialStore {
 }
 
 struct RegistrySlot<'a> {
-    guard: MutexGuard<'a, Option<Registry>>,
+    // Release the effect fence before handing the canonical mutex to the next
+    // writer. Otherwise it can spuriously observe this completed writer.
     _fence: OwnedRwLockWriteGuard<()>,
+    guard: MutexGuard<'a, Option<Registry>>,
 }
 
 impl Deref for RegistrySlot<'_> {
@@ -1000,17 +1002,27 @@ impl LocalCredentialStore {
         &self,
         request: RevokeCredentialRequest,
     ) -> Result<RevokeCredentialOutcome, LocalStoreError> {
-        let _fence = Arc::clone(&self.admission)
-            .try_write_owned()
-            .map_err(|_| LocalStoreError::Locked)?;
-        self.revoke_fenced(request)
+        let mut slot = self.slot()?;
+        self.revoke_in_slot(request, &mut slot)
     }
 
     fn revoke_fenced(
         &self,
         request: RevokeCredentialRequest,
+        fence: OwnedRwLockWriteGuard<()>,
     ) -> Result<RevokeCredentialOutcome, LocalStoreError> {
-        let mut slot = self.unfenced_slot()?;
+        let mut slot = RegistrySlot {
+            _fence: fence,
+            guard: self.unfenced_slot()?,
+        };
+        self.revoke_in_slot(request, &mut slot)
+    }
+
+    fn revoke_in_slot(
+        &self,
+        request: RevokeCredentialRequest,
+        slot: &mut RegistrySlot<'_>,
+    ) -> Result<RevokeCredentialOutcome, LocalStoreError> {
         let current = slot.as_ref().ok_or(LocalStoreError::NotInitialized)?;
         if request.request_id.trim().is_empty() || request.request_id.len() > 200 {
             return Err(LocalStoreError::Conflict);
@@ -1078,7 +1090,7 @@ impl LocalCredentialStore {
             revocation_of(&next, &request.credential_id).ok_or(LocalStoreError::Corrupt)?;
         self.persist(&next)?;
         let revision = next.revision;
-        *slot = Some(next.clone());
+        **slot = Some(next.clone());
         self.publish_snapshot(next)?;
         self.publish_revision(revision);
         Ok(RevokeCredentialOutcome {
@@ -1088,12 +1100,16 @@ impl LocalCredentialStore {
     }
 
     fn slot(&self) -> Result<RegistrySlot<'_>, LocalStoreError> {
+        // Ordinary writers retain the existing mutex serialization. Only try
+        // the effect fence while holding it: a current read hold still refuses
+        // without waiting, including when an async revoke has queued behind it.
+        let guard = self.unfenced_slot()?;
         let fence = Arc::clone(&self.admission)
             .try_write_owned()
             .map_err(|_| LocalStoreError::Locked)?;
         Ok(RegistrySlot {
-            guard: self.unfenced_slot()?,
             _fence: fence,
+            guard,
         })
     }
 
@@ -1329,7 +1345,7 @@ impl CredentialAdmin for LocalCredentialStore {
     ) -> PortFuture<'a, RevokeCredentialOutcome, CredentialAdminError> {
         Box::pin(async move {
             let _fence = Arc::clone(&self.admission).write_owned().await;
-            self.revoke_fenced(request)
+            self.revoke_fenced(request, _fence)
                 .map_err(CredentialAdminError::from)
         })
     }

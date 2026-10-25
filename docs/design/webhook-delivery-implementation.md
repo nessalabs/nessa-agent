@@ -885,3 +885,28 @@ principal/credential field. Its native mapping constructs those facts from the
 actual held credential, preventing contradictory input shapes without a new DTO
 or mode/state flag. Current receiver evidence is still checked transactionally
 before replay; historical receiver evidence is checked before replay receipt.
+
+### Ordinary registry writer handoff
+
+A registry mutation must serialize with another physical registry mutation before
+trying the effect fence. Taking the effect fence first turned ordinary pairing
+writer contention (including a no-op expiry) into `Locked`, which pairing maps to
+`Unavailable`. The original contention probe holds a real expiry in its Clock;
+expiry and cancellation both fail before their own Clock/persistence stage.
+
+| Ordering | Required outcome |
+| --- | --- |
+| ordinary synchronous writer behind another registry writer | wait on the existing canonical registry mutex in the already admitted physical worker, then try the effect fence; do not add a task or retry loop |
+| physical writer finishes | release its effect fence before releasing the registry mutex, so the next ordinary writer cannot observe the previous writer's fence |
+| synchronous mutation encounters a current credential read hold | keep the existing `Locked` refusal; no credential/grant effect or blocking fence acquisition |
+| asynchronous revoke waits for read holds | await the effect fence without a registry mutex; once obtained, take the registry mutex and retain both through persistence/publication |
+| async revoke owns its fence while another registry holder finishes | the synchronous holder only tries the fence and releases on refusal; it never waits for the fence while owning the registry mutex |
+| observer cancellation | the existing admitted physical worker retains its operation and guards; no new detached worker or nested blocking task |
+
+Only the existing mutex may wait synchronously, as before effect fencing was
+introduced. Native owner/connection composition already runs these physical store
+operations on bounded admitted blocking workers. The fence acquisition under that
+mutex remains nonblocking. No opposite-order cycle can wait on both locks: async
+revocation never awaits its fence with the registry mutex held, and a synchronous
+mutation never waits for a fence. Current authority and revision checks still run
+against the locked canonical registry before persistence.
