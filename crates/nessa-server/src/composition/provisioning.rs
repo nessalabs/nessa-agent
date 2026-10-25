@@ -162,7 +162,11 @@ mod tests {
     /// A registry as `auth init` wrote it with `panel` as the panel's set,
     /// built through the registry API. Answers the panel token, written where
     /// the window reads it.
-    fn namespace_with_panel(auth: &std::path::Path, panel: &[&str]) -> String {
+    fn namespace_with_panel(
+        auth: &std::path::Path,
+        panel: &[&str],
+        expires_at: Option<u64>,
+    ) -> String {
         use nessa_auth::{
             adapters::local::{BootstrapRequest, LocalCredentialStore},
             application::{credential_admin::IssueCredentialOutcome, dto::*},
@@ -212,7 +216,7 @@ mod tests {
                 "panel-credential".into(),
                 panel.iter().map(|action| (*action).to_owned()).collect(),
                 2,
-                None,
+                expires_at,
             )
             .unwrap()
         else {
@@ -230,6 +234,11 @@ mod tests {
 
     /// The live panel credential's actions, sorted, read back from `auth`.
     fn panel_grants(auth: &std::path::Path) -> Vec<String> {
+        panel(auth).0
+    }
+
+    /// The live panel credential's sorted actions and its expiry.
+    fn panel(auth: &std::path::Path) -> (Vec<String>, Option<u64>) {
         let store = nessa_auth::adapters::local::LocalCredentialStore::open(
             auth,
             "credentials.v1.json",
@@ -256,7 +265,7 @@ mod tests {
             .map(|grant| grant.action.clone())
             .collect::<Vec<_>>();
         actions.sort();
-        actions
+        (actions, live[0].expires_at)
     }
 
     /// The guard that matters: with both files present and the panel holding
@@ -277,6 +286,7 @@ mod tests {
                 "conversation.write",
                 "credential.manage",
             ],
+            None,
         );
         let registry = std::fs::read(auth.join("credentials.v1.json")).unwrap();
 
@@ -304,6 +314,7 @@ mod tests {
         let old = namespace_with_panel(
             &auth,
             &["server.read", "conversation.write", "credential.manage"],
+            None,
         );
 
         ensure_local_credentials(&environment(auth.clone())).unwrap();
@@ -331,13 +342,69 @@ mod tests {
         );
     }
 
+    /// The upgrade changes the grants, never how long the panel may sign in:
+    /// an earlier panel with an expiry keeps it.
+    #[test]
+    fn an_upgraded_panel_keeps_its_expiry() {
+        let temporary = tempfile::tempdir().unwrap();
+        let auth = temporary.path().join("namespace/auth");
+        let expires = 9_000_000_000;
+        let old = namespace_with_panel(
+            &auth,
+            &["server.read", "conversation.write", "credential.manage"],
+            Some(expires),
+        );
+
+        ensure_local_credentials(&environment(auth.clone())).unwrap();
+
+        let new = std::fs::read_to_string(auth.join("surfaces/nessa-panel.token")).unwrap();
+        assert_ne!(new.trim(), old);
+        assert_eq!(
+            panel(&auth),
+            (
+                vec![
+                    "conversation.read".to_owned(),
+                    "conversation.write".to_owned(),
+                    "credential.manage".to_owned(),
+                    "server.read".to_owned(),
+                ],
+                Some(expires)
+            )
+        );
+    }
+
+    /// An earlier panel that has expired is not live: it is not brought back
+    /// with a new credential.
+    #[test]
+    fn an_expired_earlier_panel_is_not_brought_back() {
+        let temporary = tempfile::tempdir().unwrap();
+        let auth = temporary.path().join("namespace/auth");
+        let token = namespace_with_panel(
+            &auth,
+            &["server.read", "conversation.write", "credential.manage"],
+            Some(3),
+        );
+        let registry = std::fs::read(auth.join("credentials.v1.json")).unwrap();
+
+        ensure_local_credentials(&environment(auth.clone())).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(auth.join("surfaces/nessa-panel.token")).unwrap(),
+            token
+        );
+        assert_eq!(
+            std::fs::read(auth.join("credentials.v1.json")).unwrap(),
+            registry
+        );
+    }
+
     /// A set chosen some other way, here a panel that only reads the gateway,
     /// is not the earlier owner set, and is left as it is.
     #[test]
     fn a_panel_with_another_set_is_left_as_it_is() {
         let temporary = tempfile::tempdir().unwrap();
         let auth = temporary.path().join("namespace/auth");
-        let token = namespace_with_panel(&auth, &["server.read"]);
+        let token = namespace_with_panel(&auth, &["server.read"], None);
 
         ensure_local_credentials(&environment(auth.clone())).unwrap();
 

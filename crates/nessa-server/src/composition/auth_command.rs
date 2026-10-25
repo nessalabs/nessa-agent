@@ -234,7 +234,8 @@ const EARLIER_OWNER_GRANTS: [&str; 3] = ["server.read", "conversation.write", "c
 /// `docs/design/auth/device-pairing.md`). Without `conversation.read` the
 /// window's sign-in cannot propose a device's read consent, so Pair a device
 /// is refused. Any other set, including one chosen with `--chat-grants`, is
-/// left as it is. Answers whether it re-provisioned.
+/// left as it is, and so is one that has expired. The new credential keeps the
+/// earlier one's expiry. Answers whether it re-provisioned.
 pub(super) fn upgrade_panel(
     directory: &Path,
     registry_context: RegistryOpenContext,
@@ -243,7 +244,11 @@ pub(super) fn upgrade_panel(
     let settings = super::runtime_config::RuntimeConfig::load(directory)?;
     let store = credential_registry::open(directory, settings.registry, policy, registry_context)?;
     let organizations = store.identity().map_err(failure)?.organization_ids;
-    let mut earlier = false;
+    let now = SystemClock.unix_seconds();
+    // The live earlier credential's expiry, kept: an upgrade changes the
+    // grants, never how long the panel may sign in. An expired one is not
+    // live, so it is not brought back.
+    let mut earlier = None;
     for organization_id in organizations {
         let listed = store
             .list_sync(
@@ -252,7 +257,9 @@ pub(super) fn upgrade_panel(
                 },
             )
             .map_err(failure)?;
-        earlier |= listed.iter().any(|credential| {
+        let mut wanted = EARLIER_OWNER_GRANTS;
+        wanted.sort_unstable();
+        if let Some(credential) = listed.iter().find(|credential| {
             let mut actions = credential
                 .grants
                 .iter()
@@ -260,23 +267,24 @@ pub(super) fn upgrade_panel(
                 .collect::<Vec<_>>();
             actions.sort_unstable();
             actions.dedup();
-            let mut wanted = EARLIER_OWNER_GRANTS;
-            wanted.sort_unstable();
             credential.principal_id == "surface:nessa-panel"
                 && credential.revoked_at.is_none()
+                && credential.expires_at.is_none_or(|expires| expires > now)
                 && actions == wanted
-        });
+        }) {
+            earlier = Some(credential.expires_at);
+        }
     }
-    if !earlier {
+    let Some(expires_at) = earlier else {
         return Ok(false);
-    }
+    };
     provision(
         &store,
         directory,
         "nessa-panel",
         OWNER_GRANTS,
-        None,
-        SystemClock.unix_seconds(),
+        expires_at,
+        now,
     )?;
     Ok(true)
 }
