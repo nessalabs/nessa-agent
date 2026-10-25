@@ -225,6 +225,62 @@ fn expiry_option(args: &[String]) -> Result<Option<u64>, RunError> {
         .transpose()
 }
 
+/// The set `auth init` gave the owner and the `nessa-panel` surface before
+/// row S17 added `conversation.read`.
+const EARLIER_OWNER_GRANTS: [&str; 3] = ["server.read", "conversation.write", "credential.manage"];
+
+/// Re-provision the `nessa-panel` surface with the owner set when the
+/// credential it holds now was provisioned with the set before S17 (row S20 in
+/// `docs/design/auth/device-pairing.md`). Without `conversation.read` the
+/// window's sign-in cannot propose a device's read consent, so Pair a device
+/// is refused. Any other set, including one chosen with `--chat-grants`, is
+/// left as it is. Answers whether it re-provisioned.
+pub(super) fn upgrade_panel(
+    directory: &Path,
+    registry_context: RegistryOpenContext,
+) -> Result<bool, RunError> {
+    let policy = grant_policy()?;
+    let settings = super::runtime_config::RuntimeConfig::load(directory)?;
+    let store = credential_registry::open(directory, settings.registry, policy, registry_context)?;
+    let organizations = store.identity().map_err(failure)?.organization_ids;
+    let mut earlier = false;
+    for organization_id in organizations {
+        let listed = store
+            .list_sync(
+                &nessa_auth::application::credential_admin::ListCredentialsRequest {
+                    organization_id,
+                },
+            )
+            .map_err(failure)?;
+        earlier |= listed.iter().any(|credential| {
+            let mut actions = credential
+                .grants
+                .iter()
+                .map(|grant| grant.action.as_str())
+                .collect::<Vec<_>>();
+            actions.sort_unstable();
+            actions.dedup();
+            let mut wanted = EARLIER_OWNER_GRANTS;
+            wanted.sort_unstable();
+            credential.principal_id == "surface:nessa-panel"
+                && credential.revoked_at.is_none()
+                && actions == wanted
+        });
+    }
+    if !earlier {
+        return Ok(false);
+    }
+    provision(
+        &store,
+        directory,
+        "nessa-panel",
+        OWNER_GRANTS,
+        None,
+        SystemClock.unix_seconds(),
+    )?;
+    Ok(true)
+}
+
 fn provision_command(
     args: &[String],
     registry_context: RegistryOpenContext,

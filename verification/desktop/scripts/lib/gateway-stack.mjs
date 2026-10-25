@@ -120,7 +120,7 @@ export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
  * `scenario`, it runs that file. With `evidence`, the run's logs are written
  * there. With `others`, agents besides `options.agent`, each is configured
  * as the scripted agent too, speaking its own profile, so a conversation can
- * be switched to it. `limits` and `native` are the gateway config's sections (`startLocalGateway`). `options.mode` `prod` previews a production build; the default is a
+ * be switched to it. `limits` and `native` are the gateway config's sections (`startLocalGateway`). `panelGrants` and `provisionLocal` seed and serve the namespace as `startLocalGateway` says. `options.mode` `prod` previews a production build; the default is a
  * dev server. Resolves with `{ url, mode, close, client, gateway, timings,
  * token }`: `url` the desktop page, `token()` the owner token, `close()`
  * stops all three. A gateway that does not start is "could not run", with
@@ -129,7 +129,17 @@ export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
 export async function startGatewayStack(
   options,
   instance,
-  { as = "owner", scripted, scenario, evidence, limits, native, others = [] } = {},
+  {
+    as = "owner",
+    scripted,
+    scenario,
+    evidence,
+    limits,
+    native,
+    others = [],
+    panelGrants,
+    provisionLocal,
+  } = {},
 ) {
   const agent = options.agent
   if (!["claude", "codex"].includes(agent))
@@ -172,6 +182,8 @@ export async function startGatewayStack(
     limits,
     native,
     runtimes,
+    panelGrants,
+    provisionLocal,
   }).catch((error) => {
     // What it said as it failed, on stderr; the result keeps one line.
     if (error.gatewayLog) log(error.gatewayLog.slice(-4000))
