@@ -235,7 +235,7 @@ describe("Linked devices", () => {
     expect(host.textContent).not.toContain("has not come back yet")
   })
 
-  it("L5: Pair sends one create under StrictMode and shows the code and both orbs", async () => {
+  it("L5: Pair sends one create under StrictMode and shows the code and one orb in a modal", async () => {
     let listed = false
     const gate = gateway(async () => {
       if (!listed) {
@@ -266,12 +266,94 @@ describe("Linked devices", () => {
     expect(pair?.disabled).toBe(false)
     await act(async () => pair?.click())
     expect(gate.creates).toBe(1)
-    expect(host.querySelector("[data-slot='pairing-code-value']")?.textContent).toBe(
+    const dialog = document.querySelector("[data-slot='dialog']")
+    expect(dialog?.textContent).toContain("Pair a device")
+    expect(dialog?.querySelector("[data-slot='pairing-code-value']")?.textContent).toBe(
       "ABCD2345",
     )
-    expect(host.querySelector("[data-slot='signal-orb']")).not.toBeNull()
-    expect(host.querySelector("[data-slot='qr-orb']")).not.toBeNull()
-    expect(document.activeElement?.getAttribute("data-linked-action")).toBe("cancel")
+    expect(dialog?.querySelectorAll("[data-slot='signal-orb']")).toHaveLength(1)
+    expect(document.querySelector("[data-slot='qr-orb']")).toBeNull()
+    // The page keeps one row, which no longer offers Pair a device.
+    expect(host.querySelector("[data-slot='pairing-code']")).toBeNull()
+    expect(host.querySelector("[data-linked-action='pair']")).toBeNull()
+
+    // Closing the modal leaves the code open; the row shows it again.
+    await act(async () =>
+      dialog
+        ?.querySelector<HTMLButtonElement>("[data-slot='dialog-close-button']")
+        ?.click(),
+    )
+    expect(document.querySelector("[data-slot='dialog']")).toBeNull()
+    expect(gate.creates).toBe(1)
+    const show = host.querySelector<HTMLButtonElement>("[data-linked-action='show']")
+    expect(show).not.toBeNull()
+    await act(async () => show?.click())
+    expect(
+      document.querySelector("[data-slot='dialog'] [data-slot='pairing-code-value']")
+        ?.textContent,
+    ).toBe("ABCD2345")
+  })
+
+  it("cancelling the code in the modal closes it and offers Pair a device again", async () => {
+    let reads = 0
+    const available = {
+      invitationId: "00112233445566778899aabbccddeeff",
+      phase: "available" as const,
+      expiresAtMs: Date.now() + 60_000,
+    }
+    const gate = gateway(async () => {
+      reads += 1
+      return reads === 2
+        ? { ok: true, value: { kind: "on", enrollments: [available], devices: [] } }
+        : { ok: true, value: { kind: "on", enrollments: [], devices: [] } }
+    })
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
+    )
+    const cancel = document.querySelector<HTMLButtonElement>(
+      "[data-slot='dialog'] [data-linked-action='cancel']",
+    )
+    expect(cancel?.disabled).toBe(false)
+    await act(async () => cancel?.click())
+    expect(document.querySelector("[data-slot='dialog']")).toBeNull()
+    expect(host.querySelector("[data-linked-action='pair']")).not.toBeNull()
+  })
+
+  it("a device that used the code is approved from the modal, not twice on the page", async () => {
+    let reads = 0
+    const claimed = {
+      invitationId: "00112233445566778899aabbccddeeff",
+      phase: "claimed" as const,
+      expiresAtMs: Date.now() + 60_000,
+      deviceKey: "11".repeat(32),
+      fingerprint: "182ff9da701fd144e2fd2cd41da8ddba979eb01b2bf7fcc3376f4b1b2ecee4e7",
+    }
+    const gate = gateway(async () => {
+      reads += 1
+      return reads === 1
+        ? { ok: true, value: { kind: "on", enrollments: [], devices: [] } }
+        : { ok: true, value: { kind: "on", enrollments: [claimed], devices: [] } }
+    })
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
+    )
+    const dialog = document.querySelector("[data-slot='dialog']")
+    expect(
+      dialog?.querySelector("[data-slot='pairing-code']")?.getAttribute("data-state"),
+    ).toBe("used")
+    expect(dialog?.querySelector("[data-slot='signal-orb']")).toBeNull()
+    expect(dialog?.querySelector("[data-linked-action='approve']")).not.toBeNull()
+    expect(host.querySelector("[data-linked-action='approve']")).toBeNull()
   })
 
   it("L21: approve, deny and revoke rest while the gateway cannot be reached", async () => {

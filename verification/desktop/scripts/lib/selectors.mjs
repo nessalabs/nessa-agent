@@ -294,9 +294,11 @@ export const css = {
   linkedRefused: '[data-linked="refused"]',
   linkedPending: '[data-linked="pending"]',
   linkedNotice: "[data-linked-notice]",
+  pairingDialog: '[data-slot="dialog"]:has([data-linked-pairing])', // the modal Pair a device opens: the code and one orb
+  pairingRow: "[data-pairing-row]", // the tab's one Pair a device row
   pairingCode: '[data-slot="pairing-code"]',
   signalOrb: '[data-slot="signal-orb"]',
-  qrOrb: '[data-slot="qr-orb"]',
+  qrOrb: '[data-slot="qr-orb"]', // never drawn: the modal carries the signal orb alone
   fingerprint: '[data-slot="key-fingerprint"]',
 
   // The owner's share dialog (src/desktop/workspace/ui/share/share-dialog.tsx)
