@@ -39,6 +39,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("drift"), knobs.drifts)
   assert.equal(count("upgrade"), knobs.upgrades)
   assert.equal(count("launch"), knobs.launches)
+  assert.equal(count("channel"), knobs.channels)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
   assert.equal(steps.find((step) => step.kind === "long").turns, knobs.long)
@@ -134,6 +135,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         drifts: "0",
         upgrades: "0",
         launches: "0",
+        channels: "0",
         awaits: "0",
         fresh: "0",
         renames: "0",

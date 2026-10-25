@@ -342,7 +342,8 @@ function draftChannel(state: WorkspaceState): string | undefined {
 
 /**
  * Where a new session starts and on what: `channelId` if the window has it,
- * else where a new session goes (`draftChannel`); `model`, else the default.
+ * else where a new session goes (`draftChannel`); `model`, else the channel's
+ * own default, else the window's.
  * None when there is no channel or no model to start on — a new session
  * runs on a model, and with none, none starts.
  */
@@ -351,7 +352,8 @@ function draftHome(
   { channelId, model }: { channelId?: string; model?: ModelRef },
 ): { channelId: string; model: ModelRef } | undefined {
   const home = channelId && channelOf(state, channelId) ? channelId : draftChannel(state)
-  const startsOn = model ?? defaultModel()
+  const startsOn =
+    model ?? (home && channelOf(state, home)?.defaults?.model) ?? defaultModel()
   return home && startsOn ? { channelId: home, model: startsOn } : undefined
 }
 

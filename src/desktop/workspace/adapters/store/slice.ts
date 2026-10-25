@@ -10,7 +10,14 @@ import type { FailureDiagnostic } from "../../model/failure"
  * `commands.ts`, which dispatch these.
  */
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
-import type { ModelRef, WorkspaceIndex } from "../../model/workspace-index"
+import type { Channel, ModelRef, WorkspaceIndex } from "../../model/workspace-index"
+import type {
+  ChannelDraft,
+  ChannelFailure,
+  ChannelStep,
+  ResourceKind,
+} from "../../model/channel-draft"
+import * as channelCreation from "../../application/usecases/channel-creation"
 import type {
   Direction,
   PaneKey,
@@ -388,6 +395,52 @@ const workspaceSlice = createSlice({
     ) => sharing.shareConfirming(state, payload),
     shareConfirmCancelled: (state, { payload }: Payload<{ opening: string }>) =>
       sharing.shareConfirmCancelled(state, payload),
+
+    // Making a channel
+    channelCreationOpened: (
+      state,
+      { payload }: Payload<{ opening: string; model: ModelRef }>,
+    ) => channelCreation.channelCreationOpened(state, payload),
+    channelCreationClosed: (state, { payload }: Payload<{ opening: string }>) =>
+      channelCreation.channelCreationClosed(state, payload),
+    channelDrafted: (
+      state,
+      {
+        payload,
+      }: Payload<{ opening: string; change: Partial<Omit<ChannelDraft, "resources">> }>,
+    ) => channelCreation.channelDrafted(state, payload),
+    channelResourcesAdded: (
+      state,
+      {
+        payload,
+      }: Payload<{ opening: string; paths: readonly string[]; kind: ResourceKind }>,
+    ) => channelCreation.channelResourcesAdded(state, payload),
+    channelResourceRemoved: (
+      state,
+      { payload }: Payload<{ opening: string; path: string }>,
+    ) => channelCreation.channelResourceRemoved(state, payload),
+    channelStepAsked: (
+      state,
+      { payload }: Payload<{ opening: string; step: ChannelStep }>,
+    ) => channelCreation.channelStepAsked(state, payload),
+    channelStepAnswered: (state, { payload }: Payload<{ opening: string }>) =>
+      channelCreation.channelStepAnswered(state, payload),
+    channelCreating: (
+      state,
+      { payload }: Payload<{ opening: string; requestId: string }>,
+    ) => channelCreation.channelCreating(state, payload),
+    channelCreationFailed: (
+      state,
+      { payload }: Payload<{ opening: string; failure: ChannelFailure }>,
+    ) => channelCreation.channelCreationFailed(state, payload),
+    channelHomeKnown: (state, { payload }: Payload<{ home: string }>) => ({
+      ...state,
+      channelMaking: { ...state.channelMaking, home: payload.home },
+    }),
+    channelMade: (
+      state,
+      { payload }: Payload<{ opening: string; channel: Channel; draftId: string }>,
+    ) => channelCreation.channelMade(state, payload),
   },
 })
 
@@ -395,16 +448,27 @@ export const workspaceActions = workspaceSlice.actions
 
 /**
  * The workspace's first state, with what was kept between launches — the
- * overview's filter — and whether its sessions can be shared from here.
+ * overview's filter — whether its sessions can be shared from here, and
+ * whether channels can be made here and their paths picked.
  */
 export function initialWorkspaceFrom({
   overviewFilter,
   sharing,
-}: Pick<WorkspaceDependencies, "overviewFilter" | "sharing">): WorkspaceState {
+  channels,
+  paths,
+}: Pick<
+  WorkspaceDependencies,
+  "overviewFilter" | "sharing" | "channels" | "paths"
+>): WorkspaceState {
   return {
     ...initialWorkspace,
     overview: { ...initialWorkspace.overview, filter: overviewFilter.read() },
     shareable: sharing !== undefined,
+    channelMaking: {
+      creatable: channels !== undefined,
+      pickable: paths !== undefined,
+      home: null,
+    },
   }
 }
 

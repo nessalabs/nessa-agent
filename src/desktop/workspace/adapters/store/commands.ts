@@ -107,3 +107,14 @@ export {
 export { chooseAccess, type AccessOutcome } from "./access-commands"
 export { setUsageLimitAutoContinue } from "./usage-limit-commands"
 export { changeModel } from "./model-commands"
+export {
+  addChannelResources,
+  answerChannelStep,
+  askChannelStep,
+  chooseChannelFolder,
+  closeChannelCreation,
+  createChannel,
+  draftChannel,
+  openChannelCreation,
+  removeChannelResource,
+} from "./channel-commands"

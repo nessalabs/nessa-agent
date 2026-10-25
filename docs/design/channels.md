@@ -72,6 +72,55 @@ A thread an agent starts with `create_thread` is in its starting conversation's
 channel, unless it runs on another host. A channel conversation always runs on
 this machine: a channel with an `environment` is refused.
 
+## Making one in the desktop window
+
+The sidebar's + opens the "New channel" flow over the session list and the
+panes (`src/desktop/workspace/ui/channel-creation/`). It asks one question at
+a time, the way an agent would, and folds each answer into a line that asks it
+again when clicked: the name, where its agents work, the model new
+conversations start on, notes, and files or folders to attach. Only the name
+must be typed; every other question starts with an answer (a folder made for
+the channel, the window's default model, no notes, nothing attached), so
+Create is ready from the first answer.
+
+```mermaid
+sequenceDiagram
+    participant Person
+    participant Flow as New channel flow
+    participant Host as Desktop host
+    participant Gateway
+    Person->>Flow: + beside the section
+    Flow->>Host: home_folder (once)
+    Person->>Flow: name, then Return
+    Person->>Flow: Choose a folder…
+    Flow->>Host: choose_channel_folder
+    Host-->>Flow: /Users/me/site (or nothing: cancelled)
+    Person->>Flow: model, notes, Add files…
+    Flow->>Host: choose_channel_resources {folders}
+    Person->>Flow: Create (⌘↩)
+    Flow->>Gateway: channel.create {requestId, name, folder?, agent, model, approvalMode, notes?, resources?}
+    alt refused
+        Gateway-->>Flow: channel_folder_refused
+        Flow-->>Person: said at the folder question, asked again
+    else made
+        Gateway-->>Flow: {channel}
+        Flow-->>Person: the channel opens on a new session's home
+        Person->>Gateway: conversation.create {channelId} with the first message
+    end
+```
+
+The flow's state is the store's (`usecases/channel-creation.ts`), so an agent
+drives it with the same commands a person's clicks dispatch. A Create keeps
+its request id while the draft stays as sent, so asking again after no answer
+makes one channel; any change to the draft takes a fresh id.
+
+The paths come only from the system's pickers: the host's
+`choose_channel_folder` and `choose_channel_resources` commands
+(`src-tauri/src/channel_paths.rs`), composed in `main.tsx` on macOS and
+Windows. Linux has no picker of its own yet, and a browser none at all, so
+there the flow does not ask for a folder or files: the channel works in a
+folder made for it.
+
 ## What comes later
 
 Settings that bound a conversation instead of starting it (inbound and output
@@ -85,3 +134,7 @@ channel. Renaming, moving and deleting channels are not built yet.
   told the notes or resources.
 - Fixed (non-managed) agent bindings erase sessions as from the configured
   workspace.
+- A channel made by another client with an approval preset other than Ask
+  starts its new sessions there, but the desktop composer shows Ask until the
+  conversation says otherwise. The desktop flow does not ask for a preset.
+- Dropping files on the flow does not attach them yet; the pickers do.

@@ -112,6 +112,12 @@ export const selectReady = (state: Root) => state.workspace.status === "ready"
 export const selectShareable = (state: Root) => state.workspace.shareable
 /** The share dialog, while it is open; its own slice of state, nothing else. */
 export const selectShareDialog = (state: Root) => state.workspace.share
+/** Whether channels can be made from this window, and their paths picked. */
+export const selectChannelMaking = (state: Root) => state.workspace.channelMaking
+/** The "New channel" flow, while it is open. */
+export const selectChannelCreation = (state: Root) => state.workspace.channelCreation
+/** Every channel the index lists, for the flow to say which share a folder. */
+export const selectAllChannels = (state: Root) => state.workspace.channels
 
 /** What is typed into a session's title while it is being renamed, or `null`. */
 export const selectRenameDraft = (state: Root, sessionId: string) =>

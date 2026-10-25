@@ -23,6 +23,7 @@ import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
 import { SessionList } from "../session-list/session-list"
 import { ShareDialogHost } from "../share/share-dialog"
+import { NewChannelHost } from "../channel-creation/new-channel"
 import { DeleteSessionHost } from "../session-row-actions"
 import { OverviewQuietProvider } from "../source-list/overview-quiet"
 import { SourceList } from "../source-list/source-list"
@@ -227,6 +228,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       onListDragMove={onListDragMove}
                     />
                     <OverviewLayer root={root} />
+                    <NewChannelHost />
                     <ShareDialogHost />
                     <DeleteSessionHost />
                     {switcher ? (

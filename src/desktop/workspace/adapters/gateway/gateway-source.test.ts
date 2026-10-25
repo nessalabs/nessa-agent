@@ -191,7 +191,65 @@ describe("the index and the list subscription", () => {
         revision: 1,
       }),
     ])
-    expect(gateway.calls.map((call) => call.method)).toEqual(["subscribeList"])
+    expect(gateway.calls.map((call) => call.method)).toEqual([
+      "subscribeList",
+      "listChannels",
+    ])
+  })
+
+  it("C1: lists the person's channels after the default one, each conversation in its own", async () => {
+    const { gateway, source } = started()
+    await gateway.client.channels.create({
+      requestId: "made",
+      name: "design-review",
+      folder: "/work/site",
+      agent: "codex",
+      model: "gpt-5.6-terra",
+      approvalMode: "auto",
+    })
+    const channelId = gateway.channels[0].channel.channelId
+    gateway.rows.set(conversationA, { ...row(conversationA), channelId })
+    gateway.rows.set(conversationB, row(conversationB))
+    const index = await source.index()
+    expect(index.channels).toEqual([
+      expect.objectContaining({ id: "gateway-conversations", folder: "/workspace" }),
+      expect.objectContaining({
+        id: channelId,
+        name: "design-review",
+        folder: "/work/site",
+        defaults: {
+          model: { provider: "openai", modelId: "gpt-5.6-terra" },
+          access: "auto",
+        },
+      }),
+    ])
+    const channelOf = (id: string) =>
+      index.sessions.find((session) => session.id === id)?.channelId
+    expect(channelOf(conversationA)).toBe(channelId)
+    expect(channelOf(conversationB)).toBe("gateway-conversations")
+  })
+
+  it("C1: a list of channels that fails keeps the channels last listed", async () => {
+    const { gateway, source } = started()
+    await gateway.client.channels.create({
+      requestId: "made",
+      name: "design-review",
+      agent: "codex",
+      model: "gpt-5",
+    })
+    await source.index()
+    gateway.once("listChannels", () => Promise.reject(new Error("lost")))
+    const warn = console.warn
+    console.warn = () => {}
+    try {
+      const again = await source.index()
+      expect(again.channels.map((channel) => channel.name)).toEqual([
+        "Conversations",
+        "design-review",
+      ])
+    } finally {
+      console.warn = warn
+    }
   })
 
   it("R1: the index again keeps every revision, from the list already followed", async () => {
@@ -2287,6 +2345,28 @@ describe("writes", () => {
         ],
       },
       { method: "subscribe", args: [conversationS, {}] },
+    ])
+  })
+
+  it("W1: a first message in a channel of the person's opens its conversation there", async () => {
+    const { gateway, source } = started()
+    await gateway.client.channels.create({
+      requestId: "made",
+      name: "design-review",
+      agent: "codex",
+      model: "gpt-5",
+    })
+    const channelId = gateway.channels[0].channel.channelId
+    await source.send({
+      sessionId: conversationS,
+      messageId: "m",
+      text: "Hello",
+      model: { provider: "openai", modelId: "gpt-5" },
+      initiator: "person",
+      start: { channelId, title: "Hello" },
+    })
+    expect(gateway.calls.find((call) => call.method === "create")?.args).toEqual([
+      { conversationId: conversationS, agent: "codex", model: "gpt-5", channelId },
     ])
   })
 
