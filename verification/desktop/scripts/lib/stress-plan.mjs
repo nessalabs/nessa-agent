@@ -91,7 +91,15 @@ export const KNOBS = {
   },
   rails: {
     default: 1,
-    what: "times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off",
+    what: "times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off, its toggle never moving",
+  },
+  listAnswers: {
+    default: 1,
+    what: "reviews answered from the session list's Needs you card: it reads the transcript card's command, and its answer settles the turn",
+  },
+  panels: {
+    default: 1,
+    what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, maximized and left with Escape, then closed",
   },
   onboardings: {
     default: 1,
@@ -198,6 +206,8 @@ export function plan(knobs) {
   add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
   add(knobs.rails, () => ({ kind: "rail" }))
+  add(knobs.panels, () => ({ kind: "panel" }))
+  add(knobs.listAnswers, () => ({ kind: "listAnswer" }))
   add(knobs.onboardings, () => ({ kind: "onboarding" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   add(knobs.tables, () => ({ kind: "table" }))
@@ -236,6 +246,7 @@ export function plan(knobs) {
     } else if (
       step.kind === "reviews" ||
       step.kind === "large" ||
+      step.kind === "listAnswer" ||
       step.kind === "model"
     ) {
       // These are about cards being shown, so they run where the agent asks.

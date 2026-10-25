@@ -138,14 +138,11 @@ export function Group({
  * catalogue, and so does whether it is available yet, and in which layout
  * it applies — elsewhere its control is disabled and the row says where.
  */
-/** Where a setting applies, said on its row in any other layout: "Three columns only", "Not in Classic". */
+/** Where a setting applies, said on its row in any other layout: "Three columns only". */
 function appliesIn(layouts: readonly WorkspaceLayoutId[]): string {
   const label = (id: WorkspaceLayoutId) =>
     workspaceLayouts.find((each) => each.id === id)?.label ?? id
-  const outside = workspaceLayouts.filter((each) => !layouts.includes(each.id))
-  return outside.length === 1 && layouts.length > 1
-    ? `Not in ${outside[0].label}`
-    : `${layouts.map(label).join(" or ")} only`
+  return `${layouts.map(label).join(" or ")} only`
 }
 
 export function Row({ id, children }: { id: SettingId; children?: ReactNode }) {

@@ -116,7 +116,6 @@ export const css = {
   subagentDetail: "[data-subagent-detail]", // the open child's conversation
   subagentScroll: "[data-subagent-scroll]", // the conversation's scroller
   subagentMessages: "[data-subagent-messages]", // the messages that scroller follows
-  subagentSummary: "[data-subagent-summary]", // the list's counts
   subagentStack: "[data-subagent-stack]", // the conversation's subagents, in its pane header
   avatarFace: '[data-slot="random-avatar-paint"]', // one face; aria-label is its name
   avatarMore: '[data-slot="avatar-stack-more"]', // the count of faces the stack does not show
@@ -160,7 +159,7 @@ export const css = {
   titlebar: ".workspace-titlebar", // class: the window's titlebar row, 48px tall
   titlebarSidebarToggle: '.workspace-titlebar [aria-controls="workspace-sidebar"]', // the titlebar's Show/Hide Sidebar
   sideRailToggle: ".side-rail-toggle", // class: shows or hides the rail; aria-expanded
-  studio: ".workspace-identity .desktop-identity-button", // class: "nessa Studio", which opens Settings
+  studio: '.desktop-identity-button[aria-label="nessa Studio Settings"]', // "nessa Studio", which opens Settings, in every layout
   peekEdge: ".desktop-peek-edge", // class: the strip at the folded sidebar's edge a hover reveals it from
   listSearch: ".workspace-list .workspace-search", // class: the session list's search field
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
@@ -171,6 +170,9 @@ export const css = {
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',
 
   // Approval card (arranged by its own width)
+  approvalCopy: ".workspace-approval-copy",
+  approvalCommandBlock: ".workspace-approval-command-block",
+  approvalDeny: ".workspace-approval-deny",
   approvalCard: ".workspace-approval", // class
   appApprovalCard: '.workspace-approval[data-origin="app"]', // class: a review an MCP App asked for, not the agent
   agentApproval: '.workspace-approval[data-origin="agent"]', // class: a review the agent asked for, not an app
@@ -486,6 +488,7 @@ export const keys = {
   toggleSessionList: "Meta+Alt+KeyS",
   newSession: "Meta+KeyN",
   newSessionBeside: "Meta+Shift+KeyN",
+  splitRight: "Meta+KeyD",
   closePane: "Meta+KeyW",
   openBeside: "Meta+Backslash",
   splitDown: "Meta+Shift+Backslash",

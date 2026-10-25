@@ -4,7 +4,7 @@ import { IconButton, type IconButtonSize } from "./icon-button"
 
 /**
  * Back and Forward, beside the sidebar toggle in every surface's titlebar —
- * the classic shell, both workspace layouts, Settings — in the same place
+ * both workspace layouts and Settings — in the same place
  * whether the sidebar is drawn, revealed or hidden. The window keeps no
  * history yet, so they are shown and rest: this is the one seam history will
  * be wired to (`canGoBack`, `onBack`, …), and until it is, neither does

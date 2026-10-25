@@ -31,8 +31,8 @@ Checks, per engine:
             from the menu hands focus to the row in its place
   swipe     two fingers left uncover Archive and Delete without opening the
             row; Delete asks once more in place, then removes the row; a long
-            swipe archives; a mouse drag moves nothing and right-click is the
-            row's own menu`,
+            swipe rests open and never archives, and Archive is one press; a
+            mouse drag moves nothing and right-click is the row's own menu`,
   },
   async ({ options, rep, url }) => {
     await withEngines(options, rep, async (engine, browser) => {
@@ -73,7 +73,8 @@ Checks, per engine:
         const words = await page.locator(css.menuItem).allInnerTexts()
         // Share… is there for a session the window may share.
         const asked = words.filter((word) => word !== "Share…").join("|")
-        if (asked !== "Rename|Pin to Sidebar|Archive|Delete…")
+        // A pinned row offers Unpin in Pin's place.
+        if (!/^Rename\|(Pin|Unpin)\|Fork\|Archive\|Delete…$/.test(asked))
           failures.push(`the menu read ${JSON.stringify(words)}`)
         if ((await row.getAttribute("data-actions")) !== "true")
           failures.push("the row let its buttons go while its menu was open")
@@ -102,9 +103,30 @@ Checks, per engine:
         // An item that asks nothing more hands focus to the row, not to the
         // pointer's button that opened the menu.
         await openMore(page, rowById(page, id))
-        await page
-          .getByRole("menuitem", { name: /^(Pin to|Unpin from) Sidebar$/ })
-          .click()
+        await page.evaluate(() => {
+          window.__pinMenuFrames = []
+          window.__pinMenuFramesDone = false
+          const start = performance.now()
+          const tick = () => {
+            for (const menu of document.querySelectorAll('[role="menu"]')) {
+              const box = menu.getBoundingClientRect()
+              if (Number(getComputedStyle(menu).opacity) > 0)
+                window.__pinMenuFrames.push({
+                  x: box.x,
+                  y: box.y,
+                  state: menu.dataset.state,
+                })
+            }
+            if (performance.now() - start < 400) requestAnimationFrame(tick)
+            else window.__pinMenuFramesDone = true
+          }
+          requestAnimationFrame(tick)
+        })
+        await page.getByRole("menuitem", { name: /^(Pin|Unpin)$/ }).click()
+        await page.waitForFunction(() => window.__pinMenuFramesDone)
+        const pinFrames = await page.evaluate(() => window.__pinMenuFrames)
+        if (pinFrames.some((frame) => frame.x < 16 && frame.y < 16))
+          failures.push("Pin paints a detached menu at the window's top-left")
         await page.locator(css.menuItem).first().waitFor({ state: "detached" })
         if ((await focusedRow(page)) !== id)
           failures.push(`after Pin, focus was on ${await focusedRow(page)}, not the row`)
@@ -248,7 +270,8 @@ Checks, per engine:
         await confirm.click()
         await rowById(page, id).waitFor({ state: "detached", timeout: 3_000 })
 
-        // A long swipe archives as the row slides out.
+        // A long two-finger swipe never archives: the row rests open, held
+        // at its tray, and Archive is one press away.
         row = await quietRow(page)
         id = await row.getAttribute("data-session-row")
         await row.hover()
@@ -258,7 +281,14 @@ Checks, per engine:
           9,
           ...Array.from({ length: 30 }, (_, at) => (at % 2 ? 9 : 11)),
         ])
-        await rowById(page, id).waitFor({ state: "detached", timeout: 5_000 })
+        await waitAttr(wrapper(), "data-swipe", "open")
+        await page.waitForTimeout(400)
+        if (!(await rowById(page, id).count()))
+          failures.push("the long swipe archived the row")
+        else {
+          await action("Archive").click()
+          await rowById(page, id).waitFor({ state: "detached", timeout: 5_000 })
+        }
         if ((await openId(page)) !== before) failures.push("the long swipe opened a row")
         return { failures, evidence: [open, confirming].filter(Boolean) }
       })
@@ -350,7 +380,15 @@ async function settledOffset(wrapper, closed) {
           content.getBoundingClientRect().left -
           element.getBoundingClientRect().left -
           from,
-        tray: tray?.getBoundingClientRect().width ?? 0,
+        // The open tray's width as SwipeRow states it: the tray itself spans
+        // the row, so a full swipe's leading action can stretch across it.
+        tray:
+          parseFloat(
+            getComputedStyle(
+              tray?.querySelector('[data-slot="workspace-swipe-row-action"]') ?? element,
+            ).getPropertyValue("--nessa-swipe-open"),
+          ) ||
+          (tray?.getBoundingClientRect().width ?? 0),
       }
     }, closed)
     if (last && now.offset === last.offset && now.tray === last.tray && now.offset !== 0)

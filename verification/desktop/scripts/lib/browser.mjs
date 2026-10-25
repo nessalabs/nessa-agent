@@ -104,7 +104,7 @@ export async function waitUntilSettled(page, timeout = 30_000) {
  * @param {import("playwright").Browser} browser
  * @param {object} o
  * @param {string} o.url
- * @param {string} [o.layout] columns | sidebar | classic
+ * @param {string} [o.layout] columns | sidebar
  * @param {number} [o.width] @param {number} [o.height]
  * @param {"reduce"|"no-preference"} [o.reducedMotion]
  * @param {Record<string,string>} [o.prefs] extra localStorage entries

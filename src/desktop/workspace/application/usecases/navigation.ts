@@ -217,6 +217,15 @@ export function toggleSessionList(
   return { ...state, chrome: { ...state.chrome, sessionList } }
 }
 
+/** What the session list's search asks for, in the channel it lists. */
+export function searchList(
+  state: WorkspaceState,
+  { query }: { query: string },
+): WorkspaceState {
+  if ((state.view.query ?? "") === query) return state
+  return { ...state, view: { ...state.view, query } }
+}
+
 export function resizeSidebar(
   state: WorkspaceState,
   { width }: { width: number },

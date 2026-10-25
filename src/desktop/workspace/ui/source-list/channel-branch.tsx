@@ -131,12 +131,7 @@ function BranchSessions({ channelId }: { channelId: string }) {
   return (
     <ul className="workspace-branch-sessions workspace-rise">
       {branch.ids.map((sessionId) => (
-        <ThreadRow
-          key={sessionId}
-          sessionId={sessionId}
-          channelId={channelId}
-          kind="branch"
-        />
+        <ThreadRow key={sessionId} sessionId={sessionId} channelId={channelId} />
       ))}
       {branch.hidden > 0 || (showAll && branch.total > branchCap) ? (
         <SidebarMenuItem
