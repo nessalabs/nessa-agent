@@ -337,16 +337,41 @@ function rawCodesIn(text) {
 
 async function laidOut(page) {
   return page.evaluate(
-    ({ panel, linked }) => {
+    ({ panel, linked, dialog }) => {
       const bounds = document.querySelector(panel)?.getBoundingClientRect()
       const root = document.querySelector(linked)?.getBoundingClientRect()
       if (!bounds || !root) return ["the linked devices page was not measured"]
       const outside = []
       if (root.left < bounds.left - 1 || root.right > bounds.right + 1)
         outside.push("the page is wider than the settings panel")
+      // The pairing modal, when open, fits the window with nothing cut inside it.
+      const modal = document.querySelector(dialog)
+      if (modal) {
+        const box = modal.getBoundingClientRect()
+        // Settings is a fixed layer over the window: a modal portalled past it
+        // is in the page and drawn underneath, unseen.
+        if (!modal.closest("[data-settings-layers]"))
+          outside.push(
+            "the pairing modal is not inside Settings, so it is drawn under it",
+          )
+        if (
+          box.left < 0 ||
+          box.top < 0 ||
+          box.right > innerWidth ||
+          box.bottom > innerHeight
+        )
+          outside.push("the pairing modal does not fit the window")
+        for (const part of modal.querySelectorAll(
+          '[data-slot="signal-orb"], [data-slot="pairing-code"]',
+        )) {
+          const inner = part.getBoundingClientRect()
+          if (inner.left < box.left - 1 || inner.right > box.right + 1)
+            outside.push(`${part.getAttribute("data-slot")} is wider than the modal`)
+        }
+      }
       return outside
     },
-    { panel: css.settingsPanel, linked: css.linked },
+    { panel: css.settingsPanel, linked: css.linked, dialog: css.pairingDialog },
   )
 }
 
@@ -501,15 +526,24 @@ await main(meta, async ({ options, rep, url }) => {
         qr: await page.locator(css.qrOrb).count(),
         onPage: await page.locator(`${css.linked} ${css.pairingCode}`).count(),
       }
-      // Escape closes the modal and leaves the code open; the row shows it again.
+      const fit = await laidOut(page)
+      // Escape closes the modal and leaves the code open; the row shows it
+      // again, and focus is on it.
       await page.keyboard.press("Escape")
       await dialog.waitFor({ state: "detached", timeout: 10_000 })
+      const returned = await page
+        .waitForFunction(
+          (selector) => document.activeElement === document.querySelector(selector),
+          selectorFor.linkedAction("show"),
+          { timeout: 5_000 },
+        )
+        .then(() => true)
+        .catch(() => false)
       await page.locator(selectorFor.linkedAction("show")).click()
       await dialog.waitFor({ timeout: 10_000 })
       const again = (
         await dialog.locator('[data-slot="pairing-code-value"]').innerText()
       ).replace(/\s+/g, "")
-      const fit = await laidOut(page)
       await cancel.click()
       await dialog.waitFor({ state: "detached", timeout: 10_000 })
       return [
@@ -520,6 +554,7 @@ await main(meta, async ({ options, rep, url }) => {
         orbs.onPage === 0
           ? null
           : "the code was drawn on the page, not only in the modal",
+        returned ? null : "focus did not return to Show code when the modal closed",
         (await page.locator(selectorFor.linkedAction("pair")).count()) === 1
           ? null
           : "Pair a device was not offered again after cancelling",
@@ -585,10 +620,12 @@ await main(meta, async ({ options, rep, url }) => {
         { timeout: 10_000 },
       )
       const text = await page.locator(css.pairingDialog).innerText()
+      const orbs = await page.locator(`${css.pairingDialog} ${css.signalOrb}`).count()
       return [
         text.includes("This code has expired")
           ? null
           : "the expired sentence was missing",
+        orbs === 0 ? null : "an expired code still drew an orb",
       ].filter(Boolean)
     })
   })

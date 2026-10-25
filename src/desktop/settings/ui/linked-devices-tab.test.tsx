@@ -287,6 +287,10 @@ describe("Linked devices", () => {
     expect(gate.creates).toBe(1)
     const show = host.querySelector<HTMLButtonElement>("[data-linked-action='show']")
     expect(show).not.toBeNull()
+    // The Pair button that opened it is gone: focus goes to the row's Show code,
+    // once Radix's own restore has left it resting.
+    await act(async () => new Promise((done) => setTimeout(done, 0)))
+    expect(document.activeElement).toBe(show)
     await act(async () => show?.click())
     expect(
       document.querySelector("[data-slot='dialog'] [data-slot='pairing-code-value']")
@@ -322,6 +326,50 @@ describe("Linked devices", () => {
     await act(async () => cancel?.click())
     expect(document.querySelector("[data-slot='dialog']")).toBeNull()
     expect(host.querySelector("[data-linked-action='pair']")).not.toBeNull()
+    expect(document.activeElement?.getAttribute("data-linked-action")).toBe("pair")
+  })
+
+  it("a failed New code is said in the modal, and an expired code draws no orb", async () => {
+    let reads = 0
+    const gate = gateway(async () => {
+      reads += 1
+      return {
+        ok: true,
+        value: {
+          kind: "on",
+          enrollments:
+            reads === 1
+              ? []
+              : [
+                  {
+                    invitationId: "00112233445566778899aabbccddeeff",
+                    phase: "available",
+                    expiresAtMs: Date.now() - 1,
+                  },
+                ],
+          devices: [],
+        },
+      }
+    })
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
+    )
+    const dialog = () => document.querySelector("[data-slot='dialog']")
+    expect(dialog()?.querySelector("[data-slot='signal-orb']")).toBeNull()
+    await act(async () =>
+      dialog()
+        ?.querySelector<HTMLButtonElement>("[data-linked-action='refresh']")
+        ?.click(),
+    )
+    expect(dialog()?.querySelector("[data-linked-notice]")?.textContent).toContain(
+      "Another pairing is in progress",
+    )
+    expect(host.querySelector("[data-linked-notice]")).toBeNull()
   })
 
   it("a device that used the code is approved from the modal, not twice on the page", async () => {

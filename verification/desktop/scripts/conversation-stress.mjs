@@ -4304,6 +4304,10 @@ async function pairFromWindow(run, failures) {
       .catch(() => {})
   const code = await codeIn()
   if (!code) failures.push("the pairing code shown was empty")
+  // Settings is a fixed layer over the window: a modal portalled past it is
+  // in the page but drawn underneath it, unseen.
+  if (!(await dialog.evaluate((node) => Boolean(node.closest("[data-settings-layers]")))))
+    failures.push("the pairing modal is not inside Settings, so it is drawn under it")
   const orbs = await dialog.locator(css.signalOrb).count()
   if (orbs !== 1) failures.push(`the pairing modal drew ${orbs} signal orbs, not 1`)
   if ((await page.locator(css.qrOrb).count()) > 0) failures.push("a QR orb was drawn")

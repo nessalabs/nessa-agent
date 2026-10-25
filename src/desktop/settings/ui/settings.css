@@ -1367,7 +1367,8 @@ html:not(.dark) .settings .settings-card {
   justify-content: center;
 }
 
-.linked-pairing-waiting {
+.linked-pairing-waiting,
+.linked-pairing-notice {
   flex: 1 1 100%;
 }
 

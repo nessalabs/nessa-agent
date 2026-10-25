@@ -203,14 +203,40 @@ function ManagedDevices({
   const [closed, setClosed] = useState<string | null>(null)
   const shown =
     state.code !== null && state.code.invitationId !== closed ? state.code : null
+  const page = useRef<HTMLDivElement>(null)
+  // The control that opened the modal is gone by the time it closes (Pair
+  // becomes Show code, Show code becomes Pair after a cancel): focus returns
+  // to whatever the row offers now.
+  const returnFocus = () =>
+    page.current
+      ?.querySelector<HTMLButtonElement>("[data-pairing-row] button:not(:disabled)")
+      ?.focus()
   const phase =
     state.connection === "unreachable" && state.linking === "unknown"
       ? "unreachable"
       : state.linking === "unknown"
         ? "checking"
         : state.linking
+  // How the last request settled. While the modal is open it is said there,
+  // since the page behind it is hidden from sight and from assistive technology.
+  const notice =
+    state.switching !== null ? null : state.notice &&
+      state.linking !== "off" &&
+      state.linking !== "refused" &&
+      state.linking !== "unknown" ? (
+      <p className="settings-footnote" role="status" data-linked-notice>
+        {state.connection === "unreachable" && state.notice.kind === "unreachable"
+          ? sentences.unreachable
+          : noticeText[state.notice.kind]}
+      </p>
+    ) : state.connection === "unreachable" ? (
+      <p className="settings-footnote" role="status" data-linked-notice>
+        {sentences.unreachable}
+      </p>
+    ) : null
   return (
     <div
+      ref={page}
       className="settings-group linked-devices"
       data-setting="linked-devices"
       data-found={found || undefined}
@@ -231,7 +257,9 @@ function ManagedDevices({
             state={state}
             dispatch={dispatch}
             shown={shown}
+            notice={notice}
             onClose={() => setClosed(state.code?.invitationId ?? null)}
+            onReturnFocus={returnFocus}
           />
           <WaitingGroup
             state={state}
@@ -241,20 +269,7 @@ function ManagedDevices({
           <DevicesGroup state={state} dispatch={dispatch} />
         </>
       ) : null}
-      {state.switching !== null ? null : state.notice &&
-        state.linking !== "off" &&
-        state.linking !== "refused" &&
-        state.linking !== "unknown" ? (
-        <p className="settings-footnote" role="status" data-linked-notice>
-          {state.connection === "unreachable" && state.notice.kind === "unreachable"
-            ? sentences.unreachable
-            : noticeText[state.notice.kind]}
-        </p>
-      ) : state.connection === "unreachable" ? (
-        <p className="settings-footnote" role="status" data-linked-notice>
-          {sentences.unreachable}
-        </p>
-      ) : null}
+      {shown === null ? notice : null}
     </div>
   )
 }
@@ -321,11 +336,15 @@ function PairingGroup({
       <SettingsRow
         label={sentences.pair}
         detail={
-          state.code
-            ? sentences.codeOpen
-            : state.hiddenInvitation
-              ? sentences.codeHidden
-              : sentences.pairDetail
+          state.code?.state === "used"
+            ? sentences.codeUsed
+            : state.code?.state === "cancelled"
+              ? sentences.codeCancelled
+              : state.code
+                ? sentences.codeOpen
+                : state.hiddenInvitation
+                  ? sentences.codeHidden
+                  : sentences.pairDetail
         }
         data-pairing-row
         control={
@@ -390,14 +409,26 @@ function PairingDialog({
   state,
   dispatch,
   shown,
+  notice,
   onClose,
+  onReturnFocus,
 }: {
   state: LinkedDevicesState
   dispatch: Dispatch
   shown: OpenCode | null
+  notice: ReactNode
   onClose: () => void
+  onReturnFocus: () => void
 }) {
+  // The code whose clock ran out here. Until the gateway records it the
+  // reducer still calls it open, but a spent code draws no orb to scan.
+  const [expired, setExpired] = useState<string | null>(null)
   const symbols = shown ? pairingSymbols(shown.code) : ""
+  const live =
+    shown !== null &&
+    shown.state === "open" &&
+    shown.expiresAtMs > Date.now() &&
+    expired !== shown.invitationId
   const waiting = shown
     ? state.waiting.filter((device) => device.invitationId === shown.invitationId)
     : []
@@ -411,10 +442,11 @@ function PairingDialog({
       description={sentences.pairingDetail}
       size="lg"
       className="linked-pairing-dialog"
+      onReturnFocus={onReturnFocus}
     >
       {shown ? (
         <div className="linked-pairing" data-linked-pairing data-state={shown.state}>
-          {shown.state === "open" ? (
+          {live ? (
             <SignalOrb code={symbols} size={orbSize} aria-label="Signal orb" />
           ) : null}
           <div className="linked-pairing-code">
@@ -422,7 +454,10 @@ function PairingDialog({
               code={symbols}
               expiresAt={shown.expiresAtMs}
               state={shown.state}
-              onExpire={() => dispatch({ type: "expired" })}
+              onExpire={() => {
+                setExpired(shown.invitationId)
+                dispatch({ type: "expired" })
+              }}
               actions={
                 <span className="linked-actions">
                   <button
@@ -459,6 +494,7 @@ function PairingDialog({
               ))}
             </SettingsGroup>
           ) : null}
+          {notice ? <div className="linked-pairing-notice">{notice}</div> : null}
         </div>
       ) : null}
     </Dialog>

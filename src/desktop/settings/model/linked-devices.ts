@@ -293,6 +293,8 @@ export const sentences = {
   pairingTitle: "Pair a device",
   pairingDetail: "Enter the code on the device, or scan the orb.",
   codeOpen: "A code is open. Show it again, or cancel it.",
+  codeUsed: "A device used this code. Show it to approve the device.",
+  codeCancelled: "This code was cancelled. Show it to open a new one.",
   showCode: "Show code",
   cancel: "Cancel",
   refresh: "New code",
