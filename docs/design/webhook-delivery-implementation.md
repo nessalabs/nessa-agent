@@ -802,6 +802,7 @@ tracked worker, budgets and exact identity checks through two concrete entries.
 | Principal page request | Compare registration-specific selector, conversation and epoch before SDK I/O; validate returned page through canonical sync owner | Wrong selector/request/body budget refuses without checkpoint advancement |
 | Physical identity changes | Compare complete SDK-owned origin/stream/incarnation/schema with requested tuple | Replaced source refuses; receiver entry remains unchanged |
 | Read waiter disappears | Actual read fence and capacity remain with tracked physical worker until source join | Revoke/unshare still wait; shutdown joins original work |
+| Adapter substitutes a valid reply lease | Original capacity and credential/grant fences share one application/physical owner; returned lease data cannot release or manufacture that ownership | Actual canonical read with replaced reply lease retains global capacity until result drop |
 | Read completes | Retain original fence with bounded result; check absolute expiry before exposing it | Expiry during read and after return refuses data exposure |
 | Cursor or sender later consumes the result | This source-only slice creates neither cursor nor HTTP effect. Later composition must retain the fence through queue acknowledgement and independently re-admit each send | No source-only result is labelled recipient E2E or current send permission |
 

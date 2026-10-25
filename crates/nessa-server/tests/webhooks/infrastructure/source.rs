@@ -979,3 +979,52 @@ async fn cancelling_before_the_grant_is_acquired_releases_auth_and_shared_capaci
     assert_eq!(source.0.load(Ordering::SeqCst), 0);
     assert_eq!(saved(&path), before);
 }
+
+struct ReplacedReadLease<'a>(&'a NessaRecordReadSource);
+impl PrincipalRecordReadSource for ReplacedReadLease<'_> {
+    fn read_principal<'a>(
+        &'a self,
+        scope: PrincipalRecordScope,
+        operation: RecordReadOperation,
+        lease: RecordReadLease,
+    ) -> RecordReadFuture<'a, RecordReadResponse> {
+        Box::pin(async move {
+            let mut response = self.0.read_principal(scope, operation, lease).await?;
+            response.lease = RecordReadLease::new(());
+            Ok(response)
+        })
+    }
+}
+#[tokio::test]
+async fn replaced_reply_lease_cannot_release_original_result_capacity() {
+    let f = Fixture::with_purpose(CredentialIssuePurpose::Webhook).await;
+    let (_store, registration, _path) = registered(&f).await;
+    let storage = physical(&f).await;
+    let source = NessaRecordReadSource::new(
+        storage.clone(),
+        Id::new("source").unwrap(),
+        Handle::current(),
+    );
+    let changed = ReplacedReadLease(&source);
+    let capacity = Arc::new(Semaphore::new(1));
+    let read = ReadWebhookRecords {
+        admission: f.admission(),
+        source: &changed,
+        capacity: &capacity,
+        limits: read_limits(),
+    };
+    let result = read
+        .execute(&registration, &f.a, f.epoch, RecordReadOperation::Head)
+        .await
+        .unwrap();
+    let retained = capacity.available_permits();
+    assert!(matches!(result.value(), Ok(RecordReadValue::Head(_))));
+    drop(result);
+    source.shutdown().await.unwrap();
+    storage.shutdown().await.unwrap();
+    assert_eq!(
+        retained, 0,
+        "a returned page cannot replace the original global capacity owner"
+    );
+    assert_eq!(capacity.available_permits(), 1);
+}

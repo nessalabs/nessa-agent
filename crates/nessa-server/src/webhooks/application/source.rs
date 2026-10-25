@@ -10,7 +10,7 @@ use nessa_sync::replication::domain::{
     validate_page, validate_page_request, Checkpoint, Limits, Page,
 };
 use std::sync::{Arc, Mutex};
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WebhookReadFailure {
@@ -25,17 +25,17 @@ pub enum WebhookReadFailure {
 /// absolute expiry, which no mutation fence can suspend.
 pub struct WebhookRecords<'a> {
     response: RecordReadResponse,
-    authority: Arc<Mutex<DeliveryHold>>,
+    ownership: Arc<Mutex<(DeliveryHold, OwnedSemaphorePermit)>>,
     clock: &'a dyn Clock,
 }
 impl WebhookRecords<'_> {
     /// Borrow the bounded result while the original fences and expiry hold.
     pub fn value(&self) -> Result<&RecordReadValue, WebhookReadFailure> {
-        let hold = self
-            .authority
+        let owned = self
+            .ownership
             .lock()
             .map_err(|_| WebhookReadFailure::Admission(AdmissionFailure::Unavailable))?;
-        if !hold.is_valid_at(self.clock.unix_seconds()) {
+        if !owned.0.is_valid_at(self.clock.unix_seconds()) {
             return Err(WebhookReadFailure::Admission(AdmissionFailure::Refused));
         }
         Ok(&self.response.value)
@@ -97,14 +97,15 @@ impl<'a> ReadWebhookRecords<'a> {
         // DeliveryHold is Send, not Sync. The mutex permits shared ownership;
         // no mutex guard crosses await or is acquired by the physical worker.
         // Cancellation drops our copy; the real worker's lease keeps the same
-        // holds until its SDK source has joined. A normal result keeps both.
-        let authority = Arc::new(Mutex::new(hold));
+        // fences and original capacity until its SDK source has joined. The
+        // application retains the same owner independently of any reply lease.
+        let ownership = Arc::new(Mutex::new((hold, permit)));
         let mut response = self
             .source
             .read_principal(
                 selected.clone(),
                 operation,
-                RecordReadLease::new((permit, authority.clone())),
+                RecordReadLease::new(ownership.clone()),
             )
             .await
             .map_err(WebhookReadFailure::Source)?;
@@ -132,7 +133,7 @@ impl<'a> ReadWebhookRecords<'a> {
         }
         let result = WebhookRecords {
             response,
-            authority,
+            ownership,
             clock: self.admission.clock,
         };
         result.value()?;
