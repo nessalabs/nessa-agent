@@ -1594,12 +1594,10 @@ it("keeps the channel a listed conversation is in, and refuses one the schema ca
   for (const channelId of ["default", "ch_bad", 7]) {
     const refused = createConversationApi(
       {
-        request: vi
-          .fn()
-          .mockResolvedValue({
-            conversations: [{ ...summary, channelId }],
-            complete: true,
-          }),
+        request: vi.fn().mockResolvedValue({
+          conversations: [{ ...summary, channelId }],
+          complete: true,
+        }),
       },
       () => "id",
     )

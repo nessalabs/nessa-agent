@@ -105,6 +105,7 @@ export class NessaClient {
   readonly auth: AuthApi
   /** Tell the gateway what this window shows, for the person's agents to read. */
   readonly workspace: WorkspaceApi
+  /** Make a channel, with its folder and defaults, and list every channel. */
   readonly channels: ChannelApi
 
   private constructor(
