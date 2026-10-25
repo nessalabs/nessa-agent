@@ -396,12 +396,23 @@ async fn run(seed: u64, cycles: usize) {
 }
 
 #[tokio::test]
-async fn paired_catalogue_seeded_mock_agent_stress() {
-    for seed in [1, 7, 41] {
-        run(seed, 1).await;
-        Progress::new(seed).at("seed_returned", 1);
-    }
-    Progress::new(0).at("test_body_complete", 3);
+async fn paired_catalogue_seeded_mock_agent_stress_seed_1() {
+    run(1, 1).await;
+    Progress::new(1).at("test_body_complete", 1);
+}
+
+// Each seed owns a fresh fixture. Let the existing libtest scheduler run these
+// independently instead of holding later seeds behind an unrelated setup.
+#[tokio::test]
+async fn paired_catalogue_seeded_mock_agent_stress_seed_7() {
+    run(7, 1).await;
+    Progress::new(7).at("test_body_complete", 1);
+}
+
+#[tokio::test]
+async fn paired_catalogue_seeded_mock_agent_stress_seed_41() {
+    run(41, 1).await;
+    Progress::new(41).at("test_body_complete", 1);
 }
 
 #[tokio::test]
