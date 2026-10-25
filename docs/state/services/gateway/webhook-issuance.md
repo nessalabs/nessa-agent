@@ -4,7 +4,7 @@ title: Webhook credential issuance
 kind: operation
 status: mixed
 summary: Cedar owns webhook issuance; a bounded private intent coordinates actual auth receipts and fenced installation, while product and worker composition remain pending.
-sourceRevision: "566cf419781203209666df344a65b3f213876560"
+sourceRevision: "97c9c1d13adfe7ade3a3ca06e140ec47ff69df04"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/credential_admin.rs
@@ -123,7 +123,8 @@ stateDiagram-v2
     Held --> Reserved: Current authority unavailable or contradictory
     Held --> Reserved: Inactive membership without canonical stop / refuse installation
     Held --> Cancelled: Original revocation or elapsed expiry / cancel uninstalled intent
-    Held --> Retired: Original revocation or elapsed expiry / stop installed registration
+    Held --> Stopped: Original revocation or elapsed expiry / stop installed registration
+    Stopped --> Retired: Retained delivery outcomes settle and state drains
     Held --> Recovery: Historical AdminIssue origin / require explicit recovery
     Held --> Installed: Match actual origin and current authority / acknowledge without bearer
     Installed --> Installed: Same intent retry acknowledges original installation
@@ -230,11 +231,21 @@ that candidate. Runtime, lifecycle and full-feature qualification remain pending
 
 ## Cancellation recovery source review
 
-This page was checked against source `566cf419781203209666df344a65b3f213876560`
+This page was checked against source `97c9c1d13adfe7ade3a3ca06e140ec47ff69df04`
 for original Auth stop, uninstalled cancellation, installed stop handoff, retained
-ownership and restoration/publication agreement. The combined source passed
-190 webhook tests before the final boxed-intent correction; its 15 affected
-cancellation tests and seven-package Clippy passed after that correction.
-Independent cancellation review and exact-head platform CI remain pending.
-The earlier scoped review and failure evidence remains historical; this does not
-qualify runtime composition, recipient E2E or browser rendering.
+ownership and restoration/publication agreement. A revocation committed between
+the issue reply and its current hold advances only the reply's revocation field
+from the actual held journal fact. Complete credential equality still rejects
+changed audience, grants or other bindings before cleanup. The actual-Auth race
+is covered for uninstalled and installed ownership, with substitution refusals
+and valid retry controls.
+
+The corrected source passed192 webhook tests, seven-package all-target Clippy,
+architecture, formatting and diff checks. The original race probe failed before
+correction; removing full current-binding agreement fails its new regression.
+The earlier13 cancellation controls retain their earlier scope rather than
+claiming this exact final tree. [Independent round one](../../../reviews/evidence/webhook-runtime/recovery-cancellation/review-1.md)
+found this race and the stopped-versus-drained diagram error; fresh review of the
+corrections remains pending. Historical source-qualified results retain their
+original revisions. Runtime composition, recipient E2E and browser rendering
+remain unqualified.

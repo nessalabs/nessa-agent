@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "566cf419781203209666df344a65b3f213876560"
+sourceRevision: "97c9c1d13adfe7ade3a3ca06e140ec47ff69df04"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
@@ -461,11 +461,32 @@ Windows and scripted gateway Chromium/WebKit, stress/chaos, recipient capability
 
 ## Cancellation recovery source review
 
-This page was checked against source `566cf419781203209666df344a65b3f213876560`
+This page was checked against source `97c9c1d13adfe7ade3a3ca06e140ec47ff69df04`
 for original Auth stop, uninstalled cancellation, installed stop handoff, retained
-ownership and restoration/publication agreement. The combined source passed
-190 webhook tests before the final boxed-intent correction; its 15 affected
-cancellation tests and seven-package Clippy passed after that correction.
-Independent cancellation review and exact-head platform CI remain pending.
-The earlier scoped review and failure evidence remains historical; this does not
-qualify runtime composition, recipient E2E or browser rendering.
+ownership and restoration/publication agreement. A revocation committed between
+the issue reply and its current hold advances only the reply's revocation field
+from the actual held journal fact. Complete credential equality still rejects
+changed audience, grants or other bindings before cleanup. The actual-Auth race
+is covered for uninstalled and installed ownership, with substitution refusals
+and valid retry controls.
+
+The corrected source passed192 webhook tests, seven-package all-target Clippy,
+architecture, formatting and diff checks. The original race probe failed before
+correction; removing full current-binding agreement fails its new regression.
+The earlier13 cancellation controls retain their earlier scope rather than
+claiming this exact final tree. [Independent round one](../../../reviews/evidence/webhook-runtime/recovery-cancellation/review-1.md)
+found this race and the stopped-versus-drained diagram error; fresh review of the
+corrections remains pending. Historical source-qualified results retain their
+original revisions. Runtime composition, recipient E2E and browser rendering
+remain unqualified.
+
+Exact published-head CI run40176448006 timed out in Windows server-lib after45
+minutes. Its stop-retention and terminal-retention tests crossed60seconds at
+09:01:07–08UTC; the last other outbox result was09:01:21 and timeout09:10:36.
+There was no recorded assertion failure or per-iteration progress. Both unchanged
+full-boundary tests complete on this Linux candidate under syscall tracing:
+terminal59.05s/30,772flushes; stop39.15s/36,920flushes, matching prior flush counts.
+The loops are finite and the tests hold no connection guard across an await.
+These observations establish Linux completion, not Windows progress or absence
+of a Windows-specific I/O stall. Windows remains an open qualification blocker;
+no timeout, retention limit, assertion or durability flush was weakened.
