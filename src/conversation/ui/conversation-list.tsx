@@ -2,8 +2,11 @@ import * as React from "react"
 import { Archive, SquarePen, Trash2 } from "lucide-react"
 import {
   ConversationHistory,
+  conversationAvatarSeed,
   type ConversationHistoryAction,
 } from "@nessa-ui/react/conversation-history"
+import { RandomAvatar } from "@nessa-ui/react/random-avatar"
+import { UndoCard } from "@nessa-ui/react/undo-card"
 
 import {
   archiveConversation,
@@ -174,24 +177,26 @@ export function ConversationList({
         {shownStatus}
       </p>
       {/* The panel lists no archived conversations, so undoing the last
-          archive is the way back to one, as Mail offers after a swipe. Not
-          offered again while that undo is out: pressing twice would ask twice. */}
+          archive is the way back to one, as Mail offers after a swipe. A row
+          card with the conversation's own avatar, so it reads as the row that
+          just left. Not offered again while that undo is out: pressing twice
+          would ask twice. */}
       {history.undoable && !leaving.has(history.undoable.serverConversationId) && (
-        <p className="m-0 flex items-center gap-2 px-2 pt-2 nessa-text-2 text-muted-foreground">
-          <span className="min-w-0 truncate">
-            Archived {`“${history.undoable.title}”`}
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              const { serverConversationId, title } = history.undoable ?? {}
-              if (serverConversationId) void act(serverConversationId, "unarchive", title)
-            }}
-            className="cursor-pointer rounded border-0 bg-transparent p-0 font-medium text-(--nessa-chat-accent) hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          >
-            Undo
-          </button>
-        </p>
+        <UndoCard
+          key={history.undoable.serverConversationId}
+          className="nessa-undo-card mx-2.5 mt-2 mb-2.5 shrink-0"
+          action="Archived"
+          title={history.undoable.title}
+          leading={
+            <RandomAvatar
+              seed={conversationAvatarSeed({ id: history.undoable.serverConversationId })}
+            />
+          }
+          onUndo={() => {
+            const { serverConversationId, title } = history.undoable ?? {}
+            if (serverConversationId) void act(serverConversationId, "unarchive", title)
+          }}
+        />
       )}
       <p role="status" className="sr-only">
         {announcement}
@@ -201,7 +206,7 @@ export function ConversationList({
         aria-label="New conversation"
         title="New conversation"
         onClick={onNew}
-        className="absolute top-0.5 right-0.5 inline-flex size-8 cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 text-(--nessa-chat-accent) hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className="absolute top-0.5 right-0.5 inline-flex size-8 cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 text-(--nessa-chat-accent-ink) hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       >
         <SquarePen aria-hidden="true" className="size-4" />
       </button>

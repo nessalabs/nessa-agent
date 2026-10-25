@@ -155,6 +155,17 @@ export const css = {
   codeBlock: ".workspace-code", // class: a code block in a transcript
   allClear: ".agents-clear", // class: the overview's "Nothing needs you" card
 
+  // The menu-bar panel (index.html)
+  panelTabs: '.nessa-chrome [data-slot="chat-tabs"]', // the panel's tab strip; data-variant="dots"
+  panelCurrent: '.nessa-chrome [data-slot="chat-tabs-current"]', // the selected tab's name, leading the strip
+  panelDot: '.nessa-chrome [data-slot="chat-tab-dot"]', // one page dot per tab; its [data-active] tab is the bar
+  panelMessages: '[data-slot="chat-tabs-messages"]', // the strip's trailing Messages button
+  panelListRow: "[data-slot=conversation-history-item]", // a row of the panel's Messages list
+  panelComposer: '.nessa-panel [data-slot="chat-composer-editor"]', // the panel composer's editor
+  sentBubble: '[data-slot="chat-bubble"][data-tone="sent"]', // a message the person sent, drawn in the chat accent
+  undoCard: '[data-slot="undo-card"]', // the row card an archive leaves, with Undo
+  randomAvatar: '[data-slot="random-avatar"]', // a conversation's painted avatar
+
   // Side columns
   sidebar: ".workspace-sidebar", // class
   sessionList: ".workspace-list", // class

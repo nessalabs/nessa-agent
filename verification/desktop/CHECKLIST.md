@@ -2233,3 +2233,18 @@ qualified same-task composer counterexample.
 _Check:_ `settings-action-owners.mjs` (both engines), component regressions in
 `native-hooks-rows.test.tsx` and `review-notice-rows.test.tsx`. See
 [settings action ownership](../../docs/design/settings-action-owners.md).
+
+## Menu-bar panel: page dots, accent and undo card
+
+- [ ] **The panel's tabs are page dots after the selected chat's name.** Opening
+  a chat from Messages adds a dot and names it in the lead. Once widths settle,
+  the selected dot is the only bar, wider than every other dot.
+- [ ] **A sent bubble wears the chat accent and its rim.** The bubble's
+  background is `--nessa-chat-accent`, and its shadow carries
+  `--nessa-chat-accent-rim`, both read from the live tokens.
+- [ ] **Archiving from Messages leaves an undo row card.** The card names the
+  chat and leads with its avatar. Undo unarchives it in the gateway, puts the
+  row back, and the card goes.
+
+_Check:_ `conversation-stress.mjs` step `menuPanel` (knob `menuPanels`), in
+Chromium within the default run and alone in WebKit in CI (`local-auth.yml`).
