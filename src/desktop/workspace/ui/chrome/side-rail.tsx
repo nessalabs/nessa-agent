@@ -14,11 +14,10 @@ import {
   useState,
 } from "react"
 import { IconButton } from "../../../ui/icon-button"
-import { IdentityFooter } from "./identity-footer"
 import "./side-rail.css"
 
-/** One 28px control with the window's 10px control edge on each side. */
-export const SIDE_RAIL_WIDTH = 48
+/** One 28px control on the sidebar's icon column (`--rail-column`, 18px), with as much on its other side. */
+export const SIDE_RAIL_WIDTH = 64
 
 export interface RailItem {
   readonly id: string
@@ -216,11 +215,6 @@ export function RailView({ item }: { item: RailItem }) {
   return (
     <section key={item.id} className="rail-view" aria-label={item.name}>
       <RailLoading name={item.name} />
-      {item.studio === false ? null : (
-        <div className="rail-view-foot">
-          <IdentityFooter />
-        </div>
-      )}
     </section>
   )
 }
