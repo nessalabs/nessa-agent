@@ -158,6 +158,9 @@ pub struct HostDependencies {
     /// The system notices for reviews waiting on the person. A host with no
     /// center it can post to and take back answers `unsupported`.
     pub review_notices: Arc<ReviewNotices>,
+    /// Where the window server says the menu bar icon and the setup window
+    /// are, so the finished setup window can fly onto the icon.
+    pub tray_geometry: Arc<dyn crate::tray::TrayGeometry>,
 }
 
 impl HostDependencies {
@@ -311,6 +314,7 @@ impl HostDependencies {
             releases: updater::release_source(app),
             linger,
             review_notices: Arc::new(ReviewNotices::start(notice_center(app))),
+            tray_geometry: crate::tray::tray_geometry(app),
         })
     }
 }

@@ -188,10 +188,10 @@ describe("Advanced", () => {
     await act(async () => navItem("Advanced")?.click())
     expect(document.querySelector("#settings-heading")?.textContent).toBe("Advanced")
     expect(document.querySelector(".settings-dek")?.textContent).toBe(
-      "Early features you can try before they are finished.",
+      "Early features to try, and first-run setup to replay.",
     )
-    // One tab is nothing to choose between: no strip.
-    expect(tabNames()).toEqual([])
+    // Experimental first, beside Setup.
+    expect(tabNames()).toEqual(["Experimental", "Setup"])
     // Each preview is a switch, off until turned on.
     const panel = document.querySelector("#settings-panel")
     expect(panel?.textContent).toContain("Subagents")

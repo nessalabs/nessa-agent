@@ -1,0 +1,87 @@
+{
+  "check": "settings-page",
+  "ok": true,
+  "started": "2026-10-23T14:37:01.593Z",
+  "finished": "2026-10-23T14:38:46.077Z",
+  "target": {
+    "url": "http://127.0.0.1:1443/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1443/favicon.ico)"
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "review-notices",
+      "permission": "denied",
+      "rows": 1,
+      "allowButtons": 0,
+      "text": "Review notificationsBlocked in this browser. Allow notifications for this site to turn them on.",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "native-hooks",
+      "read": [
+        {
+          "id": "claude-native-hooks",
+          "disabled": true,
+          "switches": 0,
+          "text": "Claude Code hooksNot available in this window."
+        },
+        {
+          "id": "codex-native-hooks",
+          "disabled": true,
+          "switches": 0,
+          "text": "Codex hooksNot available in this window."
+        }
+      ],
+      "routing": [
+        {
+          "id": "claude-native-hooks",
+          "tab": "Native hooks",
+          "top": 179,
+          "bottom": 240,
+          "inView": true
+        },
+        {
+          "id": "codex-native-hooks",
+          "tab": "Native hooks",
+          "top": 240,
+          "bottom": 300,
+          "inView": true
+        }
+      ],
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "native-hooks-on",
+      "checked": "true",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "native-hooks-unset",
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "chromium",
+      "name": "native-hooks-failed",
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

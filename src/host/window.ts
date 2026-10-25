@@ -56,6 +56,7 @@ const HOST_EVENTS = {
   gatewayStartup: "nessa://gateway-startup",
   runtimeCopy: "nessa://runtime-copy",
   reviewNoticeOpened: "nessa://review-notice-opened",
+  setupRecorded: "nessa://setup-recorded",
 } as const
 
 /** How many staged runtime files have finished `sync_all`.
@@ -1049,6 +1050,25 @@ export async function finishSetupWindow(
 }
 
 /**
+ * Where the menu bar icon is, in this page's CSS pixels.
+ *
+ * The finished setup window flies into it. Undefined when there is nothing to
+ * aim at: no native host, no tray, or a system that does not say where its tray
+ * items are. The caller then picks a corner, so a failed ask is never an error.
+ */
+export async function setupTrayPoint(): Promise<{ x: number; y: number } | undefined> {
+  if (!inTauri) return undefined
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    return (
+      (await invoke<{ x: number; y: number } | null>("setup_tray_point")) ?? undefined
+    )
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Write setup off again, after a handoff whose write the host refused.
  *
  * The panel is already up, so this asks for the write and the close alone.
@@ -1096,6 +1116,38 @@ export async function revealSetupWindow() {
   if (!inTauri) return
   const { invoke } = await import("@tauri-apps/api/core")
   await invoke("reveal_setup_window")
+}
+
+/**
+ * Shows first-run setup again, from its first step, for somebody who asked to
+ * see it from Settings.
+ *
+ * A replay, not a restart: what setup recorded stays recorded, so leaving
+ * part-way changes nothing and only finishing writes a choice again. A browser
+ * has no setup window to open; Settings only offers this with a native host.
+ */
+export async function replayOnboarding(): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("replay_onboarding")
+}
+
+/**
+ * Subscribes to setup recording a finish, which may have chosen another agent:
+ * a replay from Settings finishes while this window is running.
+ */
+export async function onSetupRecorded(handler: () => void) {
+  if (!inTauri) return () => undefined
+  // Never rejects: composition starts this and does not wait for it, and a
+  // host that cannot be listened to costs the replay's new agent until the
+  // next launch, not the window.
+  try {
+    const { listen } = await import("@tauri-apps/api/event")
+    return await listen(HOST_EVENTS.setupRecorded, () => handler())
+  } catch (cause) {
+    console.warn("[nessa] could not listen for setup being recorded", cause)
+    return () => undefined
+  }
 }
 
 /**

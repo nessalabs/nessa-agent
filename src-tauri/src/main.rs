@@ -115,6 +115,8 @@ fn main() {
             panel::retry_setup_record,
             panel::chosen_agent,
             panel::reveal_setup_window,
+            panel::replay_onboarding,
+            tray::setup_tray_point,
             agent_credentials::infrastructure::save_agent_api_key,
             provider_authentication::commands::sign_in_to_provider,
             provider_authentication::commands::provider_login_available,
@@ -345,6 +347,7 @@ fn main() {
             // ways setup can go that nothing coordinates — a dismissal, a
             // crashed webview — and is idempotent with the handoff's own close.
             if matches!(event, WindowEvent::Destroyed) && window.label() == panel::SETUP_WINDOW {
+                panel::setup_window_gone();
                 if let Some(panel) = window.app_handle().get_webview_window(panel::MAIN_WINDOW) {
                     platform::current().set_above_overlay(&panel, false);
                 }

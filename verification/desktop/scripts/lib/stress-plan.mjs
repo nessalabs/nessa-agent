@@ -101,6 +101,10 @@ export const KNOBS = {
     default: 1,
     what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, maximized and left with Escape, then closed",
   },
+  onboardings: {
+    default: 1,
+    what: "times setup is replayed from Settings and walked forward, back with its Back button, and left with its Close button",
+  },
   linkings: {
     default: 1,
     what: "times native linking is turned on and off again from Settings, each restarting the gateway",
@@ -204,6 +208,7 @@ export function plan(knobs) {
   add(knobs.rails, () => ({ kind: "rail" }))
   add(knobs.panels, () => ({ kind: "panel" }))
   add(knobs.listAnswers, () => ({ kind: "listAnswer" }))
+  add(knobs.onboardings, () => ({ kind: "onboarding" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   add(knobs.tables, () => ({ kind: "table" }))
   add(knobs.traces, () => ({ kind: "trace" }))

@@ -178,3 +178,228 @@ it("lets only the latest of overlapping reads answer", async () => {
   await act(async () => pending[1]?.({ claude: false, codex: false }))
   expect(toggle("claude-native-hooks")?.getAttribute("aria-checked")).toBe("true")
 })
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
+it("admits one native-hook write for same-task clicks before the disabled render", async () => {
+  const requests: string[] = []
+  const gateway: NativeHooksGateway = {
+    read: async () => ({ ok: true, choice: { claude: false, codex: false } }),
+    set: (_agent, _enabled, requestId) => {
+      requests.push(requestId)
+      return new Promise(() => {})
+    },
+  }
+  await act(async () =>
+    root.render(
+      <NativeHooksProvider gateway={gateway}>
+        <NativeHooksRows />
+      </NativeHooksProvider>,
+    ),
+  )
+  const button = requiredToggle("claude-native-hooks")
+  await act(async () => {
+    button.click()
+    button.click()
+  })
+  expect(requests).toHaveLength(1)
+})
+
+it("retires A's pending save so replacement source B reads and keeps its own choice", async () => {
+  const save = deferred<Awaited<ReturnType<NativeHooksGateway["set"]>>>()
+  let aReads = 0
+  let bReads = 0
+  const a: NativeHooksGateway = {
+    read: async () => {
+      aReads++
+      return { ok: true, choice: { claude: aReads > 1, codex: false } }
+    },
+    set: () => save.promise,
+  }
+  const b: NativeHooksGateway = {
+    read: async () => {
+      bReads++
+      return { ok: true, choice: { claude: false, codex: false } }
+    },
+    set: async () => ({ ok: false }),
+  }
+  const render = (gateway: NativeHooksGateway) =>
+    root.render(
+      <NativeHooksProvider gateway={gateway}>
+        <NativeHooksRows />
+      </NativeHooksProvider>,
+    )
+  await act(async () => render(a))
+  await act(async () => requiredToggle("claude-native-hooks").click())
+  await act(async () => render(b))
+  await act(async () => save.resolve({ ok: true, agent: "claude", enabled: true }))
+  expect(bReads).toBe(1)
+  expect(aReads).toBe(1)
+  expect(toggle("claude-native-hooks")?.getAttribute("aria-checked")).toBe("false")
+})
+
+it("retains one save through its reread and defers focus/visibility refreshes", async () => {
+  const saved = deferred<Awaited<ReturnType<NativeHooksGateway["set"]>>>()
+  const reread = deferred<Awaited<ReturnType<NativeHooksGateway["read"]>>>()
+  const requests: string[] = []
+  let reads = 0
+  const gateway: NativeHooksGateway = {
+    read: () =>
+      ++reads === 1
+        ? Promise.resolve({ ok: true, choice: { claude: false, codex: false } })
+        : reread.promise,
+    set: (_agent, _enabled, id) => {
+      requests.push(id)
+      return saved.promise
+    },
+  }
+  await act(async () =>
+    root.render(
+      <NativeHooksProvider gateway={gateway}>
+        <NativeHooksRows />
+      </NativeHooksProvider>,
+    ),
+  )
+  await act(async () => requiredToggle("claude-native-hooks").click())
+  await act(async () => requiredToggle("codex-native-hooks").click())
+  expect(requests).toHaveLength(1)
+  expect(requiredToggle("codex-native-hooks").disabled).toBe(true)
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"))
+    document.dispatchEvent(new Event("visibilitychange"))
+    saved.resolve({ ok: true, agent: "claude", enabled: true })
+  })
+  expect(reads).toBe(2)
+  await act(async () => window.dispatchEvent(new Event("focus")))
+  expect(reads).toBe(2)
+  expect(requiredToggle("claude-native-hooks").disabled).toBe(true)
+  await act(async () =>
+    reread.resolve({ ok: true, choice: { claude: true, codex: false } }),
+  )
+  expect(requiredToggle("codex-native-hooks").disabled).toBe(false)
+  await act(async () => requiredToggle("codex-native-hooks").click())
+  expect(requests).toHaveLength(2)
+  expect(new Set(requests).size).toBe(2)
+})
+
+it("cannot let a retired reread publish or unlock the replacement source's save", async () => {
+  const oldRead = deferred<Awaited<ReturnType<NativeHooksGateway["read"]>>>()
+  const newSave = deferred<Awaited<ReturnType<NativeHooksGateway["set"]>>>()
+  let aReads = 0
+  let bWrites = 0
+  const a: NativeHooksGateway = {
+    read: () =>
+      ++aReads === 1
+        ? Promise.resolve({ ok: true, choice: { claude: false, codex: false } })
+        : oldRead.promise,
+    set: async (agent, enabled) => ({ ok: true, agent, enabled }),
+  }
+  const b: NativeHooksGateway = {
+    read: async () => ({ ok: true, choice: { claude: false, codex: false } }),
+    set: () => {
+      bWrites++
+      return newSave.promise
+    },
+  }
+  const render = (gateway: NativeHooksGateway) =>
+    root.render(
+      <NativeHooksProvider gateway={gateway}>
+        <NativeHooksRows />
+      </NativeHooksProvider>,
+    )
+  await act(async () => render(a))
+  await act(async () => requiredToggle("claude-native-hooks").click())
+  expect(aReads).toBe(2)
+  await act(async () => render(b))
+  await act(async () => requiredToggle("codex-native-hooks").click())
+  await act(async () =>
+    oldRead.resolve({ ok: true, choice: { claude: true, codex: false } }),
+  )
+  expect(requiredToggle("claude-native-hooks").getAttribute("aria-checked")).toBe("false")
+  expect(requiredToggle("codex-native-hooks").getAttribute("aria-checked")).toBe("true")
+  expect(requiredToggle("claude-native-hooks").disabled).toBe(true)
+  await act(async () => requiredToggle("claude-native-hooks").click())
+  expect(bWrites).toBe(1)
+  await act(async () => newSave.resolve({ ok: false }))
+  expect(requiredToggle("codex-native-hooks").disabled).toBe(false)
+})
+
+it("does not start a reread after the saving view unmounts", async () => {
+  const saved = deferred<Awaited<ReturnType<NativeHooksGateway["set"]>>>()
+  let reads = 0
+  const gateway: NativeHooksGateway = {
+    read: async () => {
+      reads++
+      return { ok: true, choice: { claude: false, codex: false } }
+    },
+    set: () => saved.promise,
+  }
+  await act(async () =>
+    root.render(
+      <NativeHooksProvider gateway={gateway}>
+        <NativeHooksRows />
+      </NativeHooksProvider>,
+    ),
+  )
+  await act(async () => requiredToggle("claude-native-hooks").click())
+  await act(async () => root.render(null))
+  await act(async () => saved.resolve({ ok: true, agent: "claude", enabled: true }))
+  window.dispatchEvent(new Event("focus"))
+  document.dispatchEvent(new Event("visibilitychange"))
+  expect(reads).toBe(1)
+})
+
+it.each([true, false])(
+  "uses only a matching acknowledged choice when rereading fails (matching=%s)",
+  async (matching) => {
+    let reads = 0
+    const gateway: NativeHooksGateway = {
+      read: async () =>
+        ++reads === 1
+          ? { ok: true, choice: { claude: false, codex: true } }
+          : { ok: false },
+      set: async () => ({
+        ok: true,
+        agent: matching ? "claude" : "codex",
+        enabled: true,
+      }),
+    }
+    await act(async () =>
+      root.render(
+        <NativeHooksProvider gateway={gateway}>
+          <NativeHooksRows />
+        </NativeHooksProvider>,
+      ),
+    )
+    await act(async () => requiredToggle("claude-native-hooks").click())
+    if (matching) {
+      expect(requiredToggle("claude-native-hooks").getAttribute("aria-checked")).toBe(
+        "true",
+      )
+      expect(requiredToggle("claude-native-hooks").disabled).toBe(false)
+    } else {
+      expect(toggle("claude-native-hooks")).toBeNull()
+      expect(requiredRow("claude-native-hooks").textContent).toContain(
+        "Could not read this choice.",
+      )
+    }
+  },
+)
+
+function requiredToggle(id: string) {
+  const button = toggle(id)
+  if (!button) throw new Error(`Missing native-hook switch ${id}`)
+  return button
+}
+
+function requiredRow(id: string) {
+  const element = row(id)
+  if (!element) throw new Error(`Missing native-hook row ${id}`)
+  return element
+}

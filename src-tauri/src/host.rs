@@ -50,6 +50,9 @@ pub const UPDATE_FAILED: &str = "nessa://update-failed";
 /// not one — macOS sends it nowhere a person looks, and the release Windows
 /// build has no console at all.
 pub const LINK_NOT_OPENED: &str = "nessa://link-not-opened";
+/// Setup recorded a finish, and with it the agent it chose. Sent to every
+/// window: one that already asked which agent setup chose asks again.
+pub const SETUP_RECORDED: &str = "nessa://setup-recorded";
 /// The managed gateway's startup projection changed. The payload is
 /// [`GatewayStartup`]; a snapshot command carries the same revisioned value so
 /// subscribing before asking cannot lose or reorder a transition.

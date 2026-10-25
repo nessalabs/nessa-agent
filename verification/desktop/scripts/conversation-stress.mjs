@@ -71,6 +71,21 @@
  *               sent with the rail open is answered; closed, opened again,
  *               and turned off while open, the titlebar's controls go back to
  *               starting where the lights end
+ *   onboarding  setup is replayed from Settings › Advanced › Setup: the host
+ *               is asked once; in the setup window that ask opens, nothing
+ *               dims the desktop, and a glow fills the screen and forms the
+ *               window (glow, fill, form, open, in that order) before any of
+ *               the window's words can be seen; welcome has no Back button
+ *               and Close sits in the top-right corner; past it the picker
+ *               has Back in the top-left corner, which returns to welcome;
+ *               it lists Claude, Codex and a Local AI that is coming, never
+ *               OpenCode, with each one's figure on the picture beside it,
+ *               and pointing at a row lights that figure; Close then leaves
+ *               setup, handing over as left, not finished; a second setup
+ *               window is finished on a ready agent: the window flies into
+ *               the menu bar, asking the host where its icon is, and hands
+ *               over finished on that agent; the message sent in the window
+ *               after it is answered
  *   notice      a review waits in another conversation, which the window does
  *               not show: the host's system notice names its tool and the
  *               conversation's title, opening it brings that conversation
@@ -110,7 +125,8 @@
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
  *               line, "Ran 3 tools", that opens to a row per call, each with
- *               its status and a bar on the shared time axis, and a call's
+ *               its status and a bar on the shared time axis (at least as
+ *               wide as it is tall, ending inside the axis), and a call's
  *               card shows its input
  *
  * Meanwhile `--parallel` background conversations take turns through the
@@ -1590,6 +1606,78 @@ const steps = {
     })
   },
 
+  async onboarding(run, step, failures) {
+    await run.exclusive(async () => {
+      const asked = await replayOnboarding(run.page, run.evidence)
+      if (asked !== 1) {
+        failures.push(`Replay asked the host ${asked} times, not once`)
+        return
+      }
+      // The host opens the setup window for that ask; this page is that
+      // window, over the same gateway, as the real host builds it.
+      const page = await setupWindow(run)
+      try {
+        const heading = (name) => page.getByRole("heading", { name, exact: true })
+        const button = (name) => page.getByRole("button", { name, exact: true })
+        await heading(names.setup.welcome).waitFor({ timeout: 15_000 })
+        await openedAsAGlow(page, failures)
+        // Welcome has nothing before it: no Back, and Close in its corner.
+        await button(names.setup.close).waitFor()
+        let corners = await setupCorners(page)
+        if (corners.back) failures.push("welcome shows a Back button")
+        if (!inCorner(corners.close, "right"))
+          failures.push(
+            `Close is not round in the top-right corner: ${JSON.stringify(corners.close)}`,
+          )
+        // Forward and back twice: each time the picker has Back in the
+        // top-left corner, and it returns to welcome.
+        for (let round = 0; round < 2; round += 1) {
+          await button(names.setup.getStarted).click()
+          await heading(names.setup.chooseAgent).waitFor({ timeout: 10_000 })
+          await button(names.setup.back).waitFor()
+          corners = await setupCorners(page)
+          if (!inCorner(corners.back, "left"))
+            failures.push(
+              `Back is not round in the top-left corner: ${JSON.stringify(corners.back)}`,
+            )
+          if (!inCorner(corners.close, "right"))
+            failures.push(
+              `on the picker Close left its corner: ${JSON.stringify(corners.close)}`,
+            )
+          await button(names.setup.back).click()
+          await heading(names.setup.welcome).waitFor({ timeout: 10_000 })
+          if (await button(names.setup.back).count())
+            failures.push("back on welcome, the Back button is still shown")
+        }
+        // The picker lists the agents setup offers, each with its figure.
+        await button(names.setup.getStarted).click()
+        await heading(names.setup.chooseAgent).waitFor({ timeout: 10_000 })
+        await pickerOffers(page, failures)
+        await page.screenshot({ path: join(run.evidence, "onboarding-picker.png") })
+        // Close leaves setup from the picker: one handoff, as left.
+        await button(names.setup.close).click()
+        const handed = await waitFor(
+          async () =>
+            (await page.evaluate(() => window.__fakeHostSetupFinishes.length)) > 0,
+          10_000,
+        )
+        const finishes = await page.evaluate(() => window.__fakeHostSetupFinishes)
+        if (!handed) failures.push("Close did not hand setup back to the host")
+        else if (finishes.length !== 1 || finishes[0].completed !== false)
+          failures.push(
+            `Close handed over ${JSON.stringify(finishes)}, not one left setup`,
+          )
+        if (await page.locator(".nessa-setup-window").count())
+          failures.push("setup is still on screen after Close")
+      } finally {
+        await page.close()
+      }
+      await finishedIntoTheMenuBar(run, failures)
+    })
+    // The window is still the window it was: a message sent there is answered.
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
   async pool(run, step, failures) {
     // Workers dial the gateway's native listener, which is off in this run
     // until a step turns it on: a person does it in Settings, here as in
@@ -2600,6 +2688,9 @@ const steps = {
         return {
           status: row.dataset.status,
           at: bar && track.width ? (box.left - track.left) / track.width : null,
+          width: box?.width ?? 0,
+          height: box?.height ?? 0,
+          over: bar && track ? box.right - track.right : 0,
         }
       }),
     )
@@ -2615,6 +2706,16 @@ const steps = {
       else if (Math.abs(row.at - expected) > 0.03)
         failures.push(
           `row ${index + 1}'s bar starts ${(row.at * 100).toFixed(1)}% along the axis, not ${(expected * 100).toFixed(1)}%`,
+        )
+      // An instant call is still a round dot, never a hairline, and the
+      // last one stays inside the axis.
+      if (row.at !== null && row.width + 0.5 < row.height)
+        failures.push(
+          `row ${index + 1}'s bar is ${row.width.toFixed(1)} px wide, narrower than its ${row.height.toFixed(1)} px height`,
+        )
+      if (row.over > 0.5)
+        failures.push(
+          `row ${index + 1}'s bar ends ${row.over.toFixed(1)} px past the axis`,
         )
     }
     // A call's card shows the input it was made with.
@@ -3083,6 +3184,348 @@ async function openLinkedDevices(page) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
   await page.locator(css.settingsCategory, { hasText: names.connections }).click()
   await page.locator(css.settingsTab, { hasText: names.linkedDevices }).click()
+}
+
+/**
+ * Asks for setup again where a person does: Settings › Advanced › Setup, its
+ * Replay button. Resolves how many times the host was asked. Leaves Settings.
+ */
+async function replayOnboarding(page, evidence) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.advanced }).click()
+  await page.locator(css.settingsTab, { hasText: names.setupTab }).click()
+  if (evidence)
+    await page
+      .screenshot({ path: join(evidence, "onboarding-settings.png") })
+      .catch(() => {})
+  const before = await page.evaluate(() => window.__fakeHostReplays)
+  await page
+    .locator(selectorFor.settingRow("replay-onboarding"))
+    .getByRole("button", { name: names.replayOnboarding, exact: true })
+    .click()
+  await waitFor(
+    async () => (await page.evaluate(() => window.__fakeHostReplays)) > before,
+    5_000,
+  )
+  const asked = (await page.evaluate(() => window.__fakeHostReplays)) - before
+  await closeSettings(page)
+  return asked
+}
+
+/**
+ * A setup window as the host opens it, over the run's gateway, recording
+ * each beat of its opening as it comes: the beat, and whether the window's
+ * heading could be seen by then.
+ */
+async function setupWindow(run, prepare) {
+  const page = await run.page.context().newPage()
+  // Before the page loads, so nothing it asks on its first frames gets past.
+  await prepare?.(page)
+  await page.addInitScript(gatewayHost, {
+    endpoint: run.stack.endpoint,
+    credential: run.stack.credential,
+    setup: true,
+  })
+  await page.addInitScript(() => {
+    window.__setupBeats = []
+    window.__setupLeft = false
+    new MutationObserver(() => {
+      const shell = document.querySelector(".nessa-setup-window")
+      if (shell?.hasAttribute("data-leaving")) window.__setupLeft = true
+      const beat = shell?.dataset.beat
+      if (!beat || window.__setupBeats.at(-1)?.beat === beat) return
+      // Seen as a person sees it: a pane held hidden or clear until the
+      // window opens is in the page from the first frame.
+      const heading = document.getElementById("nessa-setup-heading")
+      const headingSeen = Boolean(
+        heading?.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
+      )
+      // Where the window is drawn as the beat starts, transform included.
+      const { left, top, right, bottom } = shell.getBoundingClientRect()
+      const drawn = { left, top, right, bottom, width: innerWidth, height: innerHeight }
+      window.__setupBeats.push({ beat, headingSeen, drawn })
+    }).observe(document, { subtree: true, childList: true, attributes: true })
+    // The flight is the window's one Web Animation: the box it took off
+    // from and the keyframes and timing it was given, taken as it starts.
+    window.__setupFlights = []
+    const animate = Element.prototype.animate
+    Element.prototype.animate = function (...args) {
+      const animation = animate.apply(this, args)
+      if (this.classList.contains("nessa-setup-window")) {
+        const { left, top, width, height } = this.getBoundingClientRect()
+        window.__setupFlights.push({
+          from: { left, top, width, height },
+          frames: animation.effect.getKeyframes(),
+          duration: animation.effect.getComputedTiming().duration,
+        })
+      }
+      return animation
+    }
+  })
+  await page.goto(`${new URL(run.page.url()).origin}/index.html?surface=setup`)
+  return page
+}
+
+/**
+ * The opening was a glow on the desktop that became the window: nothing
+ * dimmed what is behind setup, the beats came in order, and none of the
+ * window's words showed before the window had formed.
+ */
+async function openedAsAGlow(page, failures) {
+  const beats = await page.evaluate(() => window.__setupBeats)
+  const order = beats.map((entry) => entry.beat).join(",")
+  if (order !== "glow,fill,form,open")
+    failures.push(`setup opened as ${order}, not glow,fill,form,open`)
+  const early = beats.filter((entry) => entry.beat !== "open" && entry.headingSeen)
+  if (early.length)
+    failures.push(`the window's heading showed during the ${early[0].beat} beat`)
+  // Glow and fill draw the window past every edge of the screen.
+  for (const { beat, drawn } of beats.filter(
+    (entry) => entry.beat !== "open" && entry.beat !== "form",
+  ))
+    if (
+      drawn.left > 0 ||
+      drawn.top > 0 ||
+      drawn.right < drawn.width ||
+      drawn.bottom < drawn.height
+    )
+      failures.push(
+        `during ${beat} the light does not fill the screen: ${JSON.stringify(drawn)}`,
+      )
+  // Once open, the window has formed: its own size, in the middle.
+  const formed = () =>
+    page.locator(".nessa-setup-window").evaluate((shell) => {
+      const box = shell.getBoundingClientRect()
+      return {
+        scale: box.width / shell.offsetWidth,
+        dx: box.left + box.width / 2 - innerWidth / 2,
+        dy: box.top + box.height / 2 - innerHeight / 2,
+      }
+    })
+  const whole = (shape) =>
+    Math.abs(shape.scale - 1) < 0.005 && Math.abs(shape.dx) < 1 && Math.abs(shape.dy) < 1
+  if (!(await waitFor(async () => whole(await formed()), 3_000)))
+    failures.push(
+      `the open window did not form in the middle: ${JSON.stringify(await formed())}`,
+    )
+  const backdrop = await page.evaluate(() => ({
+    dim: document.querySelectorAll(".nessa-setup-dim").length,
+    sheet: getComputedStyle(document.querySelector(".nessa-setup-sheet")).backgroundColor,
+  }))
+  if (backdrop.dim || backdrop.sheet !== "rgba(0, 0, 0, 0)")
+    failures.push(`setup dims the desktop: ${JSON.stringify(backdrop)}`)
+}
+
+/**
+ * The picker lists Claude, Codex and a Local AI that cannot be chosen yet,
+ * and never OpenCode. The picture wears one agent's background with that
+ * agent's figure on it, the chosen agent's (Claude Code's mascot for Claude),
+ * and pointing at a row turns it over to that agent.
+ */
+async function pickerOffers(page, failures) {
+  const rows = await page
+    .getByRole("group", { name: "Agent" })
+    .locator(AGENT_ROWS)
+    .evaluateAll((buttons) =>
+      buttons.map((button) => ({
+        name: button.getAttribute("aria-label") ?? button.textContent,
+        disabled: button.getAttribute("aria-disabled") === "true",
+      })),
+    )
+  const named = rows.map((row) => row.name)
+  for (const agent of names.setup.agents)
+    if (!named.some((name) => name === agent || name.startsWith(`${agent},`)))
+      failures.push(`the picker does not list ${agent}: ${JSON.stringify(named)}`)
+  const local = rows.find((row) => row.name === names.setup.localAi)
+  if (!local?.disabled)
+    failures.push(`Local AI is not listed as coming: ${JSON.stringify(rows)}`)
+  if (named.some((name) => /opencode/i.test(name)))
+    failures.push(`the picker still offers OpenCode: ${JSON.stringify(named)}`)
+  // What the picture shows: the opaque background, then every figure on it.
+  const cards = () =>
+    page
+      .locator(".nessa-setup-art")
+      .evaluate((art) =>
+        [
+          art.querySelector("[data-slot='agent-backdrop'][data-shown]")?.dataset.agent,
+          ...[...art.querySelectorAll("[data-slot='agent-figure']")].map(
+            (figure) => figure.dataset.agent,
+          ),
+        ].join(","),
+      )
+  const resting = await cards()
+  if (resting !== "clawd,clawd")
+    failures.push(`the picture shows ${JSON.stringify(resting)}`)
+  await page.getByRole("button", { name: /^Codex/ }).hover()
+  const lit = await waitFor(() => cards().then((shown) => shown === "codex,codex"), 5_000)
+  if (!lit)
+    failures.push(
+      `pointing at Codex did not turn the picture to it: ${JSON.stringify(await cards())}`,
+    )
+  await page.mouse.move(1, 1)
+}
+
+/** The picker's agent rows, and not the buttons of a key form beside one. */
+const AGENT_ROWS = `button[aria-pressed], button[aria-label='${names.setup.localAi}']`
+
+/**
+ * Setup finished on a ready agent leaves by flying into the menu bar: the
+ * window lets go of its pane, the host is asked where its icon is, and the
+ * handoff that follows is a finish on that agent, made once the window has
+ * landed and gone.
+ *
+ * Which agents are ready is the gateway's machine probe, which this stack's
+ * page is not an origin it answers; the probe is answered here instead with
+ * Claude ready, so the step is about the finish rather than about the machine.
+ */
+async function finishedIntoTheMenuBar(run, failures) {
+  const page = await setupWindow(run, (page) =>
+    page.route("**/onboarding/agents", (route) =>
+      route.fulfill({
+        // The gateway's own origin, not the page's: the ask is cross-origin.
+        headers: { "access-control-allow-origin": "*" },
+        json: {
+          agents: [
+            { id: "claude", readiness: "ready" },
+            { id: "codex", readiness: "not-installed" },
+          ],
+        },
+      }),
+    ),
+  )
+  try {
+    const button = (name) => page.getByRole("button", { name, exact: true })
+    await page
+      .getByRole("heading", { name: names.setup.welcome, exact: true })
+      .waitFor({ timeout: 15_000 })
+    await button(names.setup.getStarted).click()
+    const ready = page
+      .getByRole("group", { name: "Agent" })
+      .locator("button[aria-pressed]:not([aria-disabled='true'])")
+    if (!(await waitFor(async () => (await ready.count()) > 0, 15_000))) {
+      const rows = await page
+        .getByRole("group", { name: "Agent" })
+        .locator(AGENT_ROWS)
+        .evaluateAll((all) => all.map((row) => row.getAttribute("aria-label")))
+      failures.push(`no agent became ready to choose in setup: ${JSON.stringify(rows)}`)
+      return
+    }
+    const chosen = (await ready.first().getAttribute("aria-label"))?.toLowerCase()
+    await ready.first().click()
+    await button(names.setup.continue).click()
+    const finish = page.getByRole("button", {
+      name: new RegExp(`^(${names.setup.finish.join("|")})$`),
+    })
+    await finish.waitFor({ timeout: 10_000 })
+    await finish.click()
+    const handed = await waitFor(
+      async () => (await page.evaluate(() => window.__fakeHostSetupFinishes.length)) > 0,
+      10_000,
+    )
+    const { finishes, trayAsks, left, flights, tray } = await page.evaluate(() => ({
+      finishes: window.__fakeHostSetupFinishes,
+      trayAsks: window.__fakeHostTrayAsks,
+      left: window.__setupLeft,
+      flights: window.__setupFlights,
+      // Where the fake host says its icon is.
+      tray: { x: innerWidth - 80, y: 12 },
+    }))
+    if (!left) failures.push("finishing setup did not fly the window")
+    // Where the flight lands, measured from what it was given rather than
+    // from its frames: a loaded headless page draws few frames, and the
+    // flight's deadline can land setup before the last one. A box where the
+    // window took off, wearing the last keyframe, is drawn where the window
+    // ends up; its centre is on the icon, and it is a light the icon's size.
+    // How long it takes on screen in a production build is measured on a Mac.
+    if (flights.length !== 1)
+      failures.push(`the window flew ${flights.length} times, not once`)
+    else {
+      const [flight] = flights
+      const landing = await page.evaluate(({ from, frames }) => {
+        const last = frames.at(-1)
+        const probe = document.createElement("div")
+        Object.assign(probe.style, {
+          position: "fixed",
+          left: `${from.left}px`,
+          top: `${from.top}px`,
+          width: `${from.width}px`,
+          height: `${from.height}px`,
+          transform: last.transform,
+        })
+        document.body.append(probe)
+        const box = probe.getBoundingClientRect()
+        probe.remove()
+        return {
+          x: box.left + box.width / 2,
+          y: box.top + box.height / 2,
+          width: box.width,
+          height: box.height,
+          opacity: Number(last.opacity),
+          round: frames.slice(1).every((frame) => frame.borderRadius === "50%"),
+          offset: last.offset,
+        }
+      }, flight)
+      if (
+        Math.abs(landing.x - tray.x) > 1 ||
+        Math.abs(landing.y - tray.y) > 1 ||
+        Math.abs(landing.width - 17.6) > 0.5 ||
+        Math.abs(landing.height - 17.6) > 0.5 ||
+        landing.opacity !== 0 ||
+        !landing.round ||
+        flight.duration !== 900
+      )
+        failures.push(
+          `the flight lands ${JSON.stringify({ ...landing, duration: flight.duration })}, not a round 17.6 px light on ${JSON.stringify(tray)} over 900 ms`,
+        )
+    }
+    if (!handed) failures.push("finishing setup did not hand over to the host")
+    else if (
+      finishes.length !== 1 ||
+      finishes[0].completed !== true ||
+      finishes[0].agent !== chosen
+    )
+      failures.push(
+        `finishing handed over ${JSON.stringify(finishes)}, not one finish on ${chosen}`,
+      )
+    else if (finishes[0].windowShown)
+      failures.push("setup handed over while its window was still on screen")
+    if (trayAsks !== 1)
+      failures.push(
+        `the flight asked where the menu bar icon is ${trayAsks} times, not once`,
+      )
+  } finally {
+    await page.close()
+  }
+}
+
+/**
+ * Where setup's corner buttons are, against its window: which buttons are
+ * drawn, and for each its centre as fractions of the window's width and
+ * height, and whether it is round.
+ */
+function setupCorners(page) {
+  return page.evaluate((labels) => {
+    const frame = document.querySelector(".nessa-setup-window")?.getBoundingClientRect()
+    const at = (label) => {
+      const button = document.querySelector(`button[aria-label="${label}"]`)
+      if (!frame || !button) return null
+      const box = button.getBoundingClientRect()
+      return {
+        x: (box.left + box.width / 2 - frame.left) / frame.width,
+        y: (box.top + box.height / 2 - frame.top) / frame.height,
+        round:
+          Math.abs(box.width - box.height) < 0.5 &&
+          parseFloat(getComputedStyle(button).borderRadius) >= box.width / 2 - 0.5,
+      }
+    }
+    return { back: at(labels.back), close: at(labels.close) }
+  }, names.setup)
+}
+
+/** Whether a corner button sits in the window's top-left or top-right corner. */
+function inCorner(place, side) {
+  if (!place || !place.round || place.y > 0.15) return false
+  return side === "left" ? place.x < 0.15 : place.x > 0.85
 }
 
 /** Leaves Settings: Esc does not close it; its back control returns to the app. */

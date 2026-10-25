@@ -157,3 +157,43 @@ it("waits for the retry when there is no gateway to subscribe to", async () => {
   expect(agents).toHaveBeenCalledOnce()
   stop()
 })
+
+it("shows a choice setup recorded against the catalog already shown", async () => {
+  const { client, opens } = gateway()
+  const show = vi.fn()
+  let agent = "claude"
+  let recorded: (() => void) | undefined
+  const unlisten = vi.fn()
+  const stop = followAgentChoices(
+    () => client,
+    retries().retry,
+    async () => agent,
+    (listener) => {
+      recorded = listener
+      return unlisten
+    },
+  )(show)
+  // Nothing shown yet: there is no catalog to show the choice against.
+  recorded?.()
+  await settle()
+  expect(show).not.toHaveBeenCalled()
+  opens[0].handlers.catalog(catalog("devbox"))
+  await settle()
+  expect(show).toHaveBeenLastCalledWith({
+    catalog: catalog("devbox"),
+    chosenAgent: "claude",
+  })
+  // A replay finished on another agent, and the gateway sent no new catalog.
+  agent = "codex"
+  recorded?.()
+  await settle()
+  expect(show).toHaveBeenLastCalledWith({
+    catalog: catalog("devbox"),
+    chosenAgent: "codex",
+  })
+  stop()
+  expect(unlisten).toHaveBeenCalledTimes(1)
+  recorded?.()
+  await settle()
+  expect(show).toHaveBeenCalledTimes(2)
+})

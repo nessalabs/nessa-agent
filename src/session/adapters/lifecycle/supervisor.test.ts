@@ -42,6 +42,7 @@ function connection(initial?: Error) {
     } as EstablishedDevSession,
     close,
     closeCallbacks: () => [...closers],
+    stateCallbacks: () => [...observers],
     disconnect(error: Error) {
       state = { status: "closed", error }
       for (const callback of [...closers]) callback(error)
@@ -213,4 +214,123 @@ it("reports terminal failures to the owning browser lifecycle after detaching th
   active.disconnect(expired)
   expect(onTerminalFailure).toHaveBeenCalledWith(expired)
   dispose()
+})
+
+describe("session supervision ordering regressions", () => {
+  it("caps consecutive transport retries at five seconds and cancels the last timer", async () => {
+    vi.useFakeTimers()
+    const connect = vi.fn().mockRejectedValue(interrupted())
+    const owner = setup(connect)
+    const delays = [500, 1_000, 2_000, 4_000, 5_000, 5_000]
+    await vi.advanceTimersByTimeAsync(0)
+    for (const expected of delays) {
+      const before = connect.mock.calls.length
+      await vi.advanceTimersByTimeAsync(expected - 1)
+      expect(connect).toHaveBeenCalledTimes(before)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(connect).toHaveBeenCalledTimes(before + 1)
+    }
+    expect(owner.session.get()).toBeNull()
+    expect(owner.failed).not.toHaveBeenCalled()
+    owner.dispose()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([0, 300, 12_000])(
+    "honors retryAfterMs %i without shortening local backoff",
+    async (retryAfterMs) => {
+      vi.useFakeTimers()
+      const active = connection()
+      const connect = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new NessaConnectionClosedError(
+            1013,
+            JSON.stringify({
+              code: "gateway_overloaded",
+              retryable: true,
+              retryAfterMs,
+            }),
+          ),
+        )
+        .mockResolvedValue(active.established)
+      const owner = setup(connect)
+      const delay = Math.max(500, retryAfterMs)
+      await vi.advanceTimersByTimeAsync(delay - 1)
+      expect(connect).toHaveBeenCalledOnce()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(connect).toHaveBeenCalledTimes(2)
+      expect(owner.session.get()).toBe(active.established.client)
+      owner.dispose()
+    },
+  )
+
+  it("resets the backoff after recovery and releases retired subscriptions", async () => {
+    vi.useFakeTimers()
+    const first = connection(),
+      second = connection()
+    const connect = vi
+      .fn()
+      .mockRejectedValueOnce(interrupted())
+      .mockRejectedValueOnce(interrupted())
+      .mockResolvedValueOnce(first.established)
+      .mockResolvedValue(second.established)
+    const owner = setup(connect)
+    await vi.advanceTimersByTimeAsync(1_500)
+    first.disconnect(interrupted())
+    expect(first.closeCallbacks()).toHaveLength(0)
+    expect(first.close).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(499)
+    expect(connect).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(connect).toHaveBeenCalledTimes(4)
+    expect(owner.session.get()).toBe(second.established.client)
+    owner.dispose()
+    expect(second.closeCallbacks()).toHaveLength(0)
+    expect(second.close).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it("ignores a rejected connection after disposal without scheduling recovery", async () => {
+    vi.useFakeTimers()
+    let reject!: (error: Error) => void
+    const connect = vi.fn(
+      () =>
+        new Promise<EstablishedDevSession>((_resolve, fail) => {
+          reject = fail
+        }),
+    )
+    const owner = setup(connect)
+    owner.dispose()
+    reject(interrupted())
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(connect).toHaveBeenCalledOnce()
+    expect(owner.failed).not.toHaveBeenCalled()
+    expect(owner.ready).not.toHaveBeenCalled()
+    expect(owner.session.get()).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it("ignores captured state and close callbacks after disposal", async () => {
+    vi.useFakeTimers()
+    const active = connection()
+    const owner = setup(async () => active.established)
+    await vi.advanceTimersByTimeAsync(0)
+    const staleClose = active.closeCallbacks()[0]!
+    const staleStates = active.stateCallbacks()
+    owner.dispose()
+    const readyCount = owner.ready.mock.calls.length
+    const reconnectCount = owner.reconnecting.mock.calls.length
+    staleClose(interrupted())
+    for (const callback of staleStates) {
+      callback({ status: "reconnecting", attempt: 1 } as State)
+      callback({ status: "connected" })
+    }
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(owner.ready).toHaveBeenCalledTimes(readyCount)
+    expect(owner.reconnecting).toHaveBeenCalledTimes(reconnectCount)
+    expect(owner.session.get()).toBeNull()
+    expect(active.stateCallbacks()).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
 })

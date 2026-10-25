@@ -15,6 +15,14 @@ sources:
   - "src/desktop/workspace/adapters/store/session-commands.ts"
   - "src/desktop/widgets/app/model/lifecycle.ts"
 diagramLinks:
+  Integrations: desktop-mcp-integration-management
+  Hooks: desktop-native-hook-settings
+  Notices: desktop-review-notice-permission
+  Permissions: desktop-permission-rule-revocation
+  Devices: desktop-linked-devices
+  Sharing: desktop-conversation-sharing
+
+  SettingsActions: desktop-settings-action-owners
   F0: "desktop-workspace-open-dismiss-and-reopen-the-desktop-window"
   F1: "desktop-workspace-load-browse-and-resynchronize-the-workspace"
   F2: "desktop-workspace-start-a-workspace-session-send-and-retry"
@@ -49,6 +57,21 @@ These boxes open related pages. They are parts of the system, rather than mutual
 ```mermaid
 flowchart TB
     Feature["Browse this feature"]
+    Integrations["Manage MCP integrations"]
+    Hooks["Configure native harness hooks"]
+    Notices["Enable waiting-review notifications"]
+    Feature --> Integrations
+    Feature --> Hooks
+    Feature --> Notices
+    Permissions["Revoke remembered permission rules"]
+    Feature --> Permissions
+    Devices["Pair, approve and revoke linked devices"]
+    Sharing["Share a conversation and revoke access"]
+    Feature --> Devices
+    Feature --> Sharing
+
+    SettingsActions["Finish or retire a settings action"]
+    Feature --> SettingsActions
     F0["Open, dismiss, and reopen the desktop window"]
     Feature --> F0
     F1["Load, browse, and resynchronize the workspace"]
@@ -70,6 +93,17 @@ flowchart TB
 ## Browse flows
 
 - [Answer requests from the session list](answer-requests-from-the-session-list.md)
+- [Manage MCP integrations](manage-mcp-integrations.md)
+- [Configure native harness hooks](configure-native-hooks.md)
+- [Enable waiting-review notifications](enable-review-notices.md)
+
+- [Revoke a remembered permission rule](permission-rule-revocation.md)
+
+- [Pair, approve and revoke a linked device](linked-devices.md)
+- [Share a conversation and revoke its grant](conversation-sharing.md)
+
+- [Finish or retire a settings action](settings-action-owners.md)
+
 - [Discover subagents and experimental features](discover-subagents-and-experimental-features.md)
 - [Drag or move a session or pane](drag-or-move-a-session-or-pane.md)
 - [Open, merge, unmerge, switch, and close window tabs](open-merge-unmerge-switch-and-close-window-tabs.md)

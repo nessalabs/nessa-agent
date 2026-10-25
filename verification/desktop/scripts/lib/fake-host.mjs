@@ -37,8 +37,25 @@ export const STARTING = {
  * startup still running (`GatewayReader`), and refused as not ready if it is
  * still set after `waitMs`. A scenario sets it before a reload and removes it
  * once the gateway is "up": a launch.
+ *
+ * Every window may ask for setup again (`replay_onboarding`, from Settings),
+ * which is counted in `window.__fakeHostReplays`. Given `setup`, the page is
+ * the setup window the real host opens for that ask: the host says it started
+ * (`host_startup`) and that its gateway is up (`gateway_startup`), takes the
+ * reveal, and keeps each handoff's arguments in
+ * `window.__fakeHostSetupFinishes` with whether the setup window was still
+ * on screen (`windowShown`), answering as a handoff that closed setup.
+ * It says there is no linger question (a host with no logind), and answers
+ * where its menu bar icon is (`setup_tray_point`), 80 px in from the page's
+ * top right, counting each ask in `window.__fakeHostTrayAsks`.
  */
-export function gatewayHost({ endpoint, credential, notices = false, starting = null }) {
+export function gatewayHost({
+  endpoint,
+  credential,
+  notices = false,
+  starting = null,
+  setup = false,
+}) {
   // The host's typed refusals (`SurfaceCommandError`). The page maps the
   // reason; a sentence here would be an untyped failure.
   const notReady = { reason: "not-ready" }
@@ -49,6 +66,9 @@ export function gatewayHost({ endpoint, credential, notices = false, starting = 
   window.__fakeHostAsked = asked
   // When each endpoint ask came, in the page's `performance.now()`.
   window.__fakeHostAskTimes = []
+  window.__fakeHostReplays = 0
+  window.__fakeHostSetupFinishes = []
+  window.__fakeHostTrayAsks = 0
   window.__TAURI_INTERNALS__ = {
     transformCallback: (callback) => {
       const id = ++callbacks
@@ -59,6 +79,36 @@ export function gatewayHost({ endpoint, credential, notices = false, starting = 
       if (notices) {
         const answered = noticeHost(command, args)
         if (answered) return answered
+      }
+      if (command === "replay_onboarding") {
+        window.__fakeHostReplays++
+        return Promise.resolve(null)
+      }
+      if (setup && command === "host_startup") return Promise.resolve({ state: "ready" })
+      // The gateway it manages is up: the stack's gateway is already running,
+      // and nothing about it changes, so a listener is taken and never told.
+      if (setup && command === "gateway_startup")
+        return Promise.resolve({ revision: 1, state: "ready" })
+      if (setup && command === "plugin:event|listen") {
+        window.__TAURI_EVENT_PLUGIN_INTERNALS__ ??= { unregisterListener() {} }
+        return Promise.resolve(args.handler)
+      }
+      if (setup && command === "plugin:event|unlisten") return Promise.resolve(null)
+      if (setup && command === "reveal_setup_window") return Promise.resolve(null)
+      if (setup && command === "linger_status")
+        return Promise.resolve({ shown: "not-applicable" })
+      if (setup && command === "setup_tray_point") {
+        window.__fakeHostTrayAsks++
+        return Promise.resolve({ x: innerWidth - 80, y: 12 })
+      }
+      if (setup && command === "finish_setup") {
+        // With what was on screen as it came: a handoff waits for the window
+        // to land, so the window is gone by then.
+        window.__fakeHostSetupFinishes.push({
+          ...args,
+          windowShown: document.querySelector(".nessa-setup-window") !== null,
+        })
+        return Promise.resolve({ setupClosed: true, closeError: null, recordError: null })
       }
       if (command === "load_gateway_endpoint") {
         asked[command]++
