@@ -556,6 +556,12 @@ export const names = {
     chooseAgent: "Choose an agent",
     back: "Back",
     close: "Close setup",
+    continue: "Continue",
+    /** The agents setup lists, by their rows' names; Local AI is coming. */
+    agents: ["Claude", "Codex"],
+    localAi: "Local AI, coming soon",
+    /** The summon step's ways on: the second until its lesson is done. */
+    finish: ["Start using Nessa", "Skip this step"],
   },
   /** A session's menu item that opens the share dialog. */
   share: "Share…",
