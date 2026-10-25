@@ -858,3 +858,23 @@ injects a panic through the existing native store policy dependency inside the
 actual blocking transaction. The joined typed failure has no grant, and real
 revocation completes after the worker unwinds. This does not claim supervision
 of the still-unmounted outer product command.
+
+### Principal share review M1: receiver absence is exact
+
+Round1 at e64af135 reproduced a false fresh/replay acknowledgement from the
+ordinary grant writer's intentional None-means-keep/lost-reply semantics. The
+principal-specific credential-owned operation must instead mean receiver absent.
+It remains on the same native transaction and grant gate; ordinary paired change
+semantics stay unchanged. No implicit receiver removal, new state or permit.
+
+| Relationship at actual native boundary | Required result before acknowledgement/effects |
+| --- | --- |
+| principal grant input names a receiver, lacks its exact held principal, or is a revoke | refuse the dedicated grant operation; ordinary change owns those shapes |
+| live same-principal row retains any receiver | refuse before replay acknowledgement or fresh mutation; preserve row/journal |
+| original request journal retains a receiver, including after later unshare | refuse its reinterpretation as a receiver-absent request |
+| original receiver-absent request after unshare | return its original historical receipt without recreating the grant |
+| ordinary paired change omits receiver | preserve its existing keep/lost-reply meaning |
+
+The dedicated port is named `grant_principal_with_credential` to identify the
+exact contract. The actual retained credential owner identifies this native
+entry path; no caller-provided mode flag or persisted state is added.

@@ -1,0 +1,18 @@
+
+running 1 test
+new share result: Ok(GrantedShare { applied: false, policy_revision: 1 })
+receiver-bearing original command replay: Ok(GrantedShare { applied: true, policy_revision: 1 })
+retained receiver: Some("retained-receiver"); admission: Some(Refused)
+
+thread 'receiver_bearing_existing_principal_row_must_not_be_acknowledged_as_receiver_free' (60152) panicked at /tmp/nessa-896-share-review-receiver-probe.rs:293:9:
+an acknowledged principal share must not retain a receiver
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test receiver_bearing_existing_principal_row_must_not_be_acknowledged_as_receiver_free ... FAILED
+
+failures:
+
+failures:
+    receiver_bearing_existing_principal_row_must_not_be_acknowledged_as_receiver_free
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
