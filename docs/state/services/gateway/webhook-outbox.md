@@ -80,6 +80,17 @@ under a current credential hold. The private intent supplies no permission verdi
 product command ownership, source replay and the sender remain pending. Application installation #1052 and inbound
 workflow triggers #1088 remain separate.
 
+## Principal read boundary
+
+The [inner principal source use case](record-reads.md#principal-source-reads)
+can now obtain a bounded canonical SDK page under current Auth, grant and Cedar
+checks, without constructing a paired reader. Its registration UUID and epoch
+match this outbox's existing scope contract. The compatibility fixture queues
+actual synthetic canonical wire records while retaining the original fences.
+This is not a mounted source feed or supervised sender. Stored cursors still
+supply no authority, and every send must ask current admission again. This
+navigation note does not advance this page's persistence review checkpoint.
+
 ## Cancelling a stopped uninstalled reservation
 
 The inner registration use case checks actual original Auth issuance and current
