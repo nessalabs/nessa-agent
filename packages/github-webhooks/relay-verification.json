@@ -1,0 +1,171 @@
+{
+  "sourceRevision": "34a6c508da0285108bcab82012c8da97487e5f71",
+  "workerSourceRevision": "e960bc33be8d1878478ed781e9e2764a1a3d7668",
+  "workerVersion": "18e4c754-f52c-4d1b-a28f-7ec9e826cda1",
+  "plan": "Workers Free ($0 current plan, confirmed in dashboard after deployment)",
+  "stage": "dev",
+  "origin": "https://nessa-github-webhooks.saurav-panthee.workers.dev",
+  "resources": {
+    "databaseId": "570dee24-f06a-41f5-a2b5-35de9660d794",
+    "durableObjectNamespace": "7b0325c1b060425f996f2ef367fc3b8c",
+    "class": "RepositoryWakeRoom",
+    "migration": "0002_relay.sql",
+    "schedule": "*/5 * * * *"
+  },
+  "bundles": {
+    "worker.js": {
+      "bytes": 32460,
+      "sha256": "f0967f5b53af3e4d05a1c8d8a4dbfa3022e43108eb856f061dec27e727e7af5c"
+    },
+    "2ac4106ea5ed9a89ca4611b8b77674b63fcd3181-policies.cedar": {
+      "bytes": 256,
+      "sha256": "d1dcff774496473f12babe68cb4dd5f7354689e96901742ae25c62191283cd4c"
+    },
+    "2513005f2845a720f5093d978b5255c85b0b9ac5-policies.cedar": {
+      "bytes": 189,
+      "sha256": "dcafbe3dcc9b9cdcbe71a2732b29a135f1f3bd7598a3dca38db7edd3f744b564"
+    },
+    "bb6ea96811535f86463946f69e9ee04fdf1a7397-cedar.wasm": {
+      "bytes": 4311886,
+      "sha256": "a7c93cd3af0721125d0a758a644b4cd9a4c111bed2af2a6be9a1356b34f762f0"
+    },
+    "43e0eb30a8e17306ba264532391c42c3632727e7-policies.cedar": {
+      "bytes": 197,
+      "sha256": "c0816eb489dd928c23bd8bdcd9d8b781d35dd4835cde70e6f571109de24aaa5d"
+    }
+  },
+  "checks": {
+    "workerTests": 30,
+    "nativeRelayTests": 14,
+    "cliArgumentTests": 15,
+    "architectureTests": 108,
+    "desktopBuildStageTests": 3,
+    "scriptedDesktopVerdict": "pass in Chromium and WebKit",
+    "ciCargoPackageSelection": "nessa-server, nessa-protocol, nessa-client-core, nessa-device-client --all-targets (e960bc33b)",
+    "typecheckLintFormat": "passed",
+    "strictClippy": "cargo clippy -p nessa-server --all-targets -- -D warnings (passed at 34a6c508d; existing lease-fingerprint constant-evaluation warning still printed)",
+    "docsCatalog": {
+      "documents": 134,
+      "errors": 0,
+      "warnings": 25,
+      "note": "Existing renderer reports unsupported sourceRevision fields; rendered charts not visually inspected."
+    }
+  },
+  "probes": {
+    "cloud": [
+      {
+        "rule": "identity",
+        "behavioralFailure": true,
+        "exitCode": 1
+      },
+      {
+        "rule": "repository-scope",
+        "behavioralFailure": true,
+        "exitCode": 1
+      },
+      {
+        "rule": "gap",
+        "behavioralFailure": true,
+        "exitCode": 1
+      },
+      {
+        "rule": "stage",
+        "behavioralFailure": true,
+        "exitCode": 1
+      },
+      {
+        "rule": "private-scope",
+        "behavioralFailure": true,
+        "exitCode": 1
+      },
+      {
+        "rule": "ticket-stage",
+        "behavioralFailure": true,
+        "exitCode": 1
+      }
+    ],
+    "native": [
+      {
+        "rule": "account",
+        "behavioralFailure": true,
+        "exitCode": 101
+      },
+      {
+        "rule": "generation",
+        "behavioralFailure": true,
+        "exitCode": 101
+      },
+      {
+        "rule": "gap-pause",
+        "behavioralFailure": true,
+        "exitCode": 101
+      }
+    ]
+  },
+  "live": {
+    "sourceRevision": "34a6c508da0285108bcab82012c8da97487e5f71",
+    "workerVersion": "18e4c754-f52c-4d1b-a28f-7ec9e826cda1",
+    "stage": "dev",
+    "origin": "https://nessa-github-webhooks.saurav-panthee.workers.dev",
+    "repositoryId": "1352039222",
+    "userId": "27861809",
+    "fixtures": [
+      {
+        "deliveryId": "6e5d24a2-a5a7-499b-ad3d-0606d774af4b",
+        "phase": "offline-before-connect",
+        "ingressStatus": 202
+      },
+      {
+        "deliveryId": "5df6a84d-1e71-4052-87db-e443fbf3f8ae",
+        "phase": "live-while-native-watch-open",
+        "ingressStatus": 202
+      },
+      {
+        "deliveryId": "a9ddd6f0-277d-4446-a77b-96ff063f214b",
+        "phase": "offline-after-native-shutdown",
+        "ingressStatus": 202
+      }
+    ],
+    "checks": {
+      "authenticatedRead": 200,
+      "wrongUserRejected": 409,
+      "wrongStageRejected": 409,
+      "inaccessibleRepositoryRejected": 403,
+      "nativeInitialCatchup": true,
+      "nativeLiveImportSeconds": 0.521,
+      "nativeWatchConfirmed": true,
+      "nativeRestartCatchup": true,
+      "offlineLocalReadAndDeduplication": true,
+      "unconfiguredProductionRefused": true
+    },
+    "nativeConnectionEvidence": [
+      "2026-10-25T23:44:47.618444Z DEBUG nessa_server::github_relay::infrastructure::transport: GitHub relay watch connected",
+      "2026-10-25T23:44:49.471565Z DEBUG nessa_server::github_relay::infrastructure::transport: GitHub relay watch connected"
+    ]
+  },
+  "limits": {
+    "pageSize": 8,
+    "payloadBytes": 1048576,
+    "storedEvents": 10000,
+    "storedBytes": 67108864,
+    "retentionSeconds": 604800,
+    "ticketSeconds": 120,
+    "renewAfterSeconds": 90,
+    "bindings": 16,
+    "auditRows": 10000,
+    "sweepRows": 64
+  },
+  "review": {
+    "selfReview": "authority/repository facts, stage, page/cursor correlation, atomic persistence, cleanup evidence, reconnect generation and wake expiry checked",
+    "independentReview": "pending; no merge-gate approval claimed"
+  },
+  "exclusions": [
+    "No packaged desktop release was built or installed; the native gateway binary was built and exercised in an isolated private namespace, removed after verification.",
+    "Live relay events were explicitly labelled synthetic development fixtures, authenticated against real GitHub. Cross-user/private-scope denial also has Miniflare/Cedar/D1 regression coverage.",
+    "A fresh GitHub UI redelivery required sudo/passkey reauthentication and was not performed; original real GitHub ping evidence remains in verification.json.",
+    "Full conversation stress/chaos not run: no conversation mutation, trigger binding or UI behavior was added. Scripted gateway checks passed.",
+    "Nessa Docs catalogue checked; rendered chart appearance not inspected.",
+    "GitHub connection currently uses installed/signed-in gh, not packaged browser OAuth onboarding. Fine-grained/private App user tokens without repo OAuth-scope proof are unsupported.",
+    "Alpha, CI and prod are unconfigured and fail closed; independent stage resources and GitHub App are required before rollout."
+  ]
+}

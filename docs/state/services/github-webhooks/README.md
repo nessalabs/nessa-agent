@@ -1,85 +1,132 @@
 ---
 id: github-webhooks
-title: GitHub webhook receiver
+title: GitHub webhook relay
 kind: service
 status: implemented
-summary: Signed GitHub deliveries are retained in a bounded cloud inbox.
+summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
 parent: nessa
-sourceRevision: "3ca093d002c6788ff9af6ef786cc1dc88e7fa97c"
+sourceRevision: "34a6c508da0285108bcab82012c8da97487e5f71"
 sources:
   - packages/github-webhooks/src/composition/worker.ts
-  - packages/github-webhooks/src/webhooks/domain/delivery.ts
-  - packages/github-webhooks/src/webhooks/application/receive.ts
   - packages/github-webhooks/src/webhooks/infrastructure/http.ts
   - packages/github-webhooks/src/webhooks/infrastructure/signature.ts
-  - packages/github-webhooks/src/webhooks/infrastructure/d1.ts
-  - packages/github-webhooks/migrations/0001_deliveries.sql
-  - packages/github-webhooks/tests/worker.test.ts
+  - packages/github-webhooks/src/relay/application/read.ts
+  - packages/github-webhooks/src/relay/infrastructure/cedar/evaluator.ts
+  - packages/github-webhooks/src/relay/infrastructure/d1.ts
+  - packages/github-webhooks/src/relay/infrastructure/wake-room.ts
+  - packages/github-webhooks/migrations/0002_relay.sql
+  - crates/nessa-server/src/github_relay/application/catch_up.rs
+  - crates/nessa-server/src/github_relay/application/follow.rs
+  - crates/nessa-server/src/github_relay/infrastructure/sqlite.rs
+  - crates/nessa-server/src/composition/github_relay.rs
+  - protocol/defaults/github-relays.json
+  - protocol/defaults/github-relay-contract.json
 diagramLinks: {}
 diagramDetails:
   - diagram: 0
-    node: Retaining
-    section: Waiting for storage
+    node: CloudRetained
+    section: The cloud receipt
   - diagram: 0
-    node: Retained
-    section: A confirmed receipt
+    node: LocalCommitted
+    section: The private local inbox
   - diagram: 0
-    node: Unconfirmed
-    section: A failed or lost storage answer
+    node: Gap
+    section: Retention and catch-up gaps
+  - diagram: 0
+    node: Refused
+    section: User and stage boundaries
 ---
 
-# GitHub webhook receiver
+# GitHub webhook relay
 
-This small cloud service accepts GitHub events while a desktop is offline. It
-checks the sender's signature, saves the original payload, and then acknowledges
-receipt. It does not yet deliver those events into a desktop conversation.
+GitHub sends signed events to a small Cloudflare inbox while Nessa is offline.
+When Nessa connects, it proves which GitHub account it is using and fetches only
+repositories that account can currently access. It saves each event page and its
+cursor together on the device. The relay imports data without starting an agent
+or choosing a conversation.
 
-The receiver is deployed on Workers Free and connected to the GitHub App. A real
-GitHub ping returned 202 and its delivery ID was verified in D1. Configuration
-and verification evidence are tracked on
-[#1107](https://github.com/nessalabs/nessa-agent/issues/1107).
+The development relay is deployed on Workers Free. A built native gateway opened
+a live watch, imported a signed development fixture, then caught up after shutdown
+and restart. The [verification record](../../../../packages/github-webhooks/relay-verification.json)
+separates these live fixtures from the original GitHub ping evidence. Deployment
+and review are tracked on [#1117](https://github.com/nessalabs/nessa-agent/issues/1117).
 
 ```mermaid
 stateDiagram-v2
     [*] --> Checking: webhook arrives
-    Checking --> Refused: invalid headers, size, signature or JSON
-    Checking --> Retaining: signed JSON object
-    Retaining --> Retained: new delivery commits
-    Retaining --> Duplicate: same ID and content already retained
-    Retaining --> Refused: reused ID has different content
-    Retaining --> Unconfirmed: storage unavailable or inbox full
+    Checking --> Refused: invalid signature or bounded envelope
+    Checking --> CloudRetained: database commits original delivery
+    Checking --> Unconfirmed: full or unavailable store
+    CloudRetained --> Authorizing: desktop requests a page
+    Authorizing --> Refused: GitHub access, identity, stage or Cedar refuses
+    Authorizing --> Gap: expiry watermark covers missing events
+    Authorizing --> LocalWriting: audited read returns a bounded page
+    LocalWriting --> LocalCommitted: events and cursor commit together
+    LocalWriting --> CloudRetained: local write fails or caller stops before commit
+    LocalCommitted --> Authorizing: wake-up or reconnect resumes saved cursor
+    Gap --> Authorizing: owner explicitly acknowledges missing range
 ```
 
-## Waiting for storage
+## The cloud receipt
 
-A valid signature proves the request body came from the secret's holder. It does
-not mean the event has been retained. The receiver waits for one atomic database
-write that also checks capacity and delivery identity.
+The receiver verifies the raw body and waits for D1 to confirm retention before
+returning 202. A retained identical delivery ID returns 200; changed bytes under
+the same retained identity conflict. Only signed repository/installation identities
+enter the relay index. Wake-up failure after retention does not erase the receipt;
+a later reconnect reads the durable page.
 
-## A confirmed receipt
+GitHub does not automatically retry failed deliveries. The free service refuses
+new events at its storage or provider quota limits. An operator may need to
+redeliver original GitHub delivery IDs after resolving the cause.
 
-A new delivery gets 202 only after the database confirms it. An identical replay
-gets 200 without replacing the original receipt. A changed event name or body
-under an existing delivery ID gets 409. The original payload retains the sender,
-installation and repository facts supplied by GitHub.
+## The private local inbox
 
-## A failed or lost storage answer
+The user connects repositories using their machine's signed-in GitHub CLI account.
+The serving gateway discovers the binding, opens a stage-bound watch and reads
+again to close the subscription race. Watch messages contain only a wake-up.
+Every payload page rechecks the GitHub account and current repository access.
+Private repositories require a GitHub credential with a proven `repo` OAuth scope.
+Tokens are not persisted by Cloudflare.
 
-A full or unavailable inbox returns 503. A lost response can leave a delivery
-stored even though the sender did not see acceptance. Redeliver its original ID
-after fixing the cause. GitHub does not retry failed deliveries automatically.
+Each local page transaction saves events, a cursor and audit evidence. Failure
+before commit leaves that page eligible for replay. A saved cursor resumes after
+restart. Each connection generation fences responses and cleanup from a removed
+binding; disconnect/reconnect cannot revive the previous generation's pending work.
+Local storage deduplicates a redelivered identity while its original copy remains.
 
-The inbox holds at most 10,000 deliveries and 64 MiB of raw payload. It never
-automatically evicts accepted events. An operator must export data and explicitly
-authorize cleanup. A request above one MiB is refused before parsing.
+The local owner can read the downloaded inbox without network access. OS ownership
+protects that private database; no new unauthenticated local HTTP read route is
+mounted. Existing [conversation admission](../gateway/external-events.md) remains
+a separate authority if a future feature turns an event into a turn.
 
-## The gateway remains a separate owner
+## Retention and catch-up gaps
 
-The existing [gateway event admission](../gateway/external-events.md) primitive
-uses Nessa-specific signatures and current conversation authorization. This
-receiver does not call it. Connecting an inbox to users or conversations needs
-authenticated installation ownership, an explicit binding, and the existing
-Cedar checks. GitHub payloads cannot choose that authority.
+Cloud retention has a seven-day target, with bounded five-minute cleanup sweeps.
+Each sweep records affected delivery identities and advances a repository watermark
+atomically with deletion. Sweeps can lag. The cloud cap is 10,000 deliveries and
+64 MiB payload; this is a starter service, not unlimited capture.
 
-See the [operations runbook](../../../../packages/github-webhooks/README.md) and
-[ordering contract](../../../adr/todo/1107-github-webhook-receiver.md).
+A device whose cursor precedes an expired event gets an explicit gap, which is
+saved locally. Reconnect does not silently skip it. The owner can acknowledge the
+missing range; that transition records its original cursor and cause before
+advancing. Local retention is seven days from import, cleaned during page commits,
+with the same payload/event caps and at most 16 account/repository bindings.
+Audit metadata is bounded to recent records, not an indefinite archive. Erasing
+retention also ends that store's deduplication history.
+
+## User and stage boundaries
+
+The expected user ID is compared with the token's GitHub-verified identity. Cedar
+uses current repository facts and OAuth scopes before a page is disclosed. An
+installation can serve several authorized users; its owner is not a stand-in for
+all of them. A read already admitted under one verified snapshot can finish after
+a later permission change.
+
+The desktop's existing build embeds its stage. That stage selects a compiled relay
+and the corresponding local namespace. Development uses the current workers.dev
+URL. Alpha, CI and production remain disabled until provisioned, with no fallback.
+Each rollout stage requires separate cloud resources, secrets and a GitHub App,
+because each app has one webhook URL. Users do not select stages.
+
+See the [operations and module map](../../../../packages/github-webhooks/README.md)
+and [ordering contract](../../../adr/todo/1117-github-relay.md).
