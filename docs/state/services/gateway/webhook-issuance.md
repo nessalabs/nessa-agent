@@ -4,7 +4,7 @@ title: Webhook credential issuance
 kind: operation
 status: mixed
 summary: Cedar owns webhook issuance; a bounded private intent coordinates actual auth receipts and fenced installation, while product and worker composition remain pending.
-sourceRevision: "1c1355b537037e7416486856211b74c605804fa7"
+sourceRevision: "566cf419781203209666df344a65b3f213876560"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/credential_admin.rs
@@ -24,6 +24,8 @@ sources:
   - crates/nessa-server/src/product/socket.rs
   - crates/nessa-server/src/webhooks/application/registration.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/intents.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/cancellation.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_cancellation.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/schema.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_failures.rs
@@ -119,13 +121,16 @@ stateDiagram-v2
     Reserved --> Recovery: Matching receipt has historical AdminIssue origin
     Reserved --> Held: Auth returns metadata / acquire current authority hold
     Held --> Reserved: Current authority unavailable or contradictory
-    Held --> Stopped: Revoked, expired or inactive current authority
+    Held --> Reserved: Inactive membership without canonical stop / refuse installation
+    Held --> Cancelled: Original revocation or elapsed expiry / cancel uninstalled intent
+    Held --> Retired: Original revocation or elapsed expiry / stop installed registration
     Held --> Recovery: Historical AdminIssue origin / require explicit recovery
     Held --> Installed: Match actual origin and current authority / acknowledge without bearer
     Installed --> Installed: Same intent retry acknowledges original installation
     Installed --> Retired: Canonical stop drains retained state
     Retired --> [*]: Transaction deletes registration and private intent
     Discarded --> [*]: No registration installed
+    Cancelled --> [*]: Cancellation audit acknowledged / trim retained terminal facts
 ```
 
 The auth owner reads the actual first journal transition with current credential,
@@ -136,7 +141,13 @@ Registration compares that actual origin with its reserved command and checks th
 returned receipt's actual sequence, revision and domain evidence.
 It compares the complete current credential and membership with the returned metadata
 and original inputs under an existing credential hold. An authority already revoked, expired or inactive at admission
-installs nothing. Absolute expiry can advance during installation; a saved
+installs nothing. Actual original revocation or elapsed expiry cancels an uninstalled
+reservation; an installed replay instead goes through the existing stop-and-drain
+owner. Cleanup keeps that same hold through sink acknowledgement and uses the
+original stop evidence, even if membership has since become inactive. Inactive
+membership alone grants no installation and creates no synthetic stop. A cleanup
+failure remains a typed stopped-with-cleanup-failure result; an unavailable or
+contradictory Auth snapshot retains the reservation for reconciliation. Absolute expiry can advance during installation; a saved
 registration supplies no send permission, and delivery still requires fresh
 admission. A lost auth or installation acknowledgement retains the
 intent for retry. Initial success and matching replay both return a secret-free
@@ -216,3 +227,14 @@ reproduced the missing classification; the subsequent fresh round 2 result is li
 is clean for this source at candidate8346c4ae: all severity buckets empty, M1
 independently verified fixed. No crate source changes follow source1c1355b5 in
 that candidate. Runtime, lifecycle and full-feature qualification remain pending.
+
+## Cancellation recovery source review
+
+This page was checked against source `566cf419781203209666df344a65b3f213876560`
+for original Auth stop, uninstalled cancellation, installed stop handoff, retained
+ownership and restoration/publication agreement. The combined source passed
+190 webhook tests before the final boxed-intent correction; its 15 affected
+cancellation tests and seven-package Clippy passed after that correction.
+Independent cancellation review and exact-head platform CI remain pending.
+The earlier scoped review and failure evidence remains historical; this does not
+qualify runtime composition, recipient E2E or browser rendering.

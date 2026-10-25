@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, delivery state and causal audit survive restart; product command ownership, source replay and supervised sending remain uncomposed.
-sourceRevision: "342e21aa5250eb97c79e57a1bd56bd10c12a439b"
+sourceRevision: "566cf419781203209666df344a65b3f213876560"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
@@ -21,6 +21,8 @@ sources:
   - crates/nessa-auth/tests/revocation.rs
   - crates/nessa-server/src/webhooks/application/registration.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/intents.rs
+  - crates/nessa-server/src/webhooks/infrastructure/outbox/cancellation.rs
+  - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_cancellation.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/registration_failures.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/lifecycle.rs
@@ -77,6 +79,32 @@ asks the existing auth owner and correlates its actual result before installing
 under a current credential hold. The private intent supplies no permission verdict;
 product command ownership, source replay and the sender remain pending. Application installation #1052 and inbound
 workflow triggers #1088 remain separate.
+
+## Cancelling a stopped uninstalled reservation
+
+The inner registration use case checks actual original Auth issuance and current
+credential identity before cleanup. An original revocation or elapsed expiry
+cancels an uninstalled private intent without installing its destination. The
+SQLite owner checks the saved intent and original stop before publishing any
+owed evidence, then atomically records cancellation and deletes the private
+intent. An installed replay uses the existing stop-and-drain owner instead.
+Neither path sends HTTP or grants delivery permission.
+
+Cancelled and drained are distinct retained terminal kinds. Both use the same
+indexed credential ownership check, which rejects duplicate retained owners and
+live/retired overlap. Restoration and publication correlate retained target,
+original stop and audit history: cancellation cannot claim an installation,
+expiry observation or drain. A drained registration may retain its valid
+original lifecycle history. The registration-leading history query reads at most
+five rows: four legal lifecycle facts and one contradiction sentinel. Lost audit
+acknowledgement replays identical bytes and preserves the first observer; only
+acknowledged evidence may be trimmed. A different private schema is refused.
+
+These are inner use-case and persistence guarantees. Caller cancellation,
+startup reconciliation and supervised shutdown still need runtime composition.
+The cancellation tests exercise original revocation, expiry boundaries,
+supersession, inactive membership cleanup, held Auth reads, publication failure,
+cold restoration, conflicting histories and distinct-credential controls.
 
 ## Observing an actual credential stop
 
@@ -430,3 +458,14 @@ the same lifecycle and require render validation at the new checkpoint.
 Source `8f83f7394251814575429f5f1362cb3abac61687` combines the clean original-issuance correction (`1c1355b5`) and cleanup-cost correction (`611b5a87`). Their independent reports are scoped to their original bases; [assembled correction round2](../../../reviews/evidence/webhook-runtime/assembled-corrections/review-2/report.md) is clean at ecbb440e. It also includes the earlier typed expiry-observer helper (`7b83e425`), which that review explicitly covered. That helper does not implement the separate observation-before-stop lifecycle. That reviewed correction excluded W24. The composition adds the observation-before-stop lifecycle described above. Current canonical evidence has 160 webhook tests and seven-package Clippy passing, with clean independent structural review at e8f1564f. Full outbound delivery remains uncomposed.
 
 Windows and scripted gateway Chromium/WebKit, stress/chaos, recipient capability/revoke E2E and exact-head CI remain unqualified. Historical timeout and unrelated cleanup failures remain evidence, not passing gates.
+
+## Cancellation recovery source review
+
+This page was checked against source `566cf419781203209666df344a65b3f213876560`
+for original Auth stop, uninstalled cancellation, installed stop handoff, retained
+ownership and restoration/publication agreement. The combined source passed
+190 webhook tests before the final boxed-intent correction; its 15 affected
+cancellation tests and seven-package Clippy passed after that correction.
+Independent cancellation review and exact-head platform CI remain pending.
+The earlier scoped review and failure evidence remains historical; this does not
+qualify runtime composition, recipient E2E or browser rendering.
