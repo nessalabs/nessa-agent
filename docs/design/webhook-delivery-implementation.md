@@ -808,3 +808,53 @@ tracked worker, budgets and exact identity checks through two concrete entries.
 
 No new Cedar action, paired principal, product session or receiver authority is
 introduced. No protocol, SDK or client contract changes are required.
+
+### Principal share composition
+
+The webhook-specific share use case resolves only a committed active private
+registration. It does not synthesize a receiver or grant a principal owner access.
+The existing conversation.share ownership/target Cedar rules and canonical grant
+transaction remain authoritative. Credential binding validation is shared with
+source/send admission, and the actual Auth hold stays alive through the grant
+commit. No protocol, SDK, client or Cedar permit expands in this slice.
+
+| Input/ordering | Required result | Evidence |
+| --- | --- | --- |
+| another owner or organization | ownership refusal before private lookup; no grant | `private_target_is_never_looked_up_for_another_owner` |
+| live Auth principal, no committed registration | no target fallback and no grant | `a_live_auth_principal_without_a_committed_registration_is_not_a_share_target` |
+| registered read principal | exact conversation/principal/credential grant, receiver absent | `registered_principal_share_has_no_receiver_and_grants_exactly_one_conversation` |
+| comment or drive | existing Cedar refusal, no grant | `webhook_comment_and_drive_are_refused_by_existing_cedar_before_any_grant` |
+| stopped/expired/mismatched target or disappearing registration | refuse before grant | `revoked_and_expired_credentials_cannot_create_a_principal_grant`, `replaced_or_disappearing_private_registration_cannot_be_granted` |
+| cancelled during target recheck | original Auth hold released; no grant | `cancelling_share_during_private_recheck_releases_original_auth_without_grant` |
+
+This is an inner share boundary, not product command mounting, a source-feed
+supervisor or recipient delivery E2E. Expiry is rechecked before grant mutation;
+subsequent source/send admission independently checks current expiry and revision.
+
+The canonical grant port additionally transfers the actual Auth hold to its
+physical writer. Unsupported adapters refuse this ownership-bearing operation;
+ordinary receiver changes retain their current signature and path. Native grant
+retries share one original Auth owner, and each blocking attempt owns its clone
+until commit/rollback/panic finishes. Its mutex is never locked. Acquisition stays
+Auth then principal grant then metadata connection; no new task supervisor or
+state flag is introduced. The existing test-only grant-write pause is reused,
+with crate visibility for this integration test.
+
+| Physical boundary | Required result | Evidence |
+| --- | --- | --- |
+| caller cancelled after real blocking grant write enters | actual original Auth hold survives until physical commit; real revocation waits, then admission refuses | `cancelled_physical_share_write_retains_original_auth_until_actual_commit` |
+| expiry elapses during private recheck | no grant mutation despite the held mutation fence | `expiry_during_private_registration_recheck_refuses_before_grant` |
+
+The positive share test reads a genuine synthetic SDK source under the new grant.
+This still mounts no HTTP sender and claims no recipient E2E or command supervisor.
+
+The credential-owning grant adapter also correlates the actual held credential
+and supplied principal with the grant target before taking its write path.
+`credential_owning_grant_port_refuses_mismatched_credential_and_principal`
+exercises both mismatches against the real store with no grant committed.
+
+`physical_grant_panic_rolls_back_and_releases_original_auth_after_worker_exits`
+injects a panic through the existing native store policy dependency inside the
+actual blocking transaction. The joined typed failure has no grant, and real
+revocation completes after the worker unwinds. This does not claim supervision
+of the still-unmounted outer product command.

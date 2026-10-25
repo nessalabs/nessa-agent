@@ -5,8 +5,8 @@ use super::publication::append;
 use super::stop::SavedStop;
 use super::{integer, invalid, unavailable, uuid, SqlOutbox};
 use crate::webhooks::application::{
-    DeliveryCause, ExpiryObserver, MacKey, OutboxError, Registration, RegistrationStop,
-    RegistrationStops, StopFact, StopReason, Target,
+    DeliveryCause, ExpiryObserver, MacKey, OutboxError, Registration, RegistrationLookup,
+    RegistrationStop, RegistrationStops, StopFact, StopReason, Target,
 };
 use crate::webhooks::domain::{
     Destination, LifecycleChange, RegistrationLifecycle, RegistrationPhase,
@@ -16,6 +16,16 @@ use nessa_local_database::rusqlite::{
     params, Connection, OptionalExtension, Result as SqlResult, Row, Transaction,
 };
 use std::sync::Arc;
+
+#[async_trait::async_trait]
+impl RegistrationLookup for SqlOutbox {
+    async fn registration(
+        &self,
+        credential: &CredentialId,
+    ) -> Result<Option<Registration>, OutboxError> {
+        SqlOutbox::registration(self, credential.clone()).await
+    }
+}
 
 impl SqlOutbox {
     /// Retain the actual first expiry reader in its own acknowledged commit.

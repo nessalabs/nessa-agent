@@ -56,7 +56,7 @@ use crate::conversation::application::ReceiverAuthority;
 use crate::conversation::domain::{
     Capabilities, Capability, Conversation, ReceiverBinding, ShareAccess, ToolPolicy,
 };
-use nessa_auth::application::ports::{AccessError, AccessReader};
+use nessa_auth::application::ports::{AccessError, AccessHold, AccessReader};
 use nessa_auth::domain::{AuthContext, CredentialId, PrincipalId, Resource};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
@@ -423,6 +423,17 @@ pub trait ShareGrants: Send + Sync {
     /// grant no longer holds is refused `ShareGrantChanged` and writes
     /// nothing (row J30).
     fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt>;
+    /// Retain the original Auth hold in every physical grant write, including
+    /// after caller cancellation. This is ownership, not policy admission.
+    /// An adapter that cannot transfer the hold to its writer refuses the call.
+    fn change_with_credential(
+        &self,
+        _change: ShareGrantChange,
+        _credential: AccessHold,
+    ) -> ConversationFuture<'_, ShareGrantReceipt> {
+        Box::pin(async { Err(ConversationError::Metadata) })
+    }
+
     /// The grants on one conversation, oldest first, with the catalogue
     /// revision they were read at.
     fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, ShareGrantList>;

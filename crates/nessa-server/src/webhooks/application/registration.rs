@@ -132,6 +132,15 @@ pub enum RegistrationFailure {
     OriginRecoveryRequired,
 }
 
+/// Private committed registrations, independently of paired receiver bindings.
+#[async_trait]
+pub trait RegistrationLookup: Send + Sync {
+    async fn registration(
+        &self,
+        credential: &CredentialId,
+    ) -> Result<Option<Registration>, OutboxError>;
+}
+
 /// Secret-free acknowledgement, identical for initial registration and matching replay.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegisteredWebhook {

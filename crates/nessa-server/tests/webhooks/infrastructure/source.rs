@@ -31,7 +31,7 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::Semaphore;
 
-async fn registered(f: &Fixture) -> (SqlOutbox, Registration, PathBuf) {
+pub(super) async fn registered(f: &Fixture) -> (SqlOutbox, Registration, PathBuf) {
     let private = f._root.path().join("private");
     let path = private.join("outbox.db");
     let store = SqlOutbox::open(
@@ -92,7 +92,7 @@ async fn registered(f: &Fixture) -> (SqlOutbox, Registration, PathBuf) {
         .unwrap();
     (store, registration, path)
 }
-async fn physical(f: &Fixture) -> Arc<RecordStorage> {
+pub(super) async fn physical(f: &Fixture) -> Arc<RecordStorage> {
     let storage = Arc::new(RecordStorage::new(f._root.path().join("sessions")).unwrap());
     storage.initialize().await.unwrap();
     let session = SessionId::new(f.a.to_string()).unwrap();
@@ -706,7 +706,7 @@ async fn exhausted_shared_read_capacity_refuses_before_source_or_authority_waits
     assert_eq!(saved(&path), before);
 }
 
-fn read_limits() -> Limits {
+pub(super) fn read_limits() -> Limits {
     Limits::new(
         MAX_RECORD_PAGE_RECORDS,
         MAX_RECORD_PAGE_PAYLOAD_BYTES,

@@ -6,7 +6,9 @@ mod outbox;
 mod ports;
 mod registration;
 mod registration_stop;
+mod share;
 mod source;
+pub use share::ShareWebhookConversation;
 pub use source::{ReadWebhookRecords, WebhookReadFailure, WebhookRecords};
 
 pub use admission::{AdmissionFailure, AdmitDelivery, DeliveryHold, Target};
@@ -17,7 +19,7 @@ pub use outbox::{
 };
 pub use registration::{
     RegisterWebhook, RegisteredWebhook, RegistrationConfig, RegistrationFailure,
-    RegistrationIntent, RegistrationIntents, UninstalledCancellation,
+    RegistrationIntent, RegistrationIntents, RegistrationLookup, UninstalledCancellation,
 };
 pub(crate) use registration_stop::StopFact;
 pub use registration_stop::{

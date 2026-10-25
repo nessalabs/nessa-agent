@@ -324,3 +324,6 @@ async fn webhook_cedar_subject_has_no_send_or_owner_authority() {
 
 #[path = "source.rs"]
 mod source_tests;
+
+#[path = "share.rs"]
+mod share_tests;

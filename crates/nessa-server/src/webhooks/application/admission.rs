@@ -52,14 +52,12 @@ pub struct AdmitDelivery<'a> {
 }
 
 impl AdmitDelivery<'_> {
-    /// Lock order is credential, principal/resource grant, then short metadata
-    /// reads. Recheck the grant after locking; never use an enqueued decision.
-    pub async fn execute(
+    /// Shared current-credential binding check for registered share and send.
+    /// No grant or physical-work lock is acquired before this original hold.
+    pub(super) async fn hold_target(
         &self,
         target: &Target,
-        conversation: &ConversationId,
-        epoch: u64,
-    ) -> Result<DeliveryHold, AdmissionFailure> {
+    ) -> Result<AccessHold, AdmissionFailure> {
         let credential = self
             .credentials
             .hold(&target.credential)
@@ -84,6 +82,19 @@ impl AdmitDelivery<'_> {
         {
             return Err(AdmissionFailure::Refused);
         }
+        Ok(credential)
+    }
+
+    /// Lock order is credential, principal/resource grant, then short metadata
+    /// reads. Recheck the grant after locking; never use an enqueued decision.
+    pub async fn execute(
+        &self,
+        target: &Target,
+        conversation: &ConversationId,
+        epoch: u64,
+    ) -> Result<DeliveryHold, AdmissionFailure> {
+        let credential = self.hold_target(target).await?;
+        let named = &credential.snapshot.credential;
         let grant_hold = self
             .grants
             .hold_principal_revision(conversation, &target.principal, epoch)

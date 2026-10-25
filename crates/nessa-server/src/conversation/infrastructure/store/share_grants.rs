@@ -26,6 +26,7 @@ use crate::conversation::application::{
 use crate::conversation::domain::{
     Capabilities, CommandHosts, ShareAccess, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
 };
+use nessa_auth::application::ports::AccessHold;
 use nessa_auth::domain::{CredentialId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use nessa_protocol::conversation::domain::ConversationId;
@@ -455,36 +456,22 @@ impl ShareGrants for LocalConversationStore {
     }
 
     fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt> {
-        Box::pin(async move {
-            // The principal a hold locks is the live row's, which a revoke
-            // names only by credential. Look it up, lock that grant, and
-            // write. If the row's principal is no longer the one locked, the
-            // attempt writes nothing and tries the principal it found.
-            for _ in 0..4 {
-                let key = self.principal_to_lock(&change).await?;
-                let permit = match &key {
-                    Some(principal) => Some(
-                        self.grant_gates
-                            .lock(
-                                CONVERSATION.to_owned(),
-                                change.conversation_id.to_string(),
-                                principal.clone(),
-                            )
-                            .await,
-                    ),
-                    None => None,
-                };
-                // The permit moves into the blocking write. Dropping this
-                // future detaches that write; it does not drop the permit
-                // while the write can still commit.
-                match self.apply_change(change.clone(), key, permit).await? {
-                    ChangeAttempt::Applied(receipt) => return Ok(receipt),
-                    ChangeAttempt::Retry => continue,
-                }
-            }
-            tracing::error!("a share grant change could not lock the principal it writes");
-            Err(ConversationError::Metadata)
-        })
+        self.change_owned(change, None)
+    }
+    fn change_with_credential(
+        &self,
+        change: ShareGrantChange,
+        credential: AccessHold,
+    ) -> ConversationFuture<'_, ShareGrantReceipt> {
+        if credential.snapshot.credential.id() != &change.credential_id
+            || change
+                .principal_id
+                .as_ref()
+                .is_some_and(|principal| principal != credential.snapshot.credential.principal_id())
+        {
+            return Box::pin(async { Err(ConversationError::Metadata) });
+        }
+        self.change_owned(change, Some(credential))
     }
     fn hold_revision<'a>(
         &'a self,
@@ -701,6 +688,47 @@ impl LocalConversationStore {
         })
     }
 
+    /// Same grant write path, optionally retaining one original Auth owner.
+    fn change_owned(
+        &self,
+        change: ShareGrantChange,
+        credential: Option<AccessHold>,
+    ) -> ConversationFuture<'_, ShareGrantReceipt> {
+        Box::pin(async move {
+            let credential = credential.map(|held| Arc::new(Mutex::new(held)));
+            // The principal a hold locks is the live row's, which a revoke
+            // names only by credential. Look it up, lock that grant, and
+            // write. If the row's principal is no longer the one locked, the
+            // attempt writes nothing and tries the principal it found.
+            for _ in 0..4 {
+                let key = self.principal_to_lock(&change).await?;
+                let permit = match &key {
+                    Some(principal) => Some(
+                        self.grant_gates
+                            .lock(
+                                CONVERSATION.to_owned(),
+                                change.conversation_id.to_string(),
+                                principal.clone(),
+                            )
+                            .await,
+                    ),
+                    None => None,
+                };
+                // The permit moves into the blocking write. Dropping this
+                // future detaches that write; it does not drop the permit
+                // while the write can still commit.
+                match self
+                    .apply_change(change.clone(), key, permit, credential.clone())
+                    .await?
+                {
+                    ChangeAttempt::Applied(receipt) => return Ok(receipt),
+                    ChangeAttempt::Retry => continue,
+                }
+            }
+            tracing::error!("a share grant change could not lock the principal it writes");
+            Err(ConversationError::Metadata)
+        })
+    }
     /// Write `change` while `expected` is the principal the caller has locked.
     /// `Retry` when that is not the row this write would touch; nothing is
     /// committed. The connection is taken here, after the grant lock.
@@ -713,6 +741,7 @@ impl LocalConversationStore {
         change: ShareGrantChange,
         expected: Option<String>,
         permit: Option<GrantPermit>,
+        credential: Option<Arc<Mutex<AccessHold>>>,
     ) -> ConversationFuture<'_, ChangeAttempt> {
         let changes = self.changes.clone();
         let access = self.access.clone();
@@ -730,6 +759,10 @@ impl LocalConversationStore {
                 // task; it does not release the gate while the write can
                 // still commit.
                 let _permit = permit;
+                // Same original Auth owner as the application, retained in
+                // actual blocking work even if its awaiting caller disappears.
+                // This mutex is never locked; it makes the Send hold shareable.
+                let _credential = credential;
                 #[cfg(test)]
                 if let Some(pause) = pause {
                     pause.block_until_released();
