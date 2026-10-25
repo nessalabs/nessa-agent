@@ -74,8 +74,9 @@ body {
    * The titlebar's safe area: where the window's own controls end — the
    * host's (the traffic lights, `--desktop-window-controls-inset`) and ours
    * (the sidebar toggle, Back, Forward and one more: four controls). Every
-   * titlebar-row element starts at or after it; nothing draws beneath the
-   * window controls (ADR 238, `styles.test.ts`).
+   * titlebar-row control or line of text starts at or after it, so nothing
+   * of it sits under the window controls (ADR 238, `styles.test.ts`). Only a
+   * header picture runs on behind them, to the window's edge.
    */
   --desktop-titlebar-cluster: calc(4 * var(--desktop-control-size) + 3 * 2px);
   --desktop-titlebar-safe-start: calc(
@@ -991,8 +992,9 @@ html:not(.dark) [data-surface] {
   top: 0;
   left: 0;
   width: 100%;
-  /* From the window's top edge, behind the tabs, so the art and the toolbar
-     read as one band rather than a bar stacked on a picture. */
+  /* From the window's top edge, behind the pane's header and the window's
+     controls, so the art and the toolbar read as one band rather than a bar
+     stacked on a picture. */
   height: min(calc(var(--desktop-titlebar-height) + 150px), 36cqh);
   justify-content: center;
   overflow: clip;
@@ -1031,23 +1033,6 @@ html:not(.dark) [data-surface] {
   .workspace-pane:not([data-focused])
   .desktop-header[data-sliver] {
   opacity: 0.3;
-}
-
-/*
- * In the window's corner, with nothing beside it, the band begins after the
- * window's controls: it runs up behind the tabs, but nothing of it is drawn
- * beneath the traffic lights (ADR 238), and its left fade starts where they
- * end — and so where a drag's preview would put it (`data-drag-corner`).
- */
-.workspace[data-panes-alone]
-  .workspace-pane:is(
-    [data-split-corner]:not([data-drag-corner="no"]),
-    [data-drag-corner="yes"]
-  )
-  .desktop-header[data-sliver] {
-  left: var(--desktop-titlebar-safe-start);
-  width: auto;
-  right: 0;
 }
 
 @container workspace-pane (max-height: 219px) {

@@ -14,11 +14,8 @@ import {
   locate,
   nudgePane as nudgeLayoutPane,
   paneByKey,
-  focusedPane,
   paneCount,
-  paneShowing,
   removePane,
-  singlePane,
   showInPane,
   splitPane,
   equalizePanes as equalizeLayout,
@@ -41,35 +38,31 @@ import {
   paneItemKey,
   roomProbeKey,
   sessionItem,
-  widgetItem,
   type PaneItem,
   type PaneItemKey,
 } from "../../model/pane-item"
-import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import {
   channelOf,
   draftOf,
+  keptDraftIn,
+  letGoOfDrafts,
   focusedChannel,
   itemIn,
   modelForNextTurn,
   paneShowingItem,
-  paneShowingSession,
   sessionOf,
   toggled,
   withPanes,
-  withTabs,
   type WorkspaceState,
 } from "../workspace-state"
-import { dropTab, removeFromTab, addTab, tabShowing } from "../../model/window-tabs"
-import { openInNewTab, showTabWith } from "./session-tabs"
 
 /**
  * Whether a pane can show an item: a session the window has, listed or a
- * draft; any widget, which the widgets' host draws as it can — ready, not
- * read yet, gone, or not to be shown (ADR 326).
+ * draft. Never a widget: widgets open in their chat's panel, or the window
+ * (ADR 326).
  */
 function showable(state: WorkspaceState, item: PaneItem): boolean {
-  if (item.kind === "widget") return true
+  if (item.kind === "widget") return false
   return (
     sessionOf(state, item.sessionId) !== undefined ||
     draftOf(state, item.sessionId) !== undefined
@@ -126,42 +119,26 @@ export function focusPane(state: WorkspaceState, pane: PaneKey): WorkspaceState 
  */
 function openItem(
   state: WorkspaceState,
-  {
-    item,
-    pane,
-    released,
-  }: { item: PaneItem; pane?: PaneKey; released?: readonly string[] },
+  { item, pane }: { item: PaneItem; pane?: PaneKey },
 ): WorkspaceState {
   const panes = state.panes
   if (!panes || !showable(state, item)) return state
   const next = showInPane(panes, pane ?? panes.focused, paneItemKey(item))
   if (next === panes && !paneShowingItem(panes, item)) return state
-  return withPanes(opened(state, item), next, released)
+  return withPanes(opened(state, item), next)
 }
 
 /**
- * Opens a session. In a named `pane`, it is shown there. Otherwise it comes
- * to the front where it is — the tab holding it shown, its pane focused — or,
- * in no tab yet, opens alone in a new tab (#1077): opening a chat never
- * merges it into the tab in front. Merging is done on purpose, by a drop or
- * Open Beside.
+ * Opens a session: shows it in `pane` — the focused pane when none is named
+ * — or, shown already, focuses the pane showing it. A session in no pane
+ * takes the focused pane's place, as a browser's address bar does. Side by
+ * side is asked for on purpose: a drop, Open Beside or ⌘D.
  */
 export function openSession(
   state: WorkspaceState,
-  {
-    sessionId,
-    pane,
-    released,
-  }: { sessionId: string; pane?: PaneKey; released?: readonly string[] },
+  { sessionId, pane }: { sessionId: string; pane?: PaneKey },
 ): WorkspaceState {
-  const item = sessionItem(sessionId)
-  if (pane !== undefined) return openItem(state, { item, pane, released })
-  if (!state.panes || !showable(state, item)) return state
-  if (paneShowingItem(state.panes, item)) return openItem(state, { item })
-  const key = paneItemKey(item)
-  if (tabShowing(state.tabs, state.panes, key))
-    return opened(showTabWith(state, key), item)
-  return openInNewTab(opened(state, item), key)
+  return openItem(state, { item: sessionItem(sessionId), pane })
 }
 
 /** Where a new pane showing `item` goes on `side` of `target`, if the room allows. */
@@ -245,30 +222,6 @@ export function openBeside(
 }
 
 /**
- * Opens a widget in a pane of its own (ADR 326's `pane` place): beside the
- * pane showing `origin` — the session the caller says the widget belongs
- * to — by `openBeside`'s rules, or in the focused pane's place when no pane
- * shows it or there is none. A widget on screen already is focused where it
- * is.
- */
-export function openWidget(
-  state: WorkspaceState,
-  {
-    widget,
-    origin,
-    room,
-  }: { widget: WidgetRef; origin?: string; room: PaneRoom | undefined },
-): WorkspaceState {
-  const panes = state.panes
-  if (!panes) return state
-  const item = widgetItem(widget)
-  const beside = origin === undefined ? undefined : paneShowingSession(panes, origin)
-  return beside
-    ? openItemBeside(state, { item, target: beside.key, room })
-    : openItem(state, { item })
-}
-
-/**
  * Whether a session could open beside `target` without taking its place: on
  * `side`, or on either when none is named. What the menus and the switcher
  * ask before they offer it, so they never promise what will not happen.
@@ -312,10 +265,12 @@ export function dropSession(
 }
 
 /**
- * Starts a new session as a draft: in `target`, or beside it — or the focused
- * pane — when `beside` names a side; with neither, alone in a new tab, never
- * in the tab in front (#1077). A split asked for when the workspace is full
+ * Starts a new session as a draft: in `target` (the focused pane), or beside
+ * it when `beside` names a side. A split asked for when the workspace is full
  * does nothing, rather than putting a blank session over a conversation.
+ * With `restore` — the person asking for a new session, with nothing of their
+ * own to put in it — a draft left in that channel with something typed in it
+ * (`keptDraftIn`) comes back there instead of a blank one.
  */
 export function createDraft(
   state: WorkspaceState,
@@ -326,7 +281,7 @@ export function createDraft(
     beside,
     target,
     room,
-    released,
+    restore = false,
   }: {
     draftId: string
     channelId?: string
@@ -334,14 +289,18 @@ export function createDraft(
     beside?: Side
     target?: PaneKey
     room?: PaneRoom
-    /** Pane items the pane it takes showed, let go rather than kept as a tab (a close). */
-    released?: readonly string[]
+    restore?: boolean
   },
 ): WorkspaceState {
   const panes = state.panes
   if (!panes || showable(state, sessionItem(draftId))) return state
   const home = draftHome(state, { channelId, model })
   if (!home) return state
+  const kept = restore ? keptDraftIn(state, home.channelId) : undefined
+  if (kept)
+    return beside
+      ? openBeside(state, { sessionId: kept, target, side: beside, room, replace: false })
+      : openSession(state, { sessionId: kept, pane: target })
   const drafted: WorkspaceState = {
     ...state,
     drafts: {
@@ -357,7 +316,7 @@ export function createDraft(
         room,
         replace: false,
       })
-    : openSession(drafted, { sessionId: draftId, pane: target, released })
+    : openSession(drafted, { sessionId: draftId, pane: target })
   // A draft no pane took is not kept.
   return placed === drafted ? state : placed
 }
@@ -388,15 +347,13 @@ function draftHome(
 /**
  * Where the last pane goes back to when it closes: a new session's home in
  * the channel of the listed session it shows, on the model its next message
- * would take; showing a widget, where a new session goes, on the default
- * model. None for a home already, or where no new session can start.
+ * would take. None for a home already, or where no new session can start.
  */
 function homeAfterLast(
   state: WorkspaceState,
   item: PaneItem | null,
 ): { channelId: string; model: ModelRef } | undefined {
-  if (item?.kind === "widget") return draftHome(state, {})
-  const session = item ? sessionOf(state, item.sessionId) : undefined
+  const session = item?.kind === "session" ? sessionOf(state, item.sessionId) : undefined
   if (!session) return undefined
   return draftHome(state, {
     channelId: session.channelId,
@@ -405,9 +362,8 @@ function homeAfterLast(
 }
 
 /**
- * Whether a pane closes: any one of several; a tab's only pane, closing its
- * tab, while another tab is open; the window's last only when it goes back
- * to a new session's home (`homeAfterLast`). The one rule `closePane`
+ * Whether a pane closes: any one of several; the last only when it goes
+ * back to a new session's home (`homeAfterLast`). The one rule `closePane`
  * follows, and what a pane's close button and menu item ask before they
  * offer it.
  */
@@ -415,19 +371,14 @@ export function canClosePane(state: WorkspaceState, pane: PaneKey): boolean {
   const panes = state.panes
   const shown = panes && paneByKey(panes, pane)
   if (!panes || !shown) return false
-  return (
-    paneCount(panes) > 1 ||
-    state.tabs.tabs.length > 1 ||
-    homeAfterLast(state, itemIn(shown)) !== undefined
-  )
+  return paneCount(panes) > 1 || homeAfterLast(state, itemIn(shown)) !== undefined
 }
 
 /**
- * Closes a pane; its neighbour takes the room. The last pane cannot close:
- * it goes back to a new session's home under `draftId` (`homeAfterLast`) —
- * showing a conversation, in its channel; showing a widget, where a new
- * session goes (the channel being looked at, else the first), on the
- * default model. Showing a home already, nothing changes (`canClosePane`).
+ * Closes a pane; its neighbour takes the room, and a draft in it is let go,
+ * typed in or not. The last pane cannot close: it goes back to a new
+ * session's home under `draftId` (`homeAfterLast`), in its conversation's
+ * channel. Showing a home already, nothing changes (`canClosePane`).
  */
 export function closePane(
   state: WorkspaceState,
@@ -436,117 +387,15 @@ export function closePane(
   const panes = state.panes
   const shown = panes && paneByKey(panes, pane)
   if (!panes || !shown) return state
-  // Out of a merged tab, the chat stands as a tab of its own (`withPanes`).
-  if (paneCount(panes) > 1) return withPanes(state, removePane(panes, pane))
   const item = itemIn(shown)
-  // A tab's only pane: the tab closes, if it is not the last.
-  if (state.tabs.tabs.length > 1 && state.tabs.activeTab !== null)
-    return closeActiveTab(state)
-  const home = homeAfterLast(state, item)
+  if (paneCount(panes) > 1)
+    return withPanes(
+      item?.kind === "session" ? letGoOfDrafts(state, [item.sessionId]) : state,
+      removePane(panes, pane),
+    )
+  const home = homeAfterLast(state, itemIn(shown))
   if (!home || !draftId) return state
-  return createDraft(state, {
-    draftId,
-    ...home,
-    target: pane,
-    released: [shown.item],
-  })
-}
-
-/** Closes the active tab, showing the one after it, else before it. */
-export function closeActiveTab(state: WorkspaceState): WorkspaceState {
-  const active = state.tabs.activeTab
-  if (active === null) return state
-  const { tabs, heir } = dropTab(state.tabs, active)
-  if (!heir) return state
-  return withTabs(state, {
-    tabs: {
-      ...tabs,
-      activeTab: heir.id,
-      tabs: tabs.tabs.map((tab) => (tab.id === heir.id ? { ...tab, layout: null } : tab)),
-    },
-    panes: heir.layout,
-  })
-}
-
-/**
- * A tab's close button, for one chat: closes it wherever it is. In a merged
- * tab its pane goes and the others take the room; alone, its tab goes; the
- * last tab's last chat goes back to a new session's home under `draftId`.
- * An unsent draft closed is let go with its typing.
- */
-export function closeTab(
-  state: WorkspaceState,
-  { sessionId, draftId }: { sessionId: string; draftId: string },
-): WorkspaceState {
-  return closeTabItem(state, { item: paneItemKey(sessionItem(sessionId)), draftId })
-}
-
-/** A tab's close button, for any pane item — a chat or a widget — wherever its tab is. */
-export function closeTabItem(
-  state: WorkspaceState,
-  { item: key, draftId }: { item: string; draftId: string },
-): WorkspaceState {
-  const tab = tabShowing(state.tabs, state.panes, key)
-  if (!tab) return state
-  if (tab.id !== state.tabs.activeTab)
-    return withTabs(state, {
-      tabs: removeFromTab(state.tabs, tab.id, key),
-      panes: state.panes,
-    })
-  const panes = state.panes
-  const pane = panes && paneShowing(panes, key)
-  if (!panes || !pane) return state
-  if (paneCount(panes) > 1) return withPanes(state, removePane(panes, pane.key), [key])
-  if (state.tabs.tabs.length > 1) return closeActiveTab(state)
-  const home = homeAfterLast(state, itemIn(pane)) ?? draftHome(state, {})
-  if (!home) return state
-  return createDraft(state, { draftId, ...home, target: pane.key, released: [key] })
-}
-
-/**
- * Walking the session list with the arrow keys: each row passed shows in
- * this tab's focused pane, in place of the one before, which is let go
- * rather than left behind as a tab per row — unless something was typed in
- * it. A chat that already has a tab is brought forward there instead.
- */
-export function walkToSession(
-  state: WorkspaceState,
-  { sessionId }: { sessionId: string },
-): WorkspaceState {
-  const panes = state.panes
-  const key = paneItemKey(sessionItem(sessionId))
-  if (!panes || tabShowing(state.tabs, panes, key))
-    return openSession(state, { sessionId })
-  const before = itemIn(focusedPane(panes))
-  const leaving =
-    before?.kind === "session" && !Object.hasOwn(state.composerText, before.sessionId)
-      ? [focusedPane(panes).item]
-      : []
-  return openSession(state, { sessionId, pane: panes.focused, released: leaving })
-}
-
-/**
- * Takes a chat out of its merged tab into a tab of its own, after it — the
- * tab strip's drag out. Nothing for a chat alone in its tab.
- */
-export function splitOffTab(
-  state: WorkspaceState,
-  { sessionId }: { sessionId: string },
-): WorkspaceState {
-  const key = paneItemKey(sessionItem(sessionId))
-  const tab = tabShowing(state.tabs, state.panes, key)
-  if (!tab) return state
-  if (tab.id === state.tabs.activeTab) {
-    const panes = state.panes
-    const pane = panes && paneShowingSession(panes, sessionId)
-    if (!panes || !pane || paneCount(panes) < 2) return state
-    return withPanes(state, removePane(panes, pane.key))
-  }
-  if (!tab.layout || paneCount(tab.layout) < 2) return state
-  return withTabs(state, {
-    tabs: addTab(removeFromTab(state.tabs, tab.id, key), singlePane(key), tab.id),
-    panes: state.panes,
-  })
+  return createDraft(state, { draftId, ...home, target: pane })
 }
 
 /**

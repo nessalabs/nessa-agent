@@ -35,7 +35,7 @@ import {
   withTranscript,
   type WorkspaceState,
 } from "../workspace-state"
-import { closeActiveTab, createDraft } from "./panes"
+import { createDraft } from "./panes"
 
 /** Whether the session was removed at or after this revision of it: it stays out. */
 function removedSince(state: WorkspaceState, session: SessionSummary): boolean {
@@ -108,8 +108,6 @@ function removeSession(
   const showing = panes && paneShowingSession(panes, sessionId)
   if (!panes || !showing) return removed
   if (paneCount(panes) > 1) return withPanes(removed, removePane(panes, showing.key))
-  // Alone in its tab while another is open: the tab closes.
-  if (removed.tabs.tabs.length > 1) return closeActiveTab(removed)
   const restarted = createDraft(removed, {
     draftId,
     channelId: session.channelId,

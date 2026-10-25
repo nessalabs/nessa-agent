@@ -69,7 +69,7 @@ const widget = fixtureWidget("session-a")
 
 async function draw(
   plugin: AppWidgetPlugin,
-  place: "inline" | "pane",
+  place: "inline" | "panel",
   host = fakeHost(),
 ) {
   const registry = createWidgetRegistry<WidgetPlugin>([])
@@ -85,7 +85,7 @@ async function draw(
               {(answer, found) => (
                 <WidgetBody
                   id={widget.id}
-                  place="pane"
+                  place="panel"
                   answer={answer}
                   plugin={found}
                   host={host}
@@ -183,7 +183,7 @@ describe("an app in a card", () => {
       method: "ui/request-display-mode",
       params: { mode: "fullscreen" },
     })
-    expect(host.opened).toEqual(["pane"])
+    expect(host.opened).toEqual(["panel"])
     expect(posted.at(-1)).toEqual({ jsonrpc: "2.0", id: 4, result: { mode: "inline" } })
   })
 
@@ -224,7 +224,7 @@ describe("an app in a card", () => {
 
 describe("an app in a pane", () => {
   it("says it cannot be loaded, with close, which closes its pane", async () => {
-    const host = await draw(app({ sandbox: undefined }), "pane")
+    const host = await draw(app({ sandbox: undefined }), "panel")
     expect(container.querySelector('[data-slot="empty-state-title"]')?.textContent).toBe(
       appLines.load,
     )
@@ -233,7 +233,7 @@ describe("an app in a pane", () => {
   })
 
   it("closes its pane when the app asks to go and answers its teardown", async () => {
-    const host = await draw(app(), "pane")
+    const host = await draw(app(), "panel")
     const posted = await toLive()
     await say({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" })
     expect(posted.at(-1)).toEqual({
@@ -248,7 +248,7 @@ describe("an app in a pane", () => {
   })
 
   it("takes the frame, and its listener, with it when its place goes", async () => {
-    await draw(app(), "pane")
+    await draw(app(), "panel")
     const posted = await toLive()
     const gone = frame()?.contentWindow ?? null
     await act(async () => root.render(<></>))
@@ -277,7 +277,7 @@ describe("an app in a pane", () => {
       },
       release: async (address) => void released.push(address.app.instanceId),
     }
-    await draw(app({ server }), "pane")
+    await draw(app({ server }), "panel")
     await act(async () => root.render(<></>))
     // StrictMode mounts twice; every mount that read was released, each once.
     expect(read.length).toBeGreaterThanOrEqual(2)
@@ -312,7 +312,7 @@ describe("an app in a pane", () => {
         },
       },
     }
-    await draw(plugin, "pane")
+    await draw(plugin, "panel")
     const before = read.length
     expect(released).toEqual(read.slice(0, -1))
     if (current.kind !== "known") throw new Error("the fixture's call is known")
