@@ -289,9 +289,19 @@ keeps it off:
 
 ```json
 {
-  "native": { "listenAddress": "127.0.0.1:47650" }
+  "native": { "listenAddress": "127.0.0.1:47660" }
 }
 ```
+
+That address serves only this machine, and turning Native linking on in
+Settings › Connections › Linked devices keeps a saved address like it. With
+no address saved, Settings names `0.0.0.0:47650`, so a phone on the local
+network can reach the gateway; for a phone, write a `0.0.0.0:…` address
+here instead. (Settings once named `127.0.0.1:47650` itself, and turning
+linking on replaces exactly that address with the network one.) While the
+gateway listens on a network address it announces itself as
+`_nessa-link._tcp` (Bonjour), which is how the phone finds it after scanning
+the desktop's code.
 
 On first start the gateway creates a private `native-pairing/` directory beside
 `auth/` and publishes its pairing key there before binding anything. A missing key

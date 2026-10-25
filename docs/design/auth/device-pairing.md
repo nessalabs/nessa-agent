@@ -1857,7 +1857,7 @@ code never reaches a log or audit record (the route formats no
 ### Configuration
 
 `config.json` gains an optional `native` section:
-`{"native": {"listenAddress": "127.0.0.1:47650"}}`. `listenAddress` is a
+`{"native": {"listenAddress": "0.0.0.0:47650"}}`. `listenAddress` is a
 numeric `SocketAddr` parsed by serde's standard parser: no hostname lookup.
 Absent or `null` means native pairing is off, and that is the default. A
 nonloopback address is accepted, as the design above approves for the fixed
@@ -2207,8 +2207,37 @@ is off. The switch turns it on or off with `pairing.setLinking`
 saves the choice in `config.json` and, when the running gateway does not
 match it, drains and replaces itself with the same executable (`execve`, so
 the process id and its supervisor stay). On keeps a `native.listenAddress`
-already there or names `127.0.0.1:47650`, after checking it can be bound,
+already there or names `0.0.0.0:47650`, after checking it can be bound,
 because a saved address that cannot be bound stops the next startup (S10).
+`127.0.0.1:47650`, which Settings named before linking listened on the
+network, is replaced by `0.0.0.0:47650` when linking is turned on: no phone
+could reach it. That applies by starting again even when the run already
+serves at the old address, and the outcome record names both addresses
+(`listenMoved`). That move skips the bind check, since the run holds the
+old address and that blocks a test bind of the new one; if something else
+holds the port on another interface, the next start fails as S10 says. Any
+other saved address is kept; the local-auth guide's
+loopback example names another port for that reason.
+
+While the listener serves on a network address and a configured (not
+ephemeral) port, the gateway announces it with multicast DNS-SD as
+`_nessa-link._tcp`: the machine's name as the instance, the listener's port,
+and the gateway's public id in TXT `gw` (`device_pairing::infrastructure::announcer`,
+behind the `LinkingAnnouncer` port). Only addresses the listener answers on
+are announced: `0.0.0.0` names each interface's IPv4 addresses, `[::]` both
+families, a single address only itself, and loopback never. The host record
+is the gateway's own (`nessa-<id>.local.`), never the machine's `.local`
+name, which the operating system's responder owns. The desktop's code and its orb carry only the
+eight symbols, so this is how a phone that scanned them finds the gateway.
+It says nothing the listener does not already answer to anyone who connects,
+and grants nothing: the code and the owner's approval still decide. It is
+withdrawn first when native pairing stops. A loopback listener is not
+announced. An announcement that cannot be made is logged and pairing by
+address still works. On the network default anyone on the local network
+reaches the listener: guessing is bounded (an invitation takes at most five
+attempts), but a stranger can spend those attempts and end that code, and
+the owner then makes a new one. macOS may ask once whether to accept
+incoming connections.
 Off writes `"enabled": false` and keeps the addresses. Each change is
 audited in `conversations/audit/native-linking` (requested, then outcome,
 then how a restart ended, naming the caller). The switch holds its new value until a read after the

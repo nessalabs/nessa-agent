@@ -30,7 +30,11 @@ impl DurableLinkingAudit {
 fn stored(record: &LinkingAuditRecord) -> Value {
     let (phase, outcome) = match record.phase {
         LinkingAuditPhase::Requested => ("requested", Value::Null),
-        LinkingAuditPhase::Applied { applies, written } => (
+        LinkingAuditPhase::Applied {
+            applies,
+            written,
+            moved,
+        } => (
             "outcome",
             json!({
                 "outcome": "applied",
@@ -39,6 +43,10 @@ fn stored(record: &LinkingAuditRecord) -> Value {
                     LinkingApply::Restarting => "restarting",
                 },
                 "written": written,
+                "listenMoved": moved.map(|moved| json!({
+                    "from": moved.from.to_string(),
+                    "to": moved.to.to_string(),
+                })),
             }),
         ),
         LinkingAuditPhase::Restart(end) => (
@@ -114,7 +122,7 @@ impl LinkingAudit for DurableLinkingAudit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device_pairing::application::LinkingCaller;
+    use crate::device_pairing::application::{LinkingCaller, ListenMoved};
 
     struct Fixed;
     impl Clock for Fixed {
@@ -144,6 +152,10 @@ mod tests {
         record.phase = LinkingAuditPhase::Applied {
             applies: LinkingApply::Restarting,
             written: true,
+            moved: Some(ListenMoved {
+                from: "127.0.0.1:47650".parse().unwrap(),
+                to: "0.0.0.0:47650".parse().unwrap(),
+            }),
         };
         audit.record(&record).unwrap();
         assert_eq!(
@@ -164,6 +176,8 @@ mod tests {
         assert_eq!(outcome["outcome"]["applies"], "restarting");
         assert_eq!(outcome["observedAtMs"], 7);
         assert_eq!(outcome["outcome"]["written"], true);
+        assert_eq!(outcome["outcome"]["listenMoved"]["from"], "127.0.0.1:47650");
+        assert_eq!(outcome["outcome"]["listenMoved"]["to"], "0.0.0.0:47650");
         record.phase = LinkingAuditPhase::Restart(LinkingRestart::Exec);
         audit.record(&record).unwrap();
         assert_eq!(
