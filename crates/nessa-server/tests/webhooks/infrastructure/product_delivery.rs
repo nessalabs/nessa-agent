@@ -782,6 +782,7 @@ struct FailedSendingAck {
     audit: std::path::PathBuf,
     held: std::path::PathBuf,
     entered: Arc<Notify>,
+    failed: AtomicBool,
 }
 #[async_trait]
 impl WebhookHttp for FailedSendingAck {
@@ -791,8 +792,10 @@ impl WebhookHttp for FailedSendingAck {
     ) -> Result<Box<dyn WebhookPost>, PrepareFailure> {
         // Queue publication has ended before transport preparation. Only the
         // subsequent actual Sending publication loses its real directory.
-        std::fs::rename(&self.audit, &self.held).unwrap();
-        self.entered.notify_one();
+        if !self.failed.swap(true, Ordering::SeqCst) {
+            std::fs::rename(&self.audit, &self.held).unwrap();
+            self.entered.notify_one();
+        }
         self.inner.prepare(destination).await
     }
 }
@@ -812,6 +815,7 @@ async fn missing_sending_ack_makes_no_post_and_cold_recovery_never_reposts_unkno
             audit: audit.clone(),
             held: held.clone(),
             entered: entered.clone(),
+            failed: AtomicBool::new(false),
         }),
     )
     .await;
@@ -1046,4 +1050,423 @@ async fn actual_response_is_owned_before_a_later_clock_callback_panics() {
         .unwrap();
     assert_eq!(sending, 0);
     assert!(recipient.requests.try_recv().is_err());
+}
+
+async fn two_fresh_cycles(f: &Harness) {
+    for _ in 0..2 {
+        let before = f.runtime.completed_delivery_cycles();
+        f.runtime.wake_delivery();
+        tokio::time::timeout(WAIT, f.runtime.after_delivery_cycle(before))
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_expiry_retries_its_original_stop_after_publication_returns_without_grants() {
+    let f = Harness::new().await;
+    let mut recipient = Recipient::new(true);
+    let (mut client, _) = Client::open(f.address, &f.owner).await;
+    let issue = client.call("credential.issue", issue_params()).await;
+    assert_eq!(issue["ok"], true);
+    let credential =
+        CredentialId::new(issue["payload"]["credential"]["id"].as_str().unwrap()).unwrap();
+    let original = f.store.intents().await.unwrap().pop().unwrap();
+    let audit = f._root.path().join("private/audit");
+    let held = audit.with_extension("idle-held");
+    std::fs::rename(&audit, &held).unwrap();
+    f.clock.0.store(100_000, Ordering::SeqCst);
+    mount(&f, recipient.transport.clone()).await;
+    two_fresh_cycles(&f).await;
+    let connection = Connection::open(f._root.path().join("private/outbox.db")).unwrap();
+    let first: String = connection.query_row(
+        "SELECT record FROM audit WHERE json_extract(record,'$.cause')='credential_expiry_observed'", [], |r|r.get(0),
+    ).unwrap();
+    let first: Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(first["initiator"], format!("source:{}", original.id));
+    std::fs::rename(&held, &audit).unwrap();
+    two_fresh_cycles(&f).await;
+    assert!(f.store.registration(credential).await.unwrap().is_none());
+    assert!(f.store.intents().await.unwrap().is_empty());
+    // Retirement reclaims retained SQL facts after their actual publication.
+    // Assert the immutable published stop, not indefinite SQL retention.
+    let stops: Vec<Value> = std::fs::read_dir(&audit)
+        .unwrap()
+        .map(|entry| {
+            serde_json::from_slice::<Value>(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
+        })
+        .filter(|record| record["cause"] == "credential_expired")
+        .collect();
+    assert!(!stops.is_empty());
+    for record in stops {
+        assert_eq!(record["initiator"], first["initiator"]);
+        assert_eq!(record["credential"], original.issue.credential_id);
+    }
+    for table in ["cursors", "deliveries"] {
+        let count: i64 = connection
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+    drop(connection);
+    assert!(recipient.requests.try_recv().is_err());
+    drop(client);
+    f.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lost_sending_ack_reconciles_unknown_and_sends_next_record_in_the_same_live_owner() {
+    let f = Harness::new().await;
+    let mut recipient = Recipient::new(true);
+    let audit = f._root.path().join("private/audit");
+    let held = audit.with_extension("live-held");
+    let entered = Arc::new(Notify::new());
+    mount(
+        &f,
+        Arc::new(FailedSendingAck {
+            inner: recipient.transport.clone(),
+            audit: audit.clone(),
+            held: held.clone(),
+            entered: entered.clone(),
+            failed: AtomicBool::new(false),
+        }),
+    )
+    .await;
+    let (mut client, _) = Client::open(f.address, &f.owner).await;
+    issue_share(&f, &mut client).await;
+    tokio::time::timeout(WAIT, entered.notified())
+        .await
+        .unwrap();
+    two_fresh_cycles(&f).await;
+    assert!(recipient.requests.try_recv().is_err());
+    // Control commands remain admitted while the serial sender waits for storage.
+    let list = client.call("credential.list", json!({})).await;
+    assert_eq!(list["ok"], true, "{list}");
+    let connection = Connection::open(f._root.path().join("private/outbox.db")).unwrap();
+    let sending: String = connection
+        .query_row("SELECT id FROM deliveries WHERE phase='sending'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    std::fs::rename(&held, &audit).unwrap();
+    f.runtime.wake_delivery();
+    let next = checked_request(&recipient.next().await, &f.a);
+    assert_ne!(next.0, sending);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&next.3).unwrap()["position"],
+        2
+    );
+    two_fresh_cycles(&f).await;
+    let phase: String = connection
+        .query_row(
+            "SELECT phase FROM deliveries WHERE id=?1",
+            [&sending],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(phase, "unknown");
+    let fact: String = connection.query_row("SELECT record FROM audit WHERE delivery=?1 AND json_extract(record,'$.cause')='reconcile'",[&sending],|r|r.get(0)).unwrap();
+    let fact: Value = serde_json::from_str(&fact).unwrap();
+    assert_eq!(fact["initiator"], format!("delivery:{sending}"));
+    drop(connection);
+    assert!(recipient.requests.try_recv().is_err());
+    drop(client);
+    f.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn dispatch_deadline_releases_grant_while_native_sending_sql_stays_owned() {
+    for after_commit in [false, true] {
+        let f = Harness::new().await;
+        let mut recipient = Recipient::new(true);
+        let pause = f.store.pause_admission(after_commit);
+        mount(&f, recipient.transport.clone()).await;
+        let (mut client, _) = Client::open(f.address, &f.owner).await;
+        let credential = issue_share(&f, &mut client).await;
+        tokio::time::timeout(WAIT, pause.entered()).await.unwrap();
+        tokio::time::pause();
+        tokio::time::advance(crate::webhooks::application::POST_DEADLINE).await;
+        let released =
+            tokio::time::timeout(Duration::from_secs(1), f.runtime.after_dispatch_deadline()).await;
+        tokio::time::resume();
+        // Real product unshare performs actual metadata work after time resumes.
+        // Always release/join the SQL worker before asserting a negative result.
+        let conversation = f.a.clone();
+        let mut unshare = tokio::spawn(async move {
+            let reply = client.call("conversation.unshare",json!({"requestId":"unshare-at-dispatch-deadline","conversationId":conversation.to_string(),"credentialId":credential})).await;
+            (client, reply)
+        });
+        let unshared = tokio::time::timeout(WAIT, &mut unshare).await;
+        let before_release = unshared.is_ok();
+        let runtime = f.runtime.clone();
+        let mut shutdown = Box::pin(runtime.shutdown());
+        let still_owned = shutdown.as_mut().now_or_never().is_none();
+        pause.release();
+        let (client, reply) = match unshared {
+            Ok(result) => result.unwrap(),
+            Err(_) => unshare.await.unwrap(),
+        };
+        let drained = tokio::time::timeout(WAIT, shutdown).await.unwrap();
+        assert!(
+            released.is_ok(),
+            "authority deadline must fire, stage={after_commit}"
+        );
+        assert!(
+            before_release,
+            "unshare must finish while SQL is still paused"
+        );
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert!(
+            still_owned,
+            "cleanup must join the actual native SQL worker"
+        );
+        assert_eq!(drained, Ok(()));
+        let connection = Connection::open(f._root.path().join("private/outbox.db")).unwrap();
+        let (phase,fact): (String,String) = connection.query_row(
+            "SELECT d.phase,a.record FROM deliveries d JOIN audit a ON a.delivery=d.id WHERE json_extract(a.record,'$.cause')=?1",[if after_commit {"reconcile"} else {"audit_unavailable"}],|r|Ok((r.get(0)?,r.get(1)?)),
+        ).unwrap();
+        assert_eq!(phase, if after_commit { "unknown" } else { "not_sent" });
+        let fact: Value = serde_json::from_str(&fact).unwrap();
+        assert_eq!(
+            fact["initiator"],
+            format!("delivery:{}", fact["deliveryId"].as_str().unwrap())
+        );
+        drop(connection);
+        assert!(recipient.requests.try_recv().is_err());
+        drop(client);
+        f.close().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn public_reissue_keeps_stopped_sending_history_separate_from_the_new_registration() {
+    let f = Harness::new().await;
+    let mut recipient = Recipient::new(true);
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    mount(
+        &f,
+        Arc::new(PausedPreparation {
+            inner: recipient.transport.clone(),
+            entered: entered.clone(),
+            release: release.clone(),
+        }),
+    )
+    .await;
+    let (mut client, _) = Client::open(f.address, &f.owner).await;
+    let credential = issue_share(&f, &mut client).await;
+    tokio::time::timeout(WAIT, entered.notified())
+        .await
+        .unwrap();
+    // A synthetic native Sending row represents a late committed attempt whose
+    // physical owner has ended. This test does not claim an HTTP request occurred.
+    let old = f.store.due(2000).await.unwrap().into_iter().next().unwrap();
+    let sending = old.delivery.admit(old.delivery.epoch(), 2000).unwrap();
+    f.store
+        .transition(
+            &old.delivery,
+            &sending,
+            crate::webhooks::application::DeliveryCause::Admission,
+            2000,
+        )
+        .await
+        .unwrap();
+    let revoked = client
+        .call(
+            "credential.revoke",
+            json!({"requestId":"revoke-retained-sending","credentialId":credential}),
+        )
+        .await;
+    let connection = Connection::open(f._root.path().join("private/outbox.db")).unwrap();
+    let retained: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM registrations r WHERE r.id=?1 AND r.active=0 AND EXISTS(SELECT 1 FROM deliveries d WHERE d.registration=r.id AND d.phase='sending'))",[old.registration.id.to_string()],|r|r.get(0),
+    ).unwrap();
+    drop(connection);
+    let mut params = issue_params();
+    params["requestId"] = json!("reissue-with-stopped-sending");
+    params["expiresAt"] = json!(200);
+    let next = client.call("credential.issue", params).await;
+    let next_id = next["payload"]["credential"]["id"]
+        .as_str()
+        .map(str::to_owned);
+    let intents = f.store.intents().await.unwrap();
+    let grant = f
+        .grants
+        .principal_grant(&f.a, &PrincipalId::new("hook").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    // Release the existing worker on every assertion path; it then reconciles
+    // the old unowned Sending row live, without granting the new credential.
+    let before = f.runtime.completed_delivery_cycles();
+    release.notify_one();
+    let progressed = tokio::time::timeout(WAIT, f.runtime.after_delivery_cycle(before)).await;
+    two_fresh_cycles(&f).await;
+    let facts: Vec<Value> = std::fs::read_dir(f._root.path().join("private/audit"))
+        .unwrap()
+        .map(|entry| {
+            serde_json::from_slice::<Value>(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap()
+        })
+        .collect();
+    let reconciled = facts.iter().any(|fact| {
+        fact["cause"] == "reconcile"
+            && fact["deliveryId"] == sending.id().to_string()
+            && fact["after"] == "unknown"
+    });
+    drop(client);
+    let drained = f.close().await;
+    assert_eq!(revoked["ok"], true, "{revoked}");
+    assert!(retained);
+    assert_eq!(next["ok"], true, "{next}");
+    assert_ne!(next_id.as_deref(), Some(credential.as_str()));
+    assert_eq!(
+        intents.len(),
+        2,
+        "the stopped original and active new intent are distinct"
+    );
+    assert_eq!(grant.credential_id.as_str(), credential);
+    assert!(progressed.is_ok());
+    assert!(
+        reconciled,
+        "the unowned old Sending row reconciles live, without POST"
+    );
+    assert_eq!(drained, Ok(()));
+    assert!(recipient.requests.try_recv().is_err());
+}
+
+// Own the real native connection lock on a separate OS worker. Drop releases
+// and joins it even when an assertion fails; no async task holds a std guard.
+struct MetadataBlock {
+    release: Option<std::sync::mpsc::Sender<()>>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+impl MetadataBlock {
+    async fn new(store: Arc<LocalConversationStore>) -> Self {
+        let (entered, wait) = oneshot::channel();
+        let (release, unblock) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let _connection = store.hold_mutation();
+            entered.send(()).unwrap();
+            let _ = unblock.recv();
+        });
+        wait.await.unwrap();
+        Self {
+            release: Some(release),
+            worker: Some(worker),
+        }
+    }
+    fn release(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+        if let Some(worker) = self.worker.take() {
+            worker.join().unwrap();
+        }
+    }
+}
+impl Drop for MetadataBlock {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+#[tokio::test]
+async fn dispatch_deadline_releases_partial_admission_before_joining_native_metadata() {
+    let f = Harness::new().await;
+    let (mut client, _) = Client::open(f.address, &f.owner).await;
+    let credential = issue_share(&f, &mut client).await;
+    let registration = f
+        .store
+        .registration(CredentialId::new(&credential).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let epoch = f
+        .grants
+        .principal_grant(&f.a, &PrincipalId::new("hook").unwrap())
+        .await
+        .unwrap()
+        .unwrap()
+        .policy_revision;
+    let policy = CedarConversationAccessPolicy::new().unwrap();
+    let admission = crate::webhooks::application::AdmitDelivery {
+        credentials: f.runtime.credentials(),
+        grants: f.grants.as_ref(),
+        conversations: f.grants.as_ref(),
+        policy: &policy,
+        clock: f.clock.as_ref(),
+        gateway: &f.state.gateway,
+    };
+    let mut blocked = MetadataBlock::new(f.grants.clone()).await;
+    tokio::time::pause();
+    let mut work = Box::pin(f.runtime.admit_dispatch_before(
+        &admission,
+        &registration.target,
+        &f.a,
+        epoch,
+        tokio::time::Instant::now() + crate::webhooks::application::POST_DEADLINE,
+    ));
+    assert!(
+        work.as_mut().now_or_never().is_none(),
+        "real native metadata read is pending"
+    );
+    tokio::time::advance(crate::webhooks::application::POST_DEADLINE).await;
+    // Resume real time before waiting for OS work. Drive this SAME future
+    // concurrently with its notice; waiting for the notice alone stops its timer.
+    tokio::time::resume();
+    let mut completed = None;
+    let released = tokio::time::timeout(WAIT, async {
+        tokio::select! {
+            _ = f.runtime.after_dispatch_deadline() => true,
+            result = work.as_mut() => { completed = Some(result); false },
+        }
+    })
+    .await;
+    let still_owned = completed.is_none() && work.as_mut().now_or_never().is_none();
+    // Only this observation is cancelled on timeout. The real product owner
+    // retains its revoke job, which cleanup below joins after releasing the lock.
+    let mut revoke = Box::pin(client.call(
+        "credential.revoke",
+        json!({"requestId":"revoke-admission-metadata-wait","credentialId":credential}),
+    ));
+    let revoked = tokio::time::timeout(
+        WAIT,
+        std::panic::AssertUnwindSafe(revoke.as_mut()).catch_unwind(),
+    )
+    .await;
+    drop(revoke);
+    blocked.release();
+    let admitted = match completed {
+        Some(result) => result.unwrap(),
+        None => tokio::time::timeout(WAIT, work.as_mut())
+            .await
+            .unwrap()
+            .unwrap(),
+    };
+    drop(work); // Both branches joined/completed it; release its borrow of the fixture.
+    let no_admission = admitted.is_none();
+    drop(admitted); // A broken implementation's returned hold cannot strand cleanup.
+    drop(client);
+    let drained = f.close().await;
+    assert!(
+        matches!(released, Ok(true)),
+        "the driven admission must release authority at its deadline"
+    );
+    assert!(
+        still_owned,
+        "deadline cannot detach the physical metadata read"
+    );
+    assert!(
+        matches!(&revoked, Ok(Ok(_))),
+        "public revoke must finish while metadata remains blocked"
+    );
+    let reply = match revoked {
+        Ok(Ok(reply)) => reply,
+        _ => unreachable!(),
+    };
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(
+        no_admission,
+        "expired admission cannot produce a dispatch hold"
+    );
+    assert_eq!(drained, Ok(()));
 }

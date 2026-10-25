@@ -168,6 +168,8 @@ pub(super) fn contextual(
                 | audit::Cause::Response
                 | audit::Cause::Deadline
                 | audit::Cause::AdmissionRefused
+                | audit::Cause::AuditUnavailable
+                | audit::Cause::Reconcile
                 | audit::Cause::AdmissionExpired
                 | audit::Cause::Restart
                 | audit::Cause::SourceChanged

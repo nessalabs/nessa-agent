@@ -16,6 +16,7 @@ use nessa_local_database::rusqlite::{
     params, Connection, OptionalExtension, Result as SqlResult, Row, Transaction,
 };
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[async_trait::async_trait]
 impl RegistrationLookup for SqlOutbox {
@@ -126,6 +127,24 @@ impl SqlOutbox {
                 )?;
                 commit(transaction, Some(saved.registration.id), at_ms)?;
                 finish(connection, audit, clock.unix_milliseconds())
+            },
+        )
+        .await
+    }
+
+    /// Installation evidence includes stopped history. The ordinary registration
+    /// lookup below intentionally exposes active registrations only; this private
+    /// ownership check grants no read/send authority.
+    pub(crate) async fn has_installed_intent(
+        &self,
+        id: Uuid,
+        credential: CredentialId,
+    ) -> Result<bool, OutboxError> {
+        self.run(
+            move |connection, _| match by_credential(connection, &credential)? {
+                Some(saved) if saved.registration.id == id => Ok(true),
+                Some(_) => Err(OutboxError::Invalid),
+                None => Ok(false),
             },
         )
         .await

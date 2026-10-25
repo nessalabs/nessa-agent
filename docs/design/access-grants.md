@@ -978,6 +978,23 @@ commit and the replay cursor stays.
 24. **W24.** An expiry stop copies a durable initiator. W-observe commits the reader before the registration stops. The reader is the owner on `credential.issue`, the delivery attempt on that attempt's read, or restart when restart is the first reader. The stop does not substitute the owner. A failed stop leaves W-observe. The retry is not a new initiator. Rows: W-observe, W-cred, W-cred-retry, W-issue-expired, W-prec-initiator, C-W-observe.
 25. **W25.** A stopped registration is retired when it has no nonterminal row and every terminal audit has committed. That write deletes the registration, its URL, its mac key, and its replay cursors. The active registration is a different row and stays. Rows: W-retire-reg, W-retire, C-W-retire-reg.
 
+The product coordinator serializes issuance before inspecting retained intents.
+A different request cannot displace an uninstalled intent: its issuance is
+uncertain. For an installed intent, the coordinator asks the canonical credential
+owner and acknowledges the original registration stop before reserving a new
+request. An installed intent retained for a stopped outbox is history, rather
+than an additional active registration. The following orderings exercise the
+existing W1/W14/W24 rules at the product boundary.
+
+| Ordering | Existing row | Required observation |
+| --- | --- | --- |
+| Seeds are removed while an original intent remains | W1, W-issue-refuse | Resolve retained history before ordinary routing. Matching original replay uses its immutable configuration and Webhook purpose; a fresh request with retained history requires a current seed. Lookup failure is not absence. No retained history and no seed remains ordinary issuance. |
+| A new issue meets an installed current credential | W-issue-refuse | Refuse before a second reservation or Auth issuance; original replay keeps its identity. |
+| A new issue first reads expiry with no queued work | W-issue-expired, W-reissue | Persist the owner reader, acknowledge the old stop, then issue a distinct registration. |
+| A new issue meets a stopped registration retaining Sending work | W-reissue | Keep the old outbox and cause; issue a distinct registration without copying its grants or cursor. |
+| A live cycle reads an idle expired/revoked registration | W-cred-retry | Observe/retry the canonical stop without requiring a grant or delivery; preserve the first reader. |
+| Stop publication fails, then storage returns | W-cred-retry, W-prec-initiator | Do not issue or send on failure; a later live read retries the same original fact. |
+
 | Row | State | Event | Guard | Next state | Who may cause it | Durable write in the same commit | Audit record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | W-issue | registration none | `credential.issue` | No active registration for that integration principal | registration active | The owner | One registration, its URL, its mac key, and one credential | Target the principal, before none, after active, cause issue, initiator the owner |
@@ -1072,6 +1089,27 @@ sequenceDiagram
 | W-incarnation-race | W-incarnation against an admission of a `queued` or `retry scheduled` row for the old incarnation | The `not sent` write and its delivery audit commit only while the row is still `queued` or `retry scheduled`. If W-send commits first, that row is `sending`, finishes under W-send, and gets no incarnation-replaced audit. If W-incarnation commits first, the terminal row is not admitted. The cursor audit and the audits of the rows actually changed share the W-incarnation commit. |
 | W-permit-race | Two admissions of one queued row, or revoke against an admission | One permit. The waiter reloads. The holder finishes under the epoch it read, bounded by `webhook.post_deadline`. |
 | W-audit-race | A late `not sent` or `sending` write against the deadline drop, or against a newer admission | The write commits only while the row is still the state it guarded. The deadline writes no outbox state. The first conditional commit wins, and the other does not apply. |
+
+The dispatch owner separates canonical physical reads from its send permit.
+A completed Head lease is released before private cursor/source work; sending
+then takes fresh credential/grant admission. The attempt deadline starts before fresh dispatch admission, including partially
+acquired Auth/grant fences and metadata waits, rather than after admission
+returns. It does not cover the lifetime of an unrelated canonical capture read.
+The sender retains physical SQL across a deadline and joins it before reconciling
+or starting another attempt. FULL-journal COMMIT may already be inside a filesystem
+sync: W-audit-race permits that uncertain late conditional commit, but the expired
+attempt has permanently lost its POST capability. Releasing the Auth fence does
+not mean a public revoke's subsequent private stop publication acknowledged.
+
+| Dispatch ordering | Existing row | Owned result |
+| --- | --- | --- |
+| Fresh admission waits for grant/metadata past the dispatch deadline | W-permit-race, W-revoke-wait | Release partially acquired dispatch fences, disable POST, and retain/join the admission future's actual physical reads. A cancelled acquisition cannot start another metadata read or install authority. |
+| Sending waits for private SQL past the dispatch deadline | W-deadline-queued, W-audit-race | Release authority and disable POST; retain/join SQL. Before COMMIT, refuse expired work where interruptible. An already running conditional COMMIT may finish late. |
+| Sending write rolls back or publication ACK is lost | W-audit-fail, W-unknown | Keep the original delivery identity. The next successful live write examines actual state: guarded Queued/Retry becomes NotSent with audit-unavailable cause; actual Sending becomes Unknown. Neither case POSTs. |
+| SQL/publication remains unavailable | W-rescan, W-reconcile | Pause the serial sender with its pending settlement retained; do not seal unrelated command admission for recoverable local I/O. Invalid evidence still fails closed. |
+| A complete response precedes settlement or deadline | W-deadline-known, W-prec-response | Capture the actual response before callbacks, stop transport, release dispatch authority, then settle under the retained owner. Persistence does not retain send authority. |
+| Shutdown races expired SQL or pending settlement | W-reconcile | Join physical work and retry the retained actual decision. Failed settlement prevents confirmed cleanup; it is not rollback or ACK. |
+
 | W-terminal-race | Two terminal records for one `sending` row, including restart's `unknown` and a late response | The first terminal commit wins. A later write does not replace it and does not POST that id. A `timed out` write is refused once a complete response has been read. |
 | W-pending-race | Two conversations of one registration inserting while the nonterminal count is near `webhook.outbox_pending` | One insert commits, and that write checks the count. The other reloads. At the ceiling it takes W-backlog and its cursor stays. |
 

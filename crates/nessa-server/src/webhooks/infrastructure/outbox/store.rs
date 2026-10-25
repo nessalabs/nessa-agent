@@ -40,6 +40,47 @@ pub(super) struct Owner {
     audit: PathBuf,
     capacity: Arc<Semaphore>,
     pub(super) clock: Arc<dyn Clock>,
+    #[cfg(test)]
+    admission_pause: Mutex<Option<Arc<AdmissionPause>>>,
+}
+// Only disposable native adapter fixtures can pause this actual physical work.
+#[cfg(test)]
+struct AdmissionPause {
+    after_commit: bool,
+    entered: tokio::sync::Notify,
+    released: Mutex<bool>,
+    wake: std::sync::Condvar,
+}
+#[cfg(test)]
+impl AdmissionPause {
+    fn wait(&self, after_commit: bool) {
+        if self.after_commit != after_commit {
+            return;
+        }
+        let mut released = self.released.lock().unwrap();
+        self.entered.notify_one();
+        while !*released {
+            released = self.wake.wait(released).unwrap();
+        }
+    }
+}
+#[cfg(test)]
+pub(crate) struct AdmissionControl(Arc<AdmissionPause>);
+#[cfg(test)]
+impl AdmissionControl {
+    pub(crate) async fn entered(&self) {
+        self.0.entered.notified().await;
+    }
+    pub(crate) fn release(&self) {
+        *self.0.released.lock().unwrap() = true;
+        self.0.wake.notify_all();
+    }
+}
+#[cfg(test)]
+impl Drop for AdmissionControl {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 impl Drop for Owner {
     fn drop(&mut self) {
@@ -79,6 +120,8 @@ impl SqlOutbox {
                 audit,
                 capacity: Arc::new(Semaphore::new(MAX_OUTBOX_WORKERS)),
                 clock,
+                #[cfg(test)]
+                admission_pause: Mutex::new(None),
             }),
         })
     }
@@ -171,13 +214,75 @@ impl Outbox for SqlOutbox {
     }
 
     async fn recover(&self, at_ms: u64) -> Result<(), OutboxError> {
+        self.recover_sending(at_ms, DeliveryCause::Restart).await
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../../tests/webhooks/infrastructure/outbox.rs"]
+mod tests;
+
+/// Persist one checked replacement; publication and reclamation stay with the caller.
+fn write_transition(
+    connection: &mut Connection,
+    before: &Delivery,
+    after: &Delivery,
+    cause: DeliveryCause,
+    at_ms: u64,
+) -> Result<(), OutboxError> {
+    if !cause.allows(before, after, at_ms) {
+        return Err(OutboxError::Invalid);
+    }
+    write_transition_before(connection, before, after, cause, at_ms, None)
+}
+
+fn write_transition_before(
+    connection: &mut Connection,
+    before: &Delivery,
+    after: &Delivery,
+    cause: DeliveryCause,
+    at_ms: u64,
+    deadline: Option<tokio::time::Instant>,
+) -> Result<(), OutboxError> {
+    if deadline.is_some_and(|at| tokio::time::Instant::now() >= at) {
+        return Err(OutboxError::Conflict);
+    }
+    let transaction = connection.transaction().map_err(unavailable)?;
+    let saved = stored::by_id(&transaction, before.id())?.ok_or(OutboxError::Conflict)?;
+    stored::check_current(&transaction, &saved)?;
+    let changed = transaction
+        .execute(
+            "UPDATE deliveries SET state=?1 WHERE id=?2 AND state=?3",
+            params![
+                codec::encode(after)?,
+                after.id().to_string(),
+                codec::encode(before)?
+            ],
+        )
+        .map_err(unavailable)?;
+    if changed != 1 {
+        return Err(OutboxError::Conflict);
+    }
+    delivery_audit(&transaction, after, Some(before), cause, at_ms)?;
+    super::journal::commit_before(transaction, Some(saved.registration), at_ms, deadline)?;
+    Ok(())
+}
+
+impl SqlOutbox {
+    /// The sole serial sender invokes this only after joining physical work
+    /// and settling its retained actual outcome. No remaining Sending row has
+    /// a live POST owner; reconciliation records its uncertainty without POST.
+    pub(crate) async fn recover_live(&self, at_ms: u64) -> Result<(), OutboxError> {
+        self.recover_sending(at_ms, DeliveryCause::Reconcile).await
+    }
+    async fn recover_sending(&self, at_ms: u64, cause: DeliveryCause) -> Result<(), OutboxError> {
         let clock = self.owner.clock.clone();
         self.run(move |connection, audit| {
             loop {
                 let next = connection
                     .query_row(
                         &format!(
-                            "{} FROM deliveries WHERE phase='sending' LIMIT 1",
+                            "{} FROM deliveries INDEXED BY ready_deliveries WHERE phase='sending' LIMIT 1",
                             stored::SELECT
                         ),
                         [],
@@ -212,7 +317,7 @@ impl Outbox for SqlOutbox {
                     &transaction,
                     &after,
                     Some(&before),
-                    DeliveryCause::Restart,
+                    cause,
                     at_ms,
                 )?;
                 commit(transaction, Some(saved.registration), at_ms)?;
@@ -224,43 +329,114 @@ impl Outbox for SqlOutbox {
     }
 }
 
-#[cfg(test)]
-#[path = "../../../../tests/webhooks/infrastructure/outbox.rs"]
-mod tests;
-
-/// Persist one checked replacement; publication and reclamation stay with the caller.
-fn write_transition(
-    connection: &mut Connection,
-    before: &Delivery,
-    after: &Delivery,
-    cause: DeliveryCause,
-    at_ms: u64,
-) -> Result<(), OutboxError> {
-    if !cause.allows(before, after, at_ms) {
-        return Err(OutboxError::Invalid);
-    }
-    let transaction = connection.transaction().map_err(unavailable)?;
-    let saved = stored::by_id(&transaction, before.id())?.ok_or(OutboxError::Conflict)?;
-    stored::check_current(&transaction, &saved)?;
-    let changed = transaction
-        .execute(
-            "UPDATE deliveries SET state=?1 WHERE id=?2 AND state=?3",
-            params![
-                codec::encode(after)?,
-                after.id().to_string(),
-                codec::encode(before)?
-            ],
-        )
-        .map_err(unavailable)?;
-    if changed != 1 {
-        return Err(OutboxError::Conflict);
-    }
-    delivery_audit(&transaction, after, Some(before), cause, at_ms)?;
-    commit(transaction, Some(saved.registration), at_ms)?;
-    Ok(())
-}
-
 impl SqlOutbox {
+    #[cfg(test)]
+    pub(crate) fn pause_admission(&self, after_commit: bool) -> AdmissionControl {
+        let pause = Arc::new(AdmissionPause {
+            after_commit,
+            entered: tokio::sync::Notify::new(),
+            released: Mutex::new(false),
+            wake: std::sync::Condvar::new(),
+        });
+        assert!(self
+            .owner
+            .admission_pause
+            .lock()
+            .unwrap()
+            .replace(pause.clone())
+            .is_none());
+        AdmissionControl(pause)
+    }
+
+    /// Admission SQL remains owned by the calling sender even after its permit
+    /// deadline. Late success is a conditional commit, never permission to POST.
+    pub(crate) async fn admit_before(
+        &self,
+        before: &Delivery,
+        after: &Delivery,
+        at_ms: u64,
+        deadline: tokio::time::Instant,
+    ) -> Result<(), OutboxError> {
+        let (before, after) = (before.clone(), after.clone());
+        let clock = self.owner.clock.clone();
+        #[cfg(test)]
+        let pause = self.owner.admission_pause.lock().unwrap().take();
+        self.run(move |connection, audit| {
+            #[cfg(test)]
+            if let Some(pause) = &pause {
+                pause.wait(false);
+            }
+            if !DeliveryCause::Admission.allows(&before, &after, at_ms) {
+                return Err(OutboxError::Invalid);
+            }
+            write_transition_before(
+                connection,
+                &before,
+                &after,
+                DeliveryCause::Admission,
+                at_ms,
+                Some(deadline),
+            )?;
+            #[cfg(test)]
+            if let Some(pause) = &pause {
+                pause.wait(true);
+            }
+            finish(connection, audit, clock.unix_milliseconds())
+        })
+        .await
+    }
+
+    /// A retained attempt that never invoked POST observes actual local state.
+    /// This does not acknowledge its earlier failed Sending receipt. Published
+    /// retirement can remove the guarded row; that is no current work, not ACK.
+    pub(crate) async fn settle_unposted(
+        &self,
+        registration: Uuid,
+        before: &Delivery,
+        sending: &Delivery,
+        expired: bool,
+        at_ms: u64,
+    ) -> Result<(), OutboxError> {
+        let (before, sending) = (before.clone(), sending.clone());
+        self.run(move |connection, audit| {
+            restoration::validate(connection)?;
+            let Some(saved) = stored::by_id(connection, before.id())? else {
+                return if super::retirement::read(connection, registration)?.is_some() {
+                    Ok(())
+                } else {
+                    Err(OutboxError::Conflict)
+                };
+            };
+            stored::check_current(connection, &saved)?;
+            if saved.registration != registration {
+                return Err(OutboxError::Invalid);
+            }
+            let (after, cause) = if saved.delivery == before {
+                (
+                    before.refused().map_err(super::invalid)?,
+                    DeliveryCause::AuditUnavailable,
+                )
+            } else if saved.delivery == sending {
+                if expired {
+                    (
+                        sending.not_dispatched().map_err(super::invalid)?,
+                        DeliveryCause::AdmissionExpired,
+                    )
+                } else {
+                    (sending.recovered(), DeliveryCause::Reconcile)
+                }
+            } else if matches!(saved.delivery.phase(), Phase::Terminal(_)) {
+                // A real conditional stop/settlement won. Do not replace its fact.
+                return publish(connection, audit);
+            } else {
+                return Err(OutboxError::Conflict);
+            };
+            write_transition(connection, &saved.delivery, &after, cause, at_ms)?;
+            publish(connection, audit)
+        })
+        .await
+    }
+
     /// Settle the supervisor's actual observation. An identical retained audit
     /// can prove a prior commit, but absent state/evidence never proves an ACK.
     pub(crate) async fn settle_response(

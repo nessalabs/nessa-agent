@@ -237,7 +237,7 @@ impl LocalConversationStore {
         self.run(|connection| export::read(connection))
     }
     #[cfg(test)]
-    pub(super) fn hold_mutation(&self) -> MutexGuard<'_, Connection> {
+    pub(crate) fn hold_mutation(&self) -> MutexGuard<'_, Connection> {
         self.connection
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

@@ -5,9 +5,12 @@ use crate::conversation::application::{
     AccessSubject, ConversationAccessPolicyEvaluator, ConversationError, ConversationRepository,
     RequestShape, RevisionHold, ShareGrants, ShareTarget,
 };
-use nessa_auth::application::ports::{AccessAdmission, AccessError, AccessHold, Clock};
+use nessa_auth::application::ports::{
+    AccessAdmission, AccessError, AccessHold, AccessSnapshot, Clock,
+};
 use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId, Resource};
 use nessa_protocol::conversation::domain::ConversationId;
+use std::sync::{Mutex, PoisonError};
 
 /// Secret-free identity of a committed registration. Infrastructure supplies
 /// this from its private registration row, never from an event payload.
@@ -39,6 +42,84 @@ impl DeliveryHold {
             .snapshot
             .credential
             .is_valid_at(now_seconds)
+    }
+}
+
+/// One dispatch owns partial authority separately from its physical metadata
+/// future. Cancellation releases both fences permanently; the supervisor still
+/// joins that future. This value supplies no policy decision by itself.
+pub(crate) struct DispatchAdmission {
+    state: Mutex<DispatchState>,
+}
+#[derive(Default)]
+struct DispatchState {
+    stopped: bool,
+    checked: bool,
+    credential: Option<AccessHold>,
+    grant: Option<RevisionHold>,
+}
+impl DispatchAdmission {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: Mutex::new(DispatchState::default()),
+        }
+    }
+    fn active(&self) -> Result<(), AdmissionFailure> {
+        if self
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .stopped
+        {
+            Err(AdmissionFailure::Refused)
+        } else {
+            Ok(())
+        }
+    }
+    fn keep_credential(&self, credential: AccessHold) -> Result<(), AdmissionFailure> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.stopped {
+            return Err(AdmissionFailure::Refused);
+        }
+        state.credential = Some(credential);
+        Ok(())
+    }
+    fn keep_grant(&self, grant: RevisionHold) -> Result<(), AdmissionFailure> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.stopped {
+            return Err(AdmissionFailure::Refused);
+        }
+        state.grant = Some(grant);
+        Ok(())
+    }
+    fn checked(&self) -> Result<(), AdmissionFailure> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.stopped || state.credential.is_none() || state.grant.is_none() {
+            return Err(AdmissionFailure::Refused);
+        }
+        state.checked = true;
+        Ok(())
+    }
+    pub(crate) fn cancel(&self) {
+        let (credential, grant) = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.stopped = true;
+            state.checked = false;
+            (state.credential.take(), state.grant.take())
+        };
+        // Reverse acquisition order, with no ownership mutex held while waking writers.
+        drop(grant);
+        drop(credential);
+    }
+    pub(crate) fn is_valid_at(&self, now_seconds: u64) -> bool {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        !state.stopped
+            && state.checked
+            && state.grant.is_some()
+            && state
+                .credential
+                .as_ref()
+                .is_some_and(|held| held.snapshot.credential.is_valid_at(now_seconds))
     }
 }
 
@@ -94,7 +175,6 @@ impl AdmitDelivery<'_> {
         epoch: u64,
     ) -> Result<DeliveryHold, AdmissionFailure> {
         let credential = self.hold_target(target).await?;
-        let named = &credential.snapshot.credential;
         let grant_hold = self
             .grants
             .hold_principal_revision(conversation, &target.principal, epoch)
@@ -103,12 +183,59 @@ impl AdmitDelivery<'_> {
                 ConversationError::Revoked => AdmissionFailure::Refused,
                 _ => AdmissionFailure::Unavailable,
             })?;
+        self.check_facts(&credential.snapshot, target, conversation, epoch, None)
+            .await?;
+        Ok(DeliveryHold {
+            _credential: credential,
+            _grant: grant_hold,
+        })
+    }
+
+    /// Native dispatch admission: the runtime's deadline can release partial
+    /// fences without dropping this future or detaching a physical metadata read.
+    pub(crate) async fn execute_dispatch(
+        &self,
+        attempt: &DispatchAdmission,
+        target: &Target,
+        conversation: &ConversationId,
+        epoch: u64,
+    ) -> Result<(), AdmissionFailure> {
+        attempt.active()?;
+        let credential = self.hold_target(target).await?;
+        let snapshot = credential.snapshot.clone();
+        attempt.keep_credential(credential)?;
+        let grant = self
+            .grants
+            .hold_principal_gate(conversation, &target.principal)
+            .await
+            .map_err(|_| AdmissionFailure::Unavailable)?;
+        attempt.keep_grant(grant)?;
+        self.check_facts(&snapshot, target, conversation, epoch, Some(attempt))
+            .await?;
+        attempt.checked()
+    }
+
+    async fn check_facts(
+        &self,
+        snapshot: &AccessSnapshot,
+        target: &Target,
+        conversation: &ConversationId,
+        epoch: u64,
+        attempt: Option<&DispatchAdmission>,
+    ) -> Result<(), AdmissionFailure> {
+        if let Some(attempt) = attempt {
+            attempt.active()?;
+        }
+        let named = &snapshot.credential;
         let grant = self
             .grants
             .principal_grant(conversation, &target.principal)
             .await
             .map_err(|_| AdmissionFailure::Unavailable)?
             .ok_or(AdmissionFailure::Refused)?;
+        if let Some(attempt) = attempt {
+            attempt.active()?;
+        }
         if grant.conversation_id != *conversation
             || grant.credential_id != target.credential
             || grant.principal_id != target.principal
@@ -121,6 +248,9 @@ impl AdmitDelivery<'_> {
             .await
             .map_err(|_| AdmissionFailure::Unavailable)?
             .ok_or(AdmissionFailure::Refused)?;
+        if let Some(attempt) = attempt {
+            attempt.active()?;
+        }
         let decision = self.policy.evaluate(&AccessAsk {
             subject: AccessSubject::WebhookReader {
                 organization: &target.organization,
@@ -139,12 +269,7 @@ impl AdmitDelivery<'_> {
             }),
         });
         match decision {
-            AccessDecision::Allow { .. } if named.is_valid_at(self.clock.unix_seconds()) => {
-                Ok(DeliveryHold {
-                    _credential: credential,
-                    _grant: grant_hold,
-                })
-            }
+            AccessDecision::Allow { .. } if named.is_valid_at(self.clock.unix_seconds()) => Ok(()),
             AccessDecision::Deny(AccessDenial::Unavailable) => Err(AdmissionFailure::Unavailable),
             AccessDecision::Deny(_) | AccessDecision::Allow { .. } => {
                 Err(AdmissionFailure::Refused)

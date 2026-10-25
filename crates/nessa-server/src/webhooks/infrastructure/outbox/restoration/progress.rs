@@ -23,6 +23,8 @@ pub(super) fn is_initial(record: &Record) -> bool {
             | Cause::Response
             | Cause::Deadline
             | Cause::AdmissionRefused
+            | Cause::AuditUnavailable
+            | Cause::Reconcile
             | Cause::AdmissionExpired
             | Cause::Restart
             | Cause::SourceChanged

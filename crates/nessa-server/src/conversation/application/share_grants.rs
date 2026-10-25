@@ -371,6 +371,19 @@ pub trait ShareGrants: Send + Sync {
         })
     }
 
+    /// Acquire only this principal/resource synchronization gate. This grants no
+    /// authority and validates no epoch: callers must reload facts and ask Cedar.
+    /// Acquisition must not start physical I/O; the caller owns any subsequent
+    /// read separately so a dispatch deadline can release partial fences while
+    /// joining that read. Adapters without this boundary fail closed.
+    fn hold_principal_gate<'a>(
+        &'a self,
+        _id: &'a ConversationId,
+        _principal: &'a PrincipalId,
+    ) -> ConversationFuture<'a, RevisionHold> {
+        Box::pin(async { Err(ConversationError::Metadata) })
+    }
+
     /// Fence this principal/resource epoch using the same gate as grant changes.
     /// An adapter without that synchronization fails closed.
     fn hold_principal_revision<'a>(

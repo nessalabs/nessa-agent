@@ -77,6 +77,8 @@ impl QueueInitiator {
 pub enum DeliveryCause {
     Admission,
     AdmissionExpired,
+    AuditUnavailable,
+    Reconcile,
     Response,
     Deadline,
     AuthorityStopped,
@@ -94,6 +96,8 @@ impl DeliveryCause {
         match self {
             Self::Admission => is_after(before.admit(before.epoch(), at_ms)),
             Self::AdmissionExpired => is_after(before.not_dispatched()),
+            Self::AuditUnavailable => is_after(before.refused()),
+            Self::Reconcile => before.phase() == Phase::Sending && before.recovered() == *after,
             Self::Response => [
                 Observation::Success,
                 Observation::Retryable,

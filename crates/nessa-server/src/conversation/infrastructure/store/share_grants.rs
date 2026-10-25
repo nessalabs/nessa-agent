@@ -400,11 +400,10 @@ fn count(transaction: &Transaction<'_>, sql: &str, id: &str) -> Result<i64, Conv
 }
 
 impl ShareGrants for LocalConversationStore {
-    fn hold_principal_revision<'a>(
+    fn hold_principal_gate<'a>(
         &'a self,
         id: &'a ConversationId,
         principal: &'a PrincipalId,
-        policy_revision: u64,
     ) -> ConversationFuture<'a, RevisionHold> {
         Box::pin(async move {
             let permit = self
@@ -415,10 +414,20 @@ impl ShareGrants for LocalConversationStore {
                     principal.as_str().to_owned(),
                 )
                 .await;
+            Ok(RevisionHold::held(permit))
+        })
+    }
+
+    fn hold_principal_revision<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        principal: &'a PrincipalId,
+        policy_revision: u64,
+    ) -> ConversationFuture<'a, RevisionHold> {
+        Box::pin(async move {
+            let permit = self.hold_principal_gate(id, principal).await?;
             match self.principal_grant(id, principal).await? {
-                Some(grant) if grant.policy_revision == policy_revision => {
-                    Ok(RevisionHold::held(permit))
-                }
+                Some(grant) if grant.policy_revision == policy_revision => Ok(permit),
                 _ => Err(ConversationError::Revoked),
             }
         })

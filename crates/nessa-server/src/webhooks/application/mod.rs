@@ -11,6 +11,7 @@ mod source;
 pub use share::ShareWebhookConversation;
 pub use source::{ReadWebhookRecords, WebhookReadFailure, WebhookRecords};
 
+pub(crate) use admission::DispatchAdmission;
 pub use admission::{AdmissionFailure, AdmitDelivery, DeliveryHold, Target};
 pub use outbox::{
     DeliveryCause, Outbox, OutboxError, PendingDelivery, QueueInitiator, QueuedRecord,

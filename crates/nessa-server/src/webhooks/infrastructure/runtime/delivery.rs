@@ -9,10 +9,11 @@ use crate::conversation::{
 };
 use crate::webhooks::{
     application::{
-        observation, AdmissionFailure, AdmitDelivery, DeliveryCause, ExpiryObserver, Message,
-        ObserveRegistrationStop, Outbox, OutboxError, PendingDelivery, PrepareFailure,
-        QueueInitiator, QueuedRecord, ReadWebhookRecords, Registration, WebhookHttp,
-        WebhookReadFailure, MAX_CURSORS, MAX_OUTBOX_WORKERS,
+        observation, AdmissionFailure, AdmitDelivery, DeliveryCause, DispatchAdmission,
+        ExpiryObserver, Message, ObserveRegistrationStop, Outbox, OutboxError, PendingDelivery,
+        PrepareFailure, QueueInitiator, QueuedRecord, ReadWebhookRecords, Registration,
+        StopObservationResult, WebhookHttp, WebhookReadFailure, MAX_CURSORS, MAX_OUTBOX_WORKERS,
+        POST_DEADLINE,
     },
     domain::{Delivery, Observation},
     infrastructure::record_message,
@@ -46,10 +47,35 @@ pub(crate) struct DeliveryDependencies {
 }
 /// Captured before clocks or persistence are called after transport returns.
 /// This is not a durable receipt and is never used to infer a missing ACK.
-pub(super) struct KnownObservation {
+#[derive(Clone)]
+pub(super) struct PendingSettlement {
+    registration: Uuid,
     before: Delivery,
-    observed: Observation,
+    outcome: PendingOutcome,
     at_ms: Option<u64>,
+}
+#[derive(Clone)]
+enum PendingOutcome {
+    Response(Observation),
+    Unposted { sending: Delivery, expired: bool },
+}
+#[derive(Debug)]
+enum CycleFailure {
+    Retry,
+    Fatal,
+}
+impl From<CredentialAdminError> for CycleFailure {
+    fn from(_: CredentialAdminError) -> Self {
+        Self::Fatal
+    }
+}
+fn store_failure(error: OutboxError) -> CycleFailure {
+    match error {
+        OutboxError::Unavailable | OutboxError::Capacity | OutboxError::Conflict => {
+            CycleFailure::Retry
+        }
+        OutboxError::Invalid | OutboxError::ResetRequired => CycleFailure::Fatal,
+    }
 }
 #[derive(Deserialize)]
 struct EncodedPage {
@@ -98,7 +124,13 @@ impl WebhookRuntime {
             if !self.accepting_delivery() {
                 return self.settle_known().await;
             }
-            self.delivery_cycle(&dependencies, initiator).await?;
+            match self.delivery_cycle(&dependencies, initiator).await {
+                Ok(()) => {}
+                Err(CycleFailure::Retry) => tracing::warn!(
+                    "webhook local operation unavailable; retained sender will retry"
+                ),
+                Err(CycleFailure::Fatal) => return Err(CredentialAdminError::Unavailable),
+            }
             initiator = QueueInitiator::Live;
             #[cfg(test)]
             {
@@ -112,7 +144,7 @@ impl WebhookRuntime {
         &self,
         dependencies: &DeliveryDependencies,
         initiator: QueueInitiator,
-    ) -> Result<(), CredentialAdminError> {
+    ) -> Result<(), CycleFailure> {
         // Drop the synchronous guard before any settlement await.
         let pending = self
             .owner
@@ -123,12 +155,14 @@ impl WebhookRuntime {
         if pending && self.settle_known().await.is_err() {
             return Ok(());
         }
-        let intents = self
-            .owner
+        // This worker is serial: prior physical SQL/POST has joined, and a
+        // retained actual outcome was settled above. Unowned Sending is Unknown.
+        self.owner
             .store
-            .intents()
+            .recover_live(self.owner.clock.unix_milliseconds())
             .await
-            .map_err(|_| CredentialAdminError::Unavailable)?;
+            .map_err(store_failure)?;
+        let intents = self.owner.store.intents().await.map_err(store_failure)?;
         for intent in intents {
             if !self.accepting_delivery() {
                 return Ok(());
@@ -140,10 +174,17 @@ impl WebhookRuntime {
                 .store
                 .registration(credential)
                 .await
-                .map_err(|_| CredentialAdminError::Unavailable)?
+                .map_err(store_failure)?
             else {
                 continue;
             };
+            match self
+                .observe_stop(&registration, ExpiryObserver::Source(registration.id))
+                .await?
+            {
+                StopObservationResult::StopAcknowledged => continue,
+                StopObservationResult::NoStopObserved => {}
+            }
             let conversations = dependencies
                 .metadata
                 .principal_conversations(
@@ -172,7 +213,7 @@ impl WebhookRuntime {
                 .store
                 .due(self.owner.clock.unix_milliseconds())
                 .await
-                .map_err(|_| CredentialAdminError::Unavailable)?
+                .map_err(store_failure)?
                 .into_iter()
                 .next()
             else {
@@ -198,7 +239,7 @@ impl WebhookRuntime {
         conversation: &ConversationId,
         epoch: u64,
         initiator: QueueInitiator,
-    ) -> Result<(), CredentialAdminError> {
+    ) -> Result<(), CycleFailure> {
         let reader = self.reader(dependencies);
         let head = match reader
             .execute(registration, conversation, epoch, RecordReadOperation::Head)
@@ -211,11 +252,11 @@ impl WebhookRuntime {
                 return Ok(());
             }
             Err(error) if transient_source(error) => return Ok(()),
-            Err(_) => return Err(CredentialAdminError::Unavailable),
+            Err(_) => return Err(CycleFailure::Fatal),
         };
         let (scope, target) = match head.value() {
             Ok(RecordReadValue::Head(value)) => (value.scope.clone(), value.head),
-            _ => return Err(CredentialAdminError::Unavailable),
+            _ => return Err(CycleFailure::Fatal),
         };
         let after = self
             .owner
@@ -234,13 +275,13 @@ impl WebhookRuntime {
             Err(OutboxError::ResetRequired | OutboxError::Capacity | OutboxError::Conflict) => {
                 return Ok(())
             }
-            Err(_) => return Err(CredentialAdminError::Unavailable),
+            Err(error) => return Err(store_failure(error)),
         };
         if after == target {
             return Ok(());
         }
         if after > target {
-            return Err(CredentialAdminError::Unavailable);
+            return Err(CycleFailure::Fatal);
         }
         let request = PageRequest {
             scope,
@@ -262,7 +303,7 @@ impl WebhookRuntime {
             Ok(page) => page,
             Err(WebhookReadFailure::Admission(AdmissionFailure::Refused)) => return Ok(()),
             Err(error) if transient_source(error) => return Ok(()),
-            Err(_) => return Err(CredentialAdminError::Unavailable),
+            Err(_) => return Err(CycleFailure::Fatal),
         };
         let value = match page.value() {
             Ok(RecordReadValue::Page(value)) => value,
@@ -277,7 +318,7 @@ impl WebhookRuntime {
         let wire: EncodedPage =
             serde_json::from_str(&encoded).map_err(|_| CredentialAdminError::Unavailable)?;
         if wire.payload.records.len() != value.records.len() {
-            return Err(CredentialAdminError::Unavailable);
+            return Err(CycleFailure::Fatal);
         }
         for (record, raw) in value.records.iter().zip(wire.payload.records.iter()) {
             if !self.accepting_delivery() || page.value().is_err() {
@@ -314,7 +355,7 @@ impl WebhookRuntime {
                 Err(OutboxError::Capacity | OutboxError::Conflict | OutboxError::ResetRequired) => {
                     break
                 }
-                Err(_) => return Err(CredentialAdminError::Unavailable),
+                Err(error) => return Err(store_failure(error)),
             }
         }
         Ok(())
@@ -323,7 +364,7 @@ impl WebhookRuntime {
         &self,
         dependencies: &DeliveryDependencies,
         pending: PendingDelivery,
-    ) -> Result<(), CredentialAdminError> {
+    ) -> Result<(), CycleFailure> {
         let prepared = match dependencies
             .http
             .prepare(&pending.registration.destination)
@@ -331,7 +372,7 @@ impl WebhookRuntime {
         {
             Ok(prepared) => prepared,
             Err(PrepareFailure::Busy) => return Ok(()),
-            Err(_) => return Err(CredentialAdminError::Unavailable),
+            Err(_) => return Err(CycleFailure::Fatal),
         };
         let reader = self.reader(dependencies);
         let head = match reader
@@ -363,7 +404,7 @@ impl WebhookRuntime {
                 // this queued snapshot; a conflict is not an acknowledgement.
                 match refused {
                     Ok(()) | Err(OutboxError::Conflict) => {}
-                    Err(_) => return Err(CredentialAdminError::Unavailable),
+                    Err(error) => return Err(store_failure(error)),
                 }
                 self.observe_stop(
                     &pending.registration,
@@ -373,19 +414,20 @@ impl WebhookRuntime {
                 return Ok(());
             }
             Err(error) if transient_source(error) => return Ok(()),
-            Err(_) => return Err(CredentialAdminError::Unavailable),
+            Err(_) => return Err(CycleFailure::Fatal),
         };
-        let value = match head.value() {
-            Ok(RecordReadValue::Head(value)) => value,
-            _ => return Err(CredentialAdminError::Unavailable),
+        let (scope, source_head) = match head.value() {
+            Ok(RecordReadValue::Head(value)) => (value.scope.clone(), value.head),
+            _ => return Err(CycleFailure::Fatal),
         };
+        drop(head); // Physical SDK read joined; private I/O owns no send permit.
         match self
             .owner
             .store
             .source_after(
                 pending.registration.id,
                 pending.conversation.clone(),
-                value.scope.clone(),
+                scope.clone(),
                 QueueInitiator::Live,
                 self.owner.clock.unix_milliseconds(),
             )
@@ -393,36 +435,113 @@ impl WebhookRuntime {
         {
             Ok(_) => {}
             Err(OutboxError::ResetRequired | OutboxError::Conflict) => return Ok(()),
-            Err(_) => return Err(CredentialAdminError::Unavailable),
+            Err(error) => return Err(store_failure(error)),
         }
-        if value.scope != pending.scope || value.head < pending.position {
-            return Err(CredentialAdminError::Unavailable);
+        if scope != pending.scope || source_head < pending.position {
+            return Err(CycleFailure::Fatal);
         }
+        // Canonical physical read and cursor work ended. Re-admit against the
+        // actual current credential/grant; the prior read is not dispatch authority.
+        let deadline = tokio::time::Instant::now() + POST_DEADLINE;
+        let hold = match self
+            .admit_dispatch_before(
+                &reader.admission,
+                &pending.registration.target,
+                &pending.conversation,
+                pending.delivery.epoch(),
+                deadline,
+            )
+            .await
+        {
+            Ok(Some(hold)) => hold,
+            Ok(None) => return Ok(()),
+            Err(AdmissionFailure::Refused) => {
+                self.observe_stop(
+                    &pending.registration,
+                    ExpiryObserver::Delivery(pending.delivery.id()),
+                )
+                .await?;
+                return Ok(());
+            }
+            Err(AdmissionFailure::Unavailable) => return Err(CycleFailure::Retry),
+        };
         let at = self.owner.clock.unix_milliseconds();
         let sending = pending
             .delivery
             .admit(pending.delivery.epoch(), at)
             .map_err(|_| CredentialAdminError::Unavailable)?;
-        self.owner
+        *self
+            .owner
+            .known
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(PendingSettlement {
+            registration: pending.registration.id,
+            before: pending.delivery.clone(),
+            outcome: PendingOutcome::Unposted {
+                sending: sending.clone(),
+                expired: false,
+            },
+            at_ms: None,
+        });
+        let write = self
+            .owner
             .store
-            .transition(&pending.delivery, &sending, DeliveryCause::Admission, at)
-            .await
-            .map_err(|_| CredentialAdminError::Unavailable)?;
-        if head.value().is_err() {
-            let after = sending
-                .not_dispatched()
-                .map_err(|_| CredentialAdminError::Unavailable)?;
-            self.owner
-                .store
-                .transition(
-                    &sending,
-                    &after,
-                    DeliveryCause::AdmissionExpired,
-                    self.owner.clock.unix_milliseconds(),
-                )
-                .await
-                .map_err(|_| CredentialAdminError::Unavailable)?;
-            drop(head);
+            .admit_before(&pending.delivery, &sending, at, deadline);
+        tokio::pin!(write);
+        let receipt = tokio::select! {
+            result = &mut write => Some(result),
+            _ = tokio::time::sleep_until(deadline) => None,
+        };
+        if receipt.is_none() {
+            // The future stays pinned/alive: any real spawn_blocking SQL remains
+            // owned until joined. No expired attempt retains a POST reservation.
+            drop(prepared);
+            hold.cancel();
+            #[cfg(test)]
+            self.owner.dispatch_deadline.notify_one();
+            let _physical_result = write.await;
+            let _ = self.settle_known().await;
+            return Ok(());
+        }
+        if let Some(Err(error)) = receipt {
+            drop(prepared);
+            // Try W-audit-fail under the original authority before releasing it.
+            // If that write is also pending at deadline, join it without authority.
+            let settlement = self.settle_known();
+            tokio::pin!(settlement);
+            let settled = tokio::select! {
+                result = &mut settlement => Some(result),
+                _ = tokio::time::sleep_until(deadline) => None,
+            };
+            hold.cancel();
+            if settled.is_none() {
+                let _ = settlement.await;
+            }
+            return if error == OutboxError::Invalid {
+                Err(CycleFailure::Fatal)
+            } else {
+                Ok(())
+            };
+        }
+        let expired = !hold.is_valid_at(self.owner.clock.unix_seconds());
+        if expired || tokio::time::Instant::now() >= deadline {
+            if expired {
+                if let Some(known) = self
+                    .owner
+                    .known
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_mut()
+                {
+                    known.outcome = PendingOutcome::Unposted {
+                        sending: sending.clone(),
+                        expired: true,
+                    };
+                }
+            }
+            drop(prepared);
+            hold.cancel();
+            let _ = self.settle_known().await;
             self.observe_stop(
                 &pending.registration,
                 ExpiryObserver::Delivery(sending.id()),
@@ -438,28 +557,79 @@ impl WebhookRuntime {
             pending.body,
         )
         .map_err(|_| CredentialAdminError::Unavailable)?;
-        let observed = observation(prepared.post(&pending.registration.key, &message).await);
+        let observed = {
+            let post = prepared.post(&pending.registration.key, &message);
+            tokio::pin!(post);
+            tokio::select! {
+                biased;
+                actual = &mut post => observation(actual),
+                _ = tokio::time::sleep_until(deadline) => Observation::TimedOut,
+            }
+        }; // The POST future is gone before authority can be released.
         *self
             .owner
             .known
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(KnownObservation {
-            before: sending,
-            observed,
+            .unwrap_or_else(PoisonError::into_inner) = Some(PendingSettlement {
+            registration: pending.registration.id,
+            before: sending.clone(),
+            outcome: PendingOutcome::Response(observed),
             at_ms: None,
         });
+        hold.cancel(); // Actual response captured; settlement needs no authority.
         let settled = self.settle_known().await;
-        drop(head); // Physical POST and first settlement operation have ended.
         if settled.is_err() {
             tracing::warn!("webhook response retained for local settlement; no repeat POST");
         }
         Ok(())
     }
+    /// Caller retains this future through cancellation/deadline until the actual
+    /// native read/acquisition joins. Partial fences have an independent owner.
+    pub(crate) async fn admit_dispatch_before(
+        &self,
+        admission: &AdmitDelivery<'_>,
+        target: &crate::webhooks::application::Target,
+        conversation: &ConversationId,
+        epoch: u64,
+        deadline: tokio::time::Instant,
+    ) -> Result<Option<DispatchAdmission>, AdmissionFailure> {
+        let hold = DispatchAdmission::new();
+        let admitted = {
+            let work = admission.execute_dispatch(&hold, target, conversation, epoch);
+            tokio::pin!(work);
+            let admitted = tokio::select! {
+                result = &mut work => Some(result),
+                _ = tokio::time::sleep_until(deadline) => None,
+            };
+            match admitted {
+                None => {
+                    hold.cancel();
+                    #[cfg(test)]
+                    self.owner.dispatch_deadline.notify_one();
+                    let _physical_result = work.await;
+                    return Ok(None);
+                }
+                Some(result) => result,
+            }
+        }; // The borrowed admission future is joined and destroyed here.
+        match admitted {
+            Err(error) => {
+                hold.cancel();
+                Err(error)
+            }
+            Ok(()) if tokio::time::Instant::now() >= deadline => {
+                hold.cancel();
+                Ok(None)
+            }
+            Ok(()) => Ok(Some(hold)),
+        }
+    }
+
     async fn observe_stop(
         &self,
         registration: &Registration,
         reader: ExpiryObserver,
-    ) -> Result<(), CredentialAdminError> {
+    ) -> Result<StopObservationResult, CycleFailure> {
         ObserveRegistrationStop {
             credentials: self.owner.credentials.as_ref(),
             stops: self.owner.store.as_ref(),
@@ -467,8 +637,10 @@ impl WebhookRuntime {
         }
         .execute(&registration.target.credential, reader)
         .await
-        .map(|_| ())
-        .map_err(|_| CredentialAdminError::Unavailable)
+        .map_err(|error| match error {
+            crate::webhooks::application::StopFailure::Store(error) => store_failure(error),
+            crate::webhooks::application::StopFailure::Access(_) => CycleFailure::Retry,
+        })
     }
     pub(super) async fn settle_known(&self) -> Result<(), CredentialAdminError> {
         let selected = self
@@ -476,29 +648,45 @@ impl WebhookRuntime {
             .known
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .map(|known| (known.before.clone(), known.observed, known.at_ms));
-        let Some((before, observed, at)) = selected else {
+            .clone();
+        let Some(mut selected) = selected else {
             return Ok(());
         };
-        let at = at.unwrap_or_else(|| self.owner.clock.unix_milliseconds());
-        if let Some(known) = self
+        let at = selected
+            .at_ms
+            .unwrap_or_else(|| self.owner.clock.unix_milliseconds());
+        selected.at_ms = Some(at);
+        // The timestamp is retained even if publication fails again.
+        *self
             .owner
             .known
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_mut()
-        {
-            known.at_ms = Some(at);
+            .unwrap_or_else(PoisonError::into_inner) = Some(selected.clone());
+        match selected.outcome {
+            PendingOutcome::Response(observed) => {
+                let after = selected
+                    .before
+                    .observed(observed, at)
+                    .map_err(|_| CredentialAdminError::Unavailable)?;
+                self.owner
+                    .store
+                    .settle_response(&selected.before, &after, at)
+                    .await
+            }
+            PendingOutcome::Unposted { sending, expired } => {
+                self.owner
+                    .store
+                    .settle_unposted(
+                        selected.registration,
+                        &selected.before,
+                        &sending,
+                        expired,
+                        at,
+                    )
+                    .await
+            }
         }
-        let after = before
-            .observed(observed, at)
-            .map_err(|_| CredentialAdminError::Unavailable)?;
-        self.owner
-            .store
-            .settle_response(&before, &after, at)
-            .await
-            .map_err(|_| CredentialAdminError::Unavailable)?;
+        .map_err(|_| CredentialAdminError::Unavailable)?;
         self.owner
             .known
             .lock()

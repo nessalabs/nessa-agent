@@ -1151,3 +1151,123 @@ async fn malformed_action_attribution_is_refused_before_new_target_classificatio
 
 #[path = "product_delivery.rs"]
 mod delivery;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_public_issue_retires_an_expired_idle_registration_before_reissue() {
+    let f = Harness::new().await;
+    let (mut client, _) = Client::open(f.address, &f.owner).await;
+    let first = client.call("credential.issue", issue_params()).await;
+    assert_eq!(first["ok"], true, "{first}");
+    let old = CredentialId::new(first["payload"]["credential"]["id"].as_str().unwrap()).unwrap();
+    let original = f.store.intents().await.unwrap().pop().unwrap();
+    assert!(f.store.registration(old.clone()).await.unwrap().is_some());
+    f.clock.0.store(100_000, Ordering::SeqCst);
+    let mut request = issue_params();
+    request["requestId"] = json!("reissue-after-expiry");
+    request["expiresAt"] = json!(200);
+    let next = client.call("credential.issue", request).await;
+    // Collect cleanup before assertions so a failing counterexample owns no server.
+    let intents = f.store.intents().await.unwrap();
+    let old_registration = f.store.registration(old.clone()).await.unwrap();
+    let issued = f.issued.lock().unwrap().len();
+    drop(client);
+    f.close().await.unwrap();
+    assert_eq!(next["ok"], true, "{next}");
+    assert_ne!(next["payload"]["credential"]["id"], old.as_str());
+    assert_eq!(issued, 2);
+    assert!(
+        old_registration.is_none(),
+        "drained old registration is retired"
+    );
+    assert_eq!(intents.len(), 1);
+    assert_ne!(intents[0].id, original.id);
+    assert_eq!(intents[0].issue.request_id, "reissue-after-expiry");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cold_runtime_without_seeds_replays_webhook_history_before_ordinary_routing() {
+    let f = Harness::new().await;
+    let (mut client, _) = Client::open(f.address, &f.owner).await;
+    let first = client.call("credential.issue", issue_params()).await;
+    assert_eq!(first["ok"], true);
+    let original = f.store.intents().await.unwrap().pop().unwrap();
+    let root = f._root.clone();
+    drop(client);
+    f.close().await.unwrap();
+    let private = root.path().join("private");
+    let credentials = Arc::new(
+        LocalCredentialStore::open(
+            &private,
+            "auth.json",
+            Arc::new(CedarPolicyEvaluator::new().unwrap()),
+        )
+        .unwrap(),
+    );
+    let clock = Arc::new(Time::new(3000));
+    let store = Arc::new(
+        SqlOutbox::open(
+            &private.join("outbox.db"),
+            private.join("audit"),
+            clock.clone(),
+        )
+        .unwrap(),
+    );
+    let issued = Arc::new(Mutex::new(HashMap::new()));
+    let base = Arc::new(BaseAdmin {
+        store: credentials.clone(),
+        issued: issued.clone(),
+        pause: None,
+    });
+    let runtime = WebhookRuntime::new(Vec::new(), base, credentials, store.clone(), clock).unwrap();
+    runtime.recover().await.unwrap();
+    let mut replay = original.issue.clone();
+    replay.purpose = nessa_auth::application::credential_admin::CredentialIssuePurpose::Product;
+    replay.credential_id = Uuid::new_v4().to_string();
+    replay.issued_at = 3;
+    let replayed = match runtime.issue(replay.clone()).await {
+        Ok(IssueCredentialOutcome::ExistingSecretUnavailable {
+            metadata,
+            transitions,
+        }) => {
+            metadata.id == original.issue.credential_id
+                && metadata.issued_at == original.issue.issued_at
+                && transitions.len() == 1
+                && transitions[0].correlation.as_deref() == Some(original.issue.request_id.as_str())
+        }
+        _ => false,
+    };
+    let mut fresh = replay.clone();
+    fresh.request_id = "no-seed-fresh-webhook-request".into();
+    let refused = matches!(
+        runtime.issue(fresh).await,
+        Err(CredentialAdminError::Conflict)
+    );
+    let mut ordinary = replay;
+    ordinary.request_id = "no-seed-ordinary-request".into();
+    ordinary.credential_id = Uuid::new_v4().to_string();
+    ordinary.principal.id = "ordinary-cold".into();
+    ordinary.membership.id = "ordinary-cold-member".into();
+    ordinary.membership.principal_id = "ordinary-cold".into();
+    let ordinary_issued = matches!(
+        runtime.issue(ordinary).await,
+        Ok(IssueCredentialOutcome::Issued { .. })
+    );
+    let retained = store.intents().await.unwrap();
+    let count = issued.lock().unwrap().len();
+    runtime.shutdown().await.unwrap();
+    assert!(
+        replayed,
+        "the original Webhook purpose/identity survives seed removal"
+    );
+    assert!(
+        refused,
+        "active webhook history cannot fall through to ordinary issuance"
+    );
+    assert!(
+        ordinary_issued,
+        "genuinely unregistered targets retain ordinary issuance"
+    );
+    assert_eq!(count, 1, "only the ordinary command created a new bearer");
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].id, original.id);
+}

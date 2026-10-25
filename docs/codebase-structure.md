@@ -1676,10 +1676,16 @@ The installed registration references that original intent, and transactional
 retirement deletes the private configuration together with the registration. Tests remain in
 `tests/webhooks/infrastructure/outbox.rs`, with shared reset ownership cases in
 `tests/webhooks/infrastructure/outbox/source_reset.rs`.
-Product registration configuration, W1 command/lifecycle coordination, the
-committed source reader, sender supervision and capability/revoke E2E remain
-uncomposed work. The outbox does not
-supply permission or open a listener.
+`composition/webhooks.rs` loads private registration configuration;
+`infrastructure/runtime.rs` owns public issue/revoke/grant commands and shutdown.
+`runtime/delivery.rs` composes canonical principal reads, contiguous durable
+queueing, fresh dispatch admission and signed HTTPS. `composition/root.rs` starts
+that worker after fallible startup and joins it through product cleanup.
+`tests/webhooks/infrastructure/product{,_delivery}.rs` exercises public product
+commands with disposable authorities and an isolated TLS recipient. Whole-feature
+review, source-matched platform CI, browser and conversation stress qualification
+remain incomplete; mounted fixtures alone do not establish readiness. The outbox
+does not supply permission or open a listener.
 
 ## Browser sessions
 

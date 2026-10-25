@@ -217,10 +217,24 @@ pub(super) fn commit(
     registration: Option<Uuid>,
     at_ms: u64,
 ) -> Result<(), OutboxError> {
+    commit_before(transaction, registration, at_ms, None)
+}
+
+/// The final interruptible guard. Once COMMIT enters filesystem sync, its late
+/// conditional result must be joined/reconciled (W-audit-race), never dispatched.
+pub(super) fn commit_before(
+    transaction: Transaction<'_>,
+    registration: Option<Uuid>,
+    at_ms: u64,
+    deadline: Option<tokio::time::Instant>,
+) -> Result<(), OutboxError> {
     trim(&transaction)?;
     retire_drained(&transaction, at_ms)?;
     super::intents::validate(&transaction)?;
     capacity::check(&transaction, registration)?;
+    if deadline.is_some_and(|at| tokio::time::Instant::now() >= at) {
+        return Err(OutboxError::Conflict);
+    }
     transaction.commit().map_err(unavailable)
 }
 

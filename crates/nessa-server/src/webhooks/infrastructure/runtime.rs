@@ -9,7 +9,7 @@ use crate::webhooks::application::{
     MAX_REGISTRATIONS,
 };
 pub(crate) use delivery::DeliveryDependencies;
-use delivery::KnownObservation;
+use delivery::PendingSettlement;
 use futures_util::FutureExt;
 use nessa_auth::adapters::local::LocalCredentialStore;
 use nessa_auth::application::{
@@ -76,11 +76,13 @@ struct Owner {
     ordinary: Arc<Semaphore>,
     controls: Arc<Semaphore>,
     wake: Notify,
-    known: Mutex<Option<KnownObservation>>,
+    known: Mutex<Option<PendingSettlement>>,
     #[cfg(test)]
     delivery_cycles: AtomicU64,
     #[cfg(test)]
     cycle_finished: Notify,
+    #[cfg(test)]
+    dispatch_deadline: Notify,
 }
 #[derive(Clone)]
 pub struct WebhookRuntime {
@@ -129,6 +131,8 @@ impl WebhookRuntime {
                 delivery_cycles: AtomicU64::new(0),
                 #[cfg(test)]
                 cycle_finished: Notify::new(),
+                #[cfg(test)]
+                dispatch_deadline: Notify::new(),
             }),
         })
     }
@@ -182,6 +186,10 @@ impl WebhookRuntime {
     #[cfg(test)]
     pub(crate) fn wake_delivery(&self) {
         self.owner.wake.notify_one();
+    }
+    #[cfg(test)]
+    pub(crate) async fn after_dispatch_deadline(&self) {
+        self.owner.dispatch_deadline.notified().await;
     }
     pub(crate) fn store(&self) -> &SqlOutbox {
         &self.owner.store
@@ -269,22 +277,72 @@ impl WebhookRuntime {
         request: IssueCredentialRequest,
     ) -> Result<IssueCredentialOutcome, CredentialAdminError> {
         let _issuance = self.owner.issuance.lock().await;
-        let Some(config) = self
+        // Retained history selects the command route even after seed removal.
+        // Unknown history is not evidence that this is an ordinary principal.
+        let originals = self.owner.store.intents().await.map_err(store_error)?;
+        let has_history = originals
+            .iter()
+            .any(|intent| intent.issue.principal.id == request.principal.id);
+        let config = self
             .owner
             .configurations
             .get(&request.principal.id)
             .cloned()
-        else {
-            return self.owner.base.issue(request).await;
-        };
-        for original in self.owner.store.intents().await.map_err(store_error)? {
+            .or_else(|| {
+                originals
+                    .iter()
+                    .find(|intent| {
+                        intent.issue.principal.id == request.principal.id
+                            && intent.issue.issuer_principal_id == request.issuer_principal_id
+                            && intent.issue.request_id == request.request_id
+                    })
+                    .map(|intent| intent.config.clone())
+            });
+        for original in &originals {
             if original.issue.principal.id == request.principal.id
                 && (original.issue.issuer_principal_id != request.issuer_principal_id
                     || original.issue.request_id != request.request_id)
             {
-                return Err(CredentialAdminError::Conflict);
+                let credential = CredentialId::new(&original.issue.credential_id)
+                    .map_err(|_| CredentialAdminError::Unavailable)?;
+                // An uninstalled reservation still owns an uncertain issuance.
+                // Installed history can outlive its stopped registration, but
+                // only the canonical credential observation may stop it.
+                if !self
+                    .owner
+                    .store
+                    .has_installed_intent(original.id, credential.clone())
+                    .await
+                    .map_err(store_error)?
+                {
+                    return Err(CredentialAdminError::Conflict);
+                }
+                let observed = ObserveRegistrationStop {
+                    credentials: self.owner.credentials.as_ref(),
+                    stops: self.owner.store.as_ref(),
+                    clock: self.owner.clock.as_ref(),
+                }
+                .execute(
+                    &credential,
+                    ExpiryObserver::Owner(
+                        PrincipalId::new(&request.issuer_principal_id)
+                            .map_err(|_| CredentialAdminError::Unavailable)?,
+                    ),
+                )
+                .await
+                .map_err(|_| CredentialAdminError::Unavailable)?;
+                if observed == StopObservationResult::NoStopObserved {
+                    return Err(CredentialAdminError::Conflict);
+                }
             }
         }
+        let Some(config) = config else {
+            return if has_history {
+                Err(CredentialAdminError::Conflict)
+            } else {
+                self.owner.base.issue(request).await
+            };
+        };
         let registered = RegisterWebhook {
             credentials: self.owner.base.as_ref(),
             admission: self.owner.credentials.as_ref(),
