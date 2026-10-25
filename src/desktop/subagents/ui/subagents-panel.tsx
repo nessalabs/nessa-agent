@@ -3,18 +3,15 @@
  * child's conversation with no composer. The hook decides what is open
  * (`use-subagents-panel.ts`); this draws it.
  */
-import { AvatarStack } from "@nessa-ui/react/avatar-stack"
-import { Breadcrumb } from "@nessa-ui/react/breadcrumb"
 import { EmptyState } from "@nessa-ui/react/empty-state"
+import { GroupHeader } from "@nessa-ui/react/group-header"
 import { Meter } from "@nessa-ui/react/meter"
 import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 import { StatusLabel } from "@nessa-ui/react/status-label"
 import type { WidgetHost } from "../../widgets/ui/plugin"
 import { elapsed, sessionTime, ReadOnlyTranscript } from "../../workspace"
-import { plural } from "../../model/counts"
 import { progressFraction, rowStatus, type Subagent } from "../model/subagent"
 import { tagline } from "../model/tagline"
-import { stackItem } from "./stack-item"
 import { useSubagentsPanel, type SubagentsPanelModel } from "./use-subagents-panel"
 import "./subagents.css"
 
@@ -65,28 +62,38 @@ function SubagentList({
 }) {
   return (
     <div className="subagents-list">
-      <div className="subagents-heading">
-        <AvatarStack
-          max={Infinity}
-          label={plural(model.ordered.length, "agent")}
-          items={model.ordered.map(stackItem)}
-        />
-      </div>
-      <p className="subagents-summary" data-subagent-summary>
-        {model.summary}
-      </p>
       <div className="subagents-scroll">
-        <ul className="subagents-rows" data-subagent-list>
-          {model.ordered.map((subagent) => (
-            <li key={subagent.id}>
-              <SubagentRow
-                subagent={subagent}
-                now={model.now}
-                onChoose={() => model.choose(subagent.id)}
-              />
-            </li>
-          ))}
-        </ul>
+        {/* Sections as the session list groups its rows: the same caption. */}
+        {model.groups.map((group, index) => (
+          <section
+            key={group.id}
+            className="subagents-group"
+            data-subagent-group={group.id}
+            aria-label={`${group.label} ${group.subagents.length}`}
+          >
+            <GroupHeader
+              aria-hidden="true"
+              className="workspace-group-label"
+              data-first={index === 0 || undefined}
+              level={3}
+              size="dense"
+              tone="quiet"
+              label={group.label}
+              count={group.subagents.length}
+            />
+            <ul className="subagents-rows" data-subagent-list>
+              {group.subagents.map((subagent) => (
+                <li key={subagent.id}>
+                  <SubagentRow
+                    subagent={subagent}
+                    now={model.now}
+                    onChoose={() => model.choose(subagent.id)}
+                  />
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
         {unreadable.length > 0 ? <Unreadable keys={unreadable} /> : null}
       </div>
     </div>
@@ -158,17 +165,12 @@ function SubagentDetail({
 }) {
   return (
     <div className="subagents-detail" data-subagent-detail>
-      <Breadcrumb
-        label="Subagent"
-        back
-        items={[
-          { label: "Subagents", onSelect: () => model.choose(null) },
-          { label: subagent.name },
-        ]}
-      />
+      {/* Named, with its way back, in the widget's own breadcrumb (`WidgetHost.crumb`). */}
       <div
         className="subagents-scroll"
         data-subagent-scroll
+        tabIndex={-1}
+        aria-label={`${subagent.name}'s conversation`}
         ref={model.stick.ref}
         onScroll={model.stick.onScroll}
       >

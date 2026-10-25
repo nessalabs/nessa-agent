@@ -88,6 +88,8 @@ export const selectPaneShape = (state: Root): string => {
   const layout = state.workspace.panes
   return layout ? layoutShape(layout) : ""
 }
+export const selectTabs = (state: Root) => state.workspace.tabs
+export const selectActiveTab = (state: Root) => state.workspace.tabs.activeTab ?? ""
 export const selectView = (state: Root): SessionView => state.workspace.view
 /** Whether the Agents overview fills the content region. */
 export const selectOverviewOpen = (state: Root) =>
@@ -301,12 +303,6 @@ const channelSessions = (state: Root, channelId: string) =>
 /** What a channel's row shows about its sessions; compare with `shallowEqual`. */
 export const selectChannelActivity = (state: Root, channelId: string): ChannelActivity =>
   channelActivity(channelSessions(state, channelId))
-
-/** The pinned sessions a channel hangs beneath it, as ids; compare with `shallowEqual`. */
-export const selectPinnedIds = (state: Root, channelId: string): string[] =>
-  channelSessions(state, channelId)
-    .filter((session) => session.pinned)
-    .map((session) => session.id)
 
 /** The sessions a channel's branch discloses, as ids, and how many it holds back. */
 export function selectBranch(

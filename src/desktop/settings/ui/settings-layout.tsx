@@ -229,7 +229,7 @@ export function SettingsLayout(model: SettingsSurfaceModel) {
           )}
 
           {/* Where "nessa Studio" opened Settings, the way back to the app. */}
-          <IdentityRow as="div">
+          <IdentityRow as="div" mark="none">
             <IdentityButton
               product="Agent"
               back

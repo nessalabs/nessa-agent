@@ -1,13 +1,11 @@
 /**
  * How the window lays out its workspace, chosen in Settings › Workspace ›
- * Layout: three columns (sidebar, a channel's session list, chat), sessions
- * listed under their channels in the sidebar, or the classic shell with a
- * home and a right panel.
+ * Layout: three columns (sidebar, a channel's session list, chat), or
+ * sessions listed under their channels in the sidebar.
  */
 export const workspaceLayouts = [
   { id: "columns", label: "Three columns" },
   { id: "sidebar", label: "Sessions in sidebar" },
-  { id: "classic", label: "Classic" },
 ] as const
 
 export type WorkspaceLayoutId = (typeof workspaceLayouts)[number]["id"]

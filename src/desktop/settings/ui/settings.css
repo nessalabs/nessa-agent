@@ -1292,10 +1292,6 @@ html:not(.dark) .settings .settings-card {
     color-mix(in oklab, var(--foreground) 13%, transparent);
 }
 
-.settings-sketch [data-kind="panel"] {
-  width: 18%;
-}
-
 .settings-sketch [data-kind="main"] {
   flex: 1;
 }

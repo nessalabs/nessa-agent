@@ -644,7 +644,7 @@ impl ConversationService {
         match found {
             Found::Finished(outcome, reply) => ThreadTurn::Ended(outcome, reply),
             Found::Settling(saved) | Found::Waiting(saved) if restored => {
-                let (outcome, reply) = saved.unwrap_or(("interrupted", None));
+                let (outcome, reply) = saved.unwrap_or((INTERRUPTED, None));
                 ThreadTurn::Ended(outcome, reply)
             }
             Found::Settling(_) | Found::Waiting(_) => ThreadTurn::Unfinished,
@@ -1028,7 +1028,7 @@ fn restored_unfinished(
     saved: Option<Ended>,
     limit: usize,
 ) -> Watched {
-    let (outcome, reply) = saved.unwrap_or(("interrupted", None));
+    let (outcome, reply) = saved.unwrap_or((INTERRUPTED, None));
     Watched::Finished(report_text(child, execution, outcome, reply, limit))
 }
 
@@ -1128,11 +1128,46 @@ pub(crate) fn report_text_for_test(
     child: &ConversationId,
     execution: &str,
     outcome: &str,
-    reply: String,
+    reply: Option<String>,
     limit: usize,
 ) -> String {
-    report_text(child, execution, outcome, Some(reply), limit)
+    report_text(child, execution, outcome, reply, limit)
 }
+
+/// Every outcome a report can name: each a turn can settle with, and the
+/// one a restart leaves (`interrupted`). The desktop reads each of them
+/// (`tests/fixtures/thread-report.json`).
+#[cfg(test)]
+pub(crate) fn report_outcomes_for_test() -> Vec<&'static str> {
+    let every = [
+        ExecutionOutcome::Completed,
+        ExecutionOutcome::OutputLimit,
+        ExecutionOutcome::RequestLimit,
+        ExecutionOutcome::Refused,
+        ExecutionOutcome::Cancelled,
+    ];
+    // Exhaustive, with no wildcard: an outcome added to the enum does not
+    // compile here until it is listed above, and so reaches the shared cases.
+    for each in &every {
+        match each {
+            ExecutionOutcome::Completed
+            | ExecutionOutcome::OutputLimit
+            | ExecutionOutcome::RequestLimit
+            | ExecutionOutcome::Refused
+            | ExecutionOutcome::Cancelled => {}
+        }
+    }
+    let mut names: Vec<_> = every
+        .into_iter()
+        .map(|each| outcome(&Ok::<_, ()>(each)))
+        .collect();
+    names.push(outcome(&Err::<ExecutionOutcome, ()>(())));
+    names.push(INTERRUPTED);
+    names
+}
+
+/// The outcome a report names when a restart left the turn unfinished.
+const INTERRUPTED: &str = "interrupted";
 
 const CUT: &str = "\n[cut to fit]";
 
@@ -1149,7 +1184,7 @@ fn report_text(
         "[Thread report] Thread {child} finished the turn you sent it (execution {execution}): {outcome}.\n\n"
     );
     match reply {
-        None if outcome == "interrupted" => {
+        None if outcome == INTERRUPTED => {
             text.push_str("The gateway restarted before the turn finished.");
         }
         None => text.push_str("It gave no reply text."),

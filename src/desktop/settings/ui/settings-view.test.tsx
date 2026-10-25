@@ -331,12 +331,11 @@ describe("what Settings offers", () => {
     }
   })
 
-  // Classic has no workspace shell for the side rail to stand beside.
   for (const [layout, applies] of [
+    ["columns", true],
     ["sidebar", true],
-    ["classic", false],
   ] as const)
-    it(`${applies ? "enables" : "disables, saying why,"} the side rail's switch in ${layout}`, async () => {
+    it(`enables the side rail's switch in ${layout}`, async () => {
       const kept = new Map<string, string>([["nessa.desktop.workspace-layout", layout]])
       const storage = Object.getOwnPropertyDescriptor(window, "localStorage")
       Object.defineProperty(window, "localStorage", {
@@ -359,7 +358,6 @@ describe("what Settings offers", () => {
         const row = host.querySelector('[data-setting="side-rail"]')
         const toggle = row?.querySelector<HTMLButtonElement>('[role="switch"]')
         expect(toggle?.disabled).toBe(!applies)
-        expect(row?.textContent?.includes("Not in Classic")).toBe(!applies)
       } finally {
         if (storage) Object.defineProperty(window, "localStorage", storage)
         else Reflect.deleteProperty(window, "localStorage")
@@ -372,7 +370,6 @@ describe("what Settings offers", () => {
   for (const [layout, applies] of [
     ["columns", true],
     ["sidebar", false],
-    ["classic", false],
   ] as const)
     it(`${applies ? "enables" : "disables, saying where they apply,"} the session list's settings in ${layout}`, async () => {
       // The layout as the window stored it (jsdom here keeps no storage of its own).

@@ -16,6 +16,8 @@ export function workspaceSplitPanes(store: DesktopStore): SplitPanesSource {
   return {
     layout: () => workspace().panes,
     subscribe: (onChange) => store.subscribe(onChange),
+    // Another window tab is another layout, drawn at once.
+    cut: () => workspace().tabs.activeTab,
     // What the content region shows, and the side columns: a drag read both.
     watched: () => [workspace().content, workspace().chrome],
     // Carried from outside the grid: a listed session's row, by its pane item.

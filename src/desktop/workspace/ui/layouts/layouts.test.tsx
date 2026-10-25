@@ -9,11 +9,13 @@ import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { FoldMark } from "./column-paint"
 import { isMac } from "../../../adapters/platform"
 import { chordEvent } from "../../../model/keyboard"
 import { ClockProvider } from "../../../../clock"
 import {
   closePane,
+  closeSessionTab,
   focusPane,
   loadWorkspace,
   movePane,
@@ -67,6 +69,8 @@ beforeEach(() => {
   })) as unknown as typeof window.matchMedia
   host = document.createElement("div")
   document.body.append(host)
+  // The right panel remembers its place between launches; each test starts closed.
+  window.localStorage.removeItem("nessa.desktop.right-panel")
 })
 
 afterEach(() => {
@@ -143,6 +147,7 @@ function outcome(store: ReturnType<typeof testStore>) {
     sidebar: state.chrome.sidebar,
     content: state.content,
     dialog: host.querySelector('[role="dialog"]')?.getAttribute("aria-label") ?? null,
+    panel: host.querySelector<HTMLElement>("[data-workspace]")?.dataset.panel,
   }
 }
 
@@ -173,10 +178,14 @@ describe("both layouts are the one shell", () => {
           </Provider>,
         ),
       )
-      const titlebar = [...host.querySelectorAll(".workspace-titlebar button")].map(
-        (button) => button.getAttribute("aria-label")?.replace(/ \(.*\)$/, ""),
+      const titlebar = [
+        ...host.querySelectorAll(".workspace-titlebar-navigation button"),
+      ].map((button) => button.getAttribute("aria-label")?.replace(/ \(.*\)$/, ""))
+      expect(titlebar).toEqual(
+        name === "three columns"
+          ? ["Hide Sidebar", "Hide Session List", "Go Back", "Go Forward"]
+          : ["Hide Sidebar", "Go Back", "Go Forward"],
       )
-      expect(titlebar.slice(0, 3)).toEqual(["Hide Sidebar", "Go Back", "Go Forward"])
       await act(async () => press("switcher"))
       expect(host.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe(
         "Jump to",
@@ -189,6 +198,145 @@ describe("both layouts are the one shell", () => {
       )
       await act(async () => root.unmount())
     })
+})
+
+describe("the right panel, in both layouts", () => {
+  // Wide enough that the panel's room folds no column.
+  const width = window.innerWidth
+  beforeEach(() => {
+    window.innerWidth = 2400
+  })
+  afterEach(() => {
+    window.innerWidth = width
+  })
+  for (const [name, Layout] of [
+    ["three columns", ThreeColumns],
+    ["sessions in the sidebar", SessionsInSidebar],
+  ] as const)
+    it(`opens, maximizes, leaves the maximized view with Escape and remembers its place, in ${name}`, async () => {
+      const { store, root } = await render(Layout)
+      const panel = () => host.querySelector<HTMLElement>("#workspace-panel") ?? host
+      const button = (label: string) =>
+        [
+          ...host.querySelectorAll<HTMLButtonElement>(
+            ".workspace-titlebar-trailing button",
+          ),
+        ].find((each) => each.getAttribute("aria-label")?.startsWith(label))
+      expect(panel().hasAttribute("inert")).toBe(true)
+      expect(button("Expand Panel")).toBeUndefined()
+      await act(async () => button("Show Panel")?.click())
+      expect(panel().hasAttribute("inert")).toBe(false)
+      expect(panel().textContent).toBe("Nothing open")
+      expect(host.querySelector('[aria-label="Resize Panel"]')).not.toBeNull()
+      // Maximized, it covers the workspace: what is under it is inert.
+      await act(async () => button("Expand Panel")?.click())
+      expect(panel().dataset.maximized).toBe("true")
+      const sidebar = host.querySelector<HTMLElement>(".workspace-sidebar") ?? host
+      const covered = () =>
+        [".workspace-sidebar", ".split-panes-grid", ".workspace-overview-layer"].map(
+          (selector) => host.querySelector(selector)?.closest("[inert]") !== null,
+        )
+      expect(covered()).toEqual([true, true, true])
+      expect(panel().closest("[inert]")).toBeNull()
+      // Under it, the window's keys rest: no switcher, no overview, no fold.
+      await act(async () => press("switcher"))
+      await act(async () => press("showOverview"))
+      await act(async () => press("toggleSidebar"))
+      expect(host.querySelector('[role="dialog"]')).toBeNull()
+      expect(store.getState().workspace.content).toBe("panes")
+      expect(store.getState().workspace.chrome.sidebar.open).toBe(true)
+      // An Escape a menu or dialog over it takes is theirs, not the panel's.
+      const menu = document.createElement("div")
+      menu.setAttribute("role", "menu")
+      document.body.append(menu)
+      await act(async () =>
+        menu.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+      )
+      menu.remove()
+      expect(panel().dataset.maximized).toBe("true")
+      await act(async () =>
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+      )
+      expect(panel().dataset.maximized).toBeUndefined()
+      expect(covered()).toEqual([false, false, false])
+      expect(sidebar.closest("[inert]")).toBeNull()
+      expect(
+        JSON.parse(window.localStorage.getItem("nessa.desktop.right-panel") ?? "null"),
+      ).toMatchObject({
+        open: true,
+      })
+      await act(async () => press("togglePanel"))
+      expect(panel().hasAttribute("inert")).toBe(true)
+      await act(async () => root.unmount())
+    })
+
+  it("is room the side columns are fitted around: opened in a narrow window, a column folds for it", async () => {
+    // Open beside two panes at this width, nothing folds; the panel's room does.
+    const folds: Record<string, boolean>[] = []
+    for (const panel of [false, true]) {
+      window.innerWidth = 1500
+      window.localStorage.setItem(
+        "nessa.desktop.right-panel",
+        JSON.stringify({ open: panel, width: 360 }),
+      )
+      const { store, root } = await render(ThreeColumns)
+      await act(async () => settle())
+      const chrome = store.getState().workspace.chrome
+      folds.push({ sidebar: chrome.sidebar.folded, list: chrome.sessionList.folded })
+      await act(async () => root.unmount())
+    }
+    expect(folds[0]).toEqual({ sidebar: false, list: false })
+    expect(folds[1]).not.toEqual(folds[0])
+  })
+
+  it("moves its edge, and the sidebar's, from the widths they are drawn at", async () => {
+    window.localStorage.setItem(
+      "nessa.desktop.right-panel",
+      JSON.stringify({ open: true, width: 360 }),
+    )
+    const { store, root } = await render(ThreeColumns)
+    const key = (label: string, code: string) =>
+      act(async () =>
+        host
+          .querySelector(`[aria-label="${label}"]`)
+          ?.dispatchEvent(new KeyboardEvent("keydown", { key: code, bubbles: true })),
+      )
+    const stored = () =>
+      JSON.parse(window.localStorage.getItem("nessa.desktop.right-panel") ?? "null")
+    // One arrow is one step either way: the box's gutter is not counted in.
+    await key("Resize Panel", "ArrowLeft")
+    expect(stored()).toEqual({ open: true, width: 376 })
+    await key("Resize Panel", "ArrowRight")
+    expect(stored()).toEqual({ open: true, width: 360 })
+    await key("Resize Sidebar", "ArrowRight")
+    expect(store.getState().workspace.chrome.sidebarWidth).toBe(256)
+    await key("Resize Sidebar", "ArrowLeft")
+    expect(store.getState().workspace.chrome.sidebarWidth).toBe(240)
+    await act(async () => root.unmount())
+  })
+})
+
+it("keeps one tab the strip's Tab stop, the Agents overview open or not, and only tabs in its tablist", async () => {
+  const { root } = await render(ThreeColumns)
+  const stops = () =>
+    host.querySelectorAll('.workspace-tab-list [role="tab"][tabindex="0"]').length
+  expect(stops()).toBe(1)
+  await act(async () => press("showOverview"))
+  expect(
+    host.querySelectorAll('.workspace-tab-list [aria-selected="true"]'),
+  ).toHaveLength(0)
+  expect(stops()).toBe(1)
+  const named = [...host.querySelectorAll(".workspace-tab-list *")].filter(
+    (each) =>
+      each.getAttribute("role") !== null &&
+      !["tab", "none"].includes(each.getAttribute("role") ?? ""),
+  )
+  expect(named).toEqual([])
+  await act(async () => root.unmount())
 })
 
 describe("Agents in the sidebar is a place to go, like a channel", () => {
@@ -263,6 +411,7 @@ describe("every key of the shared map does the same in both layouts", () => {
     search: { columns: null, sidebar: "Jump to" },
   }
   const pressAll = async (command: string, Layout: typeof ThreeColumns) => {
+    window.localStorage.removeItem("nessa.desktop.right-panel")
     const { store, root } = await render(Layout, command)
     const list = () => store.getState().workspace.chrome.sessionList.open
     const listBefore = list()
@@ -402,7 +551,9 @@ describe("a session's row carries its session to the panes by its pane item", ()
   ] as const)
     it(`in ${name}`, async () => {
       const { root } = await render(Layout)
-      const carried = [...host.querySelectorAll("[data-drag-item]")].map((row) => ({
+      const carried = [
+        ...host.querySelectorAll("[data-session-row][data-drag-item]"),
+      ].map((row) => ({
         row: row.getAttribute("data-session-row"),
         item: paneItemOf(row.getAttribute("data-drag-item") ?? ""),
       }))
@@ -480,7 +631,13 @@ describe("a pane's close is offered where closing it does something", () => {
     }
     expect(offered()).toEqual([true])
     expect(await menuOffers()).toBe(true)
+    // A new session opens in a tab of its own: its pane closes that tab.
     await act(async () => void store.dispatch(newSession()))
+    expect(offered()).toEqual([true])
+    // The window's last tab, on a home, has nothing to close to.
+    for (const id of ["a", "b"])
+      await act(async () => void store.dispatch(closeSessionTab({ sessionId: id })))
+    expect(store.getState().workspace.tabs.tabs).toHaveLength(1)
     expect(offered()).toEqual([false])
     expect(await menuOffers()).toBe(false)
     await act(async () =>
@@ -932,8 +1089,8 @@ describe("a draft's close", () => {
         : undefined
       if (!draftPane) throw new Error("draft pane missing")
       await act(async () => void store.dispatch(closePane({ pane: draftPane.key })))
-      expect(store.getState().workspace.drafts).not.toHaveProperty(draftId)
-      expect(store.getState().workspace.composerText).not.toHaveProperty(draftId)
+      // The draft lives with its window tab: closing its pane keeps it to reopen.
+      expect(store.getState().workspace.drafts).toHaveProperty(draftId)
       expect(showing()).toEqual({ label: "New session", home: true, text: "unsent line" })
       await act(async () => frames.runFrame())
       await act(async () => frames.runFrame())
@@ -1059,7 +1216,7 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
           return getComputedStyle(element).position
         }
         expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
-        expect(sidebar()?.getAttribute("data-sidebar-row")).toBe("open")
+        expect(sidebar()?.hasAttribute("data-folding")).toBe(false)
         expect(position()).toBe("relative")
         expect(list()?.hasAttribute("inert")).toBe(false)
         await act(async () => {
@@ -1078,7 +1235,7 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
         expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
         await act(async () => frames.runFrame())
         expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
-        expect(sidebar()?.getAttribute("data-sidebar-row")).toBe("open")
+        expect(sidebar()?.hasAttribute("data-folding")).toBe(true)
         expect(position()).toBe("relative")
         expect(list()?.hasAttribute("inert")).toBe(false)
         expect(sidebar()?.hasAttribute("data-spare-held")).toBe(true)
@@ -1093,7 +1250,7 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
           for (let frame = 0; frame < 2; frame++) {
             await act(async () => frames.runFrame())
             expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
-            expect(sidebar()?.getAttribute("data-sidebar-row")).toBe("open")
+            expect(sidebar()?.hasAttribute("data-folding")).toBe(true)
             expect(position()).toBe("relative")
             expect(sidebar()?.hasAttribute("data-spare-held")).toBe(true)
           }
@@ -1102,7 +1259,7 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
         // The boxes and the folded window land together. The list's measure
         // is still the one it had.
         expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
-        expect(sidebar()?.getAttribute("data-sidebar-row")).toBe("closed")
+        expect(sidebar()?.hasAttribute("data-folding")).toBe(false)
         expect(position()).toBe("absolute")
         expect(list()?.hasAttribute("inert")).toBe(true)
         expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
@@ -1300,7 +1457,7 @@ describe("a spare hold retains only the sidebar row already painted", () => {
             const sidebar = host.querySelector<HTMLElement>(".workspace-sidebar")
             if (!workspace || !sidebar) throw new Error("missing workspace sidebar")
             expect(workspace.dataset.sidebar).toBe("closed")
-            expect(workspace.dataset.sidebarRow).toBe("closed")
+            expect(workspace.hasAttribute("data-folding")).toBe(false)
             workspace.toggleAttribute("data-peek", peek)
             const panes = store.getState().workspace.panes
             if (!panes) throw new Error("no panes to rearrange")
@@ -1317,7 +1474,7 @@ describe("a spare hold retains only the sidebar row already painted", () => {
             for (let frame = 0; frame < 7; frame++) {
               await act(async () => frames.runFrame())
               held ||= workspace.hasAttribute("data-spare-held")
-              expect(workspace.dataset.sidebarRow).toBe("closed")
+              expect(workspace.hasAttribute("data-folding")).toBe(false)
               expect(getComputedStyle(sidebar).position, `frame ${frame}`).toBe(
                 "absolute",
               )
@@ -1333,4 +1490,33 @@ describe("a spare hold retains only the sidebar row already painted", () => {
             frames.restore()
           }
         })
+})
+
+it("does not acquire a folding row when mounted after the sidebar already closed", async () => {
+  const frames = controlledAnimationFrames()
+  const store = testStore()
+  const workspace = document.createElement("main")
+  workspace.className = "workspace"
+  workspace.toggleAttribute("data-spare-held", true)
+  document.body.append(workspace)
+  let root: Root | undefined
+  try {
+    await store.dispatch(loadWorkspace())
+    await store.dispatch(toggleSidebar({ open: false }))
+    root = createRoot(host)
+    await act(async () =>
+      root?.render(
+        <Provider store={store}>
+          <FoldMark root={{ current: workspace }} />
+        </Provider>,
+      ),
+    )
+    expect(workspace.dataset.sidebar).toBe("closed")
+    expect(workspace.hasAttribute("data-spare-held")).toBe(true)
+    expect(workspace.hasAttribute("data-folding")).toBe(false)
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    workspace.remove()
+    frames.restore()
+  }
 })

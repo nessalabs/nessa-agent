@@ -36,6 +36,8 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("window"), knobs.windows)
   assert.equal(count("linking"), knobs.linkings)
   assert.equal(count("rail"), knobs.rails)
+  assert.equal(count("panel"), knobs.panels)
+  assert.equal(count("listAnswer"), knobs.listAnswers)
   assert.equal(count("onboarding"), knobs.onboardings)
   assert.equal(count("table"), knobs.tables)
   assert.equal(count("trace"), knobs.traces)
@@ -64,7 +66,9 @@ test("a failure is always followed by a reply, and a switch never picks the mode
       if (step.kind === "switch") {
         assert.notEqual(step.from, step.to)
         assert.ok(
-          ["permission", "reviews", "large", "model"].includes(steps[index + 1]?.kind),
+          ["permission", "reviews", "large", "listAnswer", "model"].includes(
+            steps[index + 1]?.kind,
+          ),
         )
         assert.equal(steps[index + 1]?.mode, step.to)
       }
@@ -131,6 +135,8 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         windows: "0",
         linkings: "0",
         rails: "0",
+        panels: "0",
+        listAnswers: "0",
         onboardings: "0",
         tables: "0",
         traces: "0",

@@ -353,6 +353,15 @@ const checks = {
     await row.click()
     await settled(page)
     await expectContent(page, content.panes, "a session chosen", failures)
+    // A chosen chat opens in a tab of its own: the card's chat is brought back.
+    if (!(await page.locator(css.sampleCard).count())) {
+      await page.keyboard.press(keys.switcher)
+      await page.waitForSelector(css.switcherField, { state: "visible", timeout: 3000 })
+      await page.keyboard.type(names.widgetSession)
+      await page.keyboard.press(keys.enter)
+      await need(page, css.sampleCard, "the sample trail's card, its tab back")
+      await settled(page)
+    }
     await windowFromCard(page, failures)
     await page.keyboard.press(keys.overview)
     await expectContent(page, content.overview, "⌘0 from the window", failures)
@@ -591,6 +600,9 @@ const checks = {
         `${css.sidebar} ${css.sessionRow}:not([data-open]), ${css.sessionList} ${css.sessionRow}:not([data-open])`,
       )
       .last()
+    // In view first: a long list's last row can sit below the window.
+    await row.scrollIntoViewIfNeeded()
+    await settled(page)
     const box = await row.boundingBox()
     if (!box) throw new CannotRun(`no session row to carry (${css.sessionRow})`)
     const over = await page.locator(css.widgetWindow).boundingBox()

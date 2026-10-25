@@ -11,7 +11,7 @@
  */
 import type { WidgetRef } from "../../widgets/model/widget-ref"
 
-/** The layouts that draw the workspace's panes; the classic shell has none. */
+/** The layouts that draw the workspace's panes. */
 export type WindowArrangement = "columns" | "sidebar"
 
 /** What one pane shows. A new kind of pane (a file, say) is a new kind here. */

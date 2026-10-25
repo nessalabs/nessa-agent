@@ -1,3 +1,4 @@
+import { composerTextChanged } from "./sessions"
 import { describe, expect, it } from "vitest"
 import { dropOutcome } from "../../../split-panes/model/drop"
 import {
@@ -187,13 +188,20 @@ describe("new sessions", () => {
     expect(drawn(state)).toEqual([["a"], ["new"]])
   })
 
-  it("lets a draft go once no pane shows it", () => {
+  it("keeps a draft document when its pane changes or closes", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
     const replaced = openSession(drafted, { sessionId: "c" })
-    expect(replaced.drafts).toEqual({})
+    expect(replaced.drafts.new).toBeDefined()
     const beside = createDraft(loaded(), { draftId: "new", beside: "right", room: roomy })
-    const closed = closePane(beside, { pane: keyOf(beside, "new") })
-    expect(closed.drafts).toEqual({})
+    // Typed in, it is kept as a tab of its own when its pane closes.
+    const typed = composerTextChanged(beside, {
+      sessionId: "new",
+      text: "half a thought",
+    })
+    const closed = closePane(typed, { pane: keyOf(typed, "new") })
+    expect(closed.drafts.new).toBeDefined()
+    // Untouched, it closes with its pane.
+    expect(closePane(beside, { pane: keyOf(beside, "new") }).drafts.new).toBeUndefined()
   })
 
   it("does not reuse an id already in use", () => {
@@ -218,7 +226,7 @@ describe("closing panes", () => {
   })
 
   it("leaves a last pane that is already a home alone", () => {
-    const drafted = createDraft(loaded(), { draftId: "new" })
+    const drafted = alone(createDraft(loaded(), { draftId: "new" }))
     expect(closePane(drafted, { pane: keyOf(drafted, "new"), draftId: "other" })).toBe(
       drafted,
     )
@@ -520,13 +528,24 @@ describe("a widget in a pane of its own", () => {
   })
 })
 
+/** The window with only its active tab: what "the last pane" means once tabs exist. */
+const alone = (state: WorkspaceState): WorkspaceState => ({
+  ...state,
+  tabs: {
+    ...state.tabs,
+    tabs: state.tabs.tabs.filter((tab) => tab.id === state.tabs.activeTab),
+  },
+})
+
 describe("closing the last pane when it shows a widget", () => {
   const run = { plugin: "experiments", id: "run" }
 
   it("goes back to a new session's home in the channel being looked at, on the default model", () => {
-    const shown = openWidget(
-      { ...loaded(), chosenModels: { a: astra } },
-      { widget: run, room: roomy },
+    const shown = alone(
+      openWidget(
+        { ...loaded(), chosenModels: { a: astra } },
+        { widget: run, room: roomy },
+      ),
     )
     const closed = closePane(shown, { pane: shown.panes!.focused, draftId: "fresh" })
     expect(drawn(closed)).toEqual([["fresh"]])
@@ -538,7 +557,7 @@ describe("closing the last pane when it shows a widget", () => {
   })
 
   it("goes to the first channel when the one looked at is gone", () => {
-    const shown = openWidget(loaded(), { widget: run, room: roomy })
+    const shown = alone(openWidget(loaded(), { widget: run, room: roomy }))
     const lost = { ...shown, view: { channelId: "nowhere" } }
     const closed = closePane(lost, { pane: lost.panes!.focused, draftId: "fresh" })
     expect(closed.drafts.fresh.channelId).toBe("desktop")
@@ -551,14 +570,14 @@ describe("closing the last pane when it shows a widget", () => {
   })
 
   it("is not offered, and changes nothing, where no new session could start", () => {
-    const shown = openWidget(loaded(), { widget: run, room: roomy })
+    const shown = alone(openWidget(loaded(), { widget: run, room: roomy }))
     const bare = { ...shown, channels: [], view: { channelId: "" } }
     const pane = bare.panes!.focused
     expect(canClosePane(shown, pane)).toBe(true)
     expect(canClosePane(bare, pane)).toBe(false)
     expect(closePane(bare, { pane, draftId: "fresh" })).toBe(bare)
     // Offered exactly where it does something, whatever the last pane shows.
-    const drafted = createDraft(loaded(), { draftId: "home" })
+    const drafted = alone(createDraft(loaded(), { draftId: "home" }))
     // A conversation whose channel the window no longer holds starts over where a new session goes.
     const unheld = { ...loaded(), channels: [] }
     for (const state of [loaded(), shown, bare, drafted, unheld]) {
@@ -569,7 +588,7 @@ describe("closing the last pane when it shows a widget", () => {
   })
 
   it("leaves it as it is without an id for the new session", () => {
-    const shown = openWidget(loaded(), { widget: run, room: roomy })
+    const shown = alone(openWidget(loaded(), { widget: run, room: roomy }))
     expect(closePane(shown, { pane: shown.panes!.focused })).toBe(shown)
   })
 })

@@ -65,3 +65,24 @@ it("fits a new pane column from the next animation frame", async () => {
     window.cancelAnimationFrame = cancel
   }
 })
+
+it("fits nothing while covered, and uncovered fits only a size that changed", async () => {
+  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  const fitted: number[] = []
+  function Window({ width, active }: { width: number; active: boolean }) {
+    useFitOnResize(width, 1, (at) => fitted.push(at), active)
+    return null
+  }
+  const root = createRoot(document.createElement("div"))
+  await act(async () => root.render(<Window width={760} active />))
+  // A full view takes the window: its width changes under it, and nothing is fitted.
+  await act(async () => root.render(<Window width={712} active={false} />))
+  // Uncovered at the width it was fitted at: nothing to fit.
+  await act(async () => root.render(<Window width={760} active />))
+  expect(fitted).toEqual([760])
+  await act(async () => root.render(<Window width={900} active={false} />))
+  expect(fitted).toEqual([760])
+  await act(async () => root.render(<Window width={900} active />))
+  expect(fitted).toEqual([760, 900])
+  await act(async () => root.unmount())
+})

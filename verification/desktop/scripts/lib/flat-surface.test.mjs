@@ -63,7 +63,11 @@ function check(damage = {}) {
     pseudo
       ? element.after
       : element === surface
-        ? { backgroundColor: damage.noFill ? clear : "rgb(200, 200, 200)" }
+        ? {
+            backgroundColor: damage.noFill ? clear : "rgb(200, 200, 200)",
+            boxShadow: damage.surfaceCard ? "inset 0 0 0 1px black" : "none",
+            borderRadius: damage.roundedSurface ? "8px" : "0px",
+          }
         : {
             backgroundColor: clear,
             boxShadow: damage.card ? "inset 0 0 0 1px black" : "none",
@@ -81,6 +85,7 @@ function check(damage = {}) {
 }
 for (const [name, damage] of [
   ["T-shaped", {}],
+  ["clear window ground", { noFill: true }],
   ["first-column T-shaped", { firstColumn: true }],
   ["staggered adjacent columns", { staggered: true }],
   ["first adjoining row", { threeRows: true }],
@@ -99,6 +104,7 @@ for (const [name, damage] of [
   ["row stopping at the wrong side", { row: { right: "0px" } }],
   ["thick row", { row: { height: "2px" } }],
   ["card shadow", { card: true }],
-  ["missing fill", { noFill: true }],
+  ["surface card", { surfaceCard: true }],
+  ["rounded surface", { roundedSurface: true }],
 ])
   test(`flat surface rejects ${name}`, () => assert.ok(check(damage).length > 0))
