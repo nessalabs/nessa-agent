@@ -2,8 +2,13 @@
 .workspace-window {
   --rail-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
   --rail-gap: 6px;
-  /* Where the rail's controls stand from the window's edge. */
-  --rail-column: var(--desktop-control-edge);
+  /*
+   * Where the rail's controls stand from the window's edge: on the sidebar's
+   * icon column, so the toggle in the closed rail's corner stands under
+   * Agents' icon. That column's middle is the gutter, the list's 8px, a
+   * row's 8px and half its 16px icon slot in (`source-list.css`).
+   */
+  --rail-column: calc(var(--desktop-gutter) + 24px - var(--desktop-control-size) / 2);
   position: relative;
   isolation: isolate;
   display: flex;
@@ -220,25 +225,58 @@
 }
 
 /*
- * Wherever the rail is offered, its toggle is nessa's mark at the footer, and
- * Studio's square steps aside. With the rail closed the footer is in the
- * corner with it: its mark slot moves onto the rail's column, so the toggle
- * stands in it, right before "nessa Studio", one logo. With the rail open the
- * footer is past the rail and the toggle stays in the rail, so the slot folds
- * away and "nessa Studio" starts at the footer's edge.
+ * Wherever the rail is offered, its toggle is nessa's mark and "nessa Studio"
+ * stands beside it in the corner (`StudioCorner`), one gap after the mark,
+ * the gap Agents' label keeps after its icon. Neither moves when the rail
+ * opens or closes. The sidebar's foot keeps its room, its mark slot on the
+ * icon column: with the rail closed the toggle stands in it; with it open
+ * the toggle stays in the rail and the slot is left empty.
  */
-.workspace-window:is([data-rail="open"], [data-rail="closed"])
-  .workspace-identity
-  .desktop-mark {
-  visibility: hidden;
-}
-
-.workspace-window[data-rail="closed"] .workspace-identity {
+.workspace-window:is([data-rail="open"], [data-rail="closed"]) .workspace-identity {
   padding-left: calc(var(--rail-column) - var(--desktop-gutter));
 }
 
 .workspace-window[data-rail="open"] .workspace-identity .desktop-identity-mark {
-  display: none;
+  visibility: hidden;
+}
+
+.desktop-identity-room {
+  height: var(--desktop-control-size);
+}
+
+/* The pill keeps 2px of its padding by the toggle, so it starts where the
+   toggle ends and "nessa" stands 8px past the mark. */
+.side-rail-studio {
+  position: absolute;
+  z-index: 42;
+  bottom: calc(var(--desktop-gutter) + 13px);
+  left: calc(var(--rail-column) + var(--desktop-control-size));
+  display: flex;
+  font-size: var(--desktop-text-body);
+  letter-spacing: -0.01em;
+  transition:
+    opacity var(--desktop-slow) var(--desktop-out),
+    visibility 0s linear 0s;
+}
+
+.side-rail-studio .desktop-identity-button {
+  padding-left: 2px;
+}
+
+/* It stands where a sidebar's foot or an item's view is: not over the panes. */
+.workspace-window[data-sidebar="closed"]:not([data-rail-view]):not(
+    :has(.workspace[data-peek])
+  )
+  .side-rail-studio {
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity var(--desktop-slow) var(--desktop-out),
+    visibility 0s linear var(--desktop-slow);
+}
+
+.workspace-window[data-panel-maximized] .side-rail-studio {
+  visibility: hidden;
 }
 
 /* The toggle doubles as nessa's mark: its top-right tile is lit. */
@@ -293,12 +331,6 @@
 }
 
 /* "nessa Studio" in a full view: where the sidebar card's foot puts it. */
-.rail-view-foot {
-  position: absolute;
-  bottom: var(--desktop-gutter);
-  left: var(--desktop-gutter);
-}
-
 :root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view),
 :root[data-motion="reduced"] :is(.side-rail, .side-rail-toggle, .rail-view) * {
   animation: none !important;

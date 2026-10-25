@@ -565,6 +565,10 @@ export const names = {
     /** The agents setup lists, by their rows' names; Local AI is coming. */
     agents: ["Claude", "Codex"],
     localAi: "Local AI, coming soon",
+    /** Codex not installed: its download card, and the button on it at the
+     * stress installer's 45 MB. */
+    codexCard: "Download Codex",
+    codexDownload: "Download Codex · 45 MB",
     /** The summon step's ways on: the second until its lesson is done. */
     finish: ["Start using Nessa", "Skip this step"],
   },
