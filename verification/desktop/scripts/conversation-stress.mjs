@@ -2281,10 +2281,13 @@ const steps = {
 
   async channel(run, step, failures) {
     const notes = `Answer as the stress channel s${run.knobs.seed}.`
-    const attached = mkdtempSync(join(tmpdir(), "nessa-stress-channel-"))
+    // In the run's own folder, removed with it: the rest check reads these
+    // channels' conversations again at the end, and an agent cannot be built
+    // in a folder that is gone.
+    const attached = mkdtempSync(join(run.stack.scratch, "channel-"))
     const resource = join(attached, "brief.md")
     writeFileSync(resource, "# Brief\n")
-    const chosen = mkdtempSync(join(tmpdir(), "nessa-stress-chosen-"))
+    const chosen = mkdtempSync(join(run.stack.scratch, "chosen-"))
     try {
       // Made in a folder of its own, after a folder agents may not use.
       const made = await makeChannel(run, failures, {
@@ -2315,8 +2318,6 @@ const steps = {
         await talkInChannel(run, step, there, failures)
       }
     } finally {
-      rmSync(attached, { recursive: true, force: true })
-      rmSync(chosen, { recursive: true, force: true })
       // Back to the main conversation, in the default channel.
       await run.page
         .locator(`${css.sidebar} nav`)
@@ -4232,6 +4233,8 @@ async function startStack(options) {
     agent: options.agent,
     nativeAddress,
     scenario,
+    // Removed when the stack closes.
+    scratch: directory,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
   }))
 }

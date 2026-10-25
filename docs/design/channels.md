@@ -146,6 +146,9 @@ channel. Renaming, moving and deleting channels are not built yet.
   starts its new sessions there, but the desktop composer shows Ask until the
   conversation says otherwise. The desktop flow does not ask for a preset.
 - Dropping files on the flow does not attach them yet; the pickers do.
+- A conversation whose channel folder was removed cannot be opened, not even
+  to read its transcript: its agent cannot be built there, and the read is
+  refused `model_unavailable`, which names the wrong cause.
 - A Windows folder named through a UNC path to a local drive
   (`\\localhost\C$\…`) is not recognised as that drive's system folder.
 - Resources are only named to the agent, never checked against the folder
