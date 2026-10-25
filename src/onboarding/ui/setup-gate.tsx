@@ -12,7 +12,7 @@ import { useSetupFlight } from "./use-setup-flight"
 import type { AgentApiKeySink, AgentReadinessSource } from "../application/ports"
 import type { SetupRecovery } from "../application/setup-recovery"
 import { isOnboardingCompleted, type OnboardingState } from "../model/onboarding"
-import { FIELD_GROUND, coverScale, setupField, type FigureId } from "../model/opening"
+import { FIELD_GROUND, coverScale, setupField } from "../model/opening"
 
 /** The buttons on the handoff-failure screen, which are the whole point of it:
  * a window with nothing in it but a sentence is a window someone has to kill. */
@@ -194,9 +194,6 @@ export function SetupGate({
   const beat = useOpening()
   const cover = useCoverScale(shell)
   const picking = showsPicker(shown, onboarding.gatewayStartup)
-  const [pointed, setPointed] = useWhilePicking<FigureId>(picking)
-  // Off the picker nothing is pointed at, so the card's figure rests rather
-  // than keep drawing behind the steps that follow.
   const field = setupField(beat)
   const ripple = useSummonRipple(shown)
 
@@ -265,7 +262,6 @@ export function SetupGate({
         <Onboarding
           state={shown}
           open={beat === "open" && !flying}
-          onPoint={setPointed}
           apiKeys={apiKeys}
           installations={installations}
           accelerator={onboarding.accelerator}
@@ -291,28 +287,11 @@ export function SetupGate({
           className="nessa-setup-art"
           data-showing={picking ? "" : undefined}
         >
-          {beat === "open" ? (
-            <AgentShowcase chosen={shown.agent} pointed={pointed} />
-          ) : null}
+          {beat === "open" ? <AgentShowcase chosen={shown.agent} /> : null}
         </div>
       </div>
     </div>
   )
-}
-
-/**
- * Which figure is pointed at, held only while the picker is up. Taking a row
- * away does not reliably say the pointer or focus left it, so leaving the
- * picker forgets the point rather than waiting to be told.
- */
-function useWhilePicking<T>(
-  picking: boolean,
-): [T | undefined, (value: T | undefined) => void] {
-  const [held, setHeld] = React.useState<T | undefined>()
-  React.useEffect(() => {
-    if (!picking) setHeld(undefined)
-  }, [picking])
-  return [picking ? held : undefined, setHeld]
 }
 
 /**
