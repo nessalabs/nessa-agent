@@ -91,7 +91,7 @@ export const KNOBS = {
   },
   rails: {
     default: 1,
-    what: "times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off",
+    what: "times the side rail is turned on in Settings and opened around the traffic lights, a message sent, then closed and turned off, its toggle never moving",
   },
   listAnswers: {
     default: 1,

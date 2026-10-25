@@ -187,16 +187,16 @@
 }
 
 /*
- * In the footer's row, in its mark's slot (`ui/identity.css`), which is the
- * toggle's own width: from the sidebar's content edge and the row's 6px, and
- * on the row's line, 13px above its foot, so the toggle and
- * "nessa Studio" read as one row whether or not the sidebar is open.
+ * One place, open or closed: the bottom-left corner, in the rail's column —
+ * the rail's items and the titlebar's sidebar toggle stand over it — and on
+ * the footer row's line, 13px above its foot (`ui/identity.css`). Toggling
+ * the rail moves what is beside it, never the toggle under the pointer.
  */
 .side-rail-toggle {
   position: absolute;
   z-index: 42;
   bottom: calc(var(--desktop-gutter) + 13px);
-  left: calc(var(--desktop-gutter) + 6px);
+  left: var(--rail-column);
 }
 
 /* The maximized right panel covers the workspace, the rail's toggle with it. */
@@ -216,16 +216,16 @@
   transition:
     color var(--desktop-fast) ease,
     background-color var(--desktop-fast) ease,
-    transform 220ms var(--rail-spring),
-    left var(--desktop-drawer) var(--desktop-ease);
+    transform 220ms var(--rail-spring);
 }
 
 /*
- * Wherever the rail is offered, its toggle is nessa's mark at the footer:
- * Studio's square steps aside and the toggle stands in its slot, right before
- * "nessa Studio", so the two read as one logo. With the rail open beside an
- * open sidebar or a full view, the slot is past the rail, and the toggle
- * travels there on the drawer's curve as the sidebar does.
+ * Wherever the rail is offered, its toggle is nessa's mark at the footer, and
+ * Studio's square steps aside. With the rail closed the footer is in the
+ * corner with it: its mark slot moves onto the rail's column, so the toggle
+ * stands in it, right before "nessa Studio", one logo. With the rail open the
+ * footer is past the rail and the toggle stays in the rail, so the slot folds
+ * away and "nessa Studio" starts at the footer's edge.
  */
 .workspace-window:is([data-rail="open"], [data-rail="closed"])
   .workspace-identity
@@ -233,9 +233,12 @@
   visibility: hidden;
 }
 
-.workspace-window[data-rail="open"]:is([data-sidebar="open"], [data-rail-view])
-  .side-rail-toggle {
-  left: calc(var(--rail-width) + var(--desktop-gutter) + 6px);
+.workspace-window[data-rail="closed"] .workspace-identity {
+  padding-left: calc(var(--rail-column) - var(--desktop-gutter));
+}
+
+.workspace-window[data-rail="open"] .workspace-identity .desktop-identity-mark {
+  display: none;
 }
 
 /* The toggle doubles as nessa's mark: its top-right tile is lit. */
