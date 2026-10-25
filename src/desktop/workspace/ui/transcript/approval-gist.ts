@@ -62,15 +62,19 @@ const shellHomes = new Set([
   "/opt/homebrew/bin/",
 ])
 
-/** The flags that make a shell run its argument and nothing else of its own. */
+/**
+ * The flags agents send to run a script (`-c`, and Codex's `-lc`). The
+ * shell still reads its own startup files (`-l` a login profile, zsh
+ * `~/.zshenv` always); what the card reads is the script it was given.
+ */
 const scriptFlags = new Set(["-c", "-lc"])
 
 /**
  * A shell list such as `["bash", "-lc", "…"]` is its script; any other list
  * has none, and is shown as it was sent. The shell must be one by its bare
  * name or from a system directory — `/tmp/evil/bash` runs something else —
- * and its flag `-c` or `-lc`: `-ic` reads the person's rc files too, which
- * the script alone would not show.
+ * and its flag one agents send (`scriptFlags`): `-ic` also reads the
+ * person's rc files, which agents do not ask for.
  */
 function scriptOf(value: unknown): string | undefined {
   if (typeof value === "string") return value

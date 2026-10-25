@@ -24,7 +24,7 @@ import {
   type FakeSource,
 } from "../../testing"
 import { approvalGist } from "../transcript/approval-card"
-import { allowableFromList } from "./list-request"
+import { allowableFromList, listShownToolChars, wrappedLines } from "./list-request"
 import { SessionList } from "./session-list"
 
 let root: Root
@@ -175,7 +175,7 @@ const answersShown = () =>
   ].map((button) => button.getAttribute("aria-label") ?? button.textContent)
 
 it("reads Claude's shell review as the transcript does, and offers two answers, the rest in its menu", async () => {
-  const shell = 'echo "Hello from Nessa – approval test at $(date)"'
+  const shell = 'echo "Hello at $(date)"'
   const review: Approval = {
     ...asked("claude", `mcp__nessa__shell ${JSON.stringify({ command: shell })}`),
     options: [
@@ -380,6 +380,64 @@ it("allows from the list only a request it shows whole, decided by the request, 
   expect(whole({ ...asked("loading", "mcp__nessa__shell"), loading: "reading" })).toBe(
     false,
   )
+})
+
+it("allows from the list only printable ASCII, so no character hides another", () => {
+  const whole = (approval: Approval) =>
+    allowableFromList(approval, approvalGist(approval))
+  const shell = (command: string, tool = "mcp__nessa__shell") =>
+    whole(asked("s", `${tool} ${JSON.stringify({ command })}`))
+  expect(shell("ls ~")).toBe(true)
+  // One cluster wider than the card, which no break can split: Arabic
+  // number signs, conjoining jamo, a letter under forty spacing marks.
+  expect(shell(`rm -rf ${"\u0600".repeat(40)}~`)).toBe(false)
+  expect(shell(`rm -rf ${"\u1100".repeat(20)}${"\u1161".repeat(20)}~`)).toBe(false)
+  expect(shell(`rm -rf x${"\u093E".repeat(40)}~`)).toBe(false)
+  // Controls that reorder or hide, a tab, a carriage return, a dash that looks like one.
+  // An escape it draws for a control would read like words typed so.
+  expect(shell("ls \u202Etxt.exe")).toBe(false)
+  expect(shell("ls \u200Bx")).toBe(false)
+  expect(shell("ls\tx")).toBe(false)
+  expect(shell("ls\rrm -rf ~")).toBe(false)
+  expect(shell("ls \u2013la")).toBe(false)
+  expect(whole(asked("plain", "cargo test \u0600"))).toBe(false)
+  // The tool name is held to the same characters, and to a length.
+  expect(shell("ls", `mcp__${"\u0600".repeat(3)}`)).toBe(false)
+  expect(shell("ls", "mcp__a\nb")).toBe(false)
+  // An app's name and its tool's, drawn in the card's head, are held so too.
+  const app = (server: string, tool: string) =>
+    whole({ ...asked("app", "post hi"), origin: { kind: "app", server, tool } })
+  expect(app("Slack", "post")).toBe(true)
+  expect(app("Slack", `${"\u0600".repeat(40)}post`)).toBe(false)
+  expect(app(`Sl\u202Eack`, "post")).toBe(false)
+  expect(app("x".repeat(listShownToolChars + 1), "post")).toBe(false)
+  expect(shell("ls", "x".repeat(listShownToolChars))).toBe(true)
+  expect(shell("ls", "x".repeat(listShownToolChars + 1))).toBe(false)
+  // At most three lines at the list's narrowest, wrapped as the card wraps.
+  expect(shell("cargo run -p gateway -- --clients 200")).toBe(true)
+  expect(shell("cargo test -p nessa-gateway reconnect -- --nocapture")).toBe(false)
+  // A word too long for the prompt's line moves below the prompt.
+  expect(shell("x".repeat(42))).toBe(true)
+  expect(shell("x".repeat(43))).toBe(false)
+  // A word that does not fit beside `echo` moves to the next line whole.
+  expect(shell(`echo ${"x".repeat(42)}`)).toBe(true)
+  expect(shell(`echo ${"x".repeat(43)}`)).toBe(false)
+})
+
+it("counts lines as the card wraps them: between words, a long word anywhere", () => {
+  expect(wrappedLines("", 21)).toBe(1)
+  expect(wrappedLines("x".repeat(21), 21)).toBe(1)
+  // Too long for the prompt's line: it moves below the prompt, then breaks.
+  expect(wrappedLines("x".repeat(22), 21)).toBe(3)
+  // Only the first line carries the prompt.
+  expect(wrappedLines(`ls\n${"x".repeat(22)}`, 21)).toBe(3)
+  // Spaces hang at a line's end; the next word starts the next line.
+  expect(wrappedLines(`${"x".repeat(21)}   y`, 21)).toBe(2)
+  // A word that does not fit after another moves down whole, then breaks.
+  expect(wrappedLines(`ab ${"x".repeat(20)}`, 21)).toBe(2)
+  expect(wrappedLines(`ab ${"x".repeat(30)}`, 21)).toBe(3)
+  expect(wrappedLines("a\nb\nc", 21)).toBe(3)
+  expect(wrappedLines("cargo test -p nessa-gateway reconnect -- --nocapture", 21)).toBe(4)
 })
 
 it("offers a request it cannot show whole its refusals and the chat, never an allow", async () => {

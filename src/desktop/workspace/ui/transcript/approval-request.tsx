@@ -140,6 +140,22 @@ function commandWords(text: string, key: string) {
   )
 }
 
+/** The app's tool name the command begins with, if any, and the words after it. */
+function commandParts(command: string, name: string | undefined) {
+  const lead =
+    name && name.length > 0 && (command === name || command.startsWith(`${name} `))
+      ? name
+      : undefined
+  const rest = lead === undefined ? shownCommand(command) : command.slice(lead.length)
+  return { lead, rest }
+}
+
+/** The text `ApprovalCommand` draws for a command, after the prompt. */
+export function drawnCommand(command: string, name?: string): string {
+  const { lead, rest } = commandParts(command, name)
+  return lead === undefined ? rest : shownName(lead) + rest
+}
+
 /**
  * The command, broken only between its words. An app's tool name, when
  * `name` is that tool and the command begins with it, is isolated as a name
@@ -154,11 +170,7 @@ export function ApprovalCommand({
   /** The app's tool, when this command is that app's. */
   name?: string
 }) {
-  const lead =
-    name && name.length > 0 && (command === name || command.startsWith(`${name} `))
-      ? name
-      : undefined
-  const rest = lead === undefined ? shownCommand(command) : command.slice(lead.length)
+  const { lead, rest } = commandParts(command, name)
   const block = useRef<HTMLPreElement>(null)
   // Where a word is wider than the card, the block scrolls and fades the edge it cuts.
   useLayoutEffect(() => {
