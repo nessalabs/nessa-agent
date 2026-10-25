@@ -17,6 +17,8 @@ use uuid::Uuid;
 mod tls;
 use tls::RecipientTls;
 
+const RECIPIENT_WATCHDOG: Duration = Duration::from_secs(3);
+
 struct Recipient {
     address: SocketAddr,
     request: mpsc::Receiver<Vec<u8>>,
@@ -46,12 +48,8 @@ impl Recipient {
             // Test-only TLS key and loopback listener. No trust bypass is
             // exposed on the production adapter or Destination constructor.
             let stream = accept(&listener);
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
-            stream
-                .set_write_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
+            stream.set_read_timeout(Some(RECIPIENT_WATCHDOG)).unwrap();
+            stream.set_write_timeout(Some(RECIPIENT_WATCHDOG)).unwrap();
             let mut stream =
                 StreamOwned::new(ServerConnection::new(Arc::new(tls.config)).unwrap(), stream);
             let mut bytes = Vec::new();
@@ -85,7 +83,7 @@ impl Recipient {
             }
             tx.blocking_send(bytes).unwrap();
             if hold_response {
-                let _ = wait.recv_timeout(Duration::from_secs(3));
+                let _ = wait.recv_timeout(RECIPIENT_WATCHDOG);
             }
             let _ = stream.write_all(&response);
             let _ = stream.flush();
@@ -329,25 +327,45 @@ async fn a_hung_response_is_bounded() {
         b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec(),
         true,
     );
+    let deadline = Duration::from_millis(150);
     let client = client_builder("recipient.test", &[recipient.address])
         .add_root_certificate(reqwest::Certificate::from_der(&recipient.root).unwrap())
-        .timeout(Duration::from_millis(150))
+        .timeout(deadline)
         .build()
         .unwrap();
-    assert_eq!(
-        call(
-            &client,
-            &recipient.url(),
-            &MacKey::new([42; 32]),
-            &message()
-        )
-        .await,
-        Err(PostFailure::TimedOut)
-    );
-    assert!(
-        recipient.request.recv().await.is_some(),
-        "the timeout is after actual TLS request receipt"
-    );
+    // A running blocking task inhibits Tokio's paused-clock auto-advance during
+    // real TLS I/O. Host scheduling must not turn this response-timeout case
+    // into a timeout before receipt. The existing real fixture watchdog stays.
+    let (release_clock, held) = std::sync::mpsc::channel();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let keeper = tokio::task::spawn_blocking(move || {
+        let _ = started.send(());
+        held.recv_timeout(RECIPIENT_WATCHDOG).is_ok()
+    });
+    ready.await.unwrap();
+    tokio::time::pause();
+    let start = Instant::now();
+    let url = recipient.url();
+    let key = MacKey::new([42; 32]);
+    let message = message();
+    let pending = call(&client, &url, &key, &message);
+    tokio::pin!(pending);
+    tokio::select! {
+        received = recipient.request.recv() => assert!(
+            received.is_some(), "the timeout is after actual TLS request receipt"
+        ),
+        result = &mut pending => panic!("POST ended before TLS request receipt: {result:?}"),
+    }
+    assert_eq!(start.elapsed(), Duration::ZERO);
+    // Tokio's timer driver rounds to millisecond ticks. Cross the first tick
+    // after the unchanged 150 ms client deadline while the response stays held.
+    let elapsed = deadline + Duration::from_millis(1);
+    tokio::time::advance(elapsed).await;
+    assert_eq!(pending.await, Err(PostFailure::TimedOut));
+    assert_eq!(start.elapsed(), elapsed);
+    tokio::time::resume();
+    release_clock.send(()).unwrap();
+    assert!(keeper.await.unwrap(), "the real fixture watchdog expired");
     recipient.finish();
 }
 
