@@ -447,18 +447,22 @@ impl LocalChannelFolders {
     }
 
     fn refused(&self, folder: &Path) -> bool {
-        // The temporary folder is under /var on macOS and is a place a
-        // person may well work in.
-        let temporary =
-            folder.starts_with("/private/var/folders") || folder.starts_with("/var/tmp");
+        // The temporary folders are inside /var and are places a person may
+        // well work in: being in one does not count as being in the system
+        // folder that holds it. It still counts for any other system folder.
+        let in_temporary_within = |system: &Path| {
+            ["/private/var/folders", "/var/tmp"]
+                .iter()
+                .any(|temporary| {
+                    folder.starts_with(temporary) && Path::new(temporary).starts_with(system)
+                })
+        };
         // A folder holding `inner`, or `inner` itself.
         let holds = |inner: &Path| inner.starts_with(folder);
         // In a system folder, or holding one (`/private` holds `/etc`).
-        let system = self
-            .system
-            .iter()
-            .any(|system| folder.starts_with(system) || holds(system))
-            && !temporary;
+        let system = self.system.iter().any(|system| {
+            (folder.starts_with(system) && !in_temporary_within(system)) || holds(system)
+        });
         let made_for_a_channel = folder.starts_with(&self.channels) && folder != self.channels;
         folder.parent().is_none()
             || system
