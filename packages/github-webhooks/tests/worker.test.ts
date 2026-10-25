@@ -27,7 +27,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, configured =
   const worker = new Miniflare({
     modules: true,
     scriptPath: new URL("../dist/worker.js", import.meta.url).pathname,
-    compatibilityDate: "2026-07-30",
+    compatibilityDate: "2026-06-16",
     d1Databases: ["DB"],
     bindings: configured ? { GITHUB_WEBHOOK_SECRET: secret } : {},
   })

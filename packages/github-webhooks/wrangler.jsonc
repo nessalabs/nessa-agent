@@ -3,7 +3,7 @@
   "name": "nessa-github-webhooks",
   "account_id": "572733d17410b5b1e34649e5f1b4cc3c",
   "main": "src/composition/worker.ts",
-  "compatibility_date": "2026-07-30",
+  "compatibility_date": "2026-06-16",
   "workers_dev": true,
   "preview_urls": false,
   "observability": { "enabled": true, "head_sampling_rate": 1 },
