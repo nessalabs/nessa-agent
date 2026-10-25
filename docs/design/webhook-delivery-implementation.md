@@ -848,10 +848,11 @@ with crate visibility for this integration test.
 The positive share test reads a genuine synthetic SDK source under the new grant.
 This still mounts no HTTP sender and claims no recipient E2E or command supervisor.
 
-The credential-owning grant adapter also correlates the actual held credential
-and supplied principal with the grant target before taking its write path.
-`credential_owning_grant_port_refuses_mismatched_credential_and_principal`
-exercises both mismatches against the real store with no grant committed.
+The grant-only native adapter derives its exact credential and principal from
+the actual Auth hold and constructs receiver absence.
+`credential_owning_grant_port_derives_exact_principal_and_credential` checks
+the complete actual stored target against those held facts. Contradictory
+recipient/transition fields are not input parameters.
 
 `physical_grant_panic_rolls_back_and_releases_original_auth_after_worker_exits`
 injects a panic through the existing native store policy dependency inside the

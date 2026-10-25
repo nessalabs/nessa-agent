@@ -423,17 +423,21 @@ pub trait ShareGrants: Send + Sync {
     /// grant no longer holds is refused `ShareGrantChanged` and writes
     /// nothing (row J30).
     fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt>;
-    /// Retain the original Auth hold in every physical grant write, including
-    /// after caller cancellation. This is ownership, not policy admission.
-    /// An adapter that cannot transfer the hold to its writer refuses the call.
-    fn change_with_credential(
+    /// Grant to the actual held principal/credential with no receiver. Native
+    /// adapters correlate current and replayed receiver absence before success
+    /// and retain the original Auth hold in physical writes after caller loss.
+    /// Application Cedar admission remains required; unsupported adapters refuse.
+    fn grant_principal_with_credential(
         &self,
-        _change: ShareGrantChange,
+        _conversation: ConversationId,
+        _access: ShareAccess,
+        _expected_policy_revision: Option<u64>,
+        _initiator: ConversationCaller,
+        _at_ms: u64,
         _credential: AccessHold,
     ) -> ConversationFuture<'_, ShareGrantReceipt> {
         Box::pin(async { Err(ConversationError::Metadata) })
     }
-
     /// The grants on one conversation, oldest first, with the catalogue
     /// revision they were read at.
     fn grants<'a>(&'a self, id: &'a ConversationId) -> ConversationFuture<'a, ShareGrantList>;

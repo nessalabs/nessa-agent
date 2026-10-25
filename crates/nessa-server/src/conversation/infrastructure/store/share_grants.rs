@@ -18,10 +18,10 @@ use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
 use crate::conversation::application::{
-    AccessAction, ConversationError, ConversationFuture, HeldGrant, OwnerAccess, ResourceKind,
-    RevisionHold, ShareGrant, ShareGrantChange, ShareGrantList, ShareGrantReceipt,
-    ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_POLICY_REVISION,
-    MAX_SHARE_GRANTS_PER_CONVERSATION,
+    AccessAction, ConversationCaller, ConversationError, ConversationFuture, HeldGrant,
+    OwnerAccess, ResourceKind, RevisionHold, ShareGrant, ShareGrantChange, ShareGrantList,
+    ShareGrantReceipt, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::conversation::domain::{
     Capabilities, CommandHosts, ShareAccess, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
@@ -458,19 +458,25 @@ impl ShareGrants for LocalConversationStore {
     fn change(&self, change: ShareGrantChange) -> ConversationFuture<'_, ShareGrantReceipt> {
         self.change_owned(change, None)
     }
-    fn change_with_credential(
+    fn grant_principal_with_credential(
         &self,
-        change: ShareGrantChange,
+        conversation: ConversationId,
+        access: ShareAccess,
+        expected_policy_revision: Option<u64>,
+        initiator: ConversationCaller,
+        at_ms: u64,
         credential: AccessHold,
     ) -> ConversationFuture<'_, ShareGrantReceipt> {
-        if credential.snapshot.credential.id() != &change.credential_id
-            || change
-                .principal_id
-                .as_ref()
-                .is_some_and(|principal| principal != credential.snapshot.credential.principal_id())
-        {
-            return Box::pin(async { Err(ConversationError::Metadata) });
-        }
+        let change = ShareGrantChange {
+            transition: ShareGrantTransition::Grant(access),
+            conversation_id: conversation,
+            principal_id: Some(credential.snapshot.credential.principal_id().clone()),
+            receiver_id: None,
+            credential_id: credential.snapshot.credential.id().clone(),
+            expected_policy_revision,
+            initiator,
+            at_ms,
+        };
         self.change_owned(change, Some(credential))
     }
     fn hold_revision<'a>(
@@ -762,7 +768,7 @@ impl LocalConversationStore {
                 // Same original Auth owner as the application, retained in
                 // actual blocking work even if its awaiting caller disappears.
                 // This mutex is never locked; it makes the Send hold shareable.
-                let _credential = credential;
+                let credential_owner = credential;
                 #[cfg(test)]
                 if let Some(pause) = pause {
                     pause.block_until_released();
@@ -804,6 +810,20 @@ impl LocalConversationStore {
                     principal,
                 )?;
                 let after = wanted(&change.transition);
+                // The credential-owned entry constructs an exact principal
+                // grant. Ordinary paired None keeps its existing meaning.
+                // Check under the same principal gate/transaction before any
+                // replay receipt, including a receiver-absent older request.
+                if credential_owner.is_some() {
+                    let receiver_present: Option<bool> = transaction.cached_row(
+                        "SELECT receiver_id IS NOT NULL FROM share_grants WHERE resource_kind=?1 AND resource_id=?2 AND principal_id=?3",
+                        params![CONVERSATION, id, change.principal_id.as_ref().map(PrincipalId::as_str)],
+                        |row| row.get(0),
+                    ).optional().map_err(failed)?;
+                    if receiver_present == Some(true) {
+                        return Err(ConversationError::ShareTargetNotPaired);
+                    }
+                }
                 // A retried request answers what it answered the first time, so
                 // a share whose reply was lost cannot, retried after a later
                 // unshare, grant again (row G16). That holds for a request that
@@ -859,8 +879,14 @@ impl LocalConversationStore {
                         .principal_id
                         .as_ref()
                         .is_some_and(|named| named.as_str() != granted);
-                    let other_receiver = change.receiver_id.is_some()
-                        && change.receiver_id.as_deref() != journaled_receiver.as_deref();
+                    let other_receiver = if credential_owner.is_some() {
+                        // Principal None is exact absence, never the paired
+                        // path's omitted/lost-reply receiver selector.
+                        journaled_receiver.is_some()
+                    } else {
+                        change.receiver_id.is_some()
+                            && change.receiver_id.as_deref() != journaled_receiver.as_deref()
+                    };
                     if credential != change.credential_id.as_str()
                         || journaled_after != after
                         || other_principal

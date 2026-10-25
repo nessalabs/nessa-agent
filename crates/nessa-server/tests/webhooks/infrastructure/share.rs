@@ -1,16 +1,17 @@
 //! Actual Auth/Cedar/private registration/grant composition; no receiver or send.
 use super::source_tests::{physical, read_limits, registered};
 use super::*;
-use crate::conversation::application::{ConversationError, GrantedShare};
-use crate::conversation::application::{RecordReadOperation, RecordReadValue};
+use crate::conversation::application::{
+    ConversationError, GrantedShare, RecordReadOperation, RecordReadValue, ShareGrantReceipt,
+};
 use crate::conversation::domain::{Capabilities, ToolPolicy, ToolPreset};
 use crate::conversation::infrastructure::{GrantWritePause, NessaRecordReadSource};
-use crate::webhooks::application::ReadWebhookRecords;
 use crate::webhooks::application::{
-    OutboxError, Registration, RegistrationLookup, ShareWebhookConversation,
+    OutboxError, ReadWebhookRecords, Registration, RegistrationLookup, ShareWebhookConversation,
 };
 use nessa_auth::application::credential_admin::CredentialAdmin;
 use nessa_auth::application::ports::AccessAdmission;
+use nessa_local_database::rusqlite::Connection;
 use nessa_sync::replication::domain::Id;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
@@ -305,7 +306,7 @@ async fn cancelling_share_during_private_recheck_releases_original_auth_without_
     let mut target = lookup(Some(registration));
     target.block_second = true;
     let mut pending = Box::pin(share(&f, &target, Capabilities::read(), None));
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    tokio::time::timeout(Duration::from_secs(3), async {
         tokio::select! {
             result = pending.as_mut() => panic!("share completed before its private gate: {result:?}"),
             _ = async { while target.calls.load(Ordering::SeqCst)<2 { tokio::task::yield_now().await; } } => {}
@@ -430,37 +431,30 @@ async fn expiry_during_private_registration_recheck_refuses_before_grant() {
 }
 
 #[tokio::test]
-async fn credential_owning_grant_port_refuses_mismatched_credential_and_principal() {
+async fn credential_owning_grant_port_derives_exact_principal_and_credential() {
     let f = clean().await;
-    for wrong_credential in [false, true] {
-        let held = f.credentials.hold(&f.target.credential).await.unwrap();
-        let result = f
-            .grants
-            .change_with_credential(
-                ShareGrantChange {
-                    transition: ShareGrantTransition::Grant(ShareAccess::read()),
-                    conversation_id: f.a.clone(),
-                    principal_id: Some(if wrong_credential {
-                        f.target.principal.clone()
-                    } else {
-                        PrincipalId::new("unrelated-principal").unwrap()
-                    }),
-                    receiver_id: None,
-                    credential_id: if wrong_credential {
-                        CredentialId::new("unrelated-credential").unwrap()
-                    } else {
-                        f.target.credential.clone()
-                    },
-                    expected_policy_revision: None,
-                    initiator: caller(&f, "mismatched-held-target"),
-                    at_ms: 2000,
-                },
-                held,
-            )
-            .await;
-        assert!(matches!(result, Err(ConversationError::Metadata)));
-        absent(&f).await;
-    }
+    let held = f.credentials.hold(&f.target.credential).await.unwrap();
+    let principal = held.snapshot.credential.principal_id().clone();
+    let credential = held.snapshot.credential.id().clone();
+    let receipt = f
+        .grants
+        .grant_principal_with_credential(
+            f.a.clone(),
+            ShareAccess::read(),
+            None,
+            caller(&f, "held-target"),
+            2000,
+            held,
+        )
+        .await
+        .unwrap();
+    let grants = f.grants.grants(&f.a).await.unwrap().grants;
+    assert_eq!(grants.len(), 1);
+    assert_eq!(grants[0].principal_id, principal);
+    assert_eq!(grants[0].credential_id, credential);
+    assert_eq!(grants[0].receiver_id, None);
+    assert_eq!(Some(grants[0].policy_revision), receipt.policy_revision);
+    assert_eq!(grants[0].conversation_id, f.a);
 }
 
 struct PanicGrantPolicy(AtomicUsize);
@@ -494,4 +488,150 @@ async fn physical_grant_panic_rolls_back_and_releases_original_auth_after_worker
     .expect("physical unwind released the original Auth hold")
     .unwrap();
     absent(&f).await;
+}
+
+async fn ordinary_share(f: &Fixture, receiver: Option<&str>, request: &str) -> ShareGrantReceipt {
+    f.grants
+        .change(ShareGrantChange {
+            transition: ShareGrantTransition::Grant(ShareAccess::read()),
+            conversation_id: f.a.clone(),
+            principal_id: Some(f.target.principal.clone()),
+            receiver_id: receiver.map(str::to_owned),
+            credential_id: f.target.credential.clone(),
+            expected_policy_revision: None,
+            initiator: caller(f, request),
+            at_ms: 2000,
+        })
+        .await
+        .unwrap()
+}
+fn grant_journal_rows(f: &Fixture) -> i64 {
+    let path = f._root.path().join("private/conversations.db");
+    assert!(path.is_file());
+    Connection::open(path)
+        .unwrap()
+        .query_row("SELECT count(*) FROM share_grant_changes", [], |r| r.get(0))
+        .unwrap()
+}
+#[tokio::test]
+async fn a_receiver_bearing_row_is_not_a_principal_share_or_principal_replay() {
+    let f = clean().await;
+    let (store, _, _) = registered(&f).await;
+    let original = ordinary_share(&f, Some("retained-receiver"), "retained-row").await;
+    let before = f
+        .grants
+        .principal_grant(&f.a, &f.target.principal)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(before.receiver_id.as_deref(), Some("retained-receiver"));
+    // The ordinary paired contract remains None-means-keep/lost-reply.
+    assert!(!ordinary_share(&f, None, "paired-keep").await.applied);
+    assert_eq!(ordinary_share(&f, None, "retained-row").await, original);
+    let rows = grant_journal_rows(&f);
+    for request in ["fresh-principal-share", "retained-row"] {
+        let result = ShareWebhookConversation {
+            registrations: &store,
+            admission: f.admission(),
+        }
+        .execute(
+            caller(&f, request),
+            f.a.clone(),
+            f.target.credential.clone(),
+            Capabilities::read(),
+            None,
+            None,
+            2000,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(ConversationError::ShareTargetNotPaired)),
+            "{result:?}"
+        );
+        assert_eq!(
+            f.grants
+                .principal_grant(&f.a, &f.target.principal)
+                .await
+                .unwrap(),
+            Some(before.clone())
+        );
+        assert_eq!(
+            grant_journal_rows(&f),
+            rows,
+            "refusal must not append even a no-op grant journal"
+        );
+    }
+}
+#[tokio::test]
+async fn a_receiver_bearing_journal_cannot_be_replayed_as_principal_after_unshare() {
+    let f = clean().await;
+    let (store, _, _) = registered(&f).await;
+    let original = ordinary_share(&f, Some("retained-receiver"), "retained-row").await;
+    f.change(ShareGrantTransition::Revoke, "remove-receiver-grant")
+        .await;
+    absent(&f).await;
+    let rows = grant_journal_rows(&f);
+    let result = ShareWebhookConversation {
+        registrations: &store,
+        admission: f.admission(),
+    }
+    .execute(
+        caller(&f, "retained-row"),
+        f.a.clone(),
+        f.target.credential.clone(),
+        Capabilities::read(),
+        None,
+        None,
+        2000,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(ConversationError::InvalidInput)),
+        "{result:?}"
+    );
+    absent(&f).await;
+    assert_eq!(grant_journal_rows(&f), rows);
+    assert_eq!(
+        ordinary_share(&f, None, "retained-row").await,
+        original,
+        "ordinary historical paired replay stays unchanged"
+    );
+    absent(&f).await;
+    assert_eq!(grant_journal_rows(&f), rows);
+}
+#[tokio::test]
+async fn receiver_absent_original_replay_after_unshare_does_not_regrant_or_accept_a_later_receiver()
+{
+    let f = clean().await;
+    let (store, _, _) = registered(&f).await;
+    let original = share(&f, &store, Capabilities::read(), None).await.unwrap();
+    f.change(ShareGrantTransition::Revoke, "remove-principal-grant")
+        .await;
+    let rows = grant_journal_rows(&f);
+    assert_eq!(
+        share(&f, &store, Capabilities::read(), None).await.unwrap(),
+        original
+    );
+    absent(&f).await;
+    assert_eq!(grant_journal_rows(&f), rows);
+    let _ = ordinary_share(&f, Some("later-receiver"), "later-receiver").await;
+    let before = f
+        .grants
+        .principal_grant(&f.a, &f.target.principal)
+        .await
+        .unwrap();
+    let rows = grant_journal_rows(&f);
+    let result = share(&f, &store, Capabilities::read(), None).await;
+    assert!(
+        matches!(result, Err(ConversationError::ShareTargetNotPaired)),
+        "{result:?}"
+    );
+    assert_eq!(
+        f.grants
+            .principal_grant(&f.a, &f.target.principal)
+            .await
+            .unwrap(),
+        before
+    );
+    assert_eq!(grant_journal_rows(&f), rows);
 }

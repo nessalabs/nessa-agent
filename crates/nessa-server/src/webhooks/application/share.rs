@@ -3,7 +3,7 @@ use super::{AdmissionFailure, AdmitDelivery, RegistrationLookup};
 use crate::conversation::application::{
     load_conversation, AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource,
     AccessSubject, ConversationCaller, ConversationError, GrantedShare, OwnerAccess, RequestShape,
-    ShareGrantChange, ShareGrantTransition, ShareTarget,
+    ShareTarget,
 };
 use crate::conversation::domain::{Capabilities, Capability, ShareAccess, ToolPolicy};
 use nessa_auth::domain::CredentialId;
@@ -127,17 +127,12 @@ impl ShareWebhookConversation<'_> {
         let receipt = self
             .admission
             .grants
-            .change_with_credential(
-                ShareGrantChange {
-                    transition: ShareGrantTransition::Grant(access),
-                    conversation_id: id,
-                    principal_id: Some(target.principal.clone()),
-                    receiver_id: None,
-                    credential_id: credential,
-                    expected_policy_revision,
-                    initiator: caller,
-                    at_ms,
-                },
+            .grant_principal_with_credential(
+                id,
+                access,
+                expected_policy_revision,
+                caller,
+                at_ms,
                 held,
             )
             .await?;
