@@ -911,7 +911,7 @@ const checks = {
     if (panelSaid !== "pending")
       failures.push(`the third call was answered before its tab closed: "${panelSaid}"`)
     // Close its tab: the place is removed (L24), so its mount is released.
-    await page.locator(`${css.panelTabs} [title^="Close "]`).first().click()
+    await page.locator(`${css.chatPanelTabs} [title^="Close "]`).first().click()
     const closedAt = Date.now()
     await until(
       page,

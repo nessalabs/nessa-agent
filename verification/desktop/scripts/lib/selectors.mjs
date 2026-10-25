@@ -99,7 +99,7 @@ export const css = {
   // Widgets (ADR 326) and the sample plugin that shows them (src/desktop/widgets/fixture/)
   widgetCard: "[data-widget-inline]", // a widget's card in a message; its value says what it draws
   panel: "#workspace-panel", // the right panel: each chat's own; inert while hidden
-  panelTabs: ".workspace-panel-tabs", // class: the panel's tabs, one per widget open for the chat in front
+  chatPanelTabs: ".workspace-panel-tabs", // class: the panel's tabs, one per widget open for the chat in front
   panelWidget: "[data-panel-widget]", // the panel's tab in front: a widget's trail, Open in Window and body
   panelWidgetHead: ".workspace-panel-widget-head", // class: that tab's trail and Open in Window
   widgetBody: "[data-widget-body]", // a widget's body in the panel or the window, where its caret lands

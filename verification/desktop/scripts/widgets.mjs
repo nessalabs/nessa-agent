@@ -173,7 +173,7 @@ async function openTrailPanel(page, failures) {
         tabs: [...document.querySelectorAll(tab)].map((e) => e.getAttribute("title")),
       }
     },
-    [css.panel, css.pane, `${css.panelTabs} [role="tab"]`],
+    [css.panel, css.pane, `${css.chatPanelTabs} [role="tab"]`],
   )
   const after = await paneCount(page)
   if (after !== before)
@@ -436,7 +436,7 @@ const checks = {
     await expectCaret(page, "focused composer", "⌘1 on the conversation", failures)
     // Back in the panel, its last tab closed: the caret goes back to the chat.
     await page.locator(`${css.panelWidget} ${css.widgetBody}`).first().focus()
-    await page.locator(`${css.panelTabs} [title^="Close "]`).first().click()
+    await page.locator(`${css.chatPanelTabs} [title^="Close "]`).first().click()
     await settled(page)
     if (await page.locator(css.panelWidget).count())
       failures.push("the tab's close left a tab in the panel")
@@ -721,7 +721,7 @@ const checks = {
     const panel = await measure(
       css.panel,
       css.panelWidgetHead,
-      `${css.panelTabs} [title^="Close "]`,
+      `${css.chatPanelTabs} [title^="Close "]`,
     )
     judge("the panel", panel)
     await windowFromPanel(page, failures)

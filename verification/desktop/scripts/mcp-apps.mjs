@@ -1030,7 +1030,7 @@ async function openPanel(page, failures) {
 }
 
 /** The panel's tabs drawn now. */
-const panelTabCount = (page) => page.locator(`${css.panelTabs} [role="tab"]`).count()
+const panelTabCount = (page) => page.locator(`${css.chatPanelTabs} [role="tab"]`).count()
 
 /**
  * The test server's chart page, through the real proxy and the host's own
@@ -1553,7 +1553,7 @@ const checks = {
     const failures = []
     // By its tab's close: the frames go with the place.
     const { proxy, app } = await openPanel(page, failures)
-    await page.locator(`${css.panelTabs} [title^="Close "]`).first().click()
+    await page.locator(`${css.chatPanelTabs} [title^="Close "]`).first().click()
     await settled(page)
     await until(
       page,
@@ -1575,7 +1575,7 @@ const checks = {
     }))
     const waiting = await panelTabCount(page)
     await until(page, ([tab, want]) => document.querySelectorAll(tab).length === want, [
-      `${css.panelTabs} [role="tab"]`,
+      `${css.chatPanelTabs} [role="tab"]`,
       tabs - 1,
     ])
     if (said.state !== "tearing-down")
