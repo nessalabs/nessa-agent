@@ -27,7 +27,10 @@ pub use scheduled_message::{
     ObservedUsageLimit, OpenContinuation,
 };
 pub use value_objects::{
-    Capabilities, Capability, CommandHosts, ConversationDeletion, DeletionContradiction,
+    Capabilities, Capability, Channel, ChannelDefaults, ChannelFolder, ChannelId, ChannelName, ChannelNotes,
+    ChannelParts, ChannelPath, ChannelRefusal, ChannelRequest, ChannelResources,
+    MAX_CHANNELS_PER_OWNER, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_NOTES_BYTES,
+    MAX_CHANNEL_PATH_BYTES, MAX_CHANNEL_REQUEST_ID_BYTES, MAX_CHANNEL_RESOURCES, MAX_CHANNEL_RESOURCE_BYTES, CommandHosts, ConversationDeletion, DeletionContradiction,
     PaneContent, PanePlace, ProviderSessionErasure, ProviderSessionLink, ShareAccess,
     ShareAccessError, ToolCall, ToolChoice, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules,
     ToolSource, WidgetRef, WindowArrangement, WindowColumn, WindowPane, WindowRefusal,

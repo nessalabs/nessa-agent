@@ -46,6 +46,7 @@ fn agents_config() -> AgentsConfig {
         mcp_servers: Vec::new(),
         stand_ins: Default::default(),
         mcp_stand_ins: Default::default(),
+        channel_instructions: None,
         selected: None,
         runtimes: HashMap::new(),
     }
@@ -644,6 +645,7 @@ fn composed_provider(
         mcp_servers: Vec::new(),
         stand_ins: Default::default(),
         mcp_stand_ins: Default::default(),
+        channel_instructions: None,
         selected: None,
         runtimes: HashMap::new(),
     };

@@ -117,6 +117,7 @@ mod receiver_authority;
 mod scheduled_messages;
 #[cfg(unix)]
 pub(crate) mod ssh_environment;
+mod channels;
 mod store;
 mod thread_reports;
 pub use receiver_authority::{
@@ -124,6 +125,7 @@ pub use receiver_authority::{
     ReceiverSnapshot, ReceiverSnapshotError,
 };
 pub use scheduled_messages::LocalScheduledMessages;
+pub use channels::{LocalChannelFolders, LocalChannelStore};
 pub use thread_reports::LocalThreadReports;
 mod record_scope;
 pub use record_scope::{exact_record_scope, record_scope_from_identity};

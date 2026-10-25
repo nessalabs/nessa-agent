@@ -161,7 +161,7 @@ async fn answer(
                         store,
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
-                        requested_conversation(&params),
+                        requested_conversation(&params)?,
                     )
                     .await
                     .map_err(creation_failure)?;
@@ -1109,13 +1109,25 @@ fn permission_answer_failure(
     )
 }
 
-fn requested_conversation(params: &ConversationCreateParams) -> RequestedConversation {
-    RequestedConversation {
+fn requested_conversation(
+    params: &ConversationCreateParams,
+) -> Result<RequestedConversation, ConversationError> {
+    Ok(RequestedConversation {
         agent: requested_agent(params.agent.as_deref()),
         model: params.model.clone(),
         approval_mode: params.approval_mode.map(approval_mode),
         environment: params.environment.clone(),
-    }
+        channel: requested_channel(params.channel_id.as_deref())?,
+    })
+}
+/// A channel id as asked: one that is not an id is an invalid request.
+fn requested_channel(
+    channel: Option<&str>,
+) -> Result<Option<crate::conversation::domain::ChannelId>, ConversationError> {
+    channel
+        .map(crate::conversation::domain::ChannelId::new)
+        .transpose()
+        .map_err(|_| ConversationError::InvalidInput)
 }
 fn requested_conversation_from_receipt(
     params: &ConversationReceiptParams,
@@ -1132,6 +1144,7 @@ fn requested_conversation_from_receipt(
         model: params.model.clone(),
         approval_mode: params.approval_mode.map(approval_mode),
         environment: params.environment.clone(),
+        channel: requested_channel(params.channel_id.as_deref())?,
     })
 }
 fn approval_mode(mode: WireApprovalMode) -> ConversationApprovalMode {
@@ -1468,6 +1481,7 @@ fn list_result(listed: ConversationList) -> ConversationListResult {
                 updated_at_ms: entry.updated_at_ms,
                 running: entry.running,
                 archived: entry.archived,
+                channel_id: entry.channel_id,
             })
             .collect(),
         complete: listed.complete,
@@ -1498,6 +1512,7 @@ fn observe_result(observed: ConversationObservation) -> ConversationObserveResul
                 updated_at_ms: entry.updated_at_ms,
                 running: entry.running,
                 archived: entry.archived,
+                channel_id: entry.channel_id,
             })
             .collect(),
         complete: observed.complete,

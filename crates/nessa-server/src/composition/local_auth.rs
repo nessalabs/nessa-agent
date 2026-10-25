@@ -1356,6 +1356,25 @@ async fn conversations(
                 )
             })?,
     ));
+    // Channels and which conversation is in which; a channel with no chosen
+    // folder works in `<data>/channels/<id>`.
+    let channels_path = root.join("channels.sqlite3");
+    service.bind_channels(
+        Arc::new(
+            crate::conversation::infrastructure::LocalChannelStore::open(&channels_path).map_err(
+                |cause| RunError::opening(crate::core::Dataset::Channels, &channels_path, cause),
+            )?,
+        ),
+        Arc::new(
+            crate::conversation::infrastructure::LocalChannelFolders::new(
+                directory
+                    .parent()
+                    .expect("conversation root already validated"),
+                std::env::var_os("HOME").map(std::path::PathBuf::from),
+            )
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+        ),
+    );
     let scheduled_messages_path = root.join("scheduled-chat-messages.sqlite3");
     service.bind_scheduled_messages(Arc::new(
         crate::conversation::infrastructure::LocalScheduledMessages::open(&scheduled_messages_path)

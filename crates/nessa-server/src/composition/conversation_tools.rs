@@ -391,6 +391,7 @@ async fn run(
                         model: args.model,
                         approval_mode: None,
                         environment: args.environment,
+                        channel: None,
                     },
                 )
                 .await

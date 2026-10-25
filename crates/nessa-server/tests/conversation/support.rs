@@ -1848,7 +1848,7 @@ impl Provider {
             capabilities_for_model(self.factory.model_images.load(Ordering::SeqCst), model);
         self
     }
-    fn with_mode(mut self, mode: ApprovalMode) -> Self {
+    pub(crate) fn with_mode(mut self, mode: ApprovalMode) -> Self {
         self.approval_mode = mode;
         self
     }

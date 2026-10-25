@@ -157,6 +157,7 @@ fn an_installation_that_only_knew_one_agent_keeps_starting_on_it() {
             stand_ins: Default::default(),
             #[cfg(unix)]
             mcp_stand_ins: Default::default(),
+            channel_instructions: None,
             selected: None,
             runtimes: HashMap::from([(
                 "codex".into(),
@@ -211,6 +212,7 @@ fn default_workspace_rejects_a_symlinked_ancestor() {
             stand_ins: Default::default(),
             #[cfg(unix)]
             mcp_stand_ins: Default::default(),
+            channel_instructions: None,
             selected: None,
             runtimes: HashMap::from([(
                 "claude".into(),
@@ -363,6 +365,7 @@ fn several_configured_agents_with_no_choice_between_them_is_not_the_desktops_to_
             stand_ins: Default::default(),
             #[cfg(unix)]
             mcp_stand_ins: Default::default(),
+            channel_instructions: None,
             selected: None,
             runtimes: HashMap::from([("claude".into(), runtime()), ("codex".into(), runtime())]),
         }),
