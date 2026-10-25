@@ -27,8 +27,9 @@ use nessa_auth::{
     },
     application::{
         credential_admin::{
-            CredentialAdmin, CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest,
-            ListCredentialsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
+            CredentialAdmin, CredentialAdminError, CredentialIssuePurpose, IssueCredentialOutcome,
+            IssueCredentialRequest, ListCredentialsRequest, RevokeCredentialOutcome,
+            RevokeCredentialRequest,
         },
         dto::{
             CredentialGrantDto, CredentialMetadataDto, MembershipInputDto, MembershipRoleDto,
@@ -1221,7 +1222,7 @@ async fn cold_runtime_without_seeds_replays_webhook_history_before_ordinary_rout
     let runtime = WebhookRuntime::new(Vec::new(), base, credentials, store.clone(), clock).unwrap();
     runtime.recover().await.unwrap();
     let mut replay = original.issue.clone();
-    replay.purpose = nessa_auth::application::credential_admin::CredentialIssuePurpose::Product;
+    replay.purpose = CredentialIssuePurpose::Product;
     replay.credential_id = Uuid::new_v4().to_string();
     replay.issued_at = 3;
     let replayed = match runtime.issue(replay.clone()).await {

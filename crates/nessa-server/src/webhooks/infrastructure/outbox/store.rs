@@ -26,12 +26,16 @@ use nessa_local_database::{
     Schema,
 };
 use nessa_local_storage::{OpenMode, PrivateTempFile};
+#[cfg(test)]
+use std::sync::Condvar;
 use std::{
     fs::File,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
-use tokio::sync::Semaphore;
+#[cfg(test)]
+use tokio::sync::Notify;
+use tokio::{sync::Semaphore, time::Instant};
 use uuid::Uuid;
 
 pub(super) struct Owner {
@@ -47,9 +51,9 @@ pub(super) struct Owner {
 #[cfg(test)]
 struct AdmissionPause {
     after_commit: bool,
-    entered: tokio::sync::Notify,
+    entered: Notify,
     released: Mutex<bool>,
-    wake: std::sync::Condvar,
+    wake: Condvar,
 }
 #[cfg(test)]
 impl AdmissionPause {
@@ -242,9 +246,9 @@ fn write_transition_before(
     after: &Delivery,
     cause: DeliveryCause,
     at_ms: u64,
-    deadline: Option<tokio::time::Instant>,
+    deadline: Option<Instant>,
 ) -> Result<(), OutboxError> {
-    if deadline.is_some_and(|at| tokio::time::Instant::now() >= at) {
+    if deadline.is_some_and(|at| Instant::now() >= at) {
         return Err(OutboxError::Conflict);
     }
     let transaction = connection.transaction().map_err(unavailable)?;
@@ -334,9 +338,9 @@ impl SqlOutbox {
     pub(crate) fn pause_admission(&self, after_commit: bool) -> AdmissionControl {
         let pause = Arc::new(AdmissionPause {
             after_commit,
-            entered: tokio::sync::Notify::new(),
+            entered: Notify::new(),
             released: Mutex::new(false),
-            wake: std::sync::Condvar::new(),
+            wake: Condvar::new(),
         });
         assert!(self
             .owner
@@ -355,7 +359,7 @@ impl SqlOutbox {
         before: &Delivery,
         after: &Delivery,
         at_ms: u64,
-        deadline: tokio::time::Instant,
+        deadline: Instant,
     ) -> Result<(), OutboxError> {
         let (before, after) = (before.clone(), after.clone());
         let clock = self.owner.clock.clone();

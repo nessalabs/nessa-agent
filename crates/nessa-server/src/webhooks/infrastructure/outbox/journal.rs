@@ -9,6 +9,7 @@ use crate::webhooks::domain::{Delivery, Phase};
 use nessa_local_database::rusqlite::{params, Connection, Result as SqlResult, Transaction};
 use nessa_protocol::conversation::domain::ConversationId;
 use std::path::Path;
+use tokio::time::Instant;
 use uuid::Uuid;
 
 use super::publication::{append, publish};
@@ -226,13 +227,13 @@ pub(super) fn commit_before(
     transaction: Transaction<'_>,
     registration: Option<Uuid>,
     at_ms: u64,
-    deadline: Option<tokio::time::Instant>,
+    deadline: Option<Instant>,
 ) -> Result<(), OutboxError> {
     trim(&transaction)?;
     retire_drained(&transaction, at_ms)?;
     super::intents::validate(&transaction)?;
     capacity::check(&transaction, registration)?;
-    if deadline.is_some_and(|at| tokio::time::Instant::now() >= at) {
+    if deadline.is_some_and(|at| Instant::now() >= at) {
         return Err(OutboxError::Conflict);
     }
     transaction.commit().map_err(unavailable)

@@ -12,13 +12,16 @@ use crate::webhooks::{
         observation, AdmissionFailure, AdmitDelivery, DeliveryCause, DispatchAdmission,
         ExpiryObserver, Message, ObserveRegistrationStop, Outbox, OutboxError, PendingDelivery,
         PrepareFailure, QueueInitiator, QueuedRecord, ReadWebhookRecords, Registration,
-        StopObservationResult, WebhookHttp, WebhookReadFailure, MAX_CURSORS, MAX_OUTBOX_WORKERS,
-        POST_DEADLINE,
+        StopFailure, StopObservationResult, Target, WebhookHttp, WebhookReadFailure, MAX_CURSORS,
+        MAX_OUTBOX_WORKERS, POST_DEADLINE,
     },
     domain::{Delivery, Observation},
     infrastructure::record_message,
 };
-use nessa_auth::{application::credential_admin::CredentialAdminError, domain::Resource};
+use nessa_auth::{
+    application::credential_admin::CredentialAdminError,
+    domain::{CredentialId, Resource},
+};
 use nessa_protocol::{
     conversation::domain::ConversationId,
     product::generated::{
@@ -34,7 +37,7 @@ use std::{
     sync::{Arc, PoisonError},
     time::Duration,
 };
-use tokio::sync::Semaphore;
+use tokio::{sync::Semaphore, time::Instant};
 use uuid::Uuid;
 
 pub(crate) struct DeliveryDependencies {
@@ -167,7 +170,7 @@ impl WebhookRuntime {
             if !self.accepting_delivery() {
                 return Ok(());
             }
-            let credential = nessa_auth::domain::CredentialId::new(&intent.issue.credential_id)
+            let credential = CredentialId::new(&intent.issue.credential_id)
                 .map_err(|_| CredentialAdminError::Unavailable)?;
             let Some(registration) = self
                 .owner
@@ -442,7 +445,7 @@ impl WebhookRuntime {
         }
         // Canonical physical read and cursor work ended. Re-admit against the
         // actual current credential/grant; the prior read is not dispatch authority.
-        let deadline = tokio::time::Instant::now() + POST_DEADLINE;
+        let deadline = Instant::now() + POST_DEADLINE;
         let hold = match self
             .admit_dispatch_before(
                 &reader.admission,
@@ -524,7 +527,7 @@ impl WebhookRuntime {
             };
         }
         let expired = !hold.is_valid_at(self.owner.clock.unix_seconds());
-        if expired || tokio::time::Instant::now() >= deadline {
+        if expired || Instant::now() >= deadline {
             if expired {
                 if let Some(known) = self
                     .owner
@@ -588,10 +591,10 @@ impl WebhookRuntime {
     pub(crate) async fn admit_dispatch_before(
         &self,
         admission: &AdmitDelivery<'_>,
-        target: &crate::webhooks::application::Target,
+        target: &Target,
         conversation: &ConversationId,
         epoch: u64,
-        deadline: tokio::time::Instant,
+        deadline: Instant,
     ) -> Result<Option<DispatchAdmission>, AdmissionFailure> {
         let hold = DispatchAdmission::new();
         let admitted = {
@@ -617,7 +620,7 @@ impl WebhookRuntime {
                 hold.cancel();
                 Err(error)
             }
-            Ok(()) if tokio::time::Instant::now() >= deadline => {
+            Ok(()) if Instant::now() >= deadline => {
                 hold.cancel();
                 Ok(None)
             }
@@ -638,8 +641,8 @@ impl WebhookRuntime {
         .execute(&registration.target.credential, reader)
         .await
         .map_err(|error| match error {
-            crate::webhooks::application::StopFailure::Store(error) => store_failure(error),
-            crate::webhooks::application::StopFailure::Access(_) => CycleFailure::Retry,
+            StopFailure::Store(error) => store_failure(error),
+            StopFailure::Access(_) => CycleFailure::Retry,
         })
     }
     pub(super) async fn settle_known(&self) -> Result<(), CredentialAdminError> {

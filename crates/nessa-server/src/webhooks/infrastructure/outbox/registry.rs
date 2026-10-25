@@ -333,10 +333,7 @@ impl StoredRegistration {
         })
     }
 }
-pub(super) fn by_id(
-    connection: &Connection,
-    id: uuid::Uuid,
-) -> Result<CheckedRegistration, OutboxError> {
+pub(super) fn by_id(connection: &Connection, id: Uuid) -> Result<CheckedRegistration, OutboxError> {
     connection
         .query_row(
             &format!("{SELECT} FROM registrations WHERE id=?1"),

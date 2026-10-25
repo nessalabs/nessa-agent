@@ -15,6 +15,7 @@ use crate::webhooks::infrastructure::{
     isolated_post, signature, DeliveryDependencies, MAX_IN_FLIGHT,
 };
 use async_trait::async_trait;
+use nessa_auth::domain::Resource;
 use nessa_sdk::{
     application::agent_execution::{
         providers::ProviderIdentity,
@@ -27,9 +28,17 @@ use nessa_sync::replication::domain::Id;
 use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpListener},
-    thread,
+    panic::AssertUnwindSafe,
+    sync::mpsc::{Receiver as BlockingReceiver, Sender as BlockingSender},
+    thread::{self, JoinHandle as ThreadJoinHandle},
 };
-use tokio::sync::{mpsc, Semaphore};
+use tokio::{
+    sync::{
+        mpsc::{self, Receiver},
+        Semaphore,
+    },
+    time::Instant,
+};
 
 struct Transport {
     address: SocketAddr,
@@ -51,9 +60,9 @@ impl WebhookHttp for Transport {
 }
 struct Recipient {
     transport: Arc<Transport>,
-    requests: mpsc::Receiver<Vec<u8>>,
+    requests: Receiver<Vec<u8>>,
     stop: Arc<AtomicBool>,
-    task: Option<thread::JoinHandle<()>>,
+    task: Option<ThreadJoinHandle<()>>,
 }
 impl Recipient {
     fn new(always_retry: bool) -> Self {
@@ -61,7 +70,7 @@ impl Recipient {
     }
     fn with_response_pause(
         always_retry: bool,
-        pause: Option<(Arc<Notify>, std::sync::mpsc::Receiver<()>)>,
+        pause: Option<(Arc<Notify>, BlockingReceiver<()>)>,
     ) -> Self {
         crate::agent_install::infrastructure::https_archives::install_tls_backend();
         let tls = RecipientTls::generate();
@@ -763,7 +772,7 @@ async fn cold_runtime(root: &std::path::Path, now: u64, http: Arc<dyn WebhookHtt
             source,
             policy,
             capacity: Arc::new(Semaphore::new(1)),
-            gateway: nessa_auth::domain::Resource::new(
+            gateway: Resource::new(
                 OrganizationId::new("org").unwrap(),
                 ResourceId::new("gateway").unwrap(),
             ),
@@ -1337,8 +1346,8 @@ async fn public_reissue_keeps_stopped_sending_history_separate_from_the_new_regi
 // Own the real native connection lock on a separate OS worker. Drop releases
 // and joins it even when an assertion fails; no async task holds a std guard.
 struct MetadataBlock {
-    release: Option<std::sync::mpsc::Sender<()>>,
-    worker: Option<thread::JoinHandle<()>>,
+    release: Option<BlockingSender<()>>,
+    worker: Option<ThreadJoinHandle<()>>,
 }
 impl MetadataBlock {
     async fn new(store: Arc<LocalConversationStore>) -> Self {
@@ -1403,7 +1412,7 @@ async fn dispatch_deadline_releases_partial_admission_before_joining_native_meta
         &registration.target,
         &f.a,
         epoch,
-        tokio::time::Instant::now() + crate::webhooks::application::POST_DEADLINE,
+        Instant::now() + crate::webhooks::application::POST_DEADLINE,
     ));
     assert!(
         work.as_mut().now_or_never().is_none(),
@@ -1428,11 +1437,8 @@ async fn dispatch_deadline_releases_partial_admission_before_joining_native_meta
         "credential.revoke",
         json!({"requestId":"revoke-admission-metadata-wait","credentialId":credential}),
     ));
-    let revoked = tokio::time::timeout(
-        WAIT,
-        std::panic::AssertUnwindSafe(revoke.as_mut()).catch_unwind(),
-    )
-    .await;
+    let revoked =
+        tokio::time::timeout(WAIT, AssertUnwindSafe(revoke.as_mut()).catch_unwind()).await;
     drop(revoke);
     blocked.release();
     let admitted = match completed {
