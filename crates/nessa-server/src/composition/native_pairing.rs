@@ -44,7 +44,9 @@ use crate::relay::gateway::{
     infrastructure::{IdentityKey, RelayedAccept, TcpRelayDial},
 };
 use crate::timer::TokioTimer;
-use crate::tunnel::infrastructure::ingress::{TunnelIngress, Tunneled, TunneledAccept};
+#[cfg(unix)]
+use crate::tunnel::infrastructure::ingress::TunnelIngress;
+use crate::tunnel::infrastructure::ingress::{Tunneled, TunneledAccept};
 use nessa_auth::{
     adapters::{
         local::LocalCredentialStore,

@@ -55,12 +55,15 @@ impl TunnelAdmission<TunnelPermit> for NativeEnrollmentConnections {
 }
 
 /// The loopback listener the tunnel forwards to.
+// Started only by the Unix composition, beside the provider's program.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) struct TunnelIngress<P = TunnelPermit> {
     listener: TcpListener,
     admission: Arc<dyn TunnelAdmission<P>>,
     joined: mpsc::Sender<Tunneled<P>>,
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 impl<P: Send + 'static> TunnelIngress<P> {
     /// Serve `listener`, which composition bound on a loopback address.
     pub(crate) fn new(

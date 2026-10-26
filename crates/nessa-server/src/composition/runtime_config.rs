@@ -115,6 +115,7 @@ pub(super) struct NativeConfig {
     /// `"enabled": false` keeps it off. Settings writes it
     /// (`pairing.setTunnel`).
     #[serde(default, deserialize_with = "tunnel_section")]
+    #[cfg_attr(not(unix), allow(dead_code))] // served by the Unix composition only
     pub tunnel: Option<TunnelConfig>,
 }
 

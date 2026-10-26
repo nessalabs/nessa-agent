@@ -414,7 +414,8 @@ impl ProductRouteState {
         self
     }
 
-    /// Register the web tunnel this run serves.
+    /// Register the web tunnel this run serves (Unix only).
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) fn with_tunnel(mut self, tunnel: crate::tunnel::application::TunnelView) -> Self {
         self.tunnel = Some(tunnel);
         self
