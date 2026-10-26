@@ -321,9 +321,16 @@ impl ConfigLinking {
         let config = self.config.clone();
         let asked = request.clone();
         let reading = files.clone();
-        let edited = tokio::task::spawn_blocking(move || {
+        let (edited, previous) = tokio::task::spawn_blocking(move || {
             let document = config.document().map_err(refusal)?;
-            edit_tunnel(document, &asked, saved_token(&reading))
+            let previous = saved_token(&reading);
+            let edited = edit_tunnel(document, &asked, previous.clone())?;
+            // Checked before the token is replaced, so a section that
+            // cannot be saved never leaves a new token beside an old one.
+            if let Some(document) = &edited.document {
+                config.check(document).map_err(refusal)?;
+            }
+            Ok::<_, LinkingError>((edited, previous))
         })
         .await
         .map_err(|_| LinkingError::Unavailable)??;
@@ -338,8 +345,10 @@ impl ConfigLinking {
                 bindable(setting.ingress).await?;
             }
         }
+        let replaced_token = edited.token.is_some();
         if let Some(token) = edited.token {
-            tokio::task::spawn_blocking(move || files.write_token(&token))
+            let writing = files.clone();
+            tokio::task::spawn_blocking(move || writing.write_token(&token))
                 .await
                 .map_err(|_| LinkingError::Unavailable)?
                 .map_err(|_| LinkingError::Unavailable)?;
@@ -356,8 +365,19 @@ impl ConfigLinking {
                 let config = self.config.clone();
                 let published = tokio::task::spawn_blocking(move || config.publish(document))
                     .await
-                    .map_err(|_| LinkingError::Unavailable)?
-                    .map_err(refusal)?;
+                    .map_err(|_| LinkingError::Unavailable)
+                    .and_then(|published| published.map_err(refusal));
+                let published = match published {
+                    Ok(published) => published,
+                    Err(error) => {
+                        // The file could not be written: the token goes
+                        // back to what the saved section was made with.
+                        if replaced_token {
+                            restore_token(files, previous).await;
+                        }
+                        return Err(error);
+                    }
+                };
                 if published == Published::NotDurable {
                     tracing::warn!(
                         "the tunnel saved, but config.json's directory could not be synced"
@@ -521,6 +541,22 @@ struct EditedTunnel {
     token: Option<TunnelToken>,
     /// The setting it replaces and the one it saves, for the audit.
     replaced: TunnelReplaced,
+}
+
+/// Put back the token a change replaced before its section could be
+/// written. When that fails too, the new token stays beside the old
+/// section: said loudly, since the tunnel may not start with them.
+async fn restore_token(files: TunnelFiles, previous: Option<TunnelToken>) {
+    let restored = tokio::task::spawn_blocking(move || match previous {
+        Some(token) => files.write_token(&token),
+        None => files.remove_token(),
+    })
+    .await;
+    if !matches!(restored, Ok(Ok(()))) {
+        tracing::error!(
+            "the tunnel's section could not be saved and its earlier token could not be put back"
+        );
+    }
 }
 
 /// The saved `native.tunnel`, if any. The file passed the runtime
@@ -737,12 +773,17 @@ mod tests {
     struct Files {
         bytes: Mutex<Option<Vec<u8>>>,
         held: bool,
+        /// A publish fails, as a full disk would.
+        failing: std::sync::atomic::AtomicBool,
     }
     impl ConfigFiles for Files {
         fn read(&self, _limit: usize) -> std::io::Result<Option<Vec<u8>>> {
             Ok(self.bytes.lock().unwrap().clone())
         }
         fn publish(&self, bytes: &[u8]) -> std::io::Result<Published> {
+            if self.failing.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(std::io::ErrorKind::StorageFull.into());
+            }
             *self.bytes.lock().unwrap() = Some(bytes.to_vec());
             Ok(Published::Durable)
         }
@@ -780,6 +821,7 @@ mod tests {
         Arc::new(Files {
             bytes: Mutex::new(json.map(|text| text.as_bytes().to_vec())),
             held: false,
+            failing: Default::default(),
         })
     }
 
@@ -1056,6 +1098,7 @@ mod tests {
         let held = Arc::new(Files {
             bytes: Mutex::new(None),
             held: true,
+            failing: Default::default(),
         });
         let linking_held = linking(held, false);
         assert_eq!(linking_held.set(true).await, Err(LinkingError::Busy));
@@ -1414,6 +1457,55 @@ mod tests {
         );
         assert_ne!(first.fingerprint(), second.fingerprint());
         assert!(!first.fingerprint().contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn a_section_that_cannot_be_saved_puts_the_earlier_token_back() {
+        let namespace = tempfile::tempdir().unwrap();
+        let (written, _) = linking_on_with_ingress();
+        let files = files(Some(&written));
+        let first = TunnelToken::new("first".into()).unwrap();
+        tunnel_linking(files.clone(), namespace.path(), None)
+            .linking
+            .set_tunnel(
+                caller(),
+                TunnelRequest {
+                    hostname: Some(address("https://old.example.com")),
+                    token: Some(first.clone()),
+                    ..request(true, Some(TunnelMode::Named))
+                },
+            )
+            .await
+            .unwrap();
+        let saved = files.bytes.lock().unwrap().clone();
+        files
+            .failing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let linking = tunnel_linking(files.clone(), namespace.path(), None);
+        assert_eq!(
+            linking
+                .linking
+                .set_tunnel(
+                    caller(),
+                    TunnelRequest {
+                        hostname: Some(address("https://new.example.com")),
+                        token: Some(TunnelToken::new("second".into()).unwrap()),
+                        ..request(true, None)
+                    },
+                )
+                .await,
+            Err(LinkingError::Unavailable)
+        );
+        assert_eq!(
+            *files.bytes.lock().unwrap(),
+            saved,
+            "the section is as it was"
+        );
+        assert_eq!(
+            TunnelFiles::new(namespace.path()).read_token().unwrap(),
+            Some(first),
+            "and so is its token"
+        );
     }
 
     #[tokio::test]

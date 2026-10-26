@@ -64,6 +64,14 @@ impl TunnelFiles {
         file.persist(&self.token_path())?;
         sync_directory(&self.directory)
     }
+
+    /// Remove the token, if there is one.
+    pub(crate) fn remove_token(&self) -> io::Result<()> {
+        match std::fs::remove_file(self.token_path()) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            _ => sync_directory(&self.directory),
+        }
+    }
 }
 
 #[cfg(test)]
