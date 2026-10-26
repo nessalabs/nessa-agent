@@ -155,6 +155,12 @@
  *               A second channel works in a folder chosen in the picker, and
  *               its first message runs there; the gateway lists both, with
  *               their folders, and each conversation in its own
+ *   menu        the pane's ⋯ menu opens with every row leading with its
+ *               icon at the menu recipe's row height; in the overview's
+ *               filter the chosen scope and span each show their check
+ *               before their number, the numbers stand in one column, and
+ *               pressing a number picks that choice and closes the menu;
+ *               the message sent in the window after it is answered
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
@@ -232,7 +238,9 @@ import {
   keys,
   names,
   offeredLabel,
+  overviewFilterKeys,
   selectorFor,
+  storage,
 } from "./lib/selectors.mjs"
 import {
   FAKE_ACCOUNT,
@@ -3550,6 +3558,97 @@ const steps = {
       failures.push("the run does not fold again")
   },
 
+  async menu(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      const menu = page.locator(css.menu)
+      const menuGone = () => menu.waitFor({ state: "detached", timeout: 5_000 })
+      // The pane's ⋯ menu: every row leads with its icon, one row height.
+      await page.locator(css.paneActions).first().click()
+      const pane = await menuRows(page)
+      if (run.evidence)
+        await page.screenshot({ path: join(run.evidence, `menu-${run.engine}-pane.png`) })
+      if (pane.length === 0) failures.push("the pane's ⋯ menu showed no rows")
+      for (const row of pane) {
+        if (!row.leads)
+          failures.push(`the pane menu's ${row.name} row leads with no icon`)
+        if (row.height !== MENU_ROW)
+          failures.push(
+            `the pane menu's ${row.name} row is ${row.height}px, not ${MENU_ROW}`,
+          )
+      }
+      await page.keyboard.press(keys.escape)
+      await menuGone()
+      // The overview's filter: the chosen choice's check before its number,
+      // the numbers in one column, and a number picks its choice.
+      const had = await page.evaluate((key) => {
+        try {
+          return JSON.parse(localStorage.getItem(key) ?? "null")
+        } catch {
+          return null
+        }
+      }, storage.overviewFilter)
+      await page.keyboard.press(keys.overview)
+      await page.locator(css.overviewListed).waitFor({ timeout: 10_000 })
+      const filter = page.locator(css.overviewFilter)
+      // The filter shows only over a list: a view that keeps every session
+      // out (an idle one under Ongoing) offers Show All instead.
+      if (!(await filter.isVisible())) {
+        await page.getByRole("button", { name: names.overviewShowAll }).click()
+        await page.locator(css.overviewListed).waitFor({ timeout: 10_000 })
+      }
+      const pick = async (key) => {
+        await filter.click({ timeout: 10_000 })
+        await page.keyboard.press(key)
+        await menuGone().catch(() =>
+          failures.push(`pressing ${key} left the filter open`),
+        )
+      }
+      await filter.click({ timeout: 10_000 })
+      const rows = await menuRows(page)
+      if (run.evidence)
+        await page.screenshot({
+          path: join(run.evidence, `menu-${run.engine}-filter.png`),
+        })
+      const chosen = rows.filter((row) => row.checked)
+      if (chosen.length !== 2)
+        failures.push(
+          `the filter checked ${chosen.length} choices, not a scope and a span`,
+        )
+      for (const row of rows.filter((each) => each.radio)) {
+        if (!row.leads) failures.push(`the filter's ${row.name} row leads with no icon`)
+        if (row.shortcutRight !== rows.find((each) => each.radio)?.shortcutRight)
+          failures.push(`the filter's ${row.name} number is out of the column`)
+      }
+      for (const row of chosen)
+        if (!(row.checkRight !== null && row.checkRight <= row.shortcutLeft))
+          failures.push(`the filter's ${row.name} check is not before its number`)
+      await page.keyboard.press(keys.escape)
+      await menuGone()
+      // Any time, then Today: both keep this session (it changed just now)
+      // and so the filter on the page. Each number names its span on the chip.
+      for (const [key, label] of [
+        [overviewFilterKeys.today, "Today"],
+        [overviewFilterKeys.any, null],
+      ]) {
+        await pick(key)
+        const named = await waitFor(async () => {
+          const text = (await filter.textContent())?.trim() ?? ""
+          return label ? text.endsWith(`· ${label}`) : !text.includes("·")
+        }, 5_000)
+        if (!named) failures.push(`pressing ${key} did not choose its span in the filter`)
+      }
+      // Put the filter back as the person had it, the scope last: it may
+      // leave nothing listed, and the filter with it.
+      await pick(overviewFilterKeys[had?.range] ?? overviewFilterKeys.any)
+      await pick(overviewFilterKeys[had?.scope] ?? overviewFilterKeys.ongoing)
+      await page.keyboard.press(keys.escape)
+      await page.locator(css.overview).waitFor({ state: "detached", timeout: 10_000 })
+      await openStressConversation(page, run.main.id, run.main.title)
+      if (failures.length === 0) await steps.reply(run, step, failures)
+    })
+  },
+
   async table(run, step, failures) {
     const text = prompt(run, STRESS.table, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -3750,6 +3849,37 @@ const steps = {
     await expectShown(run.page, `${SAYS.echo}${last}`, failures)
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
+}
+
+/** A menu row's height in nessa_ui's menu recipe, at the default scale. */
+const MENU_ROW = 30
+
+/**
+ * The open menu's rows as drawn: whether each leads with its icon, its
+ * height, whether it is checked, and where its check and shortcut sit.
+ */
+function menuRows(page) {
+  return page
+    .locator(css.menu)
+    .first()
+    .evaluate((menu) =>
+      [...menu.querySelectorAll('[role^="menuitem"]')].map((row) => {
+        const shortcut = row.querySelector('[data-slot$="menu-shortcut"]')
+        const check = row.querySelector('[data-slot$="menu-item-indicator"] svg')
+        const box = (element) => element?.getBoundingClientRect()
+        return {
+          name: row.textContent?.trim() ?? "",
+          leads: row.firstElementChild?.tagName.toLowerCase() === "svg",
+          height: Math.round(box(row).height),
+          radio: row.getAttribute("role") === "menuitemradio",
+          checked: row.getAttribute("aria-checked") === "true",
+          shortcut: shortcut?.textContent?.trim() ?? null,
+          shortcutLeft: shortcut ? Math.round(box(shortcut).left) : null,
+          shortcutRight: shortcut ? Math.round(box(shortcut).right) : null,
+          checkRight: check ? Math.round(box(check).right) : null,
+        }
+      }),
+    )
 }
 
 /**

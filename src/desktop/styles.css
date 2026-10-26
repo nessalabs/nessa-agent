@@ -708,7 +708,8 @@ html:not(.dark) [data-surface] {
 .desktop-palette {
   display: flex;
   height: 22px;
-  margin: 2px 8px 6px;
+  /* In line with the menu rows' words (nessa_ui's menu recipe: 10px inset). */
+  margin: 2px 10px 6px;
   overflow: hidden;
   border-radius: 7px;
   box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 14%, transparent);
@@ -1458,8 +1459,9 @@ html:not(.dark) :is(.desktop-popover, .desktop-tooltip) {
 }
 
 /*
- * Menus and pickers are frosted glass rather than solid cards. Pickers rise
- * into place; menus (`ui/menu/menu.css`) appear at once, as macOS's do.
+ * Pickers are frosted glass rather than solid cards, and rise into place.
+ * Menus (`ui/menu/menu.css`) start from this surface but are solid cards,
+ * and appear at once.
  */
 .desktop-popover {
   border: 0;
@@ -1487,7 +1489,7 @@ html:not(.dark) :is(.desktop-popover, .desktop-tooltip) {
 
 /*
  * The window's tooltip (`adapters/use-window-tooltips.ts`): a small pill of
- * the same frosted glass as the menus — translucent fill, blur, a hairline
+ * the same frosted glass as the pickers — translucent fill, blur, a hairline
  * inner edge and a soft shadow — in the theme of the surface it is drawn in.
  * The chord follows the words on the same line, quieter. Placed by
  * transform, so showing it lays nothing out; it fades in, sliding 2px out of

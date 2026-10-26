@@ -1316,6 +1316,11 @@ in both themes, and screenshot what a rule is about (a highlighted item, a
 menu near the window's right edge, a pane header on hover).
 
 - [ ] **Every rule in _Interaction and visual rules_ holds.** _Check:_ manual.
+- [ ] **Menu rows lead with their icon, 30px high; a check comes before its
+  number, and the numbers line up.** In the Agents overview's filter, pressing
+  a choice's number picks it and closes the menu. _Check:_
+  `conversation-stress.mjs` step `menu` (knob `menus`): the pane's "…" menu
+  and the overview filter, with screenshots.
 
 ## Motion and reduced motion
 
@@ -1353,7 +1358,7 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
   WKWebView) before it is reported as a bug; Playwright's WebKit is close,
   not identical (pointer events outside the viewport differ, for one).
 - _Known:_ headless WebKit does not draw `backdrop-filter`: the window's glass
-  (menus, tooltips, the revealed sidebar, the model picker) shows as its flat
+  (tooltips, the revealed sidebar, the model picker) shows as its flat
   fill in headless WebKit screenshots. Judge glass with `--headed` or in the
   app, not from a headless WebKit shot.
 
