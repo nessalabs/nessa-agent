@@ -134,17 +134,19 @@ pub enum LinkingSubject {
     Tunnel { mode: Option<TunnelMode> },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LinkingAuditPhase {
     /// Before the lock is taken. When it cannot be kept, nothing is done.
     Requested,
     /// Saved, and how it applies. `written` is false when `config.json`
     /// already said so and was left as it was. `moved` names a listen
     /// address the change replaced: what it said, and what it says now.
+    /// `tunnel` is a tunnel change's setting before and after it.
     Applied {
         applies: LinkingApply,
         written: bool,
         moved: Option<ListenMoved>,
+        tunnel: Option<TunnelReplaced>,
     },
     /// Refused, and nothing was saved.
     Refused(LinkingError),
@@ -158,6 +160,24 @@ pub enum LinkingAuditPhase {
 pub struct ListenMoved {
     pub from: std::net::SocketAddr,
     pub to: std::net::SocketAddr,
+}
+
+/// The tunnel setting a change replaced and the one it saved, kept with
+/// its outcome. `before` is `None` when nothing was saved yet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TunnelReplaced {
+    pub before: Option<TunnelSnapshot>,
+    pub after: TunnelSnapshot,
+}
+
+/// A tunnel setting as audit evidence: which token, never the token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TunnelSnapshot {
+    pub enabled: bool,
+    pub mode: TunnelMode,
+    pub hostname: Option<String>,
+    /// The saved token's fingerprint (`TunnelToken::fingerprint`).
+    pub token: Option<String>,
 }
 
 /// How a change's restart ended.

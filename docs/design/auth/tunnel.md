@@ -92,7 +92,7 @@ named tunnel, would close it; that is follow-up work.
 | Ingress | Listens on loopback only, takes a tunnel permit, accepts the upgrade on `/native` only, and feeds the bridged socket to the native listener as `Accepted::Tunneled` | `nessa-server` `tunnel` |
 | Supervisor | Keeps any helper program running: starts it, waits for it to be ready, starts it again with a backoff, and takes it back across a gateway restart. It knows nothing about Cloudflare | `nessa-server` `services` (`ServiceSupervisor`, `KeptHost`) |
 | Cloudflare service | The one provider today: a pinned, digest-checked `cloudflared`, what it is run with, and how its metrics say it is ready and at which address. Another way to reach the gateway is another service behind the same supervisor | `nessa-server` `tunnel` |
-| Switch | `pairing.setTunnel` (`credential.manage`), saved in `config.json` `native.tunnel`, audited, applied by restarting the gateway like `pairing.setLinking`; `pairing.tunnel` reads its state | product, composition |
+| Switch | `pairing.setTunnel` (`credential.manage`), saved in `config.json` `native.tunnel`, audited with the setting before and after (hostname, token by fingerprint), applied by restarting the gateway like `pairing.setLinking`; `pairing.tunnel` reads its state | product, composition |
 | Address | `server.reach` (`server.read`, the owner phone's purpose list in Cedar) gives a paired device the current public address | product |
 
 Why a loopback pair, not a new stream type: every reader and the gateway

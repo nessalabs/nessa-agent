@@ -29,7 +29,7 @@ pub use cleanup::{CleanupError, SettleCleanup};
 pub use linking::{
     LinkingApply, LinkingAudit, LinkingAuditPhase, LinkingAuditRecord, LinkingAuditUnavailable,
     LinkingCaller, LinkingChange, LinkingError, LinkingRestart, LinkingSubject, ListenMoved,
-    NativeLinking, SavedTunnel, TunnelChange, TunnelRequest,
+    NativeLinking, SavedTunnel, TunnelChange, TunnelReplaced, TunnelRequest, TunnelSnapshot,
 };
 pub use owner::{OwnerError, PairingOwner, PreparedInvitation};
 pub use owner_phone::FreshOwnerPhone;

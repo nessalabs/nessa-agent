@@ -7,7 +7,7 @@
 //! `observedAtMs`, on the wall clock.
 use crate::device_pairing::application::{
     LinkingApply, LinkingAudit, LinkingAuditPhase, LinkingAuditRecord, LinkingAuditUnavailable,
-    LinkingError, LinkingRestart, LinkingSubject,
+    LinkingError, LinkingRestart, LinkingSubject, TunnelSnapshot,
 };
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
@@ -28,13 +28,24 @@ impl DurableLinkingAudit {
     }
 }
 
+/// A tunnel setting as kept: its token by fingerprint only.
+fn snapshot(tunnel: &TunnelSnapshot) -> Value {
+    json!({
+        "enabled": tunnel.enabled,
+        "mode": tunnel.mode.as_str(),
+        "hostname": tunnel.hostname,
+        "tokenFingerprint": tunnel.token,
+    })
+}
+
 fn stored(record: &LinkingAuditRecord) -> Value {
-    let (phase, outcome) = match record.phase {
+    let (phase, outcome) = match &record.phase {
         LinkingAuditPhase::Requested => ("requested", Value::Null),
         LinkingAuditPhase::Applied {
             applies,
             written,
             moved,
+            tunnel,
         } => (
             "outcome",
             json!({
@@ -47,6 +58,10 @@ fn stored(record: &LinkingAuditRecord) -> Value {
                 "listenMoved": moved.map(|moved| json!({
                     "from": moved.from.to_string(),
                     "to": moved.to.to_string(),
+                })),
+                "tunnel": tunnel.as_ref().map(|tunnel| json!({
+                    "before": tunnel.before.as_ref().map(snapshot),
+                    "after": snapshot(&tunnel.after),
                 })),
             }),
         ),
@@ -175,6 +190,7 @@ mod tests {
                 from: "127.0.0.1:47650".parse().unwrap(),
                 to: "0.0.0.0:47650".parse().unwrap(),
             }),
+            tunnel: None,
         };
         audit.record(&record).unwrap();
         assert_eq!(
@@ -232,5 +248,50 @@ mod tests {
         assert_eq!(outcome["kind"], "native_tunnel");
         assert_eq!(outcome["mode"], "named");
         assert_eq!(outcome["outcome"]["reason"], "tunnel_incomplete");
+    }
+
+    #[test]
+    fn a_tunnel_outcome_keeps_its_setting_before_and_after() {
+        use crate::device_pairing::application::TunnelReplaced;
+        use crate::tunnel::application::TunnelMode;
+        let directory = tempfile::tempdir().unwrap();
+        let audit = DurableLinkingAudit::new(directory.path().join("audit"), Arc::new(Fixed));
+        let snapshot = |hostname: &str, token: &str| TunnelSnapshot {
+            enabled: true,
+            mode: TunnelMode::Named,
+            hostname: Some(hostname.into()),
+            token: Some(token.into()),
+        };
+        let record = LinkingAuditRecord {
+            operation_id: "op".into(),
+            caller: LinkingCaller {
+                organization_id: "org".into(),
+                principal_id: "owner".into(),
+                credential_id: "panel".into(),
+            },
+            subject: LinkingSubject::Tunnel { mode: None },
+            enabled: true,
+            running: true,
+            phase: LinkingAuditPhase::Applied {
+                applies: LinkingApply::Restarting,
+                written: true,
+                moved: None,
+                tunnel: Some(TunnelReplaced {
+                    before: Some(snapshot("https://old.example.com", "0011223344556677")),
+                    after: snapshot("https://new.example.com", "8899aabbccddeeff"),
+                }),
+            },
+        };
+        audit.record(&record).unwrap();
+        let outcome: Value = serde_json::from_slice(
+            &std::fs::read(directory.path().join("audit/native-tunnel-op-outcome.json")).unwrap(),
+        )
+        .unwrap();
+        let tunnel = &outcome["outcome"]["tunnel"];
+        assert_eq!(tunnel["before"]["hostname"], "https://old.example.com");
+        assert_eq!(tunnel["before"]["tokenFingerprint"], "0011223344556677");
+        assert_eq!(tunnel["after"]["hostname"], "https://new.example.com");
+        assert_eq!(tunnel["after"]["tokenFingerprint"], "8899aabbccddeeff");
+        assert_eq!(tunnel["after"]["mode"], "named");
     }
 }

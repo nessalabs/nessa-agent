@@ -88,6 +88,17 @@ impl TunnelToken {
         .then_some(Self(token))
     }
 
+    /// Which token this is, for audit evidence: the first 8 bytes of its
+    /// SHA-256, in hex. Telling two tokens apart needs no more, and it
+    /// cannot be used in the token's place.
+    pub fn fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(self.0.as_bytes())[..8]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
     /// The token itself, for the file `cloudflared` reads it from.
     pub fn expose(&self) -> &str {
         &self.0

@@ -33,7 +33,7 @@ use crate::core::self_restart::{RestartEnd, RestartReport, SelfRestart};
 use crate::device_pairing::application::{
     LinkingApply, LinkingAudit, LinkingAuditPhase, LinkingAuditRecord, LinkingCaller,
     LinkingChange, LinkingError, LinkingRestart, LinkingSubject, ListenMoved, NativeLinking,
-    SavedTunnel, TunnelChange, TunnelRequest,
+    SavedTunnel, TunnelChange, TunnelReplaced, TunnelRequest, TunnelSnapshot,
 };
 use crate::mcp_servers::application::StoreError;
 use crate::mcp_servers::infrastructure::{ConfigJson, Published};
@@ -185,6 +185,7 @@ impl ConfigLinking {
             applies,
             written,
             moved,
+            ref tunnel,
             ..
         } = saved;
         // Recorded before it is answered or applied: a change whose outcome
@@ -197,6 +198,7 @@ impl ConfigLinking {
                 applies,
                 written,
                 moved,
+                tunnel: tunnel.clone(),
             },
         )
         .await?;
@@ -289,6 +291,7 @@ impl ConfigLinking {
                 written: false,
                 moved,
                 mode: None,
+                tunnel: None,
             });
         };
         let config = self.config.clone();
@@ -304,6 +307,7 @@ impl ConfigLinking {
             written: true,
             moved,
             mode: None,
+            tunnel: None,
         })
     }
 
@@ -368,6 +372,7 @@ impl ConfigLinking {
             written,
             moved: None,
             mode: Some(edited.mode),
+            tunnel: Some(edited.replaced),
         })
     }
 
@@ -500,6 +505,8 @@ struct Saved {
     written: bool,
     moved: Option<ListenMoved>,
     mode: Option<TunnelMode>,
+    /// A tunnel change's setting before and after, for its audit record.
+    tunnel: Option<TunnelReplaced>,
 }
 
 /// What a tunnel edit makes of `config.json`.
@@ -512,6 +519,8 @@ struct EditedTunnel {
     mode: TunnelMode,
     /// A token to write, when one was given and differs from the saved one.
     token: Option<TunnelToken>,
+    /// The setting it replaces and the one it saves, for the audit.
+    replaced: TunnelReplaced,
 }
 
 /// The saved `native.tunnel`, if any. The file passed the runtime
@@ -549,6 +558,23 @@ fn edit_tunnel(
         .and_then(|section| section.ingress)
         .unwrap_or(DEFAULT_TUNNEL_INGRESS);
     let token = request.token.clone().or_else(|| saved_token.clone());
+    let replaced = TunnelReplaced {
+        before: saved.as_ref().map(|section| TunnelSnapshot {
+            enabled: section.enabled,
+            mode: section.mode.into(),
+            hostname: section
+                .hostname
+                .as_ref()
+                .map(|address| address.as_str().to_owned()),
+            token: saved_token.as_ref().map(TunnelToken::fingerprint),
+        }),
+        after: TunnelSnapshot {
+            enabled: request.enabled,
+            mode,
+            hostname: hostname.as_ref().map(|address| address.as_str().to_owned()),
+            token: token.as_ref().map(TunnelToken::fingerprint),
+        },
+    };
     // A named tunnel always has its address, on or off: the saved section
     // must read back as a whole setting.
     if mode == TunnelMode::Named && hostname.is_none() {
@@ -608,6 +634,7 @@ fn edit_tunnel(
             .token
             .clone()
             .filter(|token| Some(token) != saved_token.as_ref()),
+        replaced,
     })
 }
 
@@ -736,7 +763,7 @@ mod tests {
                 return Err(LinkingAuditUnavailable);
             }
             assert_eq!(record.caller, caller());
-            self.records.lock().unwrap().push(record.phase);
+            self.records.lock().unwrap().push(record.phase.clone());
             Ok(())
         }
     }
@@ -838,7 +865,8 @@ mod tests {
                 LinkingAuditPhase::Applied {
                     applies: LinkingApply::Unchanged,
                     written: true,
-                    moved: None
+                    moved: None,
+                    tunnel: None
                 }
             ]
         );
@@ -870,7 +898,8 @@ mod tests {
                 LinkingAuditPhase::Applied {
                     applies: LinkingApply::Restarting,
                     written: true,
-                    moved: None
+                    moved: None,
+                    tunnel: None
                 }
             ]
         );
@@ -932,6 +961,7 @@ mod tests {
                     from: SUPERSEDED_NATIVE_LISTEN,
                     to: DEFAULT_NATIVE_LISTEN,
                 }),
+                tunnel: None
             })
         );
         // Another loopback port is the person's own choice.
@@ -1117,7 +1147,8 @@ mod tests {
             Some(&LinkingAuditPhase::Applied {
                 applies: LinkingApply::Restarting,
                 written: false,
-                moved: None
+                moved: None,
+                tunnel: None
             })
         );
     }
@@ -1200,7 +1231,22 @@ mod tests {
                 LinkingAuditPhase::Applied {
                     applies: LinkingApply::Restarting,
                     written: true,
-                    moved: None
+                    moved: None,
+                    tunnel: Some(TunnelReplaced {
+                        // The fixture's section, off.
+                        before: Some(TunnelSnapshot {
+                            enabled: false,
+                            mode: TunnelMode::Quick,
+                            hostname: None,
+                            token: None,
+                        }),
+                        after: TunnelSnapshot {
+                            enabled: true,
+                            mode: TunnelMode::Quick,
+                            hostname: None,
+                            token: None,
+                        },
+                    }),
                 }
             ]
         );
@@ -1313,6 +1359,61 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o077, 0);
+    }
+
+    #[tokio::test]
+    async fn a_rotated_token_is_kept_in_the_audit_by_fingerprint_only() {
+        let namespace = tempfile::tempdir().unwrap();
+        let (written, _) = linking_on_with_ingress();
+        let files = files(Some(&written));
+        let first = TunnelToken::new("first-secret".into()).unwrap();
+        let second = TunnelToken::new("second-secret".into()).unwrap();
+        tunnel_linking(files.clone(), namespace.path(), None)
+            .linking
+            .set_tunnel(
+                caller(),
+                TunnelRequest {
+                    hostname: Some(address("https://gateway.example.com")),
+                    token: Some(first.clone()),
+                    ..request(true, Some(TunnelMode::Named))
+                },
+            )
+            .await
+            .unwrap();
+        // A fresh run, after the restart: only the token changes, so
+        // config.json is left as it was.
+        let linking = tunnel_linking(files.clone(), namespace.path(), None);
+        linking
+            .linking
+            .set_tunnel(
+                caller(),
+                TunnelRequest {
+                    token: Some(second.clone()),
+                    ..request(true, None)
+                },
+            )
+            .await
+            .unwrap();
+        let named = |token: &TunnelToken| TunnelSnapshot {
+            enabled: true,
+            mode: TunnelMode::Named,
+            hostname: Some("https://gateway.example.com".into()),
+            token: Some(token.fingerprint()),
+        };
+        assert_eq!(
+            linking.records().last(),
+            Some(&LinkingAuditPhase::Applied {
+                applies: LinkingApply::Restarting,
+                written: false,
+                moved: None,
+                tunnel: Some(TunnelReplaced {
+                    before: Some(named(&first)),
+                    after: named(&second),
+                }),
+            })
+        );
+        assert_ne!(first.fingerprint(), second.fingerprint());
+        assert!(!first.fingerprint().contains("secret"));
     }
 
     #[tokio::test]
