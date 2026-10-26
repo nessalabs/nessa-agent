@@ -191,11 +191,16 @@ and `just release` there.
 | `pnpm frontend:check` | Run the complete frontend/client formatting, lint, protocol, docs, type, test, and build contract |
 | `pnpm sdk:check` | Run SDK formatting, Clippy, tests, and warnings-denied Rustdoc |
 | `pnpm check` | Run the same frontend, Rust crate, SDK, MCP, and desktop checks composed in CI |
-| `pnpm check:changed` | Run the local scripts that own the files changed since `origin/main`, or `pnpm check` when a path has no narrow owner. Required CI still runs every job |
+| `pnpm check:changed --git` | Discover branch, working-tree and untracked changes against the merge-base with `origin/main` (or `main`) even in coding-agent shells; run their local checks, or `pnpm check` for empty, unavailable or unowned input. Required CI still runs every job |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm ui:check` | Confirm the vendored UI matches `nessa-ui-revision` (offline, runs before `typecheck`, `dev`, `build`, `test`) |
 | `pnpm ui:types` | Reconcile the vendored UI with `nessa-ui-revision` |
 | `pnpm ui:paths` | Write `tsconfig.json`'s `paths` from `scripts/nessa-ui-paths.mjs`, which owns them whole |
+
+`pnpm check:changed` without arguments discovers Git changes in a terminal; in
+non-interactive shells it reads file paths from stdin. An empty pipe selects the
+full check. Use `pnpm check:changed --plan --git` to inspect the discovered plan
+without running checks, or pass paths explicitly. `--git` cannot be mixed with paths.
 
 ### Desktop verification
 

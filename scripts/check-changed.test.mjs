@@ -1,7 +1,10 @@
 import assert from "node:assert/strict"
-import { spawnSync } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { execFileSync, spawnSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { dirname, join } from "node:path"
 import test from "node:test"
+import { fileURLToPath } from "node:url"
 
 import {
   changedPaths,
@@ -173,6 +176,83 @@ test("the plan command prints JSON on stdout and does not run pnpm", () => {
   assert.equal(result.status, 0)
   assert.equal(result.stderr, "")
   assert.deepEqual(JSON.parse(result.stdout), plan(["src/panel/ui/app.tsx"]))
+})
+
+test("explicit Git discovery includes committed, staged, unstaged and untracked changes with piped stdin", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "nessa-changed-discovery-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "pipe" })
+  const write = (path, text) => {
+    const file = join(root, path)
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, text)
+  }
+  const discover = (...args) => {
+    const result = spawnSync(
+      process.execPath,
+      [fileURLToPath(new URL("./check-changed.mjs", import.meta.url)), "--plan", ...args],
+      { cwd: root, input: "Cargo.lock\n", encoding: "utf8" },
+    )
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stderr, "")
+    return JSON.parse(result.stdout)
+  }
+  git("init", "--initial-branch=main")
+  git("config", "user.name", "Changed-check fixture")
+  git("config", "user.email", "changed-check@localhost")
+  for (const path of [
+    "src/panel.tsx",
+    "crates/nessa-sdk/src/lib.rs",
+    "crates/nessa-auth/src/lib.rs",
+  ])
+    write(path, "initial\n")
+  git("add", ".")
+  git("-c", "commit.gpgsign=false", "commit", "-m", "base")
+  git("update-ref", "refs/remotes/origin/main", "HEAD")
+  git("checkout", "-b", "topic")
+  assert.equal(discover("--git").tier, "full", "empty discovery stays full")
+
+  write("src/panel.tsx", "committed\n")
+  git("add", ".")
+  git("-c", "commit.gpgsign=false", "commit", "-m", "branch change")
+  write("crates/nessa-sdk/src/lib.rs", "staged\n")
+  git("add", "crates/nessa-sdk/src/lib.rs")
+  write("crates/nessa-auth/src/lib.rs", "unstaged\n")
+  write("crates/nessa-server/src/new.rs", "untracked\n")
+  const expected = plan([
+    "src/panel.tsx",
+    "crates/nessa-sdk/src/lib.rs",
+    "crates/nessa-auth/src/lib.rs",
+    "crates/nessa-server/src/new.rs",
+  ])
+  assert.deepEqual(discover("--git"), expected)
+  assert.deepEqual(discover("--", "--git"), expected)
+  assert.equal(discover().tier, "full", "stdin remains an explicit unknown path")
+  assert.equal(discover("--").tier, "full", "explicit empty paths ignore stdin")
+
+  write("Cargo.lock", "unknown path\n")
+  assert.equal(discover("--git").tier, "full", "unknown discovered paths stay full")
+  rmSync(join(root, "Cargo.lock"))
+  git("update-ref", "-d", "refs/remotes/origin/main")
+  assert.deepEqual(discover("--git"), expected, "local main remains the fallback")
+  git("branch", "-D", "main")
+  assert.equal(discover("--git").tier, "full", "missing bases stay full")
+})
+
+test("Git discovery refuses mixed paths rather than silently omitting them", () => {
+  for (const args of [
+    ["--git", "Cargo.lock"],
+    ["--", "--git", "Cargo.lock"],
+  ]) {
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/check-changed.mjs", "--plan", ...args],
+      { input: "", encoding: "utf8" },
+    )
+    assert.notEqual(result.status, 0)
+    assert.equal(result.stdout, "")
+    assert.match(result.stderr, /--git cannot be combined with paths/)
+  }
 })
 
 test("selected checks spawn pnpm directly, and through cmd.exe on Windows", () => {

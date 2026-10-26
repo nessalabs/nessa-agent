@@ -12,12 +12,15 @@
  *
  *   git diff --name-only --no-renames base...head | node scripts/check-changed.mjs --plan
  *   node scripts/check-changed.mjs --plan src/panel/ui/app.tsx
+ *   node scripts/check-changed.mjs --plan --git
  *   pnpm check:changed
  *
  * `--plan` prints one JSON object on stdout and runs nothing. Without it, the
  * plan is a line on stderr and the selected scripts inherit stdout. An empty
  * pipe is an empty list, which runs `pnpm check`. Paths are the arguments,
  * with or without `--`. A terminal with no arguments reads the git diff.
+ * `--git` explicitly discovers changes even with non-interactive stdin; it
+ * cannot be combined with paths. An empty pipe without it still runs the full check.
  */
 import { spawnSync } from "node:child_process"
 import { readFileSync } from "node:fs"
@@ -237,10 +240,14 @@ const invoked = process.argv[1] && import.meta.url === pathToFileURL(process.arg
 if (invoked) {
   const argv = process.argv.slice(2)
   const planOnly = argv[0] === "--plan"
-  const rest = planOnly ? argv.slice(1) : argv
+  const supplied = planOnly ? argv.slice(1) : argv
+  const rest = supplied[0] === "--" ? supplied.slice(1) : supplied
   let paths
-  if (rest[0] === "--") {
-    paths = rest.slice(1)
+  if (rest[0] === "--git") {
+    if (rest.length !== 1) throw new Error("--git cannot be combined with paths")
+    paths = changedPaths(gitOutput)
+  } else if (supplied[0] === "--") {
+    paths = rest
   } else if (rest.length > 0) {
     paths = rest
   } else if (!process.stdin.isTTY) {
