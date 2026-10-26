@@ -1516,6 +1516,7 @@ describe("a transcript", () => {
     await update(2, false)
     // Before any call, the row is all that says the agent is at work.
     expect(host.querySelector(".workspace-live")?.textContent).toContain("Thinking")
+    const status = host.querySelector(".workspace-live")
     await update(3, true)
     expect(host.querySelector(".workspace-live")).toBeNull()
     const trace = [...host.querySelectorAll(".workspace-work")].at(-1)
@@ -1525,6 +1526,8 @@ describe("a transcript", () => {
     expect(host.querySelector('.workspace-live-spoken[role="status"]')?.textContent).toBe(
       "sleep 5",
     )
+    // The same status, so the new label is announced as it changes.
+    expect(host.querySelector(".workspace-live-spoken")).toBe(status)
   })
 })
 
