@@ -9,7 +9,10 @@ export function githubAvatarUrl(id: number): string {
   return `https://avatars.githubusercontent.com/u/${id}?s=56&v=4`
 }
 
-/** The window's `GithubAvatar`: GitHub's picture, the login's initial until it loads or if it can't. */
+/**
+ * The window's `GithubAvatar`: GitHub's picture, or the login's initial for an
+ * unknown account (id 0, asked for nothing) or a picture that fails to load.
+ */
 export const githubAvatar: GithubAvatar = ({ id, login }) => (
   <ContactAvatar
     name={login}

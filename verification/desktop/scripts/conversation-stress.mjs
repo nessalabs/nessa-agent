@@ -1771,145 +1771,156 @@ const steps = {
       return route.fulfill({ contentType: "image/png", body: FAKE_AVATAR })
     }
     await run.page.route(pictures, answer)
-    await run.exclusive(async () => {
-      await openAccounts(run.page)
-      if (!(await waitFor(async () => (await state()) === "signed-out", 30_000))) {
-        failures.push(`GitHub was ${await state()} before Connect`)
-        return
-      }
-      await shot("signed-out")
-      await row.getByRole("button", { name: names.githubConnect }).click()
-      const code = row.locator("[data-github-code]")
-      const shown = await waitFor(
-        async () =>
-          github.userCode() !== null &&
-          (await code.getAttribute("data-github-code").catch(() => null)) ===
-            github.userCode(),
-        30_000,
-      )
-      if (!shown) {
-        failures.push(
-          `the row did not show the code GitHub handed out (${github.userCode()})`,
-        )
-        return
-      }
-      await shot("connecting")
-      const open = await row.locator("[data-github-open]").getAttribute("href")
-      if (open !== github.verificationUri)
-        failures.push(`Open GitHub goes to ${open}, not ${github.verificationUri}`)
-      // The person enters the code on GitHub: the gateway's next poll takes it.
-      github.approve()
-      const connected = await waitFor(
-        async () =>
-          (await state()) === "connected" &&
-          (await row.textContent()).includes(`@${FAKE_ACCOUNT.login}`) &&
-          (await row.locator(css.githubStatus).textContent()) === "Connected",
-        30_000,
-      )
-      if (!connected) {
-        failures.push(`the row is ${await state()} after GitHub approved the code`)
-        return
-      }
-      // The picture is GitHub's, asked for by the account's id: the page was
-      // answered above, so it loads here with nothing leaving the machine.
-      const avatar = run.page.locator(`${css.githubAvatar} img`)
-      const pictured = await waitFor(
-        () =>
-          avatar
-            .evaluate((image) => image.complete && image.naturalWidth > 0)
-            .catch(() => false),
-        10_000,
-      )
-      if (!pictured) failures.push("the row did not draw the account's picture")
-      if (!avatars.some((url) => url.includes(`/u/${FAKE_ACCOUNT.id}?`)))
-        failures.push(
-          `the picture was not asked for by id: ${avatars.join(", ") || "none"}`,
-        )
-      // At rest the actions are out of sight; the pointer or focus brings them.
-      const opacity = (selector) =>
-        row.locator(selector).evaluate((node) => getComputedStyle(node).opacity)
-      const shows = (actions) =>
-        waitFor(
+    // Answered until the step ends: its Disconnect reopens the signed-in row.
+    try {
+      await run.exclusive(async () => {
+        await openAccounts(run.page)
+        if (!(await waitFor(async () => (await state()) === "signed-out", 30_000))) {
+          failures.push(`GitHub was ${await state()} before Connect`)
+          return
+        }
+        await shot("signed-out")
+        await row.getByRole("button", { name: names.githubConnect }).click()
+        const code = row.locator("[data-github-code]")
+        const shown = await waitFor(
           async () =>
-            (await opacity(css.githubActions)) === (actions ? "1" : "0") &&
-            (await opacity(css.githubStatus)) === (actions ? "0" : "1"),
-          5_000,
+            github.userCode() !== null &&
+            (await code.getAttribute("data-github-code").catch(() => null)) ===
+              github.userCode(),
+          30_000,
         )
-      await run.page.mouse.move(1, 1)
-      if (!(await shows(false))) failures.push("the actions show with the row at rest")
-      await shot("connected")
-      await row.hover()
-      if (!(await shows(true)))
-        failures.push("the actions did not show under the pointer")
-      await shot("connected-hover")
-      await run.page.mouse.move(1, 1)
-      await shows(false)
-      // From the first action, Tab reaches the second: both are in the tab order.
-      await row.locator("[data-github-repositories]").focus()
-      await run.page.keyboard.press("Tab")
-      const disconnect = row.getByRole("button", { name: names.githubDisconnect })
-      if (!(await disconnect.evaluate((node) => node === document.activeElement)))
-        failures.push("Tab from Choose repositories did not reach Disconnect")
-      if (!(await shows(true)))
-        failures.push("the actions did not show with focus in the row")
-      await shot("connected-focus")
-      const repositories = await row
-        .locator("[data-github-repositories]")
-        .getAttribute("href")
-      if (repositories !== github.installUrl)
+        if (!shown) {
+          failures.push(
+            `the row did not show the code GitHub handed out (${github.userCode()})`,
+          )
+          return
+        }
+        await shot("connecting")
+        const open = await row.locator("[data-github-open]").getAttribute("href")
+        if (open !== github.verificationUri)
+          failures.push(`Open GitHub goes to ${open}, not ${github.verificationUri}`)
+        // The person enters the code on GitHub: the gateway's next poll takes it.
+        github.approve()
+        const connected = await waitFor(
+          async () =>
+            (await state()) === "connected" &&
+            (await row.textContent()).includes(`@${FAKE_ACCOUNT.login}`) &&
+            (await row.locator(css.githubStatus).textContent()) === "Connected",
+          30_000,
+        )
+        if (!connected) {
+          failures.push(`the row is ${await state()} after GitHub approved the code`)
+          return
+        }
+        // The picture is GitHub's, asked for by the account's id: the page was
+        // answered above, so it loads here with nothing leaving the machine.
+        const avatar = run.page.locator(`${css.githubAvatar} img`)
+        const pictured = await waitFor(
+          () =>
+            avatar
+              .evaluate((image) => image.complete && image.naturalWidth > 0)
+              .catch(() => false),
+          10_000,
+        )
+        if (!pictured) failures.push("the row did not draw the account's picture")
+        if (!avatars.some((url) => url.includes(`/u/${FAKE_ACCOUNT.id}?`)))
+          failures.push(
+            `the picture was not asked for by id: ${avatars.join(", ") || "none"}`,
+          )
+        // At rest the actions are out of sight; the pointer or focus brings them.
+        const opacity = (selector) =>
+          row.locator(selector).evaluate((node) => getComputedStyle(node).opacity)
+        const shows = (actions) =>
+          waitFor(
+            async () =>
+              (await opacity(css.githubActions)) === (actions ? "1" : "0") &&
+              (await opacity(css.githubStatus)) === (actions ? "0" : "1"),
+            5_000,
+          )
+        await run.page.mouse.move(1, 1)
+        if (!(await shows(false))) failures.push("the actions show with the row at rest")
+        await shot("connected")
+        await row.hover()
+        if (!(await shows(true)))
+          failures.push("the actions did not show under the pointer")
+        await shot("connected-hover")
+        await run.page.mouse.move(1, 1)
+        if (!(await shows(false)))
+          failures.push("the actions still show once the pointer leaves")
+        // Both actions are in the tab order: Shift+Tab from Disconnect reaches
+        // Choose repositories, and Tab goes back.
+        const disconnect = row.getByRole("button", { name: names.githubDisconnect })
+        const focused = (locator) =>
+          locator.evaluate((node) => node === document.activeElement)
+        await disconnect.focus()
+        await run.page.keyboard.press("Shift+Tab")
+        if (!(await focused(row.locator("[data-github-repositories]"))))
+          failures.push("Shift+Tab from Disconnect did not reach Choose repositories")
+        await run.page.keyboard.press("Tab")
+        if (!(await focused(disconnect)))
+          failures.push("Tab from Choose repositories did not reach Disconnect")
+        if (!(await shows(true)))
+          failures.push("the actions did not show with focus in the row")
+        await shot("connected-focus")
+        const repositories = await row
+          .locator("[data-github-repositories]")
+          .getAttribute("href")
+        if (repositories !== github.installUrl)
+          failures.push(
+            `Choose repositories goes to ${repositories}, not ${github.installUrl}`,
+          )
+        await closeSettings(run.page)
+      })
+      if (failures.length) return
+      if (!existsSync(signIn)) failures.push("the sign-in was not saved")
+      else if ((lstatSync(signIn).mode & 0o077) !== 0)
         failures.push(
-          `Choose repositories goes to ${repositories}, not ${github.installUrl}`,
+          `the sign-in file is mode ${(lstatSync(signIn).mode & 0o777).toString(8)}`,
         )
-      await closeSettings(run.page)
-    })
-    await run.page.unroute(pictures, answer)
-    if (failures.length) return
-    if (!existsSync(signIn)) failures.push("the sign-in was not saved")
-    else if ((lstatSync(signIn).mode & 0o077) !== 0)
-      failures.push(
-        `the sign-in file is mode ${(lstatSync(signIn).mode & 0o777).toString(8)}`,
+      if (run.stack.gateway.log().includes(github.token))
+        failures.push("the gateway logged the GitHub token")
+      // An agent opened now is started with the sign-in, for gh and for git.
+      await githubAgent(run, step, " connected", `token=${print} git=${print}`, failures)
+      await githubAgent(
+        run,
+        step,
+        " connected",
+        `token=${print} git=${print}`,
+        failures,
+        true,
       )
-    if (run.stack.gateway.log().includes(github.token))
-      failures.push("the gateway logged the GitHub token")
-    // An agent opened now is started with the sign-in, for gh and for git.
-    await githubAgent(run, step, " connected", `token=${print} git=${print}`, failures)
-    await githubAgent(
-      run,
-      step,
-      " connected",
-      `token=${print} git=${print}`,
-      failures,
-      true,
-    )
-    if (failures.length) return
-    await run.exclusive(async () => {
-      await openAccounts(run.page)
-      await row.getByRole("button", { name: names.githubDisconnect }).click()
-      if (!(await waitFor(async () => (await state()) === "signed-out", 30_000)))
-        failures.push(`the row is ${await state()} after Disconnect`)
-      await closeSettings(run.page)
-    })
-    if (failures.length) return
-    if (existsSync(signIn)) failures.push("Disconnect left the sign-in file")
-    await githubAgent(run, step, " disconnected", "token=none git=none", failures)
-    await githubAgent(run, step, " disconnected", "token=none git=none", failures, true)
-    // Each step of both is on record, and no record holds the token.
-    const audit = join(namespace, "conversations", "audit", "github")
-    const records = existsSync(audit) ? readdirSync(audit) : []
-    for (const event of [
-      "connect-requested",
-      "connected",
-      "disconnect-requested",
-      "disconnected",
-    ])
-      if (!records.some((name) => name.endsWith(`-${event}.json`)))
-        failures.push(`the audit has no ${event} record`)
-    if (
-      records.some((name) =>
-        readFileSync(join(audit, name), "utf8").includes(github.token),
+      if (failures.length) return
+      await run.exclusive(async () => {
+        await openAccounts(run.page)
+        await row.getByRole("button", { name: names.githubDisconnect }).click()
+        if (!(await waitFor(async () => (await state()) === "signed-out", 30_000)))
+          failures.push(`the row is ${await state()} after Disconnect`)
+        await closeSettings(run.page)
+      })
+      if (failures.length) return
+      if (existsSync(signIn)) failures.push("Disconnect left the sign-in file")
+      await githubAgent(run, step, " disconnected", "token=none git=none", failures)
+      await githubAgent(run, step, " disconnected", "token=none git=none", failures, true)
+      // Each step of both is on record, and no record holds the token.
+      const audit = join(namespace, "conversations", "audit", "github")
+      const records = existsSync(audit) ? readdirSync(audit) : []
+      for (const event of [
+        "connect-requested",
+        "connected",
+        "disconnect-requested",
+        "disconnected",
+      ])
+        if (!records.some((name) => name.endsWith(`-${event}.json`)))
+          failures.push(`the audit has no ${event} record`)
+      if (
+        records.some((name) =>
+          readFileSync(join(audit, name), "utf8").includes(github.token),
+        )
       )
-    )
-      failures.push("an audit record holds the GitHub token")
+        failures.push("an audit record holds the GitHub token")
+    } finally {
+      await run.page.unroute(pictures, answer)
+    }
   },
 
   async upgrade(run, step, failures) {

@@ -1388,8 +1388,8 @@ html:not(.dark) .settings .settings-card {
  * mark is a tile, at the tile's size. "Connected" and the actions share one
  * cell, so the room is the wider of the two and the swap moves nothing; the
  * actions take its place under the pointer or keyboard focus, and stay out
- * while an action is in flight or after one failed, and where there is no
- * pointer to hover with.
+ * while an action is in flight or after one failed, and wherever a finger
+ * can reach them.
  */
 .settings-github-avatar {
   width: 28px;
@@ -1418,13 +1418,16 @@ html:not(.dark) .settings .settings-card {
   font-size: var(--desktop-text-footnote);
 }
 
+/* Out of sight is out of reach of the pointer too: a tap on "Connected" is not a Disconnect. */
 .settings-row[data-github-settled] .settings-github-actions {
   opacity: 0;
+  pointer-events: none;
 }
 
 .settings-row[data-github-settled]:is(:hover, :focus-within) .settings-github-actions,
 .settings-row:not([data-github-settled]) .settings-github-actions {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .settings-row[data-github-settled]:is(:hover, :focus-within) .settings-github-status,
@@ -1432,9 +1435,10 @@ html:not(.dark) .settings .settings-card {
   opacity: 0;
 }
 
-@media (hover: none) {
+@media (hover: none), (any-pointer: coarse) {
   .settings-row[data-github-settled] .settings-github-actions {
     opacity: 1;
+    pointer-events: auto;
   }
   .settings-row[data-github-settled] .settings-github-status {
     opacity: 0;

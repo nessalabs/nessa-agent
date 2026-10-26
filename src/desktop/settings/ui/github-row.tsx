@@ -34,7 +34,7 @@ import { FoundSetting, ItemRow, RowAction, RowLink } from "./settings-controls"
  *        └────────────────────────────Disconnect───────────────────┘
  * ```
  */
-/** Draws a GitHub account's picture, with `login`'s initial until it has loaded. */
+/** Draws a GitHub account's picture, or `login`'s initial when there is none or it fails to load. */
 export type GithubAvatar = (props: { id: number; login: string }) => ReactNode
 
 /** The account's initial, and no request: the row without a composed picture. */
