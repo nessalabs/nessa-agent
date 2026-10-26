@@ -2496,10 +2496,23 @@ export interface GithubCode {
   /** Whole seconds left before the code expires, when this was answered. */
   expiresInSeconds: number
 }
+/** Live delivery is opted in for this gateway's signed-in GitHub account. Gaps report expired catch-up history; they are not acknowledged automatically. */
+export interface GithubLiveEvents {
+  enabled: boolean
+  repositories: number
+  gaps: number
+}
+export interface GithubLiveEventsParams {
+  enabled: boolean
+  /** Explicit acknowledgement of missing history, continue within retained events. */
+  acceptGaps?: boolean
+}
 /** Result of github.status, github.connect, github.cancel and github.disconnect: where the gateway's GitHub sign-in stands now. The gateway signs in through the Nessa GitHub App with the device flow, keeps the token in a private file of its own, and gives it to each agent it opens from then on as GH_TOKEN and a git credential helper for https://github.com. */
 export interface GithubConnection {
   /** Where the sign-in stands. */
   state: GithubConnectState
+  /** Present when this build stage has a live relay configured. */
+  liveEvents?: GithubLiveEvents
   /** Present exactly when connected. */
   account?: GithubAccount
   /** Present exactly when connecting. */
@@ -2518,6 +2531,8 @@ export const GithubErrorCode = {
   GithubRejected: "github_rejected",
   GithubStorageUnavailable: "github_storage_unavailable",
   GithubAuditUnavailable: "github_audit_unavailable",
+  GithubLiveUnavailable: "github_live_unavailable",
+  GithubLiveCapacity: "github_live_capacity",
 } as const
 export type GithubErrorCode = (typeof GithubErrorCode)[keyof typeof GithubErrorCode]
 /** Wire input for peer.enroll. This gateway enrolls with its own native key, so the peer knows it as one principal however often it is enrolled. */
@@ -3202,7 +3217,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 87,
+  maxReadyMethods: 88,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3483,6 +3498,7 @@ export const ProductMethod = {
   PairingDeny: "pairing.deny",
   PairingCancel: "pairing.cancel",
   PairingSetLinking: "pairing.setLinking",
+  GithubLiveEvents: "github.liveEvents",
   GithubStatus: "github.status",
   GithubConnect: "github.connect",
   GithubCancel: "github.cancel",
@@ -3583,6 +3599,7 @@ export const productReadyMethods = [
   "pairing.deny",
   "pairing.cancel",
   "pairing.setLinking",
+  "github.liveEvents",
   "github.status",
   "github.connect",
   "github.cancel",
@@ -3674,6 +3691,7 @@ export const productMethodGrants = {
   "pairing.deny": "credential.manage",
   "pairing.cancel": "credential.manage",
   "pairing.setLinking": "credential.manage",
+  "github.liveEvents": "credential.manage",
   "github.status": "credential.manage",
   "github.connect": "credential.manage",
   "github.cancel": "credential.manage",

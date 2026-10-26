@@ -8,3 +8,5 @@ pub use ports::{
     GitHubCredentials, RelayLiveSource, RelayNotifications, RelayReporter, RelaySource, RelayStore,
     RelayWait,
 };
+mod live_events;
+pub use live_events::{ConnectedGithub, LiveEventStore, LiveEvents};

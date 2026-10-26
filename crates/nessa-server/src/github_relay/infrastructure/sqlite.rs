@@ -18,7 +18,7 @@ impl SqliteRelayStore {
     pub fn new(path: PathBuf, now: Arc<dyn Fn() -> i64 + Send + Sync>) -> Self {
         Self { path, now }
     }
-    async fn run<T: Send + 'static>(
+    pub(super) async fn run<T: Send + 'static>(
         &self,
         operation: impl FnOnce(&mut nessa_local_database::rusqlite::Connection, i64) -> Result<T, Failure>
             + Send
@@ -37,7 +37,7 @@ impl SqliteRelayStore {
         .map_err(|_| Failure::Storage)?
     }
 }
-fn failure(_: nessa_local_database::rusqlite::Error) -> Failure {
+pub(super) fn failure(_: nessa_local_database::rusqlite::Error) -> Failure {
     Failure::Storage
 }
 #[async_trait::async_trait]

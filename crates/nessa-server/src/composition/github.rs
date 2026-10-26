@@ -28,7 +28,10 @@ pub(super) struct GithubComposition {
 /// override cannot be read or no HTTP client can be built. Without it the
 /// github methods answer `github_not_configured` and agents are given no
 /// GitHub sign-in.
-pub(super) async fn compose(namespace: &Path) -> Option<GithubComposition> {
+pub(super) async fn compose(
+    namespace: &Path,
+    environment: &crate::env::Environment,
+) -> Option<GithubComposition> {
     let app = match std::env::var_os("NESSA_GITHUB_APP") {
         None => GithubApp::released(),
         Some(path) => match std::fs::read(&path).map(|bytes| GithubApp::parse(&bytes)) {
@@ -47,7 +50,7 @@ pub(super) async fn compose(namespace: &Path) -> Option<GithubComposition> {
         },
     };
     let install_url = app.install_url();
-    let Some(api) = GithubHttps::new(app) else {
+    let Some(api) = GithubHttps::new(app.clone()) else {
         tracing::error!("GitHub sign-in is off this run: no HTTPS client could be built");
         return None;
     };
@@ -63,6 +66,30 @@ pub(super) async fn compose(namespace: &Path) -> Option<GithubComposition> {
         )
         .await,
     );
+    let live = if crate::github_relay::infrastructure::relay_configuration(environment.stage)
+        .is_ok_and(|relay| relay.client_id == app.client_id && relay.app_slug == app.slug)
+    {
+        match (
+            super::github_relay::http(),
+            super::github_relay::store(environment),
+        ) {
+            (Ok(http), Ok(store)) => {
+                Some(Arc::new(crate::github_relay::application::LiveEvents::new(
+                    Arc::new(
+                        crate::github_relay::infrastructure::ConnectedGithubCredentials::new(
+                            http,
+                            connections.clone(),
+                            app,
+                        ),
+                    ),
+                    store,
+                )))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
     Some(GithubComposition {
         credentials: OpenCredentials::read_from(Arc::new(GithubLaunchCredentials::new(
             connections.clone(),
@@ -70,6 +97,8 @@ pub(super) async fn compose(namespace: &Path) -> Option<GithubComposition> {
         routes: Arc::new(GithubRoutes {
             connections,
             install_url,
+            live,
+            changes: tokio::sync::Mutex::new(()),
         }),
     })
 }

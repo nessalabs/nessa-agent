@@ -12,7 +12,7 @@ use crate::github::domain::{ConnectEnd, GithubStatus};
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
     GithubAccount, GithubCode, GithubConnectEnd, GithubConnectState, GithubConnection,
-    GithubErrorCode,
+    GithubErrorCode, GithubLiveEvents, GithubLiveEventsParams,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use serde_json::json;
@@ -25,19 +25,62 @@ pub(super) async fn dispatch(
     let Some(github) = state.github.as_ref() else {
         return failure(&frame.id, GithubErrorCode::GithubNotConfigured.as_str());
     };
-    if frame.params != json!({}) {
+    if frame.method != "github.liveEvents" && frame.params != json!({}) {
         return failure(&frame.id, "invalid_request");
     }
+    let _change = github.changes.lock().await;
     let caller = caller(session);
+    let initiator=serde_json::to_string(&json!({"organizationId":caller.organization_id,"principalId":caller.principal_id,"credentialId":caller.credential_id})).expect("caller is serializable");
+    if frame.method == "github.liveEvents" {
+        let Ok(params) = serde_json::from_value::<GithubLiveEventsParams>(frame.params.clone())
+        else {
+            return failure(&frame.id, "invalid_request");
+        };
+        let Some(live) = &github.live else {
+            return failure(&frame.id, "github_live_unavailable");
+        };
+        if let Err(error) = live
+            .set(
+                params.enabled,
+                &initiator,
+                params.accept_gaps.unwrap_or(false),
+            )
+            .await
+        {
+            return failure(&frame.id, relay_code(&error));
+        }
+    }
+    if frame.method == "github.disconnect" {
+        if let Some(live) = &github.live {
+            if let Err(error) = live.set(false, &initiator, false).await {
+                return failure(&frame.id, relay_code(&error));
+            }
+        }
+    }
     let answer = match frame.method.as_str() {
-        "github.status" => Ok(github.connections.status()),
+        "github.status" | "github.liveEvents" => Ok(github.connections.status()),
         "github.connect" => github.connections.connect(caller).await,
         "github.cancel" => github.connections.cancel(caller).await,
         "github.disconnect" => github.connections.disconnect(caller).await,
         _ => return failure(&frame.id, "unknown_method"),
     };
     match answer {
-        Ok(status) => success(&frame.id, &connection(status, &github.install_url)),
+        Ok(status) => {
+            let mut wire = connection(status, &github.install_url);
+            if let Some(live) = &github.live {
+                match live.status().await {
+                    Ok((enabled, repositories, gaps)) => {
+                        wire.live_events = Some(GithubLiveEvents {
+                            enabled,
+                            repositories: repositories as u64,
+                            gaps: gaps as u64,
+                        })
+                    }
+                    Err(error) => return failure(&frame.id, relay_code(&error)),
+                }
+            }
+            success(&frame.id, &wire)
+        }
         Err(error) => failure(&frame.id, code(error).as_str()),
     }
 }
@@ -47,6 +90,8 @@ pub(super) async fn dispatch(
 pub struct GithubRoutes {
     pub connections: std::sync::Arc<GithubConnections>,
     pub install_url: String,
+    pub live: Option<std::sync::Arc<crate::github_relay::application::LiveEvents>>,
+    pub changes: tokio::sync::Mutex<()>,
 }
 
 /// The authenticated caller, as each change's records name it.
@@ -82,6 +127,7 @@ fn end(end: ConnectEnd) -> GithubConnectEnd {
 
 pub(super) fn connection(status: GithubStatus, install_url: &str) -> GithubConnection {
     let mut wire = GithubConnection {
+        live_events: None,
         state: GithubConnectState::SignedOut,
         account: None,
         code: None,
@@ -119,4 +165,12 @@ pub(super) fn connection(status: GithubStatus, install_url: &str) -> GithubConne
         }
     }
     wire
+}
+
+fn relay_code(error: &crate::github_relay::domain::Failure) -> &'static str {
+    use crate::github_relay::domain::Failure;
+    match error {
+        Failure::Capacity => "github_live_capacity",
+        _ => "github_live_unavailable",
+    }
 }

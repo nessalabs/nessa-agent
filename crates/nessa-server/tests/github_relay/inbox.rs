@@ -489,3 +489,180 @@ async fn a_full_inbox_expiry_keeps_each_deletion_identity_in_the_bounded_audit()
         .unwrap();
     assert_eq!(receipt, count + 1);
 }
+
+struct ConnectedAccount {
+    user: AtomicI64,
+    unavailable: AtomicBool,
+    count: usize,
+}
+#[async_trait::async_trait]
+impl crate::github_relay::application::GitHubCredentials for ConnectedAccount {
+    async fn token(&self) -> Result<String, Failure> {
+        if self.user.load(Ordering::SeqCst) == 0 {
+            Err(Failure::CredentialsUnavailable)
+        } else {
+            Ok("held-by-sign-in-owner".into())
+        }
+    }
+    async fn identify(&self, _: &str) -> Result<Binding, Failure> {
+        Ok(binding(&self.user.load(Ordering::SeqCst).to_string()))
+    }
+}
+#[async_trait::async_trait]
+impl crate::github_relay::application::ConnectedGithub for ConnectedAccount {
+    fn user_id(&self) -> Option<String> {
+        let user = self.user.load(Ordering::SeqCst);
+        (user > 0).then(|| user.to_string())
+    }
+    async fn repositories(&self) -> Result<Vec<Binding>, Failure> {
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Err(Failure::Offline);
+        }
+        (0..self.count)
+            .map(|i| {
+                Binding::new(
+                    self.user.load(Ordering::SeqCst).to_string(),
+                    (42 + i).to_string(),
+                    format!("owner/repo{i}"),
+                    uuid::Uuid::new_v4(),
+                )
+            })
+            .collect()
+    }
+}
+#[tokio::test]
+async fn opt_in_survives_restart_without_resetting_the_cursor_and_disable_fences_old_pages() {
+    use crate::github_relay::application::LiveEvents;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(store(&directory));
+    let account = Arc::new(ConnectedAccount {
+        user: AtomicI64::new(11),
+        unavailable: AtomicBool::new(false),
+        count: 1,
+    });
+    let live = LiveEvents::new(account.clone(), store.clone());
+    assert_eq!(live.status().await.unwrap(), (false, 0, 0));
+    live.set(true, "principal:owner/credential:one", false)
+        .await
+        .unwrap();
+    let first = store.bindings().await.unwrap().remove(0);
+    let first_page = page("11", 1);
+    store.commit(&first, 0, &first_page).await.unwrap();
+    live.set(true, "principal:owner/credential:one", false)
+        .await
+        .unwrap();
+    assert_eq!(store.cursor(&first).await.unwrap(), 1);
+    let restored = LiveEvents::new(account.clone(), Arc::new(self::store(&directory)));
+    assert_eq!(restored.status().await.unwrap(), (true, 1, 0));
+    store.gap(&first, 99).await.unwrap();
+    assert_eq!(live.status().await.unwrap(), (true, 1, 1));
+    live.set(true, "principal:owner/credential:one", true)
+        .await
+        .unwrap();
+    let resumed = store.bindings().await.unwrap().remove(0);
+    assert_ne!(resumed.generation(), first.generation());
+    assert_eq!(store.cursor(&resumed).await.unwrap(), 99);
+    assert_eq!(live.status().await.unwrap(), (true, 1, 0));
+    live.set(false, "principal:owner/credential:one", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.commit(&first, 1, &page("11", 2)).await,
+        Err(Failure::CursorChanged)
+    );
+    assert!(store.events(&first).await.unwrap().is_empty());
+    assert_eq!(restored.status().await.unwrap(), (false, 0, 0));
+    live.set(true, "principal:owner/credential:one", false)
+        .await
+        .unwrap();
+    let second = store.bindings().await.unwrap().remove(0);
+    assert_ne!(first.generation(), second.generation());
+    assert_eq!(
+        store.commit(&first, 0, &first_page).await,
+        Err(Failure::CursorChanged)
+    );
+    let db = nessa_local_database::rusqlite::Connection::open(
+        directory.path().join("private/inbox.sqlite"),
+    )
+    .unwrap();
+    let (cause, initiator): (String, String) = db
+        .query_row(
+            "SELECT cause,initiator FROM audit WHERE delivery_id=?",
+            [&first_page.events[0].delivery_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (cause.as_str(), initiator.as_str()),
+        ("live_events_disabled", "principal:owner/credential:one")
+    );
+}
+#[tokio::test]
+async fn signed_out_offline_and_excess_repositories_cannot_enable_or_replace_the_selection() {
+    use crate::github_relay::application::LiveEvents;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(store(&directory));
+    let account = Arc::new(ConnectedAccount {
+        user: AtomicI64::new(0),
+        unavailable: AtomicBool::new(false),
+        count: 1,
+    });
+    let live = LiveEvents::new(account.clone(), store.clone());
+    assert_eq!(
+        live.set(true, "owner", false).await,
+        Err(Failure::CredentialsUnavailable)
+    );
+    account.user.store(11, Ordering::SeqCst);
+    live.set(true, "owner", false).await.unwrap();
+    let first = store.bindings().await.unwrap();
+    account.unavailable.store(true, Ordering::SeqCst);
+    assert_eq!(live.set(true, "owner", false).await, Err(Failure::Offline));
+    assert_eq!(store.bindings().await.unwrap(), first);
+    let excessive = LiveEvents::new(
+        Arc::new(ConnectedAccount {
+            user: AtomicI64::new(11),
+            unavailable: AtomicBool::new(false),
+            count: 17,
+        }),
+        store.clone(),
+    );
+    assert_eq!(
+        excessive.set(true, "owner", false).await,
+        Err(Failure::Capacity)
+    );
+    assert_eq!(store.bindings().await.unwrap(), first);
+    account.user.store(22, Ordering::SeqCst);
+    assert_eq!(live.status().await.unwrap(), (false, 0, 0));
+    let guarded =
+        crate::github_relay::infrastructure::ConnectedRelayStore::new(store.clone(), account);
+    assert!(guarded.bindings().await.unwrap().is_empty());
+    assert_eq!(
+        guarded.commit(&first[0], 0, &page("11", 1)).await,
+        Err(Failure::IdentityChanged)
+    );
+}
+#[tokio::test]
+async fn cleanup_audit_failure_refuses_disable_and_preserves_selection() {
+    use crate::github_relay::application::LiveEvents;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(store(&directory));
+    let live = LiveEvents::new(
+        Arc::new(ConnectedAccount {
+            user: AtomicI64::new(11),
+            unavailable: AtomicBool::new(false),
+            count: 1,
+        }),
+        store.clone(),
+    );
+    live.set(true, "owner", false).await.unwrap();
+    let binding = store.bindings().await.unwrap().remove(0);
+    store.commit(&binding, 0, &page("11", 1)).await.unwrap();
+    let db = nessa_local_database::rusqlite::Connection::open(
+        directory.path().join("private/inbox.sqlite"),
+    )
+    .unwrap();
+    db.execute_batch("CREATE TRIGGER refuse_cleanup BEFORE INSERT ON binding_audit WHEN NEW.cause='live_events_disabled' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END;").unwrap();
+    assert_eq!(live.set(false, "owner", false).await, Err(Failure::Storage));
+    assert_eq!(live.status().await.unwrap(), (true, 1, 0));
+    assert_eq!(store.events(&binding).await.unwrap().len(), 1);
+}

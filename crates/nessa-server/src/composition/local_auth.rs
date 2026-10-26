@@ -297,7 +297,7 @@ pub(super) async fn product_state(
     // The GitHub sign-in, composed where agents are: they are what it is for.
     #[cfg(unix)]
     let github = match &settings.agents {
-        Some(_) => super::github::compose(namespace).await,
+        Some(_) => super::github::compose(namespace, config).await,
         None => None,
     };
     let (conversations, agent_probe, warm_ups, mcp, environment_peers) =

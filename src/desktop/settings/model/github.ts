@@ -17,6 +17,11 @@ export type GithubView =
   | {
       readonly kind: "connected"
       readonly login: string
+      readonly liveEvents?: {
+        readonly enabled: boolean
+        readonly repositories: number
+        readonly gaps: number
+      }
       /** Said when a failed sign-out is not on the gateway's record. */
       readonly unrecorded?: string
       readonly installUrl: string

@@ -258,6 +258,7 @@
       "params": "PairingSetLinkingParams",
       "grant": "credential.manage"
     },
+    "github.liveEvents": { "params": "GithubLiveEventsParams", "grant": "credential.manage" },
     "github.status": {
       "params": null,
       "grant": "credential.manage"

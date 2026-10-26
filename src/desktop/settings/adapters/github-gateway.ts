@@ -29,9 +29,14 @@ export interface GithubGateway {
   connect(): Promise<GithubOutcome>
   cancel(): Promise<GithubOutcome>
   disconnect(): Promise<GithubOutcome>
+  liveEvents(enabled: boolean, acceptGaps?: boolean): Promise<GithubOutcome>
 }
 
 const refusals: Record<GithubRefusal, string> = {
+  [GithubRefusalCode.GithubLiveUnavailable]:
+    "Couldn't change live GitHub events. Check your connection and the Nessa App's repository permissions, then try again.",
+  [GithubRefusalCode.GithubLiveCapacity]:
+    "Live events support up to 16 selected repositories. Choose fewer repositories on GitHub and try again.",
   [GithubRefusalCode.GithubNotConfigured]:
     "GitHub sign-in isn't available on this gateway.",
   [GithubRefusalCode.GithubUnreachable]:
@@ -77,6 +82,7 @@ export function viewOf(connection: GithubConnection): GithubView {
       return {
         kind: "connected",
         login: connection.account?.login ?? "",
+        liveEvents: connection.liveEvents,
         ...(connection.unrecorded ? { unrecorded } : {}),
         installUrl: connection.installUrl,
       }
@@ -128,5 +134,7 @@ export function githubGateway(options: {
     connect: () => ask((api) => api.connect()),
     cancel: () => ask((api) => api.cancel()),
     disconnect: () => ask((api) => api.disconnect()),
+    liveEvents: (enabled, acceptGaps = false) =>
+      ask((api) => api.liveEvents(enabled, acceptGaps)),
   }
 }

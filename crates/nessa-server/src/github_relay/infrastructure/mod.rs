@@ -2,9 +2,12 @@
 mod credentials;
 mod sqlite;
 mod transport;
-pub use credentials::GhCredentials;
+pub use credentials::ConnectedGithubCredentials;
 pub use sqlite::SqliteRelayStore;
 pub use transport::{relay_configuration, HttpRelaySource, RelayConfiguration};
 
 mod lifecycle;
 pub use lifecycle::{TokioRelayWait, TracingRelayReporter};
+mod connected_store;
+pub use connected_store::ConnectedRelayStore;
+mod selection;

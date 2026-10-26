@@ -132,6 +132,7 @@ export async function startGatewayStack(
   instance,
   {
     as = "owner",
+    stage = "ci",
     scripted,
     scenario,
     evidence,
@@ -170,6 +171,7 @@ export async function startGatewayStack(
   const timings = {}
   let started = Date.now()
   const gateway = await startLocalGateway({
+    stage,
     agent,
     port: await freePort(),
     instance,
@@ -221,17 +223,17 @@ export async function startGatewayStack(
   const token = () => readFileSync(gateway.token, "utf8").trim()
   try {
     started = Date.now()
-    const stage = {
-      NESSA_STAGE: "ci",
-      VITE_NESSA_STAGE: "ci",
+    const stageEnvironment = {
+      NESSA_STAGE: stage,
+      VITE_NESSA_STAGE: stage,
       NESSA_BROWSER_GATEWAY_URL: gateway.url,
     }
     // A production build inlines the stage. The gateway is a ci gateway, and
     // a prod stage refuses its HTTP loopback address.
     dev =
       options.mode === "prod"
-        ? await startPreview(options, stage)
-        : await startDevServer(options, stage)
+        ? await startPreview(options, stageEnvironment)
+        : await startDevServer(options, stageEnvironment)
     timings.devServerMs = Date.now() - started
     client = await connectClient(gateway, instance, as)
     return {

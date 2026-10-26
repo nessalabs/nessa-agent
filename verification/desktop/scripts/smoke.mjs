@@ -34,7 +34,7 @@ Checks, per engine and layout:
   draft-unlisted   ⌘N adds no row to the lists until something is sent
   send             a message typed in a new session appears in its transcript
   split            ⇧⌘N (new session beside) adds a pane
-  settings         ⌘, opens Settings; Advanced says what it is for, with no tab strip, and
+  settings         ⌘, opens Settings; Advanced shows Experimental and Setup tabs, and
                    offers one preview switch, off; its Back button closes it and the panes return
   overview         on a fresh profile the sidebar offers "Agents"; ⌘0 shows the
                    overview and the keyboard lands on its row; Escape returns to the
@@ -183,9 +183,9 @@ await main(meta, async ({ options, rep, url }) => {
             dek: css.settingsDek,
           },
         )
-        if (advanced.tabs.length !== 0)
+        if (advanced.tabs.join() !== "Experimental,Setup")
           failures.push(
-            `Advanced shows tabs ${JSON.stringify(advanced.tabs)}, expected no strip for its one tab`,
+            `Advanced shows tabs ${JSON.stringify(advanced.tabs)}, expected Experimental and Setup from mainline`,
           )
         if (!advanced.dek)
           failures.push("Advanced has no line under its title saying what it is for")

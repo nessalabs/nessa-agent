@@ -4,9 +4,11 @@ use crate::{
     core::RunError,
     env::Environment,
     github_relay::{
-        application::{catch_up, GitHubCredentials, RelayStore},
+        application::{catch_up, LiveEvents, RelayStore},
         domain::Failure,
-        infrastructure::{relay_configuration, GhCredentials, HttpRelaySource, SqliteRelayStore},
+        infrastructure::{
+            relay_configuration, ConnectedRelayStore, HttpRelaySource, SqliteRelayStore,
+        },
     },
 };
 use std::{
@@ -15,7 +17,7 @@ use std::{
 };
 use tokio::task::JoinHandle;
 
-fn http() -> Result<reqwest::Client, Failure> {
+pub(super) fn http() -> Result<reqwest::Client, Failure> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::builder()
         .user_agent("Nessa-GitHub-relay")
@@ -24,7 +26,7 @@ fn http() -> Result<reqwest::Client, Failure> {
         .build()
         .map_err(|_| Failure::Offline)
 }
-fn store(environment: &Environment) -> Result<Arc<SqliteRelayStore>, Failure> {
+pub(super) fn store(environment: &Environment) -> Result<Arc<SqliteRelayStore>, Failure> {
     let root = environment
         .auth_directory
         .as_ref()
@@ -52,7 +54,7 @@ impl Drop for RelayRuntime {
         self.0.abort();
     }
 }
-pub(super) fn start(environment: &Environment) -> Option<RelayRuntime> {
+pub(super) fn start(environment: &Environment, live: Arc<LiveEvents>) -> Option<RelayRuntime> {
     let source = match source(environment) {
         Ok(source) => source,
         Err(Failure::UnconfiguredStage) => return None,
@@ -61,14 +63,11 @@ pub(super) fn start(environment: &Environment) -> Option<RelayRuntime> {
             return None;
         }
     };
-    let store = match store(environment) {
-        Ok(store) => store,
-        Err(error) => {
-            tracing::warn!(%error,"GitHub inbox unavailable");
-            return None;
-        }
-    };
-    let credentials = Arc::new(GhCredentials::new(http().ok()?));
+    let store = Arc::new(ConnectedRelayStore::new(
+        live.store.clone(),
+        live.credentials.clone(),
+    ));
+    let credentials = live.credentials.clone();
     Some(RelayRuntime(tokio::spawn(
         crate::github_relay::application::serve(
             source,
@@ -84,7 +83,7 @@ pub(super) async fn connect(repository: String, accept_gap: bool) -> Result<(), 
     let result=async {
         let store=store(&environment)?;
         let source=source(&environment)?;
-        let credentials=GhCredentials::new(http()?);
+        let credentials=credentials(&environment).await?;
         let binding=credentials.identify(&repository).await?;
         store.bind(&binding,accept_gap).await?;
         let token=credentials.token().await?;
@@ -123,4 +122,24 @@ fn output(result: serde_json::Value) -> Result<(), RunError> {
     bytes.push(b'\n');
     std::io::stdout().write_all(&bytes)?;
     Ok(())
+}
+
+async fn credentials(
+    environment: &Environment,
+) -> Result<Arc<dyn crate::github_relay::application::ConnectedGithub>, Failure> {
+    let namespace = environment
+        .auth_directory
+        .as_ref()
+        .and_then(|p| p.parent())
+        .ok_or(Failure::Storage)?;
+    let github = super::github::compose(namespace, environment)
+        .await
+        .ok_or(Failure::CredentialsUnavailable)?;
+    Ok(github
+        .routes
+        .live
+        .as_ref()
+        .ok_or(Failure::UnconfiguredStage)?
+        .credentials
+        .clone())
 }

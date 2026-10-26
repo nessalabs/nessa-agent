@@ -337,7 +337,8 @@ jobs:
       - uses: ./.github/actions/pnpm-install
       - name: Install the pinned browsers and their runtime dependencies
         run: pnpm exec playwright install --with-deps chromium webkit
-        timeout-minutes: 15
+        # The Ubuntu dependency download exceeded 15 minutes in run 40248544263.
+        timeout-minutes: 30
       # nessa-mcp: the stress check's `github` step runs commands through
       # Nessa's own shell tool.
       - id: gateway-build
@@ -346,6 +347,8 @@ jobs:
       # regression needs both engines, including WebKit's ticking-clock path.
       - name: Run the scripted gateway checks in both browsers
         run: pnpm test:e2e:scripted -- --channel bundled --evidence "$STRESS_EVIDENCE/scripted"
+      - name: Verify GitHub live-event opt-in in both browsers
+        run: node verification/desktop/scripts/github-live-events.mjs --channel bundled --out "$STRESS_EVIDENCE/github-live-events.json" --shots "$STRESS_EVIDENCE/github-live-events"
       - name: Verify usage-limit cards in both browsers
         run: node verification/desktop/scripts/usage-limit.mjs --channel bundled --out "$STRESS_EVIDENCE/usage-limit.json" --shots "$STRESS_EVIDENCE/usage-limit"
       - name: Verify pane dragging after deferred fitting in both browsers

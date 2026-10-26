@@ -50,6 +50,16 @@ function fake(initial: GithubView) {
   const answer = (): Promise<GithubOutcome> => Promise.resolve({ ok: true, view })
   const gateway: GithubGateway = {
     pollMs: 2_000,
+    liveEvents: (enabled) => {
+      calls.push(`live:${enabled}`)
+      view = {
+        kind: "connected",
+        login: "octo",
+        installUrl,
+        liveEvents: { enabled, repositories: enabled ? 1 : 0, gaps: 0 },
+      }
+      return answer()
+    },
     read: () => (calls.push("read"), answer()),
     connect: () => {
       calls.push("connect")
@@ -125,7 +135,9 @@ it("cancels a waiting code and says why the try ended", async () => {
 it("disconnects, and says that this does not revoke the app on GitHub", async () => {
   const github = fake(connected)
   await show(github.gateway)
-  expect(row()?.textContent).toContain("To revoke it on GitHub")
+  expect(host.querySelector('[popover="auto"]')?.textContent).toContain(
+    "To revoke GitHub access",
+  )
   await act(async () => button("Disconnect")?.click())
   expect(github.calls).toContain("disconnect")
   expect(state()).toBe("signed-out")
@@ -221,4 +233,45 @@ it("lets a read slower than the poll finish, rather than overtaking it", async (
   expect(reads).toBe(before + 1)
   await act(async () => answer?.({ ok: true, view: connected }))
   expect(state()).toBe("connected")
+})
+
+it("opts in through the gateway and clears live controls on disconnect", async () => {
+  const github = fake({
+    ...connected,
+    liveEvents: { enabled: false, repositories: 0, gaps: 0 },
+  })
+  await show(github.gateway)
+  const control = () => {
+    const value = host.querySelector<HTMLButtonElement>('[role="switch"]')
+    if (!value) throw new Error("live events switch absent")
+    return value
+  }
+  expect(control().getAttribute("aria-checked")).toBe("false")
+  const live = host.querySelector("[data-github-live]")
+  expect(live).not.toBeNull()
+  expect(row()?.contains(live)).toBe(false)
+  expect(live?.querySelector('[data-slot="settings-row-detail"]')?.textContent).toBe(
+    "PR, issue and CI updates.",
+  )
+  await act(async () => control().click())
+  expect(github.calls).toContain("live:true")
+  expect(control().getAttribute("aria-checked")).toBe("true")
+  await act(async () => button("Disconnect")?.click())
+  expect(host.querySelector('[role="switch"]')).toBeNull()
+})
+it("does not optimistically enable live events when the gateway refuses", async () => {
+  const github = fake({
+    ...connected,
+    liveEvents: { enabled: false, repositories: 0, gaps: 0 },
+  })
+  await show({
+    ...github.gateway,
+    liveEvents: () =>
+      Promise.resolve({ ok: false, sentence: "Repository permissions are missing." }),
+  })
+  await act(async () => host.querySelector<HTMLButtonElement>('[role="switch"]')?.click())
+  expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe(
+    "false",
+  )
+  expect(host.textContent).toContain("Repository permissions are missing.")
 })

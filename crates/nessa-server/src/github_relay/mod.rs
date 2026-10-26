@@ -3,7 +3,9 @@
 //! ```text
 //! composition -> credentials / transport / SQLite
 //!                       -> application::catch_up -> RelayStore transaction
-//! CLI -> connect / read local events; server -> watch / reconnect
+//! Settings -> LiveEvents -> atomic selection / cleanup
+//! GithubConnections -> credentials -> current account / repositories
+//! CLI -> read local events; server -> watch / reconnect
 //! ```
 //! Arrows are construction or calls. Provider data never selects a principal,
 //! conversation or command. The packaged host owns the build stage.

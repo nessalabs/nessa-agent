@@ -363,7 +363,11 @@ impl CompositionRoot {
         .map_err(|error| RunError::Serve(std::io::Error::other(error.to_string())))?
         .map_err(RunError::Serve)?;
 
-        let _github_relay = super::github_relay::start(&config);
+        let _github_relay = product
+            .github
+            .as_ref()
+            .and_then(|github| github.live.clone())
+            .and_then(|live| super::github_relay::start(&config, live));
         let shutdown_product = product.clone();
         let mut router = http::router(product).layer(Extension(endpoint_identity));
         if let Some(identity) = &desktop_identity {

@@ -2578,8 +2578,24 @@ pub struct GithubCode {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubLiveEvents {
+    pub enabled: bool,
+    pub repositories: u64,
+    pub gaps: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubLiveEventsParams {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept_gaps: Option<bool>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GithubConnection {
     pub state: GithubConnectState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_events: Option<GithubLiveEvents>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<GithubAccount>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2602,6 +2618,10 @@ pub enum GithubErrorCode {
     GithubStorageUnavailable,
     #[serde(rename = "github_audit_unavailable")]
     GithubAuditUnavailable,
+    #[serde(rename = "github_live_unavailable")]
+    GithubLiveUnavailable,
+    #[serde(rename = "github_live_capacity")]
+    GithubLiveCapacity,
 }
 impl GithubErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -2611,6 +2631,8 @@ impl GithubErrorCode {
             Self::GithubRejected => "github_rejected",
             Self::GithubStorageUnavailable => "github_storage_unavailable",
             Self::GithubAuditUnavailable => "github_audit_unavailable",
+            Self::GithubLiveUnavailable => "github_live_unavailable",
+            Self::GithubLiveCapacity => "github_live_capacity",
         }
     }
 }
@@ -3533,6 +3555,7 @@ pub mod product_method {
     pub const PAIRING_DENY: &str = "pairing.deny";
     pub const PAIRING_CANCEL: &str = "pairing.cancel";
     pub const PAIRING_SET_LINKING: &str = "pairing.setLinking";
+    pub const GITHUB_LIVE_EVENTS: &str = "github.liveEvents";
     pub const GITHUB_STATUS: &str = "github.status";
     pub const GITHUB_CONNECT: &str = "github.connect";
     pub const GITHUB_CANCEL: &str = "github.cancel";
@@ -3747,7 +3770,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 87
+                items.len() <= 88
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3835,6 +3858,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "pairing.deny",
     "pairing.cancel",
     "pairing.setLinking",
+    "github.liveEvents",
     "github.status",
     "github.connect",
     "github.cancel",
@@ -3897,6 +3921,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "pairing.deny"
         | "pairing.cancel"
         | "pairing.setLinking"
+        | "github.liveEvents"
         | "github.status"
         | "github.connect"
         | "github.cancel"

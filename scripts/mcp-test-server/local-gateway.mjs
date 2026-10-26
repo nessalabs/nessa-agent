@@ -208,6 +208,9 @@ export async function exited(child, ms) {
  *   error carries the gateway's output as `gatewayLog`.
  */
 export async function startLocalGateway(o) {
+  const stage = o.stage ?? "ci"
+  if (!["ci", "dev"].includes(stage))
+    throw new Error("verification gateways use ci or dev")
   const nessa = process.env.MCP_LIVE_NESSA ?? join(repoRoot, "target/debug/nessa")
   if (!existsSync(nessa))
     throw new Error(
@@ -248,7 +251,7 @@ export async function startLocalGateway(o) {
             ...(o.path ? { PATH: `${o.path}:${process.env.PATH}` } : {}),
           }),
       ...o.environment,
-      NESSA_STAGE: "ci",
+      NESSA_STAGE: stage,
       NESSA_PORT: String(o.port),
       NESSA_DATA_DIR: directory,
       NESSA_INSTANCE: o.instance,
@@ -260,7 +263,7 @@ export async function startLocalGateway(o) {
       { env, encoding: "utf8" },
     )
     if (init.status !== 0) throw new Error(`provisioning failed: ${init.stderr}`)
-    const configPath = join(directory, "ci", "instances", o.instance, "config.json")
+    const configPath = join(directory, stage, "instances", o.instance, "config.json")
     writeFileSync(
       configPath,
       JSON.stringify({

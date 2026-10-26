@@ -9,8 +9,9 @@ import {
 import { PairingCode } from "@nessa-ui/react/pairing-code"
 import type { GithubGateway } from "../adapters/github-gateway"
 import type { GithubOutcome, GithubView } from "../model/github"
+import { GithubLiveHelp } from "./github-live-help"
 import { setting } from "../model/settings-catalogue"
-import { FoundSetting, ItemRow, RowAction, RowLink } from "./settings-controls"
+import { FoundSetting, ItemRow, RowAction, RowLink, Toggle } from "./settings-controls"
 
 /**
  * Settings › Connections › Accounts › GitHub: the gateway's one GitHub
@@ -56,8 +57,6 @@ type Phase =
 type Request = { readonly kind: "read" } | { readonly kind: "act" }
 
 /** What disconnecting does not do, said where the button is. */
-const revocation =
-  "Disconnecting forgets the sign-in on this gateway. To revoke it on GitHub, use Settings › Applications there."
 
 export function GithubRow() {
   const gateway = useContext(GithubContext)
@@ -213,28 +212,71 @@ export function GithubRow() {
       )
     case "connected":
       return (
-        <ItemRow
-          setting="github"
-          found={found}
-          label={entry.label}
-          detail={
-            failed ??
-            [`Signed in as @${view.login}.`, view.unrecorded, revocation]
-              .filter(Boolean)
-              .join(" ")
-          }
-          data-github-state="connected"
-          control={
-            <span className="linked-actions">
-              <RowLink href={view.installUrl} data-github-repositories>
-                Choose repositories
-              </RowLink>
-              <RowAction disabled={busy} onClick={() => act((each) => each.disconnect())}>
-                Disconnect
+        <>
+          <ItemRow
+            setting="github"
+            found={found}
+            label={entry.label}
+            detail={
+              failed ??
+              [`Signed in as @${view.login}.`, view.unrecorded].filter(Boolean).join(" ")
+            }
+            data-github-state="connected"
+            control={
+              <span className="linked-actions">
+                <RowLink href={view.installUrl} data-github-repositories>
+                  Choose repositories
+                </RowLink>
+                <RowAction
+                  disabled={busy}
+                  onClick={() => act((each) => each.disconnect())}
+                >
+                  Disconnect
+                </RowAction>
+              </span>
+            }
+          />
+          <ItemRow
+            data-github-live
+            label="Live GitHub events"
+            detail={
+              view.liveEvents
+                ? view.liveEvents.gaps
+                  ? "Some offline history expired. Continue with retained events to resume."
+                  : `PR, issue and CI updates.${view.liveEvents.enabled ? ` ${view.liveEvents.repositories} ${view.liveEvents.repositories === 1 ? "repository" : "repositories"}.` : ""}`
+                : "Not available in this build."
+            }
+            control={
+              <>
+                <GithubLiveHelp
+                  key="help"
+                  refresh={
+                    view.liveEvents?.enabled
+                      ? () => act((each) => each.liveEvents(true))
+                      : undefined
+                  }
+                  disabled={busy}
+                />
+                <Toggle
+                  key="switch"
+                  label="Enable live GitHub events"
+                  checked={view.liveEvents?.enabled ?? false}
+                  disabled={busy || !view.liveEvents}
+                  onChange={(enabled) => act((each) => each.liveEvents(enabled))}
+                />
+              </>
+            }
+          >
+            {Boolean(view.liveEvents?.gaps) && (
+              <RowAction
+                disabled={busy}
+                onClick={() => act((each) => each.liveEvents(true, true))}
+              >
+                Continue with retained events
               </RowAction>
-            </span>
-          }
-        />
+            )}
+          </ItemRow>
+        </>
       )
   }
 }
