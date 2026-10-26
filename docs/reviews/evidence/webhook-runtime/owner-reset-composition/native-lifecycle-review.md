@@ -1,0 +1,40 @@
+# Independent affected review: Windows native lifecycle fixture
+
+Verdict: clean within bounded affected scope. Blocker: none. Major: none. Minor: none. Nit: none. This is a CI fixture affected review, not a fourth whole-feature round. Completed feature rounds and historical evidence remain unchanged.
+
+Reviewed author checkout `/workspace/nessa-webhook-delivery-review`, HEAD `9bbe126b86f6a4f87594dc5de529e998dd418841` plus the exact dirty bytes below. Source diff is limited to NativeSession open injecting existing ManualClock and three refresh calls using existing watched; all lifecycle assertions remain byte-unchanged. Docs add N5 and preserve original failed CI evidence. Untracked node_modules is unrelated and excluded. No source/ref/target/cache edits by reviewer.
+
+## Exact manifest
+
+- `crates/nessa-server/tests/composition/read_only_online/native_session.rs` SHA256 `c32ff81109cd3d23169fc0f3c9de541ea72f419424a3656b3134da15c3b94d57`
+- `docs/design/native-session-verification-997.md` SHA256 `b76c6c1bbf1d0840b165b6852bef259460e57e18c734af70765f3290365df49b`
+- `docs/reviews/evidence/webhook-runtime/owner-reset-composition/README.md` SHA256 `547011ab75a45abe0a89ce593db6ad2a223a8d69b4400caec1d868cb2aa2afba`
+- `docs/reviews/evidence/webhook-runtime/owner-reset-composition/ci-491-windows-failure.txt` SHA256 `9ef9101ce0d267521ec50da7cc3c16e0be096e3b8c1190811ca6fc96b086546e`
+
+Existing unchanged watchdog helper `crates/nessa-server/tests/composition/read_only_online/native_session/clock.rs` SHA256 `bd3f18055cf8c1d99257eff97e740bd1f80afbc343bafc535f028c56076629cd` was also inspected.
+
+## Source relationships and falsification
+
+Read AGENTS/CODING_STANDARDS local review gate, agreement requirement, applicable dimensions and evidence/closure. Inspected entire dirty diff and lifecycle test, existing clock/watchdog, NativeSession open/refresh/request_close/close, retained-reader budget contract and adjacent budget/refusal tests. No new production behavior, policy, state, fence, lock order, SDK contract, or dependency is added.
+
+NativeSession::open continues to use production Monotonic; open_with_clock still builds the same real file state/cache, sockets, SDK reader and independent Auth wall clock. Existing Driver::refresh passes five seconds to actual retained cache read. That read expressly returns successful but incomplete progress when its injected budget expires after saving data. Requiring complete in a lifecycle assertion while allowing an uncontrolled five-second elapsed budget conflates two valid outcomes. Frozen logical time makes completion the tested branch; it does not claim every production read completes within five wall seconds or identify the original physical delay. The original Windows failure proves complete=false, not a timeout; no precise filesystem/network/scheduler explanation is established or claimed.
+
+Preserved assertions require actual active paired status, successful complete history and multiple conversations, no withdrawal/recheck, real physical downloaded==applied records and facts; close refuses later access; offline reopen retains exact progress/view; restarted gateway returns complete without moving; terminal revoked status purges records/transcripts/catalogue, starts no read/recheck, preserves matching receipt, removes credential access, leaves escaped snapshot as historical evidence and persists receipt on another reopen. None is weakened to merely no-panic or accepts incomplete progress.
+
+Each of the three actual refresh operations now uses unchanged watched. Its independent thread uses real std mpsc recv_timeout(30s), calls existing nonblocking request_close on expiry, joins watchdog and asserts failure regardless of operation result. request_close excludes admission and wakes actual retained read stop, enrollment and product owners without waiting for Driver mutex. Thus an expired watchdog cannot be reinterpreted as lifecycle success; closure does not pretend physical release occurred. The operation must return and scope joins watchdog; subsequent normal close drains Driver ownership. This is existing cooperative stop behavior, not a universal hard kill of uninterruptible OS/filesystem work. No new stronger universal wall-bound guarantee is introduced.
+
+Adjacent explicit budget regression still advances exactly the same elapsed clock to5000 only after actual source Head phase following catalogue persistence; it asserts moved/incomplete, no refusal recheck, no purge, retained catalogue. Adjacent epoch-refusal regression holds logical time and asserts exact Refused plus its own pinned status recheck and retained partial history. Auth expiry remains on independent wall clock; no policy/credential lifetime or production timeout control changed. Inspected existing real-socket timeout/stop regressions: client-core retained relay `a_silent_relay_ends_the_leg_at_its_budget` (real200ms socket timeout), `a_stop_ends_a_blocked_read_without_shutting_its_socket` (real elapsed bound), plus reader budget-outcome cases. Those files are unchanged, and were inspected rather than rerun. Existing watchdog stalled-gateway negative-probe claims are historical design evidence, not newly rerun by this review.
+
+## Executed evidence
+
+Independent compiled test binary `/workspace/nessa-webhook-registry-order/target/debug/deps/nessa_server-8fb212548d13f335` filtered to `composition::read_only_online_tests::native_session:: --test-threads=1`: 3passed/0failed/1ignored,1.64s. `/tmp/nessa-896-native-lifecycle-review-tests.log`. Ignored test is explicit generated-Swift harness, unchanged; no Swift/platform pass claimed. This exercises actual corrected lifecycle plus adjacent explicit expiry and refusal paths. Reviewer did not invoke Cargo, broaden suite or touch build artifacts while author Clippy session49080 runs. git diff --check passed.
+
+Author receipt `/tmp/nessa-896-windows-native-session-controls.log` separately records restored3passed/1ignored; not substituted for independent result. Parent subsequently reported session49080 terminal exit0 for exact seven-package all-target Clippy and unchanged `default_budget_preserves_real_server_read_timeout` passed1/1 in10.45s. Inspected added evidence-only `native-lifecycle-qualification.md`; it accurately distinguishes local Linux checks from still-required corrected Windows CI. These two outcomes are author receipts, not reviewer reruns. Source hash reconfirmed unchanged.
+
+Failure evidence checked: run40257115915 Windows job121361629393, PR4914f5e7bc41982c7a62d4b0d31c859cf83ea1f0, actual checkoutaa316c59dd4d69b48685b922e9fc0a055e97961a and main parentaef11ea3b3d0c96f8c96fd9509f5657c58693780. Preserved excerpt records initial refresh.complete assertion native_session.rs222 and3394passed/1failed/9ignored in1707.50s, exit101; original retention and late-response controls passed. README honestly excludes unexecuted focused WebKit/count-three and future source/main/UI combinations. Reviewer checked local recorded excerpt, did not fetch or mutate CI.
+
+## Exclusions and remaining gates
+
+No Windows execution, full-suite rerun, new stall injection, browser/stress rerun or generated-Swift qualification performed; corrected-head remote CI is still required. This fixture repair no longer measures lifecycle completion within five wall seconds; explicit budget and separate timeout tests own their stated contracts. It does not establish product performance improvement or resolve an unproven underlying physical-delay hypothesis. Main3a22008c UI-pin integration is outside reviewed bytes. No historical reports changed, no publication, no external recipients or real credentials/listeners used. No new denial/blocker encountered. Parent owns source integration/publication and final merge.
+
+Added evidence-only file inspected after source freeze: `docs/reviews/evidence/webhook-runtime/owner-reset-composition/native-lifecycle-qualification.md` SHA256 `a1c739e7cb7abebda68e2cb4510d7e9e3a66ff5726e45f61a24adb913d2d27b7`. No other reviewed-source change.

@@ -21,6 +21,14 @@ focused webhook CI addition are integrated at
 [focused coverage receipt](focused-browser-coverage.md) records exact CI checkout,
 the successful default Chromium witness and still-unexecuted focused cohorts.
 
+Run 40257115915 is terminal: all jobs except Windows server passed. The
+[preserved Windows failure](ci-491-windows-failure.txt) records one native lifecycle
+completion assertion failure (3,394 passed, one failed), not a timeout. All three
+original retention controls and the late-response boundary control passed. Default
+Chromium stress passed 50/50; its webhook witness captured Head 46 with 46 queued
+records and zero attempts. This does not qualify the unexecuted focused WebKit
+and count-three additions, or a later source/main/UI combination.
+
 ## Behavior and ordering
 
 The exact native delivery is pinned before Sending through consumed settlement.
