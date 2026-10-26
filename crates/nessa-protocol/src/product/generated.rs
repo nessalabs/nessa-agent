@@ -2272,6 +2272,8 @@ pub struct PhoneAuthorizationStatus {
 pub enum PairingEnrollee {
     #[serde(rename = "device")]
     Device,
+    #[serde(rename = "ownerPhone")]
+    OwnerPhone,
     #[serde(rename = "gateway")]
     Gateway,
     #[serde(rename = "environment")]
@@ -2281,6 +2283,7 @@ impl PairingEnrollee {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Device => "device",
+            Self::OwnerPhone => "ownerPhone",
             Self::Gateway => "gateway",
             Self::Environment => "environment",
         }

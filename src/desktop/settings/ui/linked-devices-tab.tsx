@@ -647,7 +647,7 @@ function DeviceRow({
   const issued = linkedOn(device.issuedAt)
   return (
     <SettingsRow
-      label="Linked device"
+      label={device.fullAccess ? sentences.fullAccessDevice : "Linked device"}
       detail={confirming ? sentences.revokeAsk : `Linked ${issued}`}
       data-credential={device.credentialId}
       control={

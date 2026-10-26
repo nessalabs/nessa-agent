@@ -983,3 +983,66 @@ fn an_enrollment_record_keeps_its_class() {
         ConsentClass::DeviceRead
     );
 }
+
+/// An owner phone redeemed by code keeps a record of its own kind, with no
+/// original, while a signed record whose original disappeared still reads as
+/// signed: it is never rewritten as a code record or mistaken for one.
+#[test]
+fn an_owner_phone_redeemed_by_code_is_told_apart_from_a_signed_one() {
+    let owner = |attempt| {
+        PublicIntent::new(
+            InvitationId::new([1; 16]),
+            AttemptId::new([attempt; 16]),
+            ConsentIntentId::new([3; 16]),
+            1,
+            600_000,
+            ConsentClass::OwnerPhoneReadWrite,
+        )
+        .unwrap()
+    };
+    let credential = CredentialId::new("phone-1").unwrap();
+    let receiver = ResourceId::new("receiver-1").unwrap();
+    let code = Fixture::new();
+    assert!(!code.store.enrollment_signed().unwrap());
+    code.store
+        .save_pending(&key(7), &[5; 44], owner(2), None)
+        .unwrap();
+    let pending = fs::read(code.path().join(ENROLLMENT_FILE)).unwrap();
+    assert_eq!(&pending[..4], OWNER_PHONE_CODE_PENDING_MAGIC);
+    assert!(!code.store.enrollment_signed().unwrap());
+    code.store
+        .save_credential(&credential, &receiver, owner(2))
+        .unwrap();
+    let issued = fs::read(code.path().join(ENROLLMENT_FILE)).unwrap();
+    assert_eq!(&issued[..4], OWNER_PHONE_CODE_CREDENTIAL_MAGIC);
+    let root = code.anchor();
+    drop(code.store);
+    let reopened = FilePairingState::open(&root, Path::new("private")).unwrap();
+    assert!(!reopened.enrollment_signed().unwrap());
+    assert_eq!(
+        reopened.load_credential().unwrap().unwrap().intent(),
+        owner(2)
+    );
+
+    // Signed bytes with no original beside them: the original was lost.
+    let lost = Fixture::new();
+    let bytes = signed(encode_pending(&key(7), &[5; 44], owner(2)));
+    assert_eq!(&bytes[..4], OWNER_PHONE_PENDING_MAGIC);
+    let mut temporary = lost.store.directory.reserve_temp().unwrap();
+    temporary.as_file_mut().write_all(&bytes).unwrap();
+    drop(temporary.publish_new(OsStr::new(ENROLLMENT_FILE)).unwrap());
+    assert!(lost.store.enrollment_signed().unwrap());
+    assert_eq!(
+        lost.store
+            .save_pending(&key(7), &[5; 44], owner(3), Some(owner(2))),
+        Err(PrivateStateError::Conflict)
+    );
+    assert_eq!(
+        lost.store.save_credential(&credential, &receiver, owner(2)),
+        Err(PrivateStateError::Conflict)
+    );
+    assert_eq!(
+        fs::read(lost.path().join(ENROLLMENT_FILE)).unwrap(),
+        bytes.as_slice()
+    );
+}

@@ -508,7 +508,9 @@ describe("Linked devices", () => {
               "182ff9da701fd144e2fd2cd41da8ddba979eb01b2bf7fcc3376f4b1b2ecee4e7",
           },
         ],
-        devices: [{ credentialId: "device-1", issuedAt: 1_700_000_000 }],
+        devices: [
+          { credentialId: "device-1", issuedAt: 1_700_000_000, fullAccess: false },
+        ],
       },
     }))
     gate.follow = (handler) => {
@@ -572,7 +574,9 @@ describe("Linked devices", () => {
       value: {
         kind: "on",
         enrollments: [],
-        devices: [{ credentialId: "device-1", issuedAt: 1_700_000_000 }],
+        devices: [
+          { credentialId: "device-1", issuedAt: 1_700_000_000, fullAccess: false },
+        ],
       },
     }))
     gate.revoke = async () => {
