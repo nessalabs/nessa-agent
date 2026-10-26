@@ -49,12 +49,9 @@ interface Listener {
 interface Arrangement {
   columns: number
   shape: string
-  tab: string | null
 }
 
 interface Gate {
-  /** The window tab last seen: another one is a cut, painted at once. */
-  tab: string | null
   painted: number
   /** Which pane is where, as last recorded on the box frame. */
   shape: string
@@ -79,11 +76,7 @@ const gates = new WeakMap<DesktopStore, Gate>()
 
 function arrangement(store: DesktopStore): Arrangement {
   const state = store.getState()
-  return {
-    columns: selectColumnCount(state),
-    shape: selectPaneShape(state),
-    tab: state.workspace.tabs.activeTab,
-  }
+  return { columns: selectColumnCount(state), shape: selectPaneShape(state) }
 }
 
 function sameArrangement(
@@ -151,7 +144,6 @@ function gateFor(store: DesktopStore): Gate {
   if (existing) return existing
   const now = arrangement(store)
   const gate: Gate = {
-    tab: now.tab,
     painted: now.columns,
     shape: now.shape,
     waiting: null,
@@ -165,17 +157,6 @@ function gateFor(store: DesktopStore): Gate {
   }
   gate.unsubscribe = store.subscribe(() => {
     const next = arrangement(store)
-    // Another window tab: the grid draws its layout at once
-    // (`SplitPanesSource.cut`), and so does everything painted with it.
-    if (next.tab !== gate.tab) {
-      gate.tab = next.tab
-      cancel(gate)
-      recordPainted(gate, next)
-      gate.settled = next.columns
-      gate.epoch += 1
-      for (const listener of gate.listeners) listener.notify()
-      return
-    }
     // The same arrangement is still waiting. This check is first: the box
     // frame records that arrangement as painted while the list's frame is
     // still ahead, and a toggle then must not cancel the rest of the wait.

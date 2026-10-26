@@ -282,7 +282,7 @@ describe("useOpenSubagent", () => {
   it("chooses the joined id and asks the host to open the panel", async () => {
     const widget = widgetHost()
     function Opener() {
-      const [place] = useState<OpenPlace>("pane")
+      const [place] = useState<OpenPlace>("panel")
       const open = useOpenSubagent(widget, place)
       return (
         <button
@@ -296,7 +296,7 @@ describe("useOpenSubagent", () => {
     await act(async () => root.render(<Opener />))
     await act(async () => host.querySelector("button")?.click())
     expect(selectedSubagent("a")).toBe(joinedSubagentId("sample", "mara"))
-    expect(widget.opened).toEqual([[{ plugin: subagentsPluginId, id: "a" }, "pane"]])
+    expect(widget.opened).toEqual([[{ plugin: subagentsPluginId, id: "a" }, "panel"]])
   })
 })
 

@@ -184,7 +184,7 @@ describe("the pane header's subagents", () => {
     })
     const stack = host.querySelector<HTMLButtonElement>("[data-subagent-stack]")
     await act(async () => stack?.click())
-    expect(opened).toEqual([[{ plugin: subagentsPluginId, id: "a" }, "pane"]])
+    expect(opened).toEqual([[{ plugin: subagentsPluginId, id: "a" }, "panel"]])
     expect(selectedSubagent("a")).toBeNull()
     expect(host.dataset.headerClick).toBeUndefined()
   })

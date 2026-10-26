@@ -246,12 +246,6 @@ export class FlipScope extends Component<{
    * drawer's curve.
    */
   columns?: string
-  /**
-   * A change of this is a cut, not a move: another layout taking the place
-   * of the one shown — another window tab, say — lands at once, with no
-   * flight from where the last one's panes stood.
-   */
-  cut?: string
   root: RefObject<HTMLElement | null>
   children: ReactNode
 }> {
@@ -273,13 +267,12 @@ export class FlipScope extends Component<{
   }
 
   getSnapshotBeforeUpdate(
-    previous: Readonly<{ shape: string; columns?: string; cut?: string }>,
+    previous: Readonly<{ shape: string; columns?: string }>,
   ): Snapshot | null {
     const root = this.props.root.current
     const panesChanged = previous.shape !== this.props.shape
     const columnsChanged = previous.columns !== this.props.columns
     if ((!panesChanged && !columnsChanged) || !root) return null
-    if (previous.cut !== this.props.cut) return null
     // A side column folded for a split's room, while the grid holds it in
     // the row until the new boxes paint (`data-spare-held`): one change,
     // flown once with the boxes, from where everything stood — never a

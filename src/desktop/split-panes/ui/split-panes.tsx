@@ -173,22 +173,9 @@ export const SplitPanes = memo(function SplitPanes({
     // Subscribing does not call back. A layout that landed before this
     // effect, or a source this grid just took, is read now and still waits
     // its frames.
-    let lastCut = source.cut?.()
     const reconcile = () => {
       const next = source.layout()?.columns ?? null
       const shown = drawnRef.current
-      // Another layout in the old one's place: drawn at once, boxes and all,
-      // so no frame shows its panes in the boxes of the one it replaced.
-      const cut = source.cut?.()
-      if (cut !== lastCut) {
-        lastCut = cut
-        cancel()
-        armed = false
-        waiting = null
-        hold(false)
-        if (next !== shown) draw(next)
-        return
-      }
       if (pending?.columns === shown) pending = null
       // This arrangement is already the update React will commit.
       if (pending?.columns === next) return

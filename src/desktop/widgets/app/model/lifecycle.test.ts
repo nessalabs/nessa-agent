@@ -29,7 +29,7 @@ const events: LifecycleEvent[] = [
   { kind: "initialize", initialize },
   { kind: "initialized" },
   { kind: "deadline" },
-  { kind: "request-teardown", place: "pane" },
+  { kind: "request-teardown", place: "panel" },
   { kind: "request-teardown", place: "inline" },
   { kind: "teardown-answered" },
   { kind: "removed" },
@@ -61,7 +61,7 @@ describe("the way through", () => {
   })
 
   it("L21, L23: a pane's or the window's app asks to go: teardown, then its place closes", () => {
-    for (const place of ["pane", "window"] as const) {
+    for (const place of ["panel", "window"] as const) {
       const ending = advance(states.live, { kind: "request-teardown", place })
       expect(ending).toEqual({
         state: { kind: "ending", initialize },

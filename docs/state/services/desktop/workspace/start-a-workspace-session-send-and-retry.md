@@ -36,7 +36,9 @@ stateDiagram-v2
     Sending --> Confirmed: Replacement includes message identity
     AwaitingReplacement --> Confirmed: Replacement includes message identity
     Failed --> Confirmed: Replacement includes message identity
-    Draft --> Forgotten: No pane shows draft
+    Draft --> Forgotten: No pane shows draft [nothing typed] or its pane closed
+    Draft --> Kept: No pane shows draft [typed in]
+    Kept --> Draft: New session asked for in its channel
     note right of Sending
         One message's delivery projection.
         Source replacement removes its outbox entry.

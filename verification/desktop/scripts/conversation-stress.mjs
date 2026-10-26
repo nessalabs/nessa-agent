@@ -41,9 +41,11 @@
  *               beside, the panes are regions of one flat chat surface that
  *               reaches the window's top, right and bottom edges: no pane
  *               draws a fill or rim of its own, and a hairline down the
- *               middle of the gutter between them divides them; the two
- *               are one merged tab: New Tab opens a home alone and leaves it
- *               as it was, and clicking back into it restores the split
+ *               middle of the gutter between them divides them; no tab
+ *               strip is drawn for the chats, each pane has one header in
+ *               the titlebar's row, clear of the window's controls, and its
+ *               picture runs up to the window's top edge — with the session
+ *               list shown and with the panes alone
  *   long        another conversation takes `--long` turns of long streamed
  *               answers through the gateway; the last answer is whole, and
  *               still whole after its agent is closed and its history opened
@@ -511,39 +513,40 @@ async function setSideRail(page, on, failures) {
 }
 
 /**
- * The expanded right panel is the chat in front's: the strip shows that
- * chat's tab alone and no toggles for the columns it covers. New Tab docks
- * it before the new session opens, so the session is in front, in sight —
- * never under the panel. The new home is closed again and the chat brought
- * back, docked.
+ * The expanded right panel is the chat in front's: its own tabs, or with
+ * nothing open its note, no tab strip for the chats and no toggles for the
+ * columns it covers. ⌘N docks it before the new session opens, so the
+ * session is in front, in sight — never under the panel. The chat is
+ * brought back, docked.
  */
-async function expandedForItsChat(page, failures) {
-  const tabs = page.getByRole("tablist", { name: "Open views" })
-  const chat = await tabs
-    .locator('[role="tab"][aria-selected="true"]')
-    .locator("..")
-    .getAttribute("data-session-tab")
-  if ((await tabs.locator('[role="tab"]').count()) !== 1)
-    failures.push("the expanded panel's strip shows other chats' tabs")
+async function expandedForItsChat(run, failures) {
+  const page = run.page
+  if (
+    await page.locator('[role="tablist"]:not(#workspace-panel [role="tablist"])').count()
+  )
+    failures.push("the window draws a tab strip for the chats")
+  const panel = page.locator("#workspace-panel")
+  if (
+    !(await panel.locator("[data-panel-empty], .workspace-panel-tabs").count()) ||
+    ((await panel.locator("[data-panel-empty]").count()) &&
+      (await panel.innerText()).trim() !== "Nothing open")
+  )
+    failures.push(
+      `the expanded panel shows neither its tabs nor its note: "${await panel.innerText()}"`,
+    )
   if (await page.locator(`${css.titlebar} [aria-controls="workspace-sidebar"]`).count())
     failures.push("the expanded panel's titlebar offers the sidebar it covers")
-  await page.getByRole("button", { name: /^New Tab/ }).click()
+  await page.keyboard.press(keys.newSession)
   const docked = await waitFor(
     async () => (await page.locator("#workspace-panel[data-maximized]").count()) === 0,
     2000,
   )
-  if (!docked) failures.push("New Tab left the panel expanded over the new session")
+  if (!docked) failures.push("⌘N left the panel expanded over the new session")
   const home = page.locator(`${css.focusedPane} ${css.paneHome}`)
   await home.locator(css.field).waitFor({ timeout: 15_000 })
   if (await home.evaluate((node) => node.closest("[inert]") !== null))
     failures.push("the new session opened under the panel")
-  if ((await tabs.locator('[role="tab"]').count()) < 2)
-    failures.push("docked again, the strip did not show the other tabs")
-  await page.keyboard.press(keys.closePane)
-  await home.waitFor({ state: "detached", timeout: 5000 }).catch(() => {
-    failures.push("⌘W did not close the new session's home")
-  })
-  if (chat) await tabs.locator(`[data-session-tab="${chat}"] [role="tab"]`).click()
+  await openStressConversation(page, run.main.id, run.main.title)
 }
 
 /**
@@ -2321,7 +2324,7 @@ const steps = {
         ))
       )
         failures.push("Expand Panel did not maximize it")
-      await expandedForItsChat(page, failures)
+      await expandedForItsChat(run, failures)
       await page.getByRole("button", { name: "Expand Panel" }).click()
       if (
         !(await waitFor(
@@ -2760,9 +2763,22 @@ const steps = {
       )
         failures.push(`the main conversation's pane reads ${JSON.stringify(left)}`)
     }
-    // The two are one merged tab. A new tab stands alone and leaves the
-    // merged tab as it was; clicking back into it restores the split.
-    await mergedTabStays(run, conversationId, failures)
+    // One header per chat, in the titlebar's row — beside the session list,
+    // and with the panes alone at the window's edge.
+    await headersLand(run.page, "beside the session list", failures)
+    await run.page.keyboard.press(keys.toggleSessionList)
+    await waitFor(
+      async () =>
+        (await run.page.locator(`${css.workspace}[data-panes-alone]`).count()) === 1,
+      5_000,
+    )
+    await headersLand(run.page, "with the panes alone", failures)
+    await run.page.keyboard.press(keys.toggleSessionList)
+    await waitFor(
+      async () =>
+        (await run.page.locator(`${css.workspace}[data-panes-alone]`).count()) === 0,
+      5_000,
+    )
     if (failures.length) return
     // ⌘W closes the focused pane: the one beside.
     await run.page.keyboard.press(keys.closePane)
@@ -2879,27 +2895,10 @@ const steps = {
         clients.push(await connectClient(run.stack.gateway, INSTANCE, "panel"))
       for (let n = 0; n < FRESH_BURST; n += 1)
         burst.push(startedBeside(run, clients[n % FRESH_CLIENTS], step, n, failures))
-      const tabs = run.page.getByRole("tablist", { name: "Open views" })
-      const previous = await tabs
-        .locator('[role="tab"][aria-selected="true"]')
-        .locator("..")
-        .getAttribute("data-session-tab")
-      await run.page.getByRole("button", { name: /^New Tab/ }).click()
+      await run.page.keyboard.press(keys.newSession)
       const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
       await home.locator(css.field).waitFor({ timeout: 15_000 })
       await home.locator(css.field).fill(text)
-      const draft = await tabs
-        .locator('[role="tab"][aria-selected="true"]')
-        .locator("..")
-        .getAttribute("data-session-tab")
-      if (previous) {
-        await tabs.locator(`[data-session-tab="${previous}"] [role="tab"]`).click()
-        await tabs.locator(`[data-session-tab="${draft}"] [role="tab"]`).click()
-        if ((await home.locator(css.field).inputValue()) !== text)
-          failures.push(
-            "switching workspace tabs lost the new conversation's first message",
-          )
-      }
       await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
       const conversationId = await waitFor(
         () => selectedStressConversation(run.page, text),
@@ -3757,15 +3756,9 @@ const steps = {
  * (`flatSurfaceFailures`): one hairline between them, mid-gutter.
  */
 /**
- * The merged tab (#1077): two conversations beside each other are one tab.
- * New Tab opens a home alone, the merged tab untouched; clicking one of the
- * merged tab's chats brings the split back as it was left, with that chat's
- * pane focused. The new tab is then closed.
- */
-/**
  * The window shows a thread's report as one line — the thread's chat as a
  * pill with its title, and what it did — never the report's text or ids;
- * pressed, the pill brings that chat to the front, in a tab of its own.
+ * pressed, the pill brings that chat to the front, in the focused pane.
  */
 async function reportLine(run, report, failures) {
   const thread = /^\[Thread report\] Thread (\S+) /.exec(report.userText)?.[1]
@@ -3796,13 +3789,10 @@ async function reportLine(run, report, failures) {
   )
     failures.push("the window shows the report's text, not just its line")
   await line.first().locator(`[data-chat-pill="${thread}"]`).click()
+  // In front: the focused pane shows it, which its list row says.
   const front = await waitFor(
     async () =>
-      (await run.page
-        .getByRole("tablist", { name: "Open views" })
-        .locator('[role="tab"][aria-selected="true"]')
-        .locator("..")
-        .getAttribute("data-session-tab")) === thread,
+      (await selectedStressConversation(run.page, await titleOf(run, thread))) === thread,
     10_000,
   )
   if (!front)
@@ -3810,107 +3800,96 @@ async function reportLine(run, report, failures) {
   await openStressConversation(run.page, run.main.id, run.main.title)
 }
 
-async function mergedTabStays(run, besideId, failures) {
-  const tabs = run.page.getByRole("tablist", { name: "Open views" })
-  // A merged tab draws its chats together; only its chats are tabs.
-  const group = tabs.locator(".workspace-tab-group")
-  const widths = () =>
-    run.page
-      .locator(css.pane)
-      .evaluateAll((panes) =>
-        panes.map((pane) => Math.round(pane.getBoundingClientRect().width)),
+/**
+ * `oneHeaderPerChat` once the panes come to rest after a column folds or
+ * opens: what it measures is read again until it holds, or the columns'
+ * motion has had its time; what still fails then is the step's.
+ */
+async function headersLand(page, when, failures) {
+  let last = []
+  await waitFor(async () => {
+    last = []
+    await oneHeaderPerChat(page, when, last)
+    return last.length === 0
+  }, 5_000)
+  failures.push(...last)
+}
+
+/**
+ * The chats have no tabs (C1): no tab strip, and each pane has one header —
+ * its name, menu and close — in the titlebar's row, none of it on the
+ * window's controls (the cluster on the left, the panel's own on the
+ * right), and its picture up to the window's top edge, behind them.
+ */
+async function oneHeaderPerChat(page, when, failures) {
+  const state = await page.evaluate(
+    ({ titlebar, pane, header }) => {
+      const box = (e) => {
+        const b = e.getBoundingClientRect()
+        return { left: b.left, top: b.top, right: b.right, bottom: b.bottom }
+      }
+      const shown = (e) => e.getClientRects().length > 0
+      return {
+        // Any tab list outside the right panel would be tabs for the chats.
+        strip: [...document.querySelectorAll('[role="tablist"]')].filter(
+          (list) => !list.closest("#workspace-panel"),
+        ).length,
+        bar: document.querySelector(titlebar).getBoundingClientRect().height,
+        controls: [
+          ...document.querySelectorAll(
+            `${titlebar} .workspace-titlebar-navigation button, ${titlebar} .workspace-titlebar-trailing button`,
+          ),
+        ]
+          .filter(shown)
+          .map(box),
+        panes: [...document.querySelectorAll(pane)].map((each) => ({
+          headers: [...each.querySelectorAll(header)].map((h) => ({
+            box: box(h),
+            parts: [...h.querySelectorAll("button, .workspace-pane-name")]
+              .filter(shown)
+              .map(box),
+          })),
+          box: box(each),
+          picture: [...each.querySelectorAll(".desktop-header, .desktop-header-image")]
+            .filter(shown)
+            .map(box)[0],
+        })),
+      }
+    },
+    { titlebar: css.titlebar, pane: css.pane, header: css.paneHeader },
+  )
+  const overlaps = (a, b) =>
+    a.left < b.right - 1 &&
+    b.left < a.right - 1 &&
+    a.top < b.bottom - 1 &&
+    b.top < a.bottom - 1
+  if (state.strip) failures.push(`${when}: a tab strip is drawn for the chats`)
+  for (const [at, pane] of state.panes.entries()) {
+    const name = `${when}, pane ${at + 1}`
+    if (pane.headers.length !== 1) {
+      failures.push(`${name}: ${pane.headers.length} headers, not one`)
+      continue
+    }
+    const [header] = pane.headers
+    if (header.box.top < -1 || header.box.bottom > state.bar + 1)
+      failures.push(
+        `${name}: its header is not in the titlebar row: ${JSON.stringify(header.box)}`,
       )
-  const before = await widths()
-  if ((await group.locator("[data-session-tab]").count()) !== 2) {
-    failures.push("two conversations side by side are not one merged tab")
-    return
-  }
-  await run.page.getByRole("button", { name: /^New Tab/ }).click()
-  if (
-    !(await waitFor(async () => (await run.page.locator(css.pane).count()) === 1, 10_000))
-  ) {
-    failures.push(
-      `a new tab shows ${await run.page.locator(css.pane).count()} panes, not 1`,
-    )
-    return
-  }
-  const fresh = await tabs
-    .locator('[role="tab"][aria-selected="true"]')
-    .locator("..")
-    .getAttribute("data-session-tab")
-  if ((await run.page.locator(`${css.focusedPane} ${css.paneHome}`).count()) !== 1)
-    failures.push("a new tab does not show a new session's home")
-  if ((await group.locator("[data-session-tab]").count()) !== 2)
-    failures.push("opening a new tab changed the merged tab")
-  if (fresh && (await group.locator(`[data-session-tab="${fresh}"]`).count()) > 0)
-    failures.push("a new tab joined the merged tab")
-  // At rest — once the selection's fade has run — a merged group is drawn
-  // as a plain tab is: no fill of its own.
-  const restFill = () =>
-    tabs.evaluate((list) => {
-      const fill = (e) => (e ? getComputedStyle(e).backgroundColor : null)
-      const group = list.querySelector(".workspace-tab-group:not([data-active])")
-      const plain = list.querySelector(
-        ":scope > .workspace-window-tab:not([data-active])",
-      )
-      return { group: fill(group), plain: fill(plain) ?? "rgba(0, 0, 0, 0)" }
-    })
-  if (
-    !(await waitFor(async () => {
-      const { group, plain } = await restFill()
-      return group === plain
-    }, 2_000))
-  ) {
-    const { group, plain } = await restFill()
-    failures.push(`an unselected merged tab is filled ${group}, a plain one ${plain}`)
-  }
-  // Each frame after the click: the panes go from the one tab's layout to
-  // the other's in one step, never through another.
-  const sampling = run.page.evaluate(
-    (pane) =>
-      new Promise((done) => {
-        const seen = []
-        const step = () => {
-          seen.push(
-            [...document.querySelectorAll(pane)]
-              .map((p) => Math.round(p.getBoundingClientRect().width))
-              .join(","),
+    for (const part of header.parts)
+      for (const control of state.controls)
+        if (overlaps(part, control))
+          failures.push(
+            `${name}: its header sits on a window control: ${JSON.stringify({ part, control })}`,
           )
-          if (seen.length < 30) requestAnimationFrame(step)
-          else done(seen)
-        }
-        requestAnimationFrame(step)
-      }),
-    css.pane,
-  )
-  await group.locator(`[data-session-tab="${besideId}"] [role="tab"]`).click()
-  const frames = [...new Set(await sampling)]
-  if (frames.length > 2)
-    failures.push(
-      `switching tabs passed through ${frames.length - 2} other layouts: ${frames.join(" → ")}`,
+    if (
+      pane.picture &&
+      (pane.picture.top > 0.5 || pane.picture.left > pane.box.left + 0.5)
     )
-  if (
-    !(await waitFor(async () => (await run.page.locator(css.pane).count()) === 2, 10_000))
-  ) {
-    failures.push("going back to the merged tab did not restore its split")
-    return
+      failures.push(
+        `${name}: its picture does not reach the window's top and its pane's left: ${JSON.stringify({ picture: pane.picture, pane: pane.box })}`,
+      )
   }
-  const after = await widths()
-  if (after.length !== before.length || after.some((w, i) => Math.abs(w - before[i]) > 1))
-    failures.push(`the merged tab came back at ${after} wide, not ${before}`)
-  if (!fresh) return
-  await tabs
-    .locator(`[data-session-tab="${fresh}"]`)
-    .getByRole("button", { name: /^Close Tab/ })
-    .click()
-  const closedAlone = await waitFor(
-    async () =>
-      (await tabs.locator(`[data-session-tab="${fresh}"]`).count()) === 0 &&
-      (await group.locator("[data-session-tab]").count()) === 2,
-    5_000,
-  )
-  if (!closedAlone)
-    failures.push("closing the new tab did not close it alone, the merged tab intact")
+  return state
 }
 
 async function flatPanes(page, failures) {

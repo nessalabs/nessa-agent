@@ -25,7 +25,7 @@ import {
   toggleShowAll,
   toggleSidebar,
 } from "./navigation"
-import { closePane, openBeside, openWidget } from "./panes"
+import { closePane, openBeside } from "./panes"
 import { indexLoaded, sessionRemoved } from "./updates"
 
 const loaded = () =>
@@ -261,13 +261,6 @@ describe("a widget over the panes: the window place", () => {
     expect(over(over(loaded()), other).content).toEqual({ widget: other })
     const plugin = { plugin: "subagents", id: "run" }
     expect(over(over(loaded()), plugin).content).toEqual({ widget: plugin })
-  })
-
-  it("holds a widget that is in a pane too", () => {
-    const inPane = openWidget(loaded(), { widget: run, origin: "a", room: roomyGrid })
-    const both = over(inPane)
-    expect(shown(both)).toEqual(["a", "widget experiments/run"])
-    expect(both.content).toEqual({ widget: run })
   })
 
   it("is left for the panes by Escape or its close, and by going anywhere else", () => {

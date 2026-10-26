@@ -2,8 +2,9 @@
 /**
  * The titlebar's safe area (ADR 238, "The titlebar's safe area"): in every
  * frame of every transition that moves titlebar content, nothing is painted
- * under the window's controls — text, icons, images, code, decorative art —
- * in Chrome and WebKit, at 1440 × 900 and 1000 × 700.
+ * under the window's controls — text, icons, images, code — but a header's
+ * picture, which runs on behind them to the window's edge, in Chrome and
+ * WebKit, at 1440 × 900 and 1000 × 700.
  */
 import { attempt, chosen } from "./lib/cli.mjs"
 import { launch, need, openPage } from "./lib/browser.mjs"

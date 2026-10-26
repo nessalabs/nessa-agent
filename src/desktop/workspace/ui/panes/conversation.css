@@ -20,12 +20,12 @@
   flex: 1;
   min-height: 0;
   padding-top: 0;
-  /* The room the pane's title row takes above the home — and, in the top row,
-     the titlebar's too, so the picture runs up behind the tabs to the
-     window's edge — and the picture's own height. */
+  /* The room the pane's title row takes above the home — in the top row,
+     the whole titlebar row, so the picture runs up to the window's edge,
+     behind the window's controls too — and the picture's own height. */
   --workspace-home-reach: calc(
-    var(--desktop-control-size) + 2 * var(--desktop-control-inset) +
-      max(0, 1 - var(--ri, 1)) * var(--desktop-titlebar-height)
+    var(--desktop-control-size) + 2 * var(--desktop-control-inset) + 2 *
+      var(--workspace-pane-top, 0px)
   );
   --workspace-home-picture: clamp(120px, 32cqh, 290px);
 }
@@ -169,14 +169,34 @@
   container: workspace-docked / inline-size;
 }
 
+/*
+ * While the panes are alone at the window's left edge, the window's corner
+ * mark — the side rail's toggle, closed rail (`side-rail.css`) — stands over
+ * the bottom-left pane's foot. That pane's dock keeps clear of it: its
+ * composer starts one gutter past the mark, never under it. `--ci` 0 and the
+ * last row is that pane; every other pane's clearance is nothing.
+ */
+.workspace-window[data-rail="closed"] .workspace[data-panes-alone] .workspace-pane {
+  --workspace-corner-mark: calc(
+    max(0, 1 - var(--ci)) * max(0, 1 - (var(--rn) - 1 - var(--ri))) *
+      (var(--rail-column) + var(--desktop-control-size) + var(--desktop-gutter))
+  );
+}
+
 @container workspace-docked (width >= 0) {
-  /* The composer sits at the foot of the pane, a little tighter than on home. */
+  /* The composer sits at the foot of the pane, a little tighter than on home.
+     A centred dock already stands that far in; a narrow one steps past the
+     corner mark (above). */
   .workspace-dock {
     width: 100%;
     max-width: 752px;
     flex: none;
     margin: 0 auto;
     padding: 0 16px 16px;
+    padding-left: max(
+      16px,
+      var(--workspace-corner-mark, 0px) - max(0px, (100cqw - 752px) / 2)
+    );
   }
 
   .workspace-dock .desktop-composer {
@@ -219,6 +239,7 @@
   @container workspace-pane (max-height: 219px) {
     .workspace-dock {
       padding: 0 6px 6px;
+      padding-left: max(6px, var(--workspace-corner-mark, 0px));
     }
 
     .workspace-dock .desktop-composer {
@@ -411,27 +432,12 @@
   }
 }
 
-/* In the window's corner a home's picture stops below the titlebar row, as
-   before: up behind the tabs it would be drawn under the traffic lights
-   (ADR 238). */
-.workspace[data-panes-alone]
-  .workspace-pane:is(
-    [data-split-corner]:not([data-drag-corner="no"]),
-    [data-drag-corner="yes"]
-  )
-  .workspace-pane-home
-  > .desktop-home {
-  --workspace-home-reach: calc(
-    var(--desktop-control-size) + 2 * var(--desktop-control-inset)
-  );
-}
-
-/* Behind the tabs the picture is quieter, not gone: it melts into the
-   titlebar's band instead of starting under a clear edge. */
+/* Up to the window's top edge the picture is as bright as below: it fades
+   only out toward the sides and into the pane. */
 .workspace-pane-home > .desktop-home:not([data-page]) .desktop-header-image {
   mask-image:
     linear-gradient(to right, transparent, black 8%, black 92%, transparent),
-    linear-gradient(to bottom, rgb(0 0 0 / 40%), black 28%, black 72%, transparent);
+    linear-gradient(to bottom, black 72%, transparent);
 }
 
 @keyframes workspace-composer-grow {

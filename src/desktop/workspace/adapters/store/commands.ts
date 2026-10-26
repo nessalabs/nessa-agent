@@ -49,9 +49,8 @@ export const {
   deleteAsked,
   deleteClosed,
   arrangementShown,
-  tabSwitched: switchTab,
-  tabSplitOff: splitOffTab,
-  sessionWalked: walkToSession,
+  panelTabShown: showPanelTab,
+  panelTabClosed: closePanelTab,
 } = workspaceActions
 
 export type WorkspaceCommand<Result = void> = ThunkAction<
@@ -67,8 +66,6 @@ export {
   canOpenBeside,
   closeInFront,
   closePane,
-  closeSessionTab,
-  closeTabItem,
   commitDrop,
   dropSession,
   fitPanes,

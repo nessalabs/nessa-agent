@@ -1,7 +1,7 @@
 /**
  * What a host says in a widget's stead, drawn one way wherever it is said:
  * the quiet placeholder with the plugin's name while a widget is not read or
- * an app loads, and one line — in a card, plain; in a pane or the window,
+ * an app loads, and one line — in a card, plain; in the panel or the window,
  * with close — for what it cannot draw (`model/host-table.ts`,
  * `app/model/app-view.ts`).
  */
