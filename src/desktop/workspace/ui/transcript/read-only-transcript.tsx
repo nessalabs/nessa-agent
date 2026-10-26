@@ -3,7 +3,11 @@
  * row, and no composer. A subagent's transcript is this
  * (`subagents/ui/subagents-panel.tsx`).
  */
-import type { Activity, Message as MessageValue } from "../../model/transcript"
+import {
+  shownActivity,
+  type Activity,
+  type Message as MessageValue,
+} from "../../model/transcript"
 import { LiveRow } from "./live-row"
 import { Message } from "./message"
 import "./transcript.css"
@@ -15,13 +19,14 @@ export function ReadOnlyTranscript({
   messages: readonly MessageValue[]
   activity: Activity | null
 }) {
+  const shown = shownActivity(messages, activity)
   return (
     <div className="workspace-transcript" data-read-only>
       <div className="workspace-transcript-inner">
         {messages.map((message) => (
           <Message key={message.id} sessionId="" message={message} isNew={false} />
         ))}
-        {activity ? <LiveRow activity={activity} /> : null}
+        {shown ? <LiveRow activity={shown} /> : null}
       </div>
     </div>
   )

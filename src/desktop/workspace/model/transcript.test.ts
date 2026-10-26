@@ -5,6 +5,7 @@ import {
   inlineRuns,
   messageText,
   sameWords,
+  shownActivity,
   titleFrom,
   titleLength,
   toolWidget,
@@ -24,6 +25,43 @@ describe("an agent message's parts", () => {
     ]
     expect(groupSteps(parts)).toEqual([[parts[0], parts[1]], parts[2], [parts[3]]])
     expect(groupSteps([])).toEqual([])
+  })
+
+  it("draws the live row only where no tool run is still at work", () => {
+    const activity = { label: "sleep 5", since: 0 }
+    const running: Part = {
+      kind: "step",
+      step: "run",
+      label: "sleep 5",
+      status: "running",
+    }
+    const done: Part = { ...running, status: "completed" }
+    const reply = (parts: Part[], working: boolean): Message => ({
+      id: "reply",
+      role: "agent",
+      at: 0,
+      parts,
+      ...(working ? { working: true as const } : {}),
+    })
+    // The run's trace already says the agent is at work, on which call.
+    expect(shownActivity([reply([running], true)], activity)).toBeNull()
+    // A finished call that ends the turn so far is still the live trace.
+    expect(shownActivity([reply([done], true)], activity)).toBeNull()
+    // A call still running while the agent writes past it keeps its trace live.
+    expect(
+      shownActivity(
+        [reply([running, { kind: "text", text: "Meanwhile" }], true)],
+        activity,
+      ),
+    ).toBeNull()
+    // Nothing yet, or a run the agent has written past: only the row says so.
+    expect(shownActivity([], activity)).toBe(activity)
+    expect(
+      shownActivity([reply([done, { kind: "text", text: "Next" }], true)], activity),
+    ).toBe(activity)
+    // A run in a turn that ended is not live.
+    expect(shownActivity([reply([running], false)], activity)).toBe(activity)
+    expect(shownActivity([reply([running], true)], null)).toBeNull()
   })
 
   it("marks out inline code and strong text, leaving the rest plain", () => {

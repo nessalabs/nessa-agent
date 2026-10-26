@@ -1476,6 +1476,52 @@ describe("a transcript", () => {
     })
     expect(host.querySelector(".workspace-live")).toBeNull()
   })
+
+  it("shows a running tool once, in its run's trace", async () => {
+    const { store } = await shown()
+    const update = (revision: number, open: boolean) =>
+      act(async () => {
+        store.dispatch(
+          workspaceActions.updateReceived({
+            update: {
+              kind: "transcript",
+              transcript: {
+                ...conversation,
+                revision,
+                messages: [
+                  ...conversation.messages,
+                  {
+                    id: "live-reply",
+                    role: "agent",
+                    at: 0,
+                    working: true,
+                    parts: open
+                      ? [
+                          {
+                            kind: "step",
+                            step: "run",
+                            label: "sleep 5",
+                            status: "running",
+                          },
+                        ]
+                      : [],
+                  },
+                ],
+                activity: { label: open ? "sleep 5" : "Thinking", since: 0 },
+              },
+            },
+          }),
+        )
+      })
+    await update(2, false)
+    // Before any call, the row is all that says the agent is at work.
+    expect(host.querySelector(".workspace-live")?.textContent).toContain("Thinking")
+    await update(3, true)
+    expect(host.querySelector(".workspace-live")).toBeNull()
+    const trace = [...host.querySelectorAll(".workspace-work")].at(-1)
+    expect(trace?.getAttribute("data-status")).toBe("running")
+    expect(host.textContent?.split("sleep 5").length).toBe(2)
+  })
 })
 
 const claudeRuntime = {
