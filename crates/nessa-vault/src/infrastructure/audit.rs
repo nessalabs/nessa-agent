@@ -1,5 +1,5 @@
 use crate::{
-    application::{Audit, AuditRecord},
+    application::{Audit, AuditRecord, ObservationClock},
     contract,
     domain::{Failure, Status},
 };
@@ -8,14 +8,16 @@ use serde::{Deserialize, Serialize};
 use std::{
     io::{Read, Write},
     path::PathBuf,
+    sync::Arc,
 };
 /// Secret-free bounded journal, independently readable while the vault is locked.
 pub struct FileAudit {
     directory: PathBuf,
+    clock: Arc<dyn ObservationClock>,
 }
 impl FileAudit {
-    pub fn new(directory: PathBuf) -> Self {
-        Self { directory }
+    pub fn new(directory: PathBuf, clock: Arc<dyn ObservationClock>) -> Self {
+        Self { directory, clock }
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -23,6 +25,7 @@ impl FileAudit {
 struct Stored {
     target: Option<String>,
     sequence: u64,
+    observed_at_unix_ms: u64,
     operation: u64,
     lease: String,
     principal: String,
@@ -69,7 +72,12 @@ impl Audit for FileAudit {
         }
         let keep = rows.len().saturating_sub(contract::AUDIT_ROWS - 1);
         rows.drain(..keep);
+        let observed_at_unix_ms = self.clock.unix_millis()?;
+        if observed_at_unix_ms > 9_007_199_254_740_991 {
+            return Err(Failure::AuditUnavailable);
+        }
         rows.push(Stored {
+            observed_at_unix_ms,
             target: record.target.as_ref().map(|name| name.as_str().to_owned()),
             sequence,
             operation: record.operation,

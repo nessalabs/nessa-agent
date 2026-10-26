@@ -43,3 +43,8 @@ pub trait Repository: Send + Sync {
     fn write(&self, key: &VaultKey, name: &EntryName, value: &[u8]) -> Result<(), Failure>;
     fn delete(&self, key: &VaultKey, name: &EntryName) -> Result<(), Failure>;
 }
+
+/// UTC observation time assigned by the durable audit adapter, not external-effect time.
+pub trait ObservationClock: Send + Sync {
+    fn unix_millis(&self) -> Result<u64, Failure>;
+}

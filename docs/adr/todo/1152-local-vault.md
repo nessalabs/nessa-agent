@@ -63,6 +63,7 @@ preserves source data. There is no silent reset or plaintext key-file fallback.
 | A second live lease requests unlock | Refuse ownership transfer while the first lease is live; another socket close cannot seal it |
 | Secret-free audit cannot be written | Refuse setup/unlock publication; close still clears keys and reports failure after effect |
 | Audit evidence while locked | Bounded private metadata journal independent of vault key; actor, namespace, operation/lease, before/after, cause/result, no secret bytes |
+| A consumer fails to restore after unlocking | Vault unlock remains truthful and reusable; that consumer reports its own storage failure |
 | Different namespaces / independent test instances | No shared keys, sessions or mutable process globals |
 
 ## Consequences
@@ -73,3 +74,80 @@ outside this migration. Only the GitHub/inbox keychain introduced by #1137 is
 replaced now; the existing provider API-key consumer remains a separate future
 vault integration. The vault's internal named-entry port supports that future
 consumer without exposing secret values to the UI or adding it now.
+
+An explicit lock increments the vault publication generation under the state mutex. A key derivation admitted before that lock cannot publish afterward, even while the same connection remains alive; a fresh unlock is required.
+
+Round-one adversarial review adds these orderings before repair:
+
+| Ordering | Required result |
+| --- | --- |
+| Owner closes while the publication audit is writing | Retain an unlock then compensating key-cleared record; inaccessible key is cleared even on audit failure |
+| Device-code response arrives after lock, including lock then re-unlock | The old vault generation cannot publish Connecting or start polling; retain the admitted attempt's termination cause |
+| Process restarts between audit writes | Persist an injected UTC observation time as well as the durable sequence |
+| A secret value is formatted for diagnostics | The reusable wrapper renders only a redaction |
+| UI recovery read completes after remount or a newer submit | Recheck request and revision after every await; only the current operation can publish |
+| Native command deadline elapses while its child blocks | Cancel that request ID and kill only its owned child before returning; a late start checks cancellation, and later requests keep distinct IDs |
+
+Native passphrase ownership is zeroizing from deserialization, before startup waits or early refusal.
+
+## Consumer ownership revisit after review round two
+
+The generic vault owns the unlock generation. GitHub may not infer session identity
+from a boolean. Its retained sign-in and pending attempt each carry the immutable
+generation that admitted them; restore captures one before IO. A stale generation
+is retired before status, token, provider completion or a new restore can use it.
+The credential-store port carries that same generation into every load/save/delete.
+The vault compares it under the key mutex, atomically with entry access, so an old
+completion cannot write or delete a new session's credential.
+
+Cleanup is independent of the command's audit outcome. The unique connection guard
+and explicit lock route both retire stale GitHub state even when key-close audit
+fails. Retirement takes and aborts an old attempt once, retaining its original
+operation/caller and a vault-locked termination cause. GithubAudit exposes a
+blocking cleanup delivery for this synchronous lifetime boundary; its durable
+adapter uses the same file writer as ordinary asynchronous records. No detached
+UI task or unbounded cleanup queue owns this receipt. Failure clears secrets,
+returns an observable refusal on explicit lock, and logs on a departed connection.
+
+| Ordering | Result and owner |
+| --- | --- |
+| Lock then re-unlock before old cleanup runs | Compare held generation with current generation, retire only the stale cache |
+| Old restore load answers after a new unlock | Drop its receipt; publish only matching captured generation |
+| Old poll token save or rollback reaches storage after re-unlock | Vault rejects old generation atomically; newer entry survives |
+| Key-close audit fails while sign-in is pending | Clear key, abort attempt and attempt its attributed durable termination independently |
+| Repeated close/status/restore observes the same stale attempt | State is taken once; retain one termination receipt and its original caller/cause |
+| Cleanup audit fails | Drop token/code anyway; explicit caller sees audit failure; no fake successful cleanup receipt |
+
+Terminal sign-in ownership is transferred out of Connecting under its state mutex
+before an asynchronous completion/end audit. Retirement and provider completion
+therefore cannot both claim the same pending operation. During final persistence
+the projection is signed out; only a matching generation's confirmed receipt
+publishes Connected. Polling checks its operation/generation before each provider
+request and after timer waits. An already admitted provider call may finish, but
+its stale result cannot advance to another call or mutate storage.
+
+Restore does not wait for the provider-command mutex: a departed session's network
+request must not hold up a reusable vault unlock. Cache publication is one
+application-owned compare-and-publish operation under the state mutex. Provider
+success, provider failure, rollback, end and cancel all use that operation with
+their captured generation. A restore never replaces a current-generation pending
+or connected state. Its generation-scoped store load can finish independently;
+an old command cannot then clear or overwrite the restored newer cache.
+
+## Dialog placement
+
+A protected-use hook captures the UI kit's nearest portal container. The root
+vault provider owns one dialog but renders it in that requesting surface's layer;
+a body portal would be hidden behind Settings. The GitHub row requests unlock
+inside Settings, rather than in its root data provider. Leaving the surface
+releases that placement and cancels an unsubmitted request; app-session key
+ownership remains in the native host. No CSS z-index lookup chooses a surface.
+
+A gateway restart can leave the retained child waiting on an already-closed
+product socket. A redacted transport-unavailable reply drops that child. Status
+may establish a fresh connection and retry once within the same native deadline;
+setup/unlock/lock are not replayed. Cancellation is checked before any retry, so
+a timed-out old request cannot create a replacement. A Settings-triggered unlock
+uses its portal layer for both the unlock form and transport refusals.
+
+Explicit lock fences publication and clears retained key state in one mutex scope; an observer cannot obtain a new generation for an old retained key between those effects.

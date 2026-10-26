@@ -109,7 +109,7 @@ impl EncryptedFileVault {
         for (name, value) in encoded {
             let name = EntryName::new(name)?;
             let value = value.0;
-            let bytes = Zeroizing::new(
+            let bytes = Secret::new(
                 STANDARD
                     .decode(value.as_bytes())
                     .map_err(|_| Failure::Unavailable)?,
@@ -198,7 +198,7 @@ impl EncryptedFileVault {
         let mut entries = Self::entries(&previous, key).map_err(|_| Failure::Unavailable)?;
         match value {
             Some(value) => {
-                entries.insert(name.clone(), Zeroizing::new(value.to_vec()));
+                entries.insert(name.clone(), Secret::new(value.to_vec()));
             }
             None => {
                 if entries.remove(name).is_none() {

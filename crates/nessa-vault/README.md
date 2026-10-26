@@ -8,7 +8,7 @@ owns the ordering table; application integration is tracked by #1152.
 ```text
 connection owner -> Session -> Vault -> Repository <- EncryptedFileVault
 request clones  -> Lease      |           |
-                              +-> Audit <- FileAudit
+                              +-> Audit <- FileAudit <- ObservationClock
                               +-> Clock
 ```
 
@@ -16,7 +16,9 @@ Arrows name calls/ownership or port implementation. A request's lease clone does
 not keep the unique connection owner alive. Session close invalidates admission
 before an in-flight derivation may publish. Other sessions cannot take over a
 live unlock. Repository IO is blocking and composed onto a bounded blocking
-worker by its consumers. Already-admitted repository operations may finish.
+worker by its consumers. Already-admitted repository operations may finish. Generation-scoped entry access
+compares its captured unlock identity under the key mutex; stale consumer work
+cannot read, overwrite or delete a newer session's entry.
 
 The file format selects Argon2id with the fixed bounded parameters in
 `protocol/defaults/vault-contract.json`, then XChaCha20-Poly1305 with a fresh
@@ -29,7 +31,7 @@ corruption preserve ciphertext rather than initializing a replacement.
 
 The metadata audit is separate and writable while locked. Its bounded journal
 records caller identifiers, connection/operation identity, transition, cause and
-result, and contains no secret values. Audit failure refuses unlock publication;
+result and injected UTC observation time, and contains no secret values. Secret Debug formatting is redacted. Audit failure refuses unlock publication;
 close still removes its key before reporting audit failure.
 
 `cargo test -p nessa-vault` exercises real encrypted files and audit persistence,

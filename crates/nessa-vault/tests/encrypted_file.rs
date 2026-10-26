@@ -75,7 +75,7 @@ fn independent_repository_writers_keep_each_others_entries() {
 #[test]
 fn entry_and_passphrase_limits_are_enforced_before_storage() {
     assert!(matches!(
-        Passphrase::new("sixsix".into()),
+        Passphrase::new("12345678901".into()),
         Err(Failure::PassphrasePolicy)
     ));
     assert!(matches!(
@@ -110,5 +110,32 @@ fn entry_and_passphrase_limits_are_enforced_before_storage() {
     assert_eq!(
         repository.write(&key, &EntryName::new("too-many").unwrap(), b"test"),
         Err(Failure::Capacity)
+    );
+}
+
+#[test]
+fn format_one_remains_readable_with_its_original_kdf_profile() {
+    use std::io::Write;
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("vault");
+    nessa_local_storage::create_directory(&directory).unwrap();
+    nessa_local_storage::open(
+        &directory.join("entries.enc"),
+        nessa_local_storage::OpenMode::CreateNew,
+    )
+    .unwrap()
+    .write_all(include_bytes!("fixtures/format-one.enc"))
+    .unwrap();
+    let repository = EncryptedFileVault::new(directory, Arc::new(OsEntropy));
+    let key = repository
+        .unlock(&Passphrase::new("public vault format verification words".into()).unwrap())
+        .unwrap();
+    assert_eq!(
+        repository
+            .read(&key, &EntryName::new("example-secret").unwrap())
+            .unwrap()
+            .unwrap()
+            .as_slice(),
+        b"public fixture value"
     );
 }

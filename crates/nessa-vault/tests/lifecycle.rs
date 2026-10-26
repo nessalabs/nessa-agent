@@ -40,7 +40,10 @@ impl Fixture {
             directory.path().join("vault"),
             Arc::new(OsEntropy),
         ));
-        let audit = Arc::new(FileAudit::new(directory.path().join("audit")));
+        let audit = Arc::new(FileAudit::new(
+            directory.path().join("audit"),
+            Arc::new(TestClock(AtomicU64::new(0))),
+        ));
         let clock = Arc::new(TestClock(AtomicU64::new(0)));
         let vault = Vault::new(repository.clone(), audit.clone(), clock.clone());
         Self {
@@ -211,6 +214,36 @@ fn a_closed_connection_fences_an_unlock_still_deriving_its_key() {
     assert_eq!(worker.join().unwrap(), Err(Failure::SessionClosed));
     assert_eq!(vault.status(), Ok(Status::Locked));
 }
+#[test]
+fn an_explicit_lock_fences_an_unlock_still_deriving_its_key() {
+    let f = Fixture::new();
+    let setup = f.vault.session("setup".into(), caller());
+    f.vault.create(&setup.lease(), password(), &[]).unwrap();
+    drop(setup);
+    let (started_tx, started_rx) = mpsc::sync_channel(1);
+    let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+    let repository = Arc::new(Gated {
+        inner: f.repository.clone(),
+        started: started_tx,
+        resume: Mutex::new(resume_rx),
+    });
+    let vault = Vault::new(repository, f.audit.clone(), f.clock.clone());
+    let session = vault.session("blocked".into(), caller());
+    let lease = session.lease();
+    let worker = {
+        let vault = vault.clone();
+        let lease = lease.clone();
+        std::thread::spawn(move || vault.unlock(&lease, password()))
+    };
+    started_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    assert_eq!(vault.unlock(&lease, password()), Err(Failure::Busy));
+    assert_eq!(vault.lock(&lease), Ok(Status::Locked));
+    resume_tx.send(()).unwrap();
+    assert_eq!(worker.join().unwrap(), Err(Failure::Locked));
+    assert_eq!(vault.status(), Ok(Status::Locked));
+}
 struct FailableAudit {
     inner: Arc<FileAudit>,
     fail: AtomicBool,
@@ -244,4 +277,161 @@ fn audit_failure_refuses_admission_and_cannot_prevent_key_clearing() {
     assert_eq!(session.close(), Err(Failure::AuditUnavailable));
     assert_eq!(vault.status(), Ok(Status::Locked));
     assert!(matches!(vault.read(&name()), Err(Failure::Locked)));
+}
+
+impl nessa_vault::application::ObservationClock for TestClock {
+    fn unix_millis(&self) -> Result<u64, nessa_vault::domain::Failure> {
+        Ok(1793030400000)
+    }
+}
+
+#[test]
+fn durable_audit_retains_injected_observation_time_across_sessions_and_secrets_redact() {
+    let f = Fixture::new();
+    let session = f.vault.session("first".into(), caller());
+    f.vault.create(&session.lease(), password(), &[]).unwrap();
+    drop(session);
+    let session = f.vault.session("second".into(), caller());
+    f.vault.unlock(&session.lease(), password()).unwrap();
+    f.vault.write(&name(), b"do not print this").unwrap();
+    let value = f.vault.read(&name()).unwrap().unwrap();
+    assert_eq!(format!("{value:?}"), "[REDACTED]");
+    let rows: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(f.directory.path().join("audit/events.json")).unwrap(),
+    )
+    .unwrap();
+    let rows = rows.as_array().unwrap();
+    assert!(rows
+        .iter()
+        .all(|row| row["observedAtUnixMs"] == 1793030400000_u64));
+    assert!(rows
+        .windows(2)
+        .all(|pair| pair[1]["sequence"].as_u64().unwrap()
+            == pair[0]["sequence"].as_u64().unwrap() + 1));
+}
+
+struct FailPublication(Arc<FileAudit>);
+impl Audit for FailPublication {
+    fn record(&self, event: &AuditRecord) -> Result<(), Failure> {
+        if event.result == "published" {
+            Err(Failure::AuditUnavailable)
+        } else {
+            self.0.record(event)
+        }
+    }
+}
+#[test]
+fn a_failed_publication_receipt_clears_the_key_and_preserves_the_encrypted_vault() {
+    let f = Fixture::new();
+    let vault = Vault::new(
+        f.repository.clone(),
+        Arc::new(FailPublication(f.audit.clone())),
+        f.clock.clone(),
+    );
+    let session = vault.session("publication-failure".into(), caller());
+    assert_eq!(
+        vault.create(&session.lease(), password(), &[]),
+        Err(Failure::AuditUnavailable)
+    );
+    assert_eq!(vault.status(), Ok(Status::Locked));
+    assert!(matches!(vault.read(&name()), Err(Failure::Locked)));
+    let session = f.vault.session("retry".into(), caller());
+    assert_eq!(
+        f.vault.unlock(&session.lease(), password()),
+        Ok(Status::Unlocked)
+    );
+}
+
+struct GatedPublication {
+    inner: Arc<FileAudit>,
+    entered: mpsc::SyncSender<()>,
+    resume: Mutex<mpsc::Receiver<()>>,
+}
+impl Audit for GatedPublication {
+    fn record(&self, event: &AuditRecord) -> Result<(), Failure> {
+        if event.result == "published" {
+            self.entered.send(()).unwrap();
+            self.resume.lock().unwrap().recv().unwrap();
+        }
+        self.inner.record(event)
+    }
+}
+#[test]
+fn close_during_publication_audit_retains_the_key_clearing_transition() {
+    let f = Fixture::new();
+    let session = f.vault.session("setup".into(), caller());
+    f.vault.create(&session.lease(), password(), &[]).unwrap();
+    drop(session);
+    let (entered, waiting) = mpsc::sync_channel(1);
+    let (resume, released) = mpsc::sync_channel(1);
+    let vault = Vault::new(
+        f.repository.clone(),
+        Arc::new(GatedPublication {
+            inner: f.audit.clone(),
+            entered,
+            resume: Mutex::new(released),
+        }),
+        f.clock.clone(),
+    );
+    let mut session = vault.session("raced".into(), caller());
+    let lease = session.lease();
+    let opening = {
+        let vault = vault.clone();
+        let lease = lease.clone();
+        std::thread::spawn(move || vault.unlock(&lease, password()))
+    };
+    waiting
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    let closing = std::thread::spawn(move || session.close());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while lease.is_active() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    resume.send(()).unwrap();
+    assert_eq!(opening.join().unwrap(), Err(Failure::SessionClosed));
+    closing.join().unwrap().unwrap();
+    assert_eq!(vault.status(), Ok(Status::Locked));
+    let rows: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(f.directory.path().join("audit/events.json")).unwrap(),
+    )
+    .unwrap();
+    let rows = rows.as_array().unwrap();
+    let events: Vec<_> = rows.iter().filter(|row| row["lease"] == "raced").collect();
+    assert_eq!(events[events.len() - 2]["result"], "published");
+    assert_eq!(events.last().unwrap()["result"], "key_cleared");
+    assert_eq!(events.last().unwrap()["after"], "locked");
+}
+
+#[test]
+fn stale_consumer_reads_writes_and_rollbacks_cannot_touch_a_new_unlock() {
+    let f = Fixture::new();
+    let first = f.vault.session("first".into(), caller());
+    f.vault.create(&first.lease(), password(), &[]).unwrap();
+    let old = f.vault.unlocked_generation().unwrap();
+    f.vault.write_in(old, &name(), b"old").unwrap();
+    drop(first);
+    let second = f.vault.session("second".into(), caller());
+    f.vault.unlock(&second.lease(), password()).unwrap();
+    let current = f.vault.unlocked_generation().unwrap();
+    assert_ne!(old, current);
+    f.vault.write_in(current, &name(), b"new").unwrap();
+    assert!(matches!(
+        f.vault.read_in(old, &name()),
+        Err(Failure::Locked)
+    ));
+    assert_eq!(
+        f.vault.write_in(old, &name(), b"stale"),
+        Err(Failure::Locked)
+    );
+    assert_eq!(f.vault.delete_in(old, &name()), Err(Failure::Locked));
+    assert_eq!(
+        f.vault
+            .read_in(current, &name())
+            .unwrap()
+            .unwrap()
+            .as_slice(),
+        b"new"
+    );
 }
