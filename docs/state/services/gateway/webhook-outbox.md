@@ -4,7 +4,7 @@ title: Durable outbound webhook state
 kind: feature
 status: mixed
 summary: Private intents, canonical cursors and causal delivery outcomes compose with owned product commands and signed sending; acknowledgement and retained cleanup stay distinct.
-sourceRevision: "365f769078a3d2298340952ba519edc515468332"
+sourceRevision: "c790639702213d79bad32aaa148e2744ca7a9d1d"
 parent: gateway
 sources:
   - crates/nessa-server/src/webhooks/domain/value_objects/registration_lifecycle.rs
@@ -52,6 +52,11 @@ sources:
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/owner_reset.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery/owner_reset.rs
   - crates/nessa-server/tests/webhooks/infrastructure/product_delivery/owner_query.rs
+  - protocol/product/v1.json
+  - protocol/product/manifest.json
+  - packages/nessa-client/src/presentation/conversation-api.ts
+  - verification/desktop/scripts/conversation-stress.mjs
+  - verification/desktop/scripts/lib/gateway-stack.mjs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/fact.rs
   - crates/nessa-server/src/webhooks/infrastructure/outbox/source_reset/retention.rs
   - crates/nessa-server/tests/webhooks/infrastructure/outbox/cleanup.rs
@@ -265,9 +270,9 @@ terminal Unknown. The storage recovery method performs no HTTP.
 
 ## Explicit owner reset
 
-The reset, attempt pin and public status changes described here are an
-uncommitted implementation review. The recorded source checkpoint remains
-historical until that candidate is committed and checked.
+The reset, attempt pin and public status changes are checked at the source
+revision recorded above. Whole-feature independent review and source-matched
+CI/platform/browser acceptance remain separate gates.
 
 `conversation.webhook.cursor` reads the current scoped checkpoint for a registered
 webhook target. While frozen, it returns the server-issued capture UUID as

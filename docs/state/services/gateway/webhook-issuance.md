@@ -4,7 +4,7 @@ title: Webhook credential issuance
 kind: operation
 status: mixed
 summary: Owner issuance and grants feed supervised canonical signed delivery; local lifecycle evidence is qualified separately from final platform and browser acceptance.
-sourceRevision: "365f769078a3d2298340952ba519edc515468332"
+sourceRevision: "c790639702213d79bad32aaa148e2744ca7a9d1d"
 parent: gateway
 sources:
   - crates/nessa-auth/src/application/credential_admin.rs
@@ -379,3 +379,36 @@ CI/platform/browser/default-and-raised-stress remain required. The existing
 inner diagrams describe the same authority and durable states and are unchanged;
 no new renderer or browser result is claimed. Only these three feature pages and
 their linked source changes are newly reconciled, not unrelated Auth/SDK pages.
+
+
+## Retained outcome and owner reset checkpoint
+
+At source `c790639702213d79bad32aaa148e2744ca7a9d1d`, exact-delivery protection is
+installed under the native connection mutex before Sending and survives physical
+work, captured response/unposted reconciliation, publication and consumed
+acknowledgement. During that interval ordinary webhook-native mutations can
+promptly return Unavailable; canonical revoke and unshare independently retain
+their existing authority behavior. This exclusion does not keep Auth/grant dispatch
+authority through settlement. Temporary preparation/source refusals are visible
+non-attempt outcomes and paced registration progression keeps healthy siblings
+moving. True invariant failures remain fatal.
+
+The mounted owner reset selects an explicitly observed incarnation under fresh
+owner/Cedar checks and an exact frozen-generation/registration CAS. Immutable,
+bounded receipt evidence makes replay return the original selection without
+rewind. A later physical replacement requires a fresh freeze/reset. The optional
+owner source Head is a separate read after the native snapshot, with explicit
+failure/capacity/deadline refusal and no native effects. The
+[outbox statechart and controls](webhook-outbox.md#explicit-owner-reset) own these
+persistence transitions and the accepted temporary-exclusion tradeoff.
+
+The linked source changes since the preceding checkpoint were traced with the
+current application binding check, retained runtime, root cleanup, product API and
+regression tests. Auth, grant and Cedar rules are unchanged; the shared target
+snapshot validator extracts the existing binding rule rather than introducing a
+second policy. The existing inner diagram remains unchanged. The combined main
+includes native discovery and the desktop verifier changes; this source checkpoint
+is not a claim that their platform/browser cohorts ran here. All 295 webhook tests,
+including the three full retention controls, and required seven-package all-target
+Clippy passed. Whole-feature independent review and exact-head CI/platform/browser
+and default/raised stress acceptance remain pending.
