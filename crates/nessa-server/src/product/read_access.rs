@@ -22,6 +22,8 @@
 //!   ──▶ PairedAccess::admit(action, conversation, role, request shape)
 //!         ──▶ Ok | NotFound | Deleted | Forbidden | Unavailable ──▶ wire code
 //! ```
+use std::sync::Arc;
+
 use super::{
     conversation::{caller, conversation_id},
     socket::{admit_grant, failure, failure_with_details, success},
@@ -36,7 +38,7 @@ use crate::conversation::application::{
 use crate::conversation::domain::{CommandHosts, ToolChoice, ToolPolicy, ToolPreset, ToolRules};
 use crate::conversation::infrastructure::PublishedReview;
 use nessa_auth::application::session::AuthenticatedSession;
-use nessa_auth::domain::CredentialId;
+use nessa_auth::domain::{CredentialId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_protocol::product::generated::{
@@ -70,14 +72,50 @@ pub(super) async fn reader(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
 ) -> Result<Reader, &'static str> {
+    catalogue_reader(state, session)
+        .await
+        .map(|scope| scope.reader)
+}
+
+/// The reader and authoritative catalogue owner resolved at list admission.
+pub(super) struct CatalogueReader {
+    pub reader: Reader,
+    pub owner: PrincipalId,
+    pub policy: Option<Arc<dyn ConversationAccessPolicyEvaluator>>,
+}
+
+/// Resolve the reader and the binding's catalogue owner together. A peer's
+/// signed-in principal is not substituted for its grantor's identity.
+pub(super) async fn catalogue_reader(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<CatalogueReader, &'static str> {
     if let Some(phone) = super::owner_phone::current(state, session).await? {
-        return Ok(Reader::OwnerPhone(Box::new(phone)));
+        let owner = phone.receiver().owner_id.clone();
+        return Ok(CatalogueReader {
+            reader: Reader::OwnerPhone(Box::new(phone)),
+            owner,
+            policy: None,
+        });
     }
     Ok(match paired_binding(state, session).await? {
-        Some(binding) => Reader::PairedDevice {
-            receiver_id: binding.receiver_id,
+        Some(binding) => CatalogueReader {
+            reader: Reader::PairedDevice {
+                receiver_id: binding.receiver_id,
+            },
+            owner: binding.owner_id,
+            policy: Some(
+                state
+                    .conversation_access
+                    .clone()
+                    .ok_or(refusal_code(ReadRefusal::Unverifiable))?,
+            ),
         },
-        None => Reader::Owner,
+        None => CatalogueReader {
+            reader: Reader::Owner,
+            owner: session.context().principal_id().clone(),
+            policy: None,
+        },
     })
 }
 
@@ -182,8 +220,8 @@ async fn unpaired_may_see_review(
 /// the manifest grant. Paired credentials ask `conversation.read`, with the
 /// existing `conversation.write` fallback. This admits no target: peek and
 /// subscription tasks still ask [`admit_conversation`]. Unsubscribe retires only
-/// a subscription admitted earlier. Lists remain outside this exception until
-/// their catalogue is grant-scoped.
+/// a subscription admitted earlier. Lists ask their catalogue admission and
+/// per-row read policy after the method grant.
 pub(super) async fn admit_paired_read(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -194,6 +232,9 @@ pub(super) async fn admit_paired_read(
         "conversation.peek"
             | "conversation.subscribe"
             | "conversation.subscribeEvents"
+            | "conversation.list"
+            | "conversation.observe"
+            | "conversation.subscribeList"
             | "conversation.unsubscribe"
     ) {
         return Ok(false);
@@ -329,29 +370,39 @@ pub(super) async fn admit_index_rows(
     Ok(())
 }
 
-/// Whether `session` may ask for the owner's list. A paired device lists
-/// through its catalogue, which the store narrows to its grants; the socket's
-/// lists are the owner's own, so a device is refused them (row G12) rather
-/// than handed a list filtered after it was read.
+/// Admit the current catalogue reader, retaining its verified owner and
+/// receiver for the read. SQL narrows a device's rows before bounds and
+/// each candidate asks Cedar; a peer retains its catalogue-only read path.
 pub(super) async fn admit_list(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
-) -> Result<(), &'static str> {
-    if let Some(phone) = super::owner_phone::current(state, session).await? {
-        return phone
+) -> Result<CatalogueReader, &'static str> {
+    let scope = catalogue_reader(state, session).await?;
+    match &scope.reader {
+        Reader::OwnerPhone(phone) => phone
             .admit_catalogue(
-                &phone.receiver().owner_id,
+                &scope.owner,
                 &phone.receiver().organization_id,
                 AccessAction::List,
             )
-            .map_err(refusal_code);
-    }
-    let Some(binding) = paired_binding(state, session).await? else {
-        return Ok(());
-    };
-    PairedAccess::new(access_policy(state)?, party(&binding, session))
+            .map_err(refusal_code)?,
+        Reader::PairedDevice { receiver_id } => PairedAccess::new(
+            scope
+                .policy
+                .as_deref()
+                .ok_or(refusal_code(ReadRefusal::Unverifiable))?,
+            PairedParty {
+                organization: session.context().organization_id(),
+                signed_in_as: session.context().principal_id(),
+                binding_owner: &scope.owner,
+                receiver: receiver_id,
+            },
+        )
         .admit_catalogue(AccessAction::List)
-        .map_err(paired_code)
+        .map_err(paired_code)?,
+        Reader::Owner => {}
+    }
+    Ok(scope)
 }
 
 /// The action a paired party's `conversation.write` method is: a Drive
@@ -443,9 +494,9 @@ pub(super) async fn admit_request(
     {
         return as_owner().await;
     }
-    // Peek is an ordinary request, unlike subscription task admission. Ask the
-    // same paired-read owner here before the manifest's owner-surface fallback.
-    if method == "conversation.peek" && admit_paired_read(state, session, method).await? {
+    // Ordinary reads and subscription tasks ask the same paired-read owner
+    // before the manifest's owner-surface fallback.
+    if admit_paired_read(state, session, method).await? {
         return Ok(Initiation::owner());
     }
     let writes = action_for_method(method) == Some("conversation.write");

@@ -9,6 +9,219 @@ const REFUSED = "Could not connect to 127.0.0.1: Connection refused"
 const RESET = "Error receiving data: Connection reset by peer"
 const LOST = "The network connection was lost."
 const CONNECT = "Could not connect to the server."
+const request = (ws, id = "read", method = "conversation.subscribeList") =>
+  ws.emit("framesent", { payload: JSON.stringify({ type: "req", id, method }) })
+const response = (ws, id = "read", ok = true) =>
+  ws.emit("framereceived", { payload: JSON.stringify({ type: "res", id, ok }) })
+
+for (const method of ["conversation.subscribeList", "conversation.subscribe"]) {
+  test(`browser recovery requires its new ${method} acknowledgement`, async () => {
+    const f = fixture()
+    await f.observer.during(f.opened, async () => {
+      const ws = f.socket()
+      const ready = f.observer.readable(10_000)
+      request(ws, "read", method)
+      response(ws)
+      assert.equal(await ready, true)
+      return true
+    })
+    f.observer.dispose()
+  })
+}
+
+for (const [name, evidence] of [
+  [
+    "challenge alone",
+    (f, ws) =>
+      ws.emit("framereceived", {
+        payload: JSON.stringify({ type: "event", event: "session.challenge" }),
+      }),
+  ],
+  [
+    "authentication alone",
+    (f, ws) => {
+      request(ws, "read", "session.authenticate")
+      response(ws)
+    },
+  ],
+  [
+    "failed read",
+    (f, ws) => {
+      request(ws)
+      response(ws, "read", false)
+    },
+  ],
+  ["unsolicited reply", (f, ws) => response(ws)],
+  [
+    "another socket's reply",
+    (f, ws) => {
+      request(ws)
+      response(f.socket())
+    },
+  ],
+  [
+    "closed acknowledged socket",
+    (f, ws) => {
+      request(ws)
+      response(ws)
+      ws.emit("close")
+    },
+  ],
+  [
+    "failed acknowledged socket",
+    (f, ws) => {
+      request(ws)
+      response(ws)
+      f.fail(ws)
+    },
+  ],
+]) {
+  test(`${name} cannot establish usable browser recovery`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] })
+    const f = fixture()
+    await f.observer.during(f.opened, async () => {
+      evidence(f, f.socket())
+      const ready = f.observer.readable(10_000)
+      t.mock.timers.tick(10_000)
+      assert.equal(await ready, false)
+      return false
+    })
+    f.observer.dispose()
+  })
+}
+
+test("stalled recovery exhausts the existing Send budget rather than sending", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const f = fixture()
+  await f.observer.during(f.opened, async () => {
+    const ws = f.socket()
+    request(ws)
+    let settled = false
+    const ready = f.observer.readable(10_000).then((value) => {
+      settled = true
+      return value
+    })
+    t.mock.timers.tick(9_999)
+    await Promise.resolve()
+    assert.equal(settled, false)
+    t.mock.timers.tick(1)
+    assert.equal(await ready, false)
+    return false
+  })
+  f.observer.dispose()
+})
+
+for (const count of [64, 65]) {
+  test(`${count} pending workspace reads ${count === 64 ? "allow" : "refuse"} readiness`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] })
+    const f = fixture()
+    await f.observer.during(f.opened, async () => {
+      const ws = f.socket()
+      for (let index = 0; index < count; index++) request(ws, String(index))
+      response(ws, "0")
+      const ready = f.observer.readable(10_000)
+      t.mock.timers.tick(10_000)
+      assert.equal(await ready, count === 64)
+      return count === 64
+    })
+    f.observer.dispose()
+  })
+}
+
+test("the pre-restart socket's read does not prove a replacement recovered", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const f = fixture()
+  const old = f.socket()
+  await f.observer.during(f.opened, async () => {
+    request(old)
+    response(old)
+    const ready = f.observer.readable(10_000)
+    t.mock.timers.tick(10_000)
+    assert.equal(await ready, false)
+    return false
+  })
+  f.observer.dispose()
+})
+
+test("a socket closing before a recovered waiter resumes is refused", async () => {
+  const f = fixture()
+  await f.observer.during(f.opened, async () => {
+    const ws = f.socket()
+    const ready = f.observer.readable(10_000)
+    request(ws)
+    response(ws)
+    ws.emit("close")
+    assert.equal(await ready, false)
+    return false
+  })
+  f.observer.dispose()
+})
+
+for (const older of [true, false]) {
+  test(`an error on ${older ? "an older" : "another"} socket preserves the live read`, async () => {
+    const f = fixture()
+    const old = older ? f.socket() : null
+    await f.observer.during(f.opened, async () => {
+      const ws = f.socket()
+      request(ws)
+      response(ws)
+      f.fail(old ?? f.socket())
+      assert.equal(await f.observer.readable(10_000), true)
+      return false
+    })
+    // Readiness is not permission to exempt the refused connection's console.
+    assert.equal(f.lines.errors.length, 1)
+    assert.equal(f.lines.harmless.length, 0)
+    f.observer.dispose()
+  })
+}
+
+test("late console text cannot revoke another socket's acknowledged read", async () => {
+  const f = fixture()
+  await f.observer.during(f.opened, async () => {
+    const ws = f.socket()
+    request(ws)
+    response(ws)
+    f.consoleError()
+    assert.equal(await f.observer.readable(10_000), true)
+    return false
+  })
+  assert.equal(f.lines.errors.length, 1)
+  assert.equal(f.lines.harmless.length, 0)
+  f.observer.dispose()
+})
+
+test("more frames on the same socket cannot erase a later console failure", async () => {
+  const f = fixture()
+  await f.observer.during(f.opened, async () => {
+    f.fail(f.socket())
+    const ws = f.socket()
+    ws.emit("framereceived", {})
+    f.consoleError()
+    request(ws)
+    response(ws)
+    assert.equal(await f.observer.readable(10_000), true)
+    return true
+  })
+  assert.equal(f.lines.errors.length, 2)
+  assert.equal(f.lines.harmless.length, 0)
+  f.observer.dispose()
+})
+
+test("disposing or ending the observation releases a pending readiness waiter", async () => {
+  for (const dispose of [true, false]) {
+    const f = fixture()
+    let ready
+    await f.observer.during(f.opened, async () => {
+      ready = f.observer.readable(10_000)
+      if (dispose) f.observer.dispose()
+      return false
+    })
+    assert.equal(await ready, false)
+    f.observer.dispose()
+  }
+})
+
 function fixture(defaultCause = REFUSED) {
   const page = new EventEmitter()
   const lines = watchLines()

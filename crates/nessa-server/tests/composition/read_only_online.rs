@@ -1,6 +1,8 @@
 //! Real separate client/gateway proofs consume canonical stores and actual paired credentials.
 #[path = "read_only_online/fixtures.rs"]
 mod fixtures;
+#[path = "read_only_online/native_catalogue.rs"]
+mod native_catalogue;
 #[path = "read_only_online/native_session.rs"]
 mod native_session;
 #[path = "read_only_online/relay_reading.rs"]

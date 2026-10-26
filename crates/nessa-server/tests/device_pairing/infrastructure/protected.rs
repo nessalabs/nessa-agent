@@ -396,7 +396,12 @@ async fn protected_session_reads_with_the_issued_credential() {
         let nonce = probe.nonce.clone();
         let ready = probe.authenticate(&credential, &nonce).unwrap();
         let head = probe.catalogue_head(&receiver, epoch).unwrap();
-        let write = probe.call("conversation.list", json!({})).unwrap();
+        let write = probe
+            .call(
+                "conversation.create",
+                json!({"conversationId": Uuid::new_v4().to_string(), "requestId": "read-only-create"}),
+            )
+            .unwrap();
         (ready, head, write)
     })
     .await;

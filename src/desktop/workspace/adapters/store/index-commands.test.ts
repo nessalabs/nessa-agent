@@ -1,5 +1,5 @@
 /** The index commands: loading, a read overtaken, following, marking read, and a resync. */
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { WorkspaceSourceError } from "../../application/ports"
 
 import { emptyTranscript } from "../../model/transcript"
@@ -371,6 +371,8 @@ describe("the index read again", () => {
     store.dispatch(followWorkspace())
     await store.dispatch(loadWorkspace())
     await settle()
+    // Freeze elapsed-time diagnostics while checking the source warnings exactly.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000)
     const warn = console.warn
     const logged: unknown[][] = []
     console.warn = (...args: unknown[]) => void logged.push(args)
@@ -398,6 +400,7 @@ describe("the index read again", () => {
       })
     } finally {
       console.warn = warn
+      clock.mockRestore()
     }
     expect(store.getState().workspace).toBe(before)
     expect(logged).toHaveLength(3)
@@ -421,6 +424,8 @@ describe("the index read again", () => {
         ],
         sessions: [...index.sessions, summary("stranded", "orphan", 1)],
       })
+    // Freeze elapsed-time diagnostics while checking the source warnings exactly.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000)
     const warn = console.warn
     const logged: unknown[][] = []
     console.warn = (...args: unknown[]) => void logged.push(args)
@@ -429,6 +434,7 @@ describe("the index read again", () => {
       expect(store.getState().workspace.sessions.stranded).toBeUndefined()
     } finally {
       console.warn = warn
+      clock.mockRestore()
     }
     expect(logged).toEqual([
       [
@@ -449,6 +455,8 @@ describe("the index read again", () => {
           summary("z", "desktop", 1, "idle", { revision: 0 }),
         ],
       })
+    // Freeze elapsed-time diagnostics while checking the source warnings exactly.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000)
     const warn = console.warn
     const logged: unknown[][] = []
     console.warn = (...args: unknown[]) => void logged.push(args)
@@ -457,6 +465,7 @@ describe("the index read again", () => {
       expect(store.getState().workspace.sessions.z).toBeUndefined()
     } finally {
       console.warn = warn
+      clock.mockRestore()
     }
     expect(logged).toEqual([
       ["The index listed sessions at a revision the source could not have sent", ["z"]],
