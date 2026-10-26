@@ -489,4 +489,158 @@ mod attachment_gateway {
             max.div_ceil(3) * 4
         );
     }
+
+    fn piece(ticket: &str, offset: usize, bytes: &[u8], last: bool) -> serde_json::Value {
+        use base64::Engine;
+        json!({
+            "ticket": ticket,
+            "offset": offset,
+            "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+            "last": last,
+        })
+    }
+    async fn ticket_for(state: &ProductRouteState, session: &AuthenticatedSession) -> String {
+        let reply =
+            chat_request(state, session, "attachment.begin", begin(BYTES, "image/png")).await;
+        assert!(reply.ok, "{:?}", reply.error.map(|e| e.code));
+        reply.payload.unwrap()["ticket"].as_str().unwrap().to_owned()
+    }
+    fn refused(reply: ResponseFrame) -> String {
+        assert!(!reply.ok);
+        reply.error.unwrap().code
+    }
+
+    #[tokio::test]
+    async fn pieces_over_the_session_are_kept_and_answered_with_the_stored_file() {
+        let fixture = Fixture::with_normalizer(
+            AttachmentLimits::default(),
+            StubNormalizer::producing(b"small jpeg", "image/jpeg"),
+        );
+        let state = attachment_state(&fixture);
+        let session = chat_session(&state, "owner-phone").await;
+        let ticket = ticket_for(&state, &session).await;
+
+        let reply = chat_request(
+            &state,
+            &session,
+            "attachment.write",
+            piece(&ticket, 0, &BYTES[..8], false),
+        )
+        .await;
+        assert!(reply.ok, "{:?}", reply.error.map(|e| e.code));
+        let payload = reply.payload.unwrap();
+        assert_eq!(payload["received"], 8);
+        for absent in ["digest", "mimeType", "size"] {
+            assert!(payload[absent].is_null(), "{absent}");
+        }
+        let reply = chat_request(
+            &state,
+            &session,
+            "attachment.write",
+            piece(&ticket, 8, &BYTES[8..], true),
+        )
+        .await;
+        assert!(reply.ok, "{:?}", reply.error.map(|e| e.code));
+        let payload = reply.payload.unwrap();
+        assert_eq!(payload["received"], BYTES.len());
+        // What to refer to is the normalized image, as on the HTTP route.
+        assert_eq!(payload["digest"], digest_of(b"small jpeg").to_string());
+        assert_eq!(payload["mimeType"], "image/jpeg");
+        assert_eq!(payload["size"], 10);
+        assert_eq!(state.socket_uploads.in_progress(), 0);
+
+        // The ticket was spent by its upload.
+        let reply = chat_request(
+            &state,
+            &session,
+            "attachment.write",
+            piece(&ticket, 0, BYTES, true),
+        )
+        .await;
+        assert_eq!(refused(reply), "upload_ticket_invalid");
+        // And the conversation holds the file, so beginning again needs no upload.
+        let reply =
+            chat_request(&state, &session, "attachment.begin", begin(BYTES, "image/png")).await;
+        assert_eq!(reply.payload.unwrap()["state"], "stored");
+    }
+
+    #[tokio::test]
+    async fn a_piece_out_of_order_ends_its_upload() {
+        let fixture = Fixture::with_normalizer(
+            AttachmentLimits::default(),
+            StubNormalizer::producing(b"small jpeg", "image/jpeg"),
+        );
+        let state = attachment_state(&fixture);
+        let session = chat_session(&state, "owner-phone").await;
+        let ticket = ticket_for(&state, &session).await;
+        let reply = chat_request(
+            &state,
+            &session,
+            "attachment.write",
+            piece(&ticket, 0, &BYTES[..8], false),
+        )
+        .await;
+        assert!(reply.ok);
+        // A gap: the upload ends here.
+        let reply = chat_request(
+            &state,
+            &session,
+            "attachment.write",
+            piece(&ticket, 12, &BYTES[12..], true),
+        )
+        .await;
+        assert_eq!(refused(reply), "upload_failed");
+        assert_eq!(state.socket_uploads.in_progress(), 0);
+        // The piece that would have been right is now one of no upload.
+        let reply = chat_request(
+            &state,
+            &session,
+            "attachment.write",
+            piece(&ticket, 8, &BYTES[8..], true),
+        )
+        .await;
+        assert_eq!(refused(reply), "upload_failed");
+        // A later piece with no upload under its ticket starts nothing.
+        let other = ticket_for(&state, &session).await;
+        let reply = chat_request(
+            &state,
+            &session,
+            "attachment.write",
+            piece(&other, 8, &BYTES[8..], true),
+        )
+        .await;
+        assert_eq!(refused(reply), "upload_failed");
+        assert_eq!(state.socket_uploads.in_progress(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_piece_that_cannot_be_read_or_a_ticket_never_issued_is_refused() {
+        let fixture = Fixture::new(AttachmentLimits::default());
+        let state = attachment_state(&fixture);
+        let session = chat_session(&state, "owner-phone").await;
+        let unknown = "ab".repeat(32);
+        let mut not_base64 = piece(&unknown, 0, BYTES, true);
+        not_base64["data"] = json!("not base64!");
+        let mut extra = piece(&unknown, 0, BYTES, true);
+        extra["conversationId"] = json!(CONVERSATION);
+        for (params, expected) in [
+            (not_base64, "invalid_request"),
+            (extra, "invalid_request"),
+            // Only a last piece may be empty.
+            (piece(&unknown, 0, b"", false), "invalid_request"),
+            (piece(&unknown, 0, &vec![0; 32 * 1024 + 1], false), "invalid_request"),
+            (piece("short", 0, BYTES, true), "upload_ticket_invalid"),
+            (piece(&unknown, 0, BYTES, true), "upload_ticket_invalid"),
+        ] {
+            let reply = chat_request(&state, &session, "attachment.write", params).await;
+            assert_eq!(refused(reply), expected);
+        }
+        assert_eq!(state.socket_uploads.in_progress(), 0);
+        // Without the chat grant the method is not reachable at all.
+        let reader = chat_session(&state, "reader").await;
+        let reply =
+            chat_request(&state, &reader, "attachment.write", piece(&unknown, 0, BYTES, true))
+                .await;
+        assert_eq!(refused(reply), "forbidden");
+    }
 }

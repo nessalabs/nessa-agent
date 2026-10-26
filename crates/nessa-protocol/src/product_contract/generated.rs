@@ -154,6 +154,14 @@ pub enum ConversationErrorCode {
     AttachmentStorageUnavailable,
     #[serde(rename = "attachment_cleanup_unavailable")]
     AttachmentCleanupUnavailable,
+    #[serde(rename = "upload_ticket_invalid")]
+    UploadTicketInvalid,
+    #[serde(rename = "upload_failed")]
+    UploadFailed,
+    #[serde(rename = "unsupported_image")]
+    UnsupportedImage,
+    #[serde(rename = "image_too_large")]
+    ImageTooLarge,
     #[serde(rename = "conversation_deleted")]
     ConversationDeleted,
     #[serde(rename = "conversation_erasure_incomplete")]
@@ -249,6 +257,10 @@ impl ConversationErrorCode {
             Self::AttachmentCapacity => "attachment_capacity",
             Self::AttachmentStorageUnavailable => "attachment_storage_unavailable",
             Self::AttachmentCleanupUnavailable => "attachment_cleanup_unavailable",
+            Self::UploadTicketInvalid => "upload_ticket_invalid",
+            Self::UploadFailed => "upload_failed",
+            Self::UnsupportedImage => "unsupported_image",
+            Self::ImageTooLarge => "image_too_large",
             Self::ConversationDeleted => "conversation_deleted",
             Self::ConversationErasureIncomplete => "conversation_erasure_incomplete",
             Self::McpAppUnknown => "mcp_app_unknown",

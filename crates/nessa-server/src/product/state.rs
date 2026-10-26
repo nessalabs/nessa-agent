@@ -4,7 +4,7 @@ use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::agents::infrastructure::NativeHooksPreferences;
 use crate::attachments::{
     application::{AttachmentService, HeldReads},
-    entrypoint::http::UploadRoute,
+    entrypoint::{http::UploadRoute, socket::SocketUploads},
 };
 use crate::conversation::application::{
     CatalogueReadSource, ConversationAccessPolicyEvaluator, ConversationMetadataReader,
@@ -152,6 +152,9 @@ pub struct ProductRouteState {
     pub(crate) attachments: Option<AttachmentService>,
     /// Where `artifact.read` reads a held file back, over the same store.
     pub(crate) held_reads: Option<HeldReads>,
+    /// Uploads `attachment.write` is receiving in pieces, gateway-wide, so a
+    /// piece is taken whichever connection it arrives on.
+    pub(crate) socket_uploads: SocketUploads,
     /// The MCP App resources held behind tickets: issued by the conversation
     /// service, redeemed at `GET /mcp-resources`, which records each
     /// redemption in the audit beside it before serving. `None` when no MCP server is
@@ -335,6 +338,7 @@ impl ProductRouteState {
             installs: Arc::new(Semaphore::new(1)),
             attachments: None,
             held_reads: None,
+            socket_uploads: SocketUploads::default(),
             resource_tickets: None,
             uptime_clock: dependencies.uptime_clock,
             view_clock: Arc::new(ProcessTimeline),

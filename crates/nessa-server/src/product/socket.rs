@@ -1956,6 +1956,7 @@ async fn dispatch_authorized(
         method if method.starts_with("conversation.") => {
             super::conversation::dispatch(state, session, frame, initiation).await
         }
+        "attachment.write" => super::attachment::dispatch_write(state, frame).await,
         method if method.starts_with("attachment.") => {
             super::attachment::dispatch(state, session, frame).await
         }

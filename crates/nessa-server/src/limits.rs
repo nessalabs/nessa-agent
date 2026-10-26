@@ -356,6 +356,18 @@ fn catalogue() -> &'static [Limit] {
             meaning: "the most bytes one artifact.read answers with; its base64 fits the socket's ordinary frame",
         },
         Limit {
+            id: "attachment.write_piece_bytes",
+            tier: "fixed",
+            owner: "attachments socket::MAX_PIECE_BYTES, the schema's AttachmentWriteParams data",
+            meaning: "the most bytes one attachment.write piece carries; its base64 fits the socket's ordinary frame",
+        },
+        Limit {
+            id: "server.socket_uploads",
+            tier: "fixed",
+            owner: "attachments socket::MAX_SOCKET_UPLOADS",
+            meaning: "uploads attachment.write receives in pieces at once across the gateway; past this a first piece is refused temporarily_unavailable and nothing starts",
+        },
+        Limit {
             id: "artifact.read_busy_wait",
             tier: "fixed",
             owner: "attachments HeldReads::BUSY_WAIT",
@@ -682,6 +694,14 @@ pub(crate) fn effective_json(
     put(
         "artifact.read_range_bytes",
         count(HeldReads::MAX_RANGE_BYTES),
+    );
+    put(
+        "attachment.write_piece_bytes",
+        count(crate::attachments::entrypoint::socket::MAX_PIECE_BYTES),
+    );
+    put(
+        "server.socket_uploads",
+        count(crate::attachments::entrypoint::socket::MAX_SOCKET_UPLOADS),
     );
     put("artifact.read_busy_wait", millis(HeldReads::BUSY_WAIT));
     put("server.artifact_reads", count(HeldReads::CONCURRENT_READS));
