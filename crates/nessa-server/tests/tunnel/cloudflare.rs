@@ -187,15 +187,151 @@ fn an_answer_is_its_status_and_body() {
     assert_eq!(parse_answer(b"garbage"), None);
 }
 
-fn service(directory: &Path, tunnel: CloudflareTunnel) -> CloudflareService {
-    CloudflareService::new(
+/// A kept-program record that answers as it is told.
+enum Kept {
+    Nothing,
+    Unreadable,
+    Left(LeftRunning),
+}
+
+#[async_trait]
+impl KeptTunnel for Kept {
+    async fn left_running(&self) -> Result<Option<LeftRunning>, KeptLookupFailed> {
+        match self {
+            Self::Nothing => Ok(None),
+            Self::Unreadable => Err(KeptLookupFailed),
+            Self::Left(left) => Ok(Some(left.clone())),
+        }
+    }
+}
+
+fn service_with(
+    directory: &Path,
+    program: Program,
+    tunnel: CloudflareTunnel,
+    kept: Arc<dyn KeptTunnel>,
+) -> (CloudflareService, LaunchRefusal) {
+    let refused = LaunchRefusal::default();
+    let service = CloudflareService::new(
         TunnelFiles::new(directory),
-        Program::Given("/bin/true".into()),
+        program,
         Arc::new(|| Some(Box::new(Serving(vec![])) as Box<dyn ArchiveSource>)),
         tunnel,
         "127.0.0.1:47651".parse().unwrap(),
-        None,
+        kept,
+        refused.clone(),
+    );
+    (service, refused)
+}
+
+fn service(directory: &Path, tunnel: CloudflareTunnel) -> CloudflareService {
+    service_with(
+        directory,
+        Program::Given("/bin/true".into()),
+        tunnel,
+        Arc::new(Kept::Nothing),
     )
+    .0
+}
+
+fn no_record() -> ServiceInstance {
+    ServiceInstance {
+        os_pid: 0,
+        adopted: false,
+        output: None,
+        record: None,
+    }
+}
+
+/// A record left by a last run is reused only when it is exactly this
+/// launch, never once a launch of this run has run, and one that cannot be
+/// read takes back nothing.
+#[tokio::test]
+async fn a_launch_takes_back_only_the_identical_kept_program() {
+    let directory = tempfile::tempdir().unwrap();
+    let recorded = service(directory.path(), CloudflareTunnel::Quick)
+        // Below the range the OS hands out, so no free port is ever it.
+        .launch_on(1_023)
+        .unwrap();
+    let left = |launch: &ServiceLaunch| LeftRunning {
+        args: args(launch),
+        started_as: StartedAs::of(launch),
+    };
+    let with = |tunnel: CloudflareTunnel, kept: Kept| {
+        service_with(
+            directory.path(),
+            Program::Given("/bin/true".into()),
+            tunnel,
+            Arc::new(kept),
+        )
+        .0
+    };
+
+    let same = with(CloudflareTunnel::Quick, Kept::Left(left(&recorded)));
+    assert_eq!(same.launch_spec().await.unwrap(), recorded);
+    // A launch that did not start (a failed claim, say) keeps asking.
+    assert_eq!(same.launch_spec().await.unwrap(), recorded);
+    same.ready(&no_record()).await.unwrap();
+    assert_ne!(same.launch_spec().await.unwrap(), recorded);
+
+    // The same port, started as something else: not taken back.
+    let other = recorded.clone().revision("token other");
+    let changed = with(CloudflareTunnel::Quick, Kept::Left(left(&other)));
+    assert_ne!(
+        metrics_port_in(&args(&changed.launch_spec().await.unwrap())),
+        Some(1_023)
+    );
+    let named = with(named("token"), Kept::Left(left(&recorded)));
+    assert_ne!(
+        metrics_port_in(&args(&named.launch_spec().await.unwrap())),
+        Some(1_023)
+    );
+    // A record naming no metrics port, or one that cannot be read.
+    let portless = LeftRunning {
+        args: vec!["tunnel".into()],
+        started_as: StartedAs::of(&recorded),
+    };
+    for kept in [Kept::Left(portless), Kept::Unreadable] {
+        let launch = with(CloudflareTunnel::Quick, kept)
+            .launch_spec()
+            .await
+            .unwrap();
+        assert!(metrics_port_in(&args(&launch)).is_some());
+        assert_ne!(launch, recorded);
+    }
+}
+
+/// A refused launch's reason is recorded for the status to read, never its
+/// wording, and a launch that goes ahead empties it.
+#[tokio::test]
+async fn a_refused_launch_records_its_reason() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("missing");
+    for program in [Program::Unsupported, Program::Given(missing)] {
+        let (service, refused) = service_with(
+            directory.path(),
+            program,
+            CloudflareTunnel::Quick,
+            Arc::new(Kept::Nothing),
+        );
+        assert!(service.launch().await.is_err());
+        assert_eq!(
+            *refused.lock().unwrap(),
+            Some(TunnelFailure::Unavailable("unsupported"))
+        );
+    }
+    // Any file will do: the launch is only made, never run.
+    let present = directory.path().join("present");
+    std::fs::write(&present, b"").unwrap();
+    let (service, refused) = service_with(
+        directory.path(),
+        Program::Given(present),
+        CloudflareTunnel::Quick,
+        Arc::new(Kept::Nothing),
+    );
+    *refused.lock().unwrap() = Some(TunnelFailure::Unavailable("download"));
+    service.launch().await.unwrap();
+    assert_eq!(*refused.lock().unwrap(), None);
 }
 
 fn named(token: &str) -> CloudflareTunnel {
@@ -310,7 +446,8 @@ async fn a_launch_reports_on_the_kept_programs_port_only_when_it_is_that_launch(
             Arc::new(|| Some(Box::new(Serving(vec![])) as Box<dyn ArchiveSource>)),
             tunnel,
             "127.0.0.1:47651".parse().unwrap(),
-            Some((kept.clone(), name.clone())),
+            Arc::new(ShepherdKept::new(kept.clone(), name.clone())),
+            LaunchRefusal::default(),
         )
     };
     // Nothing kept: a free port.

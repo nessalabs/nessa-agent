@@ -9,7 +9,9 @@
 //! bind:    the ingress address (loopback) ──▶ TunnelIngress, beside the native listener
 //! start:   TunnelIngress::serve
 //!          shepherd ServiceSupervisor(CloudflareService, kept in <tunnel>/kept)
-//!            ──▶ its status, in the tunnel's words ──▶ pairing.tunnel, server.reach
+//!            ──▶ its status, a failure by the step that failed (a refused launch by
+//!                the reason CloudflareService recorded, LaunchRefusal)
+//!            ──▶ TunnelStatus ──▶ pairing.tunnel, server.reach
 //! stop:    both asked to stop; the provider's program is left running
 //!          (ServiceStop::Leave) for the next run to take back when its spec
 //!          and revision still match
@@ -23,18 +25,22 @@ use super::runtime_config::TunnelConfig;
 use crate::agent_install::application::ArchiveSource;
 use crate::agent_install::infrastructure::HttpsArchives;
 use crate::tunnel::application::{
-    CloudflareTunnel, TunnelFailure, TunnelMode, TunnelProvider, TunnelSetting, TunnelStatus,
-    TunnelView,
+    CloudflareTunnel, LaunchRefusal, TunnelFailure, TunnelMode, TunnelProvider, TunnelSetting,
+    TunnelStatus, TunnelView,
 };
 use crate::tunnel::infrastructure::cloudflare::{
-    CloudflareService, MakeArchives, Program, READY_WITHIN,
+    CloudflareService, MakeArchives, Program, ShepherdKept, READY_WITHIN,
 };
 use crate::tunnel::infrastructure::files::TunnelFiles;
 use shepherd::{
-    KeptError, KeptName, KeptProcesses, ServiceOptions, ServiceStatus, ServiceStop,
-    SupervisorBuilder, TerminateOptions,
+    KeptError, KeptName, KeptProcesses, ServiceFailureKind, ServiceOptions, ServiceStatus,
+    ServiceStop, SupervisorBuilder, TerminateOptions,
 };
-use std::{net::SocketAddr, path::Path, sync::Arc};
+use std::{
+    net::SocketAddr,
+    path::Path,
+    sync::{Arc, PoisonError},
+};
 use tokio::{sync::watch, task::JoinHandle};
 
 /// The provider's program, by the name shepherd keeps it under.
@@ -150,12 +156,23 @@ fn forget_unkept(files: &TunnelFiles) {
 /// until the tunnel is ready.
 fn tunnel_status(
     status: &ServiceStatus<nessa_protocol::tunnel::TunnelAddress>,
+    refused: Option<TunnelFailure>,
 ) -> Option<TunnelStatus> {
     match status {
         ServiceStatus::Starting { attempt } => (*attempt <= 1).then_some(TunnelStatus::Starting),
         ServiceStatus::Ready { value, .. } => Some(TunnelStatus::Ready(value.clone())),
-        ServiceStatus::Backoff { reason, .. } | ServiceStatus::Failed { reason } => {
-            Some(TunnelStatus::Failed(TunnelFailure::from_reason(reason)))
+        // The reason's words are logged by shepherd; why it failed is read
+        // from which step failed, and a refused launch from its own reason.
+        ServiceStatus::Backoff { kind, .. } | ServiceStatus::Failed { kind, .. } => {
+            Some(TunnelStatus::Failed(match kind {
+                ServiceFailureKind::Launch => refused.unwrap_or(TunnelFailure::Start),
+                ServiceFailureKind::ReadyCheck | ServiceFailureKind::NotReadyInTime => {
+                    TunnelFailure::NotReady
+                }
+                ServiceFailureKind::Start
+                | ServiceFailureKind::ExitedBeforeReady
+                | ServiceFailureKind::Exited => TunnelFailure::Start,
+            }))
         }
         ServiceStatus::Stopping | ServiceStatus::Stopped | ServiceStatus::Released { .. } => None,
     }
@@ -230,13 +247,15 @@ pub(super) fn start(
             .map(|archives| Box::new(archives) as Box<dyn ArchiveSource>)
     });
     let TunnelProvider::Cloudflare(tunnel) = setting.provider;
+    let refused = LaunchRefusal::default();
     let service = CloudflareService::new(
         files,
         Program::chosen(),
         archives,
         tunnel,
         ingress,
-        Some((kept.clone(), service_name())),
+        Arc::new(ShepherdKept::new(kept.clone(), service_name())),
+        refused.clone(),
     );
     Some(tokio::spawn(async move {
         let supervisor = shepherd::service_supervisor(&SupervisorBuilder::new().build());
@@ -250,7 +269,11 @@ pub(super) fn start(
             .expect("one tunnel service per run");
         let mut watching = handle.status();
         loop {
-            if let Some(now) = tunnel_status(&watching.borrow_and_update()) {
+            // The status first: a refusal is recorded before shepherd
+            // publishes its backoff, and not again until that wait is over.
+            let latest = watching.borrow_and_update().clone();
+            let refused = *refused.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(now) = tunnel_status(&latest, refused) {
                 status.send_replace(now);
             }
             tokio::select! {
