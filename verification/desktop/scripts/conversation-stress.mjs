@@ -2960,19 +2960,22 @@ const steps = {
         ["receiver", "origin", "stream", "incarnation", "schema", "accessEpoch"].every(
           (key) => a[key] === b[key],
         )
-      const catchUp = async (fixed) => {
+      const catchUp = async (fixed, deadline = Date.now() + 15_000) => {
         if (
-          !(await waitFor(async () => {
-            const native = await owner.conversation.webhookCursor(
-              conversationId,
-              credential,
-            )
-            if (native.resetRequired || !sameScope(native.scope, fixed.scope))
-              throw new Error(
-                "webhook capture changed incarnation or requires explicit reset",
+          !(await waitFor(
+            async () => {
+              const native = await owner.conversation.webhookCursor(
+                conversationId,
+                credential,
               )
-            return BigInt(native.position) >= BigInt(fixed.head)
-          }, 15_000))
+              if (native.resetRequired || !sameScope(native.scope, fixed.scope))
+                throw new Error(
+                  "webhook capture changed incarnation or requires explicit reset",
+                )
+              return BigInt(native.position) >= BigInt(fixed.head)
+            },
+            Math.max(0, deadline - Date.now()),
+          ))
         )
           throw new Error("webhook native cursor did not reach the fixed source Head")
       }
@@ -3019,8 +3022,15 @@ const steps = {
         throw new Error(
           "browser webhook witness did not advance the same source incarnation",
         )
-      await catchUp(fixed)
-      const proof = webhookNoAttempt(run.stack.gateway, INSTANCE, credential, fixed)
+      const deadline = Date.now() + 15_000
+      await catchUp(fixed, deadline)
+      const proof = webhookNoAttempt(
+        run.stack.gateway,
+        INSTANCE,
+        credential,
+        fixed,
+        deadline,
+      )
       log(
         `webhook captured fixed Head ${fixed.head}; ${proof.queued} queued, ${proof.attempted} attempted; loopback policy unchanged`,
       )

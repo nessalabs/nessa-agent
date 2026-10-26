@@ -127,7 +127,10 @@ test("native no-send proof requires queued zero-attempt rows in the fixed comple
       "INSERT INTO deliveries VALUES('registration','chat',2,?,?)",
     )
     const checkpoint = { scope, head: "2" }
-    const probe = () => webhookNoAttempt({ directory }, "test", "credential", checkpoint)
+    const probe = (deadline = Date.now() + 15_000) =>
+      webhookNoAttempt({ directory }, "test", "credential", checkpoint, deadline)
+    for (const deadline of [Date.now(), Infinity, NaN])
+      assert.throws(() => probe(deadline), /deadline expired/)
     assert.throws(probe, /missing/)
     for (const state of [
       { phase: "sending", attempts: 1, timestamp_ms: 100 },
@@ -150,14 +153,48 @@ test("native no-send proof requires queued zero-attempt rows in the fixed comple
     )
     assert.deepEqual(probe(), { queued: 1, attempted: 0 })
     assert.throws(
-      () => webhookNoAttempt({ directory }, "test", "foreign", checkpoint),
+      () =>
+        webhookNoAttempt(
+          { directory },
+          "test",
+          "foreign",
+          checkpoint,
+          Date.now() + 15_000,
+        ),
       /missing/,
     )
     assert.throws(
-      () => webhookNoAttempt({ directory }, "test", "credential", { scope, head: "3" }),
+      () =>
+        webhookNoAttempt(
+          { directory },
+          "test",
+          "credential",
+          { scope, head: "3" },
+          Date.now() + 15_000,
+        ),
       /fixed Head/,
     )
     assert.equal(db.prepare("SELECT count(*) n FROM deliveries").get().n, 1)
+    const now = Date.now
+    const deadline = now() + 15_000
+    const late = {
+      scope: {
+        ...scope,
+        get accessEpoch() {
+          Date.now = () => deadline
+          return scope.accessEpoch
+        },
+      },
+      head: "2",
+    }
+    try {
+      assert.throws(
+        () => webhookNoAttempt({ directory }, "test", "credential", late, deadline),
+        /deadline expired/,
+      )
+    } finally {
+      Date.now = now
+    }
     const writer = new Worker(
       `const { parentPort, workerData } = require('node:worker_threads');
        const { DatabaseSync } = require('node:sqlite');
@@ -174,6 +211,12 @@ test("native no-send proof requires queued zero-attempt rows in the fixed comple
       const message = () =>
         once(writer, "message", { signal: AbortSignal.timeout(2_000) })
       assert.deepEqual(await message(), ["locked"])
+      const started = performance.now()
+      assert.throws(() => probe(Date.now() + 40), /database is locked|deadline expired/)
+      assert.ok(
+        performance.now() - started < 500,
+        "lock wait uses only the remaining case budget",
+      )
       // A writer that never releases must refuse, never manufacture no-send.
       assert.throws(probe, /database is locked/)
       const released = message()

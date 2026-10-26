@@ -71,3 +71,39 @@ The prepared runtime inputs equal authored c2ac plus these exact helper bytes:
 These local5,306 tests remain distinct from actual f9e CI's5,307 frontend tests
 after the additional upstream phone changes. No old CI failure is relabeled as
 a corrected browser pass.
+
+## Shared final-capture deadline
+
+The final correction additionally shares the existing15-second final cursor
+catch-up timestamp with the SQLite proof. It never starts another interval after
+catch-up. Before opening, preparing and stepping, lock acquisition is capped by
+min(1,000ms, remaining original time); connection-local busy PRAGMAs re-budget
+each phase without changing durable configuration. A final expiry check after
+validation prevents accepting late proof. An expired/missing/nonfinite deadline
+refuses, including after a cursor callback finishes late. This is not a promise
+to hard-abort arbitrary underlying OS or filesystem work at an exact instant.
+
+Seven focused controls and409 prepared helpers pass. Additional controls cover
+an expired40ms lock budget, expiry during validation, and execution of the actual
+webhook method consuming its catch-up interval before proof: it must refuse
+before opening SQLite and still unshare/close. Four separate mutations—zero
+lock-wait, renewed SQL budget, removed final expiry guard and renewed caller
+budget—each fail the intended control; all bytes are restored. Independent
+round2 repeats7/7 and the late committed-Sending rejection probe. Its
+[report](sqlite-total-deadline-review.md) is clean (original SHA-256
+`466e325aa1678ce8ab2e57d8c97dec9cd67541b8d6f111246a51aa88f10f6682`).
+The earlier one-second-only source/review remains a historical intermediate
+candidate, not the final deadline-qualified source.
+
+The final shared-deadline source also passed the complete local frontend gate:
+5,306/5,306 tests across409 files,456 scripts plus2 skips,409 desktop helpers,
+108 architecture checks,61 protocol controls, docs/types, lint/format and
+production build15.89s. The round2 manifest records all four exact code hashes;
+all four mutation counterexamples were restored before this full check. This
+local pass still does not establish corrected Chromium/WebKit acceptance.
+
+The [terminal c2ac ledger](ci-c2ac-terminal-ledger.md) records all ten non-stress
+jobs passing, all38 selected recipient/ownership controls passing on Windows,
+macOS and Ubuntu, and the retained stress/aggregate failure. Menu-bar and GitHub
+focused WebKit steps were skipped after that failure and need actual execution
+on corrected-source CI.

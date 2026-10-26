@@ -52,6 +52,10 @@ case2 failed the independent SQLite probe and case3 was not run. The
 [contention diagnosis and meaningful controls](sqlite-proof-contention.md) and
 [affected review](sqlite-proof-review.md) preserve that original failure and
 distinguish the local correction from still-required corrected browser CI.
+The final [shared-deadline review](sqlite-total-deadline-review.md) verifies that
+cursor catch-up and SQLite inspection consume one existing15-second interval.
+The [terminal source-matched ledger](ci-c2ac-terminal-ledger.md) records each
+platform result and the skipped dependent WebKit steps without accepting them.
 
 ## Behavior and ordering
 

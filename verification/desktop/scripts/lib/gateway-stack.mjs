@@ -334,21 +334,30 @@ export async function agentTurn(
  * precedes POST. Missing data, changed scope or any attempted row is a failure,
  * never evidence of no send. No canonical SDK tables are inspected.
  */
-export function webhookNoAttempt(gateway, instance, credentialId, checkpoint) {
+export function webhookNoAttempt(gateway, instance, credentialId, checkpoint, deadline) {
+  const lockWait = () => {
+    const remaining = deadline - Date.now()
+    if (!Number.isFinite(deadline) || remaining <= 0)
+      throw new Error("webhook no-send evidence deadline expired")
+    return Math.min(1_000, remaining)
+  }
   const database = new DatabaseSync(
     join(gateway.directory, "ci", "instances", instance, "auth", "webhooks.sqlite"),
     // The native owner commits concurrently. Bound snapshot acquisition rather
     // than treating a momentary writer lock as missing/no-attempt evidence.
-    { readOnly: true, timeout: 1_000 },
+    { readOnly: true, timeout: lockWait() },
   )
   try {
-    const rows = database
-      .prepare(
-        `SELECT d.position,d.scope,d.state
+    // Preparation and stepping can each need a read lock. Neither gets a
+    // renewed deadline; these PRAGMAs affect only this read-only connection.
+    database.exec(`PRAGMA busy_timeout = ${lockWait()}`)
+    const statement = database.prepare(
+      `SELECT d.position,d.scope,d.state
       FROM deliveries d JOIN registrations r ON r.id=d.registration
       WHERE r.credential=? AND d.conversation=? ORDER BY d.position LIMIT 1025`,
-      )
-      .all(credentialId, checkpoint.scope.stream)
+    )
+    database.exec(`PRAGMA busy_timeout = ${lockWait()}`)
+    const rows = statement.all(credentialId, checkpoint.scope.stream)
     if (!rows.length || rows.length > 1024)
       throw new Error("webhook no-send evidence missing or exceeds pending capacity")
     let reached = false
@@ -369,6 +378,7 @@ export function webhookNoAttempt(gateway, instance, credentialId, checkpoint) {
     }
     if (!reached)
       throw new Error("webhook no-send evidence has not reached the fixed Head")
+    lockWait()
     return { queued: rows.length, attempted: 0 }
   } finally {
     database.close()
