@@ -2,12 +2,18 @@
 
 Original assembled source checkpoint: `c790639702213d79bad32aaa148e2744ca7a9d1d`.
 Owner cursor/reset time-precision correction: `69351af72cbd73179f7f8765424251ecf4a20b99`.
-Current main `919079a7b13f3e4e8600cc7584b097641f8992c7` is preserved,
+The original qualification preserved main `919079a7b13f3e4e8600cc7584b097641f8992c7`,
 including native discovery and UI pin `dac8ff435525ad91cb95365fce80bb768a58b582`.
 The reviewed two-file verifier correction from `942e66bf14f0a48091a9f81699cd2b3c9d60093b`
 was cherry-picked with provenance at `a2f576696bf8a847e45f6dc5a54df5ab2490ed38`;
 both parent helper blobs exactly matched before integration. No whole feature branch
 was transplanted. This is local qualification, not issue completion or merge readiness.
+
+The latest [current-main integration](current-main-integration.md) is
+`3e7e965d6b5edbcf29ff6926d736d21090268bdb`, preserving main
+`2026c2becebec94ec69f849fa529143ad4625995` and UI pin
+`3118f2d8a15f68825ecef3fe0c337368b3d7f889`. Earlier UI/platform results below
+retain their original source inputs.
 
 ## Behavior and ordering
 

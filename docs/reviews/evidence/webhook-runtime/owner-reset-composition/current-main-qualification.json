@@ -1,0 +1,46 @@
+{
+  "qualificationSource": "3e7e965d6b5edbcf29ff6926d736d21090268bdb",
+  "productionPrecisionSource": "69351af72cbd73179f7f8765424251ecf4a20b99",
+  "main": "2026c2becebec94ec69f849fa529143ad4625995",
+  "ui": "3118f2d8a15f68825ecef3fe0c337368b3d7f889",
+  "backendEquivalence": "All tracked crates, Cargo.toml and Cargo.lock byte-identical to69351af",
+  "upstreamPaths": {
+    "exact": 125,
+    "cleanThreeWayUnions": 4,
+    "total": 129
+  },
+  "webhookStep": "complete bytes identical to25a6e33f",
+  "strictHelpers": "both complete files unchanged from25a6e33f and reviewed942e66bf",
+  "frontend": {
+    "command": "pnpm frontend:check",
+    "exitCode": 0,
+    "unit": {
+      "passed": 5304,
+      "failed": 0,
+      "files": 409
+    },
+    "scripts": {
+      "passed": 456,
+      "skipped": 2,
+      "total": 458
+    },
+    "desktopHelpers": 408,
+    "architecture": 108,
+    "protocolControls": 61,
+    "buildSeconds": 15.64,
+    "context": "Native filesystem metadata; unprivileged actor; original assertions unchanged"
+  },
+  "affectedReview": {
+    "findings": [],
+    "originalReportSha256": "55c093ff5571c119172efe4fa2ef778db73d5d66260d22e4d903f94809b9803a",
+    "publicationExcerptSha256": "2023d9aacbbf2bb69c01fad7bac93a6e8f934a57a57fb5c0dcbec8122ceec046",
+    "newWholeFeatureRound": false
+  },
+  "preservedSetupFailures": "pnpm11 store prefix needed pnpm_config_store_dir; initial preparation failed before dependency installation; source and assertions unchanged",
+  "notQualified": [
+    "new published-head CI/platform",
+    "new UI browser/default stress",
+    "raised webhook3",
+    "webhook-specific WebKit"
+  ]
+}
