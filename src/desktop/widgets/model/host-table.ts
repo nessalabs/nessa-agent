@@ -1,7 +1,7 @@
 /**
  * What a host draws for a widget in each place (ADR 326's table), and what
  * its chrome calls it. The one statement of that table: every host — the
- * inline card, the widget pane's body, the window — asks it, and draws the
+ * inline card, the panel's body, the window — asks it, and draws the
  * answer. A ready app's view has rows of its own beneath it
  * (`app/model/app-view.ts`), which keep this table's rule for close.
  *
@@ -47,9 +47,9 @@ export function hostDraws(
     case "ready":
       if (place === "inline")
         return offered.inline ? { kind: "view" } : { kind: "row", title: state.title }
-      // Every plugin has a pane view; a window it does not offer is never
+      // Every plugin has a panel view; a window it does not offer is never
       // offered, and asked for all the same, it says so.
-      return place === "pane" || offered.window
+      return place === "panel" || offered.window
         ? { kind: "view" }
         : { kind: "line", text: hostLines.unshowable, closes }
     case "unread":

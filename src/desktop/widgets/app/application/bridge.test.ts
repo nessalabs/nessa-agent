@@ -141,7 +141,7 @@ function harness(
     made.bridge?.receive(message),
   )
   const bridge = createAppBridge({
-    place: options.place ?? "pane",
+    place: options.place ?? "panel",
     server: "weather",
     call,
     context,
@@ -1048,7 +1048,7 @@ describe("the mount and its release (#384)", () => {
       },
     }
     const inline = harness({ server: both, place: "inline" })
-    const pane = harness({ server: both, place: "pane" })
+    const pane = harness({ server: both, place: "panel" })
     await live(inline)
     await live(pane)
     inline.bridge.remove()
@@ -1681,12 +1681,12 @@ describe("a live app's other requests", () => {
       app.say({ jsonrpc: "2.0", id, method: "ui/request-display-mode", params: { mode } })
     ask(3, "fullscreen")
     ask(4, "pip")
-    expect(app.opened).toEqual(["pane"])
+    expect(app.opened).toEqual(["panel"])
     expect(app.take()).toEqual([
       { jsonrpc: "2.0", id: 3, result: { mode: "inline" } },
       { jsonrpc: "2.0", id: 4, result: { mode: "inline" } },
     ])
-    const pane = harness({ place: "pane" })
+    const pane = harness({ place: "panel" })
     await live(pane)
     pane.say({
       jsonrpc: "2.0",

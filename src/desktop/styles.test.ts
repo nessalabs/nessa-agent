@@ -510,21 +510,38 @@ it("keeps a running step's time on one line, whatever the pane's width", () => {
   expect(body).toMatch(/flex-shrink:\s*0/)
 })
 
-it("paints nothing of a pane under the window's controls: its content below the titlebar row, its picture band after them", () => {
+it("puts nothing of a pane but its picture under the window's controls: its header is the titlebar row, stepping past them in the corner", () => {
   const panes = readFileSync(
     new URL("./workspace/ui/panes/panes.css", import.meta.url),
     "utf8",
   )
   const body = (sheet: string, selector: string) =>
     sheet.slice(sheet.indexOf(selector)).split("}")[0]
-  // The chat surface runs up behind the toolbar; a top-row pane's content,
-  // and a full-window widget, begin below it.
+  // A top-row pane's header fills the titlebar row — a gutter, the header,
+  // a gutter: `--desktop-titlebar-height` — so what follows begins below it.
   expect(body(panes, ".workspace-pane {")).toMatch(
-    /padding-top:\s*calc\(max\(0, 1 - var\(--ri\)\) \* var\(--desktop-titlebar-height\)\)/,
+    /--workspace-pane-top:\s*calc\(max\(0, 1 - var\(--ri\)\) \* var\(--desktop-gutter\)\)/,
+  )
+  expect(body(panes, ".workspace-pane-header {")).toMatch(
+    /height:\s*calc\(var\(--desktop-control-size\) \+ 2 \* var\(--desktop-control-inset\)\)/,
+  )
+  expect(body(panes, ".workspace-pane-header {")).toMatch(
+    /margin:\s*var\(--workspace-pane-top\) 0/,
   )
   expect(body(panes, ".workspace-widget-window {")).toMatch(
-    /padding-top:\s*var\(--desktop-titlebar-height\)/,
+    /--workspace-pane-top:\s*var\(--desktop-gutter\)/,
   )
+  // In the corner, the header's name and controls start after the window's.
+  const corner = body(panes, ".workspace[data-panes-alone]\n  .workspace-pane:is(")
+  expect(corner).toMatch(
+    /\.workspace-pane-header \{\s*padding-left: var\(--desktop-titlebar-safe-start\)/,
+  )
+  expect(
+    body(
+      panes,
+      ".workspace[data-panes-alone] .workspace-widget-window .workspace-pane-header {",
+    ),
+  ).toMatch(/padding-left: var\(--desktop-titlebar-safe-start\)/)
 })
 
 it("moves Settings' sidebar by transform, never by animating its width", () => {

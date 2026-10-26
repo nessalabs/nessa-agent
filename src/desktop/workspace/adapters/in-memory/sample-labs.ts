@@ -422,7 +422,7 @@ export const labsSamples: readonly SampleSession[] = [
         "agent",
         9 * 24 * 60,
         [
-          text("The sample trail: open it beside us, or over the panes."),
+          text("The sample trail: open it in the panel, or over the panes."),
           widget(sampleWidgets.trail),
           text("And what a host says when it cannot draw one:"),
           widget(sampleWidgets.unread),

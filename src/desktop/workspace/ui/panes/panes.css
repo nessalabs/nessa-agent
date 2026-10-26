@@ -31,8 +31,9 @@
   min-width: 0;
   flex-direction: column;
   container: workspace-pane / size;
-  /* The top row runs up behind the titlebar, its content starting below it. */
-  padding-top: calc(max(0, 1 - var(--ri)) * var(--desktop-titlebar-height));
+  /* The top row's header is its titlebar row (below); a lower row's header
+     is the pane's own top. */
+  --workspace-pane-top: calc(max(0, 1 - var(--ri)) * var(--desktop-gutter));
   /* No edge of its own: the line between panes is the edge in their gutter
      (`split-panes.css`), so there is one, not two. */
   background: transparent;
@@ -97,14 +98,21 @@
 
 /* ——— The pane's header ——— */
 
-/* Pane controls sit inside the card, below the window's navigation row. */
-/* Above the body, whose home header picture reaches up behind it. */
+/*
+ * The header is the pane's titlebar row, level with the window's controls —
+ * one header per chat, its name, menu and ×, with no tab above it. What
+ * follows it begins below the titlebar's height wherever the pane is, so a
+ * transcript scrolled, a narrow pane's heading, or a home's picture's
+ * controls never pass under the window's controls. Above the body, whose
+ * header picture reaches up behind it.
+ */
 .workspace-pane-header {
   position: relative;
   z-index: 1;
   display: flex;
   height: calc(var(--desktop-control-size) + 2 * var(--desktop-control-inset));
   flex: none;
+  margin: var(--workspace-pane-top) 0;
   align-items: center;
   gap: 8px;
   padding: var(--desktop-control-inset) var(--desktop-control-inset)
@@ -112,6 +120,50 @@
   -webkit-user-select: none;
   user-select: none;
   transition: opacity var(--desktop-base) ease;
+}
+
+/*
+ * The top-right pane's header ends before the panel's toggle over the
+ * window's top-right corner (`.workspace-titlebar-trailing`) while the panel
+ * is closed; open, the panel holds that corner and its own tabs keep clear.
+ * `--ci` the last column and the top row is that pane.
+ */
+.workspace[data-panel="closed"] .workspace-pane-header {
+  padding-right: calc(
+    var(--desktop-control-inset) + max(0, 1 - (var(--cn) - 1 - var(--ci))) *
+      max(0, 1 - var(--ri)) * (var(--desktop-control-size) + var(--desktop-gutter))
+  );
+}
+
+/*
+ * In the window's corner, with nothing beside it, the header steps past the
+ * window controls — and so it does where a drag's preview would put it
+ * (`data-drag-corner`, `split-panes/adapters/dom/drag.ts`), and not where it
+ * would leave.
+ */
+.workspace[data-panes-alone]
+  .workspace-pane:is(
+    [data-split-corner]:not([data-drag-corner="no"]),
+    [data-drag-corner="yes"]
+  )
+  .workspace-pane-header {
+  padding-left: var(--desktop-titlebar-safe-start);
+}
+
+/* With the side rail open the panes start after it: the header steps past
+   the window's controls by what is left of them past the rail. */
+.workspace-window[data-rail="open"]
+  .workspace[data-panes-alone]
+  .workspace-pane:is(
+    [data-split-corner]:not([data-drag-corner="no"]),
+    [data-drag-corner="yes"]
+  )
+  .workspace-pane-header,
+.workspace-window[data-rail="open"]
+  .workspace[data-panes-alone]
+  .workspace-widget-window
+  .workspace-pane-header {
+  padding-left: calc(var(--desktop-titlebar-safe-start) - var(--rail-width));
 }
 
 .split-panes-grid[data-split-multi] .workspace-pane-header {
@@ -255,8 +307,9 @@
 }
 
 .workspace-chat .split-panes-pane-edge[data-axis="x"]::after {
-  /* The window's height, as the panes beside it run: up behind the tabs,
-     where it fades out so no rule crosses them, and down to the bottom. */
+  /* The window's height, as the panes beside it run: up through the
+     titlebar row, where it fades out as the columns' edges do, and down to
+     the bottom. */
   top: 0;
   bottom: 0;
   left: calc(50% - 0.5px);
@@ -314,10 +367,11 @@
 .workspace-widget-window {
   position: absolute;
   z-index: 2;
-  /* The chat surface itself, as a pane is: up behind the tabs to the
-     window's top, its header below them, on the window's own ground and
-     light — no slab with an edge of its own. The panes beneath are hidden
-     while it is up (`[data-window-widget]`, below), so nothing shows through. */
+  /* The chat surface itself, as a pane is: up to the window's top, its
+     header in the titlebar row, on the window's own ground and light — no
+     slab with an edge of its own. The panes beneath are hidden while it is
+     up (`[data-window-widget]`, below), so nothing shows through. */
+  --workspace-pane-top: var(--desktop-gutter);
   top: 0;
   right: 0;
   bottom: 0;
@@ -325,13 +379,20 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  padding-top: var(--desktop-titlebar-height);
   background: transparent;
   overflow: hidden;
 }
 
-.workspace[data-panes-alone] .workspace-widget-window {
-  left: 0;
+/* With nothing to its left, its header steps past the window's controls, as a corner pane's does. */
+.workspace[data-panes-alone] .workspace-widget-window .workspace-pane-header {
+  padding-left: var(--desktop-titlebar-safe-start);
+}
+
+/* And it ends before the panel's toggle, as the top-right pane's does. */
+.workspace[data-panel="closed"] .workspace-widget-window .workspace-pane-header {
+  padding-right: calc(
+    var(--desktop-control-inset) + var(--desktop-control-size) + var(--desktop-gutter)
+  );
 }
 
 .workspace-widget-window:hover .workspace-pane-actions {

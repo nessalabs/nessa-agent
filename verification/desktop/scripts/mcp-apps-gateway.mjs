@@ -84,7 +84,6 @@ import { writeView } from "./lib/scripted-evidence.mjs"
 import { css, names, offeredLabel, selectorFor } from "./lib/selectors.mjs"
 import {
   paneCount,
-  paneCountIs,
   revealTranscriptWork,
   settled,
   unofferedAnswers,
@@ -159,9 +158,9 @@ Steps, per engine and layout, in order on one page (--only <names> to pick):
             directly
   deny      a second call: its review, Deny in the window, and the app shows
             that the person declined
-  release   in a pane of its own (the app's fullscreen request), a third call
-            left waiting; closing the pane takes the app away and withdraws its
-            review, and the inline app stays live
+  release   in a tab of the chat's right panel (the app's fullscreen request), a
+            third call left waiting; closing the tab takes the app away and
+            withdraws its review, and the inline app stays live
   message   (--scripted only) the app's message opens its review; Allow lands
             that send in the transcript, labelled as the app's. The engines
             share the conversation and send the same text, so the step
@@ -359,7 +358,7 @@ const reviewGone = (stack, review, ms) =>
 
 /**
  * Moves the pointer onto `control` until that sandboxed document receives it.
- * A move in the moment a pane's frame becomes live lands on the proxy's
+ * A move in the moment an app's frame becomes live lands on the proxy's
  * iframe element and is not forwarded into the app; once the frame accepts
  * hits, the same move lands on the button. Returns how many moves it took,
  * or 0 when the app has not received the pointer by `appReviewUnstartedMs`.
@@ -856,82 +855,81 @@ const checks = {
     const inline = await appFrame(page, "inline")
     const panes = await paneCount(page)
     await inline.app.click(selectorFor.reviewControl("fullscreen"))
-    await paneCountIs(page, panes + 1)
-    const pane = await appFrame(page, "pane", 20_000)
+    // A tab in the chat's right panel, never a pane.
+    const panel = await appFrame(page, "panel", 20_000)
+    if ((await paneCount(page)) !== panes)
+      failures.push("the app's fullscreen request opened a pane, not a tab in the panel")
     // The mount going live is what lets a later, unsized `/mcp-resources`
     // abort be treated as delivered (#473). A timeout leaves it a failure.
-    const paneLive = await pane.app
+    const panelLive = await panel.app
       .waitForSelector(selectorFor.reviewState("live"), { timeout: 20_000 })
       .then(() => true)
       .catch(() => false)
-    const paneMode = await pane.app.evaluate(() =>
+    const panelMode = await panel.app.evaluate(() =>
       document.body.getAttribute("data-review-mode"),
     )
-    if (paneMode !== "fullscreen") failures.push(`the pane's app is told ${paneMode}`)
-    // The pane's own mount: its tool result arrives, and it makes no calls of its own.
+    if (panelMode !== "fullscreen") failures.push(`the panel's app is told ${panelMode}`)
+    // The panel's own mount: its tool result arrives, and it makes no calls of its own.
     const baseline = await settleEarlier(page, stack, failures)
-    // The pane's frame accepts a hit into the app a moment after it is live.
+    // The panel's frame accepts a hit into the app a moment after it is live.
     // Until then a pointer event stops on the proxy's iframe. Move onto the
     // button until the app receives it, then click once.
-    const pointerMoves = await pointerOnto(page, pane.app, "delete")
+    const pointerMoves = await pointerOnto(page, panel.app, "delete")
     if (pointerMoves === 0) {
-      failures.push("the pointer never entered the pane app's delete button")
-      return { seen: { paneMode, pointerMoves }, failures }
+      failures.push("the pointer never entered the panel app's delete button")
+      return { seen: { panelMode, pointerMoves }, failures }
     }
     try {
-      await pane.app.click(selectorFor.reviewControl("delete"))
+      await panel.app.click(selectorFor.reviewControl("delete"))
     } catch (error) {
       failures.push(
-        `the pane's delete click did not land: ${error.message.split("\n")[0]}`,
+        `the panel's delete click did not land: ${error.message.split("\n")[0]}`,
       )
-      return { seen: { paneMode, pointerMoves }, failures }
+      return { seen: { panelMode, pointerMoves }, failures }
     }
-    if ((await said(pane.app, "again")) === "") {
+    if ((await said(panel.app, "again")) === "") {
       failures.push(
-        "the pane's delete click did not reach the app: its call never showed pending",
+        "the panel's delete click did not reach the app: its call never showed pending",
       )
-      return { seen: { paneMode, pointerMoves }, failures }
+      return { seen: { panelMode, pointerMoves }, failures }
     }
-    const waited = await awaitReview(stack, baseline, () => said(pane.app, "again"))
+    const waited = await awaitReview(stack, baseline, () => said(panel.app, "again"))
     if (waited.kind !== "review") {
       failures.push(
         waited.kind === "answered"
-          ? `the pane app's call was answered without a review: "${waited.output}"`
-          : `the pane app's destructive call reached no review; ${reviewAbsentMessage(waited.samples, waited.reads)}`,
+          ? `the panel app's call was answered without a review: "${waited.output}"`
+          : `the panel app's destructive call reached no review; ${reviewAbsentMessage(waited.samples, waited.reads)}`,
       )
-      return { seen: { paneMode, pointerMoves }, failures }
+      return { seen: { panelMode, pointerMoves }, failures }
     }
     const waiting = waited.review
     if (!(await reviewShown(stack, waiting)))
-      failures.push("the window's approval is not the review the pane's call opened")
+      failures.push("the window's approval is not the review the panel's call opened")
     const card = await approvalShown(page, SERVER, DESTRUCTIVE)
     if (!card) failures.push(`the window shows no approval naming ${DESTRUCTIVE}`)
-    const paneSaid = await said(pane.app, "again")
-    if (paneSaid !== "pending")
-      failures.push(`the third call was answered before the pane closed: "${paneSaid}"`)
-    // Close the pane: the place is removed (L24), so its mount is released.
-    const paneLocator = page.locator(css.widgetPane).first()
-    await paneLocator.hover()
-    await paneLocator.getByRole("button", { name: names.closePane }).first().click()
+    const panelSaid = await said(panel.app, "again")
+    if (panelSaid !== "pending")
+      failures.push(`the third call was answered before its tab closed: "${panelSaid}"`)
+    // Close its tab: the place is removed (L24), so its mount is released.
+    await page.locator(`${css.chatPanelTabs} [title^="Close "]`).first().click()
     const closedAt = Date.now()
     await until(
       page,
       (frame) => !document.querySelector(frame),
-      selectorFor.appFrameIn("pane"),
+      selectorFor.appFrameIn("panel"),
       5000,
     )
-    if (await page.$(selectorFor.appFrameIn("pane")))
-      failures.push("the pane's app frame is still on the page after its close")
+    if (await page.$(selectorFor.appFrameIn("panel")))
+      failures.push("the panel's app frame is still on the page after its tab closed")
     const withdrawn = await reviewGone(stack, waiting, 15_000)
     const withdrawnAt = Date.now()
     const withdrawnMs = withdrawn ? withdrawnAt - closedAt : null
-    if (!withdrawn) failures.push("the review was not withdrawn when the pane closed")
+    if (!withdrawn) failures.push("the review was not withdrawn when its tab closed")
     const cardGone = await approvalGone(page, SERVER, DESTRUCTIVE, 5000)
     // From the withdrawal seen to the card gone; null when either was not seen.
     const cardGoneAfterWithdrawnMs =
       withdrawn && cardGone ? Date.now() - withdrawnAt : null
-    if (!cardGone)
-      failures.push("the window still shows the review after the pane closed")
+    if (!cardGone) failures.push("the window still shows the review after its tab closed")
     // The inline mount is another: untouched.
     const inlineState = await inline.app.evaluate(() =>
       document.body.getAttribute("data-review-state"),
@@ -939,16 +937,16 @@ const checks = {
     if (inlineState !== "live") failures.push(`the inline app is ${inlineState} after`)
     return {
       seen: {
-        paneMode,
+        panelMode,
         pointerMoves,
         review: { origin: waiting.origin, toolName: waiting.toolName },
-        paneSaid,
+        panelSaid,
         withdrawn: Boolean(withdrawn),
         withdrawnMs,
         cardGone,
         cardGoneAfterWithdrawnMs,
         inlineState,
-        paneLive,
+        panelLive,
       },
       failures,
     }

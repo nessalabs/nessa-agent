@@ -458,7 +458,11 @@ export interface TranscriptLease {
     | "agent_unavailable"
 }
 
-/** What a running agent is doing, and since when; absent while its reply streams in. */
+/**
+ * What a running agent is doing, and since when; absent while its reply
+ * streams in. A live tool run already shows the agent at work, so the
+ * transcript draws this only where none does (`shownActivity`).
+ */
 export interface Activity {
   readonly label: string
   readonly since: number
@@ -570,6 +574,46 @@ export function groupSteps(
     } else groups.push(part)
   }
   return groups
+}
+
+/**
+ * Whether the step run `steps` is over: its turn has ended (`working` is
+ * false), or the agent has gone on past it (`last` is false) with none of its
+ * calls still at work — a call can run on in the background while the agent
+ * writes. A run not over is drawn live, as the turn's "Working" trace.
+ */
+export function runSettled(
+  steps: readonly StepPart[],
+  last: boolean,
+  working: boolean,
+): boolean {
+  return (
+    !working ||
+    (!last &&
+      steps.every((step) => step.status !== "pending" && step.status !== "running"))
+  )
+}
+
+/**
+ * The live row to draw after `messages`: `activity`, unless one of them holds
+ * a tool run still at work. That run's trace already says the agent is
+ * working, for how long, and — open — on which call; a second line would say
+ * it twice. Its folded line still reads "Working", so nothing goes quiet.
+ */
+export function shownActivity(
+  messages: readonly Message[],
+  activity: Activity | null,
+): Activity | null {
+  if (!activity) return null
+  const live = messages.some((message) => {
+    if (!("working" in message) || message.working !== true) return false
+    const groups = groupSteps(message.parts)
+    return groups.some(
+      (group, index) =>
+        Array.isArray(group) && !runSettled(group, index === groups.length - 1, true),
+    )
+  })
+  return live ? null : activity
 }
 
 export type InlineRun =

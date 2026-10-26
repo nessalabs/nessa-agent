@@ -16,6 +16,8 @@ export type GithubView =
     }
   | {
       readonly kind: "connected"
+      /** GitHub's numeric id for the account, which never changes: what its picture is found by. */
+      readonly accountId: number
       readonly login: string
       readonly liveEvents?: {
         readonly enabled: boolean

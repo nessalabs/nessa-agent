@@ -1,6 +1,8 @@
 /**
- * What a pane shows: a session (listed, or a new one not started), or a
- * widget (ADR 326). Split panes know an item only as an opaque string, and
+ * What a place shows: a session (listed, or a new one not started), which a
+ * pane shows, or a widget (ADR 326), which a pane never does — its chat's
+ * panel or the window over the panes shows it, and its key names it there.
+ * Split panes know an item only as an opaque string, and
  * treat two panes with one string as the same pane (`paneShowing`), so this
  * is the one codec between the two:
  *

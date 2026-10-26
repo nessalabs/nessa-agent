@@ -268,7 +268,7 @@ against a private scripted gateway.
   `pane-item.ts`, a session or a widget, with the one codec to split panes'
   opaque key), `application/` (the
   `WorkspaceSource` port and pure use cases over the workspace's state, including
-  switching and opening the window's tabs in `usecases/session-tabs.ts`),
+  each chat's right-panel tabs in `usecases/chat-panel.ts`),
   `adapters/` (the Redux slice, commands — one list in `store/commands.ts`,
   implemented for the index, the panes, and the session in
   `store/index-commands.ts`, `store/pane-commands.ts`, and
@@ -285,9 +285,10 @@ against a private scripted gateway.
   keys and focus in `dom/`; the
   host callbacks each place gives a widget's view in
   `store/widget-hosts.ts`) and `ui/` (each component once, and `layouts/`
-  that only arrange them; `ui/panes/` a session's pane, a widget's
-  (`widget-pane.tsx`) and the window over them (`widget-window.tsx`), which
-  share one header bar (`pane-header-frame.tsx`);
+  that only arrange them; `ui/panes/` a session's pane and the window over
+  them (`widget-window.tsx`), which share one header bar
+  (`pane-header-frame.tsx`); `ui/chrome/panel-content.tsx` a chat's right
+  panel, its widgets as tabs;
   `ui/overview/` the Agents overview, with its rules in `model/overview/`;
   the list uses immediate final placement, while `settling.ts` holds an
   answered request until the source catches up, following ADR 238),

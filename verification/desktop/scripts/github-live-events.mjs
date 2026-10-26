@@ -223,6 +223,7 @@ await main(
             db.exec(
               "CREATE TRIGGER refuse_live_cleanup BEFORE INSERT ON binding_audit WHEN NEW.cause='live_events_disabled' BEGIN SELECT RAISE(ABORT,'test audit unavailable'); END;",
             )
+            await row.hover()
             await row.getByRole("button", { name: "Disconnect", exact: true }).click()
             if (
               !(await waitFor(
@@ -241,6 +242,7 @@ await main(
             db.exec("DROP TRIGGER refuse_live_cleanup")
             db.close()
           }
+          await row.hover()
           await row.getByRole("button", { name: "Disconnect", exact: true }).click()
           if (
             !(await waitFor(

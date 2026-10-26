@@ -195,7 +195,7 @@ export const SessionPeek = memo(function SessionPeek({
                 isNew={false}
               />
             ))}
-            {running ? <LiveRow key="live" activity={running} /> : null}
+            <LiveRow key="live" activity={running} after={peek.since} />
           </section>
         ) : null}
 
