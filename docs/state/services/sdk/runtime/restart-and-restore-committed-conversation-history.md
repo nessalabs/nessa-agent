@@ -5,6 +5,7 @@ kind: "operation"
 status: "mixed"
 summary: "Restart loads the saved conversation records and reconstructs the committed history."
 parent: "sdk-runtime"
+sourceRevision: "004761c44bc10747765ff8045fde57c7b4ec2649"
 sources:
   - "crates/nessa-sdk/src/infrastructure/session_storage/record.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs"
@@ -16,6 +17,7 @@ sources:
   - "crates/nessa-sdk/docs/agent_execution/agent.md"
   - "crates/nessa-server/src/conversation/infrastructure/schema.sql"
   - "crates/nessa-sdk/tests/infrastructure/session_storage.rs"
+  - "crates/nessa-sdk/tests/infrastructure/session_storage/record.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/streaming_persistence.rs"
   - "crates/nessa-sdk/tests/application/agent_execution/agents/review_regressions/provider_restoration.rs"
   - "crates/nessa-server/tests/conversation/deletion.rs"
@@ -50,5 +52,20 @@ stateDiagram-v2
 ```
 
 ## Further reading
+
+Explicitly discarding unreadable local history holds the conversation's writer
+reservation while removing a legacy journal, resetting its record stream and
+cleaning retired rows. Once admitted, this operation keeps running when its
+caller drops the wait. Another open or discard remains busy until the operation
+ends. Cancellation itself does not acknowledge deletion. A failed journal
+removal releases the reservation without resetting the saved records.
+
+The [storage ordering table](../../../../../docs/design/semantic-record-writer.md#state-and-ordering)
+and [public storage regressions](../../../../../crates/nessa-sdk/tests/infrastructure/session_storage/record.rs)
+cover queued file removal, caller cancellation, failure release, reset
+notification and reopen consistency with an unchanged sibling. This review
+covers the storage lifetime and restoration boundary; provider attachment and
+gateway deletion policy were not revalidated. The restoration chart above keeps
+its existing states because explicit discard is a separate operation.
 
 [Source](../../../../../crates/nessa-sdk/src/infrastructure/session_storage/record.rs) · [Related source](../../../../../crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/infrastructure/session_storage.rs)
