@@ -1,5 +1,5 @@
 {
-  "sourceRevision": "9500b4b74d3d6a30cf06af1bf41a8a23d4c09c21",
+  "sourceRevision": "4a93a077579d006210eff4707a3150299bde460c",
   "deployment": {
     "stage": "dev",
     "origin": "https://nessa-github-webhooks.saurav-panthee.workers.dev",
@@ -21,14 +21,16 @@
     "nativeRelayTests": 17,
     "focusedUiAndClientTests": 16,
     "pathlessFixtureTests": 15,
-    "strictClippy": "pass (existing long constant-evaluation warning printed)",
+    "strictClippy": "pass with CI package selection at 9500b4b74; no Rust or Cargo changes in the subsequent mainline merge",
     "uiTypecheck": "pass",
     "targetedEslint": "pass",
     "protocolPublicationTests": 61,
     "githubSettingsChromiumAndWebkit": "pass, including 600px/1000px help placement, reload, provider refusal, cleanup refusal and enable/disconnect race",
     "scriptedGatewayBaseline": "pass in Chromium and WebKit",
-    "fullFrontend": "rerun pending at documentation update",
-    "fullFunctionalBaseline": "initial attempt invalidated by concurrent dev-server teardown; unrelated icon tooltip contract and dev frame-budget findings also recorded; not claimed green"
+    "fullFrontend": "pass at 9500b4b74: 5319 tests and production frontend build, using canonical TMPDIR on macOS",
+    "fullFunctionalBaseline": "failed channel icon-tooltip naming and pane-focus checks at 46361a93b; tracked separately as #1129 and #1130, stopped remaining broad run after confirmed failures",
+    "mainlineFollowup": "at 46361a93b: 394 affected tests, typecheck, targeted lint/format, frontend build, Settings browser check and scripted gateway baseline pass",
+    "platformWiring": "4a93a0775 restores the Unix GitHub sign-in factory guard and keeps relay composition available to Windows; local CI-package Cargo check passes, actual Windows rerun pending"
   },
   "evidence": "../../verification/desktop/evidence/github-live-events/README.md",
   "exclusions": [
@@ -202,5 +204,13 @@
       "GitHub connection currently uses installed/signed-in gh, not packaged browser OAuth onboarding. Fine-grained/private App user tokens without repo OAuth-scope proof are unsupported.",
       "Alpha, CI and prod are unconfigured and fail closed; independent stage resources and GitHub App are required before rollout."
     ]
-  }
+  },
+  "documentation": {
+    "catalogDocuments": 134,
+    "errors": 0,
+    "warnings": "existing unsupported sourceRevision fields",
+    "mermaid": "PR sequence parses",
+    "checkpoint": "4a93a077579d006210eff4707a3150299bde460c"
+  },
+  "settingsEvidenceSourceRevision": "46361a93bc9b421a8d50b64a95eef2b71721610b"
 }

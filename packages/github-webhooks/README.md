@@ -194,7 +194,7 @@ compiled into Rust and bundled into the Worker.
 [`stage-deployments.json`](stage-deployments.json) selects each stage's Wrangler
 file. To enable a rollout stage, provision an independent **free** Worker, D1,
 SQLite Durable Object namespace and **separate GitHub App**, add its HTTPS origin,
-app slug and client ID to the public table, and add its Wrangler config path to
+app slug, numeric App ID and client ID to the public table, and add its Wrangler config path to
 the deployment table. Each config supplies its own `RELAY_STAGE`, D1 ID and Worker
 name; each deployment receives independent `GITHUB_WEBHOOK_SECRET` and
 `RELAY_TICKET_SECRET` encrypted bindings. Deploy with `pnpm run deploy STAGE`.

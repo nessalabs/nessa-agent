@@ -5,7 +5,7 @@ kind: service
 status: implemented
 summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
 parent: nessa
-sourceRevision: "9500b4b74d3d6a30cf06af1bf41a8a23d4c09c21"
+sourceRevision: "4a93a077579d006210eff4707a3150299bde460c"
 sources:
   - packages/github-webhooks/src/composition/worker.ts
   - packages/github-webhooks/src/webhooks/infrastructure/http.ts
@@ -127,7 +127,7 @@ retention also ends that store's deduplication history.
 ## User and stage boundaries
 
 The expected user ID is compared with the token's GitHub-verified identity. Cedar
-uses current repository facts and OAuth scopes before a page is disclosed. An
+uses current repository facts, OAuth scopes and App installation facts before a page is disclosed. An
 installation can serve several authorized users; its owner is not a stand-in for
 all of them. A read already admitted under one verified snapshot can finish after
 a later permission change.
