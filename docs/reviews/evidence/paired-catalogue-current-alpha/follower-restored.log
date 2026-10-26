@@ -1,0 +1,15 @@
+✔ a stable full connection proves its capacity (1.829763ms)
+✔ a stable connection accepting an extra view fails (1.85429ms)
+✔ an original event ending invalidates the probe (0.255624ms)
+✔ replacing an original event invalidates the probe (0.174843ms)
+✔ removing an original event invalidates the probe (0.150316ms)
+✔ the original main view ending invalidates the probe (0.177026ms)
+✔ an acquired view ending invalidates the probe (0.68472ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 101.150828

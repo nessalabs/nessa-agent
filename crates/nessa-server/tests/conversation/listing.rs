@@ -10,7 +10,7 @@ use crate::{
         application::{
             ConversationAccessPolicyEvaluator, ConversationFuture, ConversationListing,
             ConversationRepository, ConversationSummaries, ListedConversation, ListedConversations,
-            ObservationCursor, ObservedConversations,
+            ObservationCursor, ObservedConversations, Reader,
         },
         domain::{Conversation, ConversationDeletion},
         infrastructure::LocalConversationStore,
@@ -1347,6 +1347,7 @@ impl ConversationListing for AskedLimit {
         _: &PrincipalId,
         _: bool,
         limit: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         self.0.lock().unwrap().push(limit);
         Box::pin(async { Ok(ListedConversations::default()) })
@@ -1357,6 +1358,7 @@ impl ConversationListing for AskedLimit {
         _: &PrincipalId,
         _: bool,
         _: Option<ObservationCursor>,
+        _: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
         Box::pin(async {
             Ok(ObservedConversations {
@@ -1420,10 +1422,12 @@ impl ConversationListing for Answering {
         _: &PrincipalId,
         _: bool,
         _: usize,
+        _: &Reader,
     ) -> ConversationFuture<'_, ListedConversations> {
         let conversations = self.0.clone();
         Box::pin(async move {
             Ok(ListedConversations {
+                head: None,
                 conversations,
                 unreadable: 0,
             })
@@ -1435,6 +1439,7 @@ impl ConversationListing for Answering {
         _: &PrincipalId,
         _: bool,
         cursor: Option<ObservationCursor>,
+        _: &Reader,
     ) -> ConversationFuture<'_, ObservedConversations> {
         let conversations = if cursor.is_some() {
             Vec::new()
@@ -1495,6 +1500,7 @@ fn answering(
     let answered = rows
         .iter()
         .map(|conversation| ListedConversation {
+            held: None,
             conversation: conversation.clone(),
             summary: summary.clone(),
         })

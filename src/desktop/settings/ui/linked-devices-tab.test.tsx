@@ -5,7 +5,7 @@
  */
 import { act, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ClockProvider } from "../../../clock"
 import type {
   LinkedDevicesConnection,
@@ -361,14 +361,24 @@ describe("Linked devices", () => {
     await act(async () =>
       host.querySelector<HTMLButtonElement>("[data-linked-action='pair']")?.click(),
     )
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(
-          "[data-slot='dialog'] [data-linked-action='cancel']",
-        )
-        ?.click(),
-    )
-    await act(async () => new Promise((done) => setTimeout(done, 0)))
+    // Radix closes its focus scope on one timer; the kit's fallback focus
+    // runs on a second. Keep the gateway read held while both callbacks run,
+    // without waiting on elapsed host time or changing the injected clock.
+    // One virtual millisecond admits the nested zero-delay timer clamp, but
+    // does not admit a genuinely delayed fallback.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    try {
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(
+            "[data-slot='dialog'] [data-linked-action='cancel']",
+          )
+          ?.click(),
+      )
+      await act(async () => vi.advanceTimersByTimeAsync(1))
+    } finally {
+      vi.useRealTimers()
+    }
     expect(document.querySelector("[data-slot='dialog']")).toBeNull()
     expect(document.activeElement?.hasAttribute("data-pairing-row")).toBe(true)
     await act(async () => answerRead?.())
