@@ -5,7 +5,7 @@ kind: service
 status: implemented
 summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
 parent: nessa
-sourceRevision: "34a6c508da0285108bcab82012c8da97487e5f71"
+sourceRevision: "6bad7e40b4a916499f26001f8e9798f2886a359f"
 sources:
   - packages/github-webhooks/src/composition/worker.ts
   - packages/github-webhooks/src/webhooks/infrastructure/http.ts

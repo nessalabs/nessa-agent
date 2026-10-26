@@ -1,5 +1,5 @@
 {
-  "sourceRevision": "34a6c508da0285108bcab82012c8da97487e5f71",
+  "sourceRevision": "6bad7e40b4a916499f26001f8e9798f2886a359f",
   "workerSourceRevision": "e960bc33be8d1878478ed781e9e2764a1a3d7668",
   "workerVersion": "18e4c754-f52c-4d1b-a28f-7ec9e826cda1",
   "plan": "Workers Free ($0 current plan, confirmed in dashboard after deployment)",
@@ -21,21 +21,13 @@
       "bytes": 256,
       "sha256": "d1dcff774496473f12babe68cb4dd5f7354689e96901742ae25c62191283cd4c"
     },
-    "2513005f2845a720f5093d978b5255c85b0b9ac5-policies.cedar": {
-      "bytes": 189,
-      "sha256": "dcafbe3dcc9b9cdcbe71a2732b29a135f1f3bd7598a3dca38db7edd3f744b564"
-    },
     "bb6ea96811535f86463946f69e9ee04fdf1a7397-cedar.wasm": {
       "bytes": 4311886,
       "sha256": "a7c93cd3af0721125d0a758a644b4cd9a4c111bed2af2a6be9a1356b34f762f0"
-    },
-    "43e0eb30a8e17306ba264532391c42c3632727e7-policies.cedar": {
-      "bytes": 197,
-      "sha256": "c0816eb489dd928c23bd8bdcd9d8b781d35dd4835cde70e6f571109de24aaa5d"
     }
   },
   "checks": {
-    "workerTests": 30,
+    "workerTests": 31,
     "nativeRelayTests": 14,
     "cliArgumentTests": 15,
     "architectureTests": 108,
@@ -49,7 +41,10 @@
       "errors": 0,
       "warnings": 25,
       "note": "Existing renderer reports unsupported sourceRevision fields; rendered charts not visually inspected."
-    }
+    },
+    "workerTestsSourceRevision": "6bad7e40b4a916499f26001f8e9798f2886a359f",
+    "nativeRelayTestsSourceRevision": "34a6c508da0285108bcab82012c8da97487e5f71",
+    "buildPathRegression": "Encoded source pathname failed with ENOENT before fileURLToPath; path-with-spaces fixture and all 31 Worker tests passed after. Worker entry/WASM/policy bytes match the deployed version."
   },
   "probes": {
     "cloud": [
