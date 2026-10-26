@@ -124,6 +124,7 @@ fn output(result: serde_json::Value) -> Result<(), RunError> {
     Ok(())
 }
 
+#[cfg(unix)]
 async fn credentials(
     environment: &Environment,
 ) -> Result<Arc<dyn crate::github_relay::application::ConnectedGithub>, Failure> {
@@ -142,4 +143,13 @@ async fn credentials(
         .ok_or(Failure::UnconfiguredStage)?
         .credentials
         .clone())
+}
+
+// Agent-backed GitHub sign-in is composed only on Unix in mainline. Other
+// targets retain local inbox reads and refuse connecting without that owner.
+#[cfg(not(unix))]
+async fn credentials(
+    _environment: &Environment,
+) -> Result<Arc<dyn crate::github_relay::application::ConnectedGithub>, Failure> {
+    Err(Failure::CredentialsUnavailable)
 }
