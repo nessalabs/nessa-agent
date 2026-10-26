@@ -11,7 +11,7 @@ import {
   deleteSession,
   newSession,
   searchList,
-  walkToSession,
+  openSession,
 } from "../../adapters/store/commands"
 import { shallowEqual } from "react-redux"
 import { listAskIds } from "../../application/workspace-state"
@@ -118,8 +118,7 @@ export const SessionList = memo(function SessionList() {
     const at = ordered.findIndex((id) => id === focused)
     const next = ordered[Math.min(Math.max(walk[event.key](at), 0), ordered.length - 1)]
     if (!next) return
-    // Walking the list shows each row in this tab, not a tab per row passed.
-    dispatch(walkToSession({ sessionId: next }))
+    dispatch(openSession({ sessionId: next }))
     listRef.current
       ?.querySelector<HTMLElement>(`[data-session-row="${CSS.escape(next)}"]`)
       ?.focus()
@@ -138,6 +137,14 @@ export const SessionList = memo(function SessionList() {
           title={title}
           flipId="column-title"
           icon={<DesktopIcon name={channel?.private ? "privateChannel" : "channel"} />}
+          action={
+            <IconButton
+              icon="newSession"
+              label="New Session"
+              shortcut={frame.shortcut("newSession")}
+              onClick={() => dispatch(newSession())}
+            />
+          }
         >
           <SearchField
             className="workspace-search"

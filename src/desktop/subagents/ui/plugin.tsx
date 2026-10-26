@@ -1,6 +1,6 @@
 /**
- * The subagents widget: one per conversation, drawn in a pane and in the
- * window. What it answers is `subagentsWidgetState`, in that order. It has
+ * The subagents widget: one per conversation, drawn in its chat's panel and
+ * in the window. What it answers is `subagentsWidgetState`, in that order. It has
  * no card of its own — a widget-only message is the host's title and Open.
  * Its header accessory is the conversation's subagents.
  */
@@ -38,7 +38,7 @@ export function subagentsPlugin(): NativeWidgetPlugin {
         [id, preview, listing, read],
       )
     },
-    views: { pane: SubagentsPane, window: SubagentsPane },
+    views: { panel: SubagentsPane, window: SubagentsPane },
     SessionAccessory: SubagentStackAccessory,
   }
 }

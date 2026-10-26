@@ -274,4 +274,22 @@ export const nessaIcons: DesktopIconFamily = {
       <Dot x={10} y={6.9} r={0.95} />
     </>,
   ),
+
+  // A book on its spine, as a code host draws a repository: the label on its
+  // cover, and the page edge along the bottom.
+  repositories: drawn(
+    <>
+      <path d="M5.25 15.25V5a1.5 1.5 0 0 1 1.5-1.5h8v10H6.75a1.5 1.5 0 0 0-1.5 1.5 1.5 1.5 0 0 0 1.5 1.5h8" />
+      <path d="M8.25 6.5h3.5" />
+    </>,
+  ),
+  // Connections' two links with the line between them broken, and the sparks
+  // of the break.
+  disconnect: drawn(
+    <>
+      <circle cx="6.25" cy="13.75" r="2.25" />
+      <circle cx="13.75" cy="6.25" r="2.25" />
+      <path d="M7.9 12.1l.85-.85M11.25 8.75l.85-.85M9 4.5V3.5M16.5 11h-1M4.25 9.25l-.75-.75M11 16.5v-1" />
+    </>,
+  ),
 }

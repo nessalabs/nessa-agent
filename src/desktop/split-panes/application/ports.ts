@@ -44,12 +44,6 @@ export interface SplitPanesSource {
    * its content region or which side columns are open.
    */
   watched(): readonly unknown[]
-  /**
-   * A value whose change means another layout took the place of the one
-   * shown — another window tab — so the grid draws it at once rather than
-   * holding the old boxes for a new arrangement's frames. Optional.
-   */
-  cut?(): unknown
   /** Whether the host still has `item`: a carried item gone ends the drag. */
   holds(item: string): boolean
   /** Whether panes can be aimed at now; not while something covers them all. */

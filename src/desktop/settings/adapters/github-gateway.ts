@@ -76,6 +76,7 @@ export function viewOf(connection: GithubConnection): GithubView {
     case "connected":
       return {
         kind: "connected",
+        accountId: connection.account?.id ?? 0,
         login: connection.account?.login ?? "",
         ...(connection.unrecorded ? { unrecorded } : {}),
         installUrl: connection.installUrl,

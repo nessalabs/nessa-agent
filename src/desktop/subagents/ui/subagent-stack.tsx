@@ -1,7 +1,7 @@
 /**
  * A conversation's subagents in its pane header (ADR 329, #332): an
  * `AvatarStack`, the busiest first, given the session's id and `openWidget`
- * alone. A click opens the panel in a pane beside the conversation. Nothing
+ * alone. A click opens the list in the conversation's right panel. Nothing
  * is drawn when the hook has nothing to show.
  */
 import { AvatarStack, type AvatarStackItem } from "@nessa-ui/react/avatar-stack"
@@ -44,7 +44,7 @@ export function SubagentStackAccessory({ sessionId, openWidget }: SessionAccesso
     <SubagentStack
       items={stack.items}
       label={stack.label}
-      onOpen={() => openWidget({ plugin: subagentsPluginId, id: sessionId }, "pane")}
+      onOpen={() => openWidget({ plugin: subagentsPluginId, id: sessionId }, "panel")}
     />
   )
 }

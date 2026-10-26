@@ -29,7 +29,7 @@ diagramLinks:
   F3: "desktop-workspace-open-split-resize-and-close-panes"
   F4: "desktop-workspace-drag-or-move-a-session-or-pane"
   F5: "desktop-workspace-review-agents-answer-requests-and-reply-from-the-overview"
-  F6: "desktop-workspace-open-a-widget-inline-in-a-pane-or-over-the-window"
+  F6: "desktop-workspace-open-a-widget-inline-in-the-panel-or-over-the-window"
   F7: "desktop-workspace-step-back-from-a-widget-and-return-to-its-conversation"
 ---
 
@@ -84,7 +84,7 @@ flowchart TB
     Feature --> F4
     F5["Review agents, answer requests, and reply from the overview"]
     Feature --> F5
-    F6["Open a widget inline, in a pane, or over the window"]
+    F6["Open a widget inline, in the panel, or over the window"]
     Feature --> F6
     F7["Step back from a widget and return to its conversation"]
     Feature --> F7
@@ -106,13 +106,12 @@ flowchart TB
 
 - [Discover subagents and experimental features](discover-subagents-and-experimental-features.md)
 - [Drag or move a session or pane](drag-or-move-a-session-or-pane.md)
-- [Open, merge, unmerge, switch, and close window tabs](open-merge-unmerge-switch-and-close-window-tabs.md)
 - [Open, resize, expand and restore the right panel](open-resize-expand-and-restore-the-right-panel.md)
 - [Fold, reveal, and resize side columns](fold-reveal-and-resize-side-columns.md)
 - [Follow focus and route keyboard actions](follow-focus-and-route-keyboard-actions.md)
 - [Load, browse, and resynchronize the workspace](load-browse-and-resynchronize-the-workspace.md)
 - [MCP App view lifecycle](mcp-app-view-lifecycle.md)
-- [Open a widget inline, in a pane, or over the window](open-a-widget-inline-in-a-pane-or-over-the-window.md)
+- [Open a widget inline, in the panel, or over the window](open-a-widget-inline-in-the-panel-or-over-the-window.md)
 - [Open, dismiss, and reopen the desktop window](open-dismiss-and-reopen-the-desktop-window.md)
 - [Open, search, and change desktop settings](open-search-and-change-desktop-settings.md)
 - [Open, split, resize, and close panes](open-split-resize-and-close-panes.md)

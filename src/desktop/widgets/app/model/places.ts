@@ -1,12 +1,12 @@
 /**
  * How an app's display modes map onto the window's places (ADR 344): `inline`
- * is a card in the message; `fullscreen` is a pane beside the conversation,
+ * is a card in the message; `fullscreen` is a tab in the conversation's panel,
  * and the window — where a sidebar entry opens an app — is drawn as
  * fullscreen too; `pip` is never offered.
  *
  * Each place draws its own view, so a request changes where *another* view
  * is drawn, never this one: an inline view asking for fullscreen opens a
- * pane and stays inline, and says so in its answer, as the spec asks
+ * panel tab and stays inline, and says so in its answer, as the spec asks
  * ("Host MUST return the resulting mode").
  */
 import type { OpenPlace, WidgetPlace } from "../../model/widget-state"
@@ -30,7 +30,7 @@ export interface ModeDecision {
 
 /**
  * The decision for a request. Only an inline view asking for fullscreen
- * opens anything — a pane — and only when the app said it can be shown so
+ * opens anything — a panel tab — and only when the app said it can be shown so
  * (`declared`, its `appCapabilities.availableDisplayModes`, when it gave
  * any): a mode it did not declare is never switched to.
  */
@@ -42,6 +42,6 @@ export function requestMode(
   const answer = modeOf(place)
   const allowed = offeredModes.includes(mode) && (declared?.includes(mode) ?? true)
   if (place === "inline" && mode === "fullscreen" && allowed)
-    return { open: "pane", answer }
+    return { open: "panel", answer }
   return { answer }
 }

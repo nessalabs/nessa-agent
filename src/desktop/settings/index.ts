@@ -44,6 +44,9 @@
  *   (Accounts: connect      (its views)          (`client.github` read into
  *    through the Nessa                            the model's words, with a
  *    GitHub App's code)                           sentence for each code)
+ *          ▲
+ *          └── adapters/github-avatar.tsx (the account's picture from
+ *              GitHub, composed by `main.tsx`; the row alone draws an initial)
  *
  *   ui/review-notice-rows.tsx
  *   (Access: the button that asks the browser to allow a notification
@@ -82,6 +85,7 @@ export {
   type GithubClient,
   type GithubGateway,
 } from "./adapters/github-gateway"
+export { githubAvatar } from "./adapters/github-avatar"
 export {
   permissionRulesGateway,
   type PermissionRulesClient,
