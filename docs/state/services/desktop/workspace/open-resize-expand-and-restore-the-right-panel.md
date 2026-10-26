@@ -5,13 +5,15 @@ kind: "statechart"
 status: "implemented"
 summary: "The right panel belongs to the chat in front and docks when another view opens."
 parent: "desktop-workspace"
-sourceRevision: "922a06e6189eac04d95c9e52ca80e9377075c301"
+sourceRevision: "c5432f75638030f8dfa3941db7a3c8626522be1a"
 sources:
   - "src/desktop/workspace/ui/chrome/right-panel.tsx"
   - "src/desktop/workspace/ui/chrome/right-panel.css"
   - "src/desktop/workspace/ui/layouts/use-workspace-window.ts"
   - "src/desktop/workspace/ui/layouts/workspace-layout.tsx"
-  - "src/desktop/workspace/ui/chrome/window-tabs.tsx"
+  - "src/desktop/workspace/ui/chrome/panel-content.tsx"
+  - "src/desktop/workspace/model/chat-panel.ts"
+  - "src/desktop/workspace/application/usecases/chat-panel.ts"
   - "src/desktop/workspace/adapters/store/selectors.ts"
   - "src/desktop/model/right-panel.ts"
   - "src/desktop/adapters/window-preferences.ts"
@@ -29,21 +31,27 @@ it, and dragging that edge far enough right folds it. Whether it is open and
 its width are remembered between launches; the panes and side columns fit
 the room left beside it.
 
-Expanding it covers the workspace for the chat in front. The workspace stays
-laid out and inert beneath, while the tab strip shows only that chat's tab.
-New Tab docks the panel and opens the new session in sight. A window command
-docks it before acting; bringing another chat, widget or overview in
-front docks it too. Escape or Restore brings the columns back as they were.
-An Escape a dialog, menu or list takes first is theirs, and under Settings
-the window's Escape is Settings'. Expanded is not remembered. A side rail
-item's full view hides the panel.
+Each chat has its own panel contents: widgets open as tabs inside the panel,
+or a note says that nothing is open. Chats themselves have no tabs, and a
+widget never replaces a chat pane. Changing a panel tab keeps the same chat
+in front.
+
+Expanding the panel covers the workspace for that chat. The workspace stays
+laid out and inert beneath, while the panel keeps its own tabs or empty note.
+⌘N docks the panel and opens the new session in sight. A window command docks
+it before acting; bringing another chat or pane, the overview, or a widget
+over the window in front docks it too. Escape or Restore brings the columns
+back as they were. An Escape a dialog, menu or list takes first is theirs,
+and under Settings the window's Escape is Settings'. Expanded is not
+remembered. A side rail item's full view hides the panel.
 
 ## Source review scope
 
-The recorded source checkpoint integrates the chat-owned panel, tab strip and
-window-command behavior. The layout tests and targeted browser controls cover
-expansion, New Tab, docking, Escape and restoration. This review does not claim
-native material or performance qualification.
+The recorded source checkpoint preserves the incoming per-chat widget tabs and
+window-command behavior alongside the paired-reader integration. The owning
+layout and widget tests and maintained browser checks cover expansion, new
+sessions, docking, Escape and restoration. Test execution is reported separately;
+this page does not claim native material or performance qualification.
 
 ```mermaid
 stateDiagram-v2
@@ -59,7 +67,7 @@ stateDiagram-v2
     Expanded --> Open: another chat or view comes in front
     note right of Expanded
         The workspace under it keeps its layout and is inert.
-        Only the chat in front appears in the tab strip.
+        Only the chat in front's widgets appear in the panel tabs.
         Expanded is local to this window, never remembered.
     end note
 ```
