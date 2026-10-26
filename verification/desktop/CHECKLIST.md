@@ -1321,7 +1321,8 @@ menu near the window's right edge, a pane header on hover).
   number, and the numbers line up.** In the Agents overview's filter, pressing
   a choice's number picks it and closes the menu. _Check:_
   `conversation-stress.mjs` step `menu` (knob `menus`): the pane's "…" menu
-  and the overview filter, with screenshots.
+  and the overview filter, with screenshots, in Chromium within the default
+  run and alone in WebKit in CI (`local-auth.yml`).
 
 ## Motion and reduced motion
 

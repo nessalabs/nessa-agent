@@ -3744,8 +3744,12 @@ const steps = {
       }
       // Put the filter back as the person had it, the scope last: it may
       // leave nothing listed, and the filter with it.
-      await pick(overviewFilterKeys[had?.range] ?? overviewFilterKeys.any)
-      await pick(overviewFilterKeys[had?.scope] ?? overviewFilterKeys.ongoing)
+      const keyFor = (choice, fallback) =>
+        typeof choice === "string" && Object.hasOwn(overviewFilterKeys, choice)
+          ? overviewFilterKeys[choice]
+          : overviewFilterKeys[fallback]
+      await pick(keyFor(had?.range, "any"))
+      await pick(keyFor(had?.scope, "ongoing"))
       await page.keyboard.press(keys.escape)
       await page.locator(css.overview).waitFor({ state: "detached", timeout: 10_000 })
       await openStressConversation(page, run.main.id, run.main.title)
