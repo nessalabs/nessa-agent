@@ -8,6 +8,11 @@ export interface LinkedDevice {
   readonly credentialId: string
   /** When it was linked, Unix seconds. */
   readonly issuedAt: number
+  /**
+   * The owner's phone, which reads and writes every chat as the owner. It
+   * needs no share, so the share dialog does not offer it.
+   */
+  readonly fullAccess: boolean
 }
 
 /** The day a device was linked, as both Settings and the share dialog say it: `2025-10-09`. */

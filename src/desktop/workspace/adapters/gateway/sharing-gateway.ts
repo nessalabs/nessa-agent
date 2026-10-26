@@ -255,8 +255,9 @@ function choicesOf([session, credentials, catalog]: Awaited<
 >): SharingChoices {
   return {
     targets: credentials.credentials.flatMap((credential) => {
+      // The owner's phone already reads every chat; a share would add nothing.
       const device = linkedDeviceOf(credential, session.credentialId)
-      return device ? [device] : []
+      return device && !device.fullAccess ? [device] : []
     }),
     commandHosts: catalog.commandHosts,
     limits: toolPolicyBounds,

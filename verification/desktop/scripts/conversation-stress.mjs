@@ -4525,9 +4525,13 @@ async function announced(run, failures) {
  * card that says this sign-in cannot manage credentials. The code opens in a
  * modal with the one signal orb, none of it drawn on the page; Escape hides
  * the modal and leaves the code open, and Show code brings back the same
- * code. Cancel in the modal then closes it and Pair a device is offered
- * again. Resolves whether all of that held.
+ * code. The code enrolls the owner's phone with full access: the gateway
+ * holds it as that class. Cancel in the modal then closes it and Pair a
+ * device is offered again. Resolves whether all of that held.
  */
+/** The class of a code that enrolls the owner's phone with full access. */
+const OWNER_PHONE_CLASS = "gateway-owner-conversation-read-write"
+
 async function pairFromWindow(run, failures) {
   const { page } = run
   const before = failures.length
@@ -4571,6 +4575,13 @@ async function pairFromWindow(run, failures) {
       .catch(() => {})
   const code = await codeIn()
   if (!code) failures.push("the pairing code shown was empty")
+  // A phone paired from the window acts as the owner, with no share per chat.
+  const classes = await run.client.pairing.pending().then(
+    ({ items }) => items.map((item) => item.class),
+    (error) => [String(error)],
+  )
+  if (classes.length !== 1 || classes[0] !== OWNER_PHONE_CLASS)
+    failures.push(`the open code enrolls ${JSON.stringify(classes)}, not the owner's phone`)
   // Settings is a fixed layer over the window: a modal portalled past it is
   // in the page but drawn underneath it, unseen.
   if (!(await dialog.evaluate((node) => Boolean(node.closest("[data-settings-layers]")))))

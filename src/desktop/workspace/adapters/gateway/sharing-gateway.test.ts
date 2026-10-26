@@ -80,6 +80,11 @@ function client(
               credential("phone", ["conversation.read"]),
               credential("revoked", ["conversation.read"], 1_700_000_100),
               credential("admin", ["conversation.read", "conversation.write"]),
+              credential("owner-phone", [
+                "conversation.read",
+                "conversation.write",
+                "server.read",
+              ]),
               credential("tablet", ["conversation.read"]),
             ],
           })),
@@ -140,7 +145,8 @@ describe("reading a session's sharing", () => {
         grantedAtMs: 7,
       },
     ])
-    // Not the session's own, not revoked, not one holding more than reading.
+    // Not the session's own, not revoked, not one holding more than reading,
+    // and not the owner's phone, which reads every chat already.
     expect(read.targets.map((target) => target.credentialId)).toEqual(["phone", "tablet"])
     expect(read.commandHosts).toEqual(["devbox"])
     expect(read.limits).toBe(toolPolicyBounds)

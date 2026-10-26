@@ -2297,9 +2297,10 @@ export interface PhoneAuthorizationStatus {
   /** Typed activation interruption, when present. */
   activationStopped?: PairingActivationStop
 }
-/** Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner. gateway: a peer gateway that reads; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and holds only the conversation.read grant. environment: a peer gateway or worker that serves as an environment for this gateway's leases; its credential names the same gateway principal for the same key and holds only the environment.serve grant, so it reads nothing. All use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side. */
+/** Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner and reads what is shared with it. ownerPhone: the owner's own phone; its credential acts as the owner over every conversation the owner has, now and later, reading and writing as the owner phone purpose allows, with no per-conversation share. gateway: a peer gateway that reads; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and holds only the conversation.read grant. environment: a peer gateway or worker that serves as an environment for this gateway's leases; its credential names the same gateway principal for the same key and holds only the environment.serve grant, so it reads nothing. All use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side. */
 export const PairingEnrollee = {
   Device: "device",
+  OwnerPhone: "ownerPhone",
   Gateway: "gateway",
   Environment: "environment",
 } as const

@@ -189,22 +189,24 @@ pub struct PairingRecord {
     phase: PairingPhase,
     attempts: Box<[Attempt]>,
     claim: Option<(AttemptId, DeviceKey)>,
+    /// Made for a signed original request (`new_owner_phone`): it admits no
+    /// PAKE attempt, and only that request's approval moves it on.
+    signed_original: bool,
     owner_phone: Option<(OwnerPhoneRequestId, DeviceKey, [u8; 32])>,
     stage: Option<ReceiverStage>,
     terminal: Option<(TerminalCause, PairingInitiator)>,
 }
 impl PairingRecord {
-    /// Create a finite invitation using time supplied by the injected application clock.
+    /// Create a finite invitation a device redeems by code (PAKE), using time
+    /// supplied by the injected application clock. Any class may be enrolled
+    /// this way; the owner then approves the exact key that claimed it.
     pub fn new(
         id: InvitationId,
         intent: ConsentIntent,
         created_at_ms: u64,
         policy: PairingPolicy,
     ) -> Result<Self, PairingError> {
-        if !intent.class().uses_pake() {
-            return Err(PairingError::Invalid);
-        }
-        Self::initial(id, intent, created_at_ms, policy)
+        Self::initial(id, intent, created_at_ms, policy, false)
     }
     /// Create the separate signed-owner consistency boundary. It admits no PAKE attempts.
     /// This initial value publishes no authority until the original approval is committed.
@@ -217,13 +219,14 @@ impl PairingRecord {
         if intent.class() != ConsentClass::OwnerPhoneReadWrite {
             return Err(PairingError::Invalid);
         }
-        Self::initial(id, intent, created_at_ms, policy)
+        Self::initial(id, intent, created_at_ms, policy, true)
     }
     fn initial(
         id: InvitationId,
         intent: ConsentIntent,
         created_at_ms: u64,
         policy: PairingPolicy,
+        signed_original: bool,
     ) -> Result<Self, PairingError> {
         let expires_at_ms = created_at_ms
             .checked_add(policy.lifetime_ms())
@@ -237,6 +240,7 @@ impl PairingRecord {
             phase: PairingPhase::Available,
             attempts: Box::new([]),
             claim: None,
+            signed_original,
             owner_phone: None,
             stage: None,
             terminal: None,
@@ -284,6 +288,27 @@ impl PairingRecord {
     /// Original signed-owner proof correlation, distinct from charged PAKE attempts.
     pub fn owner_phone_approval(&self) -> Option<(OwnerPhoneRequestId, DeviceKey, [u8; 32])> {
         self.owner_phone
+    }
+    /// Whether this enrollment was made for a signed original request rather
+    /// than redeemed by code.
+    pub fn signed_original(&self) -> bool {
+        self.signed_original
+    }
+    /// The key the owner consented to, once they have: the signed original's
+    /// key, or the key that won the code and that the owner then approved.
+    /// This is the one place that says an enrollment's key is owner-approved;
+    /// `None` before that consent, whatever came after.
+    pub fn owner_approved_key(&self) -> Option<DeviceKey> {
+        if self.signed_original {
+            return self.owner_phone.map(|(_, key, _)| key);
+        }
+        let approved = match self.phase {
+            PairingPhase::Approved | PairingPhase::Staging | PairingPhase::Active => true,
+            // A terminal record keeps its stage only if it was approved first.
+            PairingPhase::Terminal => self.stage.is_some(),
+            PairingPhase::Available | PairingPhase::Claimed => false,
+        };
+        self.claim.filter(|_| approved).map(|(_, key)| key)
     }
     /// Check an immutable reservation replay before consulting admission capacity.
     pub fn reservation_status(
@@ -406,7 +431,7 @@ impl PairingRecord {
             }
 
             Event::Reserve(id, key, input) => {
-                if !self.intent.class().uses_pake() {
+                if self.signed_original {
                     return Err(PairingError::Ineligible);
                 }
                 if self.reservation_status(*id, *key, *input)?.is_some() {
@@ -475,7 +500,8 @@ impl PairingRecord {
             Event::OwnerPhoneApproved(request, key, digest) => {
                 self.owner(&actor)?;
                 self.before_expiry(at_ms)?;
-                if self.intent.class() != ConsentClass::OwnerPhoneReadWrite
+                if !self.signed_original
+                    || self.intent.class() != ConsentClass::OwnerPhoneReadWrite
                     || self.phase != PairingPhase::Available
                     || !self.attempts.is_empty()
                     || self.owner_phone.is_some()

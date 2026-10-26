@@ -114,7 +114,9 @@ pub enum ConsentClass {
     /// principal as [`Self::PeerRead`] for the same key, holding
     /// `environment.serve` and no read.
     PeerEnvironment,
-    /// Explicit first-party phone authorization, admitted by signed key proof.
+    /// The owner's own phone with read and write over their conversations,
+    /// admitted by a signed original request or by a code the owner then
+    /// approves for the exact key.
     OwnerPhoneReadWrite,
 }
 impl ConsentClass {
@@ -185,6 +187,13 @@ impl ConsentClass {
             resource,
         ))
     }
+    /// Whether a client that enrolls as this class takes an invitation of
+    /// `invited`. A device client takes either kind of the owner's own
+    /// device: read only, or the phone's read and write. The owner chose which
+    /// when they made the invitation. A peer takes only its own class.
+    pub fn accepts(self, invited: Self) -> bool {
+        self == invited || (self == Self::DeviceRead && invited == Self::OwnerPhoneReadWrite)
+    }
     /// Complete canonical ordered capabilities. Owner-phone method/resource
     /// admission remains separate from these coarse Cedar actions.
     pub fn grants(self, resource: Resource) -> Result<Vec<Grant>, PairingError> {
@@ -198,10 +207,6 @@ impl ConsentClass {
             }
         }
         Ok(grants)
-    }
-    /// Whether a class can be created through the existing manual PAKE flow.
-    pub fn uses_pake(self) -> bool {
-        self != Self::OwnerPhoneReadWrite
     }
 }
 

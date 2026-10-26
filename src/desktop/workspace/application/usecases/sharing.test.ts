@@ -37,7 +37,7 @@ const grant = (
   role: ShareGrant["role"] = "read",
 ): ShareGrant => ({ credentialId, role, policyRevision, grantedAtMs: 1 })
 const choices = (credentialId = "a"): SharingChoices => ({
-  targets: [{ credentialId, issuedAt: 1 }],
+  targets: [{ credentialId, issuedAt: 1, fullAccess: false }],
   commandHosts: [],
   limits,
 })

@@ -248,6 +248,8 @@ export function initialLinkedDevicesState(): LinkedDevicesState {
 /* ——— What the window says. None of these sentences names a wire code. ——— */
 
 export const sentences = {
+  /** A paired phone that reads and writes every chat as the owner. */
+  fullAccessDevice: "Your phone · full access",
   checking: "Checking whether linking is on.",
   notConfigured: "Linking is off on this gateway.",
   restartNote:

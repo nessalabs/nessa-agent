@@ -2,6 +2,7 @@ import {
   NessaMutationError,
   NessaPairingError,
   NessaRpcError,
+  PairingEnrollee,
   PairingRefusalCode,
   type ConnectionState,
 } from "@nessa/client"
@@ -144,7 +145,7 @@ describe("linkedDevicesGateway", () => {
     })
   })
 
-  it("L20: lists only a non-revoked conversation.read credential that is not this session", async () => {
+  it("L20: lists only a non-revoked paired device credential that is not this session", async () => {
     const current = client()
     vi.mocked(current.credentials.list).mockResolvedValue({
       credentials: [
@@ -152,11 +153,18 @@ describe("linkedDevicesGateway", () => {
         credential("owner", ["conversation.read", "credential.manage"]),
         credential("revoked", ["conversation.read"], 10),
         credential("device-1", ["conversation.read"]),
+        credential("phone", ["conversation.read", "conversation.write", "server.read"]),
+        credential("reordered", [
+          "conversation.write",
+          "conversation.read",
+          "server.read",
+        ]),
       ],
     })
     const read = await gatewayFor(current).read()
     expect(read.ok && read.value.kind === "on" && read.value.devices).toEqual([
-      { credentialId: "device-1", issuedAt: 1_700_000_000 },
+      { credentialId: "device-1", issuedAt: 1_700_000_000, fullAccess: false },
+      { credentialId: "phone", issuedAt: 1_700_000_000, fullAccess: true },
     ])
   })
 
@@ -195,6 +203,18 @@ describe("linkedDevicesGateway", () => {
     const refreshed = await gatewayFor(current).refresh(invitation)
     expect(refreshed).toEqual({ ok: false, failure: { kind: "busy" } })
     expect(current.pairing.create).not.toHaveBeenCalled()
+  })
+
+  it("every code enrolls the owner's phone, on create and on refresh", async () => {
+    const current = client()
+    vi.mocked(current.pairing.create).mockResolvedValue({ code: "ABCD2345", status })
+    vi.mocked(current.pairing.cancel).mockResolvedValue({ ...status, phase: "terminal" })
+    await gatewayFor(current).create()
+    await gatewayFor(current).refresh(invitation)
+    expect(vi.mocked(current.pairing.create).mock.calls).toEqual([
+      [{ enrollee: PairingEnrollee.OwnerPhone }],
+      [{ enrollee: PairingEnrollee.OwnerPhone }],
+    ])
   })
 
   it("a create that fails after cancel says the invitation was cancelled", async () => {

@@ -90,6 +90,8 @@ pub fn pending(parent: &Path, name: &str) -> (PathBuf, Arc<FilePairingState>) {
     (root, state)
 }
 
+/// What the fixture's owner holds unless a constructor says otherwise.
+const OWNER_GRANTS: &[&str] = &["credential.manage", "conversation.read"];
 pub struct Fixture {
     pub directory: TempDir,
     pub registry: Arc<LocalCredentialStore>,
@@ -108,27 +110,54 @@ impl Fixture {
         Self::with_read(true).await
     }
     pub async fn with_read(read: bool) -> Self {
-        Self::build(read, OWNER_EXPIRES_S, |registry| registry, real_receivers).await
+        let grants: &[&str] = if read {
+            OWNER_GRANTS
+        } else {
+            &["credential.manage"]
+        };
+        Self::build(grants, OWNER_EXPIRES_S, |registry| registry, real_receivers).await
+    }
+    /// An owner who also writes and reads the server, so they can hand all of
+    /// it to their own phone.
+    pub async fn phone_owner() -> Self {
+        Self::build(
+            &[
+                "credential.manage",
+                "conversation.read",
+                "conversation.write",
+                "server.read",
+            ],
+            OWNER_EXPIRES_S,
+            |registry| registry,
+            real_receivers,
+        )
+        .await
     }
     /// The owner's credential expires at 500 s, before an invitation created now.
     pub async fn short_lived_owner() -> Self {
-        Self::build(true, 500, |registry| registry, real_receivers).await
+        Self::build(OWNER_GRANTS, 500, |registry| registry, real_receivers).await
     }
     /// A fixture whose runtime reaches the registry through `enrollments`.
     pub async fn with_store(
         enrollments: impl FnOnce(Arc<LocalCredentialStore>) -> Arc<dyn PairingStore>,
     ) -> Self {
-        Self::build(true, OWNER_EXPIRES_S, enrollments, real_receivers).await
+        Self::build(OWNER_GRANTS, OWNER_EXPIRES_S, enrollments, real_receivers).await
     }
     /// A fixture whose runtime reaches the real receiver authority through
     /// `receivers`.
     pub async fn with_receivers(
         receivers: impl FnOnce(Arc<LocalReceiverAuthority>) -> Arc<dyn PairingReceivers>,
     ) -> Self {
-        Self::build(true, OWNER_EXPIRES_S, |registry| registry, receivers).await
+        Self::build(
+            OWNER_GRANTS,
+            OWNER_EXPIRES_S,
+            |registry| registry,
+            receivers,
+        )
+        .await
     }
     async fn build(
-        read: bool,
+        grants: &[&str],
         owner_expires_s: u64,
         enrollments: impl FnOnce(Arc<LocalCredentialStore>) -> Arc<dyn PairingStore>,
         receivers: impl FnOnce(Arc<LocalReceiverAuthority>) -> Arc<dyn PairingReceivers>,
@@ -162,11 +191,10 @@ impl Fixture {
                 credential_id: "credential".into(),
                 issued_at: 100,
                 expires_at: Some(owner_expires_s),
-                grants: ["credential.manage", "conversation.read"]
-                    .into_iter()
-                    .filter(|action| read || *action != "conversation.read")
+                grants: grants
+                    .iter()
                     .map(|action| CredentialGrantDto {
-                        action: action.into(),
+                        action: (*action).into(),
                         resource: ResourceDto {
                             organization_id: "org".into(),
                             id: "gateway".into(),

@@ -121,6 +121,21 @@ After verified KE3 and immutable claim commit, the gateway sends a TLS-protected
 
 After owner approval and staged activation, send the ActivationReceipt with credential/receiver identities and current canonical receiver epoch, retaining the same consent-intent identity/generation. No permanent private device key, server key, PAKE key or reusable bearer secret is transferred. Receipt IDs are lookup handles only; receipt/status resume requires fresh raw-key TLS possession on pinned gateway and exact expected device binding, restricted to status/cleanup when revoked. A copy of a public receipt cannot authenticate. TLS authenticates receipt delivery; this minimal design does not claim an independently verifiable offline signed receipt.
 
+### The owner's phone by code
+
+An owner can make the code enroll their own phone with full access:
+`pairing.create {"enrollee": "ownerPhone"}` gives the invitation the class
+`gateway-owner-conversation-read-write`, whose disclosure carries its three
+grants (`conversation.read`, `conversation.write`, `server.read`). Everything
+above holds as written: the class is public and bound into the transcript,
+the claim receipt discloses the full grant set, and the owner approves the
+exact claimed key after comparing fingerprints. A device client accepts this
+class as well as `gateway-conversation-read` (`ConsentClass::accepts`); a
+peer client takes only its own. The issued credential is read as the owner
+phone purpose ([ADR 811](../../adr/todo/811-owner-phone-authorization.md),
+"Pairing by code"), so it reads and writes every owned conversation with no
+share. The desktop's Pair a device makes this kind of code.
+
 ## Client persistence before KE3 and exact recovery order
 
 The tagged [TripleDh.generate_ke3 implementation](https://github.com/facebook/opaque-ke/blob/v4.0.1/src/key_exchange/tripledh.rs) checks the server MAC before returning; ClientLogin.finish propagates that failure. Therefore successful client finish is sufficient to save the authenticated gateway pin. It does **not** establish delivery/acceptance of KE3, a claim, owner approval or activation. Distinguish those meanings rather than add independently writable `gateway_verified`/`ke3_sent` flags.

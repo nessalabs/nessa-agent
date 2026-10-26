@@ -159,6 +159,7 @@ export type {
 
 export type { SessionTermination } from "./generated/product.js"
 export { RecordReadErrorCode } from "./generated/product.js"
+export { PairingEnrollee } from "./generated/product.js"
 export {
   channelRules,
   mcpAppCallTiming,

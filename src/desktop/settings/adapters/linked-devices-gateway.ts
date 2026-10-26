@@ -13,6 +13,7 @@
 import {
   NessaMutationError,
   NessaPairingError,
+  PairingEnrollee,
   PairingRefusalCode,
   type AuthApi,
   type ConnectionState,
@@ -43,6 +44,13 @@ import type {
 } from "../model/linked-devices"
 
 type OwnerStatus = Awaited<ReturnType<PairingApi["status"]>>
+
+/**
+ * Who a code from this window enrolls: the owner's own phone, which then
+ * reads and writes every chat as the owner, with no per-chat share. The
+ * owner still compares the fingerprint and approves the exact key.
+ */
+const ENROLLEE = { enrollee: PairingEnrollee.OwnerPhone }
 
 /** What Settings asks of the window's gateway client. */
 export interface LinkedDevicesClient {
@@ -280,7 +288,7 @@ export function linkedDevicesGateway(options: {
       client().then(
         (current) =>
           outcomeOf(async () => {
-            const created = await current.pairing.create()
+            const created = await current.pairing.create(ENROLLEE)
             return { code: created.code, enrollment: await enrollmentOf(created.status) }
           }),
         () => unanswered(),
@@ -306,7 +314,7 @@ export function linkedDevicesGateway(options: {
         return { ok: false, failure: failureOf(error) }
       }
       try {
-        const created = await current.pairing.create()
+        const created = await current.pairing.create(ENROLLEE)
         return {
           ok: true,
           value: { code: created.code, enrollment: await enrollmentOf(created.status) },

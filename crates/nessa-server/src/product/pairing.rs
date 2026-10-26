@@ -50,6 +50,7 @@ pub(super) async fn dispatch(
             };
             let class = match params.enrollee {
                 None | Some(PairingEnrollee::Device) => ConsentClass::DeviceRead,
+                Some(PairingEnrollee::OwnerPhone) => ConsentClass::OwnerPhoneReadWrite,
                 Some(PairingEnrollee::Gateway) => ConsentClass::PeerRead,
                 Some(PairingEnrollee::Environment) => ConsentClass::PeerEnvironment,
             };
