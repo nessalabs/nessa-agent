@@ -114,12 +114,15 @@ IDs after resolving the cause. A full free inbox is not lossless unlimited captu
 bearer credential, `x-github-user-id` and `x-nessa-stage`. The identity header is
 an expected identity, not proof: GitHub verifies the token's user and current
 repository access on every page. Cedar evaluates those facts. Private repositories
-also require the GitHub-reported `repo` OAuth scope; a metadata-only token is not
-accepted for private payloads. Fine-grained PATs and GitHub App user tokens with
-no OAuth scope proof are not a supported private-repository login in this slice.
-The local adapter uses the machine's existing `gh auth` account. Tokens are sent
-only over HTTPS to the stage's compiled origin, never persisted or logged by the
-relay. Installation owners are not assumed to own all their members' identities.
+require either GitHub-reported classic `repo` OAuth scope or proof that the
+repository belongs to the active Nessa GitHub App installation accessible to the
+user token. Cedar checks installation permissions for contents, issues, pull
+requests, actions and checks (read or write). Metadata-only, unselected, wrong-App
+and suspended installation facts do not authorize private payloads. Discovery is
+bounded to 100 installations and eight repository-list pages per read; incomplete
+proof refuses rather than assuming access. Fine-grained PATs without that proof
+are not supported for private events. GitHub credentials are sent over HTTPS for
+verification and are not stored by the relay.
 
 Each page returns at most eight events and one MiB of source payload, an explicit
 continuation flag, a next cursor and a two-minute signed
@@ -163,8 +166,20 @@ it emits JSON on stdout, diagnostics on stderr. The local owner controls this
 private inbox through OS file ownership, not a new unauthenticated HTTP route.
 These events are data: this slice does not auto-create conversations or run tools.
 Existing conversation command admission and Cedar remain their separate owners.
-The first connection requires an installed, signed-in `gh`; packaged browser
-onboarding and GitHub App OAuth token refresh are not supplied by this relay.
+Settings › Connections › Accounts uses mainline's existing Nessa GitHub App
+device sign-in. **Enable live GitHub events** opts in for its selected repositories
+(up to 16). No separate `gh` authentication is required. **Refresh repositories**
+applies a changed GitHub selection, retaining matching cursors. Missing history
+is shown explicitly; **Continue with retained events** records acknowledgement
+and retires the old follower generation. Disable clears this gateway's selection
+and local inbox with an audit record. Disconnect serializes that cleanup before
+the sign-in token is deleted; failed cleanup refuses sign-out. The watcher retires
+removed generations within five seconds; already-returning pages cannot commit
+against a removed generation. Neither action revokes the GitHub App installation
+or deletes the shared cloud retention for other devices.
+
+The CLI connection commands use the same stored Nessa sign-in. Automatic PR-to-chat
+routing, agent actions and UI PR monitoring are a later capability.
 
 ## Stages and free-plan rollout
 

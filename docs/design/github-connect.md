@@ -158,3 +158,27 @@ read its app. See the [protocol table](../../protocol/README.md).
   in its own environment and through Nessa's shell tool, then disconnects
   and checks a new agent has neither, the file is gone, the gateway log
   never held the token, and the audit holds each step.
+
+## Optional live events
+
+After signing in and choosing repositories on GitHub, Settings offers **Enable
+live GitHub events**. It is off on a new gateway. The existing token owner is
+injected into the relay; the window receives counts and opt-in state, never the
+token. The opt-in applies to the App-selected repositories, at most 16. Refresh
+repositories updates that selection without resetting matching cursors.
+
+Payloads pass through Nessa's stage-specific Cloudflare relay, with bounded
+retention for offline catch-up. Disabling clears this gateway's local inbox.
+Sign-out first performs the same atomic audited cleanup; a failed cleanup leaves
+the sign-in held and reports failure. Old generation responses cannot recreate
+a removed binding. Cloud retention is shared by authorized devices and is not
+deleted by a local disconnect. See [relay ADR 1117](../adr/todo/1117-github-relay.md)
+for the L1–L10 ordering matrix and [the relay runbook](../../packages/github-webhooks/README.md)
+for private App-token authorization, capacity and gap acknowledgement.
+
+`github.liveEvents` takes `{ enabled, acceptGaps? }` and the same
+`credential.manage` admission as the existing GitHub methods. `GithubConnection`
+includes optional `liveEvents` counts where this build stage has a configured
+relay. Alpha/CI/prod are unconfigured and cannot fall back to dev. A reported gap
+requires an explicit **Continue with retained events** action. No event starts a
+conversation or an agent turn in this feature.

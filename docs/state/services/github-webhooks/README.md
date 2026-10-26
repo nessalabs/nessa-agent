@@ -5,7 +5,7 @@ kind: service
 status: implemented
 summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
 parent: nessa
-sourceRevision: "6bad7e40b4a916499f26001f8e9798f2886a359f"
+sourceRevision: "9500b4b74d3d6a30cf06af1bf41a8a23d4c09c21"
 sources:
   - packages/github-webhooks/src/composition/worker.ts
   - packages/github-webhooks/src/webhooks/infrastructure/http.ts
@@ -15,6 +15,12 @@ sources:
   - packages/github-webhooks/src/relay/infrastructure/d1.ts
   - packages/github-webhooks/src/relay/infrastructure/wake-room.ts
   - packages/github-webhooks/migrations/0002_relay.sql
+  - crates/nessa-server/src/github_relay/application/live_events.rs
+  - crates/nessa-server/src/github_relay/infrastructure/selection.rs
+  - crates/nessa-server/src/github_relay/infrastructure/credentials.rs
+  - crates/nessa-server/src/product/github.rs
+  - src/desktop/settings/ui/github-row.tsx
+  - src/desktop/settings/ui/github-live-help.tsx
   - crates/nessa-server/src/github_relay/application/catch_up.rs
   - crates/nessa-server/src/github_relay/application/follow.rs
   - crates/nessa-server/src/github_relay/infrastructure/sqlite.rs
@@ -81,11 +87,15 @@ redeliver original GitHub delivery IDs after resolving the cause.
 
 ## The private local inbox
 
-The user connects repositories using their machine's signed-in GitHub CLI account.
+The user opts in through Settings after the existing Nessa GitHub App device
+sign-in and repository selection. The relay reads the same token owner; it does
+not require a second GitHub CLI login.
 The serving gateway discovers the binding, opens a stage-bound watch and reads
 again to close the subscription race. Watch messages contain only a wake-up.
 Every payload page rechecks the GitHub account and current repository access.
-Private repositories require a GitHub credential with a proven `repo` OAuth scope.
+For private repositories Cedar requires a proven classic `repo` OAuth scope or
+the active Nessa App installation's repository membership and read/write
+permissions for the event families. Metadata visibility alone is insufficient.
 Tokens are not persisted by Cloudflare.
 
 Each local page transaction saves events, a cursor and audit evidence. Failure
@@ -130,3 +140,30 @@ because each app has one webhook URL. Users do not select stages.
 
 See the [operations and module map](../../../../packages/github-webhooks/README.md)
 and [ordering contract](../../../adr/todo/1117-github-relay.md).
+
+## Live-event opt-in
+
+Settings shows a short, separate live-events row. The question-mark control opens
+a bulleted help popup covering authorization, relay retention and disconnect.
+Escape dismisses help and returns focus without closing Settings.
+
+The connection is owned by the gateway, so its windows see the same setting.
+Disabling removes the local selection and inbox in one audited transaction.
+Disconnect waits for that cleanup before deleting the token. An already-returning
+page is rejected by the removed binding's generation. A cleanup failure leaves
+the selection intact and refuses sign-out. Cloud retention remains shared with
+other authorized devices. Conversation and agent delivery is future work.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Off
+    Off --> Selecting: enable while signed in
+    Selecting --> On: repository selection commits
+    Selecting --> Off: provider or durable write refuses
+    On --> On: restart or refresh preserves matching cursors
+    On --> GapPaused: imported cursor is behind expiry watermark
+    GapPaused --> On: explicit acknowledgement saves cursor and new generation
+    On --> Off: disable or disconnect commits cleanup
+    GapPaused --> Off: disable or disconnect commits cleanup
+    On --> On: cleanup fails and sign-out is refused
+```

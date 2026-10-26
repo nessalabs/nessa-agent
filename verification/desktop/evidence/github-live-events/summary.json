@@ -1,0 +1,100 @@
+{
+  "check": "github-live-events",
+  "ok": true,
+  "started": "2026-10-26T01:55:48.556Z",
+  "finished": "2026-10-26T01:56:26.672Z",
+  "target": {
+    "url": "http://127.0.0.1:56856/desktop.html",
+    "mode": "dev"
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "name": "opt-in-failure-disconnect",
+      "helpSizes": [
+        {
+          "width": 1000,
+          "popup": {
+            "x": 536,
+            "y": 294,
+            "width": 340,
+            "height": 343.5
+          }
+        },
+        {
+          "width": 600,
+          "popup": {
+            "x": 170,
+            "y": 294,
+            "width": 340,
+            "height": 343.5
+          }
+        }
+      ],
+      "cleanupFailureKeptSignIn": true,
+      "concurrentDisconnectPurged": true,
+      "repositories": 1,
+      "afterDisconnect": 0,
+      "reloadPreserved": true,
+      "failedEnablePreserved": true,
+      "switch": {
+        "x": 884,
+        "y": 264.703125,
+        "width": 34,
+        "height": 20
+      },
+      "row": {
+        "x": 314,
+        "y": 244.53125,
+        "width": 620,
+        "height": 68.34375
+      },
+      "failures": [],
+      "ok": true
+    },
+    {
+      "engine": "webkit",
+      "name": "opt-in-failure-disconnect",
+      "helpSizes": [
+        {
+          "width": 1000,
+          "popup": {
+            "x": 536,
+            "y": 294,
+            "width": 340,
+            "height": 343.5
+          }
+        },
+        {
+          "width": 600,
+          "popup": {
+            "x": 170,
+            "y": 294,
+            "width": 340,
+            "height": 343.5
+          }
+        }
+      ],
+      "cleanupFailureKeptSignIn": true,
+      "concurrentDisconnectPurged": true,
+      "repositories": 1,
+      "afterDisconnect": 0,
+      "reloadPreserved": true,
+      "failedEnablePreserved": true,
+      "switch": {
+        "x": 884,
+        "y": 264.703125,
+        "width": 34,
+        "height": 20
+      },
+      "row": {
+        "x": 314,
+        "y": 244.53125,
+        "width": 620,
+        "height": 68.34375
+      },
+      "failures": [],
+      "ok": true
+    }
+  ]
+}

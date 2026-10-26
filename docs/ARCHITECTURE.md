@@ -1111,9 +1111,14 @@ is sent over the wake-up socket. Source wire bounds are published in
 `protocol/defaults/github-relay-contract.json`.
 
 `crates/nessa-server/src/github_relay` owns the native consumer and private local
-SQLite inbox. Its application coordinates injected credentials, source and store;
+SQLite inbox. `GithubConnections` remains the sole token owner; its injected
+credential adapter discovers the App-selected repositories. `LiveEvents` owns
+selection changes through one private SQLite transaction, including deletion
+evidence, cursor preservation and gap acknowledgement. Its application coordinates
+credentials, source and store;
 composition starts the optional follower under the serving gateway and exposes
-local connect/events/disconnect CLI commands. The packaged host's existing baked
+the existing GitHub sign-in and Settings live-events opt-in, alongside local
+connect/events/disconnect CLI commands. The packaged host's existing baked
 stage selects the compiled table in `protocol/defaults/github-relays.json`.
 Production has no dev fallback; a future stage needs its own GitHub App and cloud
 resources. The consumer saves event pages/cursors atomically and fences old
