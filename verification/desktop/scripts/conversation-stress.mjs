@@ -5459,10 +5459,13 @@ function tunnelDirectory(run) {
   return join(run.stack.gateway.directory, "ci", "instances", INSTANCE, "tunnel")
 }
 
-/** The tunnel program the gateway keeps, as its record says; `null` without one. */
+/** The cloudflared shepherd keeps for the tunnel, as `{ pid }` from its record; `null` without one. */
 function keptTunnel(directory) {
   try {
-    return JSON.parse(readFileSync(join(directory, "process.json"), "utf8"))
+    const record = JSON.parse(
+      readFileSync(join(directory, "kept", "cloudflared.json"), "utf8"),
+    )
+    return Number.isInteger(record.os_pid) ? { pid: record.os_pid } : null
   } catch {
     return null
   }

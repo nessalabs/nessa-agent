@@ -4544,8 +4544,8 @@ mod tests {
     /// it is ready, under `server.read`.
     #[tokio::test]
     async fn reach_names_the_tunnel_only_while_it_is_ready() {
-        use crate::services::application::{ServiceFailure, ServiceStatus};
         use crate::tunnel::application::TunnelView;
+        use crate::tunnel::application::{TunnelFailure, TunnelStatus};
         let (state, _authority) = fixture(MembershipRole::Member);
         let session = authenticate(&state).await;
         let reach = |state: &ProductRouteState| {
@@ -4562,19 +4562,19 @@ mod tests {
             }
         };
         assert_eq!(reach(&state).await, json!({ "tunnel": null }));
-        let (status, watching) = watch::channel(ServiceStatus::Starting);
+        let (status, watching) = watch::channel(TunnelStatus::Starting);
         let state = state.with_tunnel(TunnelView { status: watching });
         assert_eq!(reach(&state).await, json!({ "tunnel": null }));
         let address = nessa_protocol::tunnel::TunnelAddress::try_from(
             "https://a-b.trycloudflare.com".to_owned(),
         )
         .unwrap();
-        status.send_replace(ServiceStatus::Ready(address));
+        status.send_replace(TunnelStatus::Ready(address));
         assert_eq!(
             reach(&state).await,
             json!({ "tunnel": "https://a-b.trycloudflare.com" })
         );
-        status.send_replace(ServiceStatus::Failed(ServiceFailure::NotReady));
+        status.send_replace(TunnelStatus::Failed(TunnelFailure::NotReady));
         assert_eq!(reach(&state).await, json!({ "tunnel": null }));
     }
 

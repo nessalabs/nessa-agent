@@ -1,23 +1,78 @@
 //! What the gateway knows about its web tunnel, whichever provider carries
 //! it (`docs/design/auth/tunnel.md`): the saved setting, and the status its
-//! service publishes. A provider is a [`Service`] that reports the tunnel's
-//! public address once it is ready; the bridge, the ingress, the listener's
-//! edge and every reader know nothing of which provider it is.
+//! service publishes. A provider is a shepherd service that reports the
+//! tunnel's public address once it is ready; the bridge, the ingress, the
+//! listener's edge and every reader know nothing of which provider it is.
 //!
 //! ```text
-//! config.json native.tunnel + the token file ──▶ TunnelSetting ──▶ composition picks the provider's Service
-//! ServiceSupervisor<TunnelAddress> ──▶ watch<TunnelStatus> ──▶ pairing.tunnel, server.reach
+//! config.json native.tunnel + the token file ──▶ TunnelSetting ──▶ composition picks the provider's service
+//! shepherd ServiceSupervisor ──▶ composition::tunnel ──▶ watch<TunnelStatus> ──▶ pairing.tunnel, server.reach
 //! ```
-//!
-//! [`Service`]: crate::services::application::Service
-use crate::services::application::ServiceStatus;
 use nessa_protocol::tunnel::TunnelAddress;
 use sha2::{Digest, Sha256};
 use std::{fmt, net::SocketAddr};
 use tokio::sync::watch;
 
-/// The tunnel's status: its public address once ready.
-pub(crate) type TunnelStatus = ServiceStatus<TunnelAddress>;
+/// Where the tunnel stands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TunnelStatus {
+    /// Not ready yet (or starting again).
+    Starting,
+    /// Ready, at this public address.
+    Ready(TunnelAddress),
+    /// The last attempt failed for this reason. It is tried again.
+    Failed(TunnelFailure),
+}
+
+/// Why the tunnel is not up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TunnelFailure {
+    /// Its program could not be made ready, or nothing can run: one of
+    /// [`TunnelFailure::UNAVAILABLE`].
+    Unavailable(&'static str),
+    /// The program could not be started, or ended.
+    Start,
+    /// It started but was not ready in time.
+    NotReady,
+}
+
+impl TunnelFailure {
+    /// The words a provider's program may be unavailable for, as the wire
+    /// names them.
+    pub(crate) const UNAVAILABLE: [&'static str; 6] = [
+        "unsupported",
+        "download",
+        "unverified",
+        "storage",
+        "token",
+        "ingress",
+    ];
+
+    /// The wire's word for it.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Unavailable(reason) => reason,
+            Self::Start => "start",
+            Self::NotReady => "not_ready",
+        }
+    }
+
+    /// The failure a reason in words names: a provider says one of
+    /// [`Self::UNAVAILABLE`] (prefixed `launch: ` by the supervisor), a
+    /// run that was not ready in time is [`Self::NotReady`], and anything
+    /// else is a start that failed or a program that ended.
+    pub(crate) fn from_reason(reason: &str) -> Self {
+        let word = reason.strip_prefix("launch: ").unwrap_or(reason);
+        if let Some(word) = Self::UNAVAILABLE.iter().find(|known| **known == word) {
+            return Self::Unavailable(word);
+        }
+        if reason.starts_with("not ready") {
+            Self::NotReady
+        } else {
+            Self::Start
+        }
+    }
+}
 
 /// Where the tunnel's provider forwards each connection to, when
 /// `config.json` names nowhere else: a loopback port beside the native
@@ -162,7 +217,7 @@ impl TunnelView {
     /// The address a reader can open now, when the tunnel is ready.
     pub(crate) fn address(&self) -> Option<TunnelAddress> {
         match &*self.status.borrow() {
-            ServiceStatus::Ready(address) => Some(address.clone()),
+            TunnelStatus::Ready(address) => Some(address.clone()),
             _ => None,
         }
     }

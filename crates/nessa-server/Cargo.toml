@@ -109,7 +109,7 @@ regex = "1"
 libc = "0.2"
 # `nessa env serve` runs command leases' commands in process scopes of their
 # own, as the Nessa MCP shell tool does; the same pinned revision.
-shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "26bd7cb8843c1bc6c3eccfbbae8be926f8c49103" }
+shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "5ac0c4fef005d37f69887a9eaa4d8b93cfd3c789" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Nessa-owned agent API keys live in the login keychain. This crate is already

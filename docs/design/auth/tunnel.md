@@ -90,7 +90,7 @@ named tunnel, would close it; that is follow-up work.
 | Bridge | Joins a WebSocket to one end of a loopback TCP pair, both ways, until either side ends; pings every 20 s so Cloudflare's idle limit never closes a quiet session | `nessa-client-core` `tunnel`, used by both sides |
 | Tunnel leg | Opens `wss://name/native` and returns the loopback end, so everything after it is the same TCP stream a direct dial returns; raced after direct like the relay leg | `nessa-client-core` `tunnel`, `retained::race` |
 | Ingress | Listens on loopback only, takes a tunnel permit, accepts the upgrade on `/native` only, and feeds the bridged socket to the native listener as `Accepted::Tunneled` | `nessa-server` `tunnel` |
-| Supervisor | Keeps any helper program running: starts it, waits for it to be ready, starts it again with a backoff, and takes it back across a gateway restart. It knows nothing about Cloudflare | `nessa-server` `services` (`ServiceSupervisor`, `KeptHost`) |
+| Supervisor | Keeps any helper program running: starts it, waits for it to be ready, starts it again with a backoff, and takes it back across a gateway restart. It knows nothing about Cloudflare | shepherd's service mode and kept processes (`shepherd::ServiceSupervisor`, `KeptProcesses`), composed in `composition::tunnel` |
 | Cloudflare service | The one provider today: a pinned, digest-checked `cloudflared`, what it is run with, and how its metrics say it is ready and at which address. Another way to reach the gateway is another service behind the same supervisor | `nessa-server` `tunnel` |
 | Switch | `pairing.setTunnel` (`credential.manage`), saved in `config.json` `native.tunnel`, audited with the setting before and after (hostname, token by fingerprint), applied by restarting the gateway like `pairing.setLinking`; `pairing.tunnel` reads its state | product, composition |
 | Address | `server.reach` (`server.read`, the owner phone's purpose list in Cedar) gives a paired device the current public address | product |
@@ -137,27 +137,40 @@ users of the machine can see it (see below).
   gateway picks. `GET /ready` says it is connected, and for a quick tunnel
   `GET /quicktunnel` answers `{"hostname": …}`. Nothing is parsed from its
   log.
-- **Across gateway restarts.** `cloudflared` runs in a process group of
-  its own, with its output in `<namespace>/tunnel/cloudflared.log`, so the
-  gateway's exit, a crash or Ctrl-C included, never stops it. Beside it,
-  `<namespace>/tunnel/process.json` records its pid, what it was started
-  with, and its identity: its start time and name as the process table
-  shows them, through shepherd's process observer. Only the gateway that
-  starts next decides what happens to it:
+- **Across gateway restarts.** `cloudflared` is a shepherd kept process
+  named `cloudflared`, recorded in `<namespace>/tunnel/kept`: it leads a
+  process group and session of its own, with its output in
+  `<namespace>/tunnel/cloudflared.log`, so the gateway's exit, a crash or
+  Ctrl-C included, never stops it. Its record holds its pid, the OS start
+  token and boot that tell that pid's process from a later one, and a
+  fingerprint of everything it was started with (program, so its version,
+  arguments, environment, directory) plus a revision naming a named
+  tunnel's token by fingerprint, since the arguments only name its file.
+  Until a start of this run has run, a start whose launch on the live kept
+  program's metrics port is exactly the recorded one (same fingerprint)
+  uses that port, so shepherd takes the program back; any other start
+  takes a port free then, never one another program could claim while the
+  old program is ended. Only the gateway that starts next decides what happens to
+  it:
 
   | That gateway | Outcome |
   | --- | --- |
-  | Has the same tunnel (same program, mode, ingress, hostname and token digest), and the pid is still the recorded process | Takes it back: the same quick address, no new connection to Cloudflare |
-  | Has a different tunnel | Ends the recorded process (SIGTERM to its group, SIGKILL after 5 s) and starts a new one |
+  | Has the same tunnel (same fingerprint), and the pid is still the recorded process | Takes it back: the same quick address, no new connection to Cloudflare |
+  | Has a different tunnel | Ends the recorded process (SIGTERM to its group, then SIGKILL) and starts a new one |
   | Has the tunnel off | Ends the recorded process |
-  | Finds the pid reused by another program, or no identity was recorded | Leaves that process alone and starts its own |
+  | Finds the pid reused by another program | Drops the record without signalling it, and starts its own |
 
   A pid alone is never trusted: after a reboot or a long stop it can name
   any process. Under systemd's default `KillMode=control-group`, restarting
   the gateway's unit ends `cloudflared` with it; the next start runs a new
   one, at a new quick address. A gateway that starts itself again in
-  place (`pairing.setLinking`, `pairing.setTunnel`) is the same process
-  and keeps it.
+  place (`pairing.setLinking`, `pairing.setTunnel`) leaves it and takes it
+  back. Kept processes run on Linux and macOS; on other Unix systems the
+  tunnel reads `failed` (`unsupported`), and on Windows there is no
+  tunnel (native linking is Unix only). Before shepherd kept it, the gateway wrote its
+  own record, `<namespace>/tunnel/process.json`; that record is removed and
+  not followed, so a `cloudflared` started by such a build is left for the
+  person to end.
 - **Its ingress.** `cloudflared` forwards to the gateway's loopback
   ingress, which the gateway binds only while the tunnel runs. A port
   another program holds fails the tunnel (`ingress`), never the gateway's
@@ -168,9 +181,11 @@ users of the machine can see it (see below).
   the tunnel's address; phones still refuse it, since they pin the
   gateway's key, but a browser would not. On a machine shared with people
   you do not trust, turn the tunnel off before stopping the gateway.
-- **Failure.** A `cloudflared` that exits is started again after a wait
-  that doubles from 1 s to 60 s. While it is down the tunnel reads
-  `starting` or `failed`, and phones on the local network are unaffected.
+- **Failure.** A `cloudflared` that exits, or is not ready within 60 s, is
+  started again after a wait that doubles from 1 s to 60 s. The tunnel
+  reads `starting` until its first start is ready or fails, then `failed`
+  with the last reason until a later start is ready; phones on the local
+  network are unaffected.
 
 ## State and order table
 
@@ -186,12 +201,12 @@ users of the machine can see it (see below).
 | T7 | A quiet session | The bridge pings every 20 s, so the tunnel's idle limit does not close it | client core |
 | T8 | A reader with a tunnel whose direct dial connects within the head start | Direct is used; the tunnel is never dialed | client core |
 | T9 | A reader whose direct dial is refused or slow | The tunnel leg starts, the first to connect is used | client core |
-| T10 | The gateway starts again with the same tunnel setting and `cloudflared` still running | It takes it back: the same quick address | services, stress `tunnel` |
-| T11 | The tunnel is turned off, or its mode changes | `cloudflared` is ended; a new mode starts a new one | services, stress `tunnel` |
+| T10 | The gateway starts again with the same tunnel setting and `cloudflared` still running | It takes it back: the same quick address | `cloudflare` (port of the kept program), shepherd, stress `tunnel` |
+| T11 | The tunnel is turned off, or its mode changes | `cloudflared` is ended; a new mode starts a new one | `composition::tunnel`, shepherd, stress `tunnel` |
 | T12 | The downloaded `cloudflared` does not match its pinned size or digest | Nothing is run; the tunnel reads `failed` | gateway |
 | T13 | `pairing.setTunnel` from a credential without `credential.manage` | `forbidden` from Cedar | gateway |
 | T14 | `server.reach` from a paired owner phone | The current public address, or none | gateway |
-| T15 | The recorded pid now names another process (reboot, reuse) | Left alone; a new `cloudflared` is started | services |
+| T15 | The recorded pid now names another process (reboot, reuse) | Left alone; a new `cloudflared` is started | shepherd (kept attach checks the start token) |
 | T16 | `pairing.tunnel` after a named tunnel is saved | Says a token is saved, never the token; Settings never fills the token field | gateway, desktop |
 | T18 | The saved token cannot be read (loose permissions, not a token) | Read as no token: Settings says to save it again, and a new one is saved over it; the ingress is not held meanwhile | gateway |
 | T19 | Whatever answers the metrics port names an address that is not a `trycloudflare.com` name | Not taken as the tunnel's address | gateway |
