@@ -189,7 +189,7 @@ async fn run(
     )
     .map_err(|_| "forbidden")?;
     if target.origin.cause() != nessa_auth::domain::IssuanceCause::WebhookIssue
-        || target.credential.issued_at().checked_mul(1000) != Some(snapshot.issued_at_ms)
+        || target.credential.issued_at() != snapshot.issued_at_ms / 1000
     {
         return Err("forbidden");
     }

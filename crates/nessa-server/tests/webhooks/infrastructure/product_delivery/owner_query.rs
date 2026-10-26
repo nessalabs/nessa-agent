@@ -156,7 +156,28 @@ async fn start(f: &Harness) -> (String, Client, Client, Arc<OwnerProbe>, Release
 async fn default_and_false_cursor_skip_head_admission_and_capacity_while_requested_head_refuses_exhaustion(
 ) {
     let f = Harness::new().await;
+    // Native registration observes milliseconds; canonical Auth issues seconds.
+    f.clock.0.store(2_345, Ordering::SeqCst);
     let (credential, mut owner, unprivileged, probe, release) = start(&f).await;
+    assert_eq!(
+        f.runtime
+            .credentials()
+            .read(&CredentialId::new(&credential).unwrap())
+            .await
+            .unwrap()
+            .credential
+            .issued_at(),
+        2
+    );
+    assert_eq!(
+        f.store
+            .reset_snapshot(CredentialId::new(&credential).unwrap(), f.a.clone())
+            .await
+            .unwrap()
+            .issued_at_ms,
+        2_345,
+        "the exact native registration generation keeps its millisecond observation"
+    );
     let permits = f.state.record_reads.available_permits();
     assert!(permits > 0);
     let all = f

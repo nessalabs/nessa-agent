@@ -1082,8 +1082,11 @@ resource. The existing target-sharing Cedar action receives the current target's
 organization, binding owner, credential grants and gateway; omitting that target
 is a refusal, not an alternate owner policy. A shared snapshot binding check is
 used by dispatch and reset without reacquiring a fair Auth read fence while a
-writer could wait. Target identity and original issuance milliseconds match the
-native registration. Native reset compares the frozen capture again after owed
+writer could wait. Target identity matches the native registration, and Auth's
+whole-second issue time matches the integer-second projection of the original
+native millisecond observation. The exact native milliseconds remain part of the
+registration generation and reset CAS; they are not rounded away. Native reset
+compares the frozen capture again after owed
 publication and rechecks absolute authority expiry before commit. Replay also
 checks expiry after owed publication before returning the original receipt.
 

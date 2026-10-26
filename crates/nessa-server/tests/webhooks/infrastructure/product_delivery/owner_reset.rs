@@ -56,6 +56,7 @@ async fn frozen(f: &Harness, client: &mut Client, credential: &str) -> Value {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn public_owner_reset_selects_canonical_incarnation_replays_and_delivers_only_granted_chat() {
     let f = Harness::new().await;
+    f.clock.0.store(2_345, Ordering::SeqCst);
     let mut recipient = Recipient::new(false);
     let gate = Arc::new(Gate {
         transport: recipient.transport.clone(),
