@@ -2544,12 +2544,10 @@ it("requires an explicit valid requested Head and refuses unsolicited Head field
       api.webhookCursor(conversationId, "synthetic-hook", { includeSourceHead: true }),
     ).rejects.toThrow(TypeError)
   }
-  const request = vi
-    .fn()
-    .mockResolvedValue({
-      ...base,
-      observedSourceHead: { scope: webhookScope, head: "2" },
-    })
+  const request = vi.fn().mockResolvedValue({
+    ...base,
+    observedSourceHead: { scope: webhookScope, head: "2" },
+  })
   const api = createConversationApi({ request }, () => "unused")
   await expect(
     api.webhookCursor(conversationId, "synthetic-hook", { includeSourceHead: false }),
