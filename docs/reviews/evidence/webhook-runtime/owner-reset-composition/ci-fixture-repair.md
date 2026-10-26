@@ -70,3 +70,23 @@ the exact correction; it is not macOS or TLS acceptance.
 
 The required seven-package all-target Clippy selection also passed at c59640811
 with `-D warnings`; no code changed after these restored tests and checks.
+
+## Original run terminal outcome
+
+Run40249699947 is terminal failure. Seven substantive jobs passed: classification,
+workflow validation, frontend, gateway contract, SDK domain coverage, release build
+and Windows non-server qualification. Ubuntu, Mac, Windows server and default
+conversation stress failed as described here; the required-check aggregate failed
+accordingly. This run was neither cancelled nor rerun.
+
+Windows server job121338743616 completed3375 passed,20 failed,9 ignored in1726.53s;
+it did not hit the job deadline. Its six private-root failures and14 recipients
+correlate to the same repaired fixture paths. Recipient reads explicitly reported
+WouldBlock10035. [Original Windows lines](ci-ac6225-windows-failures.txt) also show
+all three actual retention controls passing. Both formerly failing duplicate-history
+cold-restore/live-publication cancellation tests passed. The separate Windows job
+passed native enrollment110/110, SDK860/860 with6 ignored, all-target Clippy,
+the exact Task Scheduler process/cleanup proof and private-file smoke checks.
+
+These are old-source outcomes. Corrected exact-head platform/browser execution
+remains pending normal publication, with no manual retry or dispatch substitution.

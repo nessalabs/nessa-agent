@@ -39,5 +39,43 @@
     "corrected real default browser webhook capture",
     "raised webhook3 browser execution",
     "webhook-specific WebKit capture"
-  ]
+  ],
+  "originalTerminal": {
+    "conclusion": "failure",
+    "substantiveJobsPassed": 7,
+    "substantiveJobsFailed": 4,
+    "aggregate": "failure",
+    "ubuntuServer": {
+      "passed": 4118,
+      "failed": 7,
+      "ignored": 11
+    },
+    "macServer": {
+      "passed": 4101,
+      "failed": 21,
+      "ignored": 13
+    },
+    "windowsServer": {
+      "passed": 3375,
+      "failed": 20,
+      "ignored": 9,
+      "durationSeconds": 1726.53,
+      "retentionAllThree": "passed",
+      "duplicateHistoryColdAndLive": "passed",
+      "timeout": false
+    },
+    "stress": {
+      "held": 39,
+      "total": 50,
+      "failure": "036 webhook conversation_not_found",
+      "scriptedBothBrowsers": 8,
+      "usageLimitBothBrowsers": 16,
+      "dragBothBrowsers": 8,
+      "chaos": {
+        "passed": 2,
+        "total": 2
+      }
+    },
+    "cancelledOrRerun": false
+  }
 }
