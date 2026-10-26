@@ -16,6 +16,8 @@ export type GithubView =
     }
   | {
       readonly kind: "connected"
+      /** GitHub's numeric id for the account, which never changes: what its picture is found by. */
+      readonly accountId: number
       readonly login: string
       /** Said when a failed sign-out is not on the gateway's record. */
       readonly unrecorded?: string

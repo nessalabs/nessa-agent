@@ -1338,7 +1338,9 @@ html:not(.dark) .settings .settings-card {
 :root[data-motion="reduced"] .settings-bar::after,
 :root[data-motion="reduced"] .settings-bar-title,
 :root[data-motion="reduced"] .settings-switch [data-slot="switch-thumb"],
-:root[data-motion="reduced"] .settings-choice-check {
+:root[data-motion="reduced"] .settings-choice-check,
+:root[data-motion="reduced"] .settings-github-status,
+:root[data-motion="reduced"] .settings-github-actions {
   transition: none;
 }
 
@@ -1379,4 +1381,62 @@ html:not(.dark) .settings .settings-card {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+/*
+ * Accounts › GitHub, signed in: the account's picture, round where an agent's
+ * mark is a tile, at the tile's size. "Connected" and the actions share one
+ * cell, so the room is the wider of the two and the swap moves nothing; the
+ * actions take its place under the pointer or keyboard focus, and stay out
+ * while an action is in flight or after one failed, and where there is no
+ * pointer to hover with.
+ */
+.settings-github-avatar {
+  width: 28px;
+  height: 28px;
+}
+
+.settings-github-control {
+  display: grid;
+  justify-items: end;
+  align-items: center;
+}
+
+.settings-github-status,
+.settings-github-actions {
+  grid-area: 1 / 1;
+  transition: opacity var(--desktop-fast) ease;
+}
+
+.settings-github-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.settings-github-status {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.settings-row[data-github-settled] .settings-github-actions {
+  opacity: 0;
+}
+
+.settings-row[data-github-settled]:is(:hover, :focus-within) .settings-github-actions,
+.settings-row:not([data-github-settled]) .settings-github-actions {
+  opacity: 1;
+}
+
+.settings-row[data-github-settled]:is(:hover, :focus-within) .settings-github-status,
+.settings-row:not([data-github-settled]) .settings-github-status {
+  opacity: 0;
+}
+
+@media (hover: none) {
+  .settings-row[data-github-settled] .settings-github-actions {
+    opacity: 1;
+  }
+  .settings-row[data-github-settled] .settings-github-status {
+    opacity: 0;
+  }
 }

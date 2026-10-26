@@ -129,7 +129,10 @@
  *   github      GitHub is connected in Settings › Connections › Accounts
  *               against a fake GitHub on this machine: the row shows the
  *               code GitHub handed out and where to enter it, and once the
- *               fake approves it names the account; the sign-in is a private
+ *               fake approves it shows the account's picture (GitHub's
+ *               avatar host answered by the page), its login and
+ *               "Connected", its actions out only under the pointer or
+ *               keyboard focus; the sign-in is a private
  *               file the gateway never logs; an agent started after it has
  *               GH_TOKEN and a git credential helper for github.com, both the
  *               token, and so do the commands it runs through Nessa's own
@@ -231,7 +234,12 @@ import {
   offeredLabel,
   selectorFor,
 } from "./lib/selectors.mjs"
-import { FAKE_ACCOUNT, startFakeGithub } from "./lib/fake-github.mjs"
+import {
+  FAKE_ACCOUNT,
+  FAKE_AVATAR,
+  GITHUB_AVATARS,
+  startFakeGithub,
+} from "./lib/fake-github.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
@@ -1755,6 +1763,14 @@ const steps = {
             .screenshot({ path: join(run.evidence, `github-${name}.png`) })
             .catch(() => {})
         : undefined
+    // GitHub's avatar host, answered here: which pictures were asked for.
+    const avatars = []
+    const pictures = `${GITHUB_AVATARS}/**`
+    const answer = (route) => {
+      avatars.push(route.request().url())
+      return route.fulfill({ contentType: "image/png", body: FAKE_AVATAR })
+    }
+    await run.page.route(pictures, answer)
     await run.exclusive(async () => {
       await openAccounts(run.page)
       if (!(await waitFor(async () => (await state()) === "signed-out", 30_000))) {
@@ -1786,14 +1802,57 @@ const steps = {
       const connected = await waitFor(
         async () =>
           (await state()) === "connected" &&
-          (await row.textContent()).includes(`Signed in as @${FAKE_ACCOUNT.login}.`),
+          (await row.textContent()).includes(`@${FAKE_ACCOUNT.login}`) &&
+          (await row.locator(css.githubStatus).textContent()) === "Connected",
         30_000,
       )
       if (!connected) {
         failures.push(`the row is ${await state()} after GitHub approved the code`)
         return
       }
+      // The picture is GitHub's, asked for by the account's id: the page was
+      // answered above, so it loads here with nothing leaving the machine.
+      const avatar = run.page.locator(`${css.githubAvatar} img`)
+      const pictured = await waitFor(
+        () =>
+          avatar
+            .evaluate((image) => image.complete && image.naturalWidth > 0)
+            .catch(() => false),
+        10_000,
+      )
+      if (!pictured) failures.push("the row did not draw the account's picture")
+      if (!avatars.some((url) => url.includes(`/u/${FAKE_ACCOUNT.id}?`)))
+        failures.push(
+          `the picture was not asked for by id: ${avatars.join(", ") || "none"}`,
+        )
+      // At rest the actions are out of sight; the pointer or focus brings them.
+      const opacity = (selector) =>
+        row.locator(selector).evaluate((node) => getComputedStyle(node).opacity)
+      const shows = (actions) =>
+        waitFor(
+          async () =>
+            (await opacity(css.githubActions)) === (actions ? "1" : "0") &&
+            (await opacity(css.githubStatus)) === (actions ? "0" : "1"),
+          5_000,
+        )
+      await run.page.mouse.move(1, 1)
+      if (!(await shows(false))) failures.push("the actions show with the row at rest")
       await shot("connected")
+      await row.hover()
+      if (!(await shows(true)))
+        failures.push("the actions did not show under the pointer")
+      await shot("connected-hover")
+      await run.page.mouse.move(1, 1)
+      await shows(false)
+      // From the first action, Tab reaches the second: both are in the tab order.
+      await row.locator("[data-github-repositories]").focus()
+      await run.page.keyboard.press("Tab")
+      const disconnect = row.getByRole("button", { name: names.githubDisconnect })
+      if (!(await disconnect.evaluate((node) => node === document.activeElement)))
+        failures.push("Tab from Choose repositories did not reach Disconnect")
+      if (!(await shows(true)))
+        failures.push("the actions did not show with focus in the row")
+      await shot("connected-focus")
       const repositories = await row
         .locator("[data-github-repositories]")
         .getAttribute("href")
@@ -1803,6 +1862,7 @@ const steps = {
         )
       await closeSettings(run.page)
     })
+    await run.page.unroute(pictures, answer)
     if (failures.length) return
     if (!existsSync(signIn)) failures.push("the sign-in was not saved")
     else if ((lstatSync(signIn).mode & 0o077) !== 0)

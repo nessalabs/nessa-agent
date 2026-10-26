@@ -34,6 +34,7 @@ import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backe
 import { seededWindow } from "./seeded-window"
 import {
   GithubProvider,
+  githubAvatar,
   LinkedDevicesProvider,
   McpServersProvider,
   NativeHooksProvider,
@@ -192,7 +193,10 @@ createRoot(container).render(
                             <PermissionRulesProvider
                               gateway={dependencies.permissionRules}
                             >
-                              <GithubProvider gateway={dependencies.github}>
+                              <GithubProvider
+                                gateway={dependencies.github}
+                                avatar={githubAvatar}
+                              >
                                 <DesktopWindow
                                   hostKind={host.kind}
                                   browserSurface={host.kind === "browser"}
