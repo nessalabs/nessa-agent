@@ -2042,10 +2042,12 @@ Named so they are not mistaken for settled:
   announcement reveals.
 - **Which tools a policy can gate, per binding.** The share dialog must
   say it; the answer comes from the #142 declaration and the 0014 survey.
-- **Listener hardening for a tunnel.** What the native handshake must
-  withstand before a public tunnel is recommended rather than merely
-  possible: rate limits per source, invitation-closed behavior, and a
-  measured handshake budget.
+- **Listener hardening for a tunnel.** Answered in
+  [reaching the gateway through a tunnel](auth/tunnel.md#the-edge-before-anything-runs):
+  a tunnel connection whose key holds no credential is closed right after
+  the TLS handshake, so pairing stays on the local network, and tunnel
+  connections take a pool of their own. Rate limits per source stay open:
+  every tunnel connection arrives from `cloudflared` on loopback.
 - **Delegating to an environment.** How a parent names the child's
   environment under ADR 329, and how the child's artifacts are delivered
   as results.

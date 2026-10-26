@@ -80,7 +80,8 @@ direct one, so the internet cannot crowd out the local network.
 | Bridge | Joins a WebSocket to one end of a loopback TCP pair, both ways, until either side ends; pings every 20 s so Cloudflare's idle limit never closes a quiet session | `nessa-client-core` `tunnel`, used by both sides |
 | Tunnel leg | Opens `wss://name/native` and returns the loopback end, so everything after it is the same TCP stream a direct dial returns; raced after direct like the relay leg | `nessa-client-core` `tunnel`, `retained::race` |
 | Ingress | Listens on loopback only, takes a tunnel permit, accepts the upgrade on `/native` only, and feeds the bridged socket to the native listener as `Accepted::Tunneled` | `nessa-server` `tunnel` |
-| Supervisor | Runs `cloudflared` from a pinned, digest-checked download, reads the public address from its metrics, restarts it with a backoff, adopts it across a gateway restart | `nessa-server` `tunnel` |
+| Supervisor | Keeps any helper program running: starts it, waits for it to be ready, starts it again with a backoff, and takes it back across a gateway restart. It knows nothing about Cloudflare | `nessa-server` `services` (`ServiceSupervisor`, `KeptHost`) |
+| Cloudflare service | The one provider today: a pinned, digest-checked `cloudflared`, what it is run with, and how its metrics say it is ready and at which address. Another way to reach the gateway is another service behind the same supervisor | `nessa-server` `tunnel` |
 | Switch | `pairing.setTunnel` (`credential.manage`), saved in `config.json` `native.tunnel`, audited, applied by restarting the gateway like `pairing.setLinking`; `pairing.tunnel` reads its state | product, composition |
 | Address | `server.reach` (`server.read`, the owner phone's purpose list in Cedar) gives a paired device the current public address | product |
 
@@ -96,7 +97,7 @@ cannot slip into the pair.
 | Mode | What the person does | Address |
 | --- | --- | --- |
 | Quick (default) | Nothing: turn it on | A random `*.trycloudflare.com` name. It changes each time `cloudflared` starts, so the gateway keeps `cloudflared` running across its own restarts and adopts it when it starts again |
-| Named | Make a tunnel in Cloudflare's dashboard, point a hostname at `http://127.0.0.1:47651`, paste its token and hostname | The hostname, which never changes |
+| Named | Make a tunnel in Cloudflare's dashboard, route a hostname to `http://127.0.0.1:47651` (Settings shows the ingress), paste its token and hostname | The hostname, which never changes |
 
 A quick tunnel is Cloudflare's "for testing" offer: no uptime promise and
 a limit of 200 requests in flight, which one person's devices never reach.
@@ -106,24 +107,47 @@ gateway; delivering it while the phone is away is follow-up work.
 
 The named tunnel's token is written to a file only the gateway can read
 and passed with `--token-file`, never on the command line, where other
-users of the machine can see it.
+users of the machine can see it (see below).
 
 ## Running cloudflared
 
-- **Pinned.** `data/tunnel-releases.json` names one version, and for each
-  platform its URL, size and SHA-256. The gateway downloads it into its
-  data directory on first use and refuses anything else. It never looks on
-  `PATH` and runs with `--no-autoupdate`.
+- **Pinned.** `crates/nessa-server/data/tunnel-releases.json` names one
+  version, and for each platform its URL, size and SHA-256. The gateway
+  downloads it into `<namespace>/tunnel` on first use and refuses anything
+  else. It never looks on `PATH` and runs with `--no-autoupdate`. Only a
+  debug build honours `NESSA_TUNNEL_PROGRAM`, for the stress check's
+  stand-in.
+- **What it gets.** Its arguments, and `HOME` set to the tunnel directory:
+  nothing else of the gateway's environment. A named tunnel's token is in
+  `<namespace>/tunnel/token`, readable by the gateway's user only, written
+  by `pairing.setTunnel` and read by nothing else in the gateway;
+  `cloudflared` is pointed at it with `--token-file`, so the token is never
+  on a command line, in `config.json` or in a log.
 - **Its address.** cloudflared serves its metrics on a loopback port the
-  gateway picks; `GET /quicktunnel` answers `{"hostname": …}`. Nothing is
-  parsed from its log.
-- **Across restarts.** The gateway keeps `cloudflared`'s process id,
-  metrics port and address in `tunnel/state.json`. A gateway that starts
-  with the same setting finds it by asking that metrics port, and adopts it
-  when it answers the same address; otherwise it stops it and starts a new
-  one. A self-restart (`pairing.setLinking`, `pairing.setTunnel`) leaves
-  it running; any other stop ends it. A gateway that crashed leaves it
-  running too, and the next start adopts it.
+  gateway picks. `GET /ready` says it is connected, and for a quick tunnel
+  `GET /quicktunnel` answers `{"hostname": …}`. Nothing is parsed from its
+  log.
+- **Across gateway restarts.** `cloudflared` runs in a process group of
+  its own, with its output in `<namespace>/tunnel/cloudflared.log`, so the
+  gateway's exit, a crash or Ctrl-C included, never stops it. Beside it,
+  `<namespace>/tunnel/process.json` records its pid, what it was started
+  with, and its identity: its start time and name as the process table
+  shows them, through shepherd's process observer. Only the gateway that
+  starts next decides what happens to it:
+
+  | That gateway | Outcome |
+  | --- | --- |
+  | Has the same tunnel (same program, mode, ingress, hostname and token digest), and the pid is still the recorded process | Takes it back: the same quick address, no new connection to Cloudflare |
+  | Has a different tunnel | Ends the recorded process (SIGTERM to its group, SIGKILL after 5 s) and starts a new one |
+  | Has the tunnel off | Ends the recorded process |
+  | Finds the pid reused by another program, or no identity was recorded | Leaves that process alone and starts its own |
+
+  A pid alone is never trusted: after a reboot or a long stop it can name
+  any process. Under systemd's default `KillMode=control-group`, restarting
+  the gateway's unit ends `cloudflared` with it; the next start runs a new
+  one, at a new quick address. A gateway that starts itself again in
+  place (`pairing.setLinking`, `pairing.setTunnel`) is the same process
+  and keeps it.
 - **Failure.** A `cloudflared` that exits is started again after a wait
   that doubles from 1 s to 60 s. While it is down the tunnel reads
   `starting` or `failed`, and phones on the local network are unaffected.
@@ -141,11 +165,14 @@ users of the machine can see it.
 | T7 | A quiet session | The bridge pings every 20 s, so the tunnel's idle limit does not close it | client core |
 | T8 | A reader with a tunnel whose direct dial connects within the head start | Direct is used; the tunnel is never dialed | client core |
 | T9 | A reader whose direct dial is refused or slow | The tunnel leg starts, the first to connect is used | client core |
-| T10 | The gateway starts again with the same tunnel setting and `cloudflared` still running | It adopts it: the same quick address | gateway |
-| T11 | The tunnel is turned off, or its mode changes | `cloudflared` is stopped; a new mode starts a new one | gateway |
+| T10 | The gateway starts again with the same tunnel setting and `cloudflared` still running | It takes it back: the same quick address | services, stress `tunnel` |
+| T11 | The tunnel is turned off, or its mode changes | `cloudflared` is ended; a new mode starts a new one | services, stress `tunnel` |
 | T12 | The downloaded `cloudflared` does not match its pinned size or digest | Nothing is run; the tunnel reads `failed` | gateway |
 | T13 | `pairing.setTunnel` from a credential without `credential.manage` | `forbidden` from Cedar | gateway |
 | T14 | `server.reach` from a paired owner phone | The current public address, or none | gateway |
+| T15 | The recorded pid now names another process (reboot, reuse) | Left alone; a new `cloudflared` is started | services |
+| T16 | `pairing.tunnel` after a named tunnel is saved | Says a token is saved, never the token; Settings never fills the token field | gateway, desktop |
+| T17 | `pairing.setTunnel` on while linking is off, or named with no hostname or token | `pairing_linking_off` or `pairing_tunnel_incomplete`; nothing saved | gateway |
 
 ## What this does not do
 
