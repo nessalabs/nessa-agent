@@ -43,7 +43,10 @@ async fn serve(permits: usize) -> Serving {
 impl Serving {
     async fn stop(self) {
         self.stop.send_replace(true);
-        tokio::time::timeout(REAL, self.task).await.unwrap().unwrap();
+        tokio::time::timeout(REAL, self.task)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }
 
@@ -61,7 +64,11 @@ async fn a_websocket_on_the_native_path_reaches_the_listener_and_bytes_cross() {
         .await
         .unwrap()
         .expect("a tunneled connection");
-    assert_eq!(serving.pool.available_permits(), 3, "it holds a tunnel permit");
+    assert_eq!(
+        serving.pool.available_permits(),
+        3,
+        "it holds a tunnel permit"
+    );
     let mut stream = stream;
     socket
         .send(Message::Binary(b"hello gateway".to_vec().into()))
@@ -115,13 +122,18 @@ async fn any_other_path_is_refused_and_reaches_nothing() {
 #[tokio::test]
 async fn with_the_pool_full_a_connection_is_closed_unread() {
     let mut serving = serve(0).await;
-    let mut stream = tokio::net::TcpStream::connect(serving.address).await.unwrap();
+    let mut stream = tokio::net::TcpStream::connect(serving.address)
+        .await
+        .unwrap();
     // Closed before any upgrade answer: the read ends at once.
     let mut rest = Vec::new();
-    tokio::time::timeout(REAL, tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut rest))
-        .await
-        .expect("closed in time")
-        .ok();
+    tokio::time::timeout(
+        REAL,
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut rest),
+    )
+    .await
+    .expect("closed in time")
+    .ok();
     assert!(rest.is_empty(), "nothing was answered: {rest:?}");
     assert!(serving.joined.try_recv().is_err());
     serving.stop().await;

@@ -52,7 +52,9 @@ async fn bytes_cross_a_tunnel_both_ways_unchanged() {
         .await
         .unwrap()
         .unwrap();
-    socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     // Larger than one bridge chunk, so it crosses as several messages.
     let sent: Vec<u8> = (0..100_000u32).map(|index| (index % 251) as u8).collect();
     let mut received = vec![0u8; sent.len()];
@@ -81,7 +83,11 @@ async fn the_far_end_closing_closes_the_reader() {
     })
     .await
     .unwrap();
-    assert_eq!(read.unwrap(), 0, "the gateway's close reaches the reader as end of stream");
+    assert_eq!(
+        read.unwrap(),
+        0,
+        "the gateway's close reaches the reader as end of stream"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

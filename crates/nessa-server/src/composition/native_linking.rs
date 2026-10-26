@@ -107,7 +107,11 @@ impl ConfigLinking {
 
     /// Change the tunnel too: its token kept in `files`, compared with
     /// `running`, the tunnel this run serves.
-    pub(super) fn with_tunnel(mut self, files: TunnelFiles, running: Option<TunnelSetting>) -> Self {
+    pub(super) fn with_tunnel(
+        mut self,
+        files: TunnelFiles,
+        running: Option<TunnelSetting>,
+    ) -> Self {
         self.tunnel_files = Some(files);
         self.running_tunnel = running;
         self
@@ -161,8 +165,13 @@ impl ConfigLinking {
         let saved = match saved {
             Ok(saved) => saved,
             Err(error) => {
-                self.record(operation_id, caller, change, LinkingAuditPhase::Refused(error))
-                    .await?;
+                self.record(
+                    operation_id,
+                    caller,
+                    change,
+                    LinkingAuditPhase::Refused(error),
+                )
+                .await?;
                 return Err(error);
             }
         };
@@ -343,7 +352,9 @@ impl ConfigLinking {
                     .map_err(|_| LinkingError::Unavailable)?
                     .map_err(refusal)?;
                 if published == Published::NotDurable {
-                    tracing::warn!("the tunnel saved, but config.json's directory could not be synced");
+                    tracing::warn!(
+                        "the tunnel saved, but config.json's directory could not be synced"
+                    );
                 }
                 true
             }
@@ -398,8 +409,13 @@ impl NativeLinking for ConfigLinking {
         Box::pin(async move {
             let operation_id = uuid::Uuid::new_v4().to_string();
             let change = Change::Linking(enabled);
-            self.record(&operation_id, &caller, &change, LinkingAuditPhase::Requested)
-                .await?;
+            self.record(
+                &operation_id,
+                &caller,
+                &change,
+                LinkingAuditPhase::Requested,
+            )
+            .await?;
             let applies = self.change(&operation_id, &caller, &change).await?.applies;
             tracing::info!(
                 enabled,
@@ -411,13 +427,22 @@ impl NativeLinking for ConfigLinking {
         })
     }
 
-    fn set_tunnel(&self, caller: LinkingCaller, request: TunnelRequest) -> Answer<'_, TunnelChange> {
+    fn set_tunnel(
+        &self,
+        caller: LinkingCaller,
+        request: TunnelRequest,
+    ) -> Answer<'_, TunnelChange> {
         Box::pin(async move {
             let operation_id = uuid::Uuid::new_v4().to_string();
             let enabled = request.enabled;
             let change = Change::Tunnel(request);
-            self.record(&operation_id, &caller, &change, LinkingAuditPhase::Requested)
-                .await?;
+            self.record(
+                &operation_id,
+                &caller,
+                &change,
+                LinkingAuditPhase::Requested,
+            )
+            .await?;
             let saved = self.change(&operation_id, &caller, &change).await?;
             let mode = saved.mode.unwrap_or(TunnelMode::Quick);
             tracing::info!(
@@ -1137,7 +1162,10 @@ mod tests {
         let files = files(Some(&written));
         let linking = tunnel_linking(files.clone(), namespace.path(), None);
         assert_eq!(
-            linking.linking.set_tunnel(caller(), request(true, None)).await,
+            linking
+                .linking
+                .set_tunnel(caller(), request(true, None))
+                .await,
             Ok(TunnelChange {
                 enabled: true,
                 mode: TunnelMode::Quick,
@@ -1191,7 +1219,10 @@ mod tests {
         let files = files(Some(&off_at("0.0.0.0:47650")));
         let linking = tunnel_linking(files.clone(), namespace.path(), None);
         assert_eq!(
-            linking.linking.set_tunnel(caller(), request(true, None)).await,
+            linking
+                .linking
+                .set_tunnel(caller(), request(true, None))
+                .await,
             Err(LinkingError::LinkingOff)
         );
         assert_eq!(native(&files).unwrap().get("tunnel"), None, "nothing saved");
@@ -1239,7 +1270,10 @@ mod tests {
         assert!(!config.contains("secret") && !config.contains(token.expose()));
         let kept = TunnelFiles::new(namespace.path());
         assert_eq!(kept.read_token().unwrap(), Some(token));
-        let mode = std::fs::metadata(kept.token_path()).unwrap().permissions().mode();
+        let mode = std::fs::metadata(kept.token_path())
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o077, 0);
     }
 
@@ -1289,7 +1323,10 @@ mod tests {
         let files = files(Some(&written));
         let linking = tunnel_linking(files.clone(), namespace.path(), None);
         assert_eq!(
-            linking.linking.set_tunnel(caller(), request(true, None)).await,
+            linking
+                .linking
+                .set_tunnel(caller(), request(true, None))
+                .await,
             Err(LinkingError::AddressInUse)
         );
         assert_eq!(tunnel_section(&files)["enabled"], false, "nothing saved");

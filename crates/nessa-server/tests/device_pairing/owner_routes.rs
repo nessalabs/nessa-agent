@@ -26,8 +26,8 @@ use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_protocol::tunnel::TunnelAddress;
-use nessa_server::tunnel::application::TunnelMode;
 use nessa_server::conversation::application::{FenceCapture, FenceCaptureError};
+use nessa_server::tunnel::application::TunnelMode;
 use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,

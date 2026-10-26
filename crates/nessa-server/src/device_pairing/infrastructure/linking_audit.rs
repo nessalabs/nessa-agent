@@ -209,7 +209,7 @@ mod tests {
     fn a_tunnel_change_is_its_own_kind_with_its_mode() {
         use crate::tunnel::application::TunnelMode;
         let directory = tempfile::tempdir().unwrap();
-        let audit = DurableLinkingAudit::new(directory.path().to_owned(), Arc::new(Fixed));
+        let audit = DurableLinkingAudit::new(directory.path().join("audit"), Arc::new(Fixed));
         let record = LinkingAuditRecord {
             operation_id: "op".into(),
             caller: LinkingCaller {
@@ -226,7 +226,7 @@ mod tests {
         };
         audit.record(&record).unwrap();
         let outcome: Value = serde_json::from_slice(
-            &std::fs::read(directory.path().join("native-tunnel-op-outcome.json")).unwrap(),
+            &std::fs::read(directory.path().join("audit/native-tunnel-op-outcome.json")).unwrap(),
         )
         .unwrap();
         assert_eq!(outcome["kind"], "native_tunnel");

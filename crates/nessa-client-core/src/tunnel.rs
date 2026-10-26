@@ -67,7 +67,8 @@ where
     };
     let outbound = async {
         let mut buffer = vec![0u8; TUNNEL_CHUNK];
-        let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + TUNNEL_PING, TUNNEL_PING);
+        let mut ping =
+            tokio::time::interval_at(tokio::time::Instant::now() + TUNNEL_PING, TUNNEL_PING);
         loop {
             tokio::select! {
                 read = from_socket.read(&mut buffer) => match read {

@@ -13,6 +13,7 @@ use crate::device_pairing::{
     application::OwnerError,
     infrastructure::{PairingRuntimeError, RegistrationError},
 };
+use crate::tunnel::application::{TunnelMode, TunnelToken};
 use nessa_auth::{
     application::{
         dto::{CredentialGrantDto, ResourceDto},
@@ -25,14 +26,13 @@ use nessa_auth::{
         PairingRecord, TerminalCause,
     },
 };
+use nessa_protocol::product::generated::PairingTunnelMode;
 use nessa_protocol::product::generated::{
     PairingActivationStop, PairingApproveParams, PairingApproveResult, PairingCreateParams,
     PairingCreateResult, PairingEnrollee, PairingErrorCode, PairingInitiator as WireInitiator,
     PairingInitiatorKind, PairingInvitationParams, PairingOwnerPhase, PairingOwnerStatus,
     PairingPendingResult, PairingReceiver, PairingTerminal, PairingTerminalCause,
 };
-use crate::tunnel::application::{TunnelMode, TunnelToken};
-use nessa_protocol::product::generated::PairingTunnelMode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use nessa_protocol::tunnel::TunnelAddress;
 use serde_json::json;
@@ -283,7 +283,11 @@ pub(super) async fn set_tunnel(
         Ok(hostname) => hostname,
         Err(_) => return failure(&frame.id, "invalid_request"),
     };
-    let token = match params.token.map(|token| TunnelToken::new(token).ok_or(())).transpose() {
+    let token = match params
+        .token
+        .map(|token| TunnelToken::new(token).ok_or(()))
+        .transpose()
+    {
         Ok(token) => token,
         Err(()) => return failure(&frame.id, "invalid_request"),
     };
@@ -329,7 +333,10 @@ pub(super) async fn tunnel(state: &ProductRouteState, frame: RequestFrame) -> Ou
         Ok(saved) => saved,
         Err(error) => return failure(&frame.id, linking_refusal(error).as_str()),
     };
-    let live = state.tunnel.as_ref().map(|tunnel| tunnel.status.borrow().clone());
+    let live = state
+        .tunnel
+        .as_ref()
+        .map(|tunnel| tunnel.status.borrow().clone());
     let (status, address, failure_reason) = match live {
         None => (PairingTunnelStatus::Off, None, None),
         Some(ServiceStatus::Starting) => (PairingTunnelStatus::Starting, None, None),

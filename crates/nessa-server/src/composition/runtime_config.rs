@@ -1,5 +1,6 @@
 //! File loading belongs to composition; consumers receive typed settings.
 use super::agent::AgentsConfig;
+use crate::tunnel::application::{TunnelMode, DEFAULT_TUNNEL_INGRESS};
 use crate::{
     conversation::domain::CommandPolicy,
     core::RunError,
@@ -8,7 +9,6 @@ use crate::{
 use nessa_auth::{adapters::local::LocalStoreConfig, domain::pairing::OwnerPhoneRequest};
 pub(super) use nessa_protocol::relay::RelayAddress;
 use nessa_protocol::tunnel::TunnelAddress;
-use crate::tunnel::application::{TunnelMode, DEFAULT_TUNNEL_INGRESS};
 use nessa_sdk::domain::agent_execution::leases::{PeerEnvironment, SshDestination};
 use serde::Deserialize;
 use std::{

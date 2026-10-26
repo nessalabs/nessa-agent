@@ -279,7 +279,11 @@ pub(super) async fn product_state(
         _ => None,
     };
     #[cfg(unix)]
-    if tunnel.as_ref().and_then(super::tunnel::PreparedTunnel::setting).is_none() {
+    if tunnel
+        .as_ref()
+        .and_then(super::tunnel::PreparedTunnel::setting)
+        .is_none()
+    {
         super::tunnel::release_kept(namespace);
     }
     let credential_namespace = CredentialNamespace::new(
@@ -475,7 +479,9 @@ pub(super) async fn product_state(
         )
         .with_tunnel(
             crate::tunnel::infrastructure::files::TunnelFiles::new(namespace),
-            tunnel.as_ref().and_then(super::tunnel::PreparedTunnel::setting),
+            tunnel
+                .as_ref()
+                .and_then(super::tunnel::PreparedTunnel::setting),
         );
         product = product.with_native_linking(Arc::new(linking));
         if let Some(tunnel) = &tunnel {

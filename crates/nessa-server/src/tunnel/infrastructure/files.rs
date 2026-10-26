@@ -79,7 +79,10 @@ mod tests {
         let token = TunnelToken::new("eyJhIjoiYiJ9".into()).unwrap();
         files.write_token(&token).unwrap();
         assert_eq!(files.read_token().unwrap(), Some(token));
-        let mode = std::fs::metadata(files.token_path()).unwrap().permissions().mode();
+        let mode = std::fs::metadata(files.token_path())
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o077, 0);
     }
 

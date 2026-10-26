@@ -14,6 +14,9 @@
 //! with --relay, each ask and each dial that does not connect directly goes
 //!   through the relay (enrolling does not: nothing knows the gateway's key
 //!   before it)
+//! with --tunnel, each dial that does not connect directly goes through the
+//!   gateway's web tunnel too (asks and enrolling do not: the tunnel admits
+//!   only a key that already holds a credential)
 //! with --enroll-code-file, before all of it: enroll_once(the file) ──▶
 //!   enrolled with its code when nothing is paired here, nothing sent when
 //!   paired with the gateway at ADDRESS, refused when paired with another
@@ -45,6 +48,7 @@ use nessa_auth::adapters::pairing::{ManualCode, NativeIdentity};
 use nessa_protocol::{
     clock::Clock,
     relay::{host_port, RelayAddress},
+    tunnel::TunnelAddress,
 };
 use std::{
     future::Future,
@@ -102,6 +106,7 @@ pub(super) async fn enroll(address: &str, code: &str) -> Result<(), RunError> {
 pub(super) async fn dial_in(
     address: &str,
     relay: Option<&RelayAddress>,
+    tunnel: Option<&TunnelAddress>,
     drain_deadline: Option<Duration>,
     enroll_code_file: Option<&Path>,
 ) -> Result<(), RunError> {
@@ -145,7 +150,8 @@ pub(super) async fn dial_in(
     // Without a deadline nothing drains: the signal stops, as before.
     let drain = drain_deadline.is_some().then_some(drain);
     let signals = tokio::spawn(on_signal(stop, drain));
-    let served = approved_then_served(address, relay, enroll_code_file, stopping, draining).await;
+    let served =
+        approved_then_served(address, relay, tunnel, enroll_code_file, stopping, draining).await;
     signals.abort();
     if let Some(deadline) = deadline {
         deadline.abort();
@@ -158,6 +164,7 @@ pub(super) async fn dial_in(
 async fn approved_then_served(
     address: &str,
     relay: Option<&RelayAddress>,
+    tunnel: Option<&TunnelAddress>,
     enroll_code_file: Option<&Path>,
     stopping: watch::Receiver<bool>,
     draining: watch::Receiver<bool>,
@@ -194,7 +201,10 @@ async fn approved_then_served(
         return Ok(());
     };
     let composed = composed.map_err(|(_, failure)| failure)?;
-    let served = serve_dialing(&composed, address, relay, identity, pin, stopping, draining).await;
+    let served = serve_dialing(
+        &composed, address, relay, tunnel, identity, pin, stopping, draining,
+    )
+    .await;
     composed.finish().await;
     served
 }
@@ -247,6 +257,7 @@ async fn serve_dialing(
     composed: &Composed,
     address: &str,
     relay: Option<&RelayAddress>,
+    tunnel: Option<&TunnelAddress>,
     identity: Arc<NativeIdentity>,
     pin: [u8; 44],
     stopping: watch::Receiver<bool>,
@@ -258,8 +269,15 @@ async fn serve_dialing(
             let identity = identity.clone();
             // Resolved on every dial, the gateway's address may move; each
             // address is tried, as a TCP connect by name does, and then the
-            // relay, when there is one.
-            dial(address.to_owned(), relay.cloned(), identity, pin, clock())
+            // relay and the tunnel, when there are.
+            dial(
+                address.to_owned(),
+                relay.cloned(),
+                tunnel.cloned(),
+                identity,
+                pin,
+                clock(),
+            )
         },
         |stream, stopping| {
             // Each connection was dialed to the gateway holding this pin: its

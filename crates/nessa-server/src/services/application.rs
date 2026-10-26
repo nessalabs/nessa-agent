@@ -196,7 +196,10 @@ impl Hosted {
 /// `End` when the supervisor is gone without asking.
 fn halt_channel() -> (oneshot::Sender<Halt>, PortFuture<'static, Halt>) {
     let (halt, halted) = oneshot::channel();
-    (halt, Box::pin(async move { halted.await.unwrap_or(Halt::End) }))
+    (
+        halt,
+        Box::pin(async move { halted.await.unwrap_or(Halt::End) }),
+    )
 }
 
 /// How waiting for a started process to be ready ended.
@@ -226,7 +229,12 @@ impl<T: Clone + Send + Sync + 'static> ServiceSupervisor<T> {
             match prepared {
                 Ok(()) => break,
                 Err(failure) => {
-                    tracing::warn!(service = name, failure = failure.as_str(), ?wait, "service not ready to start");
+                    tracing::warn!(
+                        service = name,
+                        failure = failure.as_str(),
+                        ?wait,
+                        "service not ready to start"
+                    );
                     self.status.send_replace(ServiceStatus::Failed(failure));
                 }
             }
@@ -261,13 +269,15 @@ impl<T: Clone + Send + Sync + 'static> ServiceSupervisor<T> {
                 }
                 Readiness::Ended(HostedEnd::NotStarted) => {
                     tracing::warn!(service = name, ?wait, "service did not start");
-                    self.status.send_replace(ServiceStatus::Failed(ServiceFailure::Start));
+                    self.status
+                        .send_replace(ServiceStatus::Failed(ServiceFailure::Start));
                     None
                 }
                 Readiness::Ended(_) => None,
                 Readiness::Late => {
                     tracing::warn!(service = name, "service was not ready in time");
-                    self.status.send_replace(ServiceStatus::Failed(ServiceFailure::NotReady));
+                    self.status
+                        .send_replace(ServiceStatus::Failed(ServiceFailure::NotReady));
                     hosted.halt(Halt::End).await;
                     None
                 }
@@ -310,7 +320,10 @@ impl<T: Clone + Send + Sync + 'static> ServiceSupervisor<T> {
             let (started, running) = oneshot::channel();
             let (halt, halted) = halt_channel();
             if let Some((launch, run)) = self.host.adopt(key.clone(), started, halted).await {
-                tracing::info!(service = self.service.name(), "took back the running service");
+                tracing::info!(
+                    service = self.service.name(),
+                    "took back the running service"
+                );
                 self.service.resume(&launch);
                 return Ok((Hosted { run, halt }, running));
             }

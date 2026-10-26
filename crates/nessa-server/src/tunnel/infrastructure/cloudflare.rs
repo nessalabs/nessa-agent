@@ -17,9 +17,9 @@
 //! Arrows are steps in order. The token is passed in a file only the gateway
 //! can read, never on the command line where other users see it; this file
 //! only points at it.
+use super::files::TunnelFiles;
 use crate::agent_install::application::{ArchiveSource, StagedArchive};
 use crate::services::application::{Launch, PortFuture, Service, ServiceFailure};
-use super::files::TunnelFiles;
 use crate::tunnel::application::CloudflareTunnel;
 use nessa_protocol::tunnel::TunnelAddress;
 use serde::Deserialize;
@@ -207,11 +207,9 @@ impl Service<TunnelAddress> for CloudflareService {
         let program = self.program_path()?;
         let tunnel = match &self.tunnel {
             CloudflareTunnel::Quick => "quick".to_owned(),
-            CloudflareTunnel::Named { address, token } => format!(
-                "named {} token-sha256 {}",
-                address.as_str(),
-                token.digest()
-            ),
+            CloudflareTunnel::Named { address, token } => {
+                format!("named {} token-sha256 {}", address.as_str(), token.digest())
+            }
         };
         Ok(format!(
             "cloudflared {} ingress {} {tunnel}",
@@ -336,7 +334,13 @@ async fn probe(port: u16, path: &str) -> io::Result<(u16, Vec<u8>)> {
 fn parse_answer(answer: &[u8]) -> Option<(u16, Vec<u8>)> {
     let head_end = answer.windows(4).position(|window| window == b"\r\n\r\n")?;
     let head = std::str::from_utf8(&answer[..head_end]).ok()?;
-    let status = head.lines().next()?.split_whitespace().nth(1)?.parse().ok()?;
+    let status = head
+        .lines()
+        .next()?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()?;
     Some((status, answer[head_end + 4..].to_vec()))
 }
 
@@ -451,8 +455,11 @@ fn unpack(file: &mut File, build: &PinnedBuild, release: &Path) -> Result<(), Se
         return Err(ServiceFailure::Unavailable("unverified"));
     }
     runnable(&partial).map_err(storage)?;
-    fs::rename(&partial, installed(release.parent().unwrap_or(release), build))
-        .map_err(storage)
+    fs::rename(
+        &partial,
+        installed(release.parent().unwrap_or(release), build),
+    )
+    .map_err(storage)
 }
 
 /// Whether the file at `path` is exactly `bytes` long with SHA-256 `digest`.

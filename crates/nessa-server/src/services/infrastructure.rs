@@ -112,7 +112,10 @@ impl KeptHost {
         let bytes = fs::read(self.record_path()).ok()?;
         let record = serde_json::from_slice(&bytes);
         if record.is_err() {
-            tracing::warn!(service = self.name, "a kept helper's record could not be read");
+            tracing::warn!(
+                service = self.name,
+                "a kept helper's record could not be read"
+            );
             self.forget();
         }
         record.ok()
@@ -132,7 +135,10 @@ impl KeptHost {
         match fs::remove_file(self.record_path()) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => tracing::warn!(service = self.name, "a kept helper's record could not be removed"),
+            Err(_) => tracing::warn!(
+                service = self.name,
+                "a kept helper's record could not be removed"
+            ),
         }
     }
 
@@ -170,7 +176,10 @@ impl KeptHost {
                 return;
             }
         }
-        tracing::warn!(service = self.name, "a helper service's process could not be confirmed gone");
+        tracing::warn!(
+            service = self.name,
+            "a helper service's process could not be confirmed gone"
+        );
     }
 
     async fn run_owned(
@@ -183,7 +192,10 @@ impl KeptHost {
         // One helper per record: whatever was recorded is replaced.
         self.release().await;
         let Some(launched) = Launched::from(&launch) else {
-            tracing::warn!(service = self.name, "a helper service's launch is not UTF-8");
+            tracing::warn!(
+                service = self.name,
+                "a helper service's launch is not UTF-8"
+            );
             return HostedEnd::NotStarted;
         };
         let Ok(log) = private_file(&self.directory.join(format!("{}.log", self.name))) else {

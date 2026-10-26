@@ -24,7 +24,10 @@ fn sleeper(directory: &Path, seconds: &str) -> Launch {
 /// A halt the test sends.
 fn halt() -> (oneshot::Sender<Halt>, PortFuture<'static, Halt>) {
     let (send, receive) = oneshot::channel();
-    (send, Box::pin(async move { receive.await.unwrap_or(Halt::End) }))
+    (
+        send,
+        Box::pin(async move { receive.await.unwrap_or(Halt::End) }),
+    )
 }
 
 fn alive(pid: u32) -> bool {
@@ -111,8 +114,15 @@ async fn an_exit_is_seen_and_forgotten() {
     let host = host(directory.path());
     let (started, running) = oneshot::channel();
     let (_stop, halted) = halt();
-    let run = host.run("key".into(), sleeper(directory.path(), "0"), started, halted);
-    let end = tokio::time::timeout(Duration::from_secs(15), run).await.unwrap();
+    let run = host.run(
+        "key".into(),
+        sleeper(directory.path(), "0"),
+        started,
+        halted,
+    );
+    let end = tokio::time::timeout(Duration::from_secs(15), run)
+        .await
+        .unwrap();
     running.await.unwrap();
     assert_eq!(end, HostedEnd::Exited);
     assert!(host.read().is_none());
@@ -134,7 +144,10 @@ async fn a_left_helper_writes_its_output_to_its_log_privately() {
     let host = host(directory.path());
     let pid = left(&host, directory.path(), "key").await;
     let log = directory.path().join("sleeper.log");
-    assert_eq!(std::fs::metadata(&log).unwrap().permissions().mode() & 0o077, 0);
+    assert_eq!(
+        std::fs::metadata(&log).unwrap().permissions().mode() & 0o077,
+        0
+    );
     let record = std::fs::metadata(directory.path().join(RECORD)).unwrap();
     assert_eq!(record.permissions().mode() & 0o077, 0);
     host.release().await;

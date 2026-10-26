@@ -481,6 +481,7 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
     let first = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -497,6 +498,7 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
     // A second connection replaces the first, whose serving ends.
     let second = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -532,6 +534,7 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
     let refused = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -558,6 +561,7 @@ async fn an_organization_budget_refuses_a_command_past_it_until_one_ends() {
         .await;
     let stream = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -614,6 +618,7 @@ async fn a_dialed_gateway_runs_only_what_the_environment_granted_it() {
     let stream = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -651,6 +656,7 @@ async fn a_key_paired_to_read_is_refused_at_open_environment() {
     let refused = dial(
         a.native.to_string(),
         None,
+        None,
         reader.identity.clone(),
         reader.pin,
         clock(),
@@ -679,6 +685,7 @@ async fn a_lease_asked_across_a_reconnect_runs_on_the_new_connection() {
     let first = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -699,6 +706,7 @@ async fn a_lease_asked_across_a_reconnect_runs_on_the_new_connection() {
         .expect("the lease asks whether the key serves");
     let second = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -786,7 +794,7 @@ async fn an_enrolled_environment_waits_for_approval_then_stays_dialed_in() {
                         if n > 0 {
                             let _ = released.wait_for(|go| *go).await;
                         }
-                        dial(native.to_string(), None, identity, pin, clock()).await
+                        dial(native.to_string(), None, None, identity, pin, clock()).await
                     }
                 },
                 move |stream, stopping| {
@@ -913,6 +921,7 @@ async fn a_pin_that_is_not_a_key_is_invalid_input_and_another_key_is_not() {
     let not_a_key = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         [0; 44],
         clock(),
@@ -924,6 +933,7 @@ async fn a_pin_that_is_not_a_key_is_invalid_input_and_another_key_is_not() {
     let other = e.identity.public_spki();
     let not_the_gateway = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         other,
@@ -1016,15 +1026,22 @@ async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it
     let peer = PeerEnvironment::new(*key.bytes());
 
     // Without the relay the gateway is out of reach.
-    let direct = dial(unreachable.clone(), None, identity.clone(), pin, clock())
-        .await
-        .err()
-        .expect("nothing listens at the direct address");
+    let direct = dial(
+        unreachable.clone(),
+        None,
+        None,
+        identity.clone(),
+        pin,
+        clock(),
+    )
+    .await
+    .err()
+    .expect("nothing listens at the direct address");
     // Refused on Linux, an unusable address on macOS: either way the
     // direct dial's own error, not the relay's.
     assert_ne!(direct.kind(), ErrorKind::InvalidInput);
     assert_eq!(RelayRefusal::carried(&direct), None);
-    let stream = dial(unreachable, Some(relay), identity, pin, clock())
+    let stream = dial(unreachable, Some(relay), None, identity, pin, clock())
         .await
         .unwrap();
     let _serving = serving(&directory.path().join("e"), pin, stream);
@@ -1042,6 +1059,7 @@ async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it
         .await;
     let stream = dial(
         a.native.to_string(),
+        None,
         None,
         direct_machine.identity.clone(),
         direct_machine.pin,
@@ -1133,6 +1151,7 @@ async fn a_relay_without_the_gateway_answers_offline_to_an_environments_dial() {
     let offline = dial(
         nowhere(),
         Some(relay().await),
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -1245,6 +1264,7 @@ async fn a_paired_environment_expires_a_lease_and_both_sides_record_it() {
         .await;
     let stream = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -1391,6 +1411,7 @@ async fn k1_a_paired_environment_drains_and_both_sides_record_its_cleanup() {
         .await;
     let stream = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -1610,6 +1631,7 @@ async fn an_idle_paired_environment_is_closed_once_revoked() {
     let stream = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -1628,6 +1650,7 @@ async fn an_idle_paired_environment_is_closed_once_revoked() {
     assert_eq!(records.len(), 1, "{records:?}");
     let refused = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -1664,6 +1687,7 @@ async fn a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes
         .await;
     let stream = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -1795,6 +1819,7 @@ async fn a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes
     let refused = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -1849,6 +1874,7 @@ async fn a_paired_environment_publishes_a_file_and_the_gateway_reads_it_back() {
         .await;
     let stream = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -2099,6 +2125,7 @@ async fn connection_changes_are_said_as_a_paired_environment_connects_ends_and_i
     let stream = dial(
         a.native.to_string(),
         None,
+        None,
         e.identity.clone(),
         e.pin,
         clock(),
@@ -2114,6 +2141,7 @@ async fn connection_changes_are_said_as_a_paired_environment_connects_ends_and_i
 
     let stream = dial(
         a.native.to_string(),
+        None,
         None,
         e.identity.clone(),
         e.pin,
@@ -2322,6 +2350,7 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
     let refused = dial(
         a.native.to_string(),
         None,
+        None,
         x.identity.clone(),
         w.pin,
         clock(),
@@ -2332,6 +2361,7 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
     assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
     let not_b = dial(
         a.native.to_string(),
+        None,
         None,
         x.identity.clone(),
         x.pin,
@@ -2372,6 +2402,7 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
     for (gateway, machine, host) in [(&a, &w, &w_host), (&b, &x, &x_host)] {
         let stream = dial(
             gateway.native.to_string(),
+            None,
             None,
             machine.identity.clone(),
             machine.pin,

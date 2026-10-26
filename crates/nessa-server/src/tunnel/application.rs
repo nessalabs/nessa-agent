@@ -23,10 +23,8 @@ pub(crate) type TunnelStatus = ServiceStatus<TunnelAddress>;
 /// `config.json` names nowhere else: a loopback port beside the native
 /// listener's. A named Cloudflare tunnel is pointed at it in Cloudflare's
 /// dashboard, so it stays the same across starts.
-pub(crate) const DEFAULT_TUNNEL_INGRESS: SocketAddr = SocketAddr::new(
-    std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
-    47651,
-);
+pub(crate) const DEFAULT_TUNNEL_INGRESS: SocketAddr =
+    SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 47651);
 
 /// How the tunnel is carried, as Settings names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,11 +133,9 @@ impl TunnelSetting {
     pub(crate) fn identity(&self) -> String {
         let provider = match &self.provider {
             TunnelProvider::Cloudflare(CloudflareTunnel::Quick) => "cloudflare quick".to_owned(),
-            TunnelProvider::Cloudflare(CloudflareTunnel::Named { address, token }) => format!(
-                "cloudflare named {} {}",
-                address.as_str(),
-                token.digest()
-            ),
+            TunnelProvider::Cloudflare(CloudflareTunnel::Named { address, token }) => {
+                format!("cloudflare named {} {}", address.as_str(), token.digest())
+            }
         };
         format!("{provider} ingress {}", self.ingress)
     }

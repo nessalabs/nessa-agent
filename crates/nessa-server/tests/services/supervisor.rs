@@ -31,7 +31,9 @@ impl Service<&'static str> for Scripted {
     fn prepare(&self) -> PortFuture<'_, Result<(), ServiceFailure>> {
         let failing = self
             .failing_prepares
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
             .is_ok();
         Box::pin(async move {
             if failing {
@@ -208,7 +210,11 @@ impl Running {
         )
         .await
         .is_ok();
-        assert!(seen, "status never {wanted:?}; it is {:?}", *self.status.borrow());
+        assert!(
+            seen,
+            "status never {wanted:?}; it is {:?}",
+            *self.status.borrow()
+        );
     }
 
     /// Stop it, and see the run end.
@@ -241,14 +247,20 @@ async fn a_service_not_ready_in_time_is_ended_and_started_again() {
     assert_eq!(running.next().await, Asked::Adopt);
     assert_eq!(running.next().await, Asked::Run("launch-0".into()));
     // The readiness deadline is the first wait; the polls sleep after it.
-    let deadline = running.timer.started(|_, wait| wait.limit() == Duration::from_secs(10)).await;
+    let deadline = running
+        .timer
+        .started(|_, wait| wait.limit() == Duration::from_secs(10))
+        .await;
     running.timer.advance_to(deadline.deadline);
     assert_eq!(running.next().await, Asked::Halt(Halt::End));
     running
         .status_is(ServiceStatus::Failed(ServiceFailure::NotReady))
         .await;
     // Then the backoff's first wait, and a fresh start: never a take-back.
-    let backoff = running.timer.started(|_, wait| wait.limit() == Duration::from_secs(1)).await;
+    let backoff = running
+        .timer
+        .started(|_, wait| wait.limit() == Duration::from_secs(1))
+        .await;
     running.timer.advance_to(backoff.deadline);
     assert_eq!(running.next().await, Asked::Run("launch-1".into()));
     running.stop().await;
@@ -268,7 +280,10 @@ async fn an_exit_after_ready_starts_it_again_after_the_backoff() {
     running.status_is(ServiceStatus::Ready("address")).await;
     running.host.exit();
     running.status_is(ServiceStatus::Starting).await;
-    let backoff = running.timer.started(|_, wait| wait.limit() == Duration::from_secs(1)).await;
+    let backoff = running
+        .timer
+        .started(|_, wait| wait.limit() == Duration::from_secs(1))
+        .await;
     running.timer.advance_to(backoff.deadline);
     assert_eq!(running.next().await, Asked::Run("launch-1".into()));
     running.stop().await;
@@ -289,7 +304,10 @@ async fn the_first_start_takes_back_a_left_process_and_later_ones_never_do() {
     assert_eq!(running.service.launches.load(Ordering::SeqCst), 0);
     running.host.exit();
     running.status_is(ServiceStatus::Starting).await;
-    let backoff = running.timer.started(|_, wait| wait.limit() == Duration::from_secs(1)).await;
+    let backoff = running
+        .timer
+        .started(|_, wait| wait.limit() == Duration::from_secs(1))
+        .await;
     running.timer.advance_to(backoff.deadline);
     assert_eq!(running.next().await, Asked::Run("launch-0".into()));
     running.stop().await;
@@ -306,7 +324,9 @@ async fn a_program_that_cannot_be_prepared_is_failed_and_tried_again() {
         None,
     );
     running
-        .status_is(ServiceStatus::Failed(ServiceFailure::Unavailable("download")))
+        .status_is(ServiceStatus::Failed(ServiceFailure::Unavailable(
+            "download",
+        )))
         .await;
     // One second, then two: the wait doubles.
     let first = running.timer.started(|index, _| index == 0).await;

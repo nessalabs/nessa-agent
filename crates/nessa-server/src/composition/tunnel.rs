@@ -93,7 +93,10 @@ pub(super) fn prepare(namespace: &Path, config: &TunnelConfig) -> PreparedTunnel
 }
 
 /// The provider's program, kept up until `stop`.
-pub(super) fn start(prepared: PreparedTunnel, stop: watch::Receiver<bool>) -> Option<JoinHandle<()>> {
+pub(super) fn start(
+    prepared: PreparedTunnel,
+    stop: watch::Receiver<bool>,
+) -> Option<JoinHandle<()>> {
     let PreparedTunnel {
         files,
         ingress,
@@ -105,7 +108,9 @@ pub(super) fn start(prepared: PreparedTunnel, stop: watch::Receiver<bool>) -> Op
     let archives = match HttpsArchives::new() {
         Ok(archives) => Arc::new(archives),
         Err(_) => {
-            status.send_replace(ServiceStatus::Failed(ServiceFailure::Unavailable("download")));
+            status.send_replace(ServiceStatus::Failed(ServiceFailure::Unavailable(
+                "download",
+            )));
             return None;
         }
     };

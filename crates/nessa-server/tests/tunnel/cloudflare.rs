@@ -66,7 +66,9 @@ fn every_supported_platform_has_a_pin_and_others_have_none() {
         ("linux", "aarch64"),
     ] {
         let build = PinnedBuild::for_platform(system, architecture).expect("pinned");
-        assert!(build.url.starts_with("https://github.com/cloudflare/cloudflared/releases/download/"));
+        assert!(build
+            .url
+            .starts_with("https://github.com/cloudflare/cloudflared/releases/download/"));
         assert!(build.url.contains(&build.version));
         assert_eq!(build.archive_digest.len(), 64);
         assert_eq!(build.program_digest.len(), 64);
@@ -81,10 +83,16 @@ fn a_pinned_program_is_installed_runnable_and_kept() {
     let build = a_build(Packaging::Program, PROGRAM_BYTES);
     let program = install(directory.path(), &build, &Serving(PROGRAM_BYTES.to_vec())).unwrap();
     assert_eq!(std::fs::read(&program).unwrap(), PROGRAM_BYTES);
-    assert_eq!(std::fs::metadata(&program).unwrap().permissions().mode() & 0o777, 0o700);
+    assert_eq!(
+        std::fs::metadata(&program).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
     // Already there and matching: nothing is fetched.
     let refusing = Serving(b"anything else".to_vec());
-    assert_eq!(install(directory.path(), &build, &refusing).unwrap(), program);
+    assert_eq!(
+        install(directory.path(), &build, &refusing).unwrap(),
+        program
+    );
 }
 
 #[test]
@@ -102,7 +110,11 @@ fn nothing_that_does_not_match_its_pin_is_made_runnable() {
     // A download that is not the pinned archive.
     let pinned = a_build(Packaging::Program, PROGRAM_BYTES);
     assert_eq!(
-        install(directory.path(), &pinned, &Serving(b"#!/bin/sh\nexit 1\n".to_vec())),
+        install(
+            directory.path(),
+            &pinned,
+            &Serving(b"#!/bin/sh\nexit 1\n".to_vec())
+        ),
         Err(ServiceFailure::Unavailable("unverified"))
     );
     assert!(!installed(directory.path(), &pinned).exists());
@@ -135,7 +147,8 @@ fn a_kept_program_that_no_longer_matches_is_fetched_again() {
 
 #[test]
 fn a_quick_answer_names_an_https_address_or_a_loopback_stand_in() {
-    let address = |body: &str| quick_address(body.as_bytes()).map(|address| address.as_str().to_owned());
+    let address =
+        |body: &str| quick_address(body.as_bytes()).map(|address| address.as_str().to_owned());
     assert_eq!(
         address(r#"{"hostname":"a-b-c.trycloudflare.com"}"#).as_deref(),
         Some("https://a-b-c.trycloudflare.com")
@@ -156,7 +169,10 @@ fn an_answer_is_its_status_and_body() {
         parse_answer(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"),
         Some((200, b"ok".to_vec()))
     );
-    assert_eq!(parse_answer(b"HTTP/1.1 503 Not Ready\r\n\r\n"), Some((503, vec![])));
+    assert_eq!(
+        parse_answer(b"HTTP/1.1 503 Not Ready\r\n\r\n"),
+        Some((503, vec![]))
+    );
     assert_eq!(parse_answer(b"garbage"), None);
 }
 
@@ -180,9 +196,24 @@ fn named(token: &str) -> CloudflareTunnel {
 #[test]
 fn a_quick_tunnel_forwards_to_the_ingress_and_reports_on_loopback() {
     let directory = tempfile::tempdir().unwrap();
-    let launch = service(directory.path(), CloudflareTunnel::Quick).launch().unwrap();
-    let args: Vec<_> = launch.args.iter().map(|arg| arg.to_str().unwrap()).collect();
-    assert_eq!(&args[..5], ["tunnel", "--no-autoupdate", "--loglevel", "warn", "--metrics"]);
+    let launch = service(directory.path(), CloudflareTunnel::Quick)
+        .launch()
+        .unwrap();
+    let args: Vec<_> = launch
+        .args
+        .iter()
+        .map(|arg| arg.to_str().unwrap())
+        .collect();
+    assert_eq!(
+        &args[..5],
+        [
+            "tunnel",
+            "--no-autoupdate",
+            "--loglevel",
+            "warn",
+            "--metrics"
+        ]
+    );
     assert!(args[5].starts_with("127.0.0.1:"));
     assert_eq!(&args[6..], ["--url", "http://127.0.0.1:47651"]);
     let home = directory.path().join("tunnel");
@@ -193,17 +224,28 @@ fn a_quick_tunnel_forwards_to_the_ingress_and_reports_on_loopback() {
 #[test]
 fn a_named_tunnel_reads_its_token_from_the_file_never_the_command_line() {
     let directory = tempfile::tempdir().unwrap();
-    let launch = service(directory.path(), named("secret-token")).launch().unwrap();
-    let args: Vec<_> = launch.args.iter().map(|arg| arg.to_str().unwrap()).collect();
+    let launch = service(directory.path(), named("secret-token"))
+        .launch()
+        .unwrap();
+    let args: Vec<_> = launch
+        .args
+        .iter()
+        .map(|arg| arg.to_str().unwrap())
+        .collect();
     let token_file = directory.path().join("tunnel").join("token");
-    assert_eq!(&args[6..], ["run", "--token-file", token_file.to_str().unwrap()]);
+    assert_eq!(
+        &args[6..],
+        ["run", "--token-file", token_file.to_str().unwrap()]
+    );
     assert!(args.iter().all(|arg| !arg.contains("secret-token")));
 }
 
 #[test]
 fn the_key_tells_settings_apart_and_never_holds_the_token() {
     let directory = tempfile::tempdir().unwrap();
-    let quick = service(directory.path(), CloudflareTunnel::Quick).key().unwrap();
+    let quick = service(directory.path(), CloudflareTunnel::Quick)
+        .key()
+        .unwrap();
     let one = service(directory.path(), named("one")).key().unwrap();
     let two = service(directory.path(), named("two")).key().unwrap();
     assert_ne!(quick, one);
@@ -233,8 +275,11 @@ async fn metrics(ready: u16, hostname: &'static str) -> u16 {
             };
             let _ = stream
                 .write_all(
-                    format!("HTTP/1.1 {status} X\r\nContent-Length: {}\r\n\r\n{body}", body.len())
-                        .as_bytes(),
+                    format!(
+                        "HTTP/1.1 {status} X\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
                 )
                 .await;
         }
@@ -262,7 +307,11 @@ async fn a_taken_back_quick_tunnel_is_asked_on_its_own_metrics_port() {
     let port = metrics(200, "q.trycloudflare.com").await;
     service.resume(&launched_on(port));
     assert_eq!(
-        service.ready().await.map(|address| address.as_str().to_owned()).as_deref(),
+        service
+            .ready()
+            .await
+            .map(|address| address.as_str().to_owned())
+            .as_deref(),
         Some("https://q.trycloudflare.com")
     );
 }
@@ -276,7 +325,11 @@ async fn a_tunnel_not_ready_reports_nothing_and_a_named_one_its_own_address() {
     let named = service(directory.path(), named("token"));
     named.resume(&launched_on(metrics(200, "ignored.example").await));
     assert_eq!(
-        named.ready().await.map(|address| address.as_str().to_owned()).as_deref(),
+        named
+            .ready()
+            .await
+            .map(|address| address.as_str().to_owned())
+            .as_deref(),
         Some("https://gateway.example.com")
     );
     // A launch naming no loopback metrics port is never asked.
