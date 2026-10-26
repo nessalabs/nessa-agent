@@ -9,6 +9,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
+import { once } from "node:events"
+import { Worker } from "node:worker_threads"
 
 import { TEXT_REPLY_SCENARIO } from "../../../../scripts/mcp-test-server/scenarios.mjs"
 import { panelTarget, scriptedLaunch, webhookNoAttempt } from "./gateway-stack.mjs"
@@ -102,7 +104,7 @@ test("a throw while building the target closes the stack", async () => {
   rmSync(directory, { recursive: true, force: true })
 })
 
-test("native no-send proof requires queued zero-attempt rows in the fixed complete scope", () => {
+test("native no-send proof requires queued zero-attempt rows in the fixed complete scope", async () => {
   const directory = mkdtempSync(join(tmpdir(), "webhook-native-proof-"))
   const scope = {
     receiver: "registration",
@@ -156,6 +158,31 @@ test("native no-send proof requires queued zero-attempt rows in the fixed comple
       /fixed Head/,
     )
     assert.equal(db.prepare("SELECT count(*) n FROM deliveries").get().n, 1)
+    const writer = new Worker(
+      `const { parentPort, workerData } = require('node:worker_threads');
+       const { DatabaseSync } = require('node:sqlite');
+       const db = new DatabaseSync(workerData);
+       db.exec('BEGIN EXCLUSIVE');
+       parentPort.postMessage('locked');
+       parentPort.once('message', () => setTimeout(() => {
+         db.exec('COMMIT'); db.close();
+         parentPort.postMessage('released'); parentPort.close();
+       }, 200));`,
+      { eval: true, workerData: join(path, "webhooks.sqlite") },
+    )
+    try {
+      const message = () =>
+        once(writer, "message", { signal: AbortSignal.timeout(2_000) })
+      assert.deepEqual(await message(), ["locked"])
+      // A writer that never releases must refuse, never manufacture no-send.
+      assert.throws(probe, /database is locked/)
+      const released = message()
+      writer.postMessage("release")
+      assert.deepEqual(probe(), { queued: 1, attempted: 0 })
+      assert.deepEqual(await released, ["released"])
+    } finally {
+      await writer.terminate()
+    }
   } finally {
     db.close()
     rmSync(directory, { recursive: true, force: true })

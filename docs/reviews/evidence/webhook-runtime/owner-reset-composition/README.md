@@ -43,6 +43,16 @@ tests across 409 files and a successful build after the separately reviewed
 recorded. No new-head platform or focused browser pass is inferred from these
 local checks.
 
+The subsequent actual CI merge is
+`f9e906be369d7abddbad72893143283e4d95c798`, combining published `c2ac8c4f`
+with upstream main `be8f53f80b7cd1fb7d49de508351e8c068238483`. Its
+[bounded source-impact review](ci-f9e-integration-review.md) has no findings.
+Full default50/50, focused WebKit1 and chaos2/2 passed there; raised Chromium
+case2 failed the independent SQLite probe and case3 was not run. The
+[contention diagnosis and meaningful controls](sqlite-proof-contention.md) and
+[affected review](sqlite-proof-review.md) preserve that original failure and
+distinguish the local correction from still-required corrected browser CI.
+
 ## Behavior and ordering
 
 The exact native delivery is pinned before Sending through consumed settlement.

@@ -337,7 +337,9 @@ export async function agentTurn(
 export function webhookNoAttempt(gateway, instance, credentialId, checkpoint) {
   const database = new DatabaseSync(
     join(gateway.directory, "ci", "instances", instance, "auth", "webhooks.sqlite"),
-    { readOnly: true },
+    // The native owner commits concurrently. Bound snapshot acquisition rather
+    // than treating a momentary writer lock as missing/no-attempt evidence.
+    { readOnly: true, timeout: 1_000 },
   )
   try {
     const rows = database
