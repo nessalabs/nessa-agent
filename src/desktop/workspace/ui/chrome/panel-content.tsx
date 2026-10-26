@@ -22,6 +22,7 @@ import {
   type WidgetPlugin,
   type WidgetRef,
 } from "../../../widgets"
+import { DesktopIcon } from "../../../ui/icons"
 import { panelWidgetAttribute } from "../../adapters/dom/focus"
 import { panelScope, useEscapeScope } from "../../adapters/dom/widget-escape"
 import { closePanelTab, openSession, showPanelTab } from "../../adapters/store/commands"
@@ -82,10 +83,14 @@ function PanelTabs({ sessionId, panel }: { sessionId: string; panel: ChatPanel }
         {(titles) => (
           <ChatTabs
             label="Panel"
+            // The window's top row, over the header picture: plain tabs, the
+            // one in front opaque.
+            variant="plain"
             tabs={panel.tabs.map((widget, at): ChatTabItem => ({
               id: tabId(widget),
               title: titles[at],
               kind: "file",
+              icon: <DesktopIcon name="panelRight" size={16} />,
               closeable: true,
             }))}
             value={tabId(panel.front)}
