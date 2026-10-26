@@ -430,9 +430,10 @@ export interface PathPicker {
   resources(kind: "files" | "folders"): Promise<readonly string[]>
   /**
    * Files and folders dragged onto the window, as the system names them:
-   * `dragging` while a drag that carries paths is over it, `dropped` with
-   * what it let go of. Answers how to stop watching. Absent where the window
-   * is never told of a drop.
+   * `dragging` while a drag that carries paths is over it, `began` as a drop
+   * lands, and `dropped` with what it let go of, named as `began` was and
+   * possibly seconds later. Answers how to stop watching. Absent where the
+   * window is never told of a drop.
    */
   drops?(watch: PathDropWatch): () => void
 }
@@ -440,7 +441,8 @@ export interface PathPicker {
 /** What a watch on dragged paths is told. */
 export interface PathDropWatch {
   dragging(over: boolean): void
-  dropped(paths: readonly DroppedPath[]): void
+  began(drop: string): void
+  dropped(drop: string, paths: readonly DroppedPath[]): void
 }
 
 /** One dragged path, and whether it is a file or a folder. */

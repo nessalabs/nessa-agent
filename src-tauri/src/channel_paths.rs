@@ -14,6 +14,7 @@
 //! by the gateway.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,7 +25,7 @@ use tauri_plugin_dialog::{DialogExt, FilePath};
 
 use crate::attachments::{answered_within, ChosenFiles, Kind};
 use crate::desktop_window::DESKTOP_WINDOW;
-use crate::host::{PATHS_DRAGGING, PATHS_DROPPED};
+use crate::host::{PATHS_DRAGGING, PATHS_DROPPED, PATHS_DROP_BEGAN};
 
 /// Paths the picker answered with, as text. A path that is not text, or an
 /// answer that is not a path on this machine, refuses the whole choice rather
@@ -167,9 +168,19 @@ async fn described(
     described
 }
 
+/// A fresh name for one drop: what [`PATHS_DROP_BEGAN`] announces and its
+/// [`PATHS_DROPPED`] answer carries.
+fn next_drop() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!("d{}", NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
 /// Handles one drag-drop event on the desktop window: tells the page while a
-/// drag carrying paths is over it, and what it dropped. Looking at the paths
-/// happens on a spawned task, off the thread that draws.
+/// drag carrying paths is over it, that a drop landed (at once, named), and
+/// later what it dropped under the same name. Looking at the paths happens on
+/// a spawned task, off the thread that draws, and can take up to
+/// [`KIND_WAIT`]: by then the page may be asking something else, which is why
+/// the answer is bound by name to the moment of the gesture.
 pub fn dropped_on_desktop(app: &AppHandle, event: &DragDropEvent) {
     if let Some(over) = dragging_after(event) {
         let _ = app.emit_to(
@@ -187,17 +198,21 @@ pub fn dropped_on_desktop(app: &AppHandle, event: &DragDropEvent) {
     let Some(deps) = crate::composition::resolve(app) else {
         return;
     };
+    let drop = next_drop();
+    let _ = app.emit_to(
+        DESKTOP_WINDOW,
+        PATHS_DROP_BEGAN,
+        serde_json::json!({ "drop": drop }),
+    );
     let app = app.clone();
     let paths = paths.clone();
     tauri::async_runtime::spawn(async move {
         let paths = described(paths, deps.files.clone(), KIND_WAIT).await;
-        if paths.is_empty() {
-            return;
-        }
+        // Said even when nothing is left, so the page lets go of the name.
         let _ = app.emit_to(
             DESKTOP_WINDOW,
             PATHS_DROPPED,
-            serde_json::json!({ "paths": paths }),
+            serde_json::json!({ "drop": drop, "paths": paths }),
         );
     });
 }

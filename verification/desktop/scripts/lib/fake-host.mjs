@@ -44,7 +44,8 @@ export const STARTING = {
  * none queued is a cancel. Each pick is counted in `window.__fakeHostPicked`
  * with the kind it asked for. The home folder is `window.__fakeHostHome`.
  * Files dragged onto the window are a step's to send, as the host's
- * `nessa://paths-dragging` and `nessa://paths-dropped` (`__fakeHostEmit`).
+ * `nessa://paths-dragging`, `nessa://paths-drop-began` and
+ * `nessa://paths-dropped` (`__fakeHostEmit`).
  *
  * Every window may ask for setup again (`replay_onboarding`, from Settings),
  * which is counted in `window.__fakeHostReplays`. Given `setup`, the page is
@@ -74,7 +75,11 @@ export function gatewayHost({
   const started = setup || panel
   // The host's events for files and folders dragged onto the window. Here,
   // not beside the function: the page runs this function's text alone.
-  const DRAGGED_EVENTS = new Set(["nessa://paths-dragging", "nessa://paths-dropped"])
+  const DRAGGED_EVENTS = new Set([
+    "nessa://paths-dragging",
+    "nessa://paths-drop-began",
+    "nessa://paths-dropped",
+  ])
   // The host's typed refusals (`SurfaceCommandError`). The page maps the
   // reason; a sentence here would be an untyped failure.
   const notReady = { reason: "not-ready" }

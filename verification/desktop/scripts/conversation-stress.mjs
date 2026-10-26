@@ -1472,9 +1472,14 @@ async function dropOnChannel(run, failures, dropped, photograph, name) {
     await photograph(`${name}-5-drop-target`)
   }
   const before = await flow.locator(css.newChannelResource).count()
-  // The host says the drag is gone as it lets go, then which paths it dropped.
+  // The host says the drag is gone as it lets go and names the drop, then,
+  // once it has looked at them, which paths that drop held.
   await emit("nessa://paths-dragging", { dragging: false })
-  await emit("nessa://paths-dropped", { paths: [...dropped, dropped[0]] })
+  await emit("nessa://paths-drop-began", { drop: `stress-${name}` })
+  await emit("nessa://paths-dropped", {
+    drop: `stress-${name}`,
+    paths: [...dropped, dropped[0]],
+  })
   const listed = await waitFor(
     async () =>
       (await flow.locator(css.newChannelResource).count()) === before + dropped.length,

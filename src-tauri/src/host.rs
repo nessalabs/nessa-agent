@@ -54,8 +54,13 @@ pub const LINK_NOT_OPENED: &str = "nessa://link-not-opened";
 /// payload is `{ dragging }`. The window's drag and drop belongs to the host,
 /// so the page has no drag events of its own to draw a drop target from.
 pub const PATHS_DRAGGING: &str = "nessa://paths-dragging";
+/// A drop landed on the desktop window; the payload is `{ drop }`, the name
+/// its [`PATHS_DROPPED`] answer will carry. Sent at the gesture, before the
+/// paths are looked at, so the page binds the drop to what it was over then
+/// rather than to whatever is open when the answer comes.
+pub const PATHS_DROP_BEGAN: &str = "nessa://paths-drop-began";
 /// Files and folders dropped on the desktop window; the payload is
-/// `{ paths }`, each a [`crate::channel_paths::DroppedPath`]. Only paths, like
+/// `{ drop, paths }`, each a [`crate::channel_paths::DroppedPath`]. Only paths, like
 /// the channel pickers': the gateway checks each again before using it.
 pub const PATHS_DROPPED: &str = "nessa://paths-dropped";
 /// Setup recorded a finish, and with it the agent it chose. Sent to every

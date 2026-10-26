@@ -215,15 +215,24 @@ describe("asking", () => {
     store.dispatch(openChannelCreation())
     const over: boolean[] = []
     const stop = store.dispatch(watchChannelDrops({ dragging: (is) => over.push(is) }))
-    const drop = (...dropped: DroppedPath[]) =>
-      watches.forEach((watch) => watch.dropped(dropped))
+    let drops = 0
+    const land = () => {
+      const name = `d${++drops}`
+      watches.forEach((watch) => watch.began(name))
+      return name
+    }
+    const answer = (name: string, ...dropped: DroppedPath[]) =>
+      watches.forEach((watch) => watch.dropped(name, dropped))
     watches.forEach((watch) => watch.dragging(true))
     expect(over).toEqual([true])
-    // Asked for its name, a drop adds nothing.
-    drop({ path: "/work/early.md", kind: "file" })
-    expect(flowOf(store)?.draft.resources).toEqual([])
+    // Landed while it asked for the name: its paths add nothing, even once
+    // they come with the files question open.
+    const early = land()
     store.dispatch(askChannelStep({ step: "resources" }))
-    drop(
+    answer(early, { path: "/work/early.md", kind: "file" })
+    expect(flowOf(store)?.draft.resources).toEqual([])
+    answer(
+      land(),
       { path: "/work/brief.md", kind: "file" },
       { path: "/work/docs", kind: "folder" },
       { path: "/work/brief.md", kind: "file" },
@@ -233,6 +242,14 @@ describe("asking", () => {
       "/work/brief.md": "file",
       "/work/docs": "folder",
     })
+    // Landed here, then the flow closed and another opened before the paths
+    // came: they belong to neither.
+    const late = land()
+    store.dispatch(closeChannelCreation())
+    store.dispatch(openChannelCreation())
+    store.dispatch(askChannelStep({ step: "resources" }))
+    answer(late, { path: "/work/late.md", kind: "file" })
+    expect(flowOf(store)?.draft.resources).toEqual([])
     stop()
     expect(watches.size).toBe(0)
   })

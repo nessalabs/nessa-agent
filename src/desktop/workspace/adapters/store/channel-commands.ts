@@ -140,9 +140,13 @@ export function addChannelResources({
 /**
  * Watches for files and folders dragged onto the window while the flow asks
  * for them: `dragging` says when a drag is over it, and what is dropped is
- * added as a pick's answer is. A drop that lands once the question has moved
- * on, or the flow has closed, changes nothing. Answers how to stop watching;
- * where the window is never told of a drop, it watches nothing.
+ * added as a pick's answer is. A drop belongs to the flow it landed on, as it
+ * landed: the host names it then and answers with its paths only after
+ * looking at them, which can be seconds later. So a drop that landed while
+ * the flow asked something else, whose flow has since closed (even if another
+ * has opened), or that arrives once the question has moved on, changes
+ * nothing. Answers how to stop watching; where the window is never told of a
+ * drop, it watches nothing.
  */
 export function watchChannelDrops({
   dragging,
@@ -151,12 +155,23 @@ export function watchChannelDrops({
 }): WorkspaceCommand<() => void> {
   return (dispatch, getState, { paths }) => {
     if (!paths?.drops) return () => {}
+    // Each drop's flow, as it landed, until its paths come.
+    const landedOn = new Map<string, string>()
+    const asked = () => {
+      const flow = getState().workspace.channelCreation
+      return flow?.asking === "resources" && !flow.creating ? flow.opening : undefined
+    }
     return paths.drops({
       dragging,
-      dropped: (added) => {
-        const flow = getState().workspace.channelCreation
-        if (!flow || flow.asking !== "resources") return
-        dispatch(channelResourcesAdded({ opening: flow.opening, added }))
+      began: (drop) => {
+        const opening = asked()
+        if (opening) landedOn.set(drop, opening)
+      },
+      dropped: (drop, added) => {
+        const opening = landedOn.get(drop)
+        landedOn.delete(drop)
+        if (opening && asked() === opening)
+          dispatch(channelResourcesAdded({ opening, added }))
       },
     })
   }

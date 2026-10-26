@@ -54,6 +54,7 @@ const HOST_EVENTS = {
   attachmentReadying: "nessa://attachment-readying",
   attachmentBatch: "nessa://attachment-batch",
   pathsDragging: "nessa://paths-dragging",
+  pathsDropBegan: "nessa://paths-drop-began",
   pathsDropped: "nessa://paths-dropped",
   gatewayStartup: "nessa://gateway-startup",
   runtimeCopy: "nessa://runtime-copy",
@@ -577,15 +578,17 @@ export interface DroppedPath {
 
 /**
  * Be told of files and folders dragged onto the desktop window: `dragging`
- * while a drag carrying paths is over it, `dropped` with the paths it let go
- * of. The window receives no drop events of its own (the webview's drag and
+ * while a drag carrying paths is over it, `began` the moment a drop lands
+ * (named), and `dropped` with the paths it let go of, under the same name,
+ * once the host has looked at them (which can be a couple of seconds later). The window receives no drop events of its own (the webview's drag and
  * drop belongs to the host), and a DOM `File` names no path, so this is the
  * only way the page learns where a dropped file is. Only paths, like the
  * channel pickers': the gateway checks each again before using it.
  */
 export async function onPathsDragged(handlers: {
   dragging: (over: boolean) => void
-  dropped: (paths: DroppedPath[]) => void
+  began: (drop: string) => void
+  dropped: (drop: string, paths: DroppedPath[]) => void
 }): Promise<() => void> {
   if (!inTauri) return () => {}
   const { listen } = await import("@tauri-apps/api/event")
@@ -593,8 +596,12 @@ export async function onPathsDragged(handlers: {
     listen<{ dragging: boolean }>(HOST_EVENTS.pathsDragging, ({ payload }) =>
       handlers.dragging(payload.dragging),
     ),
-    listen<{ paths: DroppedPath[] }>(HOST_EVENTS.pathsDropped, ({ payload }) =>
-      handlers.dropped(payload.paths),
+    listen<{ drop: string }>(HOST_EVENTS.pathsDropBegan, ({ payload }) =>
+      handlers.began(payload.drop),
+    ),
+    listen<{ drop: string; paths: DroppedPath[] }>(
+      HOST_EVENTS.pathsDropped,
+      ({ payload }) => handlers.dropped(payload.drop, payload.paths),
     ),
   ])
   return () => stops.forEach((stop) => stop())
