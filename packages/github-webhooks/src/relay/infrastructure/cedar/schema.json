@@ -17,6 +17,22 @@
               "element": {
                 "type": "String"
               }
+            },
+            "appRepositories": {
+              "type": "Set",
+              "element": {
+                "type": "Entity",
+                "name": "Repository"
+              }
+            },
+            "installationPermissions": {
+              "type": "Set",
+              "element": {
+                "type": "String"
+              }
+            },
+            "installationActive": {
+              "type": "Boolean"
             }
           }
         }

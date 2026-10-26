@@ -2,6 +2,9 @@ export type GitHubIdentity = Readonly<{
   userId: string
   repositoryIds: readonly string[]
   oauthScopes: readonly string[]
+  installationActive?: boolean
+  appRepositoryIds?: readonly string[]
+  installationPermissions?: readonly string[]
   repositoryIsPrivate: boolean
 }>
 export type IdentityResult =

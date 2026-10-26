@@ -19,11 +19,23 @@ test("production cannot reuse the development GitHub App or relay", () => {
   const dev = {
     origin: "https://dev.example",
     appSlug: "dev-app",
+    appId: 1,
     clientId: "dev-client",
   }
   assert.throws(() => stageConfiguration("prod", { dev, prod: null }))
   assert.throws(() =>
     stageConfiguration("prod", { dev, prod: { ...dev, origin: "https://prod.example" } }),
+  )
+  assert.throws(() =>
+    stageConfiguration("prod", {
+      dev,
+      prod: {
+        origin: "https://prod.example",
+        appSlug: "prod-app",
+        clientId: "prod-client",
+        appId: 1,
+      },
+    }),
   )
   assert.equal(
     stageConfiguration("prod", {
@@ -31,6 +43,7 @@ test("production cannot reuse the development GitHub App or relay", () => {
       prod: {
         origin: "https://prod.example",
         appSlug: "prod-app",
+        appId: 2,
         clientId: "prod-client",
       },
     }).appSlug,

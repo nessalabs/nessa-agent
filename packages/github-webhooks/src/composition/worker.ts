@@ -1,3 +1,4 @@
+import stages from "../../../../protocol/defaults/github-relays.json"
 import { D1DeliveryStore, type SqlDatabase } from "../webhooks/infrastructure/d1.js"
 import { createWebhookHandler } from "../webhooks/infrastructure/http.js"
 import { githubPayloadVerifier } from "../webhooks/infrastructure/signature.js"
@@ -33,10 +34,14 @@ function relay(environment: Environment) {
     !["dev", "alpha", "ci", "prod"].includes(stage)
   )
     return null
+  const target = Object.hasOwn(stages, stage)
+    ? stages[stage as keyof typeof stages]
+    : null
+  if (!target) return null
   return createRelayHandler({
     stage,
     audit: new D1RelayReadAudit(environment.DB, () => new Date()),
-    identities: new GitHubIdentityAdapter((...args) => fetch(...args)),
+    identities: new GitHubIdentityAdapter((...args) => fetch(...args), target.appId),
     policy,
     inbox: new D1RelayInbox(environment.DB),
     tickets: new HmacWakeTickets(

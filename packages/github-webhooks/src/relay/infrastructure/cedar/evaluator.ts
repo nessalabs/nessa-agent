@@ -41,6 +41,11 @@ export class CedarRelayPolicyEvaluator implements RelayPolicyEvaluator {
         {
           uid: user,
           attrs: {
+            installationActive: identity.installationActive ?? false,
+            installationPermissions: [...(identity.installationPermissions ?? [])],
+            appRepositories: (identity.appRepositoryIds ?? []).map((id) => ({
+              __entity: { type: "Relay::Repository", id },
+            })),
             oauthScopes: [...identity.oauthScopes],
             repositories: identity.repositoryIds.map((id) => ({
               __entity: { type: "Relay::Repository", id },

@@ -1,3 +1,5 @@
+import process from "node:process"
+import { URL } from "node:url"
 import { readFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { deployment, stageConfiguration } from "./deployment.mjs"

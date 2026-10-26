@@ -28,13 +28,42 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
       const credential = req.headers.get("authorization")
       if (credential === "Bearer invalid_token_1234")
         return Response.json({}, { status: 401 })
-      if (new URL(req.url).pathname === "/user")
+      const path = new URL(req.url).pathname
+      const appToken = credential?.includes("app_") ?? false
+      if (path === "/user/installations")
+        return Response.json({
+          total_count: appToken ? 1 : 0,
+          installations: appToken
+            ? [
+                {
+                  id: 77,
+                  app_id: credential?.includes("wrong_app") ? 999 : 5465070,
+                  suspended_at: credential?.includes("suspended") ? "2026-10-25" : null,
+                  permissions: {
+                    contents: "read",
+                    issues: credential?.includes("metadata_app") ? "none" : "write",
+                    pull_requests: "write",
+                    actions: "read",
+                    checks: "read",
+                  },
+                },
+              ]
+            : [],
+        })
+      if (path === "/user/installations/77/repositories")
+        return Response.json({
+          total_count: 1,
+          repositories: [{ id: credential?.includes("other_app") ? 99 : 42 }],
+        })
+      if (path === "/user")
         return Response.json(
           { id: credential === "Bearer user_two_token123" ? 22 : 11 },
           {
             headers: {
               "x-oauth-scopes":
-                credential === "Bearer metadata_only_token" ? "read:user" : "repo",
+                credential === "Bearer metadata_only_token" || appToken
+                  ? "read:user"
+                  : "repo",
             },
           },
         )
@@ -246,7 +275,12 @@ test("GitHub adapter fails closed for slow, malformed, wrong-identity and refuse
     Response.json({}, { status: 503 }),
   ]) {
     assert.equal(
-      (await new GitHubIdentityAdapter(async () => response).verify("token", "42")).kind,
+      (
+        await new GitHubIdentityAdapter(async () => response, 5465070).verify(
+          "token",
+          "42",
+        )
+      ).kind,
       "unavailable",
     )
   }
@@ -254,7 +288,7 @@ test("GitHub adapter fails closed for slow, malformed, wrong-identity and refuse
     (
       await new GitHubIdentityAdapter(async () => {
         throw new Error("offline")
-      }).verify("token", "42")
+      }, 5465070).verify("token", "42")
     ).kind,
     "unavailable",
   )
@@ -342,4 +376,20 @@ test("an unconfirmed audit write is a failure, not a disclosure receipt", async 
     }),
     /audit_unconfirmed/,
   )
+})
+
+test("L8/L9: App user tokens disclose private events only for the active Nessa installation and all event permissions", async (t) => {
+  const { deliver, page } = await fixture(t)
+  await deliver()
+  assert.equal((await page(0, { Authorization: "Bearer valid_app_token" })).status, 200)
+  for (const token of [
+    "metadata_app_token",
+    "wrong_app_token",
+    "suspended_app_token",
+    "other_app_token",
+  ]) {
+    const response = await page(0, { Authorization: `Bearer ${token}` })
+    assert.equal(response.status, 403, token)
+    assert.equal((await response.text()).includes("private"), false)
+  }
 })

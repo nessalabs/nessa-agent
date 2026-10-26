@@ -1,3 +1,4 @@
+import { URL } from "node:url"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
@@ -36,9 +37,12 @@ export function stageConfiguration(stage, targets) {
     throw new Error(`Unconfigured relay stage ${stage}`)
   const origins = new Set(),
     apps = new Set(),
-    clients = new Set()
+    clients = new Set(),
+    appIds = new Set()
   for (const value of Object.values(targets)) {
     if (!value) continue
+    if (!Number.isSafeInteger(value.appId) || value.appId <= 0)
+      throw new Error("A stage requires a GitHub App ID")
     const origin = new URL(value.origin)
     if (
       origin.protocol !== "https:" ||
@@ -52,12 +56,14 @@ export function stageConfiguration(stage, targets) {
     if (
       origins.has(origin.origin) ||
       apps.has(value.appSlug) ||
-      clients.has(value.clientId)
+      clients.has(value.clientId) ||
+      appIds.has(value.appId)
     )
       throw new Error("Stages require separate relays and GitHub Apps")
     origins.add(origin.origin)
     apps.add(value.appSlug)
     clients.add(value.clientId)
+    appIds.add(value.appId)
   }
   return targets[stage]
 }

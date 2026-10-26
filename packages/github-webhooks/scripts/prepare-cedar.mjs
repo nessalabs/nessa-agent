@@ -1,3 +1,4 @@
+import { URL } from "node:url"
 import { copyFile, mkdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"

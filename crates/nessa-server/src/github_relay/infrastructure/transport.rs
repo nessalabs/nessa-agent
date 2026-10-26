@@ -14,6 +14,7 @@ use tokio_tungstenite::{tungstenite::client::IntoClientRequest, MaybeTlsStream, 
 pub struct RelayConfiguration {
     pub origin: String,
     pub app_slug: String,
+    pub app_id: u64,
     pub client_id: String,
 }
 /// The same compiled public table is used by every gateway. The packaged host
