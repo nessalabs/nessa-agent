@@ -13,7 +13,8 @@
 //! of, each marked a file or a folder. They are a choice too, checked again
 //! by the gateway.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -21,6 +22,7 @@ use tauri::async_runtime::channel;
 use tauri::{AppHandle, DragDropEvent, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
+use crate::attachments::{answered_within, ChosenFiles, Kind};
 use crate::desktop_window::DESKTOP_WINDOW;
 use crate::host::{PATHS_DRAGGING, PATHS_DROPPED};
 
@@ -131,43 +133,38 @@ fn dragging_after(event: &DragDropEvent) -> Option<bool> {
 }
 
 /// What the page is told of `paths`: each one there, in order, with its kind.
-/// A path that is not text, or no longer there, is left out; the rest still go.
-/// Every path is looked at at once, so one on a stalled share holds the drop
-/// for at most [`KIND_WAIT`], not that once per path.
-async fn described(paths: Vec<PathBuf>) -> Vec<DroppedPath> {
+/// A path that is not text, or that the filesystem says is not there, is left
+/// out; the rest still go. The filesystem is the host's own port
+/// ([`ChosenFiles`], the one the panel's drops look through), asked through
+/// [`answered_within`] for every path at once, so one on a stalled share holds
+/// the drop for at most `wait`, not that once per path.
+async fn described(
+    paths: Vec<PathBuf>,
+    files: Arc<dyn ChosenFiles>,
+    wait: Duration,
+) -> Vec<DroppedPath> {
     let looks: Vec<_> = paths
         .into_iter()
         .filter_map(|path| {
             let text = path.to_str()?.to_owned();
-            Some((text, tauri::async_runtime::spawn(kind_of(path))))
+            let files = files.clone();
+            let look = answered_within(wait, move || files.look(&path));
+            Some((text, tauri::async_runtime::spawn(look)))
         })
         .collect();
     let mut described = Vec::with_capacity(looks.len());
     for (path, look) in looks {
-        if let Ok(Some(kind)) = look.await {
-            described.push(DroppedPath { path, kind });
-        }
+        let kind = match look.await {
+            Ok(Ok(Ok(found))) if found.kind == Kind::Directory => DroppedKind::Folder,
+            Ok(Ok(Ok(_))) => DroppedKind::File,
+            // The filesystem said it is not there, or not to be read.
+            Ok(Ok(Err(_))) => continue,
+            // No answer in time: kept, as a file.
+            Ok(Err(_)) | Err(_) => DroppedKind::File,
+        };
+        described.push(DroppedPath { path, kind });
     }
     described
-}
-
-async fn kind_of(path: PathBuf) -> Option<DroppedKind> {
-    let look = tauri::async_runtime::spawn_blocking(move || is_folder(&path));
-    match tokio::time::timeout(KIND_WAIT, look).await {
-        Ok(Ok(found)) => found.map(|folder| {
-            if folder {
-                DroppedKind::Folder
-            } else {
-                DroppedKind::File
-            }
-        }),
-        Ok(Err(_)) | Err(_) => Some(DroppedKind::File),
-    }
-}
-
-/// Whether `path` is a folder (following links); `None` when nothing is there.
-fn is_folder(path: &Path) -> Option<bool> {
-    std::fs::metadata(path).ok().map(|found| found.is_dir())
 }
 
 /// Handles one drag-drop event on the desktop window: tells the page while a
@@ -187,10 +184,13 @@ pub fn dropped_on_desktop(app: &AppHandle, event: &DragDropEvent) {
     if paths.is_empty() {
         return;
     }
+    let Some(deps) = crate::composition::resolve(app) else {
+        return;
+    };
     let app = app.clone();
     let paths = paths.clone();
     tauri::async_runtime::spawn(async move {
-        let paths = described(paths).await;
+        let paths = described(paths, deps.files.clone(), KIND_WAIT).await;
         if paths.is_empty() {
             return;
         }
@@ -205,6 +205,8 @@ pub fn dropped_on_desktop(app: &AppHandle, event: &DragDropEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attachments::{DirectoryEntries, OnDisk, Stored};
+    use std::path::Path;
     use tauri::PhysicalPosition;
 
     fn entering(paths: &[&Path]) -> DragDropEvent {
@@ -230,30 +232,118 @@ mod tests {
         assert_eq!(dragging_after(&over), None);
     }
 
+    /// A filesystem that answers from a list: a folder, a file, nothing
+    /// there, or a stall that never answers.
+    struct Answers(Vec<(&'static str, Answer)>);
+
+    #[derive(Clone, Copy)]
+    enum Answer {
+        Folder,
+        File,
+        Gone,
+        Stalled,
+    }
+
+    impl ChosenFiles for Answers {
+        fn look(&self, path: &Path) -> std::io::Result<OnDisk> {
+            let answer = self
+                .0
+                .iter()
+                .find(|(named, _)| Path::new(named) == path)
+                .map(|(_, answer)| *answer)
+                .expect("a path the test named");
+            let on_disk = |kind| OnDisk {
+                kind,
+                size: 0,
+                stored: Stored::Locally,
+            };
+            match answer {
+                Answer::Folder => Ok(on_disk(Kind::Directory)),
+                Answer::File => Ok(on_disk(Kind::Regular)),
+                Answer::Gone => Err(std::io::ErrorKind::NotFound.into()),
+                Answer::Stalled => {
+                    std::thread::sleep(Duration::from_secs(5));
+                    Ok(on_disk(Kind::Directory))
+                }
+            }
+        }
+
+        fn entries(&self, _: &Path, _: usize) -> std::io::Result<DirectoryEntries> {
+            unreachable!("a drop on the desktop window never walks a folder")
+        }
+
+        fn bytes(&self, _: &Path, _: u64) -> std::io::Result<Vec<u8>> {
+            unreachable!("a drop on the desktop window never reads a file")
+        }
+    }
+
     #[test]
-    fn dropped_paths_say_file_or_folder_and_leave_out_what_is_gone() {
-        let root = tempfile::tempdir().unwrap();
-        let file = root.path().join("brief.md");
-        std::fs::write(&file, "# Brief").unwrap();
-        let folder = root.path().join("docs");
-        std::fs::create_dir(&folder).unwrap();
-        let gone = root.path().join("gone");
-        let said =
-            tauri::async_runtime::block_on(described(vec![file.clone(), gone, folder.clone()]));
+    fn dropped_paths_say_file_or_folder_in_order_and_leave_out_what_is_gone() {
+        let files = Arc::new(Answers(vec![
+            ("/work/brief.md", Answer::File),
+            ("/work/gone", Answer::Gone),
+            ("/work/docs", Answer::Folder),
+        ]));
+        let said = tauri::async_runtime::block_on(described(
+            vec![
+                "/work/brief.md".into(),
+                "/work/gone".into(),
+                "/work/docs".into(),
+            ],
+            files,
+            Duration::from_secs(5),
+        ));
         assert_eq!(
             said,
             vec![
                 DroppedPath {
-                    path: file.to_str().unwrap().to_owned(),
+                    path: "/work/brief.md".to_owned(),
                     kind: DroppedKind::File,
                 },
                 DroppedPath {
-                    path: folder.to_str().unwrap().to_owned(),
+                    path: "/work/docs".to_owned(),
                     kind: DroppedKind::Folder,
                 },
             ]
         );
         let shape = serde_json::to_value(&said[1]).unwrap();
         assert_eq!(shape["kind"], "folder");
+    }
+
+    #[test]
+    fn stalled_paths_hold_the_drop_for_one_wait_and_count_as_files() {
+        let files = Arc::new(Answers(vec![
+            ("/share/a", Answer::Stalled),
+            ("/share/b", Answer::Stalled),
+            ("/share/c", Answer::Stalled),
+            ("/work/docs", Answer::Folder),
+        ]));
+        let started = std::time::Instant::now();
+        let said = tauri::async_runtime::block_on(described(
+            vec![
+                "/share/a".into(),
+                "/share/b".into(),
+                "/share/c".into(),
+                "/work/docs".into(),
+            ],
+            files,
+            Duration::from_millis(200),
+        ));
+        // Three stalls looked at together wait one 200 ms, not three.
+        assert!(
+            started.elapsed() < Duration::from_millis(550),
+            "the drop waited {:?}",
+            started.elapsed()
+        );
+        let kinds: Vec<_> = said.iter().map(|each| each.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                DroppedKind::File,
+                DroppedKind::File,
+                DroppedKind::File,
+                DroppedKind::Folder,
+            ]
+        );
     }
 }
