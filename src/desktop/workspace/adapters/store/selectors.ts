@@ -279,7 +279,7 @@ export const selectPaneSession = (state: Root, pane: PaneKey): string | null => 
 
 /** Chat `sessionId`'s right panel: its widgets as tabs; none while it has none. */
 export const selectChatPanel = (state: Root, sessionId: string): ChatPanel | null =>
-  state.workspace.panels[sessionId] ?? null
+  entry(state.workspace.panels, sessionId) ?? null
 
 /** How many times something asked the window to show the right panel. */
 export const selectPanelAsked = (state: Root): number => state.workspace.panelAsked

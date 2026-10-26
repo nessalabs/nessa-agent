@@ -84,6 +84,14 @@ describe("a chat's panel tabs", () => {
     expect(closePanelTab(back, { sessionId: "a", widget: run }).panels).toEqual({})
   })
 
+  it("reads only a chat's own panel, never one a session id inherits", () => {
+    const state = open()
+    for (const sessionId of ["constructor", "toString", "__proto__"]) {
+      expect(showPanelTab(state, { sessionId, widget: run })).toBe(state)
+      expect(closePanelTab(state, { sessionId, widget: run })).toBe(state)
+    }
+  })
+
   it("goes with its chat", () => {
     const state = sessionRemoved(open(), { sessionId: "a", revision: 9, draftId: "x" })
     expect(state.panels).toEqual({})

@@ -9,6 +9,7 @@ import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import { closeInPanel, openInPanel, showInPanel } from "../../model/chat-panel"
 import { focusedPane } from "../../../split-panes/model/pane-layout"
 import {
+  entry,
   paneShowingSession,
   sessionIn,
   without,
@@ -57,7 +58,7 @@ export function openWidgetInPanel(
   const { state: shown, owner } = front
   return {
     ...shown,
-    panels: { ...shown.panels, [owner]: openInPanel(shown.panels[owner], widget) },
+    panels: { ...shown.panels, [owner]: openInPanel(entry(shown.panels, owner), widget) },
     panelAsked: shown.panelAsked + 1,
   }
 }
@@ -67,7 +68,7 @@ export function showPanelTab(
   state: WorkspaceState,
   { sessionId, widget }: { sessionId: string; widget: WidgetRef },
 ): WorkspaceState {
-  const panel = state.panels[sessionId]
+  const panel = entry(state.panels, sessionId)
   if (!panel) return state
   const next = showInPanel(panel, widget)
   return next === panel
@@ -80,7 +81,7 @@ export function closePanelTab(
   state: WorkspaceState,
   { sessionId, widget }: { sessionId: string; widget: WidgetRef },
 ): WorkspaceState {
-  const panel = state.panels[sessionId]
+  const panel = entry(state.panels, sessionId)
   if (!panel) return state
   const next = closeInPanel(panel, widget)
   if (next === panel) return state
