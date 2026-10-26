@@ -83,7 +83,7 @@ const composerHints: Record<ChannelStep, string> = {
   name: "Name the channel",
   folder: "Pick above, then press ↩",
   model: "Pick above, then press ↩",
-  notes: "Notes for every agent here, or press ↩ to skip",
+  notes: "Notes for agents here, or ↩ to skip",
   resources: "Add or drop files, or create",
 }
 

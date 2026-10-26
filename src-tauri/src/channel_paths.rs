@@ -22,7 +22,7 @@ use tauri::{AppHandle, DragDropEvent, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
 use crate::desktop_window::DESKTOP_WINDOW;
-use crate::host::{PATHS_DRAGGED, PATHS_DRAGGING};
+use crate::host::{PATHS_DRAGGING, PATHS_DROPPED};
 
 /// Paths the picker answered with, as text. A path that is not text, or an
 /// answer that is not a path on this machine, refuses the whole choice rather
@@ -132,16 +132,21 @@ fn dragging_after(event: &DragDropEvent) -> Option<bool> {
 
 /// What the page is told of `paths`: each one there, in order, with its kind.
 /// A path that is not text, or no longer there, is left out; the rest still go.
+/// Every path is looked at at once, so one on a stalled share holds the drop
+/// for at most [`KIND_WAIT`], not that once per path.
 async fn described(paths: Vec<PathBuf>) -> Vec<DroppedPath> {
-    let mut described = Vec::with_capacity(paths.len());
-    for path in paths {
-        let Some(text) = path.to_str().map(str::to_owned) else {
-            continue;
-        };
-        let Some(kind) = kind_of(path).await else {
-            continue;
-        };
-        described.push(DroppedPath { path: text, kind });
+    let looks: Vec<_> = paths
+        .into_iter()
+        .filter_map(|path| {
+            let text = path.to_str()?.to_owned();
+            Some((text, tauri::async_runtime::spawn(kind_of(path))))
+        })
+        .collect();
+    let mut described = Vec::with_capacity(looks.len());
+    for (path, look) in looks {
+        if let Ok(Some(kind)) = look.await {
+            described.push(DroppedPath { path, kind });
+        }
     }
     described
 }
@@ -191,7 +196,7 @@ pub fn dropped_on_desktop(app: &AppHandle, event: &DragDropEvent) {
         }
         let _ = app.emit_to(
             DESKTOP_WINDOW,
-            PATHS_DRAGGED,
+            PATHS_DROPPED,
             serde_json::json!({ "paths": paths }),
         );
     });

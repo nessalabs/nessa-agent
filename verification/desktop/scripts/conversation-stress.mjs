@@ -1347,6 +1347,7 @@ async function makeChannel(
   await photograph(`${name}-3-model`)
   await page.keyboard.press(keys.enter)
   if (!(await asking("notes"))) return null
+  await saidWhole(page, `${css.newChannelField}[data-step="notes"]`, "notes", failures)
   if (notes) await page.locator(`${css.newChannelField}[data-step="notes"]`).fill(notes)
   await photograph(`${name}-4-notes`)
   await page.keyboard.press(keys.enter)
@@ -1400,6 +1401,37 @@ async function makeChannel(
   return listed ?? null
 }
 
+/** The desktop window's least width, as `tauri.conf.json` sets it. */
+const NARROWEST_WINDOW = 800
+
+/**
+ * The composer's hint for a question (a span's text, or an empty field's
+ * placeholder) fits its box on one line, whole: it is neither wrapped nor
+ * cut short. Measured as the text itself, in the box's own font, so a hint
+ * that is clipped to one line still fails.
+ */
+async function saidWhole(page, selector, question, failures) {
+  // At the narrowest the desktop window goes (`minWidth` in tauri.conf.json),
+  // where the composer has the least room.
+  const size = page.viewportSize()
+  if (size) await page.setViewportSize({ width: NARROWEST_WINDOW, height: size.height })
+  const said = await page.locator(selector).evaluate((node) => {
+    const text =
+      "placeholder" in node && node.value === "" ? node.placeholder : node.textContent
+    const style = getComputedStyle(node)
+    const context = document.createElement("canvas").getContext("2d")
+    context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+    const room =
+      node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    return { text, wide: context.measureText(text).width, room }
+  })
+  if (size) await page.setViewportSize(size)
+  if (said.wide > said.room + 1)
+    failures.push(
+      `the ${question} question's hint "${said.text}" needs ${Math.ceil(said.wide)}px on one line; it has ${Math.floor(said.room)}px`,
+    )
+}
+
 /**
  * Drags `dropped` (each `{ path, kind }`) onto the window while the flow asks
  * for files, as the host tells the page: a drag over it lights the whole flow
@@ -1417,14 +1449,8 @@ async function dropOnChannel(run, failures, dropped, photograph, name) {
     failures.push("the new channel flow does not listen for dropped files")
     return
   }
-  // The hint says it in one line, and the count is short.
-  const hint = flow.locator(".new-channel-hint")
-  const lines = await hint.evaluate((node) =>
-    Math.round(
-      node.getBoundingClientRect().height / parseFloat(getComputedStyle(node).lineHeight),
-    ),
-  )
-  if (lines !== 1) failures.push(`the files question's hint takes ${lines} lines, not 1`)
+  // The hint says it whole, on one line, and the count is short.
+  await saidWhole(page, `${css.newChannel} .new-channel-hint`, "files", failures)
   const count = (await flow.locator(".new-channel-count").innerText()).trim()
   if (!/^\d\/\d$/.test(count))
     failures.push(`the flow counts its questions as "${count}"`)

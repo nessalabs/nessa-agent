@@ -57,7 +57,7 @@ pub const PATHS_DRAGGING: &str = "nessa://paths-dragging";
 /// Files and folders dropped on the desktop window; the payload is
 /// `{ paths }`, each a [`crate::channel_paths::DroppedPath`]. Only paths, like
 /// the channel pickers': the gateway checks each again before using it.
-pub const PATHS_DRAGGED: &str = "nessa://paths-dropped";
+pub const PATHS_DROPPED: &str = "nessa://paths-dropped";
 /// Setup recorded a finish, and with it the agent it chose. Sent to every
 /// window: one that already asked which agent setup chose asks again.
 pub const SETUP_RECORDED: &str = "nessa://setup-recorded";

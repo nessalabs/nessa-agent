@@ -288,8 +288,9 @@
   line-height: 22px;
 }
 
-/* One line, always: a narrow window clips the hint rather than wrapping it. */
-.new-channel-hint {
+/* One line, always: a narrow window clips a hint rather than wrapping it. */
+.new-channel-hint,
+.new-channel-field:placeholder-shown {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
