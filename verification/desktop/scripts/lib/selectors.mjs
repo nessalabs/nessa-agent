@@ -467,6 +467,17 @@ export const storage = {
   pictureInConversations: "nessa.desktop.picture-in-conversations",
   greeting: "nessa.desktop.greeting",
   sideRail: "nessa.desktop.side-rail", // "on" offers the side rail (Advanced › Experimental)
+  overviewFilter: "nessa.desktop.workspace.overview-filter", // the Agents overview's filter, as JSON (`remembered-filter.ts`)
+}
+
+/** The number each overview filter choice shows and answers to (`choiceKey`). */
+export const overviewFilterKeys = {
+  ongoing: "1",
+  all: "2",
+  any: "3",
+  today: "4",
+  week: "5",
+  month: "6",
 }
 
 /** The same-window event a stored preference announces a change on. */
