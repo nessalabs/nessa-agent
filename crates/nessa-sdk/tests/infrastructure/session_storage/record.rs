@@ -7,6 +7,7 @@ use super::{
     },
     opened,
 };
+use data_encoding::BASE32HEX_NOPAD;
 use nessa_sdk::{
     application::agent_execution::{
         executions::ExecutionRequest,
@@ -28,13 +29,14 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::RecvTimeoutError,
+        mpsc::{self, RecvTimeoutError},
         Arc, Mutex,
     },
     task::{Context, Poll, Waker},
     thread,
     time::{Duration, Instant},
 };
+use tokio::{runtime::Builder as RuntimeBuilder, sync::oneshot};
 
 /// Hang ceiling for the child to reach the unsealed prefix.
 ///
@@ -55,6 +57,164 @@ fn watch_pending(watch: &mut CommittedChangeWatch) {
         wait.as_mut().poll(&mut Context::from_waker(Waker::noop())),
         Poll::Pending
     ));
+}
+
+#[test]
+fn cancelled_discard_retains_exclusion_until_queued_file_removal_finishes() {
+    let runtime = RuntimeBuilder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("sessions");
+        let storage = RecordStorage::new(&root).unwrap();
+        storage.initialize().await.unwrap();
+        let id = SessionId::new("cancelled-discard").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let (change, snapshot) = opened(&id);
+        lease
+            .save_changes(
+                lease.load().await.unwrap().binding().clone(),
+                vec![SessionSaveUnit::new(vec![change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        drop(lease);
+
+        drop(storage.discard_unreadable(id.clone()));
+        let lease = storage.open_existing(id.clone()).await.unwrap().unwrap();
+        assert_eq!(lease.load().await.unwrap().snapshot(), Some(&snapshot));
+        drop(lease);
+        let sibling = SessionId::new("discard-sibling").unwrap();
+        let sibling_lease = storage.open(sibling.clone()).await.unwrap();
+        let (change, sibling_snapshot) = opened(&sibling);
+        sibling_lease
+            .save_changes(
+                sibling_lease.load().await.unwrap().binding().clone(),
+                vec![SessionSaveUnit::new(vec![change]).unwrap()],
+            )
+            .await
+            .unwrap();
+        let mut watch = storage.watch_committed(&id).unwrap();
+        watch_pending(&mut watch);
+
+        let (release, gate) = mpsc::channel();
+        let (started, running) = oneshot::channel();
+        let blocker = tokio::task::spawn_blocking(move || {
+            started.send(()).unwrap();
+            // Dropping `release` also frees the worker if the test fails.
+            let _ = gate.recv();
+        });
+        running.await.unwrap();
+        let mut discard = storage.discard_unreadable(id.clone());
+        assert!(matches!(
+            discard
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Pending
+        ));
+        drop(discard);
+        // Physical removal cannot finish before `blocker` releases the pool,
+        // regardless of whether the caller still wants its result.
+        let mut competing = storage.open_existing(id.clone());
+        let excluded = matches!(
+            competing
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Err(StorageError::Busy))
+        );
+        drop(competing);
+        let mut competing = storage.discard_unreadable(id.clone());
+        let discard_excluded = matches!(
+            competing
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Err(StorageError::Busy))
+        );
+        drop(competing);
+        release.send(()).unwrap();
+        blocker.await.unwrap();
+        assert!(
+            excluded,
+            "cancelled discard released its writer reservation before queued I/O ended"
+        );
+        assert!(
+            discard_excluded,
+            "another discard entered while queued I/O retained ownership"
+        );
+
+        let lease = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match storage.open_existing(id.clone()).await {
+                    Err(StorageError::Busy) => tokio::task::yield_now().await,
+                    result => break result.unwrap().unwrap(),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(lease.load().await.unwrap().snapshot().is_none());
+        drop(lease);
+        assert_eq!(watch_ready(&mut watch), ChangeWatchState::Dirty);
+        assert_eq!(
+            sibling_lease.load().await.unwrap().snapshot(),
+            Some(&sibling_snapshot)
+        );
+        drop(sibling_lease);
+        storage.shutdown().await.unwrap();
+        drop(storage);
+        let reopened = RecordStorage::new(&root).unwrap();
+        let lease = reopened.open_existing(id).await.unwrap().unwrap();
+        assert!(lease.load().await.unwrap().snapshot().is_none());
+        drop(lease);
+        let sibling_lease = reopened.open_existing(sibling).await.unwrap().unwrap();
+        assert_eq!(
+            sibling_lease.load().await.unwrap().snapshot(),
+            Some(&sibling_snapshot)
+        );
+        drop(sibling_lease);
+        reopened.shutdown().await.unwrap();
+    });
+}
+
+#[tokio::test]
+async fn failed_discard_releases_its_reservation_without_resetting_history() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("sessions");
+    let storage = RecordStorage::new(&root).unwrap();
+    let id = SessionId::new("failed-discard").unwrap();
+    let lease = storage.open(id.clone()).await.unwrap();
+    let (change, snapshot) = opened(&id);
+    lease
+        .save_changes(
+            lease.load().await.unwrap().binding().clone(),
+            vec![SessionSaveUnit::new(vec![change]).unwrap()],
+        )
+        .await
+        .unwrap();
+    drop(lease);
+    let journal = root.join(format!(
+        "s-{}.jsonl",
+        BASE32HEX_NOPAD
+            .encode(id.as_str().as_bytes())
+            .to_ascii_lowercase()
+    ));
+    std::fs::create_dir(&journal).unwrap();
+    let mut watch = storage.watch_committed(&id).unwrap();
+    assert!(matches!(
+        storage.discard_unreadable(id.clone()).await,
+        Err(StorageError::Io(_))
+    ));
+    watch_pending(&mut watch);
+    // Removing the obstructing directory lets a new opener prove both release
+    // of exclusion and preservation of the original semantic history.
+    std::fs::remove_dir(journal).unwrap();
+    let lease = storage.open_existing(id).await.unwrap().unwrap();
+    assert_eq!(lease.load().await.unwrap().snapshot(), Some(&snapshot));
+    drop(lease);
+    storage.shutdown().await.unwrap();
 }
 
 #[tokio::test]
