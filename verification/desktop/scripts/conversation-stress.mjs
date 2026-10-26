@@ -1892,6 +1892,8 @@ const steps = {
       if (failures.length) return
       await run.exclusive(async () => {
         await openAccounts(run.page)
+        // The actions are out of reach until the pointer is over the row, as a person's is.
+        await row.hover()
         await row.getByRole("button", { name: names.githubDisconnect }).click()
         if (!(await waitFor(async () => (await state()) === "signed-out", 30_000)))
           failures.push(`the row is ${await state()} after Disconnect`)

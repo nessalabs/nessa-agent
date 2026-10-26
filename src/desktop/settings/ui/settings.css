@@ -1414,6 +1414,7 @@ html:not(.dark) .settings .settings-card {
 }
 
 .settings-github-status {
+  pointer-events: none;
   color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);
 }
