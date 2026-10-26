@@ -61,9 +61,22 @@ fn watch_pending(watch: &mut CommittedChangeWatch) {
 
 #[test]
 fn cancelled_discard_retains_exclusion_until_queued_file_removal_finishes() {
+    let admitted = Arc::new(AtomicBool::new(false));
+    let (parked, idle) = oneshot::channel();
+    let parked = Mutex::new(Some(parked));
     let runtime = RuntimeBuilder::new_current_thread()
         .enable_all()
         .max_blocking_threads(1)
+        .on_thread_park({
+            let admitted = admitted.clone();
+            move || {
+                if admitted.load(Ordering::SeqCst) {
+                    if let Some(parked) = parked.lock().unwrap().take() {
+                        let _ = parked.send(());
+                    }
+                }
+            }
+        })
         .build()
         .unwrap();
     runtime.block_on(async {
@@ -115,6 +128,13 @@ fn cancelled_discard_retains_exclusion_until_queued_file_removal_finishes() {
                 .poll(&mut Context::from_waker(Waker::noop())),
             Poll::Pending
         ));
+        admitted.store(true, Ordering::SeqCst);
+        // Idle means the detached discard has been polled to its blocking
+        // receipt: the only blocking worker still waits on `gate`.
+        tokio::time::timeout(Duration::from_secs(10), idle)
+            .await
+            .unwrap()
+            .unwrap();
         drop(discard);
         // Physical removal cannot finish before `blocker` releases the pool,
         // regardless of whether the caller still wants its result.
