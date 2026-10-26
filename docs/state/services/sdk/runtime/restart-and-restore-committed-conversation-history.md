@@ -5,7 +5,7 @@ kind: "operation"
 status: "mixed"
 summary: "Restart loads the saved conversation records and reconstructs the committed history."
 parent: "sdk-runtime"
-sourceRevision: "004761c44bc10747765ff8045fde57c7b4ec2649"
+sourceRevision: "36695f3a8bd80a8d2b769b9a608339c54e31b3ec"
 sources:
   - "crates/nessa-sdk/src/infrastructure/session_storage/record.rs"
   - "crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs"
@@ -51,7 +51,7 @@ stateDiagram-v2
     end note
 ```
 
-## Further reading
+## Discarding unreadable history
 
 Explicitly discarding unreadable local history holds the conversation's writer
 reservation while removing a legacy journal, resetting its record stream and
@@ -67,5 +67,7 @@ notification and reopen consistency with an unchanged sibling. This review
 covers the storage lifetime and restoration boundary; provider attachment and
 gateway deletion policy were not revalidated. The restoration chart above keeps
 its existing states because explicit discard is a separate operation.
+
+## Further reading
 
 [Source](../../../../../crates/nessa-sdk/src/infrastructure/session_storage/record.rs) · [Related source](../../../../../crates/nessa-sdk/src/infrastructure/session_storage/record_writer.rs) · [Related tests](../../../../../crates/nessa-sdk/tests/infrastructure/session_storage.rs)
