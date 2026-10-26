@@ -239,7 +239,7 @@ been disabled or a deliberate rotation has finished on both services.
 
 GitHub sign-in and the separate random inbox encryption key use native OS secret
 storage (macOS Keychain, Windows Credential Manager, Linux Secret Service).
-No plaintext secret-file fallback is provided. Linux desktop/headless users need
+No plaintext secret-file fallback is provided. Keys already acquired remain in process memory until the gateway exits. Linux desktop/headless users need
 an unlocked Secret Service session; a locked or unavailable service refuses access.
 The inbox is encrypted in full with SQLCipher, including identities, payloads,
 cursors, audits and journal pages. Sign-out deletes the login, while retaining the
@@ -277,3 +277,5 @@ and typed outcomes, not credentials or event bodies.
 
 See [ADR 1132](../../docs/adr/todo/1132-github-relay-hardening.md) for orderings,
 security boundaries and the review record.
+
+Expiry uses covering indexes and an audit primary-key cutoff; the full-capacity query-plan regression rejects idle full scans. Linux Secret Service sessions use prompt timeout zero, including lock-after-lookup races. OS credential identities use the canonical namespace, so filesystem aliases share a key.

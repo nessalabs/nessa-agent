@@ -244,7 +244,7 @@ import {
   GITHUB_AVATARS,
   startFakeGithub,
   nativeGithubEnvironment,
-  cleanupNativeGithub,
+  nativeGithubCleanup,
 } from "./lib/fake-github.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
@@ -5173,12 +5173,15 @@ async function startStack(options) {
     rmSync(directory, { recursive: true, force: true })
     throw error
   }
+  const cleanupSecrets = github
+    ? nativeGithubCleanup(stack.gateway, "ci", INSTANCE)
+    : () => {}
   const close = stack.close
   stack.close = async () => {
     try {
       await close()
     } finally {
-      if (github) cleanupNativeGithub(stack.gateway, "ci", INSTANCE)
+      cleanupSecrets()
       await github?.close()
       rmSync(directory, { recursive: true, force: true })
     }

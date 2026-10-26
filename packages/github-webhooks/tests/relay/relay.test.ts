@@ -522,3 +522,59 @@ test("user-budget identity churn is bounded while existing users retain admissio
   assert.equal(await budget.admit("5000"), false)
   assert.equal(await budget.admit("11"), true)
 })
+
+test("idle cleanup uses indexed ranges at full data and audit capacity", async (t) => {
+  const { db } = await fixture(t)
+  await db.exec(
+    "DROP TRIGGER relay_installation_admission; DROP TRIGGER relay_repository_admission",
+  )
+  await db
+    .prepare(
+      `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<10000)
+    INSERT INTO deliveries(delivery_id,event,payload_sha256,payload,received_at,bytes)
+    SELECT CAST(x AS TEXT),'issues','fixture','{}','2026-10-25T00:00:00Z',2 FROM n`,
+    )
+    .run()
+  await db
+    .prepare(
+      `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<10000)
+    INSERT INTO relay_cleanup_audit(delivery_id,received_at) SELECT CAST(x AS TEXT),'2026-10-25T00:00:00Z' FROM n`,
+    )
+    .run()
+  const calls: { sql: string; values: (string | number)[] }[] = []
+  const captured = {
+    prepare(sql: string) {
+      return {
+        bind(...values: (string | number)[]) {
+          calls.push({ sql, values })
+          return db.prepare(sql).bind(...values)
+        },
+        first: async () => null,
+        all: async () => ({ results: [] }),
+      }
+    },
+  }
+  await new D1RelayInbox(captured).expire("1900-01-01T00:00:00Z")
+  const { D1RelayReadBudget } = await import("../../src/relay/infrastructure/budget.js")
+  await new D1RelayReadBudget(captured, () => 0).expire()
+  for (const { sql, values } of calls) {
+    const plan = await db
+      .prepare("EXPLAIN QUERY PLAN " + sql)
+      .bind(...values)
+      .all<{ detail: string }>()
+    const detail = plan.results.map((r: { detail: string }) => r.detail).join("\n")
+    assert.doesNotMatch(
+      detail,
+      /SCAN deliveries|SCAN relay_cleanup_audit|SCAN relay_user_budget|TEMP B-TREE/,
+    )
+    assert.match(detail, /SEARCH/)
+  }
+  assert.equal(
+    (await db.prepare("SELECT COUNT(*) AS n FROM deliveries").first())?.n,
+    10000,
+  )
+  assert.equal(
+    (await db.prepare("SELECT COUNT(*) AS n FROM relay_cleanup_audit").first())?.n,
+    10000,
+  )
+})

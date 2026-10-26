@@ -18,3 +18,6 @@ pub use keychain::KeychainSecret;
 mod macos;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{read as read_macos, SecretReadFailure};
+
+#[cfg(target_os = "linux")]
+mod linux;

@@ -54,15 +54,19 @@ pub(super) async fn compose(
         tracing::error!("GitHub sign-in is off this run: no HTTPS client could be built");
         return None;
     };
+    let secret = match crate::secrets::KeychainSecret::new(namespace, "github-sign-in") {
+        Ok(secret) => secret,
+        Err(_) => {
+            tracing::error!("GitHub sign-in is off: namespace is unavailable");
+            return None;
+        }
+    };
     let connections = Arc::new(
         GithubConnections::load(
             Arc::new(api),
             Arc::new(GithubTokenKeychain::new(
                 namespace.join("github"),
-                Arc::new(crate::secrets::KeychainSecret::new(
-                    namespace,
-                    "github-sign-in",
-                )),
+                Arc::new(secret),
             )),
             Arc::new(DurableGithubAudit::new(
                 conversation_root(namespace).join("audit").join("github"),

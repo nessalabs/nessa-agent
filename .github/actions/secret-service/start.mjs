@@ -29,5 +29,5 @@ if (daemon.status !== 0)
   throw new Error("Could not unlock disposable credential collection")
 appendFileSync(
   process.env.GITHUB_ENV,
-  `DBUS_SESSION_BUS_ADDRESS=${address}\nXDG_RUNTIME_DIR=${runtime}\n`,
+  `DBUS_SESSION_BUS_ADDRESS=${address}\nXDG_RUNTIME_DIR=${runtime}\nNESSA_TEST_SECRET_SERVICE=disposable\n`,
 )

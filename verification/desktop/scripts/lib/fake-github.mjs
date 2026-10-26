@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process"
 import { join, basename } from "node:path"
 import { createHash, randomBytes } from "node:crypto"
 import { createServer } from "node:http"
-import { writeFileSync } from "node:fs"
+import { writeFileSync, realpathSync } from "node:fs"
 
 /** The account the fake signs in. */
 export const FAKE_ACCOUNT = { id: 4242, login: "stress-octo" }
@@ -165,19 +165,21 @@ export function nativeGithubEnvironment() {
 
 /** Remove only this fixture's disposable login-keychain entries after its gateway
  * stops. Linux CI owns an ephemeral Secret Service collection for the whole job. */
-export function cleanupNativeGithub(gateway, stage, instance) {
-  if (process.platform !== "darwin") return
+export function nativeGithubCleanup(gateway, stage, instance) {
+  if (process.platform !== "darwin") return () => {}
   if (!basename(gateway.directory).startsWith("nessa-mcp-live-"))
     throw new Error("Not a disposable gateway")
-  const namespace = join(gateway.directory, stage, "instances", instance)
+  const namespace = realpathSync(join(gateway.directory, stage, "instances", instance))
   const service = `ai.nessalabs.nessa.${createHash("sha256").update(namespace).digest("hex")}`
-  for (const purpose of ["github-sign-in", "github-inbox-key"]) {
-    const result = spawnSync(
-      "security",
-      ["delete-generic-password", "-s", service, "-a", purpose],
-      { stdio: "ignore", timeout: 10000 },
-    )
-    if (result.status !== 0 && result.status !== 44)
-      throw new Error("Disposable OS credential cleanup failed")
+  return () => {
+    for (const purpose of ["github-sign-in", "github-inbox-key"]) {
+      const result = spawnSync(
+        "security",
+        ["delete-generic-password", "-s", service, "-a", purpose],
+        { stdio: "ignore", timeout: 10000 },
+      )
+      if (result.status !== 0 && result.status !== 44)
+        throw new Error("Disposable OS credential cleanup failed")
+    }
   }
 }

@@ -69,3 +69,7 @@ CREATE TRIGGER relay_repository_added AFTER INSERT ON deliveries
 WHEN NEW.repository_key IS NOT NULL AND NEW.installation_key<>'unrouted' BEGIN
  INSERT OR IGNORE INTO relay_repositories VALUES(NEW.installation_key,NEW.repository_key);
 END;
+
+CREATE INDEX deliveries_expiry ON deliveries(received_at,delivery_id);
+
+CREATE INDEX relay_user_budget_expiry ON relay_user_budget(day,user_id);

@@ -41,10 +41,10 @@ pub(super) fn store(environment: &Environment) -> Result<Arc<SqliteRelayStore>, 
         }),
         Arc::new(crate::github_relay::infrastructure::KeychainInboxKey::new(
             root.join("github-relay/inbox.sqlite"),
-            Arc::new(crate::secrets::KeychainSecret::new(
-                root,
-                "github-inbox-key",
-            )),
+            Arc::new(
+                crate::secrets::KeychainSecret::new(root, "github-inbox-key")
+                    .map_err(|_| Failure::Storage)?,
+            ),
         )),
     )))
 }

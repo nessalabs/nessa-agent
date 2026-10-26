@@ -10,7 +10,7 @@ import app from "../../../protocol/defaults/github-app.json" with { type: "json"
 import {
   startFakeGithub,
   nativeGithubEnvironment,
-  cleanupNativeGithub,
+  nativeGithubCleanup,
 } from "./lib/fake-github.mjs"
 import { startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { gatewayHost } from "./lib/fake-host.mjs"
@@ -293,6 +293,7 @@ await main(
       rmSync(directory, { recursive: true, force: true })
       throw error
     }
+    const cleanupSecrets = nativeGithubCleanup(stack.gateway, "dev", "github-live-events")
     return {
       ...stack,
       github,
@@ -300,7 +301,7 @@ await main(
         try {
           await stack.close()
         } finally {
-          cleanupNativeGithub(stack.gateway, "dev", "github-live-events")
+          cleanupSecrets()
           await github.close()
           rmSync(directory, { recursive: true, force: true })
         }

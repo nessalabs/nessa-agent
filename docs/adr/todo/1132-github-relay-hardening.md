@@ -59,3 +59,35 @@ an admission cap, rather than discarding a watermark and silently replaying a ga
 An operator must provision a larger stage explicitly before these development
 ceilings can support a large rollout. These limits do not make 10,000 users fit
 Cloudflare's Free daily allowance.
+
+### Adversarial review round 1
+
+The fresh review of `9bd6a8482..be8f47537` found three issues, all accepted:
+idle D1 scans could exceed Free reads near capacity; Linux's convenience keyring
+adapter could unlock/prompt; lexical namespace aliases could choose different
+keys for the same inbox. The review exercised SQLite query plans and reproduced
+the path-alias failure through the native CLI and real macOS Keychain.
+
+| Additional ordering / workload | Required result |
+| --- | --- |
+| Collection locks between lookup and secret access | No prompt; typed unavailable; preserve credential/inbox |
+| Same namespace through a filesystem alias | Canonical identity chooses the same OS entries |
+| Canonical namespace unavailable | Refuse; no lexical-path fallback |
+| Full retained/audit/budget tables, nothing expired | Indexed ranges inspect no full tables; audit cutoff uses primary key |
+
+
+Round-1 dispositions: covering indexes now own delivery and user-budget expiry;
+cleanup audit pruning uses a primary-key cutoff. The full-capacity query-plan
+regression rejects scans and temporary sorting. Linux uses encrypted Secret
+Service sessions with maximum prompt timeout zero, checking collection/item
+locks and refusing ambiguous entries. A disposable Linux CI check locks the
+collection and verifies read/write/delete refusal. Namespace construction now
+canonicalizes before hashing and refuses missing roots; an alias regression
+compares identities. Fixture cleanup captures the canonical identity before its
+files are removed.
+
+Existing macOS WebKit link-tab assertions failed while exercising the broader
+GitHub stress step; this behavior predates this change and is tracked separately
+in [#1136](https://github.com/nessalabs/nessa-agent/issues/1136). Chromium completed
+three connect/use/disconnect cycles; dedicated live-event Settings verification
+passed both engines. No full WebKit stress pass is claimed.

@@ -685,6 +685,14 @@ jobs:
   # the single test thread stay in scripts/check-sdk-domain-coverage.sh.
   # Dependencies and workspace crates are cached under a prefix of their own;
   # rust-cache would otherwise keep only dependencies, and only from `target/`.
+      - name: Start disposable Secret Service for native credential verification
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/secret-service
+      - name: Verify locked native credentials refuse without prompting
+        if: runner.os == 'Linux'
+        run: timeout 120 cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk --lib secrets::linux::tests::locked_disposable_service_refuses_without_prompting -- --ignored
+        timeout-minutes: 5
+
   sdk-domain-coverage:
     name: SDK domain coverage
     needs: changes

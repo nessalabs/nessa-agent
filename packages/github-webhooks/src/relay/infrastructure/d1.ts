@@ -75,8 +75,8 @@ export class D1RelayInbox implements RelayInbox {
     // Audit is metadata only and bounded separately from payload retention.
     await this.database
       .prepare(
-        `DELETE FROM relay_cleanup_audit WHERE cleanup_id IN
-      (SELECT cleanup_id FROM relay_cleanup_audit ORDER BY cleanup_id DESC LIMIT -1 OFFSET ?) RETURNING cleanup_id`,
+        `DELETE FROM relay_cleanup_audit WHERE cleanup_id <=
+      (SELECT MAX(cleanup_id) - ? FROM relay_cleanup_audit) RETURNING cleanup_id`,
       )
       .bind(relayLimits.auditRows)
       .all()
