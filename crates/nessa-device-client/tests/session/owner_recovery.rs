@@ -177,6 +177,9 @@ impl OwnerPhoneOriginalStore for Store {
             )
         }))
     }
+    fn enrollment_signed(&self) -> Result<bool, PrivateStateError> {
+        self.actual.enrollment_signed()
+    }
 }
 impl OwnerPhoneEnrollmentStore for Store {
     fn adopt_owner_phone(
@@ -817,6 +820,38 @@ fn missing_original_with_valid_owner_pending_or_issued_never_falls_back_or_conne
         assert!(fixture.connector.0.lock().unwrap().is_empty());
         assert!(!fixture.root.path().join("private/cache.sqlite").exists());
     }
+}
+
+#[test]
+fn an_owner_phone_redeemed_by_code_takes_the_enrollment_path_not_a_lost_original() {
+    // The owner's phone paired by code holds an owner-phone record and never
+    // had an original; its status reads through the enrollment path.
+    let fixture = Fixture::new(Mode::Good);
+    fs::remove_file(fixture.original()).unwrap();
+    let intent = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        600_000,
+        ConsentClass::OwnerPhoneReadWrite,
+    )
+    .unwrap();
+    fixture
+        .state
+        .actual
+        .save_pending(
+            &PrivateKeyMaterial::new(Zeroizing::new([7; 32])),
+            &[5; 44],
+            intent,
+            None,
+        )
+        .unwrap();
+    assert!(!fixture.state.actual.enrollment_signed().unwrap());
+    assert!(matches!(
+        fixture.parent().status().unwrap(),
+        SessionStatus::ReadOnly(_)
+    ));
 }
 
 #[test]

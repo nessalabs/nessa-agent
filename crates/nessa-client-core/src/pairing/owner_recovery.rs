@@ -387,7 +387,7 @@ fn check_terminal_record(
 }
 
 /// Restore the current original without initial-key fallback or network contact.
-/// None names a current read-only or empty scope; unreadable state refuses.
+/// None names a read-only, code-redeemed or empty scope; unreadable state refuses.
 pub fn current_owner_phone(
     state: &dyn OwnerPhoneState,
 ) -> Result<Option<OwnerPhonePreparation>, OwnerPhonePreparationError> {
@@ -395,19 +395,12 @@ pub fn current_owner_phone(
         .load_original()
         .map_err(OwnerPhonePreparationError::Private)?
     else {
-        // Current read-only capability is separate from an original scope whose
-        // file disappeared. Its OwnerPhone record cannot become read-only fallback.
-        let pending = state
-            .load_pending()
-            .map_err(OwnerPhonePreparationError::Private)?;
-        let issued = state
-            .load_credential()
-            .map_err(OwnerPhonePreparationError::Private)?;
-        if pending.as_ref().is_some_and(|value| {
-            value.intent().class() == nessa_auth::domain::pairing::ConsentClass::OwnerPhoneReadWrite
-        }) || issued.as_ref().is_some_and(|value| {
-            value.intent().class() == nessa_auth::domain::pairing::ConsentClass::OwnerPhoneReadWrite
-        }) {
+        // A signed enrollment whose original disappeared never falls back to
+        // the code path; an owner phone redeemed by code never had one.
+        if state
+            .enrollment_signed()
+            .map_err(OwnerPhonePreparationError::Private)?
+        {
             return Err(OwnerPhonePreparationError::Missing);
         }
         return Ok(None);

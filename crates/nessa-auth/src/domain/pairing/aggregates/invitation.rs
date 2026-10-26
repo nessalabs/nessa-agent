@@ -294,10 +294,12 @@ impl PairingRecord {
     pub fn signed_original(&self) -> bool {
         self.signed_original
     }
-    /// The key the owner consented to, once they have: the signed original's
-    /// key, or the key that won the code and that the owner then approved.
-    /// This is the one place that says an enrollment's key is owner-approved;
-    /// `None` before that consent, whatever came after.
+    /// The key the owner consented to: the signed original's key, or the key
+    /// that won the code once the owner approved it. This is the one place
+    /// that says an enrollment's key is owner-approved; `None` before that
+    /// consent. A code record that ended reads its approval from its stage, so
+    /// one cancelled between approval and staging answers `None`; authority
+    /// also needs the record Active, which no ended record is.
     pub fn owner_approved_key(&self) -> Option<DeviceKey> {
         if self.signed_original {
             return self.owner_phone.map(|(_, key, _)| key);

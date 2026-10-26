@@ -4645,7 +4645,9 @@ async function pairFromWindow(run, failures) {
     (error) => [String(error)],
   )
   if (classes.length !== 1 || classes[0] !== OWNER_PHONE_CLASS)
-    failures.push(`the open code enrolls ${JSON.stringify(classes)}, not the owner's phone`)
+    failures.push(
+      `the open code enrolls ${JSON.stringify(classes)}, not the owner's phone`,
+    )
   // Settings is a fixed layer over the window: a modal portalled past it is
   // in the page but drawn underneath it, unseen.
   if (!(await dialog.evaluate((node) => Boolean(node.closest("[data-settings-layers]")))))
