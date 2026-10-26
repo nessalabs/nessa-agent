@@ -159,56 +159,25 @@ fn native_paired_catalogue_stress() {
     native.close().unwrap();
 }
 
-/// A stand-in for the tunnel's edge: each WebSocket it takes is bridged to a
-/// fresh TCP connection to `gateway`, and every one it takes is counted.
-fn edge(gateway: std::net::SocketAddr) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
-    use nessa_client_core::tunnel::{bridge, websocket_config};
-    let taken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let origin = format!("http://{}", listener.local_addr().unwrap());
-    let counted = taken.clone();
-    std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async move {
-            listener.set_nonblocking(true).unwrap();
-            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-            loop {
-                let (stream, _) = listener.accept().await.unwrap();
-                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                tokio::spawn(async move {
-                    let websocket = tokio_tungstenite::accept_async_with_config(
-                        stream,
-                        Some(websocket_config()),
-                    )
-                    .await
-                    .unwrap();
-                    let socket = tokio::net::TcpStream::connect(gateway).await.unwrap();
-                    bridge(websocket, socket).await;
-                });
-            }
-        });
-    });
-    (origin, taken)
-}
-
 /// A phone away from its gateway's network: the address it paired on refuses
-/// every dial, and its product connection goes through the tunnel it was told
-/// about instead, under the same pinned TLS.
+/// every dial, and its product connection goes through the gateway's real
+/// tunnel ingress instead, with a stand-in for cloudflared in front of it,
+/// under the same pinned TLS. A status stays on the local network: the
+/// ingress answers only a product or environment opening.
+#[cfg(unix)]
 #[test]
 fn a_phone_away_from_its_network_reaches_the_gateway_through_its_tunnel() {
+    use super::fixtures::{Edge, EndsProcess};
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("gateway");
-    let _gateway = Gateway::start_catalogue(&root);
+    let edge = Edge::new(directory.path());
+    let _gateway = Gateway::start_tunneled(&root, edge.program());
+    let (pid, tunnel) = Edge::serving(&root);
+    let _ends = EndsProcess(pid);
     let setup: Setup =
         serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
     let profile: Value =
         serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
-    let gateway: std::net::SocketAddr =
-        profile["gatewayAddress"].as_str().unwrap().parse().unwrap();
-    let (tunnel, taken) = edge(gateway);
     // Nothing listens here: every direct dial is refused at once.
     let away = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -223,14 +192,18 @@ fn a_phone_away_from_its_network_reaches_the_gateway_through_its_tunnel() {
     .unwrap();
     let product = native.open_product("away".into()).unwrap();
     product.wait_ready().unwrap();
-    assert!(
-        taken.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+    assert_eq!(
+        Edge::connections(&root),
+        1,
         "the product connection came through the tunnel"
     );
     check(
         &product,
         &BTreeSet::from([setup.conversation.clone(), setup.empty.clone()]),
     );
+    // Whatever a status reports from here, it never tried the tunnel.
+    let _ = native.status();
+    assert_eq!(Edge::connections(&root), 1, "a status dials directly");
     product.close().unwrap();
     native.close().unwrap();
 }

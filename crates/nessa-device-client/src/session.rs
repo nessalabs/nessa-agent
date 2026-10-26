@@ -26,10 +26,9 @@ use nessa_client_core::{
         ProductWake, ThreadProductWake,
     },
     retained::{
-        dial_native, FeedEvent, ReadFailure, ReadReport, ReadStop, RetainedCache,
-        RetainedCataloguePage, RetainedDeviceReader, RetainedEnrollmentClient,
-        RetainedEnrollmentStatus, RetainedOwnerStatus, RetainedPurge, RetainedTranscript,
-        HANDSHAKE,
+        FeedEvent, ReadFailure, ReadReport, ReadStop, RetainedCache, RetainedCataloguePage,
+        RetainedDeviceReader, RetainedEnrollmentClient, RetainedEnrollmentStatus,
+        RetainedOwnerStatus, RetainedPurge, RetainedTranscript, HANDSHAKE,
     },
 };
 use nessa_protocol::{
@@ -96,16 +95,13 @@ pub trait EnrollmentConnector: Send + Sync {
     /// Establish a bounded native TCP connection; no authority is inferred.
     fn connect(&self, address: SocketAddr) -> Result<TcpStream, NativeClientError>;
 }
-/// Dials the gateway directly, then through its web tunnel when one is known
-/// and the direct dial does not connect (`dial_native`). A tunnel never
-/// pairs: the gateway closes a tunnel connection whose key holds no
-/// credential, so enrollment still needs the local network.
-struct SocketConnector {
-    tunnel: Option<TunnelAddress>,
-}
+/// Dials the gateway directly, never through its web tunnel: the gateway
+/// answers only a product or environment opening there, so enrollment, status
+/// and owner recovery need the local network.
+struct SocketConnector;
 impl EnrollmentConnector for SocketConnector {
     fn connect(&self, address: SocketAddr) -> Result<TcpStream, NativeClientError> {
-        dial_native(address, self.tunnel.as_ref(), HANDSHAKE)
+        TcpStream::connect_timeout(&address, HANDSHAKE)
             .map_err(|error| NativeClientError::Io(error.kind()))
     }
 }
@@ -813,8 +809,10 @@ impl NativeSession {
     /// Composition entry: open an existing private directory beneath a trusted
     /// root. Cache creation is lazy; no socket or pairing is performed here.
     /// `tunnel` is the gateway's web tunnel as it last named it
-    /// (`server.reach`): status and product dials fall back on it when the
-    /// direct one does not connect. Retained reads still dial directly.
+    /// (`server.reach`): a product dial falls back on it when the direct one
+    /// does not connect. Status, owner recovery and retained reads dial
+    /// directly, so an owner phone with a signed original, whose product
+    /// opening recovers first, still needs the local network.
     pub fn open(
         root: &Path,
         directory: &Path,
@@ -847,9 +845,7 @@ impl NativeSession {
             address,
             wall,
             clock,
-            connector: Arc::new(SocketConnector {
-                tunnel: tunnel.clone(),
-            }),
+            connector: Arc::new(SocketConnector),
             entropy: Arc::new(OsEntropyFactory),
             runtime,
             product: ProductDependencies::reaching(tunnel),
