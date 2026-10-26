@@ -197,6 +197,7 @@ jobs:
               'crates/nessa-sdk/src/infrastructure/session_storage/record_source.rs',
               'crates/nessa-sdk/src/infrastructure/acp/sessions/config.rs',
               'crates/nessa-sdk/src/infrastructure/mcp/servers.rs',
+              'crates/nessa-server/src/conversation/domain/value_objects/channel.rs',
               'crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs',
               'crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs',
               'crates/nessa-protocol/src/product_contract/generated.rs',
@@ -337,8 +338,10 @@ jobs:
       - name: Install the pinned browsers and their runtime dependencies
         run: pnpm exec playwright install --with-deps chromium webkit
         timeout-minutes: 15
+      # nessa-mcp: the stress check's `github` step runs commands through
+      # Nessa's own shell tool.
       - id: gateway-build
-        run: cargo build -p nessa-server
+        run: cargo build -p nessa-server -p nessa-mcp
       # Reuse this job's gateway build and browser install. The reset-boundary
       # regression needs both engines, including WebKit's ticking-clock path.
       - name: Run the scripted gateway checks in both browsers
@@ -354,6 +357,15 @@ jobs:
           mkdir -p "$STRESS_EVIDENCE"
           pnpm test:e2e:stress -- --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
         timeout-minutes: 20
+      # The menu-bar panel ships in WKWebView, so its step also runs alone in
+      # WebKit: page dots, the sent bubble's accent and rim, and the undo card.
+      - name: Run the menu-bar panel stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'menuPanels') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --menuPanels 1 --evidence "$STRESS_EVIDENCE/menu-panel-webkit" 2>&1 | tee "$STRESS_EVIDENCE/menu-panel-webkit.log"
+        timeout-minutes: 10
       # Seeded random actions from several clients at once on the same
       # gateway build (conversation-chaos.mjs): a few short seeds here, many
       # long ones nightly. A failure prints its seed and a shrunk action list.

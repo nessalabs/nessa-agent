@@ -1347,6 +1347,7 @@ function summaryRow(
     "updatedAtMs",
     "running",
     "archived",
+    "channelId",
   ])
   const conversationId = identity(row, "conversationId")
   if (!conversationIdPattern.test(conversationId) || seen.has(conversationId))
@@ -1355,6 +1356,13 @@ function summaryRow(
   flag(row, "running")
   flag(row, "archived")
   if (row.archived !== archived) throw new Error(filter)
+  // A conversation in the default channel carries no channelId; one in a made
+  // channel names it, and naming "default" would be a second way to say none.
+  if (
+    Object.hasOwn(row, "channelId") &&
+    (typeof row.channelId !== "string" || !madeChannelIdPattern.test(row.channelId))
+  )
+    throw new Error("Invalid conversation channelId")
   return {
     conversationId,
     title: optionalText(row, "title", bounds.maxConversationTitleBytes),
@@ -1363,8 +1371,11 @@ function summaryRow(
     updatedAtMs: time(row, "updatedAtMs"),
     running: row.running as boolean,
     archived: row.archived as boolean,
+    ...(Object.hasOwn(row, "channelId") ? { channelId: row.channelId as string } : {}),
   }
 }
+
+const madeChannelIdPattern = /^ch_[a-z2-7]{10}$/
 
 /**
  * The caller's conversations as the gateway listed them. Each row is checked

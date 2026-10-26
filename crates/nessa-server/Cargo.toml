@@ -24,6 +24,10 @@ path = "src/backup_plan_main.rs"
 
 [dependencies]
 base64 = "0.22"
+# The local-network announcement while native linking listens there
+# (device_pairing::infrastructure::announcer), so a phone that scanned the
+# desktop's code finds the gateway. No async runtime of its own.
+mdns-sd = { version = "0.21", default-features = false }
 nessa-protocol = { path = "../nessa-protocol" }
 # A peer gateway dials another gateway as a client (ADR 483, amended for slice
 # H of ADR 252). Without the example's command line.
@@ -72,6 +76,9 @@ async-trait = "0.1"
 # implementation rather than two.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 sha2 = "0.10"
+# A resolved Windows path without the `\\?\` prefix, so a channel's folder is
+# kept, shown and handed to an agent as the person knows it.
+dunce = "1"
 # macOS compares composed and decomposed names as one path. The fold is pure
 # so the same rule can be checked on Linux.
 unicode-normalization = "0.1.25"

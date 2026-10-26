@@ -11,8 +11,9 @@
 //! bind:    PreparedNative --> TcpEnrollmentAccept --> the one NativeEnrollmentConnections
 //!          (with NativeSessions: the product state + the registry's device verifier)
 //! start:   BoundNative --> listener task (failed --> watch)
-//!          --> PeerPoller (reads each peer) --> RunningNative
-//! stop:    signal_stop (listener and poller) --> join: the poller's workers,
+//!          --> PeerPoller (reads each peer)
+//!          --> LinkingAnnouncer (only on a network address) --> RunningNative
+//! stop:    signal_stop (announcement withdrawn, listener and poller) --> join: the poller's workers,
 //!          then the peer commands closed (running ones waited for, bounded by PREEMPT),
 //!          then the peer audit closed and drained (bounded by AUDIT_DEADLINE),
 //!          then listener drain, then GatewayPairing::shutdown, then reconcile_cleanup
@@ -25,6 +26,7 @@ use super::runtime_config::{routable_advertised_host, NativeConfig, RelayAddress
 use crate::conversation::application::FenceCapture;
 use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::core::{NativeFailure, NativeShutdownFailure, RunError};
+use crate::device_pairing::application::{Announced, LinkingAnnouncement, LinkingAnnouncer};
 use crate::device_pairing::infrastructure::{
     restore_gateway_identity, ConversationReceivers, EnvironmentPeers, GatewayPairing,
     InvitationEntropy, NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
@@ -97,6 +99,8 @@ pub(super) struct NativeInputs {
 /// connection owner (design row S13).
 pub(super) struct PreparedNative {
     gateway: Arc<GatewayPairing>,
+    /// The gateway's public id, as it is announced.
+    audience: String,
     address: SocketAddr,
     registry: Arc<LocalCredentialStore>,
     /// The peer commands the poller reads through once serving starts.
@@ -177,6 +181,7 @@ pub(super) async fn prepare(
     .await
     .map_err(|error| RunError::Native(NativeFailure::Identity(error)))?;
     let registry = inputs.registry;
+    let audience = inputs.audience.as_str().to_owned();
     let audit = Arc::new(DurablePeerAudit::new(
         root.join(PEER_AUDIT_DIRECTORY),
         inputs.clock.clone(),
@@ -224,6 +229,7 @@ pub(super) async fn prepare(
     Ok((
         PreparedNative {
             gateway,
+            audience,
             address: config.listen_address,
             registry,
             peers: peers.clone(),
@@ -246,8 +252,15 @@ type NativeAccept = RelayedAccept<TcpEnrollmentAccept>;
 /// Native pairing with its socket bound and its one connection owner built.
 pub(super) struct BoundNative {
     gateway: Arc<GatewayPairing>,
+    audience: String,
     listener: NativeEnrollmentListener<NativeAccept>,
     address: SocketAddr,
+    /// The address as configured: an ephemeral port reads 0 here, while
+    /// `address` holds the port the operating system chose.
+    configured: SocketAddr,
+    /// Announces the listener on the local network once it serves; `None`
+    /// announces nothing.
+    announcer: Option<Arc<dyn LinkingAnnouncer>>,
     /// Serving through the relay, when one is configured: started with the
     /// listener.
     relay: Option<ThroughRelay<TcpStream, RelayPermit>>,
@@ -260,6 +273,23 @@ impl BoundNative {
     /// The address the listener is bound to.
     pub(super) fn local_address(&self) -> SocketAddr {
         self.address
+    }
+    /// Announce the listener with `announcer` once it serves.
+    pub(super) fn with_announcer(mut self, announcer: Arc<dyn LinkingAnnouncer>) -> Self {
+        self.announcer = Some(announcer);
+        self
+    }
+    /// What the listener is announced as, when it is announced at all: only
+    /// a listener a phone can reach, on a network address and a configured
+    /// port. A loopback listener serves this machine alone, and an ephemeral
+    /// port is not one the next start repeats.
+    fn announcement(&self) -> Option<LinkingAnnouncement> {
+        (self.configured.port() != 0 && !self.configured.ip().is_loopback()).then(|| {
+            LinkingAnnouncement {
+                address: SocketAddr::new(self.configured.ip(), self.address.port()),
+                gateway: self.audience.clone(),
+            }
+        })
     }
     /// Start reading each peer: its waits and read budget on the peer
     /// commands' monotonic clock (the root's deadline clock), its finished
@@ -290,6 +320,7 @@ pub(super) async fn bind(
 ) -> Result<BoundNative, RunError> {
     let PreparedNative {
         gateway,
+        audience,
         address,
         registry,
         peers,
@@ -349,8 +380,11 @@ pub(super) async fn bind(
     });
     Ok(BoundNative {
         gateway,
+        audience,
         listener: NativeEnrollmentListener::new(RelayedAccept::new(socket, relayed), connections),
         address: bound,
+        configured: address,
+        announcer: None,
         relay,
         peers,
         audit,
@@ -397,6 +431,8 @@ pub(super) struct RunningNative {
     peers: Arc<PeerCommands>,
     /// Their audit: closed and drained once the commands are.
     audit: Arc<DurablePeerAudit>,
+    /// The local-network announcement, withdrawn first on stop.
+    announced: Option<Box<dyn Announced>>,
 }
 
 /// Start serving. An accept failure that ends the listener is published on
@@ -408,6 +444,24 @@ pub(super) fn start(
     failure: watch::Sender<Option<ErrorKind>>,
 ) -> RunningNative {
     let poller = bound.start_poller();
+    // Announced only once serving is about to start, and never fatal: a phone
+    // can still pair by address.
+    let announced = bound.announcer.as_ref().and_then(|announcer| {
+        let announcement = bound.announcement()?;
+        match announcer.announce(&announcement) {
+            Ok(announced) => {
+                tracing::info!(
+                    address = %announcement.address,
+                    "native pairing announced on the local network"
+                );
+                Some(announced)
+            }
+            Err(error) => {
+                tracing::warn!(%error, "native pairing not announced on the local network");
+                None
+            }
+        }
+    });
     let BoundNative {
         gateway,
         listener,
@@ -439,6 +493,7 @@ pub(super) fn start(
         poller,
         peers,
         audit,
+        announced,
     }
 }
 
@@ -446,6 +501,10 @@ impl RunningNative {
     /// Ask the listener to stop admitting; it wakes its peers at once. Called
     /// before the cleanup owner waits on anything else (design row S12).
     pub(super) fn signal_stop(&mut self) {
+        // A phone stops finding a gateway that is about to stop answering.
+        if let Some(announced) = self.announced.take() {
+            announced.withdraw();
+        }
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }

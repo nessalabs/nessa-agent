@@ -14,6 +14,7 @@
 //! connection --> tls_stream --> EnvironmentPeers (paired environments)
 //! runtime  --> registration (one code registration at a time)
 //! linking_audit --> application's LinkingAudit (pairing.setLinking's records)
+//! announcer --> application's LinkingAnnouncer (multicast DNS-SD while listening on the network)
 //! owner_commands --> runtime (owner side only; the product socket's handle)
 //! runtime --> FenceCapture (after pairing.cancel commits; a failure leaves it)
 //! receivers --> conversation receiver authority (application's PairingReceivers)
@@ -23,6 +24,7 @@
 //! runtime holds only the volatile PAKE setup of the one open invitation.
 //! Framing offsets are IO progress, not enrollment state. `shutdown` on each
 //! owner stops admission, wakes blocked sockets, and waits for its workers.
+mod announcer;
 mod connection;
 mod environment_peers;
 mod identity;
@@ -36,6 +38,7 @@ mod receivers;
 mod registration;
 mod runtime;
 mod tls_stream;
+pub use announcer::{MulticastAnnouncer, GATEWAY_KEY, LINKING_SERVICE};
 pub(crate) use connection::RELAY_CAPACITY;
 pub use connection::{
     NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections, RelayPermit,

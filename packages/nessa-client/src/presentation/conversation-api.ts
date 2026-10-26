@@ -130,8 +130,14 @@ export type ConversationCreateOptions = ConversationActionOptions & {
   agent?: string
   /** Initial catalog model when a new conversation is created. */
   model?: string
-  /** Initial provider preset; omitted selects ask. */
+  /** Initial provider preset; omitted selects ask, or the channel's preset. */
   approvalMode?: ApprovalMode
+  /** The channel this conversation is in for its whole life: one
+   * `channels.list()` returned. Omitted is the default channel. Its agent,
+   * model and preset fill in what is omitted here. One the gateway does not
+   * name for this person is refused as `channel_not_found`, with `uncertain`
+   * false. */
+  channelId?: string
   /** The SSH destination this conversation's agent runs on for its whole
    * life: one `agents.list` returned under `environments`. Omitted runs it on
    * the gateway's own machine. One the gateway does not name is refused as
@@ -827,6 +833,8 @@ export function createConversationApi(
         options.approvalMode === undefined ? {} : { approvalMode: options.approvalMode }
       const environment =
         options.environment === undefined ? {} : { environment: options.environment }
+      const channelId =
+        options.channelId === undefined ? {} : { channelId: options.channelId }
       return mutate(
         ProductMethod.ConversationCreate,
         {
@@ -836,6 +844,7 @@ export function createConversationApi(
           ...model,
           ...approvalMode,
           ...environment,
+          ...channelId,
         },
         (value) => conversationId(value, id),
       )

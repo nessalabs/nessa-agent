@@ -359,6 +359,7 @@ mod tests {
             environment: BTreeMap::new(),
             runtime_environment: BTreeMap::new(),
             credential_environment: BTreeMap::new(),
+            open_credentials: Default::default(),
             workspace: root.path().into(),
             tools_enabled: true,
             mcp_servers: nessa_sdk::infrastructure::acp::sessions::McpServerList::none(),

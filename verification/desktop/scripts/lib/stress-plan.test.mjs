@@ -32,6 +32,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("linking"), knobs.linkings)
   assert.equal(count("rail"), knobs.rails)
   assert.equal(count("panel"), knobs.panels)
+  assert.equal(count("menuPanel"), knobs.menuPanels)
   assert.equal(count("listAnswer"), knobs.listAnswers)
   assert.equal(count("onboarding"), knobs.onboardings)
   assert.equal(count("table"), knobs.tables)
@@ -41,6 +42,8 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("drift"), knobs.drifts)
   assert.equal(count("upgrade"), knobs.upgrades)
   assert.equal(count("launch"), knobs.launches)
+  assert.equal(count("github"), knobs.githubs)
+  assert.equal(count("channel"), knobs.channels)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
   assert.equal(steps.find((step) => step.kind === "long").turns, knobs.long)
@@ -140,6 +143,9 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         drifts: "0",
         upgrades: "0",
         launches: "0",
+        menuPanels: "0",
+        githubs: "0",
+        channels: "0",
         awaits: "0",
         fresh: "0",
         renames: "0",

@@ -341,20 +341,11 @@ export const settingsEntries = [
   },
   // Connections › Accounts
   {
-    id: "nessa-account",
-    pending: true,
-    tab: "accounts",
-    label: "Nessa account",
-    detail: "Sync settings and sessions between your Macs.",
-    keywords: "sign in login",
-  },
-  {
     id: "github",
-    pending: true,
     tab: "accounts",
     label: "GitHub",
-    detail: "Lets agents open pull requests as you.",
-    keywords: "git repository",
+    detail: "Lets agents clone, push, and open pull requests as you.",
+    keywords: "git repository sign in connect app",
   },
   // Connections › Integrations
   {

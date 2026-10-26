@@ -1,5 +1,9 @@
-import { AgentDownloads } from "./agent-downloads"
-import type { AgentInstallations } from "../application/agent-installations"
+import { installationOutcomeText } from "./agent-downloads"
+import type {
+  AgentInstallations,
+  InstallationOffer,
+} from "../application/agent-installations"
+import { useAgentDownloads } from "./use-agent-downloads"
 import * as React from "react"
 import type { AgentApiKeySink } from "../application/ports"
 import { AgentApiKeyAuditWarning, useAgentApiKeySave } from "./agent-api-key-save"
@@ -206,7 +210,8 @@ function AgentOption({
   startup,
   selected,
   onSelect,
-  onPoint,
+  takesFocus,
+  onFocusTaken,
 }: {
   id: AgentId
   name: string
@@ -215,13 +220,21 @@ function AgentOption({
   startup: GatewayStartupStatus
   selected: boolean
   onSelect: (id: AgentId) => void
-  /** Told when the row is pointed at or focused, and when it no longer is. */
-  onPoint: (id: FigureId | undefined) => void
+  /** Take the focus when shown: this row has replaced the download card that
+   * held it. */
+  takesFocus?: boolean
+  onFocusTaken?: () => void
 }) {
   const note = readinessNote(readiness, failure, startup)
-  const figure: FigureId | undefined = id === "claude" || id === "codex" ? id : undefined
+  const row = React.useRef<HTMLButtonElement>(null)
+  React.useEffect(() => {
+    if (!takesFocus) return
+    row.current?.focus()
+    onFocusTaken?.()
+  }, [takesFocus, onFocusTaken])
   return (
     <button
+      ref={row}
       type="button"
       // Plain toggles rather than a radio group. The group announced the
       // arrow-key pattern a radio group promises and implemented none of it:
@@ -236,10 +249,6 @@ function AgentOption({
         if (note) return
         onSelect(id)
       }}
-      onPointerEnter={() => onPoint(figure)}
-      onPointerLeave={() => onPoint(undefined)}
-      onFocus={() => onPoint(figure)}
-      onBlur={() => onPoint(undefined)}
       className={`group ${OPTION} aria-disabled:cursor-default aria-disabled:opacity-60`}
     >
       <span className="flex size-8 shrink-0 items-center justify-center text-foreground">
@@ -400,23 +409,22 @@ const FIGURE_OF = Object.freeze({
 
 const SHOWCASE: readonly FigureId[] = Object.freeze(["claude", "codex", "local"])
 
+/** How long a figure plays once its agent is chosen, before it rests again. */
+const CHOSEN_PLAY_MS = 2_400
+
 /**
- * The picture beside the picker, taken over by one agent: the row pointed at,
- * else the chosen one, else Claude. The whole picture wears that agent's card
- * background, which fades across when the agent changes, with its figure
- * standing on it; pointing at a row plays the figure. Every background is
- * drawn and only the shown one is opaque, so a change is a crossfade rather
- * than a cut. The figure is keyed by agent and fades in fresh. Decorative: the
- * rows say all of it, so nothing here is named.
+ * The picture beside the picker, taken over by one agent: the chosen one, else
+ * Claude. It follows the choice and nothing else, so pointing along the rows
+ * leaves it alone and a click is what turns it. The whole picture wears that
+ * agent's card background, which fades across when the choice changes, with
+ * its figure standing on it; a new choice plays the figure for a moment.
+ * Every background is drawn and only the shown one is opaque, so a change is
+ * a crossfade rather than a cut. The figure is keyed by agent and fades in
+ * fresh. Decorative: the rows say all of it, so nothing here is named.
  */
-export function AgentShowcase({
-  chosen,
-  pointed,
-}: {
-  chosen: AgentId | undefined
-  pointed: FigureId | undefined
-}) {
-  const shown: FigureId = pointed ?? (chosen === "codex" ? "codex" : "claude")
+export function AgentShowcase({ chosen }: { chosen: AgentId | undefined }) {
+  const shown: FigureId = chosen === "codex" ? "codex" : "claude"
+  const lively = usePlayOnChange(shown)
   return (
     <>
       {SHOWCASE.map((id) => (
@@ -430,26 +438,279 @@ export function AgentShowcase({
       <AgentFigure
         key={shown}
         agent={FIGURE_OF[shown]}
-        lively={pointed === shown}
+        lively={lively}
         className="nessa-setup-figure"
       />
     </>
   )
 }
 
+/** True for a moment after `value` changes, never for the value it started
+ * with: the figure on screen when the picker opens has not just been chosen. */
+function usePlayOnChange<T>(value: T): boolean {
+  const last = React.useRef(value)
+  const [playing, setPlaying] = React.useState(false)
+  React.useEffect(() => {
+    if (value === last.current) return
+    last.current = value
+    setPlaying(true)
+    const timer = setTimeout(() => setPlaying(false), CHOSEN_PLAY_MS)
+    return () => clearTimeout(timer)
+  }, [value])
+  return playing
+}
+
+type Downloads = ReturnType<typeof useAgentDownloads> & {
+  /** An install has finished and the readiness check that follows it has not
+   * yet come back, so the agent is held as an installed card until it does. */
+  installHeld: boolean
+}
+
+/** The picker's downloads, read only where this surface can install. A hook
+ * cannot be called on one render and not the next, so the read lives in a
+ * component of its own that is there or is not. */
+function WithDownloads({
+  source,
+  onChanged,
+  checking,
+  children,
+}: {
+  source: AgentInstallations | undefined
+  onChanged: () => void
+  checking: boolean
+  children: (downloads: Downloads | undefined) => React.ReactNode
+}) {
+  if (!source) return <>{children(undefined)}</>
+  return (
+    <ReadDownloads source={source} onChanged={onChanged} checking={checking}>
+      {children}
+    </ReadDownloads>
+  )
+}
+
+function ReadDownloads({
+  source,
+  onChanged,
+  checking,
+  children,
+}: {
+  source: AgentInstallations
+  onChanged: () => void
+  checking: boolean
+  children: (downloads: Downloads) => React.ReactNode
+}) {
+  const downloads = useAgentDownloads(source, onChanged)
+  return (
+    <>
+      {children({
+        ...downloads,
+        installHeld: useInstallHeld(downloads.outcome, checking),
+      })}
+    </>
+  )
+}
+
+/** The longest an install waits on its readiness check before the card lets
+ * go: the check may never start (a gateway that is not ready asks nothing). */
+const INSTALL_HOLD_MS = 5_000
+
+/**
+ * Whether an install is waiting on the readiness check it starts. The check
+ * is asked for once the downloads have been read again, a moment after the
+ * install reports, so "not checking" alone would let the row show through for
+ * that moment. Held until a check has been seen running and has come back, or
+ * for `INSTALL_HOLD_MS` at most, so a check that never runs cannot leave the
+ * card standing for good.
+ */
+function useInstallHeld(outcome: Downloads["outcome"], checking: boolean): boolean {
+  const installed = outcome?.status === "installed" ? outcome : undefined
+  // The install whose wait is over: its check came back, or it waited long
+  // enough. Keyed by the outcome, which each install makes afresh.
+  const [released, setReleased] = React.useState<Downloads["outcome"]>()
+  const [ran, setRan] = React.useState<Downloads["outcome"]>()
+  React.useEffect(() => {
+    if (!installed || released === installed) return
+    if (checking) setRan(installed)
+    else if (ran === installed) setReleased(installed)
+  }, [installed, checking, ran, released])
+  React.useEffect(() => {
+    if (!installed) return
+    const timer = setTimeout(() => setReleased(installed), INSTALL_HOLD_MS)
+    return () => clearTimeout(timer)
+  }, [installed])
+  return installed !== undefined && released !== installed
+}
+
+/** What an agent's download card is doing, when its place in the picker is a
+ * card rather than a row. */
+type CardState =
+  /** Offered: one Download button with the size. */
+  | { kind: "offer"; offer: InstallationOffer }
+  /** Being fetched and verified. */
+  | { kind: "fetching" }
+  /** Installed, until the readiness check that follows turns it into the row. */
+  | { kind: "installed" }
+  /** Downloads are still being read: the card holds the agent's place, so a
+   * row does not stand there only to turn into a card a moment later. */
+  | { kind: "reading" }
+  /** Nothing can be offered until downloads are read again: they could not
+   * be read, or an attempt was lost or met another one still running. */
+  | { kind: "check" }
+
+/**
+ * Whether an agent's place in the picker is its download card rather than its
+ * row, and what the card is doing. Only an agent this machine does not have
+ * gets one. A fresh read of the downloads always wins over what the last
+ * attempt said, so an agent that read can no longer offer goes back to its row
+ * rather than standing behind a card for good. An install is held as a card
+ * only until the readiness check after it is done: an agent that check still
+ * cannot find goes back to its row and its reason.
+ */
+function cardState(
+  id: AgentId,
+  readiness: AgentReadiness,
+  downloads: Downloads | undefined,
+): CardState | undefined {
+  if (readiness !== "not-installed" || !downloads) return undefined
+  if (downloads.pending === id) return { kind: "fetching" }
+  if (downloads.attempted === id && downloads.installHeld) return { kind: "installed" }
+  const offer = downloads.offers?.find((each) => each.agent === id)
+  if (downloads.unavailable) return { kind: "check" }
+  if (!downloads.offers)
+    return downloads.attempted === id && downloads.outcome
+      ? { kind: "check" }
+      : { kind: "reading" }
+  return offer && !offer.installed ? { kind: "offer", offer } : undefined
+}
+
+/** Why a card's last download did not install, in the card's own words: its
+ * one way to read the downloads again is its Check again button. */
+function cardFailureText(downloads: Downloads, id: AgentId): string | undefined {
+  if (downloads.attempted !== id || downloads.outcome?.status !== "failed")
+    return downloads.unavailable && downloads.pending === undefined
+      ? "Downloads could not be checked."
+      : undefined
+  switch (downloads.outcome.reason) {
+    case "busy":
+      return "Another download is running. Check again shortly."
+    case "not-confirmed":
+      return "Not confirmed. It may still be running; check again before trying again."
+    default:
+      return installationOutcomeText(downloads.outcome)
+  }
+}
+
+/**
+ * An agent that is not on this machine yet, in the place its row would take:
+ * its mark, its name, and one button. Nothing to pick until it is here, so it
+ * is a card rather than a toggle; once installed, a fresh readiness check
+ * turns it into the row.
+ *
+ * Words only when there is something to act on — a download that failed says
+ * why, under the name. The size rides on the button, which is all a person
+ * needs to decide.
+ *
+ * The button stays the same element through a download, held with
+ * `aria-disabled` rather than `disabled`, so the focus a key press put on it
+ * stays there while it turns into the download's spinner; when the card
+ * becomes the row, the row takes that focus.
+ */
+function AgentDownloadCard({
+  id,
+  name,
+  card,
+  downloads,
+  onFocusChange,
+}: {
+  id: AgentId
+  name: string
+  card: CardState
+  downloads: Downloads
+  /** Told when the card's button takes or loses the focus, so the row the
+   * card becomes can take it over. */
+  onFocusChange: (id: AgentId | undefined) => void
+}) {
+  const failed = cardFailureText(downloads, id)
+  const busy = downloads.pending !== undefined
+  const megabytes =
+    card.kind === "offer" ? Math.ceil(card.offer.archiveBytes / 1_000_000) : undefined
+  const label =
+    card.kind === "fetching"
+      ? `Downloading and verifying ${name}`
+      : card.kind === "installed"
+        ? `${name} is installed`
+        : card.kind === "reading"
+          ? `Checking ${name} downloads`
+          : card.kind === "offer"
+            ? `Download ${name} · ${megabytes} MB`
+            : "Check again"
+  return (
+    <div
+      role="group"
+      aria-label={`Download ${name}`}
+      data-agent-download={id}
+      data-download-state={card.kind}
+      className="flex w-full items-center gap-3 rounded-xl border border-dashed border-border bg-card/35 px-3 py-2.5"
+    >
+      <span className="flex size-8 shrink-0 items-center justify-center text-foreground">
+        <AgentMark id={id} name={name} />
+      </span>
+      <span className="flex min-w-0 flex-col">
+        <span className="nessa-text-4 font-medium text-foreground">{name}</span>
+        <span
+          role="status"
+          aria-live="polite"
+          className="nessa-text-2 text-muted-foreground"
+        >
+          {failed}
+        </span>
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="ml-auto shrink-0 rounded-full aria-disabled:opacity-60"
+        aria-label={label}
+        // Another agent's download holds this one too: the installer runs
+        // one at a time.
+        aria-disabled={
+          card.kind === "installed" ||
+          card.kind === "reading" ||
+          (card.kind !== "check" && busy)
+        }
+        onFocus={() => onFocusChange(id)}
+        onBlur={() => onFocusChange(undefined)}
+        onClick={() => {
+          if (card.kind === "check") downloads.refresh()
+          else if (card.kind === "offer" && !busy) downloads.install(card.offer.agent)
+        }}
+      >
+        {card.kind === "fetching" || card.kind === "reading" ? (
+          <LoaderCircle aria-hidden className="motion-safe:animate-spin" />
+        ) : card.kind === "installed" ? (
+          <Check aria-hidden />
+        ) : card.kind === "offer" ? (
+          <>
+            <Download aria-hidden />
+            {megabytes} MB
+          </>
+        ) : (
+          "Check again"
+        )}
+      </Button>
+    </div>
+  )
+}
+
 /** The Local AI row: listed so the picker says it is coming, and never
  * choosable. Named with what it is waiting on, like any agent that cannot be
  * picked, and still focusable so a keyboard reaches that reason. */
-function LocalAiOption({ onPoint }: { onPoint: (id: FigureId | undefined) => void }) {
+function LocalAiOption() {
   return (
     <button
       type="button"
       aria-disabled
       aria-label="Local AI, coming soon"
-      onPointerEnter={() => onPoint("local")}
-      onPointerLeave={() => onPoint(undefined)}
-      onFocus={() => onPoint("local")}
-      onBlur={() => onPoint(undefined)}
       className={`${OPTION} aria-disabled:cursor-default aria-disabled:opacity-60 aria-disabled:hover:bg-card/55`}
     >
       <span className="flex size-8 shrink-0 items-center justify-center text-foreground">
@@ -478,7 +739,6 @@ function LocalAiOption({ onPoint }: { onPoint: (id: FigureId | undefined) => voi
 export function Onboarding({
   state,
   open = true,
-  onPoint = () => {},
   apiKeys,
   installations,
   gatewayStartup,
@@ -499,9 +759,6 @@ export function Onboarding({
   /** Whether the window has opened. Until it has, the welcome waits to type
    * and nothing takes the focus. Defaults to true. */
   open?: boolean
-  /** Told which agent's row is pointed at or focused, so the picture can
-   * show that agent's card. */
-  onPoint?: (id: FigureId | undefined) => void
   /** Secure-store effect injected by native setup composition. */
   apiKeys?: AgentApiKeySink
   installations?: AgentInstallations
@@ -533,7 +790,6 @@ export function Onboarding({
   // Called unconditionally, as a hook must be; it only listens on the step
   // that has keys to light.
   const held = useHeldKeys(state.step === "summon")
-  const point = onPoint
   // Whether the welcome has finished typing its name: the line under it and
   // its way on come in then. Back to the welcome types it again, so the rest
   // waits for it again rather than standing under half a name.
@@ -548,6 +804,9 @@ export function Onboarding({
   // nothing at all. The new step takes the focus instead — once the window is
   // open, because a pane still hidden behind the glow cannot hold it.
   const step = React.useRef<HTMLDivElement>(null)
+  // Which download card's button holds the focus, so the row it becomes can
+  // take it: the button goes with the card, and the focus would go to the page.
+  const [focusedCard, setFocusedCard] = React.useState<AgentId>()
   React.useEffect(() => {
     if (open) step.current?.focus()
   }, [state.step, open])
@@ -685,49 +944,73 @@ export function Onboarding({
         Choose an agent
       </h1>
       <RuntimeCopyBar progress={runtimeCopy} />
-      <div role="group" aria-label="Agent" className="flex flex-col gap-2">
-        {SETUP_AGENTS.map((choice) => {
-          const readiness = agentReadiness(state, choice.id)
-          const keyAgent = choice.id === "claude" ? choice.id : undefined
-          const canSaveApiKey =
-            keyAgent !== undefined &&
-            readiness === "needs-authentication" &&
-            apiKeys !== undefined &&
-            (gatewayStartup.state === "ready" || gatewayStartup.state === "unmanaged")
-          return (
-            <React.Fragment key={choice.id}>
-              <AgentOption
-                id={choice.id}
-                name={choice.name}
-                readiness={readiness}
-                failure={state.readinessFailure}
-                startup={gatewayStartup}
-                selected={state.agent === choice.id}
-                onSelect={onChoose}
-                onPoint={point}
-              />
-              {canSaveApiKey ? (
-                <div className="flex flex-col gap-2">
-                  <AgentApiKeyForm
-                    agent={keyAgent}
-                    agentName={choice.name}
-                    onSave={credentials.save}
-                    onSaved={onRecheck}
-                  />
-                </div>
-              ) : null}
-            </React.Fragment>
-          )
-        })}
-        <LocalAiOption onPoint={point} />
-      </div>
-      {installations ? (
-        <AgentDownloads
-          source={installations}
-          agents={SETUP_AGENTS.map((choice) => choice.id)}
-          onChanged={onRecheck}
-        />
-      ) : null}
+      <WithDownloads source={installations} onChanged={onRecheck} checking={checking}>
+        {(downloads) => (
+          <>
+            <div role="group" aria-label="Agent" className="flex flex-col gap-2">
+              {SETUP_AGENTS.map((choice) => {
+                const readiness = agentReadiness(state, choice.id)
+                const card = cardState(choice.id, readiness, downloads)
+                if (card && downloads)
+                  return (
+                    <AgentDownloadCard
+                      key={choice.id}
+                      id={choice.id}
+                      name={choice.name}
+                      card={card}
+                      downloads={downloads}
+                      onFocusChange={setFocusedCard}
+                    />
+                  )
+                const keyAgent = choice.id === "claude" ? choice.id : undefined
+                const canSaveApiKey =
+                  keyAgent !== undefined &&
+                  readiness === "needs-authentication" &&
+                  apiKeys !== undefined &&
+                  (gatewayStartup.state === "ready" ||
+                    gatewayStartup.state === "unmanaged")
+                return (
+                  <React.Fragment key={choice.id}>
+                    <AgentOption
+                      id={choice.id}
+                      name={choice.name}
+                      readiness={readiness}
+                      failure={state.readinessFailure}
+                      startup={gatewayStartup}
+                      selected={state.agent === choice.id}
+                      onSelect={onChoose}
+                      takesFocus={focusedCard === choice.id}
+                      onFocusTaken={() => setFocusedCard(undefined)}
+                    />
+                    {canSaveApiKey ? (
+                      <div className="flex flex-col gap-2">
+                        <AgentApiKeyForm
+                          agent={keyAgent}
+                          agentName={choice.name}
+                          onSave={credentials.save}
+                          onSaved={onRecheck}
+                        />
+                      </div>
+                    ) : null}
+                  </React.Fragment>
+                )
+              })}
+              <LocalAiOption />
+            </div>
+            {/* An install that left an older runtime behind still needs
+            somebody, after its card has become a row; said once, under the
+            list, for as long as that install is the last one. */}
+            {/* Only while there is something to say: an empty line would
+              still take the pane's gap. */}
+            {downloads?.outcome?.status === "installed" &&
+            downloads.outcome.cleanupPending ? (
+              <p role="status" className="nessa-text-2 text-muted-foreground">
+                Cleanup of an older runtime needs attention.
+              </p>
+            ) : null}
+          </>
+        )}
+      </WithDownloads>
       <AgentApiKeyAuditWarning failure={credentials.auditFailure} />
       {stuck ? (
         // Said once, under the list, rather than repeated on every agent:

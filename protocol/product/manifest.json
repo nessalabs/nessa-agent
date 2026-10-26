@@ -258,6 +258,22 @@
       "params": "PairingSetLinkingParams",
       "grant": "credential.manage"
     },
+    "github.status": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "github.connect": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "github.cancel": {
+      "params": null,
+      "grant": "credential.manage"
+    },
+    "github.disconnect": {
+      "params": null,
+      "grant": "credential.manage"
+    },
     "peer.enroll": {
       "params": "PeerEnrollParams",
       "grant": "credential.manage"
@@ -308,6 +324,14 @@
     },
     "workspace.publish": {
       "params": "WorkspacePublishParams",
+      "grant": "conversation.write"
+    },
+    "channel.create": {
+      "params": "ChannelCreateParams",
+      "grant": "conversation.write"
+    },
+    "channel.list": {
+      "params": "ChannelListParams",
       "grant": "conversation.write"
     },
     "conversation.subscribeEvents": {

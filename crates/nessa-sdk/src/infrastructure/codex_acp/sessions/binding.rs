@@ -367,12 +367,17 @@ impl AgentProvider for CodexAcpProvider {
         // and the process factory share that cell, so they cannot diverge.
         let launch = Arc::new(AtomicBool::new(false));
         let profile = self.launch_profile(launch.clone());
-        let process = self.process_factory_following(launch);
+        // This open's credentials, read once for every start of its process.
+        let opened = Self {
+            config: self.config.with_open_credentials(),
+            ..self.clone()
+        };
+        let process = opened.process_factory_following(launch);
         let traces = self.traces.clone();
         Box::pin(async move {
             acp_binding::open(
                 process,
-                self.config.clone(),
+                opened.config.clone(),
                 self.capabilities.clone(),
                 profile,
                 self.audit.clone(),

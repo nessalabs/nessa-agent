@@ -1,10 +1,13 @@
 /**
  * The right panel: a column beside the panes, in both layouts, with its
  * toggle and maximize button at the titlebar's end (⌥⌘B shows and hides it).
- * Its edge resizes it, and dragged far enough right folds it. Maximized, it
- * covers the workspace — the sidebar, the list and the panes are inert under
- * it (`Covered`, `workspace-layout.tsx`) and the window's keys rest but ⌥⌘B —
- * until Escape or Restore. Until something opens in it, it says so.
+ * Its edge resizes it, and dragged far enough right folds it. It is the chat
+ * in front's panel: expanded, it covers the workspace for that chat alone —
+ * the sidebar, the list and the panes are inert under it (`Covered`,
+ * `workspace-layout.tsx`) and the tab strip shows that chat's tab only. The
+ * same button, Escape, or anything that brings another chat in front — a new
+ * tab, a window key, a tab switched to — docks it again
+ * (`usePanelHeldByChat`). Until something opens in it, it says so.
  */
 import { memo, useLayoutEffect, useRef } from "react"
 import { EmptyState } from "@nessa-ui/react/empty-state"

@@ -74,6 +74,12 @@ export const css = {
   dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot — and a new session's home's, docked there in a small pane
   conversationDock: ".workspace-conversation .workspace-dock", // class: a conversation's composer, never a home's
   paneHome: ".workspace-pane-home", // class: a new session's home in a pane
+  channelAdd: ".workspace-section-add", // class: a sidebar section's +, which opens the "New channel" flow
+  newChannel: ".new-channel", // class: the "New channel" flow over the content region
+  newChannelField: ".new-channel-field", // class: the flow's composer field, for the name and the notes; data-step
+  newChannelAsked: ".new-channel-asked", // class: the question being asked; data-step
+  newChannelAnswered: ".new-channel-answered", // class: an answered question's ✓ line; data-step
+  newChannelResource: ".new-channel-resources li", // a file or folder attached to the channel being made
   homeScene: ".workspace-pane-home .desktop-header", // class: the home's night scene or picture
   greeting: ".workspace-pane-home .desktop-greeting", // class: "Working late?"
   conversationTitle: ".workspace-heading h2", // class: a conversation's title, atop its transcript
@@ -148,6 +154,17 @@ export const css = {
   needsYouHeading: "#agents-needs-you", // the overview's Needs you heading
   codeBlock: ".workspace-code", // class: a code block in a transcript
   allClear: ".agents-clear", // class: the overview's "Nothing needs you" card
+
+  // The menu-bar panel (index.html)
+  panelTabs: '.nessa-chrome [data-slot="chat-tabs"]', // the panel's tab strip; data-variant="dots"
+  panelCurrent: '.nessa-chrome [data-slot="chat-tabs-current"]', // the selected tab's name, leading the strip
+  panelDot: '.nessa-chrome [data-slot="chat-tab-dot"]', // one page dot per tab; its [data-active] tab is the bar
+  panelMessages: '[data-slot="chat-tabs-messages"]', // the strip's trailing Messages button
+  panelListRow: "[data-slot=conversation-history-item]", // a row of the panel's Messages list
+  panelComposer: '.nessa-panel [data-slot="chat-composer-editor"]', // the panel composer's editor
+  sentBubble: '[data-slot="chat-bubble"][data-tone="sent"]', // a message the person sent, drawn in the chat accent
+  undoCard: '[data-slot="undo-card"]', // the row card an archive leaves, with Undo
+  randomAvatar: '[data-slot="random-avatar"]', // a conversation's painted avatar
 
   // Side columns
   sidebar: ".workspace-sidebar", // class
@@ -281,15 +298,18 @@ export const css = {
   // (src/desktop/settings/ui/integrations-tab.tsx)
   mcpGroup: '[data-setting="mcp-servers"]', // the servers' card; data-pending with no gateway
   // Settings › Connections › Linked devices (src/desktop/settings/ui/linked-devices-tab.tsx)
+  github: '[data-setting="github"]', // Settings › Accounts' GitHub row; data-github-state: absent | reading | unread | signed-out | connecting | connected
   linked: "[data-linked]", // the tab; its value: pending | checking | off | on | refused | unreachable
   linkedOn: '[data-linked="on"]',
   linkedOff: '[data-linked="off"]',
   linkedRefused: '[data-linked="refused"]',
   linkedPending: '[data-linked="pending"]',
   linkedNotice: "[data-linked-notice]",
+  pairingDialog: '[data-slot="dialog"]:has([data-linked-pairing])', // the modal Pair a device opens: the code and one orb
+  pairingRow: "[data-pairing-row]", // the tab's one Pair a device row
   pairingCode: '[data-slot="pairing-code"]',
   signalOrb: '[data-slot="signal-orb"]',
-  qrOrb: '[data-slot="qr-orb"]',
+  qrOrb: '[data-slot="qr-orb"]', // never drawn: the modal carries the signal orb alone
   fingerprint: '[data-slot="key-fingerprint"]',
 
   // The owner's share dialog (src/desktop/workspace/ui/share/share-dialog.tsx)
@@ -543,6 +563,10 @@ export const names = {
   connections: "Connections",
   integrations: "Integrations",
   linkedDevices: "Linked devices",
+  /** Settings › Connections' tab holding the GitHub sign-in, and its row's buttons. */
+  accounts: "Accounts",
+  githubConnect: "Connect…",
+  githubDisconnect: "Disconnect",
   /** Settings' category and tab holding the previews, the side rail's switch among them. */
   advanced: "Advanced",
   experimental: "Experimental",
@@ -560,6 +584,10 @@ export const names = {
     /** The agents setup lists, by their rows' names; Local AI is coming. */
     agents: ["Claude", "Codex"],
     localAi: "Local AI, coming soon",
+    /** Codex not installed: its download card, and the button on it at the
+     * stress installer's 45 MB. */
+    codexCard: "Download Codex",
+    codexDownload: "Download Codex · 45 MB",
     /** The summon step's ways on: the second until its lesson is done. */
     finish: ["Start using Nessa", "Skip this step"],
   },

@@ -135,6 +135,8 @@ const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   [ConversationErrorCode.MessageQuotaExceeded]: "other",
   // A Drive turn's grant moved. Sharing does not send or steer, so these
   // are not a share or an unshare.
+  // A channel is named only when a conversation is made.
+  [ConversationErrorCode.ChannelNotFound]: "other",
   [ConversationErrorCode.Revoked]: "other",
   [ConversationErrorCode.RevokedAfterSave]: "other",
   [ConversationErrorCode.UnavailableAfterSave]: "other",

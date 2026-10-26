@@ -185,10 +185,16 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `pairing.deny` | `pairing` | Control | Controls | Manifest |
 | `pairing.cancel` | `pairing` | Control | Controls | Manifest |
 | `pairing.setLinking` | `pairing` | Ordinary | Requests | Manifest |
+| `github.status` | `github` | Ordinary | Requests | Manifest |
+| `github.connect` | `github` | Ordinary | Requests | Manifest |
+| `github.cancel` | `github` | Ordinary | Requests | Manifest |
+| `github.disconnect` | `github` | Ordinary | Requests | Manifest |
 | `peer.enroll` | `peers` | Ordinary | Requests | Manifest |
 | `peer.list` | `peers` | Ordinary | Requests | Manifest |
 | `peer.forget` | `peers` | Ordinary | Requests | Manifest |
 | `peer.relay` | `peers` | Ordinary | Requests | Manifest |
+| `channel.create` | `channel` | Ordinary | Requests | Request(CatalogueWrite) |
+| `channel.list` | `channel` | Ordinary | Requests | Request(CatalogueWrite) |
 | `conversation.subscribe` | `subscription` | Ordinary | ConnectionOwned | FollowConversation |
 | `conversation.subscribeList` | `subscription` | Ordinary | ConnectionOwned | FollowList |
 | `conversation.unsubscribe` | `subscription` | Ordinary | ConnectionOwned | UnsubscribeConversation |

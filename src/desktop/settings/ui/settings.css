@@ -63,7 +63,9 @@
   --settings-focus-offset: 2px;
 }
 
-:where(.settings) :focus-visible {
+/* A kit dialog's panel and body draw their own rings: the panel only after a keyboard open. */
+:where(.settings)
+  :focus-visible:not(:where([data-slot="dialog"], [data-slot="dialog-body"])) {
   outline: var(--settings-focus-outline);
   outline-offset: var(--settings-focus-offset);
 }
@@ -760,6 +762,14 @@ html:not(.dark) .settings .settings-card {
   color: var(--desktop-faint);
 }
 
+/* An anchor is inline: it takes the button's box, so a link and a button side by side share a line. */
+.settings-button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 /* A list of keys reads as a list: its rows sit closer than a setting's. */
 .settings .settings-row:has(.settings-kbd) {
   padding-block: 8px;
@@ -1332,18 +1342,36 @@ html:not(.dark) .settings .settings-card {
   transition: none;
 }
 
-/* Linked devices: the UI kit's groups, with the orbs stacked so a narrow page fits them. */
+/* Linked devices: the UI kit's groups. */
 .linked-devices {
   display: flex;
   flex-direction: column;
   gap: 32px;
 }
 
-.linked-orbs {
+/*
+ * The pairing modal: the orb on the left and the code beside it, wrapping
+ * under it when the window is too narrow for both. A waiting device's
+ * approval takes the full width below them.
+ */
+.linked-pairing {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
+  align-items: center;
   justify-content: center;
+  gap: 24px;
+  padding-block: 8px;
+}
+
+.linked-pairing-code {
+  flex: 1 1 200px;
+  display: flex;
+  justify-content: center;
+}
+
+.linked-pairing-waiting,
+.linked-pairing-notice {
+  flex: 1 1 100%;
 }
 
 .linked-actions {
