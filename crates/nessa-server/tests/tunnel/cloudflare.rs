@@ -320,9 +320,12 @@ async fn a_refused_launch_records_its_reason() {
             Some(TunnelFailure::Unavailable("unsupported"))
         );
     }
+    // Any file will do: the launch is only made, never run.
+    let present = directory.path().join("present");
+    std::fs::write(&present, b"").unwrap();
     let (service, refused) = service_with(
         directory.path(),
-        Program::Given("/bin/true".into()),
+        Program::Given(present),
         CloudflareTunnel::Quick,
         Arc::new(Kept::Nothing),
     );
