@@ -163,7 +163,8 @@ export function watchChannelDrops({
         const opening = openingOf(getState())
         if (opening) dispatch(channelDropLanded({ opening, drop }))
       },
-      dropped: (drop, added) => dispatch(channelDropSettled({ drop, added })),
+      dropped: (drop, added, unread) =>
+        dispatch(channelDropSettled({ drop, added, unread })),
     })
   }
 }

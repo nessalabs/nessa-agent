@@ -1483,6 +1483,7 @@ async function dropOnChannel(run, failures, dropped, photograph, name) {
   await emit("nessa://paths-dropped", {
     drop: `stress-${name}`,
     paths: [...dropped, dropped[0]],
+    unread: 0,
   })
   const listed = await waitFor(
     async () =>

@@ -440,6 +440,7 @@ const workspaceSlice = createSlice({
       }: Payload<{
         drop: string
         added: readonly { readonly path: string; readonly kind: ResourceKind }[]
+        unread: number
       }>,
     ) => channelCreation.channelDropSettled(state, payload),
     channelStepAsked: (

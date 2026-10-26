@@ -123,6 +123,13 @@ pub enum DroppedKind {
 /// as a file, which only decides its icon.
 const KIND_WAIT: Duration = Duration::from_secs(2);
 
+/// Most paths of one drop the host looks at: what a channel holds at most
+/// (`x-channelRules.maxResources` in the product protocol, held equal by a
+/// test). Each look is a thread of its own that a stalled share can keep, so
+/// a drop of thousands looks at no more than could ever be kept; the rest are
+/// counted and the page says they did not fit.
+const MOST_DROPPED: usize = 32;
+
 /// Whether a drag is over the window after `event`, when it changes that: a
 /// drag naming no paths (text, say) is nothing the page can take.
 fn dragging_after(event: &DragDropEvent) -> Option<bool> {
@@ -175,6 +182,13 @@ fn next_drop() -> String {
     format!("d{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
+/// The paths of a drop the host will look at, and how many it will not.
+fn within_bound(mut paths: Vec<PathBuf>) -> (Vec<PathBuf>, usize) {
+    let unread = paths.len().saturating_sub(MOST_DROPPED);
+    paths.truncate(MOST_DROPPED);
+    (paths, unread)
+}
+
 /// Handles one drag-drop event on the desktop window: tells the page while a
 /// drag carrying paths is over it, that a drop landed (at once, named), and
 /// later what it dropped under the same name. Looking at the paths happens on
@@ -207,12 +221,13 @@ pub fn dropped_on_desktop(app: &AppHandle, event: &DragDropEvent) {
     let app = app.clone();
     let paths = paths.clone();
     tauri::async_runtime::spawn(async move {
-        let paths = described(paths, deps.files.clone(), KIND_WAIT).await;
+        let (looked, unread) = within_bound(paths);
+        let paths = described(looked, deps.files.clone(), KIND_WAIT).await;
         // Said even when nothing is left, so the page lets go of the name.
         let _ = app.emit_to(
             DESKTOP_WINDOW,
             PATHS_DROPPED,
-            serde_json::json!({ "drop": drop, "paths": paths }),
+            serde_json::json!({ "drop": drop, "paths": paths, "unread": unread }),
         );
     });
 }
@@ -323,6 +338,24 @@ mod tests {
         );
         let shape = serde_json::to_value(&said[1]).unwrap();
         assert_eq!(shape["kind"], "folder");
+    }
+
+    #[test]
+    fn a_drop_looks_at_no_more_paths_than_a_channel_holds() {
+        let rules: serde_json::Value =
+            serde_json::from_str(include_str!("../../protocol/product/v1.json")).unwrap();
+        assert_eq!(
+            rules["x-channelRules"]["maxResources"].as_u64(),
+            Some(MOST_DROPPED as u64)
+        );
+        let many: Vec<PathBuf> = (0..MOST_DROPPED + 5)
+            .map(|n| PathBuf::from(format!("/p/{n}")))
+            .collect();
+        let (looked, unread) = within_bound(many);
+        assert_eq!(looked.len(), MOST_DROPPED);
+        assert_eq!(looked[0], PathBuf::from("/p/0"));
+        assert_eq!(unread, 5);
+        assert_eq!(within_bound(vec!["/a".into()]), (vec!["/a".into()], 0));
     }
 
     #[test]

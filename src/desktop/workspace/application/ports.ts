@@ -442,7 +442,8 @@ export interface PathPicker {
 export interface PathDropWatch {
   dragging(over: boolean): void
   began(drop: string): void
-  dropped(drop: string, paths: readonly DroppedPath[]): void
+  /** `unread` counts paths past what a channel holds, which were not looked at. */
+  dropped(drop: string, paths: readonly DroppedPath[], unread: number): void
 }
 
 /** One dragged path, and whether it is a file or a folder. */

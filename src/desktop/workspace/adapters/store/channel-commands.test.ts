@@ -222,7 +222,7 @@ describe("asking", () => {
       return name
     }
     const answer = (name: string, ...dropped: DroppedPath[]) =>
-      watches.forEach((watch) => watch.dropped(name, dropped))
+      watches.forEach((watch) => watch.dropped(name, dropped, 0))
     watches.forEach((watch) => watch.dragging(true))
     expect(over).toEqual([true])
     // Landed while it asked for the name: its paths add nothing, even once
@@ -275,12 +275,27 @@ describe("asking", () => {
     expect(await store.dispatch(createChannel())).toBeUndefined()
     expect(flowOf(store)?.creating).toBe(false)
     watches.forEach((watch) =>
-      watch.dropped("d1", [{ path: "/work/brief.md", kind: "file" }]),
+      watch.dropped("d1", [{ path: "/work/brief.md", kind: "file" }], 0),
     )
     expect(flowOf(store)?.draft.resources).toEqual(["/work/brief.md"])
     const made = await store.dispatch(createChannel())
     expect(made).toBeDefined()
     expect(listed.find((channel) => channel.id === made)?.name).toBe("drops")
+    stop()
+  })
+
+  it("counts the paths the host did not look at as not fitting", async () => {
+    const { paths, watches } = queuedPaths()
+    const { store } = await storeWith({ channels: channels(), paths })
+    store.dispatch(openChannelCreation())
+    store.dispatch(askChannelStep({ step: "resources" }))
+    const stop = store.dispatch(watchChannelDrops({ dragging: () => {} }))
+    watches.forEach((watch) => watch.began("d1"))
+    watches.forEach((watch) =>
+      watch.dropped("d1", [{ path: "/work/brief.md", kind: "file" }], 7),
+    )
+    expect(flowOf(store)?.draft.resources).toEqual(["/work/brief.md"])
+    expect(flowOf(store)?.leftOut).toBe(7)
     stop()
   })
 

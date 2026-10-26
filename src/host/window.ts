@@ -588,7 +588,7 @@ export interface DroppedPath {
 export async function onPathsDragged(handlers: {
   dragging: (over: boolean) => void
   began: (drop: string) => void
-  dropped: (drop: string, paths: DroppedPath[]) => void
+  dropped: (drop: string, paths: DroppedPath[], unread: number) => void
 }): Promise<() => void> {
   if (!inTauri) return () => {}
   const { listen } = await import("@tauri-apps/api/event")
@@ -599,9 +599,9 @@ export async function onPathsDragged(handlers: {
     listen<{ drop: string }>(HOST_EVENTS.pathsDropBegan, ({ payload }) =>
       handlers.began(payload.drop),
     ),
-    listen<{ drop: string; paths: DroppedPath[] }>(
+    listen<{ drop: string; paths: DroppedPath[]; unread: number }>(
       HOST_EVENTS.pathsDropped,
-      ({ payload }) => handlers.dropped(payload.drop, payload.paths),
+      ({ payload }) => handlers.dropped(payload.drop, payload.paths, payload.unread),
     ),
   ])
   return () => stops.forEach((stop) => stop())

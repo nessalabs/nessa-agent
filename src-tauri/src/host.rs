@@ -60,7 +60,8 @@ pub const PATHS_DRAGGING: &str = "nessa://paths-dragging";
 /// rather than to whatever is open when the answer comes.
 pub const PATHS_DROP_BEGAN: &str = "nessa://paths-drop-began";
 /// Files and folders dropped on the desktop window; the payload is
-/// `{ drop, paths }`, each a [`crate::channel_paths::DroppedPath`]. Only paths, like
+/// `{ drop, paths, unread }`, `unread` counting paths past what a channel
+/// holds, which the host did not look at, each a [`crate::channel_paths::DroppedPath`]. Only paths, like
 /// the channel pickers': the gateway checks each again before using it.
 pub const PATHS_DROPPED: &str = "nessa://paths-dropped";
 /// Setup recorded a finish, and with it the agent it chose. Sent to every

@@ -163,7 +163,8 @@ export function channelDropLanded(
 
 /**
  * A drop's paths came. They are added, as a pick's are, only when the drop
- * landed on this flow and the flow still asks for files; either way the drop
+ * landed on this flow and the flow still asks for files, and the `unread`
+ * ones the host never looked at count as not fitting; either way the drop
  * stops holding Create.
  */
 export function channelDropSettled(
@@ -171,9 +172,11 @@ export function channelDropSettled(
   {
     drop,
     added,
+    unread,
   }: {
     drop: string
     added: readonly { readonly path: string; readonly kind: ResourceKind }[]
+    unread: number
   },
 ): WorkspaceState {
   const flow = state.channelCreation
@@ -185,9 +188,18 @@ export function channelDropSettled(
       landing: flow.landing.filter((each) => each !== drop),
     },
   }
-  return flow.asking === "resources"
-    ? channelResourcesAdded(settled, { opening: flow.opening, added })
-    : settled
+  if (flow.asking !== "resources") return settled
+  const kept = channelResourcesAdded(settled, { opening: flow.opening, added })
+  const now = kept.channelCreation
+  return unread > 0 && now
+    ? {
+        ...kept,
+        channelCreation: {
+          ...now,
+          leftOut: (added.length > 0 ? now.leftOut : 0) + unread,
+        },
+      }
+    : kept
 }
 
 /** Takes one file or folder off the channel. */
