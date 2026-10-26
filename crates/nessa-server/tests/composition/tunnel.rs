@@ -84,63 +84,82 @@ async fn an_ingress_that_cannot_be_bound_ends_the_kept_program() {
     );
 }
 
+/// A failure reads from the step shepherd says failed, and a refused
+/// launch from its own reason, whatever words come with them.
 #[test]
 fn shepherd_statuses_read_as_the_tunnels() {
+    use shepherd::ServiceFailureKind as Kind;
     let address =
         nessa_protocol::tunnel::TunnelAddress::try_from("https://a.trycloudflare.com".to_owned())
             .unwrap();
-    let backoff = |reason: &str| {
-        tunnel_status(&ServiceStatus::Backoff {
-            failures: 1,
-            delay: Duration::from_secs(1),
-            reason: reason.into(),
-        })
+    let backoff = |kind: Kind, refused: Option<TunnelFailure>| {
+        tunnel_status(
+            &ServiceStatus::Backoff {
+                failures: 1,
+                delay: Duration::from_secs(1),
+                kind,
+                reason: "launch: not_ready".into(),
+            },
+            refused,
+        )
     };
+    let failed = |failure| Some(TunnelStatus::Failed(failure));
     assert_eq!(
-        tunnel_status(&ServiceStatus::Starting { attempt: 1 }),
+        tunnel_status(&ServiceStatus::Starting { attempt: 1 }, None),
         Some(TunnelStatus::Starting)
     );
     // A start after a failure keeps the failure's reason showing.
-    assert_eq!(tunnel_status(&ServiceStatus::Starting { attempt: 2 }), None);
     assert_eq!(
-        tunnel_status(&ServiceStatus::Ready {
-            value: address.clone(),
-            os_pid: 7,
-            adopted: true,
-        }),
+        tunnel_status(&ServiceStatus::Starting { attempt: 2 }, None),
+        None
+    );
+    assert_eq!(
+        tunnel_status(
+            &ServiceStatus::Ready {
+                value: address.clone(),
+                os_pid: 7,
+                adopted: true,
+            },
+            None
+        ),
         Some(TunnelStatus::Ready(address))
     );
-    for word in TunnelFailure::UNAVAILABLE {
+    for word in ["unsupported", "download", "unverified", "storage", "token"] {
+        let refused = TunnelFailure::Unavailable(word);
+        assert_eq!(backoff(Kind::Launch, Some(refused)), failed(refused));
+    }
+    // A refusal is read only for a refused launch.
+    let refused = Some(TunnelFailure::Unavailable("download"));
+    assert_eq!(backoff(Kind::Launch, None), failed(TunnelFailure::Start));
+    for kind in [Kind::Start, Kind::ExitedBeforeReady, Kind::Exited] {
         assert_eq!(
-            backoff(&format!("launch: {word}")),
-            Some(TunnelStatus::Failed(TunnelFailure::Unavailable(word)))
+            backoff(kind, refused),
+            failed(TunnelFailure::Start),
+            "{kind:?}"
+        );
+    }
+    for kind in [Kind::NotReadyInTime, Kind::ReadyCheck] {
+        assert_eq!(
+            backoff(kind, refused),
+            failed(TunnelFailure::NotReady),
+            "{kind:?}"
         );
     }
     assert_eq!(
-        backoff("not ready in time"),
-        Some(TunnelStatus::Failed(TunnelFailure::NotReady))
+        tunnel_status(
+            &ServiceStatus::Failed {
+                kind: Kind::Launch,
+                reason: "launch: download".into()
+            },
+            refused
+        ),
+        failed(TunnelFailure::Unavailable("download"))
     );
-    for other in [
-        "exited before ready: exited with code 1",
-        "exited with code 0",
-        "spawn: no such file",
-        "kept: kept record store failed: x",
-        "launch: something new",
-    ] {
-        assert_eq!(
-            backoff(other),
-            Some(TunnelStatus::Failed(TunnelFailure::Start)),
-            "{other}"
-        );
-    }
+    assert_eq!(tunnel_status(&ServiceStatus::Stopping, None), None);
     assert_eq!(
-        tunnel_status(&ServiceStatus::Failed {
-            reason: "launch: download".into()
-        }),
-        Some(TunnelStatus::Failed(TunnelFailure::Unavailable("download")))
+        tunnel_status(&ServiceStatus::Released { os_pid: 7 }, None),
+        None
     );
-    assert_eq!(tunnel_status(&ServiceStatus::Stopping), None);
-    assert_eq!(tunnel_status(&ServiceStatus::Released { os_pid: 7 }), None);
 }
 
 /// With the tunnel off and nothing ever kept, nothing is created.

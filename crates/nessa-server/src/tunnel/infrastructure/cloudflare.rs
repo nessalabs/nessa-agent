@@ -4,15 +4,17 @@
 //! only one that knows Cloudflare exists.
 //!
 //! ```text
-//! launch ──▶ <tunnel>/cloudflared-<version>/cloudflared, digest checked
+//! launch ──▶ a refusal's reason recorded in LaunchRefusal (emptied when it goes ahead)
+//!        ──▶ <tunnel>/cloudflared-<version>/cloudflared, digest checked
 //!            (downloaded from the pinned URL, size and digest checked, when missing)
 //!        ──▶ quick: cloudflared tunnel --url http://<ingress>
 //!            named: cloudflared tunnel run --token-file <tunnel>/token (written by Settings, `files`),
 //!                   revision "token <fingerprint>"
 //!            both:  --no-autoupdate --loglevel warn --metrics 127.0.0.1:<port>, HOME=<tunnel>,
 //!                   nothing else inherited, output to <tunnel>/cloudflared.log
-//!            (<port>: the kept program's when the launch on it is exactly the one recorded and no
-//!             launch of this run has run yet, so shepherd takes it back; else one free now)
+//!            (<port>: the kept program's, read through KeptTunnel, when the launch on it is exactly
+//!             the one recorded and no launch of this run has run yet, so shepherd takes it back;
+//!             else one free now)
 //! ready  ──▶ asked on the metrics port the running program's own record names:
 //!            GET /ready is 200, and for quick GET /quicktunnel names its hostname
 //! ```
@@ -22,7 +24,7 @@
 //! only points at it.
 use super::files::TunnelFiles;
 use crate::agent_install::application::{ArchiveSource, StagedArchive};
-use crate::tunnel::application::{CloudflareTunnel, TunnelFailure};
+use crate::tunnel::application::{CloudflareTunnel, LaunchRefusal, TunnelFailure};
 use async_trait::async_trait;
 use nessa_protocol::tunnel::TunnelAddress;
 use serde::Deserialize;
@@ -39,7 +41,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, PoisonError,
     },
     time::Duration,
 };
@@ -157,12 +159,13 @@ pub(crate) struct CloudflareService {
     archives: MakeArchives,
     tunnel: CloudflareTunnel,
     ingress: SocketAddr,
-    /// shepherd's records and the name it keeps the program under, when it
-    /// keeps it: a run's first launch asks them for the program left running.
-    kept: Option<(KeptProcesses, KeptName)>,
+    /// The program a last run left running: a run's first launch asks it.
+    kept: Arc<dyn KeptTunnel>,
     /// Whether a launch of this run has started or been taken back: until
     /// one has, a launch reuses the kept program's metrics port.
     ran: AtomicBool,
+    /// Why the last launch was refused, which the status is read from.
+    refused: LaunchRefusal,
 }
 
 impl CloudflareService {
@@ -172,7 +175,8 @@ impl CloudflareService {
         archives: MakeArchives,
         tunnel: CloudflareTunnel,
         ingress: SocketAddr,
-        kept: Option<(KeptProcesses, KeptName)>,
+        kept: Arc<dyn KeptTunnel>,
+        refused: LaunchRefusal,
     ) -> Self {
         Self {
             directory: files.directory().to_owned(),
@@ -183,6 +187,7 @@ impl CloudflareService {
             ingress,
             kept,
             ran: AtomicBool::new(false),
+            refused,
         }
     }
 
@@ -219,33 +224,25 @@ impl CloudflareService {
     }
 
     /// The launch on the port the program a last run left running was
-    /// started with, as its live kept record says, when that launch is
-    /// exactly the one recorded: shepherd then takes the program back. Asked
-    /// only until a launch of this run has started or been taken back.
+    /// started with, as its kept record says, when that launch is exactly
+    /// the one recorded: shepherd then takes the program back. Asked only
+    /// until a launch of this run has started or been taken back. A record
+    /// that cannot be read takes back nothing.
     async fn kept_launch(&self) -> Result<Option<ServiceLaunch>, TunnelFailure> {
         if self.ran.load(Ordering::SeqCst) {
             return Ok(None);
         }
-        let Some((kept, name)) = self.kept.as_ref() else {
-            return Ok(None);
+        let left = match self.kept.left_running().await {
+            Ok(Some(left)) => left,
+            Ok(None) => return Ok(None),
+            // The lookup logged why; the program is started anew.
+            Err(KeptLookupFailed) => return Ok(None),
         };
-        let Ok(live) = kept.list().await else {
-            return Ok(None);
-        };
-        let Some(record) = live
-            .into_iter()
-            .find(|entry| &entry.record.name == name && !entry.held)
-            .map(|entry| entry.record)
-        else {
-            return Ok(None);
-        };
-        let Some(port) = metrics_port_in(&record.args) else {
+        let Some(port) = metrics_port_in(&left.args) else {
             return Ok(None);
         };
         let launch = self.launch_on(port)?;
-        let same =
-            SpecFingerprint::of(&launch.spec, launch.revision.as_deref()) == record.fingerprint;
-        Ok(same.then_some(launch))
+        Ok((StartedAs::of(&launch) == left.started_as).then_some(launch))
     }
 
     /// What to run this time: the kept program's own launch when it is
@@ -330,12 +327,16 @@ impl CloudflareService {
 impl Service for CloudflareService {
     type Ready = TunnelAddress;
 
-    /// A failure is its wire word, which `TunnelFailure::from_reason` reads
-    /// back.
+    /// A refusal's reason is recorded for the status; its words are only
+    /// logged.
     async fn launch(&self) -> Result<ServiceLaunch, ServiceFailure> {
-        let failed = |failure: TunnelFailure| ServiceFailure::new(failure.as_str());
-        self.prepare().await.map_err(failed)?;
-        self.launch_spec().await.map_err(failed)
+        let launched = match self.prepare().await {
+            Ok(()) => self.launch_spec().await,
+            Err(failure) => Err(failure),
+        };
+        *self.refused.lock().unwrap_or_else(PoisonError::into_inner) =
+            launched.as_ref().err().copied();
+        launched.map_err(|failure| ServiceFailure::new(failure.as_str()))
     }
 
     async fn ready(
@@ -350,6 +351,70 @@ impl Service for CloudflareService {
             .map(|record| record.args.as_slice())
             .unwrap_or_default();
         Ok(self.address(args).await)
+    }
+}
+
+/// The program a last run left running for the tunnel, as its record says.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LeftRunning {
+    /// The arguments it was started with.
+    pub(crate) args: Vec<String>,
+    pub(crate) started_as: StartedAs,
+}
+
+/// What a kept program was started as: compared with a launch, never read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StartedAs(SpecFingerprint);
+
+impl StartedAs {
+    /// What `launch` starts a program as.
+    pub(crate) fn of(launch: &ServiceLaunch) -> Self {
+        Self(SpecFingerprint::of(
+            &launch.spec,
+            launch.revision.as_deref(),
+        ))
+    }
+}
+
+/// The program left running could not be looked up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct KeptLookupFailed;
+
+/// Where the program a last run left running is recorded, outside this
+/// process. Composition injects shepherd's records ([`ShepherdKept`]);
+/// tests substitute their own.
+#[async_trait]
+pub(crate) trait KeptTunnel: Send + Sync {
+    /// The live program kept for the tunnel that no other owner holds.
+    async fn left_running(&self) -> Result<Option<LeftRunning>, KeptLookupFailed>;
+}
+
+/// The tunnel's program as shepherd keeps it, under one name.
+pub(crate) struct ShepherdKept {
+    kept: KeptProcesses,
+    name: KeptName,
+}
+
+impl ShepherdKept {
+    pub(crate) fn new(kept: KeptProcesses, name: KeptName) -> Self {
+        Self { kept, name }
+    }
+}
+
+#[async_trait]
+impl KeptTunnel for ShepherdKept {
+    async fn left_running(&self) -> Result<Option<LeftRunning>, KeptLookupFailed> {
+        let live = self.kept.list().await.map_err(|error| {
+            tracing::warn!(%error, "the kept tunnel program's record could not be read");
+            KeptLookupFailed
+        })?;
+        Ok(live
+            .into_iter()
+            .find(|entry| entry.record.name == self.name && !entry.held)
+            .map(|entry| LeftRunning {
+                args: entry.record.args,
+                started_as: StartedAs(entry.record.fingerprint),
+            }))
     }
 }
 

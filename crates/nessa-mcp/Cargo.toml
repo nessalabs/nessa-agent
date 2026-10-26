@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 nessa-local-storage = { path = "../nessa-local-storage" }
-shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "5ac0c4fef005d37f69887a9eaa4d8b93cfd3c789" }
+shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "601653929349959a4b73b59391ca8814c786abb2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "signal", "sync", "time"] }

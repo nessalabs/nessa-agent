@@ -6,7 +6,8 @@
 //!
 //! ```text
 //! config.json native.tunnel + the token file ──▶ TunnelSetting ──▶ composition picks the provider's service
-//! shepherd ServiceSupervisor ──▶ composition::tunnel ──▶ watch<TunnelStatus> ──▶ pairing.tunnel, server.reach
+//! shepherd ServiceSupervisor (failure kind) + LaunchRefusal ──▶ composition::tunnel ──▶ watch<TunnelStatus>
+//!   ──▶ pairing.tunnel, server.reach
 //! ```
 use nessa_protocol::tunnel::TunnelAddress;
 use sha2::{Digest, Sha256};
@@ -27,27 +28,17 @@ pub(crate) enum TunnelStatus {
 /// Why the tunnel is not up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TunnelFailure {
-    /// Its program could not be made ready, or nothing can run: one of
-    /// [`TunnelFailure::UNAVAILABLE`].
+    /// Its program could not be made ready, or nothing can run: the wire's
+    /// word for why (`unsupported`, `download`, `unverified`, `storage`,
+    /// `token`, `ingress`).
     Unavailable(&'static str),
-    /// The program could not be started, or ended.
+    /// The program could not be started, or it ended.
     Start,
-    /// It started but was not ready in time.
+    /// It started but was not ready in time, or said it never would be.
     NotReady,
 }
 
 impl TunnelFailure {
-    /// The words a provider's program may be unavailable for, as the wire
-    /// names them.
-    pub(crate) const UNAVAILABLE: [&'static str; 6] = [
-        "unsupported",
-        "download",
-        "unverified",
-        "storage",
-        "token",
-        "ingress",
-    ];
-
     /// The wire's word for it.
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -56,23 +47,12 @@ impl TunnelFailure {
             Self::NotReady => "not_ready",
         }
     }
-
-    /// The failure a reason in words names: a provider says one of
-    /// [`Self::UNAVAILABLE`] (prefixed `launch: ` by the supervisor), a
-    /// run that was not ready in time is [`Self::NotReady`], and anything
-    /// else is a start that failed or a program that ended.
-    pub(crate) fn from_reason(reason: &str) -> Self {
-        let word = reason.strip_prefix("launch: ").unwrap_or(reason);
-        if let Some(word) = Self::UNAVAILABLE.iter().find(|known| **known == word) {
-            return Self::Unavailable(word);
-        }
-        if reason.starts_with("not ready") {
-            Self::NotReady
-        } else {
-            Self::Start
-        }
-    }
 }
+
+/// Why the provider's last launch was refused, when it was: the provider
+/// decides it, and the status reads it from here, never from a failure's
+/// wording. Emptied by a launch that goes ahead.
+pub(crate) type LaunchRefusal = std::sync::Arc<std::sync::Mutex<Option<TunnelFailure>>>;
 
 /// Where the tunnel's provider forwards each connection to, when
 /// `config.json` names nowhere else: a loopback port beside the native
