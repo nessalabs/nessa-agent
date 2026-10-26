@@ -1839,6 +1839,18 @@ const steps = {
           )
         await run.page.mouse.move(1, 1)
         if (!(await shows(false))) failures.push("the actions show with the row at rest")
+        // Hidden is out of reach too: what is under Disconnect's spot at rest is not it.
+        const hit = await row
+          .getByRole("button", { name: names.githubDisconnect })
+          .evaluate((node) => {
+            const box = node.getBoundingClientRect()
+            const under = document.elementFromPoint(
+              box.x + box.width / 2,
+              box.y + box.height / 2,
+            )
+            return Boolean(under?.closest(".settings-github-actions"))
+          })
+        if (hit) failures.push("the hidden actions take the pointer at rest")
         await shot("connected")
         await row.hover()
         if (!(await shows(true)))
