@@ -17,16 +17,19 @@ export function LiveRow({
   activity: Activity | null
   after: readonly Message[]
 }) {
-  const now = useNow(1000)
   if (!activity) return null
   const drawn = shownActivity(after, activity) !== null
   return (
     <div className={drawn ? "workspace-live" : "workspace-live-spoken"} role="status">
       {drawn ? <StatusGlyph status="running" /> : null}
       <span className={drawn ? "workspace-shimmer" : undefined}>{activity.label}</span>
-      {drawn ? (
-        <span className="workspace-live-time">{elapsed(activity.since, now)}</span>
-      ) : null}
+      {drawn ? <LiveTime since={activity.since} /> : null}
     </div>
   )
+}
+
+/** How long the agent has been at it; the clock runs only while it is shown. */
+function LiveTime({ since }: { since: number }) {
+  const now = useNow(1000)
+  return <span className="workspace-live-time">{elapsed(since, now)}</span>
 }
