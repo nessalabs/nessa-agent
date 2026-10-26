@@ -92,6 +92,9 @@ impl Recipient {
                     }
                     Err(error) => panic!("{error}"),
                 };
+                // BSD may inherit the listener's nonblocking mode. This
+                // synchronous TLS reader uses the bounded socket timeouts.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(3)))
                     .unwrap();
