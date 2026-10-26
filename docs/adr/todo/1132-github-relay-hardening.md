@@ -132,3 +132,17 @@ operations pass a real disposable locked-keychain check without touching the
 login keychain. The current full CI stress failure was reproduced as a stale
 fixture client after gateway restart; its sign-in assertion now uses the run's
 current client. Protocol descriptions now name OS credential storage.
+
+### Adversarial review closure
+
+Fresh round 3 reviewed `9bd6a8482..b5776acd3` and reported no new actionable
+findings. It independently passed all 44 Worker tests and checked 1,800 seeded
+SQLite insert/delete/duplicate/rollback operations against authoritative counts.
+It also reran the disposable locked-keychain regression. The final implementer
+run passed the same native check in 0.15 seconds, current Settings flows in both
+engines, and restart-before-GitHub stress (5/5). The reviewed state page checkpoint
+is `b5776acd35d6d6df3856224ab4618212b58d3dfe`; unrelated pages are not advanced.
+
+The development migration and Worker are deployed on the existing Free resources.
+The verification record carries the exact version and synthetic delivery proof.
+No production stage is enabled by this rollout.

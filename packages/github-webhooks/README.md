@@ -125,7 +125,7 @@ are not supported for private events. GitHub credentials are sent over HTTPS for
 verification and are not stored by the relay.
 
 Each page returns at most eight events and one MiB of source payload, an explicit
-continuation flag, a next cursor and a two-minute signed
+continuation flag, a next cursor and a fifteen-minute signed
 watch ticket. `GET /relay/v1/watch` upgrades to WebSocket with `x-nessa-stage`
 and `x-nessa-watch-ticket` headers. Tickets never go in URLs. SQLite Durable Objects
 use hibernation; sockets carry only `changed`, without event data. Expiry closes
@@ -279,3 +279,9 @@ See [ADR 1132](../../docs/adr/todo/1132-github-relay-hardening.md) for orderings
 security boundaries and the review record.
 
 Expiry uses covering indexes and an audit primary-key cutoff; the full-capacity query-plan regression rejects idle full scans. Linux Secret Service sessions use prompt timeout zero, including lock-after-lookup races. OS credential identities use the canonical namespace, so filesystem aliases share a key.
+
+The [hardening verification](hardening-verification.json) and
+[adversarial review](evidence/hardening-review.md) record the source checkpoint,
+security boundaries and current Free development deployment. Metadata admission
+uses trigger-maintained counters; cleanup accounting is keyed by installation,
+with execution regressions that include trigger work.

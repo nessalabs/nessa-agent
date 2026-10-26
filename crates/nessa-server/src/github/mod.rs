@@ -5,7 +5,7 @@
 //! ```text
 //! github.status/connect/cancel/disconnect ──▶ GithubConnections
 //!                  ├──▶ GithubApi (device code, token poll, /user)
-//!                  ├──▶ GithubTokenStore (one private file, never config.json)
+//!                  ├──▶ GithubTokenStore (namespace-scoped OS credential entry)
 //!                  ├──▶ GithubAudit (requested, then outcome; no token)
 //!                  └──▶ Timer (poll interval and the code's deadline)
 //! each provider open ──▶ GithubLaunchCredentials ──▶ GithubConnections::token

@@ -5,7 +5,7 @@ kind: service
 status: implemented
 summary: Verified GitHub events reach each authorized user's private desktop inbox, with bounded offline catch-up.
 parent: nessa
-sourceRevision: "4a93a077579d006210eff4707a3150299bde460c"
+sourceRevision: "b5776acd35d6d6df3856224ab4618212b58d3dfe"
 sources:
   - packages/github-webhooks/src/composition/worker.ts
   - packages/github-webhooks/src/webhooks/infrastructure/http.ts
@@ -15,6 +15,14 @@ sources:
   - packages/github-webhooks/src/relay/infrastructure/d1.ts
   - packages/github-webhooks/src/relay/infrastructure/wake-room.ts
   - packages/github-webhooks/migrations/0002_relay.sql
+  - packages/github-webhooks/migrations/0003_fair_use.sql
+  - packages/github-webhooks/src/relay/infrastructure/budget.ts
+  - crates/nessa-local-database/src/encryption.rs
+  - crates/nessa-server/src/secrets/keychain.rs
+  - crates/nessa-server/src/secrets/macos.rs
+  - crates/nessa-server/src/secrets/linux.rs
+  - crates/nessa-server/src/github/infrastructure/token_keychain.rs
+  - crates/nessa-server/src/github_relay/infrastructure/keychain.rs
   - crates/nessa-server/src/github_relay/application/live_events.rs
   - crates/nessa-server/src/github_relay/infrastructure/selection.rs
   - crates/nessa-server/src/github_relay/infrastructure/credentials.rs
@@ -62,9 +70,11 @@ stateDiagram-v2
     [*] --> Checking: webhook arrives
     Checking --> Refused: invalid signature or bounded envelope
     Checking --> CloudRetained: database commits original delivery
-    Checking --> Unconfirmed: full or unavailable store
+    Checking --> Unconfirmed: installation quota, full or unavailable store
     CloudRetained --> Authorizing: desktop requests a page
     Authorizing --> Refused: GitHub access, identity, stage or Cedar refuses
+    Authorizing --> Throttled: user read budget exhausted
+    Throttled --> Authorizing: retry after backoff
     Authorizing --> Gap: expiry watermark covers missing events
     Authorizing --> LocalWriting: audited read returns a bounded page
     LocalWriting --> LocalCommitted: events and cursor commit together
@@ -104,8 +114,7 @@ restart. Each connection generation fences responses and cleanup from a removed
 binding; disconnect/reconnect cannot revive the previous generation's pending work.
 Local storage deduplicates a redelivered identity while its original copy remains.
 
-The local owner can read the downloaded inbox without network access. OS ownership
-protects that private database; no new unauthenticated local HTTP read route is
+The local owner can read the downloaded inbox without network access. SQLCipher encrypts the whole database and rollback journal, including repository identities and audit records. Its separate random key lives in the OS credential store. OS ownership also protects its files; no new unauthenticated local HTTP read route is
 mounted. Existing [conversation admission](../gateway/external-events.md) remains
 a separate authority if a future feature turns an event into a turn.
 
@@ -167,3 +176,66 @@ stateDiagram-v2
     GapPaused --> Off: disable or disconnect commits cleanup
     On --> On: cleanup fails and sign-out is refused
 ```
+
+
+## Secret storage and fair use
+
+The gateway keeps its existing GitHub sign-in and a separate random inbox key in
+native OS credential entries scoped by stage and instance namespace. macOS uses
+noninteractive Keychain reads, writes and deletes against the existing user-default
+keychain. Linux uses encrypted Secret Service sessions with prompting disabled and
+requires an unlocked collection.
+Missing entries differ from unavailable stores. Legacy private login JSON is
+removed only after OS write/readback. Disconnect removes the login and payloads,
+while retaining the separate key needed for encrypted cleanup evidence.
+
+Key acquisition refuses a locked store, missing or wrong keys, and corrupted ciphertext. Keys already acquired remain in process memory until gateway exit.
+No replacement is created for encrypted data. Development plaintext is exported
+to a verified encrypted temporary file and atomically replaced under a shared
+process lock. Stop old gateway processes before upgrading. Old plaintext backups
+and snapshots are not erased. A database backup without its OS key cannot restore
+the inbox. Cloudflare sees webhook plaintext and provides managed at-rest
+encryption; this is not end-to-end encryption.
+
+```mermaid
+stateDiagram-v2
+    [*] --> KeyLookup
+    KeyLookup --> Unavailable: OS store refuses
+    KeyLookup --> Unavailable: encrypted inbox exists but key is missing
+    KeyLookup --> KeyReady: OS receipt confirms key
+    KeyReady --> Upgrade: legacy plaintext exists
+    Upgrade --> KeyReady: verified encrypted copy replaces source
+    Upgrade --> Unavailable: export or verification fails
+    KeyReady --> Open: SQLCipher authenticates pages
+    KeyReady --> Unavailable: wrong key or cipher corruption
+    Open --> Open: events and cursor commit together
+```
+
+Each signed installation retains at most 2,500 events / 16 MiB within the global
+ceiling. GitHub-verified users receive 120 reads/minute and 6,000/day. Native edge
+limits precede provider calls, but are approximate per Cloudflare location and
+cannot guarantee availability under distributed floods. Four sockets per
+user/repository and 128/room bound wake fanout. User-budget and repository-identity
+metadata have admission caps; old gap markers are preserved. The Free allowance
+remains shared and cannot support 10,000 busy users.
+
+A 15-minute wake lease renews after 12 minutes. The native quiet-day test counts
+240 page reads and 120 upgrades/repository, down from 2,880 HTTP requests/day.
+Events, reconnects and Durable Object invocations add traffic. Every payload read
+still rechecks GitHub access; revoked users may retain wake-only hints until
+lease expiry, without event bodies.
+
+This checkpoint reviews the receiver, native storage/follower, sign-in composition,
+stage tables and Settings opt-in. OS execution was checked on macOS; native
+Linux/Windows execution and provider backup/log retention are excluded from local
+verification. [ADR 1132](../../../adr/todo/1132-github-relay-hardening.md) records
+ordering tests and the security review.
+
+Schema-owned counters admit metadata without recounting every user or repository.
+Expiry accounting touches only the affected installation. A real D1 regression
+counts trigger work as well as the outer cleanup query (836 row reads for
+64 expirations across 4,096 installations).
+
+[Hardening evidence](../../../../packages/github-webhooks/hardening-verification.json)
+records the reviewed source, adversarial findings and development deployment.
+Only this state page was reconciled for this hardening checkpoint.
