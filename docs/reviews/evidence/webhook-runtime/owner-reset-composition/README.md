@@ -83,6 +83,11 @@ original report as finding-free.
 
 ## Remaining gates and exclusions
 
+The published-head CI failures and narrowly reviewed fixture correction are
+tracked in the [CI correction receipt](ci-fixture-repair.md). Original failures
+remain visible; corrected real browser and platform acceptance are not inferred
+from local fixture/helper passes.
+
 Exact-head platform CI, canonical browser, default/raised stress and chaos
 acceptance remain required. The complete native-filesystem `pnpm frontend:check` passed at37611, including
 **5,324/5,324 unit tests**,408 desktop helpers,108 architecture tests/checker,

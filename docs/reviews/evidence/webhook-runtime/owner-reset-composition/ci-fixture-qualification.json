@@ -1,0 +1,43 @@
+{
+  "base": "ac6225d7d0e3ef8be69d7cd31b2e689235324687",
+  "fixtureSource": "4be5703a83f742ef4c48d6e4e2d8a589fb047d0c",
+  "recipientModeSource": "c59640811a937821cb82d42d69402fa52bd23947",
+  "runtimeSource": "c790639702213d79bad32aaa148e2744ca7a9d1d",
+  "originalRun": 40249699947,
+  "local": {
+    "umask": "022, process-local",
+    "composition": {
+      "passed": 6,
+      "failed": 0
+    },
+    "webhooks": {
+      "passed": 295,
+      "failed": 0,
+      "retentionExclusions": 0,
+      "durationSeconds": 18.92
+    },
+    "clippy": {
+      "selection": "local-storage, auth, server, protocol, client-core, device-client, sdk; all-targets -D warnings",
+      "exitCode": 0
+    },
+    "helpers": {
+      "passed": 24,
+      "failed": 0
+    },
+    "architecture": "passed after restoring declared Cargo PATH",
+    "sdkDocs": "passed after restoring declared Cargo PATH",
+    "socketModeProbe": "old WouldBlock reproduced; exact corrected blocking read passed; Linux emulation only"
+  },
+  "affectedReview": {
+    "fixtureReportSha256": "927d941ac3a21a6723e6ef0181243e6c9279727aaf1638651387e6d3f8c419af",
+    "recipientReportSha256": "175e0556573dfd7b1961eb242b20239856d2a12163a16b883745fbd7e8901ce9",
+    "findings": [],
+    "newWholeFeatureRound": false
+  },
+  "notQualified": [
+    "corrected exact-head platform CI",
+    "corrected real default browser webhook capture",
+    "raised webhook3 browser execution",
+    "webhook-specific WebKit capture"
+  ]
+}

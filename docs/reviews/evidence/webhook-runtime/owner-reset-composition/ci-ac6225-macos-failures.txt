@@ -1,0 +1,35 @@
+Mac source ac6225d7d0e3ef8be69d7cd31b2e689235324687, job121338743669
+2026-10-26T00:54:22.7982550Z [nessa-server nessa_server] thread '<unnamed>' (137318) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.7986650Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.7997420Z [nessa-server nessa_server] thread '<unnamed>' (137432) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.7999290Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.8011180Z [nessa-server nessa_server] thread '<unnamed>' (138144) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.8012530Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.8019580Z [nessa-server nessa_server] thread '<unnamed>' (138207) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.8020840Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.8028230Z [nessa-server nessa_server] thread '<unnamed>' (138298) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.8029580Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.8036780Z [nessa-server nessa_server] thread '<unnamed>' (137913) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.8038060Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.8057440Z [nessa-server nessa_server] thread '<unnamed>' (138805) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.8058610Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.8065450Z [nessa-server nessa_server] thread '<unnamed>' (138899) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.8066950Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.8074810Z [nessa-server nessa_server] thread '<unnamed>' (139162) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.8076250Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.8084290Z [nessa-server nessa_server] thread '<unnamed>' (138003) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.8085530Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.8092700Z [nessa-server nessa_server] thread '<unnamed>' (139248) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.8095730Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.8114380Z [nessa-server nessa_server] thread '<unnamed>' (139350) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.8118650Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.8127860Z [nessa-server nessa_server] thread '<unnamed>' (139433) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.8129650Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.8145150Z [nessa-server nessa_server] thread '<unnamed>' (139212) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+2026-10-26T00:54:22.8146330Z [nessa-server nessa_server] called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+2026-10-26T00:54:22.8226510Z [nessa-server nessa_server] test result: FAILED. 4101 passed; 21 failed; 13 ignored; 0 measured; 0 filtered out; finished in 274.21s
+2026-10-26T00:54:22.8227110Z [nessa-server nessa_server] 
+thread '<unnamed>' (137318) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
+thread '<unnamed>' (137432) panicked at crates/nessa-server/src/webhooks/infrastructure/../../../tests/webhooks/infrastructure/product_delivery.rs:108:56:
+called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
