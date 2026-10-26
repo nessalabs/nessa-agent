@@ -7,7 +7,8 @@
  * clipping ancestors, enters the window controls' corner: x below
  * `--desktop-titlebar-safe-start`, y below `--desktop-titlebar-height`,
  * both resolved against the top-most surface. Titlebar rows, floating
- * layers and decorative art are exempt (`safeAreaExempt`).
+ * layers and a header's picture, which runs to the window's edge, are exempt
+ * (`safeAreaExempt`).
  */
 import { safeAreaExempt, safeAreaTokens, css } from "./selectors.mjs"
 

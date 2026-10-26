@@ -15,7 +15,6 @@ import { IconButton } from "../../../ui/icon-button"
 import { SideRail, SideRailButton, RailView } from "../chrome/side-rail"
 import { StudioCorner } from "../chrome/identity-footer"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
-import { WindowTabs } from "../chrome/window-tabs"
 import { PanelMaximize, PanelToggle, WorkspacePanel } from "../chrome/right-panel"
 import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
@@ -67,7 +66,6 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
     peek,
     shape,
     openColumns,
-    tab,
     splitPanes,
     railOffered,
     railDrawn,
@@ -98,6 +96,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
     panelWidth,
     onTogglePanel,
     onTogglePanelMaximized,
+    onNewSession,
     onPanelDragStart,
     onPanelDragMove,
   } = model
@@ -107,7 +106,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
         <EscapeScopesProvider value={escapeScopes}>
           <ListedChannelProvider value={listedChannel}>
             <SidebarPeekProvider value={peek}>
-              <FlipScope shape={shape} columns={openColumns} cut={tab} root={root}>
+              <FlipScope shape={shape} columns={openColumns} root={root}>
                 <div
                   className="workspace-window"
                   data-rail={!railOffered ? "off" : railDrawn ? "open" : "closed"}
@@ -153,7 +152,11 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                             onClick={onToggleSidebar}
                           />
                         )}
-                        {region.sessionList && !panelMaximized ? (
+                        {/* The cluster's fourth control: the session list's toggle
+                            where there is a list — whose head holds New Session —
+                            else New Session itself. The expanded panel stands for
+                            its chat: no column to show, no new chat under it. */}
+                        {panelMaximized ? null : region.sessionList ? (
                           <IconButton
                             icon="sessionList"
                             label={`${listOpen ? "Hide" : "Show"} Session List`}
@@ -161,7 +164,14 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                             aria-expanded={listOpen}
                             onClick={onToggleSessionList}
                           />
-                        ) : null}
+                        ) : (
+                          <IconButton
+                            icon="newSession"
+                            label="New Session"
+                            shortcut={frame.shortcut("newSession")}
+                            onClick={onNewSession}
+                          />
+                        )}
                         <HistoryButtons />
                       </div>
                     )}
@@ -169,7 +179,10 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       <div className="workspace-titlebar-space" data-tauri-drag-region />
                     ) : (
                       <>
-                        <WindowTabs panelChat={panelMaximized} />
+                        <div
+                          className="workspace-titlebar-space"
+                          data-tauri-drag-region
+                        />
                         <div className="workspace-titlebar-trailing">
                           {panelOpen ? (
                             <PanelMaximize

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * MCP Apps (ADR 344, #349), through the fixture app the sample workspace
- * registers (`src/desktop/widgets/app/fixture/`): it renders inline, in a pane
- * (its own fullscreen request) and in the window, each place told its
+ * registers (`src/desktop/widgets/app/fixture/`): it renders inline, in its
+ * chat's right panel (its own fullscreen request) and in the window, each place told its
  * display mode and given its tool call; `tools/call` is answered for an
  * allowed tool and refused for a hidden one; `ui/message` lands in the
  * transcript labelled with the app that wrote it, and a context is refused
@@ -13,8 +13,8 @@
  * sandbox proxy, handed documents the host's own builder writes, reads every
  * way the app's document is replaced as its departure and nothing else as
  * one; the test server's chart page handshakes through that proxy and draws
- * the tool result it is sent; and it is torn down on close — by its pane's
- * close, and by its own request.
+ * the tool result it is sent; and it is torn down on close — by its panel
+ * tab's close, and by its own request.
  *
  * The app's documents are cross-origin to the page, so the script reads them
  * through Playwright's frames, never through the page.
@@ -34,7 +34,7 @@ import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { target } from "./lib/server.mjs"
 import { content, css, names, selectorFor } from "./lib/selectors.mjs"
-import { contentIs, paneCount, paneCountIs, settled, until } from "./lib/workspace.mjs"
+import { contentIs, paneCount, settled, until } from "./lib/workspace.mjs"
 
 const meta = {
   name: "mcp-apps",
@@ -48,9 +48,10 @@ Usage: node verification/desktop/scripts/mcp-apps.mjs [options]
 Checks, per engine and layout (--only <names> to pick):
   inline       the card's app is live, told inline, its call's input and result,
                and its frame as tall as the app said
-  pane         the app's fullscreen request opens a pane beside the conversation,
-               whose app is live and told fullscreen; the card's stays inline
-  window       the pane's Open in Window shows the app in the window, live,
+  panel        the app's fullscreen request opens a tab in the chat's right panel,
+               no pane, whose app is live and told fullscreen; the card's stays
+               inline
+  window       the panel tab's Open in Window shows the app in the window, live,
                told fullscreen, filling it
   tools-call   tools/call answered for the allowed tool, refused for the hidden one
   message      ui/message answered {} and landing in the transcript as one message
@@ -103,8 +104,8 @@ Checks, per engine and layout (--only <names> to pick):
                shows the series from the tool result it was sent
   forge        forged proxy messages change nothing; a forged report puts no
                words of the app's in the host's chrome
-  teardown     closing the pane takes its frames off the page; the app asking to
-               go is sent ui/resource-teardown before its pane closes
+  teardown     closing its panel tab takes its frames off the page; the app asking
+               to go is sent ui/resource-teardown before its tab closes
   moving-frame the action wait keeps the discovered app through finite host
                motion; a controlled nested-frame Close receives one click
 
@@ -949,7 +950,7 @@ const rect = (element) =>
 
 /**
  * The place's body and the app's frame in it, measured together once the
- * place has settled (a pane opening animates its width): whether the frame
+ * place has settled (the panel opening animates its width): whether the frame
  * fills the body, within a pixel.
  */
 async function fills(page, body, frame) {
@@ -1006,18 +1007,30 @@ async function expectLive(page, place, mode, failures) {
   return { element, proxy, app, said, box }
 }
 
-/** Opens the app in a pane, by its own fullscreen request from the card. */
-async function openPane(page, failures) {
+/**
+ * Opens the app in its chat's right panel, by its own fullscreen request from
+ * the card: a tab of its own there, and no pane.
+ */
+async function openPanel(page, failures) {
   const before = await paneCount(page)
   const { app } = await appFrame(page, "inline")
   await appState(app, "live")
   await app.click(selectorFor.fixtureControl("fullscreen"))
-  await paneCountIs(page, before + 1)
+  await need(
+    page,
+    `${css.panelWidget} ${selectorFor.appFrameIn("panel")}`,
+    "the app's tab",
+  )
+  if ((await paneCount(page)) !== before)
+    failures.push("the app's fullscreen request opened a pane, not a tab in the panel")
   const answer = await output(app, selectorFor.fixtureOutput("mode"))
   if (answer !== 'ok: {"mode":"inline"}')
     failures.push(`the card's fullscreen request was answered ${answer}, expected inline`)
-  return expectLive(page, "pane", "fullscreen", failures)
+  return expectLive(page, "panel", "fullscreen", failures)
 }
+
+/** The panel's tabs drawn now. */
+const panelTabCount = (page) => page.locator(`${css.chatPanelTabs} [role="tab"]`).count()
 
 /**
  * The test server's chart page, through the real proxy and the host's own
@@ -1184,13 +1197,13 @@ const checks = {
         }, { signal: top.__sandboxProbeAbort.signal });
       </script></body>`
       const proxy = document.createElement("iframe")
-      proxy.setAttribute("data-app-frame", "pane")
+      proxy.setAttribute("data-app-frame", "panel")
       proxy.style.cssText = "width:500px;height:250px;border:0"
       proxy.srcdoc = `<iframe style="width:500px;height:250px;border:0" srcdoc="${html.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;")}"></iframe>`
       moving.append(proxy)
       host.append(moving)
     })
-    const discovered = await appFrame(page, "pane")
+    const discovered = await appFrame(page, "panel")
     await discovered.app.waitForSelector(selectorFor.fixtureControl("close"))
     await page.evaluate(() => {
       const owner = document.querySelector("[data-moving-app-host]")
@@ -1201,7 +1214,7 @@ const checks = {
     })
     // Discovery remains usable before motion has completed. Only the action
     // primitive waits, on these handles, rather than discovering another app.
-    const lookup = await appFrame(page, "pane", 1000)
+    const lookup = await appFrame(page, "panel", 1000)
     const before = await page.evaluate(() => {
       const animation = document
         .querySelector("[data-moving-app-host]")
@@ -1250,29 +1263,28 @@ const checks = {
     return { frame: box, drawn, appHeight: height, told: told.styles, failures }
   },
 
-  pane: async (page) => {
+  panel: async (page) => {
     const failures = []
-    const { box } = await openPane(page, failures)
+    const { box } = await openPanel(page, failures)
     const card = await appState((await appFrame(page, "inline")).app, "live")
     if (card.mode !== "inline") failures.push(`the card's app is told ${card.mode} after`)
     const measured = await fills(
       page,
-      `${css.widgetPane} ${css.widgetBody}`,
-      `${css.widgetPane} ${selectorFor.appFrameIn("pane")}`,
+      `${css.panelWidget} ${css.widgetBody}`,
+      `${css.panelWidget} ${selectorFor.appFrameIn("panel")}`,
     )
     if (!measured.fit)
       failures.push(
-        `the pane's frame does not fill its body: ${JSON.stringify(measured)}`,
+        `the panel's frame does not fill its body: ${JSON.stringify(measured)}`,
       )
     return { frame: box, measured, failures }
   },
 
   window: async (page) => {
     const failures = []
-    await openPane(page, failures)
-    await page.locator(css.widgetPane).first().hover()
+    await openPanel(page, failures)
     await page
-      .locator(css.widgetPane)
+      .locator(css.panelWidgetHead)
       .first()
       .getByRole("button", { name: names.openInWindow })
       .first()
@@ -1539,40 +1551,41 @@ const checks = {
 
   teardown: async (page) => {
     const failures = []
-    // By its pane's close: the frames go with the place.
-    const { proxy, app } = await openPane(page, failures)
-    const pane = page.locator(css.widgetPane).first()
-    await pane.hover()
-    await pane.getByRole("button", { name: names.closePane }).first().click()
+    // By its tab's close: the frames go with the place.
+    const { proxy, app } = await openPanel(page, failures)
+    await page.locator(`${css.chatPanelTabs} [title^="Close "]`).first().click()
     await settled(page)
     await until(
       page,
       (frame) => !document.querySelector(frame),
-      selectorFor.appFrameIn("pane"),
+      selectorFor.appFrameIn("panel"),
     ).catch(() => {})
-    if (await page.$(selectorFor.appFrameIn("pane")))
-      failures.push("the pane's frame is still on the page after its close")
+    if (await page.$(selectorFor.appFrameIn("panel")))
+      failures.push("the panel's frame is still on the page after its tab closed")
     if (!proxy.isDetached() || !app.isDetached())
-      failures.push("the pane's proxy or app document outlived its close")
-    // By its own request: teardown is sent, answered, and the pane closes.
-    const second = await openPane(page, failures)
-    const panes = await paneCount(page)
+      failures.push("the panel's proxy or app document outlived its tab's close")
+    // By its own request: teardown is sent, answered, and the tab closes.
+    const second = await openPanel(page, failures)
+    const tabs = await panelTabCount(page)
     // The fixture answers its teardown 400ms after it is asked: until then
-    // the pane stays, and the app is still on the page saying so.
+    // the tab stays, and the app is still on the page saying so.
     await second.app.click(selectorFor.fixtureControl("close"))
     const said = await appState(second.app, "tearing-down", 2000).catch(() => ({
       state: "detached",
     }))
-    const waiting = await paneCount(page)
-    await paneCountIs(page, panes - 1)
+    const waiting = await panelTabCount(page)
+    await until(page, ([tab, want]) => document.querySelectorAll(tab).length === want, [
+      `${css.chatPanelTabs} [role="tab"]`,
+      tabs - 1,
+    ])
     if (said.state !== "tearing-down")
       failures.push(
         `the app asking to go was not sent ui/resource-teardown (it says ${said.state})`,
       )
-    if (waiting !== panes)
-      failures.push("the app's pane closed before the app answered its teardown")
-    if ((await paneCount(page)) !== panes - 1)
-      failures.push("the app's pane did not close after its teardown")
+    if (waiting !== tabs)
+      failures.push("the app's tab closed before the app answered its teardown")
+    if ((await panelTabCount(page)) !== tabs - 1)
+      failures.push("the app's tab did not close after its teardown")
     if (!second.app.isDetached())
       failures.push("the app's document outlived its teardown")
     return { said: said.state, failures }

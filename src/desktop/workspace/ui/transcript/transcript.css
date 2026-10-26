@@ -326,6 +326,16 @@
     var(--desktop-fast) both;
 }
 
+/* Said to a screen reader where a live tool run already shows it. */
+.workspace-live-spoken {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .workspace-shimmer {
   background: linear-gradient(
       90deg,

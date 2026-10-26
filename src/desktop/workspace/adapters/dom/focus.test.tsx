@@ -83,7 +83,7 @@ function Page() {
   )
   return (
     <div ref={root}>
-      <button type="button" data-session-row="row">
+      <button type="button" data-list-row>
         A row in a list
       </button>
       {windowWidget ? (
@@ -220,15 +220,13 @@ it("follows a pane taking focus even from a list, and leaves a list walked in on
   const store = await page()
   await act(async () => void store.dispatch(newSession({ beside: "right" })))
   await frames()
-  const row = host.querySelector<HTMLElement>("[data-session-row]")
+  const row = host.querySelector<HTMLElement>("[data-list-row]")
   row?.focus()
-  // The list opens another session, in a tab of its own: the caret stays in the list.
+  // The list opens another session in the focused pane: the caret stays in the list.
   await act(async () => void store.dispatch(openSession({ sessionId: "c" })))
   await frames()
   expect(document.activeElement).toBe(row)
-  // Split there, then another pane takes focus (⌘1): the caret goes with it.
-  await act(async () => void store.dispatch(newSession({ beside: "right" })))
-  await frames()
+  // Another pane takes focus (⌘1): the caret goes with it.
   await act(async () => void store.dispatch(focusPane({ pane: 1 })))
   await frames()
   expect(caretIn()).toBe("Message 1")
@@ -291,7 +289,7 @@ it("puts the caret in the focused pane's composer when the panes come back from 
   await act(async () => void store.dispatch(showContent({ content: "agents" })))
   await frames()
   // In the overview, the keyboard is its own: nothing here takes it.
-  const row = host.querySelector<HTMLElement>("[data-session-row]")
+  const row = host.querySelector<HTMLElement>("[data-list-row]")
   row?.focus()
   row?.remove()
   expect(document.activeElement).toBe(document.body)
@@ -567,35 +565,3 @@ it.each(["pane", "widget", "overview-before"])(
     expect(caretIn()).toBe(destination)
   },
 )
-
-it("keeps keyboard focus in document tabs when selecting a different visible pane", async () => {
-  const store = await page()
-  await act(async () => void store.dispatch(newSession({ beside: "right" })))
-  await frames()
-  const second = store.getState().workspace.panes?.focused ?? 2
-  const tabs = document.createElement("div")
-  tabs.setAttribute("role", "tablist")
-  const tab = document.createElement("button")
-  tab.setAttribute("role", "tab")
-  tab.setAttribute("aria-selected", "true")
-  tabs.append(tab)
-  host.firstElementChild?.append(tabs)
-  // Chosen from the keyboard, the selected tab keeps the caret.
-  window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }))
-  tab.focus()
-  await act(async () => void store.dispatch(focusPane({ pane: 1 })))
-  await frames()
-  expect(document.activeElement).toBe(tab)
-  // A stale tab — ⌘N or ⌘D moved the selection elsewhere — lets the caret follow.
-  tab.setAttribute("aria-selected", "false")
-  await act(async () => void store.dispatch(focusPane({ pane: second })))
-  await frames()
-  expect(caretIn()).toBe(`Message ${second}`)
-  // Clicked, the caret follows into the pane too.
-  tab.setAttribute("aria-selected", "true")
-  tab.focus()
-  window.dispatchEvent(new Event("pointerdown"))
-  await act(async () => void store.dispatch(focusPane({ pane: 1 })))
-  await frames()
-  expect(caretIn()).toBe("Message 1")
-})

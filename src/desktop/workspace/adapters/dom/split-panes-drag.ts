@@ -42,7 +42,7 @@ export function sideColumns(root: HTMLElement): readonly Element[] {
   ].flatMap((column) => (column ? [column] : []))
 }
 
-/** The window's titlebar beside the workspace's root: its tabs and controls. */
+/** The window's titlebar beside the workspace's root: its controls. */
 const titlebarOf = (root: HTMLElement) =>
   root.parentElement?.querySelector<HTMLElement>(".workspace-titlebar") ?? null
 
@@ -54,8 +54,6 @@ export function workspaceDragOptions(): SplitPanesDragOptions {
     previewPanes: false,
     covered: sideColumns,
     stripped: ["data-tauri-drag-region", focusedPaneAttribute],
-    // A chat's tab is carried onto a pane's side to merge it there (#1077).
-    carriedFrom: titlebarOf,
     // A drop's outline starts below the titlebar row, where a pane's content does.
     clearOf: titlebarOf,
   }

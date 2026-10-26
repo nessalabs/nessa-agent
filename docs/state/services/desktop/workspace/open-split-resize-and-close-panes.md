@@ -30,10 +30,11 @@ Opening beside a pane first looks for space on the right, then below. When there
 
 Splitting and resizing respect the available workspace. A new draft that must open beside another pane is refused when there is no room. Closing a pane removes its view, not its conversation.
 
-This chart is one tab's layout. Opening a chat that is in no tab opens a new
-tab rather than replacing a pane here; closing a pane in a merged tab keeps
-its chat open as a tab of its own; and closing a tab's only pane closes the
-tab ([window tabs](open-merge-unmerge-switch-and-close-window-tabs.md)).
+Opening a chat no pane shows takes the focused pane's place, as a browser's
+address bar does. A new session's draft it replaces is let go unless something
+is typed in it; that one is kept, and the next new session asked for in its
+channel shows it again. Closing a pane lets go of its draft, typed in or not.
+Chats have no tabs: only widgets open as tabs, in the chat's right panel.
 
 ```mermaid
 stateDiagram-v2
@@ -44,9 +45,8 @@ stateDiagram-v2
     Applying --> Arranged: Commit layout and focus
     Measuring --> Arranged: No room [replacement permitted] / replace target
     Measuring --> Arranged: No room [new beside] / refuse unchanged
-    Arranged --> Arranged: Close pane / reflow, choose remaining focus, its chat a tab of its own
-    Arranged --> [*]: Close the tab's only pane / the tab closes, another becomes active
-    Arranged --> Arranged: Close the last tab's last chat / new draft when available
+    Arranged --> Arranged: Close pane / reflow and choose remaining focus
+    Arranged --> Arranged: Close last session / new draft when available
     note right of Arranged
         Operation chart of one layout, not execution state.
         Four panes and three columns bound arrangement.

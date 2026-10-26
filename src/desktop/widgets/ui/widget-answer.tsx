@@ -84,7 +84,7 @@ const noPlaces: OfferedPlaces = { inline: false, window: false }
 const everyPlace: OfferedPlaces = { inline: true, window: true }
 
 /**
- * The places beside the pane that a plugin offers a view for; none for one
+ * The places beside the panel that a plugin offers a view for; none for one
  * the window lacks, and every one for an app, which draws the same frame in
  * each.
  */

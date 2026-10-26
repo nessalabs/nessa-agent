@@ -16,7 +16,7 @@ describe("host context", () => {
   }
 
   it("translates the widget host's context, field for field, with the app's own", () => {
-    expect(appHostContext("pane", context, page, { name: "show" })).toEqual({
+    expect(appHostContext("panel", context, page, { name: "show" })).toEqual({
       toolInfo: { tool: { name: "show" } },
       theme: "dark",
       styles: { variables: { "--color-text-primary": "#fafafa" } },
@@ -48,15 +48,15 @@ describe("host context", () => {
   })
 
   it("L13: a change says only the fields that changed, and nothing when none did", () => {
-    const before = appHostContext("pane", context, page, undefined)
-    expect(changedContext(before, appHostContext("pane", context, page, undefined))).toBe(
-      undefined,
-    )
+    const before = appHostContext("panel", context, page, undefined)
+    expect(
+      changedContext(before, appHostContext("panel", context, page, undefined)),
+    ).toBe(undefined)
     expect(
       changedContext(
         before,
         appHostContext(
-          "pane",
+          "panel",
           { ...context, theme: "light", size: { width: 1, height: 2 } },
           page,
           undefined,

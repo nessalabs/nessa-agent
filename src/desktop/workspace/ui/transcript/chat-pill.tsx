@@ -9,8 +9,8 @@ import "./chat-pill.css"
 /**
  * Another chat, named where a transcript speaks of it: its agent and its
  * title, as they are now (a rename shows at once). Pressed, it opens that
- * chat as any opening does — its tab brought forward, or a tab of its own
- * (`openSession`). A chat the window no longer has is a quiet pill that says
+ * chat as any opening does — its pane focused, or shown in the focused
+ * pane (`openSession`). A chat the window no longer has is a quiet pill that says
  * so and goes nowhere. One pill for every place: a thread's report line, an
  * id an agent wrote, a tool that named a chat.
  */

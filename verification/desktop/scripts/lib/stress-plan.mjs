@@ -99,7 +99,7 @@ export const KNOBS = {
   },
   panels: {
     default: 1,
-    what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, expanded for that chat alone (its tab only; New Tab docks it and the new session opens in sight), left with Escape, then closed",
+    what: "times the right panel is opened with ⌥⌘B beside a conversation, a message sent, expanded for that chat alone (its own tabs or note, no chat tabs; ⌘N docks it and the new session opens in sight), left with Escape, then closed",
   },
   onboardings: {
     default: 1,

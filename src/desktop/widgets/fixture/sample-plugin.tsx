@@ -23,7 +23,7 @@ import "./sample-plugin.css"
 
 const steps = ["Read the case", "Try a change", "Measure it"] as const
 
-/** A widget of the sample plugin's, in a pane or in the window. */
+/** A widget of the sample plugin's, in a chat's panel or in the window. */
 /** The place's size as the host reports it, for `widgets.mjs` to hold to the box it measures. */
 function PlaceSize({ context }: { context: WidgetViewProps["context"] }) {
   const size = context.size
@@ -73,19 +73,19 @@ function SampleView({ id, place, host, context }: WidgetViewProps) {
             ))}
           </ol>
           <div className="sample-actions">
-            {place === "pane" ? (
+            {place === "panel" ? (
               <Button size="sm" variant="ghost" onClick={() => host.open("window")}>
                 Open in Window
               </Button>
             ) : (
-              <Button size="sm" variant="ghost" onClick={() => host.open("pane")}>
-                Open in a Pane
+              <Button size="sm" variant="ghost" onClick={() => host.open("panel")}>
+                Open in the Panel
               </Button>
             )}
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => host.openWidget(sampleWidgets.notes, "pane")}
+              onClick={() => host.openWidget(sampleWidgets.notes, "panel")}
             >
               Open Notes
             </Button>
@@ -116,7 +116,7 @@ function SampleCard({ id, host, context }: WidgetViewProps) {
     <div className="sample-card" data-sample-card>
       <PlaceSize context={context} />
       <span>{id === sampleWidgets.notes.id ? "Sample notes" : "Sample trail"}</span>
-      <Button size="sm" variant="ghost" onClick={() => host.open("pane")}>
+      <Button size="sm" variant="ghost" onClick={() => host.open("panel")}>
         Open
       </Button>
       <Button size="sm" variant="ghost" onClick={() => host.open("window")}>
@@ -135,7 +135,7 @@ function sampleAccessory(origin: string) {
         size="sm"
         variant="ghost"
         data-sample-accessory
-        onClick={() => openWidget(sampleWidgets.notes, "pane")}
+        onClick={() => openWidget(sampleWidgets.notes, "panel")}
       >
         Notes
       </Button>
@@ -152,7 +152,7 @@ export function samplePlugin(origin: string): NativeWidgetPlugin {
     useWidget: function useSampleWidget(id: string): WidgetState {
       return useMemo(() => sampleState(id, origin), [id])
     },
-    views: { pane: SampleView, window: SampleView, inline: SampleCard },
+    views: { panel: SampleView, window: SampleView, inline: SampleCard },
     readsHostSize: true,
     SessionAccessory: sampleAccessory(origin),
   }
