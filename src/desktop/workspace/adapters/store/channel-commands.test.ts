@@ -251,6 +251,18 @@ describe("asking", () => {
     expect(flowOf(store)?.draft.resources).toEqual(["/work/brief.md", "/work/docs"])
     expect(flowOf(store)?.landing).toEqual([])
     store.dispatch(askChannelStep({ step: "resources" }))
+    // Landed here, then the question moved on and came back before the paths
+    // came: it asks for files again when they come, so they are added.
+    const back = land()
+    store.dispatch(askChannelStep({ step: "notes" }))
+    store.dispatch(askChannelStep({ step: "resources" }))
+    answer(back, { path: "/work/back.md", kind: "file" })
+    expect(flowOf(store)?.draft.resources).toEqual([
+      "/work/brief.md",
+      "/work/docs",
+      "/work/back.md",
+    ])
+    expect(flowOf(store)?.landing).toEqual([])
     // Landed here, then the flow closed and another opened before the paths
     // came: they belong to neither.
     const late = land()
