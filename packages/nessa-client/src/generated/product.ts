@@ -2448,7 +2448,63 @@ export interface PairingSetLinkingResult {
   /** How the saved choice takes effect. */
   applies: PairingLinkingApply
 }
-/** Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which). */
+/** How the web tunnel is carried. quick: a free Cloudflare quick tunnel at a random trycloudflare.com address, which changes whenever cloudflared starts again (it is kept running across gateway restarts, so it changes only when cloudflared itself has to start again). named: a tunnel made in the person's Cloudflare account, at their own hostname, which never changes. */
+export const PairingTunnelMode = { Quick: "quick", Named: "named" } as const
+export type PairingTunnelMode = (typeof PairingTunnelMode)[keyof typeof PairingTunnelMode]
+/** Turn the web tunnel on or off for this gateway, so a paired phone reaches it from anywhere. Needs native linking on. The gateway saves the choice in its config.json (the token in a private file beside its state, never in config.json) and, when the running gateway does not already match it, restarts itself to apply it. A field left out keeps what is saved. */
+export interface PairingSetTunnelParams {
+  /** True turns the tunnel on; false turns it off and keeps its other settings. Sending the same request again changes nothing, so a retry is safe. */
+  enabled: boolean
+  /** Quick or named. Left out, the saved mode, or quick when none is saved. */
+  mode?: PairingTunnelMode
+  /** A named tunnel's public address, https://host or https://host:port, with no path. Left out, the saved one. */
+  hostname?: string
+  /** A named tunnel's token from Cloudflare's dashboard: printable ASCII with no spaces. Left out, the saved one. It is never sent back. */
+  token?: string
+}
+/** Result of pairing.setTunnel. */
+export interface PairingSetTunnelResult {
+  /** The saved choice. */
+  enabled: boolean
+  /** The saved mode. */
+  mode: PairingTunnelMode
+  /** How the saved choice takes effect. */
+  applies: PairingLinkingApply
+}
+/** Where the running gateway's tunnel stands. off: this run has no tunnel. starting: it is being started, or started again. ready: it answers at address. failed: the last attempt failed for failure; it is tried again. */
+export const PairingTunnelStatus = {
+  Off: "off",
+  Starting: "starting",
+  Ready: "ready",
+  Failed: "failed",
+} as const
+export type PairingTunnelStatus =
+  (typeof PairingTunnelStatus)[keyof typeof PairingTunnelStatus]
+/** Result of pairing.tunnel: the saved tunnel setting and the running tunnel. The token is never included. */
+export interface PairingTunnelResult {
+  /** Whether the saved setting turns the tunnel on. */
+  enabled: boolean
+  /** The saved mode, quick when none is saved. */
+  mode: PairingTunnelMode
+  /** The saved named tunnel's address, when one is saved. */
+  hostname?: string
+  /** Whether a named tunnel's token is saved. */
+  hasToken: boolean
+  /** The loopback address the tunnel forwards to: where a named tunnel's public hostname must point in Cloudflare's dashboard, as http://<ingress>. */
+  ingress: string
+  /** The running tunnel's status. */
+  status: PairingTunnelStatus
+  /** The running tunnel's public address, when it is ready. */
+  address?: string
+  /** Why the last attempt failed, when status is failed: unsupported (no pinned cloudflared for this machine), download, unverified (the download did not match its pin), storage, token, ingress (the loopback ingress could not be bound), start or not_ready. */
+  failure?: string
+}
+/** Result of server.reach: the addresses this gateway can be reached at beyond the local network, for a paired device to keep. */
+export interface ServerReachResult {
+  /** The web tunnel's public address, https://host[:port], when a tunnel is ready; null otherwise. Open wss://<host>/native and speak the native connection inside its binary messages. */
+  tunnel: string | null
+}
+/** Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking and pairing.setTunnel, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which). pairing.setTunnel refuses with the same codes: pairing_busy and pairing_unavailable as above, pairing_address_in_use when the tunnel's loopback ingress cannot be bound, and pairing_audit_unavailable as above. pairing_linking_off: pairing.setTunnel cannot turn the tunnel on while native linking is off; nothing was saved. pairing_tunnel_incomplete: a named tunnel needs a hostname and a token, given or saved; nothing was saved. */
 export const PairingErrorCode = {
   PairingNotConfigured: "pairing_not_configured",
   PairingNotFound: "pairing_not_found",
@@ -2460,6 +2516,8 @@ export const PairingErrorCode = {
   PairingUnavailable: "pairing_unavailable",
   PairingAddressInUse: "pairing_address_in_use",
   PairingAuditUnavailable: "pairing_audit_unavailable",
+  PairingLinkingOff: "pairing_linking_off",
+  PairingTunnelIncomplete: "pairing_tunnel_incomplete",
 } as const
 export type PairingErrorCode = (typeof PairingErrorCode)[keyof typeof PairingErrorCode]
 /** The GitHub account a sign-in belongs to. */
@@ -3203,7 +3261,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 87,
+  maxReadyMethods: 90,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3423,6 +3481,7 @@ export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
   AuthSession: "auth.session",
   ServerHealth: "server.health",
+  ServerReach: "server.reach",
   CredentialIssue: "credential.issue",
   CredentialList: "credential.list",
   CredentialRevoke: "credential.revoke",
@@ -3484,6 +3543,8 @@ export const ProductMethod = {
   PairingDeny: "pairing.deny",
   PairingCancel: "pairing.cancel",
   PairingSetLinking: "pairing.setLinking",
+  PairingSetTunnel: "pairing.setTunnel",
+  PairingTunnel: "pairing.tunnel",
   GithubStatus: "github.status",
   GithubConnect: "github.connect",
   GithubCancel: "github.cancel",
@@ -3523,6 +3584,7 @@ export const ProductHandshakeMethod = "session.authenticate" as const
 export const productReadyMethods = [
   "auth.session",
   "server.health",
+  "server.reach",
   "credential.issue",
   "credential.list",
   "credential.revoke",
@@ -3584,6 +3646,8 @@ export const productReadyMethods = [
   "pairing.deny",
   "pairing.cancel",
   "pairing.setLinking",
+  "pairing.setTunnel",
+  "pairing.tunnel",
   "github.status",
   "github.connect",
   "github.cancel",
@@ -3614,6 +3678,7 @@ export const productMethodGrants = {
   "session.authenticate": null,
   "auth.session": null,
   "server.health": "server.read",
+  "server.reach": "server.read",
   "credential.issue": "credential.manage",
   "credential.list": "credential.manage",
   "credential.revoke": "credential.manage",
@@ -3675,6 +3740,8 @@ export const productMethodGrants = {
   "pairing.deny": "credential.manage",
   "pairing.cancel": "credential.manage",
   "pairing.setLinking": "credential.manage",
+  "pairing.setTunnel": "credential.manage",
+  "pairing.tunnel": "credential.manage",
   "github.status": "credential.manage",
   "github.connect": "credential.manage",
   "github.cancel": "credential.manage",

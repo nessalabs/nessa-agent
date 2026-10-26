@@ -129,6 +129,10 @@ export const KNOBS = {
     default: 1,
     what: "times a conversation placed on any worker moves to another when its worker drains",
   },
+  tunnels: {
+    default: 1,
+    what: "times the web tunnel is turned on in Settings, kept across a gateway restart, dialed through by a paired worker, and turned off",
+  },
   drifts: {
     default: 1,
     what: "gateway restarts with a changed agent PATH and TMPDIR, then a send to the existing conversation completes",
@@ -234,6 +238,7 @@ export function plan(knobs) {
   add(knobs.traces, () => ({ kind: "trace" }))
   add(knobs.notices, () => ({ kind: "notice" }))
   add(knobs.pools, () => ({ kind: "pool" }))
+  add(knobs.tunnels, () => ({ kind: "tunnel" }))
   add(knobs.drifts, () => ({ kind: "drift" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))
   add(knobs.launches, () => ({ kind: "launch" }))

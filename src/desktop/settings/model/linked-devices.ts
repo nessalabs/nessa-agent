@@ -126,6 +126,8 @@ export type FailureKind =
   | "slotOccupied"
   | "addressInUse"
   | "auditUnavailable"
+  | "linkingOff"
+  | "tunnelIncomplete"
   | "capacity"
   | "conflict"
   | "ineligible"
@@ -262,6 +264,8 @@ export const sentences = {
   auditUnavailable:
     "The gateway could not record this change. The switch shows where linking stands now.",
   linkingBusy: "The gateway is applying another change. Try again in a moment.",
+  linkingOff: "Turn on native linking first. Nothing was changed.",
+  tunnelIncomplete: "A named tunnel needs a hostname and its token. Nothing was changed.",
   unconfirmed:
     "The gateway has not answered yet. The switch shows where linking stood when it last did.",
   on: "Devices can pair with this gateway.",
@@ -320,6 +324,8 @@ export const noticeText: Record<NoticeKind, string> = {
   slotOccupied: sentences.slotOccupied,
   addressInUse: sentences.addressInUse,
   auditUnavailable: sentences.auditUnavailable,
+  linkingOff: sentences.linkingOff,
+  tunnelIncomplete: sentences.tunnelIncomplete,
   capacity: sentences.capacity,
   conflict: sentences.conflict,
   ineligible: sentences.ineligible,

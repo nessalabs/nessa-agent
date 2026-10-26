@@ -286,6 +286,7 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
         "artifact.read",
         "agents.list",
         "server.health",
+        "server.reach",
         "auth.session",
     ] {
         let action = nessa_protocol::product::generated::action_for_method(method);
@@ -306,6 +307,8 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
         "credential.issue",
         "conversation.share",
         "pairing.approve",
+        "pairing.setTunnel",
+        "pairing.tunnel",
         "peer.relay",
         "unknown.future",
     ] {

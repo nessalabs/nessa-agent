@@ -58,6 +58,8 @@ function client(partial: Partial<LinkedDevicesClient> = {}): LinkedDevicesClient
       deny: vi.fn(),
       cancel: vi.fn(),
       setLinking: vi.fn(),
+      setTunnel: vi.fn(),
+      tunnel: vi.fn(),
     },
     credentials: {
       issue: vi.fn(),
@@ -192,6 +194,56 @@ describe("linkedDevicesGateway", () => {
       invitationId: invitation,
       phase: "claimed",
       fingerprint: "182ff9da701fd144e2fd2cd41da8ddba979eb01b2bf7fcc3376f4b1b2ecee4e7",
+    })
+  })
+
+  it("reads the tunnel in the window's words; a failure this build does not know is other", async () => {
+    const current = client()
+    const answer = {
+      enabled: true,
+      mode: "quick" as const,
+      hasToken: false,
+      ingress: "127.0.0.1:47651",
+      status: "failed" as const,
+      failure: "not_ready",
+    }
+    vi.mocked(current.pairing.tunnel).mockResolvedValue(answer)
+    expect(await gatewayFor(current).tunnel()).toEqual({
+      ok: true,
+      value: { ...answer, failure: "notReady" },
+    })
+    vi.mocked(current.pairing.tunnel).mockResolvedValue({ ...answer, failure: "quota" })
+    expect(await gatewayFor(current).tunnel()).toMatchObject({
+      value: { failure: "other" },
+    })
+  })
+
+  it("sends a tunnel change as given, and a refusal is one of the model's", async () => {
+    const current = client()
+    vi.mocked(current.pairing.setTunnel).mockResolvedValue({
+      enabled: true,
+      mode: "named",
+      applies: "restarting",
+    })
+    const change = {
+      enabled: true,
+      mode: "named" as const,
+      hostname: "https://n.example",
+    }
+    expect(await gatewayFor(current).setTunnel(change)).toEqual({
+      ok: true,
+      value: { enabled: true, mode: "named", applies: "restarting" },
+    })
+    expect(current.pairing.setTunnel).toHaveBeenCalledWith(change)
+    vi.mocked(current.pairing.setTunnel).mockRejectedValue(
+      new NessaPairingError(
+        "pairing.setTunnel",
+        new NessaRpcError("pairing_tunnel_incomplete", "no token"),
+      ),
+    )
+    expect(await gatewayFor(current).setTunnel(change)).toEqual({
+      ok: false,
+      failure: { kind: "tunnelIncomplete" },
     })
   })
 

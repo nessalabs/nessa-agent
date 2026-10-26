@@ -166,7 +166,7 @@ impl FilePairingEnvironment {
                     .map(|pending| *pending.gateway_pin())
             });
             let route = relay.as_ref().zip(pin.as_ref());
-            dial_gateway(&address, route, CONNECT)
+            dial_gateway(&address, route, None, CONNECT)
         });
         bounded(dialing).await
     }
@@ -290,7 +290,7 @@ impl EnrollingPairing for FilePairingEnvironment {
         // Direct only: the relay is asked for a key this learns by enrolling.
         let address = self.address.clone();
         let stream = bounded(tokio::task::spawn_blocking(move || {
-            dial_gateway(&address, None, CONNECT)
+            dial_gateway(&address, None, None, CONNECT)
         }))
         .await
         .map_err(|error| format!("{}: {error}", self.address))?;

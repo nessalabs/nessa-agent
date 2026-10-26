@@ -128,6 +128,7 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `session.authenticate` | `socket` | Ordinary | Authentication | Authentication |
 | `auth.session` | `socket` | Ordinary | Requests | CurrentSession |
 | `server.health` | `socket` | Ordinary | Requests | Manifest |
+| `server.reach` | `socket` | Ordinary | Requests | Manifest |
 | `credential.issue` | `socket` | Ordinary | Requests | Manifest |
 | `credential.list` | `socket` | Ordinary | Requests | Manifest |
 | `credential.revoke` | `socket` | Ordinary | Requests | Manifest |
@@ -185,6 +186,8 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `pairing.deny` | `pairing` | Control | Controls | Manifest |
 | `pairing.cancel` | `pairing` | Control | Controls | Manifest |
 | `pairing.setLinking` | `pairing` | Ordinary | Requests | Manifest |
+| `pairing.setTunnel` | `pairing` | Ordinary | Requests | Manifest |
+| `pairing.tunnel` | `pairing` | Ordinary | Requests | Manifest |
 | `github.status` | `github` | Ordinary | Requests | Manifest |
 | `github.connect` | `github` | Ordinary | Requests | Manifest |
 | `github.cancel` | `github` | Ordinary | Requests | Manifest |
